@@ -54,7 +54,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.27.8"
+APP_VERSION = "2026.04.27.9"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = 3
@@ -140,25 +140,22 @@ def load_font(size: int, bold: bool = False) -> ImageFont.ImageFont:
 
 
 def evidence_summary_image(result, body: str, status: str, comments: str) -> Image.Image:
-    width, height = 1400, 1800
-    image = Image.new("RGB", (width, height), "white")
-    draw = ImageDraw.Draw(image)
-    title_font = load_font(42, bold=True)
-    section_font = load_font(22, bold=True)
-    label_font = load_font(19, bold=True)
-    text_font = load_font(19)
-    small_font = load_font(16)
+    width = 1600
+    title_font = load_font(62, bold=True)
+    ribbon_font = load_font(34, bold=True)
+    section_font = load_font(34, bold=True)
+    label_font = load_font(24, bold=True)
+    text_font = load_font(29)
+    small_font = load_font(22)
     navy = "#0B2A5B"
     red = "#C62828"
     slate = "#334155"
-    light = "#EEF2F7"
+    muted = "#64748B"
+    border = "#CBD5E1"
+    light = "#F8FAFC"
 
-    y = 70
-    draw.text((70, y), "Compliance", fill=navy, font=title_font)
-    draw.text((320, y), "Express", fill=red, font=title_font)
-    draw.text((70, y + 68), "Instant Compliance Snapshot Evidence", fill=navy, font=section_font)
-    draw.line((70, y + 110, width - 70, y + 110), fill=red, width=5)
-    y += 155
+    scratch = Image.new("RGB", (width, 2200), "white")
+    draw = ImageDraw.Draw(scratch)
 
     context = filing_context(result, body)
     fiscal_end = context.get("fiscal_end")
@@ -178,23 +175,49 @@ def evidence_summary_image(result, body: str, status: str, comments: str) -> Ima
         ("Calculated Due Date Used", format_date(due_date) if due_date else "Not identified"),
     ]
 
-    draw.rounded_rectangle((60, y, width - 60, y + 1040), radius=24, fill="#F8FAFC", outline="#CBD5E1", width=2)
-    y += 36
-    draw.text((90, y), "Status Basis", fill=navy, font=section_font)
-    y += 56
+    wrapped_rows = []
+    value_width = width - 250
     for label, value in rows:
-        draw.rectangle((90, y, width - 90, y + 1), fill=light)
-        y += 18
-        draw.text((95, y), label.upper(), fill=red, font=label_font)
-        y += 30
-        for line in wrap_text(draw, str(value), text_font, width - 190):
-            draw.text((95, y), line, fill=slate, font=text_font)
-            y += 28
-        y += 20
+        wrapped_rows.append((label, wrap_text(draw, str(value), text_font, value_width)))
 
-    draw.text((90, height - 190), "The captured public registry page follows this summary page.", fill=navy, font=section_font)
+    row_heights = [82 + (len(lines) * 38) for _, lines in wrapped_rows]
+    card_height = 96 + sum(row_heights)
+    height = max(1900, 420 + card_height + 220)
+    image = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(image)
+
+    y = 70
+    draw.text((80, y), "Compliance", fill=navy, font=title_font)
+    draw.text((455, y), "Express", fill=red, font=title_font)
+    y += 92
+    draw.rounded_rectangle((80, y, 770, y + 74), radius=0, fill=red, outline="#7F1D1D", width=3)
+    draw.text((110, y + 18), "INSTANT COMPLIANCE SNAPSHOT", fill="white", font=ribbon_font)
+    y += 112
+    draw.text((80, y), "Evidence Summary", fill=navy, font=section_font)
+    draw.text((80, y + 48), "Prepared from the public registry snapshot captured at the time of lookup.", fill=muted, font=small_font)
+    draw.line((80, y + 92, width - 80, y + 92), fill=red, width=6)
+    y += 140
+
+    card_top = y
+    draw.rounded_rectangle((70, card_top, width - 70, card_top + card_height), radius=28, fill=light, outline=border, width=3)
+    y += 38
+    draw.text((105, y), "Status Basis", fill=navy, font=section_font)
+    y += 64
+    for index, ((label, lines), row_height) in enumerate(zip(wrapped_rows, row_heights)):
+        if index:
+            draw.line((105, y, width - 105, y), fill="#E2E8F0", width=2)
+            y += 24
+        draw.text((110, y), label.upper(), fill=red, font=label_font)
+        y += 36
+        for line in lines:
+            draw.text((110, y), line, fill=slate, font=text_font)
+            y += 38
+        y += 22
+
+    footer_y = height - 170
+    draw.text((90, footer_y), "The captured public registry page follows this summary page.", fill=navy, font=section_font)
     draw.text(
-        (90, height - 140),
+        (90, footer_y + 56),
         "This snapshot is based on public registry information available at the time of lookup and is not legal advice.",
         fill=slate,
         font=small_font,
