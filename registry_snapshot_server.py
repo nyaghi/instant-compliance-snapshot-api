@@ -53,8 +53,8 @@ PIN_LOG_PATH = Path(__file__).with_name("registry_snapshot_passcodes.log")
 ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifacts")))
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
-PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").rstrip("/")
-APP_VERSION = "2026.04.27.5"
+PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
+APP_VERSION = "2026.04.27.6"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = 3
@@ -1632,15 +1632,14 @@ def true_status_from_body(result, body: str) -> str:
         return "Not Registered"
     if indicates_exempt_registration(combined):
         return "Exempt"
+    if use_registry_date:
+        return status_from_calendar_date(registry_date)
     if annual_filings_absent(combined):
         return "Delinquent" if record_confirmed else "Not Registered"
     if body_indicates_no_organization_record(combined) and not record_confirmed:
         return "Not Registered"
     if record_confirmed and stale_represented_year_is_delinquent(represented_year):
         return "Delinquent"
-
-    if use_registry_date:
-        return status_from_calendar_date(registry_date)
 
     if state in EXTENSION_SCENARIO_STATES and due_date and represented_year and not result_indicates_no_record(result):
         return status_from_calendar_date(due_date)
@@ -2136,5 +2135,4 @@ def main() -> None:
     server.serve_forever()
 
 
-if __name__ == "__main__":
-    main()
+if __name__ =
