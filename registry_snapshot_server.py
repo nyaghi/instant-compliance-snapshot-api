@@ -54,7 +54,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.27.6"
+APP_VERSION = "2026.04.27.7"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = 3
@@ -466,7 +466,7 @@ def public_status(result) -> str:
         return "Not Registered" if result.success else "Site Not Reachable"
     if normalized in {"not registered", "not found", "no record", "no record found"}:
         return "Not Registered"
-    if normalized in {"current", "active", "good standing", "compliant"}:
+    if normalized in {"current", "active", "good standing", "compliant"} or re.search(r"\bgood\s+as\s+of\b", normalized):
         return "Current"
     if "exempt" in normalized:
         return "Exempt"
@@ -1634,6 +1634,9 @@ def true_status_from_body(result, body: str) -> str:
         return "Exempt"
     if use_registry_date:
         return status_from_calendar_date(registry_date)
+    labeled_dates = [] if state == "CA" else labeled_due_dates_from_text(combined)
+    if labeled_dates:
+        return status_from_calendar_date(labeled_dates[0])
     if annual_filings_absent(combined):
         return "Delinquent" if record_confirmed else "Not Registered"
     if body_indicates_no_organization_record(combined) and not record_confirmed:
@@ -1653,9 +1656,6 @@ def true_status_from_body(result, body: str) -> str:
         if due_date and represented_year:
             return status_from_calendar_date(due_date)
         return "Current"
-
-    for due_date in labeled_due_dates_from_text(combined):
-        return status_from_calendar_date(due_date)
 
     if due_date and represented_year:
         return status_from_calendar_date(due_date)
