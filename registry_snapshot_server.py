@@ -14,10 +14,12 @@ import smtplib
 import sys
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import parse_qs, unquote, urljoin, urlparse
 import urllib.request
 
@@ -54,10 +56,13 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.27.9"
+APP_VERSION = "2026.04.27.11"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = 3
+MAX_PARALLEL_LOOKUPS = max(1, int(os.environ.get("CE_MAX_PARALLEL_LOOKUPS", "3")))
+BLOCK_HEAVY_BROWSER_RESOURCES = os.environ.get("CE_BLOCK_HEAVY_BROWSER_RESOURCES", "1").strip().lower() not in {"0", "false", "no"}
+EAGER_EVIDENCE_PDF = os.environ.get("CE_EAGER_EVIDENCE_PDF", "0").strip().lower() in {"1", "true", "yes"}
 MAX_EXTERNAL_EXEMPT_ORGS = 3
 DOMAIN_LIMIT_DAYS = 7
 ADMIN_PASSCODE = "8977"
@@ -101,12 +106,35 @@ def evidence_png_path(state: str, org_name: str) -> Path:
     return ARTIFACTS_DIR / state.upper() / f"{artifact_safe_name(org_name)}.png"
 
 
+def evidence_metadata_path(state: str, org_name: str) -> Path:
+    return ARTIFACTS_DIR / state.upper() / f"{artifact_safe_name(org_name)}.evidence.json"
+
+
 def ak_registration_pdf_path(org_name: str) -> Path:
     return ARTIFACTS_DIR / "AK" / f"{artifact_safe_name(org_name)}_registration.pdf"
 
 
 def evidence_url(state: str, org_name: str) -> str:
     return f"{PUBLIC_BASE_URL}/evidence/{state.upper()}/{artifact_safe_name(org_name)}.pdf"
+
+
+def configure_browser_context(context) -> None:
+    if not BLOCK_HEAVY_BROWSER_RESOURCES:
+        return
+
+    def route_handler(route):
+        try:
+            if route.request.resource_type in {"image", "media", "font"}:
+                route.abort()
+                return
+        except Exception:
+            pass
+        route.continue_()
+
+    try:
+        context.route("**/*", route_handler)
+    except Exception:
+        pass
 
 
 def wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, max_width: int) -> list[str]:
@@ -157,7 +185,11 @@ def evidence_summary_image(result, body: str, status: str, comments: str) -> Ima
     scratch = Image.new("RGB", (width, 2200), "white")
     draw = ImageDraw.Draw(scratch)
 
-    context = filing_context(result, body)
+    try:
+        context = filing_context(result, body)
+    except Exception as exc:
+        log_error(f"Could not build filing context for evidence summary: {exc}")
+        context = {}
     fiscal_end = context.get("fiscal_end")
     fiscal_end_text = f"{fiscal_end[0]}/{fiscal_end[1]}" if fiscal_end else "Not identified"
     due_date = context.get("due_date")
@@ -260,6 +292,67 @@ def screenshot_to_pdf(state: str, org_name: str, result=None, body: str = "", st
     return evidence_url(state, org_name)
 
 
+def write_evidence_metadata(state: str, org_name: str, result_data: dict, body: str, status: str, comments: str) -> None:
+    metadata_path = evidence_metadata_path(state, org_name)
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    safe_result = {
+        key: value
+        for key, value in result_data.items()
+        if value is None or isinstance(value, (str, int, float, bool))
+    }
+    metadata = {
+        "state": state.upper(),
+        "org_name": org_name,
+        "result": safe_result,
+        "body": body,
+        "status": status,
+        "comments": comments,
+        "created_at_epoch": int(time.time()),
+    }
+    try:
+        metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    except Exception as exc:
+        log_error(f"Could not write evidence metadata for {state} / {org_name}: {exc}")
+
+
+def prepare_evidence_pdf(candidate: Path) -> bool:
+    try:
+        relative = candidate.relative_to(ARTIFACTS_DIR.resolve())
+    except ValueError:
+        return False
+    if len(relative.parts) < 2:
+        return False
+    state = relative.parts[0].upper()
+    org_name = candidate.stem
+    metadata_path = candidate.with_suffix(".evidence.json")
+    if not metadata_path.exists():
+        return False
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        result_data = metadata.get("result") or {}
+        result = SimpleNamespace(**result_data)
+        if not getattr(result, "state", ""):
+            result.state = state
+        if not getattr(result, "organization_name", ""):
+            result.organization_name = metadata.get("org_name") or org_name
+        if not getattr(result, "ein", ""):
+            result.ein = result_data.get("ein", "")
+        if not getattr(result, "source_url", ""):
+            result.source_url = result_data.get("source_url", "")
+        screenshot_to_pdf(
+            state,
+            org_name,
+            result,
+            metadata.get("body") or "",
+            metadata.get("status") or result_data.get("status") or "",
+            metadata.get("comments") or result_data.get("comments") or "",
+        )
+        return candidate.exists()
+    except Exception as exc:
+        log_error(f"Could not prepare lazy evidence PDF {candidate}: {exc}")
+        return False
+
+
 def save_focused_viewport_artifact(page, state: str, org_name: str) -> None:
     state_dir = ARTIFACTS_DIR / state.upper()
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -279,6 +372,11 @@ def log_error(message: str) -> None:
         f.write(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] {message}\n")
         f.write(traceback.format_exc())
         f.write("\n")
+
+
+def log_event(message: str) -> None:
+    with LOG_PATH.open("a", encoding="utf-8") as f:
+        f.write(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] {message}\n")
 
 
 def append_lead_log(email: str, results: list[dict]) -> None:
@@ -1032,6 +1130,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
     years_to_try = getattr(checker, "AK_YEARS_TO_TRY", [date.today().year, date.today().year - 1])
     for idx, year in enumerate(years_to_try):
         ak_context = browser.new_context(viewport={"width": 1365, "height": 900}, accept_downloads=True)
+        configure_browser_context(ak_context)
         ak_page = ak_context.new_page()
         try:
             if not checker.open_ak_public_search(ak_page):
@@ -1819,6 +1918,7 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
 
 
 def run_state_lookup(organization_name: str, ein: str, state: str) -> dict:
+    lookup_started = time.perf_counter()
     artifact_name = organization_name or f"EIN {format_ein(ein)}"
     lookup_name = "" if state == "NY" else organization_name
     org = checker.Organization(organization_name=lookup_name, ein=ein)
@@ -1832,9 +1932,9 @@ def run_state_lookup(organization_name: str, ein: str, state: str) -> dict:
         try:
             if state == "AK":
                 result, body = search_ak_with_registration_evidence(browser, org, artifact_name)
-                proof_url = screenshot_to_pdf(state, artifact_name)
             else:
                 context = browser.new_context()
+                configure_browser_context(context)
                 page = context.new_page()
             if state == "AK":
                 pass
@@ -1894,7 +1994,6 @@ def run_state_lookup(organization_name: str, ein: str, state: str) -> dict:
                 )
                 if state in {"CA", "MD", "ME"}:
                     save_focused_viewport_artifact(page, state, artifact_name)
-                proof_url = screenshot_to_pdf(state, artifact_name)
         finally:
             if context:
                 context.close()
@@ -1910,12 +2009,33 @@ def run_state_lookup(organization_name: str, ein: str, state: str) -> dict:
         result.organization_name = data["organization_name"]
     data["status"] = true_status_from_body(result, body)
     data["comments"] = comments_for_result(result, body, data["status"])
-    proof_url = screenshot_to_pdf(state, artifact_name, result, body, data["status"], data["comments"]) or proof_url
+    write_evidence_metadata(state, artifact_name, data, body, data["status"], data["comments"])
+    if EAGER_EVIDENCE_PDF:
+        proof_url = screenshot_to_pdf(state, artifact_name, result, body, data["status"], data["comments"]) or proof_url
+    elif evidence_png_path(state, artifact_name).exists() or ak_registration_pdf_path(artifact_name).exists():
+        proof_url = evidence_url(state, artifact_name)
     if proof_url:
         data["evidence_url"] = proof_url
+    data["lookup_seconds"] = round(time.perf_counter() - lookup_started, 2)
     data["checked_at_epoch"] = int(time.time())
     data["app_version"] = APP_VERSION
+    log_event(f"{state} lookup for {format_ein(ein)} finished in {data['lookup_seconds']}s with status {data.get('status')}")
     return data
+
+
+def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> list[dict]:
+    lookup_requests = [
+        (org["organization_name"], org["ein"], st)
+        for org in organizations
+        for st in states
+    ]
+    if len(lookup_requests) <= 1:
+        return [run_state_lookup(*lookup_requests[0])]
+
+    worker_count = min(MAX_PARALLEL_LOOKUPS, len(lookup_requests))
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        # executor.map preserves input order, so the table stays predictable.
+        return list(executor.map(lambda args: run_state_lookup(*args), lookup_requests))
 
 
 def normalize_organization_requests(payload: dict, privileged: bool) -> list[dict]:
@@ -1972,7 +2092,12 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
             relative_path = unquote(self.path.removeprefix("/evidence/"))
             candidate = (ARTIFACTS_DIR / relative_path).resolve()
             artifacts_root = ARTIFACTS_DIR.resolve()
-            if artifacts_root not in candidate.parents or candidate.suffix.lower() != ".pdf" or not candidate.exists():
+            if artifacts_root not in candidate.parents or candidate.suffix.lower() != ".pdf":
+                self._send_json(404, {"error": "Evidence PDF not found."})
+                return True
+            if not candidate.exists():
+                prepare_evidence_pdf(candidate)
+            if not candidate.exists():
                 self._send_json(404, {"error": "Evidence PDF not found."})
                 return True
             body = candidate.read_bytes()
@@ -2132,11 +2257,7 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
                 self._send_json(429, {"error": "A complimentary snapshot was already requested for this email domain."})
                 return
 
-            results = [
-                run_state_lookup(org["organization_name"], org["ein"], st)
-                for org in organizations
-                for st in states
-            ]
+            results = run_state_lookups_parallel(organizations, states)
             append_lead_log(email, results)
             if is_batch:
                 if not privileged:
