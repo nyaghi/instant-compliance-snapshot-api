@@ -22,7 +22,7 @@ Environment variables:
 
 ```text
 HOST=0.0.0.0
-PUBLIC_BASE_URL=https://YOUR-RENDER-SERVICE.onrender.com
+PUBLIC_BASE_URL=https://instant-compliance-snapshot-api.onrender.com
 PYTHONUNBUFFERED=1
 ```
 
