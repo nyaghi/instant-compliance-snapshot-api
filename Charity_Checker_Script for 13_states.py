@@ -1,10 +1,11 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
 import csv
 import io
 import json
+import os
 import re
 import sys
 import time
@@ -33,6 +34,9 @@ STATUS_UNKNOWN = "Unknown"
 
 AK_SEARCH_URL = "https://online-registrations-law.alaska.gov/TLP/WebDoc/_/#4"
 AK_YEARS_TO_TRY = [2026, 2025, 2024, 2023]
+FAST_WAIT_MAX_MS = max(1000, int(os.environ.get("CE_FAST_WAIT_MAX_MS", "5000")))
+FULL_PAGE_ARTIFACTS = os.environ.get("CE_FULL_PAGE_ARTIFACTS", "0").strip().lower() in {"1", "true", "yes"}
+ARTIFACT_SCREENSHOT_TIMEOUT_MS = max(1000, int(os.environ.get("CE_ARTIFACT_SCREENSHOT_TIMEOUT_MS", "10000")))
 
 @dataclass
 class Organization:
@@ -131,13 +135,17 @@ def save_artifacts(page, artifacts_dir: Path, state: str, org_name: str) -> None
     except Exception:
         pass
     try:
-        page.screenshot(path=str(state_dir / f"{safe_name}.png"), full_page=True)
+        page.screenshot(
+            path=str(state_dir / f"{safe_name}.png"),
+            full_page=FULL_PAGE_ARTIFACTS,
+            timeout=ARTIFACT_SCREENSHOT_TIMEOUT_MS,
+        )
     except Exception:
         pass
 
 def safe_wait_for_network_idle(page, timeout: int = 15000) -> None:
     try:
-        page.wait_for_load_state("networkidle", timeout=timeout)
+        page.wait_for_load_state("networkidle", timeout=min(timeout, FAST_WAIT_MAX_MS))
     except Exception:
         pass
 
@@ -1440,53 +1448,70 @@ def search_md(page, org: Organization) -> StateResult:
             result.error = "Could not find MD Charity EIN input"
             return result
 
-        ein_input.fill("")
-        ein_input.fill(formatted_ein)
-        time.sleep(1)
+        def submit_md_search(search_value: str) -> None:
+            ein_input.fill("")
+            ein_input.fill(search_value)
+            time.sleep(1)
 
-        clicked_search = False
-        for sel in [
-            'button[type="submit"]',
-            'input[type="submit"]',
-            'button',
-            'input[type="button"]',
-        ]:
-            try:
-                buttons = page.locator(sel).filter(has_text=re.compile("Search", re.I))
-                count = min(buttons.count(), 10)
-                for i in range(count):
-                    btn = buttons.nth(i)
-                    if btn.is_visible(timeout=750):
-                        btn.click(timeout=5000)
-                        clicked_search = True
+            clicked_search = False
+            for sel in [
+                'button[type="submit"]',
+                'input[type="submit"]',
+                'button',
+                'input[type="button"]',
+            ]:
+                try:
+                    buttons = page.locator(sel).filter(has_text=re.compile("Search", re.I))
+                    count = min(buttons.count(), 10)
+                    for i in range(count):
+                        btn = buttons.nth(i)
+                        if btn.is_visible(timeout=750):
+                            btn.click(timeout=5000)
+                            clicked_search = True
+                            break
+                    if clicked_search:
                         break
-                if clicked_search:
-                    break
-            except Exception:
-                continue
-        if not clicked_search:
-            try:
-                page.get_by_role("button", name=re.compile("Search", re.I)).click(timeout=5000)
-                clicked_search = True
-            except Exception:
-                pass
-        if not clicked_search:
-            try:
-                ein_input.press("Enter")
-            except Exception:
-                pass
+                except Exception:
+                    continue
+            if not clicked_search:
+                try:
+                    page.get_by_role("button", name=re.compile("Search", re.I)).click(timeout=5000)
+                    clicked_search = True
+                except Exception:
+                    pass
+            if not clicked_search:
+                try:
+                    ein_input.press("Enter")
+                except Exception:
+                    pass
+            safe_wait_for_network_idle(page, timeout=90000)
 
-        safe_wait_for_network_idle(page, timeout=90000)
+        def md_body_has_match(text: str) -> bool:
+            return bool(
+                ein in digits_only(text)
+                or formatted_ein in text
+                or (wanted_name and wanted_name in normalize_name(text))
+            )
+
         wanted_name = normalize_name(org.organization_name)
         body = ""
-        deadline = time.time() + 120
-        while time.time() < deadline:
-            body = page.locator("body").inner_text(timeout=20000)
-            if ein in digits_only(body) or formatted_ein in body or (wanted_name and wanted_name in normalize_name(body)):
+        for search_value in [formatted_ein, ein]:
+            submit_md_search(search_value)
+            deadline = time.time() + 120
+            while time.time() < deadline:
+                body = page.locator("body").inner_text(timeout=20000)
+                if md_body_has_match(body):
+                    break
+                if re.search(r"\b1\s+record\b|\b[1-9]\d*\s+records\b", body, re.I):
+                    time.sleep(2)
+                    body = page.locator("body").inner_text(timeout=20000)
+                    if md_body_has_match(body):
+                        break
+                time.sleep(2)
+            if md_body_has_match(body):
                 break
-            time.sleep(2)
 
-        if re.search(r"no results|no records|not found|0 results", body, re.I):
+        if not md_body_has_match(body) and re.search(r"no results|no records|not found|0 results", body, re.I):
             result.raw_status_text = "No record found"
             result.status = STATUS_NOT_REGISTERED
             result.source_note = "Maryland search returned no matching EIN record."
