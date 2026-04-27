@@ -21,6 +21,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urljoin, urlparse
 import urllib.request
 
+os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "0")
+
 from PIL import Image, ImageDraw, ImageFont
 try:
     from pypdf import PdfReader, PdfWriter
