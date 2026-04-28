@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.28.8"
+APP_VERSION = "2026.04.28.9"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = 3
@@ -2162,6 +2162,12 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
             candidate = (ARTIFACTS_DIR / relative_path).resolve()
             artifacts_root = ARTIFACTS_DIR.resolve()
             if artifacts_root not in candidate.parents or candidate.suffix.lower() != ".pdf":
+                self._send_json(404, {"error": "Evidence PDF not found."})
+                return True
+            try:
+                relative_candidate = candidate.relative_to(artifacts_root)
+                state = relative_candidate.parts[0].upper()
+            except Exception:
                 self._send_json(404, {"error": "Evidence PDF not found."})
                 return True
             metadata_candidate = candidate.with_suffix(".evidence.json")
