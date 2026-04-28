@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.28.19"
+APP_VERSION = "2026.04.28.20"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1974,6 +1974,11 @@ def true_status_from_body(result, body: str) -> str:
     if record_confirmed and stale_represented_year_is_delinquent(represented_year):
         return "Delinquent"
 
+    if state == "HI" and record_confirmed and represented_year and represented_year >= date.today().year - 1 and re.search(r"\bActive\b", combined, re.I):
+        return "Current"
+    if state == "MA" and record_confirmed and represented_year and represented_year >= date.today().year - 1 and re.search(r"Annual\s+Filings?\s+not\s+visible", combined, re.I):
+        return "Current"
+
     if state in EXTENSION_SCENARIO_STATES and due_date and represented_year and not result_indicates_no_record(result):
         return status_from_calendar_date(due_date)
 
@@ -2051,7 +2056,7 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         if state == "MA":
             filing_label = "Form PC"
         elif state == "MD":
-            filing_label = "Maryland annual filing"
+            filing_label = "annual filing"
         elif state == "CA":
             filing_label = "California annual renewal"
         elif state == "HI":
