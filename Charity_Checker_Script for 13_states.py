@@ -998,6 +998,9 @@ def search_nj(page, org: Organization) -> StateResult:
 
         query = digits_only(org.ein) if digits_only(org.ein) else org.organization_name
         input_box = find_visible_input(page, [
+            "#SearchBox28",
+            'input[placeholder="Search"]',
+            'input[aria-label*="partial text" i]',
             'input[placeholder*="Search for a Charity" i]',
             'input[name*="search" i]',
             'input[id*="search" i]',
