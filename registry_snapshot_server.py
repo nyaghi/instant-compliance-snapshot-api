@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.28.2"
+APP_VERSION = "2026.04.28.3"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = 3
@@ -64,6 +64,7 @@ MAX_PARALLEL_LOOKUPS = max(1, int(os.environ.get("CE_MAX_PARALLEL_LOOKUPS", "3")
 BLOCK_HEAVY_BROWSER_RESOURCES = os.environ.get("CE_BLOCK_HEAVY_BROWSER_RESOURCES", "1").strip().lower() not in {"0", "false", "no"}
 EAGER_EVIDENCE_PDF = os.environ.get("CE_EAGER_EVIDENCE_PDF", "0").strip().lower() in {"1", "true", "yes"}
 CAPTURE_EVIDENCE_SCREENSHOTS = os.environ.get("CE_CAPTURE_EVIDENCE_SCREENSHOTS", "0").strip().lower() in {"1", "true", "yes"}
+CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT = os.environ.get("CE_CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT", "1").strip().lower() not in {"0", "false", "no"}
 MAX_EXTERNAL_EXEMPT_ORGS = 3
 DOMAIN_LIMIT_DAYS = 7
 ADMIN_PASSCODE = "8977"
@@ -2018,6 +2019,8 @@ def run_state_lookup(organization_name: str, ein: str, state: str) -> dict:
                     )
                     if state in {"CA", "MD", "ME"}:
                         save_focused_viewport_artifact(page, state, artifact_name)
+                elif CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT:
+                    save_focused_viewport_artifact(page, state, artifact_name)
         finally:
             if context:
                 context.close()
