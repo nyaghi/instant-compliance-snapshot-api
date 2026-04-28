@@ -56,13 +56,14 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.27.11"
+APP_VERSION = "2026.04.28.1"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = 3
 MAX_PARALLEL_LOOKUPS = max(1, int(os.environ.get("CE_MAX_PARALLEL_LOOKUPS", "3")))
 BLOCK_HEAVY_BROWSER_RESOURCES = os.environ.get("CE_BLOCK_HEAVY_BROWSER_RESOURCES", "1").strip().lower() not in {"0", "false", "no"}
 EAGER_EVIDENCE_PDF = os.environ.get("CE_EAGER_EVIDENCE_PDF", "0").strip().lower() in {"1", "true", "yes"}
+CAPTURE_EVIDENCE_SCREENSHOTS = os.environ.get("CE_CAPTURE_EVIDENCE_SCREENSHOTS", "0").strip().lower() in {"1", "true", "yes"}
 MAX_EXTERNAL_EXEMPT_ORGS = 3
 DOMAIN_LIMIT_DAYS = 7
 ADMIN_PASSCODE = "8977"
@@ -169,12 +170,13 @@ def load_font(size: int, bold: bool = False) -> ImageFont.ImageFont:
 
 def evidence_summary_image(result, body: str, status: str, comments: str) -> Image.Image:
     width = 1600
-    title_font = load_font(62, bold=True)
-    ribbon_font = load_font(34, bold=True)
-    section_font = load_font(34, bold=True)
-    label_font = load_font(24, bold=True)
-    text_font = load_font(29)
-    small_font = load_font(22)
+    height = 2200
+    title_font = load_font(66, bold=True)
+    ribbon_font = load_font(38, bold=True)
+    section_font = load_font(38, bold=True)
+    label_font = load_font(27, bold=True)
+    text_font = load_font(32)
+    small_font = load_font(25)
     navy = "#0B2A5B"
     red = "#C62828"
     slate = "#334155"
@@ -207,14 +209,21 @@ def evidence_summary_image(result, body: str, status: str, comments: str) -> Ima
         ("Calculated Due Date Used", format_date(due_date) if due_date else "Not identified"),
     ]
 
+    def clamp_lines(lines: list[str], max_lines: int) -> list[str]:
+        if len(lines) <= max_lines:
+            return lines
+        clipped = lines[:max_lines]
+        clipped[-1] = clipped[-1].rstrip(" .,:;") + "..."
+        return clipped
+
     wrapped_rows = []
     value_width = width - 250
     for label, value in rows:
-        wrapped_rows.append((label, wrap_text(draw, str(value), text_font, value_width)))
+        lines = wrap_text(draw, str(value), text_font, value_width)
+        max_lines = 6 if label == "CE Comment" else 4 if label in {"Source URL", "Source Note"} else 3
+        wrapped_rows.append((label, clamp_lines(lines, max_lines)))
 
-    row_heights = [82 + (len(lines) * 38) for _, lines in wrapped_rows]
-    card_height = 96 + sum(row_heights)
-    height = max(1900, 420 + card_height + 220)
+    row_heights = [74 + (len(lines) * 42) for _, lines in wrapped_rows]
     image = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(image)
 
@@ -231,6 +240,7 @@ def evidence_summary_image(result, body: str, status: str, comments: str) -> Ima
     y += 140
 
     card_top = y
+    card_height = min(height - card_top - 230, 96 + sum(row_heights))
     draw.rounded_rectangle((70, card_top, width - 70, card_top + card_height), radius=28, fill=light, outline=border, width=3)
     y += 38
     draw.text((105, y), "Status Basis", fill=navy, font=section_font)
@@ -242,15 +252,20 @@ def evidence_summary_image(result, body: str, status: str, comments: str) -> Ima
         draw.text((110, y), label.upper(), fill=red, font=label_font)
         y += 36
         for line in lines:
+            if y > card_top + card_height - 70:
+                draw.text((110, y), "Additional details are retained in the registry snapshot metadata.", fill=muted, font=small_font)
+                break
             draw.text((110, y), line, fill=slate, font=text_font)
-            y += 38
+            y += 42
         y += 22
+        if y > card_top + card_height - 70:
+            break
 
     footer_y = height - 170
-    draw.text((90, footer_y), "The captured public registry page follows this summary page.", fill=navy, font=section_font)
+    draw.text((90, footer_y), "Supporting Snapshot", fill=navy, font=section_font)
     draw.text(
         (90, footer_y + 56),
-        "This snapshot is based on public registry information available at the time of lookup and is not legal advice.",
+        "This snapshot is based on public registry information available at the time of lookup and is not legal advice. A registry screenshot follows when available.",
         fill=slate,
         font=small_font,
     )
@@ -260,22 +275,28 @@ def evidence_summary_image(result, body: str, status: str, comments: str) -> Ima
 def screenshot_to_pdf(state: str, org_name: str, result=None, body: str = "", status: str = "", comments: str = "") -> str | None:
     png_path = evidence_png_path(state, org_name)
     pdf_path = evidence_pdf_path(state, org_name)
-    if not png_path.exists():
+    if not png_path.exists() and result is None:
         return None
 
     pdf_path.parent.mkdir(parents=True, exist_ok=True)
-    with Image.open(png_path) as image:
-        if image.mode in {"RGBA", "P"}:
-            image = image.convert("RGB")
-        if image.width > 1400:
-            ratio = 1400 / image.width
-            image = image.resize((1400, max(1, int(image.height * ratio))), Image.Resampling.LANCZOS)
-        output_buffer = io.BytesIO()
-        if result is not None:
-            summary = evidence_summary_image(result, body, status, comments)
-            summary.save(output_buffer, "PDF", resolution=144.0, save_all=True, append_images=[image])
-        else:
-            image.save(output_buffer, "PDF", resolution=144.0)
+    output_buffer = io.BytesIO()
+    append_images = []
+    if png_path.exists():
+        with Image.open(png_path) as image:
+            if image.mode in {"RGBA", "P"}:
+                image = image.convert("RGB")
+            if image.width > 1400:
+                ratio = 1400 / image.width
+                image = image.resize((1400, max(1, int(image.height * ratio))), Image.Resampling.LANCZOS)
+            append_images.append(image.copy())
+
+    if result is not None:
+        summary = evidence_summary_image(result, body, status, comments)
+        summary.save(output_buffer, "PDF", resolution=144.0, save_all=True, append_images=append_images)
+    elif append_images:
+        append_images[0].save(output_buffer, "PDF", resolution=144.0, save_all=True, append_images=append_images[1:])
+    else:
+        return None
 
     ak_pdf = ak_registration_pdf_path(org_name)
     if state.upper() == "AK" and ak_pdf.exists() and PdfReader is not None and PdfWriter is not None:
@@ -1587,6 +1608,8 @@ def indicates_exempt_registration(text: str) -> bool:
 def md_detail_page_matched(result, text: str) -> bool:
     readable = html.unescape(re.sub(r"<[^>]+>", " ", text or ""))
     readable = re.sub(r"\s+", " ", readable)
+    if re.search(r"\b[1-9]\d*\s+records?\b", readable, re.I) and not re.search(r"No\s+results\s+found|0\s+records?", readable, re.I):
+        return True
     if not re.search(r"SOS\s+Charity\s+Organization\s+Record|Charity\s+Name|Registration\s+Status", readable, re.I):
         return False
     if re.search(r"SoS\s+Charities\s+-\s+Public\s+Registry[\s\S]{0,600}No\s+results\s+found", readable, re.I):
@@ -1949,7 +1972,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str) -> dict:
                 md_body = registry_page_body(page)
                 if md_detail_page_matched(result, md_body):
                     result.status = result.raw_status_text if result.raw_status_text and result.raw_status_text != "No matching EIN result" else checker.STATUS_UNKNOWN
-                    result.raw_status_text = result.raw_status_text if result.raw_status_text != "No matching EIN result" else "Maryland detail record found"
+                    result.raw_status_text = result.raw_status_text if result.raw_status_text not in {"No matching EIN result", "No record found"} else "Maryland record found"
                     result.source_note = "Maryland detail page was reached from the public registry search."
                     result.success = True
                     body = md_detail_body(page)
@@ -1986,14 +2009,15 @@ def run_state_lookup(organization_name: str, ein: str, state: str) -> dict:
             if page:
                 if not body:
                     body = registry_page_body(page)
-                checker.save_artifacts(
-                    page,
-                    ARTIFACTS_DIR,
-                    state,
-                    artifact_name,
-                )
-                if state in {"CA", "MD", "ME"}:
-                    save_focused_viewport_artifact(page, state, artifact_name)
+                if CAPTURE_EVIDENCE_SCREENSHOTS:
+                    checker.save_artifacts(
+                        page,
+                        ARTIFACTS_DIR,
+                        state,
+                        artifact_name,
+                    )
+                    if state in {"CA", "MD", "ME"}:
+                        save_focused_viewport_artifact(page, state, artifact_name)
         finally:
             if context:
                 context.close()
@@ -2012,7 +2036,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str) -> dict:
     write_evidence_metadata(state, artifact_name, data, body, data["status"], data["comments"])
     if EAGER_EVIDENCE_PDF:
         proof_url = screenshot_to_pdf(state, artifact_name, result, body, data["status"], data["comments"]) or proof_url
-    elif evidence_png_path(state, artifact_name).exists() or ak_registration_pdf_path(artifact_name).exists():
+    elif evidence_png_path(state, artifact_name).exists() or ak_registration_pdf_path(artifact_name).exists() or evidence_metadata_path(state, artifact_name).exists():
         proof_url = evidence_url(state, artifact_name)
     if proof_url:
         data["evidence_url"] = proof_url
