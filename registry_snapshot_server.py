@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.28.16"
+APP_VERSION = "2026.04.28.17"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1151,6 +1151,65 @@ def extract_ak_signature_date(pdf_text: str) -> str:
     return match.group(1).strip() if match else ""
 
 
+def organization_name_variants(name: str) -> list[str]:
+    base = re.sub(r"\s+", " ", (name or "").strip())
+    if not base:
+        return [""]
+    variants = [base]
+    without_trailing_the = re.sub(r",\s*the\s*$", "", base, flags=re.I).strip()
+    without_leading_the = re.sub(r"^the\s+", "", base, flags=re.I).strip()
+    for variant in [without_trailing_the, without_leading_the]:
+        if variant and variant.lower() not in {item.lower() for item in variants}:
+            variants.append(variant)
+    return variants
+
+
+def org_with_name(org, name: str):
+    return SimpleNamespace(organization_name=name, ein=org.ein)
+
+
+def find_ak_print_link_relaxed(page, org):
+    formatted_ein = checker.format_ein_with_dash(org.ein)
+    ein_digits = re.sub(r"\D", "", org.ein or "")
+    variants = organization_name_variants(org.organization_name)
+    for variant in variants:
+        try:
+            found = checker.find_ak_print_link(page, org_with_name(org, variant))
+            if found:
+                return found
+        except Exception:
+            pass
+    return page.evaluate(
+        """
+        ({ formattedEin, einDigits, names }) => {
+            const normalize = (value) => (value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+            const normalizedNames = (names || []).map(normalize).filter(Boolean);
+            const rows = Array.from(document.querySelectorAll('table.DocTable tbody tr, table tbody tr'));
+            for (const row of rows) {
+                const rowText = (row.innerText || row.textContent || '').trim().replace(/\\s+/g, ' ');
+                const rowDigits = rowText.replace(/\\D/g, '');
+                const rowNorm = normalize(rowText);
+                const einSeen = (formattedEin && rowText.includes(formattedEin)) || (einDigits && rowDigits.includes(einDigits));
+                const nameSeen = normalizedNames.length && normalizedNames.some((name) => rowNorm.includes(name) || name.includes(rowNorm));
+                if (!einSeen && !nameSeen) continue;
+                const links = Array.from(row.querySelectorAll('a'));
+                for (const link of links) {
+                    const text = (link.innerText || link.textContent || '').trim();
+                    const rect = link.getBoundingClientRect();
+                    const style = window.getComputedStyle(link);
+                    const visible = !!(rect.width && rect.height) && style.display !== 'none' && style.visibility !== 'hidden';
+                    if (/^Print$/i.test(text) && visible) {
+                        return { found: true, rowText, x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+                    }
+                }
+            }
+            return null;
+        }
+        """,
+        {"formattedEin": formatted_ein, "einDigits": ein_digits, "names": variants},
+    )
+
+
 def fetch_ak_registration_pdf(page, context, print_link: dict, org_name: str) -> tuple[str, str]:
     popup = None
     pdf_url = ""
@@ -1233,35 +1292,37 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
         return result, ""
     years_to_try = getattr(checker, "AK_YEARS_TO_TRY", [date.today().year, date.today().year - 1])
     for idx, year in enumerate(years_to_try):
-        ak_context = browser.new_context(viewport={"width": 1365, "height": 900}, accept_downloads=True)
-        configure_browser_context(ak_context)
-        ak_page = ak_context.new_page()
-        try:
-            if not checker.open_ak_public_search(ak_page):
-                result.error = "Could not open Alaska Public Search form"
+        for variant in organization_name_variants(org.organization_name):
+            ak_context = browser.new_context(viewport={"width": 1365, "height": 900}, accept_downloads=True)
+            configure_browser_context(ak_context)
+            ak_page = ak_context.new_page()
+            try:
+                if not checker.open_ak_public_search(ak_page):
+                    result.error = "Could not open Alaska Public Search form"
+                    return result, ""
+                search_org = org_with_name(org, variant)
+                checker.fill_ak_search_form(ak_page, search_org, year)
+                print_link = find_ak_print_link_relaxed(ak_page, search_org)
+                if not print_link:
+                    if idx == len(years_to_try) - 1:
+                        checker.save_artifacts(ak_page, ARTIFACTS_DIR, "AK", artifact_name)
+                    continue
+                checker.save_artifacts(ak_page, ARTIFACTS_DIR, "AK", artifact_name)
+                pdf_text, pdf_url = fetch_ak_registration_pdf(ak_page, ak_context, print_link, artifact_name)
+                accounting_year_end = checker.extract_ak_accounting_end_year(pdf_text) if pdf_text else None
+                result.status, result.raw_status_text, result.source_note = checker.classify_ak_registration_year(year, accounting_year_end)
+                signature_date = extract_ak_signature_date(pdf_text)
+                if signature_date:
+                    result.source_note = f"{result.source_note}; print registration signature date {signature_date}"
+                if pdf_url:
+                    result.source_url = pdf_url
+                result.success = True
+                return result, "\n".join([registry_page_body(ak_page), pdf_text])
+            except Exception as e:
+                result.error = f"AK error: {e}"
                 return result, ""
-            checker.fill_ak_search_form(ak_page, org, year)
-            print_link = checker.find_ak_print_link(ak_page, org)
-            if not print_link:
-                if idx == len(years_to_try) - 1:
-                    checker.save_artifacts(ak_page, ARTIFACTS_DIR, "AK", artifact_name)
-                continue
-            checker.save_artifacts(ak_page, ARTIFACTS_DIR, "AK", artifact_name)
-            pdf_text, pdf_url = fetch_ak_registration_pdf(ak_page, ak_context, print_link, artifact_name)
-            accounting_year_end = checker.extract_ak_accounting_end_year(pdf_text) if pdf_text else None
-            result.status, result.raw_status_text, result.source_note = checker.classify_ak_registration_year(year, accounting_year_end)
-            signature_date = extract_ak_signature_date(pdf_text)
-            if signature_date:
-                result.source_note = f"{result.source_note}; print registration signature date {signature_date}"
-            if pdf_url:
-                result.source_url = pdf_url
-            result.success = True
-            return result, "\n".join([registry_page_body(ak_page), pdf_text])
-        except Exception as e:
-            result.error = f"AK error: {e}"
-            return result, ""
-        finally:
-            ak_context.close()
+            finally:
+                ak_context.close()
     checked_years = ", ".join(str(year) for year in years_to_try)
     result.raw_status_text = f"No Alaska registration found for checked years {checked_years}"
     result.status = "Not registered"
@@ -1420,75 +1481,78 @@ def search_hi_precise(page, org):
         if not name_input or not fein_input:
             result.error = "Could not find HI search fields"
             return result
-        name_input.fill("")
-        name_input.fill(org.organization_name)
-        fein_input.fill("")
-        if ein_digits:
-            fein_input.fill(ein_digits)
-        clicked = False
-        for sel in ["#trigger-organization-search", 'button[id="trigger-organization-search"]', 'button[type="submit"]', "button"]:
-            try:
-                buttons = page.locator(sel)
-                for i in range(min(buttons.count(), 10)):
-                    button = buttons.nth(i)
-                    try:
-                        text = re.sub(r"\s+", " ", button.inner_text(timeout=1000)).strip()
-                    except Exception:
-                        text = (button.get_attribute("value") or "").strip()
-                    if button.is_visible(timeout=750) and re.search(r"\bSearch\b", text, re.I):
-                        button.click(timeout=5000)
-                        clicked = True
-                        break
-                if clicked:
-                    break
-            except Exception:
-                continue
-        if not clicked:
-            result.error = "Could not click HI Search button"
-            return result
-        checker.safe_wait_for_network_idle(page, timeout=30000)
-        time.sleep(3)
-        body = page.locator("body").inner_text(timeout=15000)
-        if re.search(r"no results|no records|0 results|showing 0 to 0 of 0 entries|no data available in table|not registered in our system", body, re.I):
-            result.raw_status_text = "No record found"
-            result.status = "Not registered"
-            result.source_note = "Hawaii search returned no matching organization result."
-            result.success = True
-            return result
-        wanted = checker.normalize_name(org.organization_name)
+        body = ""
         clicked_result = False
-        for selector in ["#searchOrgTable tbody tr", "#searchResultTable tbody tr", "table tbody tr", "a[href]"]:
-            try:
-                rows = page.locator(selector)
-                for i in range(min(rows.count(), 100)):
-                    row = rows.nth(i)
-                    try:
-                        if not row.is_visible(timeout=750):
-                            continue
-                        row_text = re.sub(r"\s+", " ", row.inner_text(timeout=1500)).strip()
-                        if not row_text or re.search(r"no data available", row_text, re.I):
-                            continue
-                        if ein_digits and ein_digits not in re.sub(r"\D", "", row_text) and wanted not in checker.normalize_name(row_text):
-                            continue
-                        links = row.locator("a[href]")
-                        if selector == "a[href]":
-                            row.click(timeout=5000)
-                        elif links.count():
-                            links.first.click(timeout=5000)
-                        else:
-                            row.click(timeout=5000)
-                        clicked_result = True
+        for variant in organization_name_variants(org.organization_name):
+            name_input.fill("")
+            name_input.fill(variant)
+            fein_input.fill("")
+            if ein_digits:
+                fein_input.fill(ein_digits)
+            clicked = False
+            for sel in ["#trigger-organization-search", 'button[id="trigger-organization-search"]', 'button[type="submit"]', "button"]:
+                try:
+                    buttons = page.locator(sel)
+                    for i in range(min(buttons.count(), 10)):
+                        button = buttons.nth(i)
+                        try:
+                            text = re.sub(r"\s+", " ", button.inner_text(timeout=1000)).strip()
+                        except Exception:
+                            text = (button.get_attribute("value") or "").strip()
+                        if button.is_visible(timeout=750) and re.search(r"\bSearch\b", text, re.I):
+                            button.click(timeout=5000)
+                            clicked = True
+                            break
+                    if clicked:
                         break
-                    except Exception:
-                        continue
-                if clicked_result:
-                    break
-            except Exception:
+                except Exception:
+                    continue
+            if not clicked:
+                result.error = "Could not click HI Search button"
+                return result
+            checker.safe_wait_for_network_idle(page, timeout=30000)
+            time.sleep(3)
+            body = page.locator("body").inner_text(timeout=15000)
+            if re.search(r"no results|no records|0 results|showing 0 to 0 of 0 entries|no data available in table|not registered in our system", body, re.I):
                 continue
+            wanted_variants = [checker.normalize_name(item) for item in organization_name_variants(org.organization_name)]
+            for selector in ["#searchOrgTable tbody tr", "#searchResultTable tbody tr", "table tbody tr", "a[href]"]:
+                try:
+                    rows = page.locator(selector)
+                    for i in range(min(rows.count(), 100)):
+                        row = rows.nth(i)
+                        try:
+                            if not row.is_visible(timeout=750):
+                                continue
+                            row_text = re.sub(r"\s+", " ", row.inner_text(timeout=1500)).strip()
+                            if not row_text or re.search(r"no data available", row_text, re.I):
+                                continue
+                            row_digits = re.sub(r"\D", "", row_text)
+                            row_name = checker.normalize_name(row_text)
+                            name_match = any(name and (name in row_name or row_name in name) for name in wanted_variants)
+                            if ein_digits and ein_digits not in row_digits and not name_match:
+                                continue
+                            links = row.locator("a[href]")
+                            if selector == "a[href]":
+                                row.click(timeout=5000)
+                            elif links.count():
+                                links.first.click(timeout=5000)
+                            else:
+                                row.click(timeout=5000)
+                            clicked_result = True
+                            break
+                        except Exception:
+                            continue
+                    if clicked_result:
+                        break
+                except Exception:
+                    continue
+            if clicked_result:
+                break
         if not clicked_result:
-            result.raw_status_text = "No matching organization result"
+            result.raw_status_text = "No record found" if re.search(r"no results|no records|0 results|showing 0 to 0 of 0 entries|no data available in table|not registered in our system", body, re.I) else "No matching organization result"
             result.status = "Not registered"
-            result.source_note = "Hawaii search results did not contain a matching organization row."
+            result.source_note = "Hawaii search results did not contain a matching organization/EIN row."
             result.success = True
             return result
         page.wait_for_load_state("domcontentloaded", timeout=30000)
