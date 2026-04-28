@@ -20,7 +20,7 @@ from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import parse_qs, unquote, urljoin, urlparse
+from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
 import urllib.request
 
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "0")
@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.28.9"
+APP_VERSION = "2026.04.28.10"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = 3
@@ -117,8 +117,14 @@ def ak_registration_pdf_path(org_name: str) -> Path:
     return ARTIFACTS_DIR / "AK" / f"{artifact_safe_name(org_name)}_registration.pdf"
 
 
-def evidence_url(state: str, org_name: str) -> str:
-    return f"{PUBLIC_BASE_URL}/evidence/{state.upper()}/{artifact_safe_name(org_name)}.pdf"
+def evidence_url(state: str, org_name: str, ein: str = "") -> str:
+    url = f"{PUBLIC_BASE_URL}/evidence/{state.upper()}/{artifact_safe_name(org_name)}.pdf"
+    query = []
+    if ein:
+        query.append(f"ein={quote(format_ein(ein), safe='')}")
+    if org_name:
+        query.append(f"org={quote(org_name, safe='')}")
+    return f"{url}?{'&'.join(query)}" if query else url
 
 
 def configure_browser_context(context) -> None:
@@ -312,7 +318,7 @@ def screenshot_to_pdf(state: str, org_name: str, result=None, body: str = "", st
             writer.write(f)
     else:
         pdf_path.write_bytes(output_buffer.getvalue())
-    return evidence_url(state, org_name)
+    return evidence_url(state, org_name, getattr(result, "ein", "") if result is not None else "")
 
 
 def write_evidence_metadata(state: str, org_name: str, result_data: dict, body: str, status: str, comments: str) -> None:
@@ -2082,7 +2088,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
     if EAGER_EVIDENCE_PDF:
         proof_url = screenshot_to_pdf(state, artifact_name, result, body, data["status"], data["comments"]) or proof_url
     elif evidence_png_path(state, artifact_name).exists() or ak_registration_pdf_path(artifact_name).exists() or evidence_metadata_path(state, artifact_name).exists():
-        proof_url = evidence_url(state, artifact_name)
+        proof_url = evidence_url(state, artifact_name, ein)
     if proof_url:
         data["evidence_url"] = proof_url
     data["lookup_seconds"] = round(time.perf_counter() - lookup_started, 2)
@@ -2158,7 +2164,8 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
             return False
 
         try:
-            relative_path = unquote(self.path.removeprefix("/evidence/"))
+            parsed = urlparse(self.path)
+            relative_path = unquote(parsed.path.removeprefix("/evidence/"))
             candidate = (ARTIFACTS_DIR / relative_path).resolve()
             artifacts_root = ARTIFACTS_DIR.resolve()
             if artifacts_root not in candidate.parents or candidate.suffix.lower() != ".pdf":
@@ -2170,7 +2177,13 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
             except Exception:
                 self._send_json(404, {"error": "Evidence PDF not found."})
                 return True
+            query = parse_qs(parsed.query)
+            request_ein = format_ein((query.get("ein") or [""])[0])
+            request_org = ((query.get("org") or [""])[0] or candidate.stem.replace("_", " ")).strip()
             metadata_candidate = candidate.with_suffix(".evidence.json")
+            if not metadata_candidate.exists() and request_ein:
+                prepare_name = request_org or candidate.stem.replace("_", " ")
+                run_state_lookup(prepare_name, request_ein, state, capture_source_snapshot=True)
             should_prepare = not candidate.exists()
             if metadata_candidate.exists() and candidate.exists():
                 should_prepare = metadata_candidate.stat().st_mtime > candidate.stat().st_mtime
