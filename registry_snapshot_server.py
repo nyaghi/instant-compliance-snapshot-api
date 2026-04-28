@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.28.13"
+APP_VERSION = "2026.04.28.14"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = 1
@@ -993,7 +993,7 @@ def filing_context(result, body: str) -> dict:
             "fiscal_end": fiscal_end,
             "next_report_year": None,
             "due_date": None,
-            "comment": "Annual filing due date could not be determined from the available instant compliance snapshot."
+            "comment": "Annual filing due date could not be determined from the available Charity Clarity check."
         }
 
     next_report_year = latest_year + 1
@@ -1900,14 +1900,14 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
     if normalized_status == "site not reachable":
         technical_error = " ".join([result.error or "", result.source_note or "", result.raw_status_text or ""])
         if re.search(r"ERR_NAME_NOT_RESOLVED|remote name could not be resolved|getaddrinfo failed|Name or service not known", technical_error, re.I):
-            return "Local DNS/network resolution failed while trying to reach the public registry host. This is usually a local network/DNS issue; rerun the snapshot after the connection stabilizes."
+            return "Local DNS/network resolution failed while trying to reach the public registry host. This is usually a local network/DNS issue; rerun Charity Clarity after the connection stabilizes."
         if re.search(r"timed out|timeout", technical_error, re.I):
-            return "The public registry did not respond before the lookup timed out. Rerun the snapshot to confirm whether this was temporary."
-        return "Public registry site could not be reached at the time of the snapshot."
+            return "The public registry did not respond before the lookup timed out. Rerun Charity Clarity to confirm whether this was temporary."
+        return "Public registry site could not be reached at the time of the Charity Clarity check."
     if normalized_status == "not registered":
         return f"The {state} public registry was reachable, but no matching registration record was found for the organization/EIN searched."
     if normalized_status == "unknown":
-        return f"The {state} public registry was reachable, but the snapshot could not confirm a final interpreted status from the available registry page."
+        return f"The {state} public registry was reachable, but Charity Clarity could not confirm a final interpreted status from the available registry page."
     if normalized_status == "exempt":
         return f"The {state} public registry indicates the organization is exempt from charitable registration or annual filing requirements in that state."
     if normalized_status == "delinquent" and re.search(r"\b(closed|inactive)\b", " ".join([result.status or "", result.raw_status_text or ""]), re.I):
@@ -1915,12 +1915,12 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
     if normalized_status == "delinquent" and annual_filings_absent(combined_result_text(result, body)):
         return (
             f"The {state} public registry detail page shows the organization record, but the annual filing section shows no annual filings available "
-            "and the snapshot does not show an exempt registration status."
+            "and the Charity Clarity check does not show an exempt registration status."
         )
     if normalized_status == "delinquent" and stale_represented_year_is_delinquent(context.get("represented_year")) and not context.get("due_date"):
         return (
             f"The {state} public registry detail page shows the organization record and the most recent fiscal/filing year identified is "
-            f"{context.get('represented_year')}. The available snapshot did not provide enough fiscal year-end information to calculate a precise due date, "
+            f"{context.get('represented_year')}. The available Charity Clarity check did not provide enough fiscal year-end information to calculate a precise due date, "
             "but the filing record appears more than one annual cycle behind."
         )
     registry_date = explicit_registry_date(result, body)
@@ -1987,7 +1987,7 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
                         f"If the {extension_label} was granted, the extended deadline would be {format_date(extended_due)} and the status would be {extended_status}."
                     )
                 return (
-                    f"{context['represented_year']} appears to be the most recent {state} filing year identified in the instant compliance snapshot. "
+                    f"{context['represented_year']} appears to be the most recent {state} filing year identified in the Charity Clarity check. "
                     f"Based on a {context['fiscal_end'][0]}/{context['fiscal_end'][1]} fiscal year end, the {context['next_report_year']} {filing_name} initial due date is {format_date(base_due)}. "
                     f"{status_sentence}"
                 )
@@ -2016,12 +2016,12 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
                 )
             return context["comment"]
     if normalized_status == "upcoming filing":
-        return "A filing or renewal appears to be due soon based on the instant compliance snapshot."
+        return "A filing or renewal appears to be due soon based on the Charity Clarity check."
     if normalized_status == "current":
-        return "No delinquency was identified in the instant compliance snapshot."
+        return "No delinquency was identified in the Charity Clarity check."
     if "delinquent" in normalized_status or "non-compliant" in normalized_status:
-        return "The instant compliance snapshot indicates a delinquency."
-    return "Review the instant compliance snapshot for additional details."
+        return "The Charity Clarity check indicates a delinquency."
+    return "Review the Charity Clarity result for additional details."
 
 
 def run_state_lookup(organization_name: str, ein: str, state: str, capture_source_snapshot: bool = False) -> dict:
@@ -2298,8 +2298,8 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
             content_type = "text/html; charset=utf-8"
         else:
             body = (
-                "<!doctype html><title>Instant Compliance Snapshot API</title>"
-                "<h1>Instant Compliance Snapshot API is running.</h1>"
+                "<!doctype html><title>Charity Clarity API</title>"
+                "<h1>Charity Clarity API is running.</h1>"
             ).encode("utf-8")
             content_type = "text/html; charset=utf-8"
         self.send_response(200)
