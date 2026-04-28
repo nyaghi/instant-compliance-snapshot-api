@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.28.7"
+APP_VERSION = "2026.04.28.8"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = 3
@@ -935,6 +935,15 @@ def filing_context(result, body: str) -> dict:
         year_match = re.search(r"(20\d{2})", result.raw_status_text or "")
         latest_year = int(year_match.group(1)) if year_match else None
     period_start, period_end = fiscal_period_for_ein(result.ein)
+    state = (result.state or "").upper()
+    md_record_found = (
+        state == "MD"
+        and period_end
+        and not re.search(r"no matching|no record|not found|no results|0 records|0 results", combined_result_text(result, body), re.I)
+        and re.search(r"Maryland record found|record found|detail page was reached|matching record", combined_result_text(result, body), re.I)
+    )
+    if md_record_found:
+        latest_year = max(latest_year or 0, period_end.year)
     if latest_year is None and period_end:
         latest_year = period_end.year
     registry_fiscal_end = fiscal_year_end_from_body(body)
@@ -2002,7 +2011,9 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             elif state == "MD":
                 result = checker.search_md(page, org)
                 md_body = registry_page_body(page)
-                if md_detail_page_matched(result, md_body):
+                if re.search(r"Maryland record found", " ".join([result.raw_status_text or "", result.source_note or ""]), re.I) and not capture_source_snapshot:
+                    body = md_body
+                elif md_detail_page_matched(result, md_body):
                     result.status = result.raw_status_text if result.raw_status_text and result.raw_status_text != "No matching EIN result" else checker.STATUS_UNKNOWN
                     result.raw_status_text = result.raw_status_text if result.raw_status_text not in {"No matching EIN result", "No record found"} else "Maryland record found"
                     result.source_note = "Maryland detail page was reached from the public registry search."
