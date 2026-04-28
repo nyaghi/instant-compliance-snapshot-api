@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.28.21"
+APP_VERSION = "2026.04.28.22"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -75,6 +75,7 @@ VERIFICATION_TOKEN_SECONDS = 60 * 60
 EXEMPT_EMAIL_DOMAIN = "compliance-express.com"
 EXEMPT_EMAIL_ADDRESSES = {"nyaghi17@gmail.com"}
 DOMAIN_LIMIT_PATH = Path(__file__).with_name("registry_snapshot_domain_limits.json")
+DEVICE_LIMIT_PATH = Path(__file__).with_name("registry_snapshot_device_limits.json")
 PIN_STORE: dict[str, dict] = {}
 VERIFICATION_TOKENS: dict[str, dict] = {}
 ORG_NAME_CACHE: dict[str, str] = {}
@@ -632,6 +633,19 @@ def save_domain_limits(limits: dict) -> None:
     DOMAIN_LIMIT_PATH.write_text(json.dumps(limits, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def load_device_limits() -> dict:
+    if not DEVICE_LIMIT_PATH.exists():
+        return {}
+    try:
+        return json.loads(DEVICE_LIMIT_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_device_limits(limits: dict) -> None:
+    DEVICE_LIMIT_PATH.write_text(json.dumps(limits, indent=2, sort_keys=True), encoding="utf-8")
+
+
 def domain_is_limited(domain: str) -> bool:
     if not domain or is_exempt_domain(domain):
         return False
@@ -648,6 +662,30 @@ def record_domain_check(domain: str) -> None:
     limits = load_domain_limits()
     limits[domain] = int(time.time())
     save_domain_limits(limits)
+
+
+def normalize_device_id(device_id: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.:-]", "", (device_id or "").strip())[:120]
+
+
+def device_is_limited(device_id: str) -> bool:
+    device_id = normalize_device_id(device_id)
+    if not device_id:
+        return False
+    limits = load_device_limits()
+    prior = int(limits.get(device_id, 0) or 0)
+    if not prior:
+        return False
+    return int(time.time()) - prior < DOMAIN_LIMIT_DAYS * 24 * 60 * 60
+
+
+def record_device_check(device_id: str) -> None:
+    device_id = normalize_device_id(device_id)
+    if not device_id:
+        return
+    limits = load_device_limits()
+    limits[device_id] = int(time.time())
+    save_device_limits(limits)
 
 
 def should_record_domain_check(results: list[dict]) -> bool:
@@ -1194,7 +1232,33 @@ def organization_name_variants(name: str) -> list[str]:
 
 
 def org_with_name(org, name: str):
-    return SimpleNamespace(organization_name=name, ein=org.ein)
+    clone = SimpleNamespace(organization_name=name, ein=org.ein)
+    if hasattr(org, "evidence_mode"):
+        clone.evidence_mode = getattr(org, "evidence_mode")
+    return clone
+
+
+def result_is_retryable_name_miss(result) -> bool:
+    return public_status(result) == "Not Registered" or bool(re.search(
+        r"no matching|no record found|no records found|not found|no results|0 records|0 results",
+        " ".join([result.status or "", result.raw_status_text or "", result.source_note or ""]),
+        re.I,
+    ))
+
+
+def search_with_name_variants(page, org, search_func):
+    best_result = None
+    original_name = org.organization_name
+    for variant in organization_name_variants(original_name):
+        result = search_func(page, org_with_name(org, variant))
+        if getattr(result, "organization_name", "") != original_name:
+            result.organization_name = original_name
+        if not result_is_retryable_name_miss(result):
+            return result
+        best_result = result
+    if best_result and getattr(best_result, "organization_name", "") != original_name:
+        best_result.organization_name = original_name
+    return best_result
 
 
 def find_ak_print_link_relaxed(page, org):
@@ -2212,19 +2276,19 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             elif state == "PA":
                 result = checker.search_pa(page, org)
             elif state == "VA":
-                result = checker.search_va(page, org)
+                result = search_with_name_variants(page, org, checker.search_va)
             elif state == "SC":
-                result = checker.search_sc(page, org)
+                result = search_with_name_variants(page, org, checker.search_sc)
             elif state == "HI":
                 result = search_hi_precise(page, org)
                 if public_status(result) != "Not Registered":
                     body = hi_detail_body(page)
             elif state == "ME":
-                result = checker.search_me(page, org)
+                result = search_with_name_variants(page, org, checker.search_me)
                 body = me_detail_body(page, org)
                 enrich_me_result_from_body(result, body)
             elif state == "ND":
-                result = checker.search_nd(page, org)
+                result = search_with_name_variants(page, org, checker.search_nd)
             else:
                 raise ValueError(f"Unsupported state: {state}")
             if page:
@@ -2478,6 +2542,7 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
             email = normalize_email(payload.get("email") or "")
+            device_id = normalize_device_id(payload.get("device_id") or "")
 
             requested_states = payload.get("states")
             state = (payload.get("state") or "").strip().upper()
@@ -2516,12 +2581,16 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
             if is_batch and not privileged and domain_is_limited(domain):
                 self._send_json(429, {"error": "A complimentary snapshot was already requested for this email domain."})
                 return
+            if is_batch and not privileged and device_is_limited(device_id):
+                self._send_json(429, {"error": "A complimentary snapshot was already requested from this browser."})
+                return
 
             results = run_state_lookups_parallel(organizations, states)
             append_lead_log(email, results)
             if is_batch:
                 if not privileged and should_record_domain_check(results):
                     record_domain_check(domain)
+                    record_device_check(device_id)
                 self._send_json(200, {"results": results, "checked_at_epoch": int(time.time())})
             else:
                 self._send_json(200, results[0])
