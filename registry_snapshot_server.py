@@ -1801,6 +1801,66 @@ def nj_detail_body(page, org) -> str:
     return "\n".join(piece for piece in pieces if piece)
 
 
+def search_nj_direct(page, org):
+    url = "https://charportal.dca.njoag.gov/Charity-Registration/CHR-Public-Search-Page/"
+    result = checker.StateResult(org.organization_name, org.ein, "NJ", checker.STATUS_UNKNOWN, url)
+    try:
+        ein_digits = re.sub(r"\D", "", org.ein or "")
+        page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        time.sleep(8)
+        input_box = None
+        for selector in [
+            "#SearchBox28",
+            'input[placeholder="Search"]',
+            'input[aria-label*="partial text" i]',
+            'input[id^="SearchBox"]',
+            'input[type="search"]',
+            'input[type="text"]',
+        ]:
+            try:
+                candidate = page.locator(selector).first
+                candidate.wait_for(state="visible", timeout=5000)
+                input_box = candidate
+                break
+            except Exception:
+                continue
+        if not input_box:
+            result.error = "Could not find NJ search box"
+            return result
+
+        input_box.fill("")
+        input_box.fill(ein_digits or org.organization_name)
+        page.keyboard.press("Enter")
+        time.sleep(8)
+        body = page.locator("body").inner_text(timeout=15000)
+        if re.search(r"no records found|no records|no matching|0 results", body, re.I):
+            result.raw_status_text = "No record found"
+            result.status = checker.STATUS_NOT_REGISTERED
+            result.source_note = "New Jersey search returned no matching record."
+            result.success = True
+            return result
+
+        rows = [re.sub(r"\s+", " ", row).strip() for row in body.splitlines() if row.strip()]
+        status = ""
+        if ein_digits and ein_digits in re.sub(r"\D", "", body):
+            for known in ["Compliant", "Active", "Current", "Delinquent", "Expired", "Revoked", "Suspended", "Withdrawn", "Retired"]:
+                if re.search(rf"\b{re.escape(known)}\b", body, re.I):
+                    status = known
+                    break
+        if not status:
+            status_match = re.search(r"Status\s+([A-Za-z][A-Za-z /-]+?)\s+Federal\s+EIN", re.sub(r"\s+", " ", body), re.I)
+            if status_match:
+                status = status_match.group(1).strip()
+        result.raw_status_text = status or "Status not found"
+        result.status = status or checker.STATUS_UNKNOWN
+        result.source_note = "New Jersey uses the public search result Status value."
+        result.success = True
+        return result
+    except Exception as exc:
+        result.error = f"NJ error: {exc}"
+        return result
+
+
 def md_filing_context(result, body: str) -> dict:
     return filing_context(result, body)
 
@@ -2270,7 +2330,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             elif state == "NY":
                 result = checker.search_ny(page, org)
             elif state == "NJ":
-                result = checker.search_nj(page, org)
+                result = search_nj_direct(page, org)
                 if public_status(result) != "Not Registered":
                     body = nj_detail_body(page, org)
             elif state == "PA":
