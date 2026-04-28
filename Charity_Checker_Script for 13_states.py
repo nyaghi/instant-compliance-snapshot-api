@@ -37,6 +37,7 @@ AK_YEARS_TO_TRY = [2026, 2025, 2024, 2023]
 FAST_WAIT_MAX_MS = max(1000, int(os.environ.get("CE_FAST_WAIT_MAX_MS", "5000")))
 FULL_PAGE_ARTIFACTS = os.environ.get("CE_FULL_PAGE_ARTIFACTS", "0").strip().lower() in {"1", "true", "yes"}
 ARTIFACT_SCREENSHOT_TIMEOUT_MS = max(1000, int(os.environ.get("CE_ARTIFACT_SCREENSHOT_TIMEOUT_MS", "10000")))
+STATE_RESULT_WAIT_SECONDS = max(3, int(os.environ.get("CE_STATE_RESULT_WAIT_SECONDS", "10")))
 
 @dataclass
 class Organization:
@@ -534,7 +535,7 @@ def search_co(page, org: Organization) -> StateResult:
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
         safe_wait_for_network_idle(page, timeout=20000)
-        time.sleep(3)
+        time.sleep(0.5)
 
         query = digits_only(org.ein) if digits_only(org.ein) else org.organization_name
         input_box = find_visible_input(page, [
@@ -551,9 +552,9 @@ def search_co(page, org: Organization) -> StateResult:
         input_box.fill(query)
         page.keyboard.press("Enter")
         safe_wait_for_network_idle(page, timeout=25000)
-        time.sleep(3)
+        time.sleep(0.75)
 
-        body = page.locator("body").inner_text(timeout=12000)
+        body = page.locator("body").inner_text(timeout=5000)
         if re.search(r"no records|no results|not found", body, re.I):
             result.raw_status_text = "No record found"
             result.status = STATUS_NOT_REGISTERED
@@ -1414,7 +1415,7 @@ def search_md(page, org: Organization) -> StateResult:
 
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
         safe_wait_for_network_idle(page, timeout=20000)
-        time.sleep(4)
+        time.sleep(1)
 
         ein_input = None
         for label in ["Search by Charity EIN", "Charity EIN", "EIN"]:
@@ -1451,7 +1452,7 @@ def search_md(page, org: Organization) -> StateResult:
         def submit_md_search(search_value: str) -> None:
             ein_input.fill("")
             ein_input.fill(search_value)
-            time.sleep(1)
+            time.sleep(0.25)
 
             clicked_search = False
             for sel in [
@@ -1484,30 +1485,42 @@ def search_md(page, org: Organization) -> StateResult:
                     ein_input.press("Enter")
                 except Exception:
                     pass
-            safe_wait_for_network_idle(page, timeout=90000)
+            safe_wait_for_network_idle(page, timeout=5000)
 
         def md_body_has_match(text: str) -> bool:
+            if md_body_has_record(text):
+                return True
             return bool(
                 ein in digits_only(text)
                 or formatted_ein in text
                 or (wanted_name and wanted_name in normalize_name(text))
             )
 
+        def md_body_has_record(text: str) -> bool:
+            readable = re.sub(r"\s+", " ", text or "")
+            if re.search(r"no results|no records|not found|0 results", readable, re.I):
+                return False
+            return bool(
+                re.search(r"\b1\s+record\b|\b[1-9]\d*\s+records\b", readable, re.I)
+                or re.search(r"SOS\s+Charity\s+Organization\s+Record\s+for", readable, re.I)
+                or re.search(r"Registration\s+Status\s*:?\s*Current", readable, re.I)
+            )
+
         wanted_name = normalize_name(org.organization_name)
         body = ""
         for search_value in [formatted_ein, ein]:
             submit_md_search(search_value)
-            deadline = time.time() + 120
+            deadline = time.time() + STATE_RESULT_WAIT_SECONDS
             while time.time() < deadline:
-                body = page.locator("body").inner_text(timeout=20000)
+                body = page.locator("body").inner_text(timeout=5000)
                 if md_body_has_match(body):
                     break
-                if re.search(r"\b1\s+record\b|\b[1-9]\d*\s+records\b", body, re.I):
-                    time.sleep(2)
-                    body = page.locator("body").inner_text(timeout=20000)
+                if md_body_has_record(body):
+                    time.sleep(0.75)
+                    body = page.locator("body").inner_text(timeout=5000)
                     if md_body_has_match(body):
                         break
-                time.sleep(2)
+                time.sleep(0.75)
             if md_body_has_match(body):
                 break
 
@@ -1563,21 +1576,55 @@ def search_md(page, org: Organization) -> StateResult:
                     break
             except Exception:
                 continue
+        if not clicked_result and md_body_has_record(body):
+            for selector in ["a[href]", "tbody tr", "[role='row']", ".card", ".search-result", ".list-view-item"]:
+                try:
+                    items = page.locator(selector)
+                    count = min(items.count(), 20)
+                    for i in range(count):
+                        item = items.nth(i)
+                        try:
+                            if not item.is_visible(timeout=750):
+                                continue
+                            text = re.sub(r"\s+", " ", item.inner_text(timeout=1500)).strip()
+                            if not text or re.search(r"Home|Privacy|Accessibility|Log in|Register|Clear all filters", text, re.I):
+                                continue
+                            links = item.locator("a[href]")
+                            if selector == "a[href]":
+                                item.click(timeout=5000)
+                            elif links.count() > 0:
+                                links.first.click(timeout=5000)
+                            else:
+                                item.click(timeout=5000)
+                            clicked_result = True
+                            break
+                        except Exception:
+                            continue
+                    if clicked_result:
+                        break
+                except Exception:
+                    continue
         if not clicked_result:
+            if md_body_has_record(body):
+                result.raw_status_text = "Record found; detail page not opened"
+                result.status = STATUS_UNKNOWN
+                result.source_note = "Maryland public search returned a record for the EIN search, but the detail page could not be opened automatically."
+                result.success = True
+                return result
             result.raw_status_text = "No matching EIN result"
             result.status = STATUS_NOT_REGISTERED
             result.source_note = "Maryland search results did not contain a matching EIN row."
             result.success = True
             return result
 
-        safe_wait_for_network_idle(page, timeout=90000)
+        safe_wait_for_network_idle(page, timeout=5000)
         registration_status = ""
-        deadline = time.time() + 120
+        deadline = time.time() + STATE_RESULT_WAIT_SECONDS
         while time.time() < deadline:
             registration_status = extract_labeled_value(page, ["Registration Status"])
             if registration_status:
                 break
-            time.sleep(2)
+            time.sleep(0.75)
         result.raw_status_text = registration_status
         result.status = registration_status if registration_status else STATUS_UNKNOWN
         result.source_note = "Maryland uses the exact Registration Status from the public detail page."
@@ -1637,14 +1684,14 @@ def search_sc(page, org: Organization) -> StateResult:
             result.error = "Could not click SC Search button"
             return result
 
-        page.wait_for_load_state("domcontentloaded", timeout=30000)
-        safe_wait_for_network_idle(page, timeout=30000)
-        time.sleep(2)
+        page.wait_for_load_state("domcontentloaded", timeout=10000)
+        safe_wait_for_network_idle(page, timeout=5000)
+        time.sleep(0.75)
 
         body = ""
-        deadline = time.time() + 60
+        deadline = time.time() + STATE_RESULT_WAIT_SECONDS
         while time.time() < deadline:
-            body = page.locator("body").inner_text(timeout=15000)
+            body = page.locator("body").inner_text(timeout=5000)
             try:
                 if page.locator("a[href*='CharityInfo']").count() > 0:
                     break
@@ -1652,7 +1699,7 @@ def search_sc(page, org: Organization) -> StateResult:
                 pass
             if re.search(r"\bNo records?\b|No results|0 results", body, re.I):
                 break
-            time.sleep(2)
+            time.sleep(0.75)
 
         if re.search(r"\bNo records?\b|No results|0 results", body, re.I):
             result.raw_status_text = "No record found"
