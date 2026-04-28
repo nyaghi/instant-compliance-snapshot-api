@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.28.20"
+APP_VERSION = "2026.04.28.21"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1962,6 +1962,10 @@ def true_status_from_body(result, body: str) -> str:
     if represented_year_is_registry_evidenced(result, body, represented_year) and current_cycle_already_filed(state, represented_year, registry_date):
         if not re.search(r"\b(delinquent|expired|revoked|suspended|closed|inactive|overdue|non[- ]?compliant)\b", combined_lower, re.I):
             return "Current"
+    if state == "HI" and record_confirmed and represented_year and represented_year >= date.today().year - 1 and re.search(r"\bActive\b", combined, re.I):
+        return "Current"
+    if state == "MA" and record_confirmed and represented_year and represented_year >= date.today().year - 1 and re.search(r"Annual\s+Filings?\s+not\s+visible", combined, re.I):
+        return "Current"
     if use_registry_date:
         return status_from_calendar_date(registry_date)
     labeled_dates = [] if state == "CA" else labeled_due_dates_from_text(combined)
@@ -1973,11 +1977,6 @@ def true_status_from_body(result, body: str) -> str:
         return "Not Registered"
     if record_confirmed and stale_represented_year_is_delinquent(represented_year):
         return "Delinquent"
-
-    if state == "HI" and record_confirmed and represented_year and represented_year >= date.today().year - 1 and re.search(r"\bActive\b", combined, re.I):
-        return "Current"
-    if state == "MA" and record_confirmed and represented_year and represented_year >= date.today().year - 1 and re.search(r"Annual\s+Filings?\s+not\s+visible", combined, re.I):
-        return "Current"
 
     if state in EXTENSION_SCENARIO_STATES and due_date and represented_year and not result_indicates_no_record(result):
         return status_from_calendar_date(due_date)
@@ -2058,9 +2057,9 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         elif state == "MD":
             filing_label = "annual filing"
         elif state == "CA":
-            filing_label = "California annual renewal"
+            filing_label = "annual renewal"
         elif state == "HI":
-            filing_label = "Hawaii annual filing"
+            filing_label = "annual filing"
         return (
             f"{context['represented_year']} appears to be the most recent {state} {filing_label} year identified in the Charity Clarity check. "
             "Because the most recent filing year appears current for this snapshot, Charity Clarity treats the organization as Current."
