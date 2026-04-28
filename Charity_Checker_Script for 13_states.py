@@ -38,11 +38,13 @@ FAST_WAIT_MAX_MS = max(750, min(int(os.environ.get("CE_FAST_WAIT_MAX_MS", "1500"
 FULL_PAGE_ARTIFACTS = os.environ.get("CE_FULL_PAGE_ARTIFACTS", "0").strip().lower() in {"1", "true", "yes"}
 ARTIFACT_SCREENSHOT_TIMEOUT_MS = max(1000, int(os.environ.get("CE_ARTIFACT_SCREENSHOT_TIMEOUT_MS", "10000")))
 STATE_RESULT_WAIT_SECONDS = max(3, int(os.environ.get("CE_STATE_RESULT_WAIT_SECONDS", "10")))
+MD_FAST_SEARCH_ONLY = os.environ.get("CE_MD_FAST_SEARCH_ONLY", "1").strip().lower() not in {"0", "false", "no"}
 
 @dataclass
 class Organization:
     organization_name: str
     ein: str = ""
+    evidence_mode: bool = False
 
 @dataclass
 class StateResult:
@@ -1605,6 +1607,13 @@ def search_md(page, org: Organization) -> StateResult:
             result.raw_status_text = "No record found"
             result.status = STATUS_NOT_REGISTERED
             result.source_note = "Maryland search returned no matching EIN record."
+            result.success = True
+            return result
+
+        if MD_FAST_SEARCH_ONLY and not org.evidence_mode and md_body_has_record(body):
+            result.raw_status_text = "Maryland record found"
+            result.status = STATUS_UNKNOWN
+            result.source_note = "Maryland public search returned a matching record; detailed source evidence is captured on demand when the snapshot PDF is opened."
             result.success = True
             return result
 
