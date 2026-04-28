@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.28.17"
+APP_VERSION = "2026.04.28.19"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -951,6 +951,10 @@ def latest_year_from_text(body: str, state: str) -> int | None:
     if state == "MA":
         for match in re.finditer(r"Form[\s-]*PC[^0-9]{0,80}(20\d{2})", readable_body, re.I):
             years.append(int(match.group(1)))
+        annual_match = re.search(r"Annual\s+Filings(?:\s+and\s+Documents)?([\s\S]{0,5000}?)(?:Charity\s+Registration\s+Documents|Registration\s+Documents|Other\s+Filed\s+Documents|$)", readable_body, re.I)
+        if annual_match:
+            for match in re.finditer(r"\b(20\d{2})\b", annual_match.group(1)):
+                years.append(int(match.group(1)))
     if state == "HI":
         doc_match = re.search(r"\bDocuments\b([\s\S]{0,2500})", readable_body, re.I)
         if doc_match:
@@ -1027,6 +1031,31 @@ def filing_context(result, body: str) -> dict:
 
 def stale_represented_year_is_delinquent(represented_year: int | None) -> bool:
     return bool(represented_year and represented_year <= date.today().year - 2)
+
+
+def current_cycle_already_filed(state: str, represented_year: int | None, registry_date: date | None = None) -> bool:
+    """Treat a current-year registration/current filing year as satisfied before date-window rules."""
+    if represented_year is None:
+        return False
+    state = (state or "").upper()
+    today = date.today()
+    if state == "AK":
+        return represented_year >= today.year and (registry_date is None or registry_date >= today)
+    if state in {"CA", "HI", "MA", "MD"}:
+        return represented_year >= today.year - 1
+    return False
+
+
+def represented_year_is_registry_evidenced(result, body: str, represented_year: int | None) -> bool:
+    if represented_year is None:
+        return False
+    state = (result.state or "").upper()
+    combined = combined_result_text(result, body)
+    if latest_year_from_text(combined, state) == represented_year:
+        return True
+    if state == "AK" and re.search(rf"\b{represented_year}\s+registration\s+found\b", combined, re.I):
+        return True
+    return False
 
 
 def md_financial_body(page) -> str:
@@ -1911,6 +1940,8 @@ def true_status_from_body(result, body: str) -> str:
     )
 
     if state == "MD" and md_detail_page_matched(result, combined):
+        if current_cycle_already_filed(state, represented_year, registry_date):
+            return "Current"
         if stale_represented_year_is_delinquent(represented_year):
             return "Delinquent"
         if due_date and represented_year:
@@ -1924,6 +1955,13 @@ def true_status_from_body(result, body: str) -> str:
         return "Not Registered"
     if indicates_exempt_registration(combined):
         return "Exempt"
+    if state == "AK" and re.search(r"\b20\d{2}\s+registration\s+found\b", combined, re.I):
+        found_years = [int(match.group(1)) for match in re.finditer(r"\b(20\d{2})\s+registration\s+found\b", combined, re.I)]
+        if found_years and current_cycle_already_filed(state, max(found_years), registry_date):
+            return "Current"
+    if represented_year_is_registry_evidenced(result, body, represented_year) and current_cycle_already_filed(state, represented_year, registry_date):
+        if not re.search(r"\b(delinquent|expired|revoked|suspended|closed|inactive|overdue|non[- ]?compliant)\b", combined_lower, re.I):
+            return "Current"
     if use_registry_date:
         return status_from_calendar_date(registry_date)
     labeled_dates = [] if state == "CA" else labeled_due_dates_from_text(combined)
@@ -2003,6 +2041,25 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
             or re.search(r"due date|next report|renewal|expiration|expires|automatic extension", " ".join([result.raw_status_text or "", result.source_note or ""]), re.I)
         )
     )
+    if normalized_status == "current" and current_cycle_already_filed(state, context.get("represented_year"), registry_date):
+        if state == "AK":
+            return (
+                f"The AK public registry shows the {context['represented_year']} charitable organization registration/renewal is on file. "
+                "Because the current Alaska registration cycle has been submitted, Charity Clarity treats the organization as Current."
+            )
+        filing_label = "annual filing"
+        if state == "MA":
+            filing_label = "Form PC"
+        elif state == "MD":
+            filing_label = "Maryland annual filing"
+        elif state == "CA":
+            filing_label = "California annual renewal"
+        elif state == "HI":
+            filing_label = "Hawaii annual filing"
+        return (
+            f"{context['represented_year']} appears to be the most recent {state} {filing_label} year identified in the Charity Clarity check. "
+            "Because the most recent filing year appears current for this snapshot, Charity Clarity treats the organization as Current."
+        )
     if use_registry_date and normalized_status in {"upcoming filing", "current", "delinquent"}:
         descriptor = "expiration or renewal date"
         if state == "AK":
