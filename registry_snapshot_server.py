@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.28.3"
+APP_VERSION = "2026.04.28.4"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = 3
@@ -604,9 +604,13 @@ def public_status(result) -> str:
 
     normalized = status.lower()
     if normalized == "unknown":
-        if (result.raw_status_text or "").strip() and not re.search(r"no matching|no record|not found|no results", result.raw_status_text or "", re.I):
-            return "Unknown"
-        return "Not Registered" if result.success else "Site Not Reachable"
+        no_record_text = " ".join([
+            result.raw_status_text or "",
+            result.source_note or "",
+        ])
+        if re.search(r"no matching|no record|not found|no results|0 records|0 results", no_record_text, re.I):
+            return "Not Registered"
+        return "Unknown" if result.success else "Site Not Reachable"
     if normalized in {"not registered", "not found", "no record", "no record found"}:
         return "Not Registered"
     if normalized in {"current", "active", "good standing", "compliant"} or re.search(r"\bgood\s+as\s+of\b", normalized):
@@ -1832,6 +1836,8 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         return "Public registry site could not be reached at the time of the snapshot."
     if normalized_status == "not registered":
         return f"The {state} public registry was reachable, but no matching registration record was found for the organization/EIN searched."
+    if normalized_status == "unknown":
+        return f"The {state} public registry was reachable, but the snapshot could not confirm a final interpreted status from the available registry page."
     if normalized_status == "exempt":
         return f"The {state} public registry indicates the organization is exempt from charitable registration or annual filing requirements in that state."
     if normalized_status == "delinquent" and re.search(r"\b(closed|inactive)\b", " ".join([result.status or "", result.raw_status_text or ""]), re.I):
