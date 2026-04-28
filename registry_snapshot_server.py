@@ -56,10 +56,10 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.28.12"
+APP_VERSION = "2026.04.28.13"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NY", "OH", "PA"}
-MAX_STATES_PER_SNAPSHOT = 3
+MAX_STATES_PER_SNAPSHOT = 1
 MAX_PARALLEL_LOOKUPS = max(1, int(os.environ.get("CE_MAX_PARALLEL_LOOKUPS", "3")))
 BLOCK_HEAVY_BROWSER_RESOURCES = os.environ.get("CE_BLOCK_HEAVY_BROWSER_RESOURCES", "1").strip().lower() not in {"0", "false", "no"}
 EAGER_EVIDENCE_PDF = os.environ.get("CE_EAGER_EVIDENCE_PDF", "0").strip().lower() in {"1", "true", "yes"}
@@ -606,7 +606,7 @@ def is_privileged_request(email: str, domain: str) -> bool:
 
 
 def state_limit_for_request(domain: str) -> int:
-    return len(SUPPORTED_STATES) if is_exempt_domain(domain) else MAX_STATES_PER_SNAPSHOT
+    return MAX_STATES_PER_SNAPSHOT
 
 
 def org_limit_for_request(email: str, domain: str) -> int:
@@ -2123,13 +2123,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
         result.organization_name = data["organization_name"]
     data["status"] = true_status_from_body(result, body)
     data["comments"] = comments_for_result(result, body, data["status"])
-    write_evidence_metadata(state, artifact_name, data, body, data["status"], data["comments"])
-    if EAGER_EVIDENCE_PDF:
-        proof_url = screenshot_to_pdf(state, artifact_name, result, body, data["status"], data["comments"]) or proof_url
-    elif evidence_png_path(state, artifact_name).exists() or ak_registration_pdf_path(artifact_name).exists() or evidence_metadata_path(state, artifact_name).exists():
-        proof_url = evidence_url(state, artifact_name, ein)
-    if proof_url:
-        data["evidence_url"] = proof_url
+    data["evidence_url"] = ""
     data["lookup_seconds"] = round(time.perf_counter() - lookup_started, 2)
     data["checked_at_epoch"] = int(time.time())
     data["app_version"] = APP_VERSION
@@ -2373,13 +2367,13 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
             states = sorted(states)
 
             if not organizations or not states or any(st not in set(SUPPORTED_STATES) for st in states):
-                self._send_json(400, {"error": f"Enter a valid 9-digit EIN and select 1 to {MAX_STATES_PER_SNAPSHOT} supported states."})
+                self._send_json(400, {"error": "Enter a valid 9-digit EIN and select one supported state."})
                 return
 
             state_limit = state_limit_for_request(domain)
             org_limit = org_limit_for_request(email, domain)
             if len(states) > state_limit:
-                self._send_json(400, {"error": f"Select up to {state_limit} states."})
+                self._send_json(400, {"error": "Select one state."})
                 return
             if len(organizations) > org_limit:
                 self._send_json(400, {"error": f"This email can submit up to {org_limit} organization{'s' if org_limit != 1 else ''} at a time."})
