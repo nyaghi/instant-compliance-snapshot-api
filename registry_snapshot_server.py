@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.28.11"
+APP_VERSION = "2026.04.28.12"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = 3
@@ -229,14 +229,16 @@ def evidence_summary_image(result, body: str, status: str, comments: str) -> Ima
         return clipped
 
     wrapped_rows = []
-    value_width = width - 580
+    x_value = 730
+    value_width = width - x_value - 130
     for label, value in rows:
         lines = wrap_text(draw, str(value), text_font, value_width)
-        max_lines = 7 if label == "CE Comment" else 4 if label in {"Source URL", "Source Note"} else 3
+        max_lines = 10 if label == "CE Comment" else 4 if label in {"Source URL", "Source Note"} else 3
         wrapped_rows.append((label, clamp_lines(lines, max_lines)))
 
-    row_heights = [62 + (len(lines) * 46) for _, lines in wrapped_rows]
-    height = 470 + sum(row_heights) + 210
+    row_heights = [max(112, 72 + (len(lines) * 46)) for _, lines in wrapped_rows]
+    divider_gaps = 20 * max(0, len(row_heights) - 1)
+    height = 500 + sum(row_heights) + divider_gaps + 240
     image = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(image)
 
@@ -254,7 +256,7 @@ def evidence_summary_image(result, body: str, status: str, comments: str) -> Ima
     y += 150
 
     card_top = y
-    card_height = 74 + sum(row_heights)
+    card_height = 74 + sum(row_heights) + divider_gaps
     draw.rounded_rectangle((70, card_top, width - 70, card_top + card_height), radius=28, fill=light, outline=border, width=3)
     y += 38
     for index, ((label, lines), row_height) in enumerate(zip(wrapped_rows, row_heights)):
@@ -263,7 +265,6 @@ def evidence_summary_image(result, body: str, status: str, comments: str) -> Ima
             y += 20
         draw.text((110, y), label.upper(), fill=red, font=label_font)
         value_y = y
-        x_value = 575
         for line in lines:
             draw.text((x_value, value_y), line, fill=slate, font=text_font)
             value_y += 46
