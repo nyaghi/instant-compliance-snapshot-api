@@ -1449,11 +1449,7 @@ def search_md(page, org: Organization) -> StateResult:
             result.error = "Could not find MD Charity EIN input"
             return result
 
-        def submit_md_search(search_value: str) -> None:
-            ein_input.fill("")
-            ein_input.fill(search_value)
-            time.sleep(0.25)
-
+        def click_md_search(active_input) -> None:
             clicked_search = False
             for sel in [
                 'button[type="submit"]',
@@ -1466,8 +1462,8 @@ def search_md(page, org: Organization) -> StateResult:
                     count = min(buttons.count(), 10)
                     for i in range(count):
                         btn = buttons.nth(i)
-                        if btn.is_visible(timeout=750):
-                            btn.click(timeout=5000)
+                        if btn.is_visible(timeout=500):
+                            btn.click(timeout=3000)
                             clicked_search = True
                             break
                     if clicked_search:
@@ -1476,16 +1472,101 @@ def search_md(page, org: Organization) -> StateResult:
                     continue
             if not clicked_search:
                 try:
-                    page.get_by_role("button", name=re.compile("Search", re.I)).click(timeout=5000)
+                    page.get_by_role("button", name=re.compile("Search", re.I)).click(timeout=3000)
                     clicked_search = True
                 except Exception:
                     pass
-            if not clicked_search:
+            if not clicked_search and active_input is not None:
                 try:
-                    ein_input.press("Enter")
+                    active_input.press("Enter")
                 except Exception:
                     pass
             safe_wait_for_network_idle(page, timeout=1200)
+
+        def submit_md_search(search_value: str) -> None:
+            ein_input.fill("")
+            ein_input.fill(search_value)
+            time.sleep(0.25)
+            click_md_search(ein_input)
+
+        def find_md_name_input():
+            for label in ["Search by Charity Name", "Charity Name", "Name"]:
+                try:
+                    loc = page.get_by_label(re.compile(label, re.I))
+                    count = loc.count()
+                    for i in range(count):
+                        item = loc.nth(i)
+                        try:
+                            if item.is_visible(timeout=500):
+                                return item
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
+            for selector in [
+                'input[placeholder*="Charity Name" i]',
+                'input[aria-label*="Charity Name" i]',
+                'input[placeholder*="Search by Charity Name" i]',
+                'input[aria-label*="Search by Charity Name" i]',
+                'input[type="search"]',
+                'input[type="text"]',
+            ]:
+                try:
+                    inputs = page.locator(selector)
+                    count = min(inputs.count(), 8)
+                    for i in range(count):
+                        item = inputs.nth(i)
+                        try:
+                            if not item.is_visible(timeout=500):
+                                continue
+                            placeholder = (item.get_attribute("placeholder") or "").lower()
+                            aria = (item.get_attribute("aria-label") or "").lower()
+                            if "ein" in placeholder or "ein" in aria:
+                                continue
+                            return item
+                        except Exception:
+                            continue
+                except Exception:
+                    continue
+            return None
+
+        def submit_md_name_search(search_value: str) -> None:
+            name_input = find_md_name_input()
+            if not name_input:
+                return
+            try:
+                ein_input.fill("")
+            except Exception:
+                pass
+            name_input.fill("")
+            name_input.fill(search_value)
+            time.sleep(0.25)
+            click_md_search(name_input)
+
+        def wait_for_md_match() -> str:
+            local_body = ""
+            deadline = time.time() + min(STATE_RESULT_WAIT_SECONDS, 6)
+            while time.time() < deadline:
+                local_body = page.locator("body").inner_text(timeout=2500)
+                if md_body_has_match(local_body):
+                    break
+                if md_body_has_record(local_body):
+                    time.sleep(0.25)
+                    local_body = page.locator("body").inner_text(timeout=2500)
+                    if md_body_has_match(local_body):
+                        break
+                time.sleep(0.25)
+            return local_body
+
+        def body_says_no_results(text: str) -> bool:
+            return bool(re.search(r"no results|no records|not found|0 results", text or "", re.I))
+
+        def body_says_pending_or_error(text: str) -> bool:
+            readable = re.sub(r"\s+", " ", text or "")
+            return bool(
+                re.search(r"loading|please wait|searching|processing", readable, re.I)
+                or not readable.strip()
+            )
 
         def md_body_has_match(text: str) -> bool:
             if md_body_has_record(text):
@@ -1510,21 +1591,17 @@ def search_md(page, org: Organization) -> StateResult:
         body = ""
         for search_value in [formatted_ein, ein]:
             submit_md_search(search_value)
-            deadline = time.time() + min(STATE_RESULT_WAIT_SECONDS, 6)
-            while time.time() < deadline:
-                body = page.locator("body").inner_text(timeout=2500)
-                if md_body_has_match(body):
-                    break
-                if md_body_has_record(body):
-                    time.sleep(0.25)
-                    body = page.locator("body").inner_text(timeout=2500)
-                    if md_body_has_match(body):
-                        break
-                time.sleep(0.25)
+            body = wait_for_md_match()
             if md_body_has_match(body):
                 break
 
-        if not md_body_has_match(body) and re.search(r"no results|no records|not found|0 results", body, re.I):
+        if not md_body_has_match(body) and org.organization_name and not org.organization_name.lower().startswith("ein "):
+            submit_md_name_search(org.organization_name)
+            name_body = wait_for_md_match()
+            if md_body_has_match(name_body) or (not body_says_no_results(name_body) and not body_says_pending_or_error(name_body)):
+                body = name_body
+
+        if not md_body_has_match(body) and body_says_no_results(body):
             result.raw_status_text = "No record found"
             result.status = STATUS_NOT_REGISTERED
             result.source_note = "Maryland search returned no matching EIN record."
