@@ -1413,9 +1413,9 @@ def search_md(page, org: Organization) -> StateResult:
             return result
         formatted_ein = f"{ein[:2]}-{ein[2:]}"
 
-        page.goto(url, wait_until="domcontentloaded", timeout=45000)
-        safe_wait_for_network_idle(page, timeout=20000)
-        time.sleep(1)
+        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        safe_wait_for_network_idle(page, timeout=2500)
+        time.sleep(0.25)
 
         ein_input = None
         for label in ["Search by Charity EIN", "Charity EIN", "EIN"]:
@@ -1485,7 +1485,7 @@ def search_md(page, org: Organization) -> StateResult:
                     ein_input.press("Enter")
                 except Exception:
                     pass
-            safe_wait_for_network_idle(page, timeout=5000)
+            safe_wait_for_network_idle(page, timeout=1200)
 
         def md_body_has_match(text: str) -> bool:
             if md_body_has_record(text):
@@ -1510,17 +1510,17 @@ def search_md(page, org: Organization) -> StateResult:
         body = ""
         for search_value in [formatted_ein, ein]:
             submit_md_search(search_value)
-            deadline = time.time() + STATE_RESULT_WAIT_SECONDS
+            deadline = time.time() + min(STATE_RESULT_WAIT_SECONDS, 6)
             while time.time() < deadline:
-                body = page.locator("body").inner_text(timeout=5000)
+                body = page.locator("body").inner_text(timeout=2500)
                 if md_body_has_match(body):
                     break
                 if md_body_has_record(body):
-                    time.sleep(0.75)
-                    body = page.locator("body").inner_text(timeout=5000)
+                    time.sleep(0.25)
+                    body = page.locator("body").inner_text(timeout=2500)
                     if md_body_has_match(body):
                         break
-                time.sleep(0.75)
+                time.sleep(0.25)
             if md_body_has_match(body):
                 break
 
@@ -1532,6 +1532,29 @@ def search_md(page, org: Organization) -> StateResult:
             return result
 
         clicked_result = False
+        if md_body_has_record(body):
+            fast_result_selectors = []
+            if org.organization_name:
+                escaped_name = org.organization_name.replace('"', '\\"')
+                fast_result_selectors.extend([
+                    f'a:has-text("{escaped_name}")',
+                    f'text="{org.organization_name}"',
+                ])
+            fast_result_selectors.extend([
+                f'a:has-text("{formatted_ein}")',
+                f'a:has-text("{ein}")',
+                "a[href*='sos-charity']",
+                "a[href*='SOS']",
+            ])
+            for selector in fast_result_selectors:
+                try:
+                    candidate = page.locator(selector).first
+                    if candidate.count() > 0 and candidate.is_visible(timeout=500):
+                        candidate.click(timeout=3000)
+                        clicked_result = True
+                        break
+                except Exception:
+                    continue
         row_selectors = [
             "tbody tr",
             "tr",
@@ -1547,27 +1570,27 @@ def search_md(page, org: Organization) -> StateResult:
         for selector in row_selectors:
             try:
                 rows = page.locator(selector)
-                count = min(rows.count(), 100)
+                count = min(rows.count(), 25)
                 for i in range(count):
                     row = rows.nth(i)
                     try:
-                        if not row.is_visible(timeout=750):
+                        if not row.is_visible(timeout=250):
                             continue
-                        row_text = re.sub(r"\s+", " ", row.inner_text(timeout=1500)).strip()
+                        row_text = re.sub(r"\s+", " ", row.inner_text(timeout=750)).strip()
                         row_digits = digits_only(row_text)
                         row_name = normalize_name(row_text)
                         if ein not in row_digits and formatted_ein not in row_text and not (wanted_name and wanted_name in row_name):
                             continue
                         if selector == "a[href]":
-                            row.click(timeout=5000)
+                            row.click(timeout=3000)
                             clicked_result = True
                         else:
                             links = row.locator("a[href]")
                             if links.count() > 0:
-                                links.first.click(timeout=5000)
+                                links.first.click(timeout=3000)
                                 clicked_result = True
                             else:
-                                row.click(timeout=5000)
+                                row.click(timeout=3000)
                                 clicked_result = True
                         break
                     except Exception:
@@ -1580,22 +1603,22 @@ def search_md(page, org: Organization) -> StateResult:
             for selector in ["a[href]", "tbody tr", "[role='row']", ".card", ".search-result", ".list-view-item"]:
                 try:
                     items = page.locator(selector)
-                    count = min(items.count(), 20)
+                    count = min(items.count(), 12)
                     for i in range(count):
                         item = items.nth(i)
                         try:
-                            if not item.is_visible(timeout=750):
+                            if not item.is_visible(timeout=250):
                                 continue
-                            text = re.sub(r"\s+", " ", item.inner_text(timeout=1500)).strip()
+                            text = re.sub(r"\s+", " ", item.inner_text(timeout=750)).strip()
                             if not text or re.search(r"Home|Privacy|Accessibility|Log in|Register|Clear all filters", text, re.I):
                                 continue
                             links = item.locator("a[href]")
                             if selector == "a[href]":
-                                item.click(timeout=5000)
+                                item.click(timeout=3000)
                             elif links.count() > 0:
-                                links.first.click(timeout=5000)
+                                links.first.click(timeout=3000)
                             else:
-                                item.click(timeout=5000)
+                                item.click(timeout=3000)
                             clicked_result = True
                             break
                         except Exception:
@@ -1617,14 +1640,14 @@ def search_md(page, org: Organization) -> StateResult:
             result.success = True
             return result
 
-        safe_wait_for_network_idle(page, timeout=5000)
+        safe_wait_for_network_idle(page, timeout=1500)
         registration_status = ""
-        deadline = time.time() + STATE_RESULT_WAIT_SECONDS
+        deadline = time.time() + min(STATE_RESULT_WAIT_SECONDS, 5)
         while time.time() < deadline:
             registration_status = extract_labeled_value(page, ["Registration Status"])
             if registration_status:
                 break
-            time.sleep(0.75)
+            time.sleep(0.25)
         result.raw_status_text = registration_status
         result.status = registration_status if registration_status else STATUS_UNKNOWN
         result.source_note = "Maryland uses the exact Registration Status from the public detail page."
