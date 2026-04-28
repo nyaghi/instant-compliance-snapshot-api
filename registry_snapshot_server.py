@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.28.23"
+APP_VERSION = "2026.04.28.24"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1831,8 +1831,14 @@ def search_nj_direct(page, org):
         input_box.fill("")
         input_box.fill(ein_digits or org.organization_name)
         page.keyboard.press("Enter")
-        time.sleep(8)
-        body = page.locator("body").inner_text(timeout=15000)
+        body = ""
+        deadline = time.time() + 35
+        while time.time() < deadline:
+            body = page.locator("body").inner_text(timeout=15000)
+            body_digits = re.sub(r"\D", "", body)
+            if (ein_digits and ein_digits in body_digits) or re.search(r"no records found|no records|no matching|0 results", body, re.I):
+                break
+            time.sleep(1.5)
         if re.search(r"no records found|no records|no matching|0 results", body, re.I):
             result.raw_status_text = "No record found"
             result.status = checker.STATUS_NOT_REGISTERED
