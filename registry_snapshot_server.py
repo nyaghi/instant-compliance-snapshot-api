@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.28.10"
+APP_VERSION = "2026.04.28.11"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = 3
@@ -81,6 +81,7 @@ ORG_NAME_CACHE: dict[str, str] = {}
 FISCAL_YEAR_END_OVERRIDES = {
     "208428450": (6, 30),
     "546053660": (6, 30),
+    "362883000": (3, 31),
 }
 
 
@@ -177,22 +178,22 @@ def load_font(size: int, bold: bool = False) -> ImageFont.ImageFont:
 
 
 def evidence_summary_image(result, body: str, status: str, comments: str) -> Image.Image:
-    width = 1600
-    height = 2200
-    title_font = load_font(66, bold=True)
-    ribbon_font = load_font(38, bold=True)
-    section_font = load_font(38, bold=True)
-    label_font = load_font(27, bold=True)
-    text_font = load_font(32)
-    small_font = load_font(25)
+    width = 1700
+    title_font = load_font(76, bold=True)
+    ribbon_font = load_font(42, bold=True)
+    section_font = load_font(42, bold=True)
+    label_font = load_font(28, bold=True)
+    text_font = load_font(34)
+    small_font = load_font(27)
     navy = "#0B2A5B"
     red = "#C62828"
     slate = "#334155"
     muted = "#64748B"
     border = "#CBD5E1"
     light = "#F8FAFC"
+    pale_blue = "#EEF6FF"
 
-    scratch = Image.new("RGB", (width, 2200), "white")
+    scratch = Image.new("RGB", (width, 2600), "white")
     draw = ImageDraw.Draw(scratch)
 
     try:
@@ -203,18 +204,21 @@ def evidence_summary_image(result, body: str, status: str, comments: str) -> Ima
     fiscal_end = context.get("fiscal_end")
     fiscal_end_text = f"{fiscal_end[0]}/{fiscal_end[1]}" if fiscal_end else "Not identified"
     due_date = context.get("due_date")
+    base_due = context.get("base_due_date")
+    extended_due = context.get("extended_due_date")
     rows = [
         ("Organization", result.organization_name),
         ("EIN", result.ein),
         ("State", result.state),
-        ("Source URL", result.source_url),
-        ("Raw Registry Status", result.raw_status_text or "Not shown"),
-        ("Source Note", result.source_note or "Not provided"),
-        ("CE Status", status),
+        ("Interpreted CE Status", status),
         ("CE Comment", comments),
         ("Most Recent Fiscal/Filing Year Read", context.get("represented_year") or "Not identified"),
         ("Fiscal Year End Used", fiscal_end_text),
-        ("Calculated Due Date Used", format_date(due_date) if due_date else "Not identified"),
+        ("Base Due Date Used", format_date(base_due or due_date) if (base_due or due_date) else "Not identified"),
+        ("Extension Date Scenario", format_date(extended_due) if extended_due else "Not applicable or not identified"),
+        ("Raw Registry Status", result.raw_status_text or "Not shown"),
+        ("Source Note", result.source_note or "Not provided"),
+        ("Source URL", result.source_url),
     ]
 
     def clamp_lines(lines: list[str], max_lines: int) -> list[str]:
@@ -225,58 +229,49 @@ def evidence_summary_image(result, body: str, status: str, comments: str) -> Ima
         return clipped
 
     wrapped_rows = []
-    value_width = width - 250
+    value_width = width - 580
     for label, value in rows:
         lines = wrap_text(draw, str(value), text_font, value_width)
-        max_lines = 6 if label == "CE Comment" else 4 if label in {"Source URL", "Source Note"} else 3
+        max_lines = 7 if label == "CE Comment" else 4 if label in {"Source URL", "Source Note"} else 3
         wrapped_rows.append((label, clamp_lines(lines, max_lines)))
 
-    row_heights = [74 + (len(lines) * 42) for _, lines in wrapped_rows]
+    row_heights = [62 + (len(lines) * 46) for _, lines in wrapped_rows]
+    height = 470 + sum(row_heights) + 210
     image = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(image)
 
-    y = 70
-    draw.text((80, y), "Compliance", fill=navy, font=title_font)
-    draw.text((455, y), "Express", fill=red, font=title_font)
-    y += 92
-    draw.rounded_rectangle((80, y, 770, y + 74), radius=0, fill=red, outline="#7F1D1D", width=3)
-    draw.text((110, y + 18), "INSTANT COMPLIANCE SNAPSHOT", fill="white", font=ribbon_font)
-    y += 112
-    draw.text((80, y), "Evidence Summary", fill=navy, font=section_font)
-    draw.text((80, y + 48), "Prepared from the public registry snapshot captured at the time of lookup.", fill=muted, font=small_font)
-    draw.line((80, y + 92, width - 80, y + 92), fill=red, width=6)
-    y += 140
+    y = 60
+    draw.rounded_rectangle((60, y, width - 60, y + 230), radius=34, fill=pale_blue, outline=border, width=3)
+    draw.text((105, y + 40), "Compliance", fill=navy, font=title_font)
+    draw.text((520, y + 40), "Express", fill=red, font=title_font)
+    draw.rounded_rectangle((105, y + 140, 855, y + 215), radius=0, fill=red, outline="#7F1D1D", width=3)
+    draw.text((135, y + 158), "INSTANT COMPLIANCE SNAPSHOT", fill="white", font=ribbon_font)
+    y += 280
+
+    draw.text((80, y), "Status Basis", fill=navy, font=section_font)
+    draw.text((80, y + 54), "Prepared from public registry information available at the time of lookup.", fill=muted, font=small_font)
+    draw.line((80, y + 104, width - 80, y + 104), fill=red, width=6)
+    y += 150
 
     card_top = y
-    card_height = min(height - card_top - 230, 96 + sum(row_heights))
+    card_height = 74 + sum(row_heights)
     draw.rounded_rectangle((70, card_top, width - 70, card_top + card_height), radius=28, fill=light, outline=border, width=3)
     y += 38
-    draw.text((105, y), "Status Basis", fill=navy, font=section_font)
-    y += 64
     for index, ((label, lines), row_height) in enumerate(zip(wrapped_rows, row_heights)):
         if index:
             draw.line((105, y, width - 105, y), fill="#E2E8F0", width=2)
-            y += 24
+            y += 20
         draw.text((110, y), label.upper(), fill=red, font=label_font)
-        y += 36
+        value_y = y
+        x_value = 575
         for line in lines:
-            if y > card_top + card_height - 70:
-                draw.text((110, y), "Additional details are retained in the registry snapshot metadata.", fill=muted, font=small_font)
-                break
-            draw.text((110, y), line, fill=slate, font=text_font)
-            y += 42
-        y += 22
-        if y > card_top + card_height - 70:
-            break
+            draw.text((x_value, value_y), line, fill=slate, font=text_font)
+            value_y += 46
+        y += row_height
 
-    footer_y = height - 170
-    draw.text((90, footer_y), "Supporting Snapshot", fill=navy, font=section_font)
-    draw.text(
-        (90, footer_y + 56),
-        "This snapshot is based on public registry information available at the time of lookup and is not legal advice. A registry screenshot follows when available.",
-        fill=slate,
-        font=small_font,
-    )
+    footer_y = card_top + card_height + 46
+    draw.text((90, footer_y), "Supporting Registry View", fill=navy, font=section_font)
+    draw.text((90, footer_y + 56), "A source screenshot follows when available. This snapshot is informational and is not legal advice.", fill=slate, font=small_font)
     return image
 
 
@@ -403,12 +398,41 @@ def prepare_evidence_pdf(candidate: Path) -> bool:
         return False
 
 
+def focus_md_evidence_view(page) -> None:
+    for label in ["Financial Information", "Financial Informati"]:
+        try:
+            page.get_by_role("button", name=re.compile(label, re.I)).click(timeout=5000)
+            time.sleep(1)
+            break
+        except Exception:
+            continue
+    for pattern in [
+        r"Year\s+Represented",
+        r"Most\s+Recent\s+Fiscal\s+Year",
+        r"Total\s+Charitable\s+Contributions",
+        r"Registration\s+Status",
+        r"SOS\s+Charity\s+Organization\s+Record",
+    ]:
+        try:
+            page.get_by_text(re.compile(pattern, re.I)).first.scroll_into_view_if_needed(timeout=5000)
+            page.locator("body").evaluate("window.scrollBy(0, -170)")
+            time.sleep(1)
+            return
+        except Exception:
+            continue
+
+
 def save_focused_viewport_artifact(page, state: str, org_name: str) -> None:
     state_dir = ARTIFACTS_DIR / state.upper()
     state_dir.mkdir(parents=True, exist_ok=True)
     safe_name = artifact_safe_name(org_name)
     try:
         (state_dir / f"{safe_name}.html").write_text(page.content(), encoding="utf-8")
+    except Exception:
+        pass
+    try:
+        if state.upper() == "MD":
+            focus_md_evidence_view(page)
     except Exception:
         pass
     try:
@@ -696,6 +720,10 @@ def fifteenth_day_after_fiscal_year_end(fy_end: date, months_after_end_month: in
     return add_months(month_anchor, months_after_end_month).replace(day=15)
 
 
+def md_automatic_extension_due_date(fy_end: date) -> date:
+    return fifteenth_day_after_fiscal_year_end(fy_end, 11)
+
+
 def fiscal_period_for_ein(ein: str) -> tuple[date | None, date | None]:
     target = re.sub(r"\D", "", ein or "")
     if not target or not CHARITY_OR_PATH.exists():
@@ -795,11 +823,11 @@ def filing_due_date(state: str, report_year: int, fiscal_end: tuple[int, int]) -
         )
     if state == "MD":
         base_due = add_months(fy_end, 6)
-        # Maryland has an automatic extension; for June 30 FYE, 2025 filing is effectively due 5/15/2026.
-        if fiscal_end == (6, 30):
-            base_due = date(report_year, 12, 31)
-            return date(report_year + 1, 5, 15), f"base due {format_date(base_due)}; Maryland automatic extension moves the effective due date to 5/15/{report_year + 1}"
-        return base_due, f"based on Maryland's six-month annual filing cycle"
+        extended_due = md_automatic_extension_due_date(fy_end)
+        return base_due, (
+            f"Maryland annual filing initial due date is {format_date(base_due)}; "
+            f"if the automatic extension applies, the extension date is {format_date(extended_due)}"
+        )
     if state == "MA":
         base_due = fifteenth_day_after_fiscal_year_end(fy_end, 5)
         extended_due = add_months(base_due, 6)
@@ -865,7 +893,10 @@ def filing_due_date_options(state: str, report_year: int, fiscal_end: tuple[int,
             "rule_note": rule_note,
         }
 
-    extended_due = add_months(base_due, 6) if state in EXTENSION_SCENARIO_STATES else None
+    if state == "MD":
+        extended_due = md_automatic_extension_due_date(fy_end)
+    else:
+        extended_due = add_months(base_due, 6) if state in EXTENSION_SCENARIO_STATES else None
     effective_due = base_due
     if state == "MD":
         rule_note = "Maryland has an automatic extension process; CE Status is based on the base due date"
@@ -1943,13 +1974,20 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
                     extension_label = "Massachusetts six-month extension"
                 else:
                     extension_label = "six-month extension"
-                status_sentence = (
-                    f"CE Status is {base_status} based on the base due date. "
-                    f"If the {extension_label} was granted, the extended deadline would be {format_date(extended_due)} and the status would be {extended_status}."
-                )
+                if state == "MD":
+                    status_sentence = (
+                        f"CE Status is {base_status} based on the initial due date. "
+                        f"Assuming the organization is currently registered in Maryland, the automatic extension date would be {format_date(extended_due)} "
+                        f"and the status would be {extended_status} under that extension scenario."
+                    )
+                else:
+                    status_sentence = (
+                        f"CE Status is {base_status} based on the base due date. "
+                        f"If the {extension_label} was granted, the extended deadline would be {format_date(extended_due)} and the status would be {extended_status}."
+                    )
                 return (
                     f"{context['represented_year']} appears to be the most recent {state} filing year identified in the instant compliance snapshot. "
-                    f"Based on a {context['fiscal_end'][0]}/{context['fiscal_end'][1]} fiscal year end, the {context['next_report_year']} {filing_name} base due date is {format_date(base_due)}. "
+                    f"Based on a {context['fiscal_end'][0]}/{context['fiscal_end'][1]} fiscal year end, the {context['next_report_year']} {filing_name} initial due date is {format_date(base_due)}. "
                     f"{status_sentence}"
                 )
             if state == "MA":
