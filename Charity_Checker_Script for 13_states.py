@@ -34,7 +34,7 @@ STATUS_UNKNOWN = "Unknown"
 
 AK_SEARCH_URL = "https://online-registrations-law.alaska.gov/TLP/WebDoc/_/#4"
 AK_YEARS_TO_TRY = [2026, 2025, 2024, 2023]
-FAST_WAIT_MAX_MS = max(1000, int(os.environ.get("CE_FAST_WAIT_MAX_MS", "5000")))
+FAST_WAIT_MAX_MS = max(750, min(int(os.environ.get("CE_FAST_WAIT_MAX_MS", "1500")), 2000))
 FULL_PAGE_ARTIFACTS = os.environ.get("CE_FULL_PAGE_ARTIFACTS", "0").strip().lower() in {"1", "true", "yes"}
 ARTIFACT_SCREENSHOT_TIMEOUT_MS = max(1000, int(os.environ.get("CE_ARTIFACT_SCREENSHOT_TIMEOUT_MS", "10000")))
 STATE_RESULT_WAIT_SECONDS = max(3, int(os.environ.get("CE_STATE_RESULT_WAIT_SECONDS", "10")))
