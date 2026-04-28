@@ -2179,7 +2179,7 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         if state == "AK":
             return (
                 f"The AK public registry shows the {context['represented_year']} charitable organization registration/renewal is on file. "
-                "Because the current Alaska registration cycle has been submitted, Charity Clarity treats the organization as Current."
+                "Because that registration cycle has already been submitted for the period reviewed, Charity Clarity treats the organization as Current."
             )
         filing_label = "annual filing"
         if state == "MA":
@@ -2191,8 +2191,8 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         elif state == "HI":
             filing_label = "annual filing"
         return (
-            f"{context['represented_year']} appears to be the most recent {state} {filing_label} year identified in the Charity Clarity check. "
-            "Because the most recent filing year appears current for this snapshot, Charity Clarity treats the organization as Current."
+            f"The {state} public registry shows a {context['represented_year']} {filing_label} on record. "
+            f"Based on the filing year identified in this Charity Clarity check, no {state} charitable filing appears overdue for the period reviewed, so Charity Clarity treats the organization as Current."
         )
     if use_registry_date and normalized_status in {"upcoming filing", "current", "delinquent"}:
         descriptor = "expiration or renewal date"
