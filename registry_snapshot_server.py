@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.28.5"
+APP_VERSION = "2026.04.28.6"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = 3
@@ -1009,7 +1009,7 @@ def md_financial_body(page) -> str:
     return "\n".join(pieces)
 
 
-def md_detail_body(page) -> str:
+def md_detail_body(page, deep: bool = False) -> str:
     pieces = []
     try:
         pieces.append(page.locator("body").inner_text(timeout=5000))
@@ -1026,7 +1026,8 @@ def md_detail_body(page) -> str:
         pieces.append(page.locator("body").inner_text(timeout=8000))
     except Exception:
         pass
-    pieces.append(md_financial_body(page))
+    if deep:
+        pieces.append(md_financial_body(page))
     return "\n".join(piece for piece in pieces if piece)
 
 
@@ -2004,9 +2005,9 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     result.raw_status_text = result.raw_status_text if result.raw_status_text not in {"No matching EIN result", "No record found"} else "Maryland record found"
                     result.source_note = "Maryland detail page was reached from the public registry search."
                     result.success = True
-                    body = md_detail_body(page)
+                    body = md_detail_body(page, deep=capture_source_snapshot)
                 elif public_status(result) != "Not Registered":
-                    body = md_detail_body(page)
+                    body = md_detail_body(page, deep=capture_source_snapshot)
                 else:
                     body = md_no_results_body(page)
             elif state == "CO":
