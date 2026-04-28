@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
@@ -39,6 +39,18 @@ FULL_PAGE_ARTIFACTS = os.environ.get("CE_FULL_PAGE_ARTIFACTS", "0").strip().lowe
 ARTIFACT_SCREENSHOT_TIMEOUT_MS = max(1000, int(os.environ.get("CE_ARTIFACT_SCREENSHOT_TIMEOUT_MS", "10000")))
 STATE_RESULT_WAIT_SECONDS = max(3, int(os.environ.get("CE_STATE_RESULT_WAIT_SECONDS", "10")))
 MD_FAST_SEARCH_ONLY = os.environ.get("CE_MD_FAST_SEARCH_ONLY", "1").strip().lower() not in {"0", "false", "no"}
+MD_FAST_RESULT_WAIT_SECONDS = max(2, min(STATE_RESULT_WAIT_SECONDS, int(os.environ.get("CE_MD_FAST_RESULT_WAIT_SECONDS", "3"))))
+MAX_FIXED_SLEEP_SECONDS = max(0.25, float(os.environ.get("CE_MAX_FIXED_SLEEP_SECONDS", "1.5")))
+_REAL_SLEEP = time.sleep
+
+
+def fast_sleep(seconds: float) -> None:
+    """Cap fixed pauses so slow state portals do not make the full snapshot crawl."""
+    try:
+        amount = max(0.0, float(seconds))
+    except Exception:
+        amount = 0.0
+    _REAL_SLEEP(min(amount, MAX_FIXED_SLEEP_SECONDS))
 
 @dataclass
 class Organization:
@@ -311,7 +323,7 @@ def classify_ak_registration_year(registration_year: int, accounting_year_end: O
 def open_ak_public_search(page) -> bool:
     for _ in range(4):
         page.goto(AK_SEARCH_URL, wait_until="domcontentloaded", timeout=60000)
-        time.sleep(3.5)
+        fast_sleep(3.5)
         if page.locator("#Dq-8").count() > 0:
             return True
         public_search = page.locator("#l_Df-3-1")
@@ -320,24 +332,24 @@ def open_ak_public_search(page) -> bool:
                 public_search.first.click(timeout=30000, force=True)
             except Exception:
                 pass
-            time.sleep(3)
+            fast_sleep(3)
             if page.locator("#Dq-8").count() > 0:
                 return True
-        time.sleep(2)
+        fast_sleep(2)
     return False
 
 def fill_ak_search_form(page, org: Organization, year: int) -> None:
     page.locator("#Dq-8").wait_for(state="visible", timeout=30000)
     page.locator("#Dq-8").select_option(label="Charitable Organization")
-    time.sleep(0.5)
+    fast_sleep(0.5)
     page.locator("#Dq-9").select_option(label=str(year))
-    time.sleep(0.5)
+    fast_sleep(0.5)
     page.locator("#Dq-a").fill(org.organization_name)
-    time.sleep(0.5)
+    fast_sleep(0.5)
     page.locator("#Dq-b").fill(format_ein_with_dash(org.ein))
-    time.sleep(0.5)
+    fast_sleep(0.5)
     page.locator("#Dq-c").click(timeout=30000, force=True)
-    time.sleep(5)
+    fast_sleep(5)
 
 def find_ak_print_link(page, org: Organization):
     return page.evaluate(
@@ -390,7 +402,7 @@ def read_ak_accounting_year_from_pdf(page, context, print_link) -> Optional[int]
             pdf_url = popup.url
         except PlaywrightTimeoutError:
             page.mouse.click(print_link["x"], print_link["y"])
-            time.sleep(5)
+            fast_sleep(5)
             pdf_url = page.url
 
         if not pdf_url:
@@ -419,7 +431,7 @@ def search_ca(page, org: Organization) -> StateResult:
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
         safe_wait_for_network_idle(page, timeout=20000)
-        time.sleep(2)
+        fast_sleep(2)
 
         query = digits_only(org.ein) if digits_only(org.ein) else org.organization_name
         filled = False
@@ -457,7 +469,7 @@ def search_ca(page, org: Organization) -> StateResult:
             page.keyboard.press("Enter")
 
         safe_wait_for_network_idle(page, timeout=20000)
-        time.sleep(2)
+        fast_sleep(2)
         body = page.locator("body").inner_text(timeout=10000)
         if re.search(r"no records|no results|not registered", body, re.I):
             result.raw_status_text = "No record found"
@@ -537,7 +549,7 @@ def search_co(page, org: Organization) -> StateResult:
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
         safe_wait_for_network_idle(page, timeout=20000)
-        time.sleep(0.5)
+        fast_sleep(0.5)
 
         query = digits_only(org.ein) if digits_only(org.ein) else org.organization_name
         input_box = find_visible_input(page, [
@@ -554,7 +566,7 @@ def search_co(page, org: Organization) -> StateResult:
         input_box.fill(query)
         page.keyboard.press("Enter")
         safe_wait_for_network_idle(page, timeout=25000)
-        time.sleep(0.75)
+        fast_sleep(0.75)
 
         body = page.locator("body").inner_text(timeout=5000)
         if re.search(r"no records|no results|not found", body, re.I):
@@ -596,7 +608,7 @@ def search_ma(page, org: Organization) -> StateResult:
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
         safe_wait_for_network_idle(page, timeout=30000)
-        time.sleep(6)
+        fast_sleep(6)
 
         query = digits_only(org.ein) if digits_only(org.ein) else org.organization_name
         switched = False
@@ -660,7 +672,7 @@ def search_ma(page, org: Organization) -> StateResult:
             page.keyboard.press("Enter")
 
         safe_wait_for_network_idle(page, timeout=25000)
-        time.sleep(3)
+        fast_sleep(3)
 
         body = page.locator("body").inner_text(timeout=15000)
         if re.search(r"no results|no records|0 records|no matching", body, re.I):
@@ -682,13 +694,13 @@ def search_ma(page, org: Organization) -> StateResult:
             except Exception:
                 pass
         safe_wait_for_network_idle(page, timeout=25000)
-        time.sleep(4)
+        fast_sleep(4)
 
         try:
             page.locator("body").evaluate("window.scrollTo(0, document.body.scrollHeight)")
         except Exception:
             pass
-        time.sleep(1)
+        fast_sleep(1)
 
         body = page.locator("body").inner_text(timeout=15000)
         m_section = re.search(
@@ -737,7 +749,7 @@ def search_ny(page, org: Organization) -> StateResult:
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
         safe_wait_for_network_idle(page, timeout=20000)
-        time.sleep(3)
+        fast_sleep(3)
 
         ein_digits = digits_only(org.ein)
         formatted_ein = format_ein_with_dash(org.ein) if ein_digits else ""
@@ -806,7 +818,7 @@ def search_ny(page, org: Organization) -> StateResult:
             page.keyboard.press("Enter")
 
         safe_wait_for_network_idle(page, timeout=25000)
-        time.sleep(3)
+        fast_sleep(3)
 
         body = page.locator("body").inner_text(timeout=12000)
         if re.search(r"no rows available|no records|no results found|no results|not found", body, re.I):
@@ -872,7 +884,7 @@ def search_ny(page, org: Organization) -> StateResult:
             return result
 
         safe_wait_for_network_idle(page, timeout=25000)
-        time.sleep(3)
+        fast_sleep(3)
 
         detail_text = page.locator("body").inner_text(timeout=20000)
         if re.search(r"no rows available|no records|no results found|search home", detail_text, re.I) and not re.search(r"Annual Filing Documents", detail_text, re.I):
@@ -898,7 +910,7 @@ def search_ny(page, org: Organization) -> StateResult:
                     continue
             if annual_docs_open:
                 safe_wait_for_network_idle(page, timeout=15000)
-                time.sleep(2)
+                fast_sleep(2)
                 detail_text = page.locator("body").inner_text(timeout=20000)
 
         if not annual_docs_open and not re.search(r"Annual Filing Documents", detail_text, re.I):
@@ -982,7 +994,7 @@ def search_nj(page, org: Organization) -> StateResult:
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
         safe_wait_for_network_idle(page, timeout=20000)
-        time.sleep(4)
+        fast_sleep(4)
 
         query = digits_only(org.ein) if digits_only(org.ein) else org.organization_name
         input_box = find_visible_input(page, [
@@ -1000,7 +1012,7 @@ def search_nj(page, org: Organization) -> StateResult:
         input_box.fill(query)
         page.keyboard.press("Enter")
         safe_wait_for_network_idle(page, timeout=25000)
-        time.sleep(4)
+        fast_sleep(4)
 
         body = page.locator("body").inner_text(timeout=15000)
         if re.search(r"no records found|no records|no matching", body, re.I):
@@ -1094,7 +1106,7 @@ def find_pa_ein_input(page):
 def click_pa_search_button(page) -> bool:
     for attempt in range(2):
         safe_wait_for_network_idle(page, timeout=10000)
-        time.sleep(1 + attempt)
+        fast_sleep(1 + attempt)
 
         for label in ["Search", "Find", "Submit"]:
             try:
@@ -1140,12 +1152,12 @@ def click_pa_search_button(page) -> bool:
 
 def extract_pa_result_expiration(page, ein: str):
     safe_wait_for_network_idle(page, timeout=15000)
-    time.sleep(2)
+    fast_sleep(2)
     try:
         page.locator("body").evaluate("window.scrollTo(0, document.body.scrollHeight)")
     except Exception:
         pass
-    time.sleep(1)
+    fast_sleep(1)
 
     row_selectors = ["tbody tr", "tr", "[role='row']"]
     for selector in row_selectors:
@@ -1185,13 +1197,13 @@ def search_pa(page, org: Organization) -> StateResult:
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=45000)
                 safe_wait_for_network_idle(page, timeout=20000)
-                time.sleep(3)
+                fast_sleep(3)
                 last_goto_error = None
                 break
             except Exception as e:
                 last_goto_error = e
                 if goto_attempt == 0:
-                    time.sleep(4)
+                    fast_sleep(4)
                     continue
         if last_goto_error:
             raise last_goto_error
@@ -1202,7 +1214,7 @@ def search_pa(page, org: Organization) -> StateResult:
             if ein_input:
                 break
             safe_wait_for_network_idle(page, timeout=10000)
-            time.sleep(2)
+            fast_sleep(2)
         if not ein_input:
             result.error = "Could not find PA EIN input"
             return result
@@ -1321,7 +1333,7 @@ def search_va(page, org: Organization) -> StateResult:
     result = StateResult(org.organization_name, org.ein, "VA", STATUS_UNKNOWN, url)
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
-        time.sleep(1)
+        fast_sleep(1)
 
         name_input = find_va_name_input(page)
         if not name_input:
@@ -1335,7 +1347,7 @@ def search_va(page, org: Organization) -> StateResult:
             return result
 
         page.wait_for_load_state("load", timeout=30000)
-        time.sleep(1)
+        fast_sleep(1)
 
         body = page.locator("body").inner_text(timeout=10000)
         if re.search(r"\bNo record found\b", body, re.I):
@@ -1353,7 +1365,7 @@ def search_va(page, org: Organization) -> StateResult:
             return result
 
         page.wait_for_load_state("load", timeout=30000)
-        time.sleep(1)
+        fast_sleep(1)
 
         extension_raw = extract_labeled_value(page, ["Registration Extended Until"])
         extension_date = parse_date_value(extension_raw)
@@ -1415,9 +1427,9 @@ def search_md(page, org: Organization) -> StateResult:
             return result
         formatted_ein = f"{ein[:2]}-{ein[2:]}"
 
-        page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        safe_wait_for_network_idle(page, timeout=2500)
-        time.sleep(0.25)
+        page.goto(url, wait_until="domcontentloaded", timeout=15000)
+        safe_wait_for_network_idle(page, timeout=750)
+        fast_sleep(0.25)
 
         ein_input = None
         for label in ["Search by Charity EIN", "Charity EIN", "EIN"]:
@@ -1483,12 +1495,12 @@ def search_md(page, org: Organization) -> StateResult:
                     active_input.press("Enter")
                 except Exception:
                     pass
-            safe_wait_for_network_idle(page, timeout=1200)
+            safe_wait_for_network_idle(page, timeout=500)
 
         def submit_md_search(search_value: str) -> None:
             ein_input.fill("")
             ein_input.fill(search_value)
-            time.sleep(0.25)
+            fast_sleep(0.25)
             click_md_search(ein_input)
 
         def find_md_name_input():
@@ -1542,22 +1554,23 @@ def search_md(page, org: Organization) -> StateResult:
                 pass
             name_input.fill("")
             name_input.fill(search_value)
-            time.sleep(0.25)
+            fast_sleep(0.25)
             click_md_search(name_input)
 
         def wait_for_md_match() -> str:
             local_body = ""
-            deadline = time.time() + min(STATE_RESULT_WAIT_SECONDS, 6)
+            wait_seconds = STATE_RESULT_WAIT_SECONDS if org.evidence_mode else MD_FAST_RESULT_WAIT_SECONDS
+            deadline = time.time() + min(wait_seconds, 6)
             while time.time() < deadline:
                 local_body = page.locator("body").inner_text(timeout=2500)
                 if md_body_has_match(local_body):
                     break
                 if md_body_has_record(local_body):
-                    time.sleep(0.25)
+                    fast_sleep(0.25)
                     local_body = page.locator("body").inner_text(timeout=2500)
                     if md_body_has_match(local_body):
                         break
-                time.sleep(0.25)
+                fast_sleep(0.25)
             return local_body
 
         def body_says_no_results(text: str) -> bool:
@@ -1733,7 +1746,7 @@ def search_md(page, org: Organization) -> StateResult:
             registration_status = extract_labeled_value(page, ["Registration Status"])
             if registration_status:
                 break
-            time.sleep(0.25)
+            fast_sleep(0.25)
         result.raw_status_text = registration_status
         result.status = registration_status if registration_status else STATUS_UNKNOWN
         result.source_note = "Maryland uses the exact Registration Status from the public detail page."
@@ -1752,13 +1765,13 @@ def search_sc(page, org: Organization) -> StateResult:
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=45000)
                 safe_wait_for_network_idle(page, timeout=15000)
-                time.sleep(1)
+                fast_sleep(1)
                 last_goto_error = None
                 break
             except Exception as e:
                 last_goto_error = e
                 if goto_attempt == 0:
-                    time.sleep(3)
+                    fast_sleep(3)
                     continue
         if last_goto_error:
             raise last_goto_error
@@ -1795,7 +1808,7 @@ def search_sc(page, org: Organization) -> StateResult:
 
         page.wait_for_load_state("domcontentloaded", timeout=10000)
         safe_wait_for_network_idle(page, timeout=5000)
-        time.sleep(0.75)
+        fast_sleep(0.75)
 
         body = ""
         deadline = time.time() + STATE_RESULT_WAIT_SECONDS
@@ -1808,7 +1821,7 @@ def search_sc(page, org: Organization) -> StateResult:
                 pass
             if re.search(r"\bNo records?\b|No results|0 results", body, re.I):
                 break
-            time.sleep(0.75)
+            fast_sleep(0.75)
 
         if re.search(r"\bNo records?\b|No results|0 results", body, re.I):
             result.raw_status_text = "No record found"
@@ -1850,12 +1863,12 @@ def search_sc(page, org: Organization) -> StateResult:
 
         page.wait_for_load_state("domcontentloaded", timeout=30000)
         safe_wait_for_network_idle(page, timeout=30000)
-        time.sleep(2)
+        fast_sleep(2)
         try:
             page.locator("body").evaluate("window.scrollTo(0, document.body.scrollHeight)")
         except Exception:
             pass
-        time.sleep(2)
+        fast_sleep(2)
 
         detail_text = page.locator("body").inner_text(timeout=15000)
         m = re.search(r"Due Date:\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})", detail_text, re.I)
@@ -1887,7 +1900,7 @@ def search_hi(page, org: Organization) -> StateResult:
 
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
         safe_wait_for_network_idle(page, timeout=20000)
-        time.sleep(3)
+        fast_sleep(3)
 
         contains_selected = False
         for sel in ["#nameFilter", 'select[name="nameFilter"]']:
@@ -1924,12 +1937,12 @@ def search_hi(page, org: Organization) -> StateResult:
         name_input.click(timeout=5000)
         name_input.fill("")
         name_input.type(org.organization_name, delay=85)
-        time.sleep(0.5)
+        fast_sleep(0.5)
         fein_input.click(timeout=5000)
         fein_input.fill("")
         if formatted_ein:
             fein_input.type(formatted_ein, delay=85)
-        time.sleep(0.5)
+        fast_sleep(0.5)
 
         clicked_search = False
         for sel in [
@@ -1962,7 +1975,7 @@ def search_hi(page, org: Organization) -> StateResult:
             return result
 
         safe_wait_for_network_idle(page, timeout=30000)
-        time.sleep(3)
+        fast_sleep(3)
 
         body = page.locator("body").inner_text(timeout=15000)
         if re.search(r"no results|no records|0 results|showing 0 to 0 of 0 entries|no data available in table", body, re.I):
@@ -2043,7 +2056,7 @@ def search_hi(page, org: Organization) -> StateResult:
 
         page.wait_for_load_state("domcontentloaded", timeout=30000)
         safe_wait_for_network_idle(page, timeout=20000)
-        time.sleep(2)
+        fast_sleep(2)
 
         detail_text = page.locator("body").inner_text(timeout=12000)
         status_text = extract_labeled_value(page, ["Registration Status"])
@@ -2069,7 +2082,7 @@ def search_me(page, org: Organization) -> StateResult:
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
         safe_wait_for_network_idle(page, timeout=20000)
-        time.sleep(3)
+        fast_sleep(3)
 
         regulator = None
         for sel in ["#scRegulator", 'select[name="ctl00$ctl00$mainContent$mainContent$scRegulator"]']:
@@ -2084,7 +2097,7 @@ def search_me(page, org: Organization) -> StateResult:
             result.error = "Could not find ME Regulator dropdown"
             return result
         regulator.select_option(label="ALL")
-        time.sleep(1)
+        fast_sleep(1)
 
         name_input = None
         for sel in ["#scCompanyName", 'input[name="ctl00$ctl00$mainContent$mainContent$scCompanyName"]']:
@@ -2101,7 +2114,7 @@ def search_me(page, org: Organization) -> StateResult:
         name_input.click(timeout=5000)
         name_input.fill("")
         name_input.type(org.organization_name, delay=85)
-        time.sleep(1)
+        fast_sleep(1)
 
         search_button = None
         for sel in ["#btnSearch", 'input[name="ctl00$ctl00$mainContent$mainContent$btnSearch"]', 'input[type="submit"][value="Search"]']:
@@ -2116,9 +2129,9 @@ def search_me(page, org: Organization) -> StateResult:
             result.error = "Could not find ME Search button"
             return result
         search_button.click(timeout=5000, no_wait_after=True)
-        time.sleep(12)
+        fast_sleep(12)
         safe_wait_for_network_idle(page, timeout=30000)
-        time.sleep(2)
+        fast_sleep(2)
 
         body = page.locator("body").inner_text(timeout=15000)
         if re.search(r"0 records found|no records|no results|no companies found|no data", body, re.I):
@@ -2214,7 +2227,7 @@ def search_me(page, org: Organization) -> StateResult:
                 if detail_attempt > 0:
                     page.goto(url, wait_until="domcontentloaded", timeout=60000)
                     safe_wait_for_network_idle(page, timeout=20000)
-                    time.sleep(2)
+                    fast_sleep(2)
                     regulator = None
                     for sel in ["#scRegulator", 'select[name="ctl00$ctl00$mainContent$mainContent$scRegulator"]']:
                         try:
@@ -2227,7 +2240,7 @@ def search_me(page, org: Organization) -> StateResult:
                     if not regulator:
                         raise RuntimeError("Could not find ME Regulator dropdown after retry.")
                     regulator.select_option(label="ALL")
-                    time.sleep(1)
+                    fast_sleep(1)
 
                     name_input = None
                     for sel in ["#scCompanyName", 'input[name="ctl00$ctl00$mainContent$mainContent$scCompanyName"]']:
@@ -2243,7 +2256,7 @@ def search_me(page, org: Organization) -> StateResult:
                     name_input.click(timeout=5000)
                     name_input.fill("")
                     name_input.type(org.organization_name, delay=85)
-                    time.sleep(1)
+                    fast_sleep(1)
 
                     search_button = None
                     for sel in ["#btnSearch", 'input[name="ctl00$ctl00$mainContent$mainContent$btnSearch"]', 'input[type="submit"][value="Search"]']:
@@ -2257,9 +2270,9 @@ def search_me(page, org: Organization) -> StateResult:
                     if not search_button:
                         raise RuntimeError("Could not find ME Search button after retry.")
                     search_button.click(timeout=5000, no_wait_after=True)
-                    time.sleep(12)
+                    fast_sleep(12)
                     safe_wait_for_network_idle(page, timeout=30000)
-                    time.sleep(2)
+                    fast_sleep(2)
 
                     reacquired_link = None
                     best_priority = -1
@@ -2306,9 +2319,9 @@ def search_me(page, org: Organization) -> StateResult:
                     page.goto(detail_url, wait_until="domcontentloaded", timeout=60000)
                 else:
                     best_link.click(timeout=5000, no_wait_after=True)
-                    time.sleep(12)
+                    fast_sleep(12)
                 safe_wait_for_network_idle(page, timeout=30000)
-                time.sleep(2)
+                fast_sleep(2)
                 if not me_detail_page_ready():
                     raise RuntimeError("ME detail page markers not found after navigation.")
                 detail_text = page.locator("body").inner_text(timeout=30000)
@@ -2317,7 +2330,7 @@ def search_me(page, org: Organization) -> StateResult:
             except Exception as e:
                 last_detail_error = e
                 if detail_attempt == 0:
-                    time.sleep(3)
+                    fast_sleep(3)
                     continue
         if last_detail_error:
             raise last_detail_error
@@ -2398,13 +2411,13 @@ def search_nd(page, org: Organization) -> StateResult:
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=45000)
                 safe_wait_for_network_idle(page, timeout=20000)
-                time.sleep(3)
+                fast_sleep(3)
                 last_goto_error = None
                 break
             except Exception as e:
                 last_goto_error = e
                 if goto_attempt == 0:
-                    time.sleep(4)
+                    fast_sleep(4)
                     continue
         if last_goto_error:
             raise last_goto_error
@@ -2420,7 +2433,7 @@ def search_nd(page, org: Organization) -> StateResult:
         search_input.click(timeout=5000)
         search_input.fill("")
         search_input.type(org.organization_name, delay=85)
-        time.sleep(1)
+        fast_sleep(1)
 
         search_button = None
         for sel in ['button[aria-label="Execute search"]', 'button[aria-label*="Execute search"]']:
@@ -2435,9 +2448,9 @@ def search_nd(page, org: Organization) -> StateResult:
             result.error = "Could not find ND search button"
             return result
         search_button.click(timeout=5000)
-        time.sleep(6)
+        fast_sleep(6)
         safe_wait_for_network_idle(page, timeout=20000)
-        time.sleep(2)
+        fast_sleep(2)
 
         body = page.locator("body").inner_text(timeout=15000)
         if re.search(r"Results:\s*0\b|No results|No matching", body, re.I):
@@ -2493,9 +2506,9 @@ def search_nd(page, org: Organization) -> StateResult:
         try:
             page.get_by_text("Registration Date", exact=True).wait_for(timeout=15000)
         except Exception:
-            time.sleep(4)
+            fast_sleep(4)
         safe_wait_for_network_idle(page, timeout=10000)
-        time.sleep(1)
+        fast_sleep(1)
 
         detail_text = page.locator("body").inner_text(timeout=15000)
         status_text = ""
@@ -2627,7 +2640,7 @@ def main() -> int:
                             pass
                 print(f"[{st}] Result: {r.status} | {r.raw_status_text}", flush=True)
                 results.append(r)
-                time.sleep(1.0)
+                fast_sleep(1.0)
 
     write_results(args.output_prefix, results)
     print(f"Wrote {len(results)} results to {args.output_prefix}.csv and .json")
