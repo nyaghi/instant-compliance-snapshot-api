@@ -1679,7 +1679,7 @@ def search_md(page, org: Organization) -> StateResult:
             result.success = True
             return result
 
-        if MD_FAST_SEARCH_ONLY and not org.evidence_mode and md_body_has_record(body):
+        if MD_FAST_SEARCH_ONLY and not org.evidence_mode and md_body_has_record(body) and text_contains_requested_ein(body, org.ein):
             result.raw_status_text = "Maryland record found"
             result.status = STATUS_UNKNOWN
             result.source_note = "Maryland public search returned a matching record; detailed source evidence is captured on demand when the snapshot PDF is opened."
