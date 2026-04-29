@@ -73,6 +73,30 @@ class StateResult:
 def digits_only(value: str) -> str:
     return re.sub(r"\D", "", value or "")
 
+def text_contains_requested_ein(text: str, ein: str) -> bool:
+    target = digits_only(ein)
+    return bool(target and target in digits_only(text or ""))
+
+def text_exposes_ein(text: str) -> bool:
+    readable = re.sub(r"\s+", " ", text or "")
+    return bool(
+        re.search(r"\b(?:EIN|FEIN|Federal\s+Tax|Tax\s+ID|Employer\s+Identification)\b", readable, re.I)
+        or re.search(r"\b\d{2}[-\s]?\d{7}\b|\b\d{9}\b", readable)
+    )
+
+def text_has_wrong_ein_match(text: str, ein: str) -> bool:
+    target = digits_only(ein)
+    if not target:
+        return False
+    return text_exposes_ein(text) and target not in digits_only(text or "")
+
+def reject_wrong_ein_result(result: StateResult, state_name: str) -> StateResult:
+    result.raw_status_text = "No matching EIN result"
+    result.status = STATUS_NOT_REGISTERED
+    result.source_note = f"{state_name} search found a possible name match, but the public record did not match the requested EIN."
+    result.success = True
+    return result
+
 def read_input_csv(path: Path) -> List[Organization]:
     with path.open("r", newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
@@ -842,6 +866,8 @@ def search_ny(page, org: Organization) -> StateResult:
                     if not row_text:
                         continue
                     row_digits = digits_only(row_text)
+                    if ein_digits and text_exposes_ein(row_text) and ein_digits not in row_digits:
+                        continue
                     row_name = normalize_name(row_text)
                     priority = -1
                     if ein_digits and ein_digits in row_digits:
@@ -887,6 +913,8 @@ def search_ny(page, org: Organization) -> StateResult:
         fast_sleep(3)
 
         detail_text = page.locator("body").inner_text(timeout=20000)
+        if text_has_wrong_ein_match(detail_text, org.ein):
+            return reject_wrong_ein_result(result, "New York")
         if re.search(r"no rows available|no records|no results found|search home", detail_text, re.I) and not re.search(r"Annual Filing Documents", detail_text, re.I):
             result.raw_status_text = "Detail page not reached"
             result.status = STATUS_UNKNOWN
@@ -1610,12 +1638,14 @@ def search_md(page, org: Organization) -> StateResult:
             )
 
         def md_body_has_match(text: str) -> bool:
-            if md_body_has_record(text):
+            if text_contains_requested_ein(text, org.ein) or formatted_ein in (text or ""):
                 return True
+            if md_body_has_record(text) and text_exposes_ein(text):
+                return False
+            if md_body_has_record(text) and wanted_name:
+                return wanted_name in normalize_name(text)
             return bool(
-                ein in digits_only(text)
-                or formatted_ein in text
-                or (wanted_name and wanted_name in normalize_name(text))
+                wanted_name and wanted_name in normalize_name(text)
             )
 
         def md_body_has_record(text: str) -> bool:
@@ -1704,6 +1734,8 @@ def search_md(page, org: Organization) -> StateResult:
                         row_text = re.sub(r"\s+", " ", row.inner_text(timeout=750)).strip()
                         row_digits = digits_only(row_text)
                         row_name = normalize_name(row_text)
+                        if text_exposes_ein(row_text) and ein not in row_digits and formatted_ein not in row_text:
+                            continue
                         if ein not in row_digits and formatted_ein not in row_text and not (wanted_name and wanted_name in row_name):
                             continue
                         if selector == "a[href]":
@@ -1766,6 +1798,9 @@ def search_md(page, org: Organization) -> StateResult:
             return result
 
         safe_wait_for_network_idle(page, timeout=1500)
+        detail_text = page.locator("body").inner_text(timeout=5000)
+        if text_has_wrong_ein_match(detail_text, org.ein):
+            return reject_wrong_ein_result(result, "Maryland")
         registration_status = ""
         deadline = time.time() + min(STATE_RESULT_WAIT_SECONDS, 5)
         while time.time() < deadline:
@@ -1897,6 +1932,8 @@ def search_sc(page, org: Organization) -> StateResult:
         fast_sleep(2)
 
         detail_text = page.locator("body").inner_text(timeout=15000)
+        if text_has_wrong_ein_match(detail_text, org.ein):
+            return reject_wrong_ein_result(result, "South Carolina")
         m = re.search(r"Due Date:\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})", detail_text, re.I)
         due_raw = m.group(1).strip() if m else extract_labeled_value_from_text(detail_text, ["Due Date"])
         due_date = parse_date_value(due_raw)
@@ -2516,6 +2553,8 @@ def search_nd(page, org: Organization) -> StateResult:
                         lines = [re.sub(r"\s+", " ", ln).strip() for ln in txt.splitlines() if ln.strip()]
                         if not lines:
                             continue
+                        if text_has_wrong_ein_match(txt, org.ein):
+                            continue
                         name_text = lines[0]
                         name_exact = name_text.upper()
                         name_normalized = normalize_name(name_text)
@@ -2550,6 +2589,8 @@ def search_nd(page, org: Organization) -> StateResult:
         fast_sleep(1)
 
         detail_text = page.locator("body").inner_text(timeout=15000)
+        if text_has_wrong_ein_match(detail_text, org.ein):
+            return reject_wrong_ein_result(result, "North Dakota")
         status_text = ""
         try:
             detail_rows = page.locator("tr.detail")
