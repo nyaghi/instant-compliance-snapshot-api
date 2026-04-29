@@ -2171,6 +2171,7 @@ def search_me(page, org: Organization) -> StateResult:
         target_normalized = normalize_name(org.organization_name)
         best_link = None
         best_priority = -1
+        best_status_priority = -999
         for selector in ["a[href*='ShowDetail.aspx']", "a[href]"]:
             try:
                 links = page.locator(selector)
@@ -2192,8 +2193,20 @@ def search_me(page, org: Organization) -> StateResult:
                             priority = 2
                         elif target_normalized and (target_normalized in link_normalized or link_normalized in target_normalized):
                             priority = 1
-                        if priority > best_priority:
+                        status_priority = 0
+                        try:
+                            row_text = re.sub(r"\s+", " ", link.locator("xpath=ancestor::tr[1]").inner_text(timeout=1500)).strip()
+                            if re.search(r"\bACTIVE\b", row_text, re.I):
+                                status_priority = 5
+                            elif re.search(r"\b(CURRENT|GOOD\s+STANDING)\b", row_text, re.I):
+                                status_priority = 4
+                            elif re.search(r"\b(FAILED\s+TO\s+RENEW|EXPIRED|REVOKED|SUSPENDED|INACTIVE)\b", row_text, re.I):
+                                status_priority = -5
+                        except Exception:
+                            status_priority = 0
+                        if priority > best_priority or (priority == best_priority and status_priority > best_status_priority):
                             best_priority = priority
+                            best_status_priority = status_priority
                             best_link = link
                     except Exception:
                         continue
