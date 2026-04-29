@@ -1153,7 +1153,7 @@ def click_pa_search_button(page) -> bool:
                 continue
     return False
 
-def extract_pa_result_expiration(page, ein: str):
+def extract_pa_result_expiration(page, ein: str, organization_name: str = ""):
     safe_wait_for_network_idle(page, timeout=15000)
     fast_sleep(2)
     try:
@@ -1162,6 +1162,8 @@ def extract_pa_result_expiration(page, ein: str):
         pass
     fast_sleep(1)
 
+    target_name = normalize_name(organization_name)
+    candidates = []
     row_selectors = ["tbody tr", "tr", "[role='row']"]
     for selector in row_selectors:
         try:
@@ -1176,15 +1178,36 @@ def extract_pa_result_expiration(page, ein: str):
                     if ein not in digits_only(row_text):
                         continue
                     cells = row.locator("td")
+                    row_name = ""
                     if cells.count() >= 5:
+                        try:
+                            row_name = cells.nth(0).inner_text(timeout=1500).strip()
+                        except Exception:
+                            row_name = ""
                         expiration_raw = cells.nth(4).inner_text(timeout=1500).strip()
-                        return row_text, expiration_raw
-                    expiration_raw = extract_labeled_value_from_text(row_text, ["Expiration Date", "Expiration"])
-                    return row_text, expiration_raw
+                    else:
+                        expiration_raw = extract_labeled_value_from_text(row_text, ["Expiration Date", "Expiration"])
+                    normalized_row_name = normalize_name(row_name or row_text)
+                    priority = 0
+                    if target_name:
+                        if normalized_row_name == target_name:
+                            priority = 4
+                        elif target_name in normalized_row_name or normalized_row_name in target_name:
+                            priority = 3
+                        elif all(part in normalized_row_name for part in target_name.split() if len(part) > 2):
+                            priority = 2
+                    expiration_date = parse_date_value(expiration_raw)
+                    # When PA returns several rows for one EIN, prefer the exact/name match first.
+                    # If the name is unavailable, prefer a usable future expiration over stale history.
+                    date_score = 1 if expiration_date and expiration_date >= date.today() else 0
+                    candidates.append((priority, date_score, expiration_date or date.min, row_text, expiration_raw))
                 except Exception:
                     continue
         except Exception:
             continue
+    if candidates:
+        candidates.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+        return candidates[0][3], candidates[0][4]
     return "", ""
 def search_pa(page, org: Organization) -> StateResult:
     url = "https://www.charities.pa.gov/#/page/searchCharities"
@@ -1228,7 +1251,7 @@ def search_pa(page, org: Organization) -> StateResult:
             result.error = "Could not click PA Search button"
             return result
 
-        row_text, expiration_raw = extract_pa_result_expiration(page, ein)
+        row_text, expiration_raw = extract_pa_result_expiration(page, ein, org.organization_name)
         if not row_text:
             result.raw_status_text = "No matching EIN result"
             result.status = STATUS_NOT_REGISTERED
