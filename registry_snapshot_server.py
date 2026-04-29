@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.29.12"
+APP_VERSION = "2026.04.29.13"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -2320,6 +2320,14 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
             f"Based on the filing year identified in this Charity Clarity check, no {state} charitable filing appears overdue for the period reviewed, so Charity Clarity treats the organization as Current."
         )
     if normalized_status == "upcoming filing" and current_cycle_already_filed(state, context.get("represented_year"), registry_date) and context.get("due_date"):
+        extension_sentence = ""
+        extended_due = context.get("extended_due_date")
+        if extended_due:
+            extended_status = status_from_calendar_date(extended_due)
+            if state == "MD":
+                extension_sentence = f" If Maryland's automatic extension applies, the due date becomes {format_date(extended_due)} and the status becomes {extended_status}."
+            elif state in EXTENSION_SCENARIO_STATES:
+                extension_sentence = f" If a six-month extension was applied for and approved, the due date becomes {format_date(extended_due)} and the status becomes {extended_status}."
         if state == "AK":
             return (
                 f"The AK public registry shows the {context['represented_year']} charitable organization registration/renewal is on file. "
@@ -2327,7 +2335,7 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
             )
         return (
             f"The {state} public registry shows a {context.get('represented_year')} filing or renewal on record. "
-            f"The next required filing is due {format_date(context.get('due_date'))}, which is within 6 months."
+            f"The next required filing is due {format_date(context.get('due_date'))}, which is within 6 months.{extension_sentence}"
         )
     if use_registry_date and normalized_status in {"upcoming filing", "current", "delinquent"}:
         descriptor = "expiration or renewal date"
