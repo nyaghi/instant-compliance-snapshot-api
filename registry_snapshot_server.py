@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.29.14"
+APP_VERSION = "2026.04.29.15"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1536,6 +1536,7 @@ def me_detail_body(page, org) -> str:
     if not detail_visible(body_text):
         best_href = ""
         best_score = -1
+        best_status_score = -999
         try:
             links = page.locator("a[href*='ShowDetail.aspx']")
             for i in range(min(links.count(), 80)):
@@ -1552,8 +1553,20 @@ def me_detail_body(page, org) -> str:
                         score = 2
                     elif link_text:
                         score = 1
-                    if score > best_score:
+                    status_score = 0
+                    try:
+                        row_text = re.sub(r"\s+", " ", link.locator("xpath=ancestor::tr[1]").inner_text(timeout=1500)).strip()
+                        if re.search(r"\bACTIVE\b", row_text, re.I):
+                            status_score = 5
+                        elif re.search(r"\b(CURRENT|GOOD\s+STANDING)\b", row_text, re.I):
+                            status_score = 4
+                        elif re.search(r"\b(FAILED\s+TO\s+RENEW|EXPIRED|REVOKED|SUSPENDED|INACTIVE)\b", row_text, re.I):
+                            status_score = -5
+                    except Exception:
+                        status_score = 0
+                    if score > best_score or (score == best_score and status_score > best_status_score):
                         best_score = score
+                        best_status_score = status_score
                         best_href = (link.get_attribute("href") or "").strip()
                 except Exception:
                     continue
@@ -1734,6 +1747,14 @@ def search_hi_precise(page, org):
 
 
 def enrich_me_result_from_body(result, body: str) -> None:
+    existing_status = " ".join([result.status or "", result.raw_status_text or ""])
+    if re.search(r"\bACTIVE\b", existing_status, re.I) and not re.search(r"\b(FAILED\s+TO\s+RENEW|EXPIRED|REVOKED|SUSPENDED|INACTIVE)\b", existing_status, re.I):
+        result.raw_status_text = result.raw_status_text or "Active"
+        result.status = result.status or "Active"
+        result.source_note = result.source_note or "Registration status with definition (ME)"
+        result.error = ""
+        result.success = True
+        return
     readable = html.unescape(re.sub(r"<[^>]+>", " ", body or ""))
     readable = re.sub(r"\s+", " ", readable).strip()
     if re.search(r"0 records found|no records|no results|no companies found|no data", readable, re.I):
