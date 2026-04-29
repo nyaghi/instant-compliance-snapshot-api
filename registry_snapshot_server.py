@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.29.11"
+APP_VERSION = "2026.04.29.12"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1061,7 +1061,7 @@ def filing_context(result, body: str) -> dict:
         latest_year = max(latest_year or 0, period_end.year)
     if latest_year is None and period_end and state != "CA":
         latest_year = period_end.year
-    registry_fiscal_end = fiscal_year_end_from_body(body)
+    registry_fiscal_end = fiscal_year_end_from_body(body, state)
     fiscal_end = registry_fiscal_end or fiscal_year_end_for_ein(result.ein)
 
     if latest_year is None or fiscal_end is None:
@@ -1941,15 +1941,65 @@ def md_filing_context(result, body: str) -> dict:
     return filing_context(result, body)
 
 
-def fiscal_year_end_from_body(body: str) -> tuple[int, int] | None:
+def fiscal_year_end_from_body(body: str, state: str = "") -> tuple[int, int] | None:
     readable_body = html.unescape(re.sub(r"<[^>]+>", " ", body))
+    state = (state or "").upper()
+    if state == "CA":
+        annual_match = re.search(
+            r"Annual\s+Renewal\s+Data([\s\S]{0,12000}?)(?:Fundraising\s+Platform\s+Data|Related\s+Registration|Filing\s+and\s+Correspondence|$)",
+            readable_body,
+            re.I,
+        )
+        if not annual_match:
+            return None
+        annual_section = annual_match.group(1)
+        ca_patterns = [
+            r"Accounting\s+Period\s+End\s+Date\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
+            r"Accounting\s+Period\s+End\s+Date\s*:?\s*([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+            r"Fiscal\s+Year\s+End(?:ing)?\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
+            r"Fiscal\s+Year\s+End(?:ing)?\s*:?\s*([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+        ]
+        for pattern in ca_patterns:
+            matches = [parse_due_date(match.group(1)) for match in re.finditer(pattern, annual_section, re.I)]
+            parsed_dates = [value for value in matches if value]
+            if parsed_dates:
+                latest_period_end = max(parsed_dates)
+                return latest_period_end.month, latest_period_end.day
+        return None
+    if state == "HI":
+        annual_match = re.search(
+            r"Annual\s+filing\s+documents([\s\S]{0,5000}?)(?:Registration\s+documents|Other\s+Filed\s+Documents|$)",
+            readable_body,
+            re.I,
+        )
+        annual_section = annual_match.group(1) if annual_match else readable_body
+        hi_patterns = [
+            r"Fiscal\s+year\s+end\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
+            r"Fiscal\s+year\s+end\s*:?\s*([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+            r"Accounting\s+Period\s+End\s+Date\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
+            r"Accounting\s+Period\s+End\s+Date\s*:?\s*([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+        ]
+        for pattern in hi_patterns:
+            matches = [parse_due_date(match.group(1)) for match in re.finditer(pattern, annual_section, re.I)]
+            parsed_dates = [value for value in matches if value]
+            if parsed_dates:
+                latest_period_end = max(parsed_dates)
+                return latest_period_end.month, latest_period_end.day
+        if re.search(r"Fiscal\s+year\s+end", annual_section, re.I):
+            parsed_dates = [
+                value
+                for value in (parse_due_date(match.group(0)) for match in re.finditer(r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b", annual_section))
+                if value
+            ]
+            if parsed_dates:
+                latest_period_end = max(parsed_dates)
+                return latest_period_end.month, latest_period_end.day
+        return None
     patterns = [
-        r"(?:Fiscal\s+Year\s+End|FYE|Fiscal\s+Period\s+End|Period\s+End(?:ing)?|End\s+Date)[\s\S]{0,140}?([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
-        r"(?:Fiscal\s+Year\s+End|FYE|Fiscal\s+Period\s+End|Period\s+End(?:ing)?|End\s+Date)[\s\S]{0,140}?(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
-        r"(?:Fiscal\s+Year\s+End|FYE|Fiscal\s+Period\s+End|Period\s+End(?:ing)?|End\s+Date)\s*:?\s*([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
-        r"(?:Fiscal\s+Year\s+End|FYE|Fiscal\s+Period\s+End|Period\s+End(?:ing)?|End\s+Date)\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
-        r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\s*(?:-|to|through)\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
-        r"\b[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4}\s*(?:-|to|through)\s*([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+        r"(?:Accounting\s+Period\s+End\s+Date|Fiscal\s+Year\s+End|FYE|Fiscal\s+Period\s+End|Period\s+End(?:ing)?)[\s\S]{0,140}?([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+        r"(?:Accounting\s+Period\s+End\s+Date|Fiscal\s+Year\s+End|FYE|Fiscal\s+Period\s+End|Period\s+End(?:ing)?)[\s\S]{0,140}?(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
+        r"(?:Accounting\s+Period\s+End\s+Date|Fiscal\s+Year\s+End|FYE|Fiscal\s+Period\s+End|Period\s+End(?:ing)?)\s*:?\s*([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+        r"(?:Accounting\s+Period\s+End\s+Date|Fiscal\s+Year\s+End|FYE|Fiscal\s+Period\s+End|Period\s+End(?:ing)?)\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
     ]
     for pattern in patterns:
         for match in re.finditer(pattern, readable_body, re.I):
