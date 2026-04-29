@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.29.5"
+APP_VERSION = "2026.04.29.6"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -993,6 +993,24 @@ def latest_year_from_text(body: str, state: str) -> int | None:
             annual_years = [int(match.group(1)) for match in re.finditer(r"\b(20\d{2})\b", annual_match.group(1))]
             return max(annual_years) if annual_years else None
         return None
+    if state == "CA":
+        annual_match = re.search(
+            r"Annual\s+Renewal\s+Data([\s\S]{0,12000}?)(?:Fundraising\s+Platform\s+Data|Related\s+Registration|Filing\s+and\s+Correspondence|$)",
+            readable_body,
+            re.I,
+        )
+        if annual_match:
+            annual_years = [
+                int(match.group(1))
+                for match in re.finditer(
+                    r"(?:Accounting\s+Period\s+End\s+Date|Fiscal\s+Year\s+End|Period\s+End(?:ing)?)[^0-9]{0,80}\d{1,2}[/-]\d{1,2}[/-](20\d{2})",
+                    annual_match.group(1),
+                    re.I,
+                )
+            ]
+            if not annual_years:
+                annual_years = [int(match.group(1)) for match in re.finditer(r"\b(20\d{2})\b", annual_match.group(1))]
+            return max(annual_years) if annual_years else None
     for pattern in patterns:
         for match in re.finditer(pattern, readable_body, re.I):
             years.append(int(match.group(1)))
@@ -1575,6 +1593,21 @@ def hi_detail_body(page) -> str:
     return "\n".join(piece for piece in pieces if piece)
 
 
+def ma_detail_body(page) -> str:
+    pieces = []
+    for _ in range(3):
+        time.sleep(2)
+        body = registry_page_body(page)
+        pieces.append(body)
+        if latest_year_from_text(body, "MA"):
+            break
+        try:
+            page.get_by_text(re.compile(r"Annual\s+Filings(?:\s+and\s+Documents)?", re.I)).first.scroll_into_view_if_needed(timeout=3000)
+        except Exception:
+            pass
+    return "\n".join(piece for piece in pieces if piece)
+
+
 def search_hi_precise(page, org):
     url = "https://charity.ehawaii.gov/charity/new-search.html"
     result = checker.StateResult(org.organization_name, org.ein, "HI", checker.STATUS_UNKNOWN, url)
@@ -1594,70 +1627,79 @@ def search_hi_precise(page, org):
             return result
         body = ""
         clicked_result = False
+        ein_values = []
+        if ein_digits:
+            ein_values.extend([checker.format_ein_with_dash(org.ein), ein_digits])
+        ein_values.append("")
+        seen_eins = set()
+        ein_values = [item for item in ein_values if item not in seen_eins and not seen_eins.add(item)]
         for variant in organization_name_variants(org.organization_name):
-            name_input.fill("")
-            name_input.fill(variant)
-            fein_input.fill("")
-            if ein_digits:
-                fein_input.fill(ein_digits)
-            clicked = False
-            for sel in ["#trigger-organization-search", 'button[id="trigger-organization-search"]', 'button[type="submit"]', "button"]:
-                try:
-                    buttons = page.locator(sel)
-                    for i in range(min(buttons.count(), 10)):
-                        button = buttons.nth(i)
-                        try:
-                            text = re.sub(r"\s+", " ", button.inner_text(timeout=1000)).strip()
-                        except Exception:
-                            text = (button.get_attribute("value") or "").strip()
-                        if button.is_visible(timeout=750) and re.search(r"\bSearch\b", text, re.I):
-                            button.click(timeout=5000)
-                            clicked = True
+            for ein_value in ein_values:
+                name_input.fill("")
+                name_input.fill(variant)
+                fein_input.fill("")
+                if ein_value:
+                    fein_input.fill(ein_value)
+                clicked = False
+                for sel in ["#trigger-organization-search", 'button[id="trigger-organization-search"]', 'button[type="submit"]', "button"]:
+                    try:
+                        buttons = page.locator(sel)
+                        for i in range(min(buttons.count(), 10)):
+                            button = buttons.nth(i)
+                            try:
+                                text = re.sub(r"\s+", " ", button.inner_text(timeout=1000)).strip()
+                            except Exception:
+                                text = (button.get_attribute("value") or "").strip()
+                            if button.is_visible(timeout=750) and re.search(r"\bSearch\b", text, re.I):
+                                button.click(timeout=5000)
+                                clicked = True
+                                break
+                        if clicked:
                             break
-                    if clicked:
-                        break
-                except Exception:
+                    except Exception:
+                        continue
+                if not clicked:
+                    result.error = "Could not click HI Search button"
+                    return result
+                checker.safe_wait_for_network_idle(page, timeout=30000)
+                time.sleep(3)
+                body = page.locator("body").inner_text(timeout=15000)
+                if re.search(r"no results|no records|0 results|showing 0 to 0 of 0 entries|no data available in table|not registered in our system", body, re.I):
                     continue
-            if not clicked:
-                result.error = "Could not click HI Search button"
-                return result
-            checker.safe_wait_for_network_idle(page, timeout=30000)
-            time.sleep(3)
-            body = page.locator("body").inner_text(timeout=15000)
-            if re.search(r"no results|no records|0 results|showing 0 to 0 of 0 entries|no data available in table|not registered in our system", body, re.I):
-                continue
-            wanted_variants = [checker.normalize_name(item) for item in organization_name_variants(org.organization_name)]
-            for selector in ["#searchOrgTable tbody tr", "#searchResultTable tbody tr", "table tbody tr", "a[href]"]:
-                try:
-                    rows = page.locator(selector)
-                    for i in range(min(rows.count(), 100)):
-                        row = rows.nth(i)
-                        try:
-                            if not row.is_visible(timeout=750):
+                wanted_variants = [checker.normalize_name(item) for item in organization_name_variants(org.organization_name)]
+                for selector in ["#searchOrgTable tbody tr", "#searchResultTable tbody tr", "table tbody tr", "a[href]"]:
+                    try:
+                        rows = page.locator(selector)
+                        for i in range(min(rows.count(), 100)):
+                            row = rows.nth(i)
+                            try:
+                                if not row.is_visible(timeout=750):
+                                    continue
+                                row_text = re.sub(r"\s+", " ", row.inner_text(timeout=1500)).strip()
+                                if not row_text or re.search(r"no data available", row_text, re.I):
+                                    continue
+                                row_digits = re.sub(r"\D", "", row_text)
+                                row_name = checker.normalize_name(row_text)
+                                name_match = any(name and (name in row_name or row_name in name) for name in wanted_variants)
+                                if ein_digits and ein_digits not in row_digits and not name_match:
+                                    continue
+                                links = row.locator("a[href]")
+                                if selector == "a[href]":
+                                    row.click(timeout=5000)
+                                elif links.count():
+                                    links.first.click(timeout=5000)
+                                else:
+                                    row.click(timeout=5000)
+                                clicked_result = True
+                                break
+                            except Exception:
                                 continue
-                            row_text = re.sub(r"\s+", " ", row.inner_text(timeout=1500)).strip()
-                            if not row_text or re.search(r"no data available", row_text, re.I):
-                                continue
-                            row_digits = re.sub(r"\D", "", row_text)
-                            row_name = checker.normalize_name(row_text)
-                            name_match = any(name and (name in row_name or row_name in name) for name in wanted_variants)
-                            if ein_digits and ein_digits not in row_digits and not name_match:
-                                continue
-                            links = row.locator("a[href]")
-                            if selector == "a[href]":
-                                row.click(timeout=5000)
-                            elif links.count():
-                                links.first.click(timeout=5000)
-                            else:
-                                row.click(timeout=5000)
-                            clicked_result = True
+                        if clicked_result:
                             break
-                        except Exception:
-                            continue
-                    if clicked_result:
-                        break
-                except Exception:
-                    continue
+                    except Exception:
+                        continue
+                if clicked_result:
+                    break
             if clicked_result:
                 break
         if not clicked_result:
@@ -2104,7 +2146,7 @@ def true_status_from_body(result, body: str) -> str:
         return "Not Registered"
     if indicates_exempt_registration(combined):
         return "Exempt"
-    if state in {"MA", "MD", "NJ", "NY"} and record_confirmed and represented_year and due_date:
+    if state in {"CA", "MA", "MD", "NJ", "NY"} and record_confirmed and represented_year and due_date:
         return status_from_calendar_date(due_date)
     if state == "AK" and re.search(r"\b20\d{2}\s+registration\s+found\b", combined, re.I):
         found_years = [int(match.group(1)) for match in re.finditer(r"\b(20\d{2})\s+registration\s+found\b", combined, re.I)]
@@ -2350,6 +2392,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     body = ca_detail_body(page, org)
             elif state == "MA":
                 result = checker.search_ma(page, org)
+                body = ma_detail_body(page)
             elif state == "MD":
                 result = checker.search_md(page, org)
                 md_body = registry_page_body(page)
