@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.29.1"
+APP_VERSION = "2026.04.29.2"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -983,16 +983,19 @@ def latest_year_from_text(body: str, state: str) -> int | None:
         r"Period\s+End(?:ing)?\s*:?\s*\d{1,2}[/-]\d{1,2}[/-](20\d{2})",
     ]
     years = []
+    if state == "MA":
+        annual_match = re.search(
+            r"Annual\s+Filings(?:\s+and\s+Documents)?([\s\S]{0,5000}?)(?:Charity\s+Registration\s+Documents|Registration\s+Documents|Other\s+Filed\s+Documents|$)",
+            readable_body,
+            re.I,
+        )
+        if annual_match:
+            annual_years = [int(match.group(1)) for match in re.finditer(r"\b(20\d{2})\b", annual_match.group(1))]
+            return max(annual_years) if annual_years else None
+        return None
     for pattern in patterns:
         for match in re.finditer(pattern, readable_body, re.I):
             years.append(int(match.group(1)))
-    if state == "MA":
-        for match in re.finditer(r"Form[\s-]*PC[^0-9]{0,80}(20\d{2})", readable_body, re.I):
-            years.append(int(match.group(1)))
-        annual_match = re.search(r"Annual\s+Filings(?:\s+and\s+Documents)?([\s\S]{0,5000}?)(?:Charity\s+Registration\s+Documents|Registration\s+Documents|Other\s+Filed\s+Documents|$)", readable_body, re.I)
-        if annual_match:
-            for match in re.finditer(r"\b(20\d{2})\b", annual_match.group(1)):
-                years.append(int(match.group(1)))
     if state == "HI":
         doc_match = re.search(r"\bDocuments\b([\s\S]{0,2500})", readable_body, re.I)
         if doc_match:
