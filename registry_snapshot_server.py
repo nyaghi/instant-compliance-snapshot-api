@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.28.26"
+APP_VERSION = "2026.04.29.1"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -911,9 +911,9 @@ def filing_due_date(state: str, report_year: int, fiscal_end: tuple[int, int]) -
     if state == "ME":
         return add_months(fy_end, 5), "based on Maine's annual filing cycle"
     if state == "ND":
-        return date(report_year + 1, 9, 1), "based on North Dakota's annual charitable organization renewal cycle"
+        return date(report_year - 1, 9, 1), "based on North Dakota's annual charitable organization renewal cycle"
     if state == "AK":
-        return date(report_year + 1, 9, 1), "based on Alaska's annual charitable registration cycle"
+        return date(report_year - 1, 9, 1), "based on Alaska's annual charitable registration cycle"
     return None, "state due-date rule is not encoded"
 
 
@@ -1072,7 +1072,7 @@ def stale_represented_year_is_delinquent(represented_year: int | None) -> bool:
 
 
 def current_cycle_already_filed(state: str, represented_year: int | None, registry_date: date | None = None) -> bool:
-    """Treat a current-year registration/current filing year as satisfied before date-window rules."""
+    """The filing year on record is recent enough to use next-due-date logic."""
     if represented_year is None:
         return False
     state = (state or "").upper()
@@ -1082,6 +1082,16 @@ def current_cycle_already_filed(state: str, represented_year: int | None, regist
     if state in {"CA", "HI", "MA", "MD"}:
         return represented_year >= today.year - 1
     return False
+
+
+def status_for_filed_cycle(state: str, context: dict, registry_date: date | None = None) -> str:
+    due_date = context.get("due_date")
+    represented_year = context.get("represented_year")
+    if due_date and represented_year:
+        return status_from_calendar_date(due_date)
+    if current_cycle_already_filed(state, represented_year, registry_date):
+        return "Current"
+    return ""
 
 
 def represented_year_is_registry_evidenced(result, body: str, represented_year: int | None) -> bool:
@@ -2075,8 +2085,9 @@ def true_status_from_body(result, body: str) -> str:
     )
 
     if state == "MD" and md_detail_page_matched(result, combined):
-        if current_cycle_already_filed(state, represented_year, registry_date):
-            return "Current"
+        filed_cycle_status = status_for_filed_cycle(state, context, registry_date)
+        if filed_cycle_status:
+            return filed_cycle_status
         if stale_represented_year_is_delinquent(represented_year):
             return "Delinquent"
         if due_date and represented_year:
@@ -2093,14 +2104,14 @@ def true_status_from_body(result, body: str) -> str:
     if state == "AK" and re.search(r"\b20\d{2}\s+registration\s+found\b", combined, re.I):
         found_years = [int(match.group(1)) for match in re.finditer(r"\b(20\d{2})\s+registration\s+found\b", combined, re.I)]
         if found_years and current_cycle_already_filed(state, max(found_years), registry_date):
-            return "Current"
+            return status_for_filed_cycle(state, context, registry_date) or "Current"
     if represented_year_is_registry_evidenced(result, body, represented_year) and current_cycle_already_filed(state, represented_year, registry_date):
         if not re.search(r"\b(delinquent|expired|revoked|suspended|closed|inactive|overdue|non[- ]?compliant)\b", combined_lower, re.I):
-            return "Current"
+            return status_for_filed_cycle(state, context, registry_date) or "Current"
     if state == "HI" and record_confirmed and represented_year and represented_year >= date.today().year - 1 and re.search(r"\bActive\b", combined, re.I):
-        return "Current"
+        return status_for_filed_cycle(state, context, registry_date) or "Current"
     if state == "MA" and record_confirmed and represented_year and represented_year >= date.today().year - 1 and re.search(r"Annual\s+Filings?\s+not\s+visible", combined, re.I):
-        return "Current"
+        return status_for_filed_cycle(state, context, registry_date) or "Current"
     if use_registry_date:
         return status_from_calendar_date(registry_date)
     labeled_dates = [] if state == "CA" else labeled_due_dates_from_text(combined)
@@ -2184,7 +2195,7 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         if state == "AK":
             return (
                 f"The AK public registry shows the {context['represented_year']} charitable organization registration/renewal is on file. "
-                "Because that registration cycle has already been submitted for the period reviewed, Charity Clarity treats the organization as Current."
+                f"The next Alaska charitable registration renewal is due {format_date(context.get('due_date'))}, which is not within the next 6 months."
             )
         filing_label = "annual filing"
         if state == "MA":
@@ -2198,6 +2209,16 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         return (
             f"The {state} public registry shows a {context['represented_year']} {filing_label} on record. "
             f"Based on the filing year identified in this Charity Clarity check, no {state} charitable filing appears overdue for the period reviewed, so Charity Clarity treats the organization as Current."
+        )
+    if normalized_status == "upcoming filing" and current_cycle_already_filed(state, context.get("represented_year"), registry_date) and context.get("due_date"):
+        if state == "AK":
+            return (
+                f"The AK public registry shows the {context['represented_year']} charitable organization registration/renewal is on file. "
+                f"The next Alaska charitable registration renewal is due {format_date(context.get('due_date'))}, which is within 6 months."
+            )
+        return (
+            f"The {state} public registry shows a {context.get('represented_year')} filing or renewal on record. "
+            f"The next required filing is due {format_date(context.get('due_date'))}, which is within 6 months."
         )
     if use_registry_date and normalized_status in {"upcoming filing", "current", "delinquent"}:
         descriptor = "expiration or renewal date"
