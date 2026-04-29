@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.29.9"
+APP_VERSION = "2026.04.29.10"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1003,13 +1003,11 @@ def latest_year_from_text(body: str, state: str) -> int | None:
             annual_years = [
                 int(match.group(1))
                 for match in re.finditer(
-                    r"(?:Accounting\s+Period\s+End\s+Date|Fiscal\s+Year\s+End|Period\s+End(?:ing)?)[^0-9]{0,80}\d{1,2}[/-]\d{1,2}[/-](20\d{2})",
+                    r"(?:Accounting\s+Period\s+End\s+Date|Fiscal\s+Year\s+End|Period\s+End(?:ing)?)[^0-9]{0,120}\d{1,2}\s*[/-]\s*\d{1,2}\s*[/-]\s*(20\d{2})",
                     annual_match.group(1),
                     re.I,
                 )
             ]
-            if not annual_years:
-                annual_years = [int(match.group(1)) for match in re.finditer(r"\b(20\d{2})\b", annual_match.group(1))]
             return max(annual_years) if annual_years else None
         return None
     for pattern in patterns:
