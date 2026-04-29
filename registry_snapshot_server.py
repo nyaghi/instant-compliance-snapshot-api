@@ -56,9 +56,9 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.29.6"
+APP_VERSION = "2026.04.29.7"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
-EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NY", "OH", "PA"}
+EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
 MAX_PARALLEL_LOOKUPS = max(1, int(os.environ.get("CE_MAX_PARALLEL_LOOKUPS", "3")))
 BLOCK_HEAVY_BROWSER_RESOURCES = os.environ.get("CE_BLOCK_HEAVY_BROWSER_RESOURCES", "1").strip().lower() not in {"0", "false", "no"}
@@ -1633,7 +1633,11 @@ def search_hi_precise(page, org):
         ein_values.append("")
         seen_eins = set()
         ein_values = [item for item in ein_values if item not in seen_eins and not seen_eins.add(item)]
+        search_variants = [""] if ein_digits else []
         for variant in organization_name_variants(org.organization_name):
+            if variant not in search_variants:
+                search_variants.append(variant)
+        for variant in search_variants:
             for ein_value in ein_values:
                 name_input.fill("")
                 name_input.fill(variant)
@@ -1663,9 +1667,6 @@ def search_hi_precise(page, org):
                     return result
                 checker.safe_wait_for_network_idle(page, timeout=30000)
                 time.sleep(3)
-                body = page.locator("body").inner_text(timeout=15000)
-                if re.search(r"no results|no records|0 results|showing 0 to 0 of 0 entries|no data available in table|not registered in our system", body, re.I):
-                    continue
                 wanted_variants = [checker.normalize_name(item) for item in organization_name_variants(org.organization_name)]
                 for selector in ["#searchOrgTable tbody tr", "#searchResultTable tbody tr", "table tbody tr", "a[href]"]:
                     try:
@@ -1700,6 +1701,9 @@ def search_hi_precise(page, org):
                         continue
                 if clicked_result:
                     break
+                body = page.locator("body").inner_text(timeout=15000)
+                if re.search(r"no results|no records|0 results|showing 0 to 0 of 0 entries|no data available in table|not registered in our system", body, re.I):
+                    continue
             if clicked_result:
                 break
         if not clicked_result:
