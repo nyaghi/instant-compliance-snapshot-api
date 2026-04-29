@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.29.3"
+APP_VERSION = "2026.04.29.4"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -2104,7 +2104,7 @@ def true_status_from_body(result, body: str) -> str:
         return "Not Registered"
     if indicates_exempt_registration(combined):
         return "Exempt"
-    if state == "MA" and record_confirmed and represented_year and due_date:
+    if state in {"MA", "MD", "NJ"} and record_confirmed and represented_year and due_date:
         return status_from_calendar_date(due_date)
     if state == "AK" and re.search(r"\b20\d{2}\s+registration\s+found\b", combined, re.I):
         found_years = [int(match.group(1)) for match in re.finditer(r"\b(20\d{2})\s+registration\s+found\b", combined, re.I)]
@@ -2308,6 +2308,9 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
                     f"Based on a {fiscal_end[0]}/{fiscal_end[1]} fiscal year end, the {report_year} CHAR500 annual filing base due date is {format_date(base_due)}. "
                     f"If an extension applies, the extended deadline is approximately {format_date(extended_due)}."
                 )
+            if state == "NJ":
+                calculated_status = status_from_calendar_date(context["due_date"])
+                return f"{context['comment']} CE Status is {calculated_status} based on that due date."
             return context["comment"]
     if normalized_status == "upcoming filing":
         return "A filing or renewal appears to be due soon based on the Charity Clarity check."
