@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.30.22"
+APP_VERSION = "2026.04.30.24"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -763,6 +763,13 @@ def add_months(value: date, months: int) -> date:
     return date(year, month, day)
 
 
+def add_months_preserving_end_of_month(value: date, months: int) -> date:
+    shifted = add_months(value, months)
+    if value.day == calendar.monthrange(value.year, value.month)[1]:
+        return shifted.replace(day=calendar.monthrange(shifted.year, shifted.month)[1])
+    return shifted
+
+
 def fifteenth_day_after_fiscal_year_end(fy_end: date, months_after_end_month: int) -> date:
     month_anchor = date(fy_end.year, fy_end.month, 1)
     return add_months(month_anchor, months_after_end_month).replace(day=15)
@@ -833,6 +840,22 @@ def public_profile_name_for_ein(ein: str) -> str:
     return name
 
 
+def public_profile_latest_tax_year_for_ein(ein: str) -> int | None:
+    payload = public_profile_for_ein(ein)
+    candidates = []
+    raw_tax_period = str((payload.get("organization") or {}).get("tax_period") or "")
+    match = re.match(r"(20\d{2})[-/]?\d{0,2}", raw_tax_period)
+    if match:
+        candidates.append(int(match.group(1)))
+    for filing in payload.get("filings_with_data") or []:
+        for key in ("tax_prd_yr", "tax_prd"):
+            raw = str(filing.get(key) or "")
+            match = re.match(r"(20\d{2})", raw)
+            if match:
+                candidates.append(int(match.group(1)))
+    return max(candidates) if candidates else None
+
+
 def resolved_organization_name(ein: str, supplied_name: str = "") -> str:
     supplied_name = (supplied_name or "").strip()
     if supplied_name:
@@ -901,7 +924,7 @@ def filing_due_date(state: str, report_year: int, fiscal_end: tuple[int, int]) -
             f"if an extension was applied, the extended due date is {format_date(extended_due)}"
         )
     if state == "MD":
-        base_due = add_months(fy_end, 6)
+        base_due = add_months_preserving_end_of_month(fy_end, 6)
         extended_due = md_automatic_extension_due_date(fy_end)
         return base_due, (
             f"Maryland annual filing initial due date is {format_date(base_due)}; "
@@ -955,7 +978,7 @@ def filing_due_date_options(state: str, report_year: int, fiscal_end: tuple[int,
     if state == "CA":
         base_due = date(report_year, 12, 31) if fiscal_end == (6, 30) else fifteenth_day_after_fiscal_year_end(fy_end, 5)
     elif state == "MD":
-        base_due = add_months(fy_end, 6)
+        base_due = add_months_preserving_end_of_month(fy_end, 6)
     elif state in {"MA", "NY", "HI", "SC"}:
         base_due = fifteenth_day_after_fiscal_year_end(fy_end, 5)
     elif state == "PA":
@@ -975,7 +998,7 @@ def filing_due_date_options(state: str, report_year: int, fiscal_end: tuple[int,
     if state == "MD":
         extended_due = md_automatic_extension_due_date(fy_end)
     else:
-        extended_due = add_months(base_due, 6) if state in EXTENSION_SCENARIO_STATES else None
+        extended_due = add_months_preserving_end_of_month(base_due, 6) if state in EXTENSION_SCENARIO_STATES else None
     effective_due = base_due
     if state == "MD":
         rule_note = "Maryland has an automatic extension process; CE Status is based on the base due date"
@@ -1083,7 +1106,18 @@ def latest_year_from_text(body: str, state: str) -> int | None:
 
 
 def md_represented_year_from_text(body: str, ein: str = "", organization_name: str = "") -> int | None:
-    readable = html.unescape(re.sub(r"<[^>]+>", " ", body or ""))
+    source = body or ""
+    for escaped, replacement in {
+        "\\u003c": "<",
+        "\\u003C": "<",
+        "\\u003e": ">",
+        "\\u003E": ">",
+        "\\u0026": "&",
+        "\\u00a0": " ",
+        "\\/": "/",
+    }.items():
+        source = source.replace(escaped, replacement)
+    readable = html.unescape(re.sub(r"<[^>]+>", " ", source))
     readable = re.sub(r"\s+", " ", readable)
     patterns = [
         r"Most\s+Recent\s+Fiscal\s+Year\s*:?\s*(20\d{2})",
@@ -1133,7 +1167,13 @@ def filing_context(result, body: str) -> dict:
         and re.search(r"\bCurrent\b", " ".join([result.status or "", result.raw_status_text or ""]), re.I)
     ):
         latest_year = None
-    if latest_year is None and period_end and state not in {"CA", "MD"}:
+    if (
+        latest_year is None
+        and state == "NJ"
+        and re.search(r"\b(compliant|current|active)\b", " ".join([result.status or "", result.raw_status_text or "", body or ""]), re.I)
+    ):
+        latest_year = public_profile_latest_tax_year_for_ein(result.ein)
+    if latest_year is None and period_end and state not in {"CA", "MD", "NJ"}:
         latest_year = period_end.year
     registry_fiscal_end = fiscal_year_end_from_body(body, state)
     fiscal_end = registry_fiscal_end or fiscal_year_end_for_ein(result.ein)
