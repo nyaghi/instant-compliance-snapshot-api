@@ -1658,6 +1658,18 @@ def search_md(page, org: Organization) -> StateResult:
                 or re.search(r"Registration\s+Status\s*:?\s*Current", readable, re.I)
             )
 
+        def md_row_is_candidate(text: str) -> bool:
+            row_text = re.sub(r"\s+", " ", text or "").strip()
+            if not row_text or re.search(r"Home|Privacy|Accessibility|Log in|Register|Clear all filters", row_text, re.I):
+                return False
+            row_digits = digits_only(row_text)
+            row_name = normalize_name(row_text)
+            if ein in row_digits or formatted_ein in row_text:
+                return True
+            if text_exposes_ein(row_text):
+                return False
+            return bool(wanted_name and wanted_name in row_name)
+
         wanted_name = normalize_name(org.organization_name)
         body = ""
         for search_value in [formatted_ein, ein]:
@@ -1693,7 +1705,6 @@ def search_md(page, org: Organization) -> StateResult:
                 escaped_name = org.organization_name.replace('"', '\\"')
                 fast_result_selectors.extend([
                     f'a:has-text("{escaped_name}")',
-                    f'text="{org.organization_name}"',
                 ])
             fast_result_selectors.extend([
                 f'a:has-text("{formatted_ein}")',
@@ -1705,6 +1716,12 @@ def search_md(page, org: Organization) -> StateResult:
                 try:
                     candidate = page.locator(selector).first
                     if candidate.count() > 0 and candidate.is_visible(timeout=500):
+                        try:
+                            candidate_text = re.sub(r"\s+", " ", candidate.inner_text(timeout=750)).strip()
+                        except Exception:
+                            candidate_text = ""
+                        if candidate_text and not md_row_is_candidate(candidate_text):
+                            continue
                         candidate.click(timeout=3000)
                         clicked_result = True
                         break
@@ -1732,11 +1749,7 @@ def search_md(page, org: Organization) -> StateResult:
                         if not row.is_visible(timeout=250):
                             continue
                         row_text = re.sub(r"\s+", " ", row.inner_text(timeout=750)).strip()
-                        row_digits = digits_only(row_text)
-                        row_name = normalize_name(row_text)
-                        if text_exposes_ein(row_text) and ein not in row_digits and formatted_ein not in row_text:
-                            continue
-                        if ein not in row_digits and formatted_ein not in row_text and not (wanted_name and wanted_name in row_name):
+                        if not md_row_is_candidate(row_text):
                             continue
                         if selector == "a[href]":
                             row.click(timeout=3000)
@@ -1767,7 +1780,7 @@ def search_md(page, org: Organization) -> StateResult:
                             if not item.is_visible(timeout=250):
                                 continue
                             text = re.sub(r"\s+", " ", item.inner_text(timeout=750)).strip()
-                            if not text or re.search(r"Home|Privacy|Accessibility|Log in|Register|Clear all filters", text, re.I):
+                            if not md_row_is_candidate(text):
                                 continue
                             links = item.locator("a[href]")
                             if selector == "a[href]":
