@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.30.24"
+APP_VERSION = "2026.04.30.25"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1173,6 +1173,12 @@ def filing_context(result, body: str) -> dict:
         and re.search(r"\b(compliant|current|active)\b", " ".join([result.status or "", result.raw_status_text or "", body or ""]), re.I)
     ):
         latest_year = public_profile_latest_tax_year_for_ein(result.ein)
+    if (
+        latest_year is None
+        and state == "CA"
+        and re.search(r"\b(current|active|registered|compliant)\b", " ".join([result.status or "", result.raw_status_text or "", body or ""]), re.I)
+    ):
+        latest_year = public_profile_latest_tax_year_for_ein(result.ein)
     if latest_year is None and period_end and state not in {"CA", "MD", "NJ"}:
         latest_year = period_end.year
     registry_fiscal_end = fiscal_year_end_from_body(body, state)
@@ -1369,22 +1375,33 @@ def extract_ak_signature_date(pdf_text: str) -> str:
     return match.group(1).strip() if match else ""
 
 
-def organization_name_variants(name: str) -> list[str]:
-    base = re.sub(r"\s+", " ", (name or "").strip())
-    if not base:
-        return [""]
-    variants = [base]
-    without_trailing_the = re.sub(r",\s*the\s*$", "", base, flags=re.I).strip()
-    without_leading_the = re.sub(r"^the\s+", "", base, flags=re.I).strip()
-    without_comma_suffix = re.sub(r",\s*(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?)\s*$", "", base, flags=re.I).strip()
-    without_suffix = re.sub(r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?)\s*$", "", without_comma_suffix, flags=re.I).strip()
-    no_comma = re.sub(r",\s*", " ", base).strip()
-    no_punctuation = re.sub(r"[^\w\s]", " ", base).strip()
-    no_punctuation = re.sub(r"\s+", " ", no_punctuation)
-    for variant in [without_comma_suffix, without_suffix, no_comma, no_punctuation, without_trailing_the, without_leading_the]:
-        if variant and variant.lower() not in {item.lower() for item in variants}:
-            variants.append(variant)
-    return variants
+def organization_name_variants(name: str, ein: str = "") -> list[str]:
+    variants = []
+
+    def add(value: str) -> None:
+        value = re.sub(r"\s+", " ", (value or "").strip())
+        if value and value.lower() not in {item.lower() for item in variants}:
+            variants.append(value)
+
+    seed_names = [name]
+    if ein:
+        seed_names.extend([organization_name_for_ein(ein), public_profile_name_for_ein(ein)])
+
+    for seed in seed_names:
+        base = re.sub(r"\s+", " ", (seed or "").strip())
+        if not base:
+            continue
+        add(base)
+        without_trailing_the = re.sub(r",\s*the\s*$", "", base, flags=re.I).strip()
+        without_leading_the = re.sub(r"^the\s+", "", base, flags=re.I).strip()
+        without_comma_suffix = re.sub(r",\s*(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?)\s*$", "", base, flags=re.I).strip()
+        without_suffix = re.sub(r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?)\s*$", "", without_comma_suffix, flags=re.I).strip()
+        no_comma = re.sub(r",\s*", " ", base).strip()
+        no_punctuation = re.sub(r"[^\w\s]", " ", base).strip()
+        no_punctuation = re.sub(r"\s+", " ", no_punctuation)
+        for variant in [without_comma_suffix, without_suffix, no_comma, no_punctuation, without_trailing_the, without_leading_the]:
+            add(variant)
+    return variants or [""]
 
 
 def org_with_name(org, name: str):
@@ -1405,7 +1422,7 @@ def result_is_retryable_name_miss(result) -> bool:
 def search_with_name_variants(page, org, search_func):
     best_result = None
     original_name = org.organization_name
-    for variant in organization_name_variants(original_name):
+    for variant in organization_name_variants(original_name, org.ein):
         result = search_func(page, org_with_name(org, variant))
         if getattr(result, "organization_name", "") != original_name:
             result.organization_name = original_name
@@ -1420,7 +1437,7 @@ def search_with_name_variants(page, org, search_func):
 def find_ak_print_link_relaxed(page, org):
     formatted_ein = checker.format_ein_with_dash(org.ein)
     ein_digits = re.sub(r"\D", "", org.ein or "")
-    variants = organization_name_variants(org.organization_name)
+    variants = organization_name_variants(org.organization_name, org.ein)
     for variant in variants:
         try:
             found = checker.find_ak_print_link(page, org_with_name(org, variant))
@@ -1541,7 +1558,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
         return result, ""
     years_to_try = getattr(checker, "AK_YEARS_TO_TRY", [date.today().year, date.today().year - 1])
     for idx, year in enumerate(years_to_try):
-        for variant in organization_name_variants(org.organization_name):
+        for variant in organization_name_variants(org.organization_name, org.ein):
             ak_context = browser.new_context(viewport={"width": 1365, "height": 900}, accept_downloads=True)
             configure_browser_context(ak_context)
             ak_page = ak_context.new_page()
@@ -1767,7 +1784,7 @@ def search_hi_precise(page, org):
         seen_eins = set()
         ein_values = [item for item in ein_values if item not in seen_eins and not seen_eins.add(item)]
         search_variants = [""] if ein_digits else []
-        for variant in organization_name_variants(org.organization_name):
+        for variant in organization_name_variants(org.organization_name, org.ein):
             if variant not in search_variants:
                 search_variants.append(variant)
         for variant in search_variants:
@@ -1800,7 +1817,7 @@ def search_hi_precise(page, org):
                     return result
                 checker.safe_wait_for_network_idle(page, timeout=30000)
                 time.sleep(3)
-                wanted_variants = [checker.normalize_name(item) for item in organization_name_variants(org.organization_name)]
+                wanted_variants = [checker.normalize_name(item) for item in organization_name_variants(org.organization_name, org.ein)]
                 for selector in ["#searchOrgTable tbody tr", "#searchResultTable tbody tr", "table tbody tr", "a[href]"]:
                     try:
                         rows = page.locator(selector)
@@ -2573,7 +2590,7 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
                 if state == "MD":
                     status_sentence = (
                         f"CE Status is {base_status} based on the initial due date. "
-                        f"Assuming the organization is currently registered in Maryland, the automatic extension date would be {format_date(extended_due)} "
+                        f"If Maryland's automatic extension was processed, the due date would be {format_date(extended_due)} "
                         f"and the status would be {extended_status} under that extension scenario."
                     )
                 else:
