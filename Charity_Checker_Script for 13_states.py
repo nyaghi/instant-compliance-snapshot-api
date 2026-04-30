@@ -1646,6 +1646,27 @@ def search_md(page, org: Organization) -> StateResult:
                 or not readable.strip()
             )
 
+        def md_name_variants(name: str) -> list[str]:
+            raw = re.sub(r"\s+", " ", name or "").strip()
+            variants = [raw]
+            variants.append(re.sub(r",\s*the\s*$", "", raw, flags=re.I).strip())
+            variants.append(re.sub(r"^the\s+", "", raw, flags=re.I).strip())
+            variants.append(re.sub(r"\bincorporated\b", "inc", raw, flags=re.I).strip())
+            seen = set()
+            output = []
+            for variant in variants:
+                normalized = normalize_name(variant)
+                if normalized and normalized not in seen:
+                    seen.add(normalized)
+                    output.append(variant)
+            return output
+
+        md_wanted_names = [normalize_name(value) for value in md_name_variants(org.organization_name)]
+
+        def md_body_has_exact_name(text: str) -> bool:
+            normalized_text = normalize_name(text)
+            return any(name and name in normalized_text for name in md_wanted_names)
+
         def md_body_has_match(text: str) -> bool:
             if text_contains_requested_ein(text, org.ein) or formatted_ein in (text or ""):
                 return True
@@ -1654,9 +1675,9 @@ def search_md(page, org: Organization) -> StateResult:
             if md_body_has_record(text) and text_exposes_ein(text):
                 return False
             if md_body_has_record(text) and wanted_name:
-                return wanted_name in normalize_name(text)
+                return md_body_has_exact_name(text)
             return bool(
-                wanted_name and wanted_name in normalize_name(text)
+                wanted_name and md_body_has_exact_name(text)
             )
 
         def md_body_has_record(text: str) -> bool:
@@ -1669,6 +1690,8 @@ def search_md(page, org: Organization) -> StateResult:
                 or re.search(r"Registration\s+Status\s*:?\s*Current", readable, re.I)
             )
 
+        allow_exact_name_candidate = False
+
         def md_row_is_candidate(text: str) -> bool:
             row_text = re.sub(r"\s+", " ", text or "").strip()
             if not row_text or re.search(r"Home|Privacy|Accessibility|Log in|Register|Clear all filters", row_text, re.I):
@@ -1677,11 +1700,11 @@ def search_md(page, org: Organization) -> StateResult:
             row_name = normalize_name(row_text)
             if ein in row_digits or formatted_ein in row_text:
                 return True
-            if ein:
+            if ein and not allow_exact_name_candidate:
                 return False
             if text_exposes_ein(row_text):
                 return False
-            return bool(wanted_name and wanted_name in row_name)
+            return bool(any(name and name in row_name for name in md_wanted_names))
 
         wanted_name = normalize_name(org.organization_name)
         body = ""
@@ -1691,14 +1714,24 @@ def search_md(page, org: Organization) -> StateResult:
             if md_body_has_match(body):
                 break
 
+        name_confirmed_search = False
         if not md_body_has_match(body) and org.organization_name and not org.organization_name.lower().startswith("ein "):
-            submit_md_name_search(org.organization_name)
-            name_body = wait_for_md_match()
-            if md_body_has_match(name_body) or (
-                not ein and not body_says_no_results(name_body) and not body_says_pending_or_error(name_body)
-            ):
-                body = name_body
+            for name_search_value in md_name_variants(org.organization_name):
+                submit_md_name_search(name_search_value)
+                name_body = wait_for_md_match()
+                if md_body_has_match(name_body) or (
+                    md_body_has_exact_name(name_body)
+                    and not body_says_no_results(name_body)
+                    and not body_says_pending_or_error(name_body)
+                ):
+                    body = name_body
+                    name_confirmed_search = True
+                    break
+                if not ein and not body_says_no_results(name_body) and not body_says_pending_or_error(name_body):
+                    body = name_body
+                    break
         ein_confirmed_search = bool(ein and md_body_has_match(body))
+        allow_exact_name_candidate = bool(not ein_confirmed_search and name_confirmed_search)
 
         if not md_body_has_match(body) and body_says_no_results(body):
             result.raw_status_text = "No record found"
@@ -1847,6 +1880,8 @@ def search_md(page, org: Organization) -> StateResult:
         result.status = registration_status if registration_status else STATUS_UNKNOWN
         if ein_confirmed_search:
             result.source_note = "Maryland uses the exact Registration Status from a detail page reached through an EIN-confirmed public registry search."
+        elif name_confirmed_search:
+            result.source_note = "Maryland uses the exact Registration Status from a detail page reached through an exact-name public registry search."
         else:
             result.source_note = "Maryland uses the exact Registration Status from the public detail page."
         result.success = True
