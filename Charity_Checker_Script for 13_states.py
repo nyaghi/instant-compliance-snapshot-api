@@ -1698,6 +1698,7 @@ def search_md(page, org: Organization) -> StateResult:
                 not ein and not body_says_no_results(name_body) and not body_says_pending_or_error(name_body)
             ):
                 body = name_body
+        ein_confirmed_search = bool(ein and md_body_has_match(body))
 
         if not md_body_has_match(body) and body_says_no_results(body):
             result.raw_status_text = "No record found"
@@ -1844,7 +1845,10 @@ def search_md(page, org: Organization) -> StateResult:
             fast_sleep(0.25)
         result.raw_status_text = registration_status
         result.status = registration_status if registration_status else STATUS_UNKNOWN
-        result.source_note = "Maryland uses the exact Registration Status from the public detail page."
+        if ein_confirmed_search:
+            result.source_note = "Maryland uses the exact Registration Status from a detail page reached through an EIN-confirmed public registry search."
+        else:
+            result.source_note = "Maryland uses the exact Registration Status from the public detail page."
         result.success = True
         return result
     except Exception as e:
