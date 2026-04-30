@@ -1649,6 +1649,8 @@ def search_md(page, org: Organization) -> StateResult:
         def md_body_has_match(text: str) -> bool:
             if text_contains_requested_ein(text, org.ein) or formatted_ein in (text or ""):
                 return True
+            if ein:
+                return False
             if md_body_has_record(text) and text_exposes_ein(text):
                 return False
             if md_body_has_record(text) and wanted_name:
@@ -1675,6 +1677,8 @@ def search_md(page, org: Organization) -> StateResult:
             row_name = normalize_name(row_text)
             if ein in row_digits or formatted_ein in row_text:
                 return True
+            if ein:
+                return False
             if text_exposes_ein(row_text):
                 return False
             return bool(wanted_name and wanted_name in row_name)
@@ -1690,7 +1694,9 @@ def search_md(page, org: Organization) -> StateResult:
         if not md_body_has_match(body) and org.organization_name and not org.organization_name.lower().startswith("ein "):
             submit_md_name_search(org.organization_name)
             name_body = wait_for_md_match()
-            if md_body_has_match(name_body) or (not body_says_no_results(name_body) and not body_says_pending_or_error(name_body)):
+            if md_body_has_match(name_body) or (
+                not ein and not body_says_no_results(name_body) and not body_says_pending_or_error(name_body)
+            ):
                 body = name_body
 
         if not md_body_has_match(body) and body_says_no_results(body):
@@ -1808,6 +1814,12 @@ def search_md(page, org: Organization) -> StateResult:
                     continue
         if not clicked_result:
             if md_body_has_record(body):
+                if ein:
+                    result.raw_status_text = "No matching EIN result"
+                    result.status = STATUS_NOT_REGISTERED
+                    result.source_note = "Maryland public search returned a record by name, but did not confirm the requested EIN."
+                    result.success = True
+                    return result
                 result.raw_status_text = "Record found; detail page not opened"
                 result.status = STATUS_UNKNOWN
                 result.source_note = "Maryland public search returned a record for the EIN search, but the detail page could not be opened automatically."
