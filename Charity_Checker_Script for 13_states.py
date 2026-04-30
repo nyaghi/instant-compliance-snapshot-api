@@ -600,20 +600,20 @@ def search_co(page, org: Organization) -> StateResult:
             result.success = True
             return result
 
+        expires_match = re.search(r"Expir(?:es|ed)\s+on[:\s]+(\d{1,2}/\d{1,2}/\d{4})", body, re.I)
+        if expires_match:
+            expires_on = datetime.strptime(expires_match.group(1), "%m/%d/%Y").date()
+            result.raw_status_text = f"Expires on {expires_on.strftime('%m/%d/%Y')}"
+            result.status = status_from_due_date(expires_on)
+            result.source_note = "Colorado public search exposes an expiration date; status is derived from that date."
+            result.success = True
+            return result
+
         status_text = extract_labeled_value_from_text(body, ["Status", "Registration Status"])
         if status_text and not re.fullmatch(r"status", status_text, re.I):
             result.raw_status_text = status_text
             result.status = status_text
             result.source_note = "Colorado uses the exact public status when it is visible."
-            result.success = True
-            return result
-
-        expires_match = re.search(r"Expires on[:\s]+(\d{1,2}/\d{1,2}/\d{4})", body, re.I)
-        if expires_match:
-            expires_on = datetime.strptime(expires_match.group(1), "%m/%d/%Y").date()
-            result.raw_status_text = f"Expires on {expires_on.strftime('%m/%d/%Y')}"
-            result.status = status_from_due_date(expires_on)
-            result.source_note = "Colorado public search exposes an Expires on date; status is derived from that date."
             result.success = True
             return result
 
