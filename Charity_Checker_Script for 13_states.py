@@ -13,6 +13,7 @@ from dataclasses import dataclass, asdict
 from datetime import datetime, date
 from pathlib import Path
 from typing import List, Optional
+from urllib.parse import quote
 
 try:
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -1489,6 +1490,45 @@ def search_md(page, org: Organization) -> StateResult:
             result.error = "MD search requires 9-digit EIN"
             return result
         formatted_ein = f"{ein[:2]}-{ein[2:]}"
+
+        md_ein_filter_id = "a87e8739-62de-600d-728c-6300bf865f9e"
+        entries_url = (
+            f"{url}/entries?_method=get"
+            f"&filter%5B{md_ein_filter_id}%5D={quote(formatted_ein)}"
+            f"&filter%5Blimit%5D=20"
+            f"&{md_ein_filter_id}={quote(formatted_ein)}"
+            "&limit=20&fake=false&forceNewQuery=false&query%5Bpage%5D=1&page=1"
+        )
+        try:
+            page.set_extra_http_headers({
+                "X-Requested-With": "XMLHttpRequest",
+                "Accept": "text/html, */*; q=0.01",
+            })
+            page.goto(entries_url, wait_until="domcontentloaded", timeout=20000)
+            body = page.locator("body").inner_text(timeout=5000)
+            body_digits = digits_only(body)
+            if ein in body_digits:
+                status_match = re.search(
+                    r"Registration Status:.*?var(?:\\u003e|>)\s*([^<\\]+?)\s*(?:\\u003c|<)/var",
+                    body,
+                    re.I | re.S,
+                )
+                if not status_match:
+                    status_match = re.search(r"Registration\s+Status[^A-Za-z0-9]{0,80}(Current|Delinquent|Expired|Active|Inactive)", body, re.I)
+                status_text = status_match.group(1).strip() if status_match else STATUS_UNKNOWN
+                result.raw_status_text = status_text
+                result.status = status_text
+                result.source_note = "Maryland uses the exact Registration Status from an EIN-confirmed public registry entries search."
+                result.success = True
+                return result
+            if re.search(r'"entries"\s*:\s*\[\s*\]|No\s+results\s+found', body, re.I):
+                result.raw_status_text = "No record found"
+                result.status = STATUS_NOT_REGISTERED
+                result.source_note = "Maryland entries search returned no matching EIN record."
+                result.success = True
+                return result
+        except Exception:
+            pass
 
         page.goto(url, wait_until="domcontentloaded", timeout=15000)
         safe_wait_for_network_idle(page, timeout=750)
