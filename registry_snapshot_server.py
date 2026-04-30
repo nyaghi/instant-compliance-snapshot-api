@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.30.14"
+APP_VERSION = "2026.04.30.15"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -2139,6 +2139,8 @@ def md_detail_page_matched(result, text: str) -> bool:
     readable = re.sub(r"\s+", " ", readable)
     ein_digits = re.sub(r"\D", "", result.ein or "")
     readable_digits = re.sub(r"\D", "", readable)
+    if ein_digits and ein_digits not in readable_digits:
+        return False
     exposes_ein = bool(
         re.search(r"\b(?:EIN|FEIN|Federal\s+Tax|Tax\s+ID|Employer\s+Identification)\b", readable, re.I)
         or re.search(r"\b\d{2}[-\s]?\d{7}\b|\b\d{9}\b", readable)
@@ -2590,7 +2592,13 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             elif state == "MD":
                 result = checker.search_md(page, org)
                 md_body = registry_page_body(page)
-                if re.search(r"Maryland record found", " ".join([result.raw_status_text or "", result.source_note or ""]), re.I) and not capture_source_snapshot:
+                if public_status(result) != "Not Registered" and not md_detail_page_matched(result, md_body):
+                    result.raw_status_text = "No matching EIN result"
+                    result.status = checker.STATUS_NOT_REGISTERED
+                    result.source_note = "Maryland search did not confirm a public registry record matching the requested EIN."
+                    result.success = True
+                    body = md_no_results_body(page)
+                elif re.search(r"Maryland record found", " ".join([result.raw_status_text or "", result.source_note or ""]), re.I) and not capture_source_snapshot:
                     body = md_body
                 elif md_detail_page_matched(result, md_body):
                     result.status = result.raw_status_text if result.raw_status_text and result.raw_status_text != "No matching EIN result" else checker.STATUS_UNKNOWN
