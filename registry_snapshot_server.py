@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.30.16"
+APP_VERSION = "2026.04.30.17"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -2176,8 +2176,8 @@ def status_from_calendar_date(value: date) -> str:
 def labeled_due_dates_from_text(text: str) -> list[date]:
     dates = []
     due_patterns = [
-        r"(?:due date|renewal due|filing due|annual report due|registration expires|registration expiration|expiration date|expires on|expires)\s*:?\s*([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
-        r"(?:due date|renewal due|filing due|annual report due|registration expires|registration expiration|expiration date|expires on|expires)\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})",
+        r"(?:due date|renewal due|filing due|annual report due|registration expires|registration expiration|expiration date|expires on|expired on|expires|expired)\s*:?\s*([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+        r"(?:due date|renewal due|filing due|annual report due|registration expires|registration expiration|expiration date|expires on|expired on|expires|expired)\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})",
     ]
     for pattern in due_patterns:
         for match in re.finditer(pattern, text or "", re.I):
@@ -2194,8 +2194,8 @@ def explicit_registry_date(result, body: str) -> date | None:
     if raw_date and re.fullmatch(r"\s*(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}-[A-Za-z]{3}-\d{2,4})\s*", result.raw_status_text or ""):
         return raw_date
     patterns = [
-        rf"(?:expires|expiration date|registration expires|automatic extension)\s*:?\s*([A-Za-z]{{3,9}}\s+\d{{1,2}},\s+\d{{4}})",
-        rf"(?:expires|expiration date|registration expires|automatic extension)\s*:?\s*(\d{{1,2}}[/-]\d{{1,2}}[/-]\d{{4}})",
+        rf"(?:expires|expired|expired on|expiration date|registration expires|automatic extension)\s*:?\s*([A-Za-z]{{3,9}}\s+\d{{1,2}},\s+\d{{4}})",
+        rf"(?:expires|expired|expired on|expiration date|registration expires|automatic extension)\s*:?\s*(\d{{1,2}}[/-]\d{{1,2}}[/-]\d{{4}})",
         r"^\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})\s*$",
     ]
     for source in [focused, text]:
@@ -2400,6 +2400,11 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         )
     if normalized_status == "delinquent" and re.search(r"\b(closed|inactive)\b", " ".join([result.status or "", result.raw_status_text or ""]), re.I):
         return f"The {state} public registry shows a found organization record with a closed or inactive registration status."
+    if state == "CO" and normalized_status == "delinquent" and re.search(r"\b(expired|may not solicit)\b", combined_result_text(result, body), re.I):
+        registry_date = explicit_registry_date(result, body)
+        if registry_date:
+            return f"The CO public registry shows an expiration date of {format_date(registry_date)}, which is overdue."
+        return "The CO public registry shows an expired registration status, which Charity Clarity treats as Delinquent."
     if normalized_status == "delinquent" and annual_filings_absent(combined_result_text(result, body)):
         return (
             f"The {state} public registry detail page shows the organization record, but the annual filing section shows no annual filings available "
