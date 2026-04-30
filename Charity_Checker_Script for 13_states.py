@@ -1281,6 +1281,15 @@ def search_pa(page, org: Organization) -> StateResult:
 
         row_text, expiration_raw = extract_pa_result_expiration(page, ein, org.organization_name)
         if not row_text:
+            formatted_ein = format_ein_with_dash(ein)
+            if formatted_ein and formatted_ein != ein:
+                retry_input = find_pa_ein_input(page)
+                if retry_input:
+                    retry_input.fill("")
+                    retry_input.fill(formatted_ein)
+                    if click_pa_search_button(page):
+                        row_text, expiration_raw = extract_pa_result_expiration(page, ein, org.organization_name)
+        if not row_text:
             result.raw_status_text = "No matching EIN result"
             result.status = STATUS_NOT_REGISTERED
             result.source_note = "PA search results did not contain a matching EIN row."
