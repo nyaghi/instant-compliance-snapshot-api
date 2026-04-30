@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.30.17"
+APP_VERSION = "2026.04.30.18"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -2139,6 +2139,9 @@ def md_detail_page_matched(result, text: str) -> bool:
     readable = re.sub(r"\s+", " ", readable)
     ein_digits = re.sub(r"\D", "", result.ein or "")
     readable_digits = re.sub(r"\D", "", readable)
+    source_note = result.source_note or ""
+    if re.search(r"EIN-confirmed public registry search", source_note, re.I):
+        return bool(re.search(r"SOS\s+Charity\s+Organization\s+Record|Charity\s+Name|Registration\s+Status", readable, re.I))
     if ein_digits and ein_digits not in readable_digits:
         return False
     exposes_ein = bool(
