@@ -2092,6 +2092,8 @@ def search_hi(page, org: Organization) -> StateResult:
                         if not row_text or re.search(r"no data available in table", row_text, re.I):
                             continue
                         row_digits = digits_only(row_text)
+                        if ein_digits and ein_digits not in row_digits:
+                            continue
                         link_text = ""
                         try:
                             links = row.locator("a[href]")
