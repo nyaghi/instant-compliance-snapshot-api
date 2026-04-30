@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.30.1"
+APP_VERSION = "2026.04.30.2"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -970,6 +970,17 @@ def latest_year_from_text(body: str, state: str) -> int | None:
         if tab_years:
             return max(tab_years)
     readable_body = html.unescape(re.sub(r"<[^>]+>", " ", body))
+    if state == "MD":
+        md_patterns = [
+            r"Most\s+Recent\s+Fiscal\s+Year\s*:?\s*(20\d{2})",
+            r"Last\s+Year\s+Represented\s*:?\s*(20\d{2})",
+            r"Year\s+Represented\s*:?\s*(20\d{2})",
+        ]
+        md_years = []
+        for pattern in md_patterns:
+            for match in re.finditer(pattern, readable_body, re.I):
+                md_years.append(int(match.group(1)))
+        return max(md_years) if md_years else None
     patterns = [
         r"Most\s+Recent\s+Fiscal\s+Year\s*:?\s*(20\d{2})",
         r"Last\s+Year\s+Represented\s*:?\s*(20\d{2})",
@@ -1051,15 +1062,7 @@ def filing_context(result, body: str) -> dict:
         and re.search(r"\bCurrent\b", " ".join([result.status or "", result.raw_status_text or ""]), re.I)
     ):
         latest_year = None
-    md_record_found = (
-        state == "MD"
-        and period_end
-        and not re.search(r"no matching|no record|not found|no results|0 records|0 results", combined_result_text(result, body), re.I)
-        and re.search(r"Maryland record found|record found|detail page was reached|matching record", combined_result_text(result, body), re.I)
-    )
-    if md_record_found:
-        latest_year = max(latest_year or 0, period_end.year)
-    if latest_year is None and period_end and state != "CA":
+    if latest_year is None and period_end and state not in {"CA", "MD"}:
         latest_year = period_end.year
     registry_fiscal_end = fiscal_year_end_from_body(body, state)
     fiscal_end = registry_fiscal_end or fiscal_year_end_for_ein(result.ein)
@@ -2307,6 +2310,11 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         return f"The {state} public registry indicates the organization is exempt from charitable registration or annual filing requirements in that state."
     if state == "CA" and normalized_status == "current" and not context.get("due_date"):
         return "The CA public registry shows Registry Status Current. Charity Clarity did not identify a delinquency in this quick check."
+    if state == "MD" and normalized_status == "current" and not context.get("represented_year"):
+        return (
+            "The MD public registry shows Registration Status: Current. Charity Clarity did not identify a Maryland filing-year value "
+            "from the public snapshot, so this quick check treats the registry status as Current without citing a specific annual filing year."
+        )
     if normalized_status == "delinquent" and re.search(r"\b(closed|inactive)\b", " ".join([result.status or "", result.raw_status_text or ""]), re.I):
         return f"The {state} public registry shows a found organization record with a closed or inactive registration status."
     if normalized_status == "delinquent" and annual_filings_absent(combined_result_text(result, body)):
