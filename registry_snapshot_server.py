@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.30.3"
+APP_VERSION = "2026.04.30.4"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -971,18 +971,18 @@ def latest_year_from_text(body: str, state: str) -> int | None:
             return max(tab_years)
     readable_body = html.unescape(re.sub(r"<[^>]+>", " ", body))
     if state == "MD":
-        if not re.search(r"SOS\s+Charity\s+Organization\s+Record\s+for", readable_body, re.I):
-            return None
         md_patterns = [
             r"Most\s+Recent\s+Fiscal\s+Year\s*:?\s*(20\d{2})",
             r"Last\s+Year\s+Represented\s*:?\s*(20\d{2})",
             r"Year\s+Represented\s*:?\s*(20\d{2})",
         ]
-        md_years = []
+        md_matches = []
         for pattern in md_patterns:
             for match in re.finditer(pattern, readable_body, re.I):
-                md_years.append(int(match.group(1)))
-        return max(md_years) if md_years else None
+                md_matches.append((match.start(), int(match.group(1))))
+        if md_matches:
+            return sorted(md_matches, key=lambda item: item[0])[0][1]
+        return None
     patterns = [
         r"Most\s+Recent\s+Fiscal\s+Year\s*:?\s*(20\d{2})",
         r"Last\s+Year\s+Represented\s*:?\s*(20\d{2})",
