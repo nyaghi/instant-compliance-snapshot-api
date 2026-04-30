@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.30.19"
+APP_VERSION = "2026.04.30.20"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -2592,11 +2592,13 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
     body = ""
     proof_url = None
 
+    result = None
     with checker.sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = None
         context = None
         page = None
         try:
+            browser = p.chromium.launch(headless=True)
             if state == "AK":
                 result, body = search_ak_with_registration_evidence(browser, org, artifact_name)
             else:
@@ -2673,10 +2675,25 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                         save_focused_viewport_artifact(page, state, artifact_name)
                 elif CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT or capture_source_snapshot:
                     save_focused_viewport_artifact(page, state, artifact_name)
+        except Exception as exc:
+            log_error(f"{state} lookup for {format_ein(ein)} failed before completion: {exc}")
+            result = checker.StateResult(organization_name or f"EIN {format_ein(ein)}", format_ein(ein), state, "Site Not Reachable", "")
+            result.raw_status_text = "Lookup could not be completed"
+            result.source_note = "Public registry lookup could not be completed."
+            result.error = str(exc)
+            result.success = False
         finally:
             if context:
                 context.close()
-            browser.close()
+            if browser:
+                browser.close()
+
+    if result is None:
+        result = checker.StateResult(organization_name or f"EIN {format_ein(ein)}", format_ein(ein), state, "Site Not Reachable", "")
+        result.raw_status_text = "Browser launch failed"
+        result.source_note = "Public registry lookup could not start because the browser runtime was unavailable."
+        result.error = "Browser launch failed"
+        result.success = False
 
     result.source_note = source_note_for_result(result)
     data = checker.asdict(result)
