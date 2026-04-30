@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.30.5"
+APP_VERSION = "2026.04.30.6"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -861,7 +861,7 @@ def filing_due_date(state: str, report_year: int, fiscal_end: tuple[int, int]) -
                 f"California annual filing base due date is {format_date(base_due)}; "
                 f"if an extension was applied, the extended due date is {format_date(extended_due)}"
             )
-        base_due = add_months(fy_end, 4) + timedelta(days=15)
+        base_due = fifteenth_day_after_fiscal_year_end(fy_end, 5)
         extended_due = add_months(base_due, 6)
         effective_due = base_due if base_due >= date.today() else extended_due
         return effective_due, (
@@ -921,7 +921,7 @@ def filing_due_date_options(state: str, report_year: int, fiscal_end: tuple[int,
     state = state.upper()
     fy_end = date(report_year, fiscal_end[0], fiscal_end[1])
     if state == "CA":
-        base_due = date(report_year, 12, 31) if fiscal_end == (6, 30) else add_months(fy_end, 4) + timedelta(days=15)
+        base_due = date(report_year, 12, 31) if fiscal_end == (6, 30) else fifteenth_day_after_fiscal_year_end(fy_end, 5)
     elif state == "MD":
         base_due = add_months(fy_end, 6)
     elif state in {"MA", "NY", "HI", "SC"}:
