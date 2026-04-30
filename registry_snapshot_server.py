@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.30.6"
+APP_VERSION = "2026.04.30.7"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -79,6 +79,7 @@ DEVICE_LIMIT_PATH = Path(__file__).with_name("registry_snapshot_device_limits.js
 PIN_STORE: dict[str, dict] = {}
 VERIFICATION_TOKENS: dict[str, dict] = {}
 ORG_NAME_CACHE: dict[str, str] = {}
+PUBLIC_PROFILE_CACHE: dict[str, dict] = {}
 FISCAL_YEAR_END_OVERRIDES = {
     "208428450": (6, 30),
     "546053660": (6, 30),
@@ -803,20 +804,31 @@ def organization_name_for_ein(ein: str) -> str:
     return ""
 
 
+def public_profile_for_ein(ein: str) -> dict:
+    target = re.sub(r"\D", "", ein or "")
+    if len(target) != 9:
+        return {}
+    if target in PUBLIC_PROFILE_CACHE:
+        return PUBLIC_PROFILE_CACHE[target]
+    try:
+        url = f"https://projects.propublica.org/nonprofits/api/v2/organizations/{target}.json"
+        request = urllib.request.Request(url, headers={"User-Agent": "ComplianceExpressRegistrySnapshot/1.0"})
+        with urllib.request.urlopen(request, timeout=12) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="ignore"))
+    except Exception:
+        payload = {}
+    PUBLIC_PROFILE_CACHE[target] = payload
+    return payload
+
+
 def public_profile_name_for_ein(ein: str) -> str:
     target = re.sub(r"\D", "", ein or "")
     if len(target) != 9:
         return ""
     if target in ORG_NAME_CACHE:
         return ORG_NAME_CACHE[target]
-    try:
-        url = f"https://projects.propublica.org/nonprofits/api/v2/organizations/{target}.json"
-        request = urllib.request.Request(url, headers={"User-Agent": "ComplianceExpressRegistrySnapshot/1.0"})
-        with urllib.request.urlopen(request, timeout=12) as response:
-            payload = json.loads(response.read().decode("utf-8", errors="ignore"))
-        name = ((payload.get("organization") or {}).get("name") or "").strip()
-    except Exception:
-        name = ""
+    payload = public_profile_for_ein(ein)
+    name = ((payload.get("organization") or {}).get("name") or "").strip()
     ORG_NAME_CACHE[target] = name
     return name
 
@@ -842,6 +854,26 @@ def fiscal_year_end_for_ein(ein: str) -> tuple[int, int] | None:
     _, period_end = fiscal_period_for_ein(ein)
     if period_end:
         return period_end.month, period_end.day
+    payload = public_profile_for_ein(ein)
+    filings = payload.get("filings_with_data") or []
+    for filing in filings:
+        raw_period = str(filing.get("tax_prd") or "")
+        match = re.fullmatch(r"(\d{4})(\d{2})", raw_period)
+        if match:
+            year = int(match.group(1))
+            month = int(match.group(2))
+            if 1 <= month <= 12:
+                return month, calendar.monthrange(year, month)[1]
+    raw_tax_period = str((payload.get("organization") or {}).get("tax_period") or "")
+    match = re.match(r"(\d{4})-(\d{1,2})-(\d{1,2})", raw_tax_period)
+    if match:
+        year = int(match.group(1))
+        month = int(match.group(2))
+        day = int(match.group(3))
+        if 1 <= month <= 12:
+            if day == 1:
+                day = calendar.monthrange(year, month)[1]
+            return month, min(day, calendar.monthrange(year, month)[1])
     return None
 
 
