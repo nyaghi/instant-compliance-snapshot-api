@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.30.4"
+APP_VERSION = "2026.04.30.5"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1050,13 +1050,50 @@ def latest_year_from_text(body: str, state: str) -> int | None:
     return max(years) if years else None
 
 
+def md_represented_year_from_text(body: str, ein: str = "", organization_name: str = "") -> int | None:
+    readable = html.unescape(re.sub(r"<[^>]+>", " ", body or ""))
+    readable = re.sub(r"\s+", " ", readable)
+    patterns = [
+        r"Most\s+Recent\s+Fiscal\s+Year\s*:?\s*(20\d{2})",
+        r"Last\s+Year\s+Represented\s*:?\s*(20\d{2})",
+        r"Year\s+Represented\s*:?\s*(20\d{2})",
+    ]
+    ein_digits = re.sub(r"\D", "", ein or "")
+    normalize = getattr(checker, "normalize_name", lambda value: re.sub(r"\s+", " ", (value or "").lower()).strip())
+    normalized_name = normalize(organization_name)
+    candidates = []
+    for pattern in patterns:
+        for match in re.finditer(pattern, readable, re.I):
+            start = match.start()
+            window = readable[max(0, start - 1800): start + 1800]
+            window_digits = re.sub(r"\D", "", window)
+            score = 0
+            if ein_digits and ein_digits in window_digits:
+                score += 3
+            if normalized_name and normalized_name in normalize(window):
+                score += 2
+            if re.search(r"Charity\s+Details|Organization\s+Income|Organization\s+Expenses|Charity\s+EIN", window, re.I):
+                score += 1
+            candidates.append({"year": int(match.group(1)), "start": start, "score": score})
+    if not candidates:
+        return None
+    scored = [candidate for candidate in candidates if candidate["score"] > 0]
+    if scored:
+        best_score = max(candidate["score"] for candidate in scored)
+        return max(candidate["year"] for candidate in scored if candidate["score"] == best_score)
+    return sorted(candidates, key=lambda item: item["start"])[0]["year"]
+
+
 def filing_context(result, body: str) -> dict:
-    latest_year = latest_year_from_text(body, result.state)
+    state = (result.state or "").upper()
+    if state == "MD":
+        latest_year = md_represented_year_from_text(body, result.ein, result.organization_name)
+    else:
+        latest_year = latest_year_from_text(body, result.state)
     if latest_year is None and re.search(r"registration\s+found|year\s+represented|latest|most\s+recent|filing\s+year", result.raw_status_text or "", re.I):
         year_match = re.search(r"(20\d{2})", result.raw_status_text or "")
         latest_year = int(year_match.group(1)) if year_match else None
     period_start, period_end = fiscal_period_for_ein(result.ein)
-    state = (result.state or "").upper()
     if (
         state == "CA"
         and latest_year is not None
