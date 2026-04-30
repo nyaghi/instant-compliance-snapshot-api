@@ -2063,7 +2063,11 @@ def search_hi(page, org: Organization) -> StateResult:
         fast_sleep(3)
 
         body = page.locator("body").inner_text(timeout=15000)
-        if re.search(r"no results|no records|0 results|showing 0 to 0 of 0 entries|no data available in table", body, re.I):
+        if re.search(
+            r"no results|no records|0 results|showing 0 to 0 of 0 entries|no data available in table|not registered in our system",
+            body,
+            re.I,
+        ):
             result.raw_status_text = "No record found"
             result.status = STATUS_NOT_REGISTERED
             result.source_note = "Hawaii search returned no matching organization result."
