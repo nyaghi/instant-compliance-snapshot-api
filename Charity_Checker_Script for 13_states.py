@@ -1619,6 +1619,10 @@ def search_md(page, org: Organization) -> StateResult:
             name_input.fill(search_value)
             fast_sleep(0.25)
             click_md_search(name_input)
+            try:
+                name_input.press("Enter")
+            except Exception:
+                pass
 
         def wait_for_md_match() -> str:
             local_body = ""
@@ -1652,6 +1656,8 @@ def search_md(page, org: Organization) -> StateResult:
             variants.append(re.sub(r",\s*the\s*$", "", raw, flags=re.I).strip())
             variants.append(re.sub(r"^the\s+", "", raw, flags=re.I).strip())
             variants.append(re.sub(r"\bincorporated\b", "inc", raw, flags=re.I).strip())
+            variants.append(re.sub(r"\b(the|inc|incorporated|corp|corporation|foundation)\b\.?", " ", raw, flags=re.I).strip())
+            variants.append(re.sub(r"[^A-Za-z0-9 ]+", " ", raw).strip())
             seen = set()
             output = []
             for variant in variants:
