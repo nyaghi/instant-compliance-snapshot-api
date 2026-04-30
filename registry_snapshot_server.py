@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.30.13"
+APP_VERSION = "2026.04.30.14"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1775,7 +1775,9 @@ def search_hi_precise(page, org):
                                 row_digits = re.sub(r"\D", "", row_text)
                                 row_name = checker.normalize_name(row_text)
                                 name_match = any(name and (name in row_name or row_name in name) for name in wanted_variants)
-                                if ein_digits and ein_digits not in row_digits and not name_match:
+                                if ein_digits and ein_digits not in row_digits:
+                                    continue
+                                if not ein_digits and not name_match:
                                     continue
                                 links = row.locator("a[href]")
                                 if selector == "a[href]":
@@ -1809,6 +1811,12 @@ def search_hi_precise(page, org):
         checker.safe_wait_for_network_idle(page, timeout=20000)
         time.sleep(2)
         detail_text = page.locator("body").inner_text(timeout=12000)
+        detail_ein = (
+            checker.extract_labeled_value(page, ["FEIN", "Federal Tax ID (EIN)", "Federal Tax ID", "EIN"])
+            or checker.extract_labeled_value_from_text(detail_text, ["FEIN", "Federal Tax ID (EIN)", "Federal Tax ID", "EIN"])
+        )
+        if ein_digits and detail_ein and re.sub(r"\D", "", detail_ein) != ein_digits:
+            return checker.reject_wrong_ein_result(result, "Hawaii")
         status_text = checker.extract_labeled_value(page, ["Registration Status", "Status"]) or checker.extract_labeled_value_from_text(detail_text, ["Registration Status", "Status"])
         result.raw_status_text = status_text
         result.status = status_text if status_text else checker.STATUS_UNKNOWN
