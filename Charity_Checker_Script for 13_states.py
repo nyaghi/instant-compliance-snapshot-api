@@ -2148,6 +2148,8 @@ def search_hi(page, org: Organization) -> StateResult:
         fast_sleep(2)
 
         detail_text = page.locator("body").inner_text(timeout=12000)
+        if not text_contains_requested_ein(detail_text, org.ein):
+            return reject_wrong_ein_result(result, "Hawaii")
         status_text = extract_labeled_value(page, ["Registration Status"])
         if not status_text:
             status_text = extract_labeled_value_from_text(detail_text, ["Registration Status"])
