@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.04.30.7"
+APP_VERSION = "2026.04.30.8"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -2308,6 +2308,8 @@ def true_status_from_body(result, body: str) -> str:
         return "Not Registered"
     if indicates_exempt_registration(combined):
         return "Exempt"
+    if state == "PA" and use_registry_date:
+        return status_from_calendar_date(registry_date)
     if state in EXTENSION_SCENARIO_STATES and record_confirmed and represented_year and due_date:
         return status_from_calendar_date(due_date)
     if state == "AK" and re.search(r"\b20\d{2}\s+registration\s+found\b", combined, re.I):
@@ -2407,6 +2409,13 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
             or re.search(r"due date|next report|renewal|expiration|expires|automatic extension", " ".join([result.raw_status_text or "", result.source_note or ""]), re.I)
         )
     )
+    if state == "PA" and use_registry_date and normalized_status in {"upcoming filing", "current", "delinquent"}:
+        registry_status = status_from_calendar_date(registry_date).lower()
+        if registry_status == "upcoming filing":
+            return f"The PA public registry shows an expiration date of {format_date(registry_date)}, which is within 6 months."
+        if registry_status == "current":
+            return f"The PA public registry shows an expiration date of {format_date(registry_date)}, which is not within the next 6 months."
+        return f"The PA public registry shows an expiration date of {format_date(registry_date)}, which is overdue."
     if normalized_status == "current" and current_cycle_already_filed(state, context.get("represented_year"), registry_date):
         if state == "AK":
             return (
