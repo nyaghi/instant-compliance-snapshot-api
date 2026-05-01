@@ -1460,13 +1460,15 @@ def click_va_organization_link(page, org_name: str) -> bool:
                     link.click(timeout=5000)
                     return True
                 if wanted and (wanted in normalized or normalized in wanted):
-                    candidates.append(link)
+                    score = 2 if normalized.startswith(wanted) or wanted.startswith(normalized) else 1
+                    candidates.append((score, link))
             except Exception:
                 continue
     except Exception:
         pass
     if candidates:
-        candidates[0].click(timeout=5000)
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        candidates[0][1].click(timeout=5000)
         return True
     return False
 
@@ -2104,13 +2106,15 @@ def search_sc(page, org: Organization) -> StateResult:
                         clicked_result = True
                         break
                     if wanted and (wanted in normalized or normalized in wanted):
-                        candidates.append(link)
+                        score = 2 if normalized.startswith(wanted) or wanted.startswith(normalized) else 1
+                        candidates.append((score, link))
                 except Exception:
                     continue
         except Exception:
             pass
         if not clicked_result and candidates:
-            candidates[0].click(timeout=5000)
+            candidates.sort(key=lambda item: item[0], reverse=True)
+            candidates[0][1].click(timeout=5000)
             clicked_result = True
         if not clicked_result:
             result.raw_status_text = "No matching organization result"
@@ -2762,10 +2766,19 @@ def search_nd(page, org: Organization) -> StateResult:
                         if not item.is_visible(timeout=750):
                             continue
                         txt = item.inner_text(timeout=1500)
+                        row_txt = txt
+                        try:
+                            row_txt = item.locator("xpath=ancestor::*[self::tr or @role='row' or contains(@class,'row')][1]").inner_text(timeout=1000)
+                        except Exception:
+                            try:
+                                row_txt = item.locator("xpath=ancestor::div[contains(@class,'row')][1]").inner_text(timeout=1000)
+                            except Exception:
+                                row_txt = txt
+                        combined_txt = re.sub(r"\s+", " ", f"{txt} {row_txt}").strip()
                         lines = [re.sub(r"\s+", " ", ln).strip() for ln in txt.splitlines() if ln.strip()]
                         if not lines:
                             continue
-                        if text_has_wrong_ein_match(txt, org.ein):
+                        if text_has_wrong_ein_match(combined_txt, org.ein):
                             continue
                         name_text = lines[0]
                         name_exact = name_text.upper()
@@ -2778,10 +2791,10 @@ def search_nd(page, org: Organization) -> StateResult:
                         elif target_normalized and (target_normalized in name_normalized or name_normalized in target_normalized):
                             priority = 1
                         status_score = 0
-                        if re.search(r"\b(active|current|good standing|registered)\b", txt, re.I):
-                            status_score += 3
-                        if re.search(r"\b(inactive|closed|expired|failed|revoked|terminated|withdrawn|cancelled|canceled)\b", txt, re.I):
-                            status_score -= 5
+                        if re.search(r"\b(active|current|good standing|registered)\b", combined_txt, re.I):
+                            status_score += 5
+                        if re.search(r"\b(inactive|closed|expired|failed|failed to renew|revoked|terminated|withdrawn|cancelled|canceled)\b", combined_txt, re.I):
+                            status_score -= 8
                         if (priority, status_score) > (best_priority, best_status_score):
                             best_priority = priority
                             best_status_score = status_score
