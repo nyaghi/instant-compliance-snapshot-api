@@ -787,15 +787,13 @@ def search_ma(page, org: Organization) -> StateResult:
             except Exception:
                 pass
         safe_wait_for_network_idle(page, timeout=25000)
-        for _ in range(12):
+        for _ in range(15):
             fast_sleep(1)
             try:
                 loading_text = page.locator("body").inner_text(timeout=5000)
             except Exception:
                 continue
             if re.search(r"Form[\s-]*PC|No documents found|No rows available", loading_text, re.I):
-                break
-            if not re.search(r"Please wait,\s*Fetching the available filings", loading_text, re.I):
                 break
 
         try:
