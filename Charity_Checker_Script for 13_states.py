@@ -1297,6 +1297,13 @@ def search_pa(page, org: Organization) -> StateResult:
             result.success = True
             return result
 
+        if re.search(r"\bexempt\b", row_text or "", re.I):
+            result.raw_status_text = "Exempt"
+            result.status = "Exempt"
+            result.source_note = "Pennsylvania matched result row indicates an exempt registration status."
+            result.success = True
+            return result
+
         expiration_date = parse_date_value(expiration_raw)
         if expiration_date:
             result.raw_status_text = expiration_raw
