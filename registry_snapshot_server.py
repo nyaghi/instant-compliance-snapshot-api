@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.01.2"
+APP_VERSION = "2026.05.01.3"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -2201,6 +2201,20 @@ def indicates_exempt_registration(text: str) -> bool:
     )
 
 
+def result_explicitly_exempt(result) -> bool:
+    """Only trust exemption when it comes from the matched result fields."""
+    status_text = " ".join([
+        result.status or "",
+        result.raw_status_text or "",
+        result.source_note or "",
+    ])
+    return bool(re.search(
+        r"\b(exempt|exempt\s+registration|exempt\s+from\s+(?:charitable\s+|annual\s+)?registration)\b",
+        status_text,
+        re.I,
+    ))
+
+
 def md_detail_page_matched(result, text: str) -> bool:
     readable = html.unescape(re.sub(r"<[^>]+>", " ", text or ""))
     readable = re.sub(r"\s+", " ", readable)
@@ -2386,7 +2400,7 @@ def true_status_from_body(result, body: str) -> str:
         )
     )
 
-    if indicates_exempt_registration(combined):
+    if result_explicitly_exempt(result):
         return "Exempt"
 
     if state == "MD" and md_detail_page_matched(result, combined):
@@ -2404,6 +2418,8 @@ def true_status_from_body(result, body: str) -> str:
 
     if result_indicates_no_record(result):
         return "Not Registered"
+    if record_confirmed and indicates_exempt_registration(combined):
+        return "Exempt"
     if state == "PA" and use_registry_date:
         return status_from_calendar_date(registry_date)
     if state in EXTENSION_SCENARIO_STATES and record_confirmed and represented_year and due_date:
