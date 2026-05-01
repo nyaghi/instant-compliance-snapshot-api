@@ -347,20 +347,23 @@ def classify_ak_registration_year(registration_year: int, accounting_year_end: O
 
 def open_ak_public_search(page) -> bool:
     for _ in range(4):
-        page.goto(AK_SEARCH_URL, wait_until="domcontentloaded", timeout=60000)
-        fast_sleep(3.5)
-        if page.locator("#Dq-8").count() > 0:
-            return True
-        public_search = page.locator("#l_Df-3-1")
-        if public_search.count() > 0:
-            try:
-                public_search.first.click(timeout=30000, force=True)
-            except Exception:
-                pass
-            fast_sleep(3)
+        try:
+            page.goto(AK_SEARCH_URL, wait_until="domcontentloaded", timeout=60000)
+            fast_sleep(3.5)
             if page.locator("#Dq-8").count() > 0:
                 return True
-        fast_sleep(2)
+            public_search = page.locator("#l_Df-3-1")
+            if public_search.count() > 0:
+                try:
+                    public_search.first.click(timeout=30000, force=True)
+                except Exception:
+                    pass
+                fast_sleep(3)
+                if page.locator("#Dq-8").count() > 0:
+                    return True
+        except Exception:
+            pass
+        fast_sleep(3)
     return False
 
 def fill_ak_search_form(page, org: Organization, year: int) -> None:
@@ -386,7 +389,7 @@ def find_ak_print_link(page, org: Organization):
 
             for (const row of rows) {
                 const rowText = (row.innerText || row.textContent || '').trim().replace(/\\s+/g, ' ');
-                if (!rowText.includes(ein) || !normalize(rowText).includes(targetOrg)) {
+                if (!rowText.includes(ein)) {
                     continue;
                 }
 
@@ -1092,7 +1095,7 @@ def search_ak(browser, org: Organization, artifacts_dir: Optional[Path] = None) 
         try:
             if not open_ak_public_search(ak_page):
                 result.error = "Could not open Alaska Public Search form"
-                return result
+                continue
 
             fill_ak_search_form(ak_page, org, year)
             print_link = find_ak_print_link(ak_page, org)
@@ -1112,9 +1115,12 @@ def search_ak(browser, org: Organization, artifacts_dir: Optional[Path] = None) 
             return result
         except Exception as e:
             result.error = f"AK error: {e}"
-            return result
+            continue
         finally:
             ak_context.close()
+
+    if result.error:
+        return result
 
     checked_years = ", ".join(str(year) for year in AK_YEARS_TO_TRY)
     result.raw_status_text = f"No Alaska registration found for checked years {checked_years}"
