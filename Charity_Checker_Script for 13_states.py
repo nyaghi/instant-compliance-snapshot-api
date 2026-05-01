@@ -2438,6 +2438,7 @@ def search_me(page, org: Organization) -> StateResult:
         best_link = None
         best_priority = -1
         best_status_priority = -999
+        best_row_text = ""
         for selector in ["a[href*='ShowDetail.aspx']", "a[href]"]:
             try:
                 links = page.locator(selector)
@@ -2460,6 +2461,7 @@ def search_me(page, org: Organization) -> StateResult:
                         elif target_normalized and (target_normalized in link_normalized or link_normalized in target_normalized):
                             priority = 1
                         status_priority = 0
+                        row_text = txt
                         try:
                             row_text = re.sub(r"\s+", " ", link.locator("xpath=ancestor::tr[1]").inner_text(timeout=1500)).strip()
                             if re.search(r"\bACTIVE\b", row_text, re.I):
@@ -2474,6 +2476,7 @@ def search_me(page, org: Organization) -> StateResult:
                             best_priority = priority
                             best_status_priority = status_priority
                             best_link = link
+                            best_row_text = row_text
                     except Exception:
                         continue
             except Exception:
@@ -2483,6 +2486,19 @@ def search_me(page, org: Organization) -> StateResult:
             result.raw_status_text = "No matching organization result"
             result.status = STATUS_NOT_REGISTERED
             result.source_note = "Maine search results did not contain a matching organization link."
+            result.success = True
+            return result
+
+        row_status_match = re.search(
+            r"\b(ACTIVE|FAILED\s+TO\s+RENEW|EXPIRED|REVOKED|SUSPENDED|INACTIVE|CURRENT)\b",
+            best_row_text or "",
+            re.I,
+        )
+        if row_status_match:
+            row_status = re.sub(r"\s+", " ", row_status_match.group(1)).strip()
+            result.raw_status_text = row_status
+            result.status = row_status
+            result.source_note = "Maine uses the Status shown on the matched search result row."
             result.success = True
             return result
 
