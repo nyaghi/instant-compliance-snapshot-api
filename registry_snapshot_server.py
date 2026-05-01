@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.01.11"
+APP_VERSION = "2026.05.01.12"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1183,20 +1183,16 @@ def filing_context(result, body: str) -> dict:
         and re.search(r"\b(compliant|current|active)\b", " ".join([result.status or "", result.raw_status_text or "", body or ""]), re.I)
     ):
         latest_year = public_profile_latest_tax_year_for_ein(result.ein)
-    if (
-        latest_year is None
-        and state == "MA"
-        and not result_indicates_no_record(result)
-        and re.search(r"\b(record|account|tax\s*id|ag\s+account|annual\s+filings|form[- ]?pc|corporation)\b", " ".join([result.status or "", result.raw_status_text or "", body or ""]), re.I)
-    ):
-        latest_year = public_profile_latest_tax_year_for_ein(result.ein)
+    # For Massachusetts, do not substitute a ProPublica/IRS tax year for a
+    # state Form PC year. If the MA portal does not expose Annual Filings rows,
+    # the comment should say that instead of inventing a visible Form PC.
     if (
         latest_year is None
         and state == "CA"
         and re.search(r"\b(current|active|registered|compliant)\b", " ".join([result.status or "", result.raw_status_text or "", body or ""]), re.I)
     ):
         latest_year = public_profile_latest_tax_year_for_ein(result.ein)
-    if latest_year is None and period_end and state not in {"CA", "MD", "NJ"}:
+    if latest_year is None and period_end and state not in {"CA", "MA", "MD", "NJ"}:
         latest_year = period_end.year
     registry_fiscal_end = fiscal_year_end_from_body(body, state)
     fiscal_end = registry_fiscal_end or fiscal_year_end_for_ein(result.ein)
