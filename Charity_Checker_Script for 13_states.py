@@ -389,27 +389,54 @@ def fill_ak_search_form(page, org: Organization, year: int) -> None:
         submission = page.get_by_label(re.compile(r"Submission\s+type", re.I)).first
     submission.wait_for(state="visible", timeout=30000)
     submission.select_option(label="Charitable Organization")
+    try:
+        submission.dispatch_event("change")
+    except Exception:
+        pass
     fast_sleep(0.5)
     year_select = page.locator("#Dq-9")
     if year_select.count() == 0:
         year_select = page.get_by_label(re.compile(r"Year", re.I)).first
+    year_select.wait_for(state="visible", timeout=15000)
+    selected_year = False
     try:
         year_select.select_option(label=str(year))
+        selected_year = True
     except Exception:
         try:
             year_select.select_option(value=str(year))
+            selected_year = True
         except Exception:
             pass
+    if not selected_year:
+        try:
+            year_select.select_option(index=0)
+        except Exception:
+            pass
+    try:
+        year_select.dispatch_event("change")
+    except Exception:
+        pass
     fast_sleep(0.5)
     name_input = page.locator("#Dq-a")
     if name_input.count() == 0:
         name_input = page.get_by_label(re.compile(r"^Name$", re.I)).first
-    name_input.fill(org.organization_name)
+    try:
+        name_input.fill("")
+    except Exception:
+        pass
     fast_sleep(0.5)
     fein_input = page.locator("#Dq-b")
     if fein_input.count() == 0:
         fein_input = page.get_by_label(re.compile(r"FEIN", re.I)).first
-    fein_input.fill(format_ein_with_dash(org.ein))
+    fein_input.wait_for(state="visible", timeout=15000)
+    fein_input.fill("")
+    fein_input.type(format_ein_with_dash(org.ein), delay=40)
+    try:
+        fein_input.dispatch_event("input")
+        fein_input.dispatch_event("change")
+    except Exception:
+        pass
     fast_sleep(0.5)
     search_button = page.locator("#Dq-c")
     if search_button.count() == 0:
@@ -2724,6 +2751,7 @@ def search_nd(page, org: Organization) -> StateResult:
         target_normalized = normalize_name(org.organization_name)
         best_button = None
         best_priority = -1
+        best_status_score = -999
         for selector in ['div.interactive-cell-button', 'div[role="button"]']:
             try:
                 items = page.locator(selector)
@@ -2749,8 +2777,14 @@ def search_nd(page, org: Organization) -> StateResult:
                             priority = 2
                         elif target_normalized and (target_normalized in name_normalized or name_normalized in target_normalized):
                             priority = 1
-                        if priority > best_priority:
+                        status_score = 0
+                        if re.search(r"\b(active|current|good standing|registered)\b", txt, re.I):
+                            status_score += 3
+                        if re.search(r"\b(inactive|closed|expired|failed|revoked|terminated|withdrawn|cancelled|canceled)\b", txt, re.I):
+                            status_score -= 5
+                        if (priority, status_score) > (best_priority, best_status_score):
                             best_priority = priority
+                            best_status_score = status_score
                             best_button = item
                     except Exception:
                         continue
