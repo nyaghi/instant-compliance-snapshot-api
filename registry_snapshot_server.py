@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.01.9"
+APP_VERSION = "2026.05.01.10"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1420,6 +1420,14 @@ def organization_name_variants(name: str, ein: str = "") -> list[str]:
             flags=re.I,
         ).strip()
         compact_legal_suffixes = re.sub(r"\s+", " ", compact_legal_suffixes)
+        hyphenated_word_pairs = []
+        words = base.split()
+        if "-" not in base and 2 <= len(words) <= 8:
+            for idx in range(len(words) - 1):
+                pair_variant = words[:]
+                pair_variant[idx] = f"{pair_variant[idx]}-{pair_variant[idx + 1]}"
+                del pair_variant[idx + 1]
+                hyphenated_word_pairs.append(" ".join(pair_variant))
         for variant in [
             without_comma_suffix,
             without_suffix,
@@ -1433,6 +1441,7 @@ def organization_name_variants(name: str, ein: str = "") -> list[str]:
             compact_legal_suffixes,
             without_trailing_the,
             without_leading_the,
+            *hyphenated_word_pairs,
         ]:
             add(variant)
     return variants or [""]
