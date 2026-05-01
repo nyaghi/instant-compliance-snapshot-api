@@ -1559,8 +1559,15 @@ def search_va(page, org: Organization) -> StateResult:
 
         registration_status = extract_labeled_value(page, ["Registration Filing Status"])
         result.raw_status_text = registration_status
-        result.status = STATUS_UNKNOWN if registration_status else STATUS_UNKNOWN
-        result.source_note = "Virginia exposed only the informational Registration Filing Status, not a final public compliance status."
+        if re.search(r"not\s+authorized\s+to\s+solicit", registration_status or "", re.I):
+            result.status = STATUS_DELINQUENT
+            result.source_note = "Virginia public registry says the organization is not authorized to solicit in Virginia."
+        elif registration_status:
+            result.status = STATUS_UNKNOWN
+            result.source_note = "Virginia exposed only the informational Registration Filing Status, not a final public compliance status."
+        else:
+            result.status = STATUS_UNKNOWN
+            result.source_note = "Virginia did not expose a final public compliance status."
         result.success = True
         return result
 
