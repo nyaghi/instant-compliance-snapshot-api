@@ -56,13 +56,14 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.01.10"
+APP_VERSION = "2026.05.01.11"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
 REQUESTED_PARALLEL_LOOKUPS = max(1, int(os.environ.get("CE_MAX_PARALLEL_LOOKUPS", "1")))
-ALLOW_PARALLEL_BROWSER_LOOKUPS = os.environ.get("CE_ALLOW_PARALLEL_BROWSER_LOOKUPS", "0").strip().lower() in {"1", "true", "yes"}
-MAX_PARALLEL_LOOKUPS = REQUESTED_PARALLEL_LOOKUPS if ALLOW_PARALLEL_BROWSER_LOOKUPS else 1
+ALLOW_PARALLEL_BROWSER_LOOKUPS = os.environ.get("CE_ALLOW_PARALLEL_BROWSER_LOOKUPS", "1").strip().lower() in {"1", "true", "yes"}
+MAX_BROWSER_LOOKUPS = max(1, int(os.environ.get("CE_MAX_BROWSER_LOOKUPS", "2")))
+MAX_PARALLEL_LOOKUPS = min(REQUESTED_PARALLEL_LOOKUPS, MAX_BROWSER_LOOKUPS) if ALLOW_PARALLEL_BROWSER_LOOKUPS else 1
 BLOCK_HEAVY_BROWSER_RESOURCES = os.environ.get("CE_BLOCK_HEAVY_BROWSER_RESOURCES", "1").strip().lower() not in {"0", "false", "no"}
 EAGER_EVIDENCE_PDF = os.environ.get("CE_EAGER_EVIDENCE_PDF", "0").strip().lower() in {"1", "true", "yes"}
 CAPTURE_EVIDENCE_SCREENSHOTS = os.environ.get("CE_CAPTURE_EVIDENCE_SCREENSHOTS", "0").strip().lower() in {"1", "true", "yes"}
@@ -719,6 +720,8 @@ def public_status(result) -> str:
         return "Current"
     if "exempt" in normalized:
         return "Exempt"
+    if "suspended" in normalized:
+        return "Suspended"
     if "upcoming" in normalized or "due" in normalized:
         return "Upcoming Filing"
     if any(token in normalized for token in ["delinquent", "non-compliant", "non compliant", "expired", "revoked", "suspended", "overdue", "closed", "inactive"]):
@@ -860,9 +863,9 @@ def public_profile_latest_tax_year_for_ein(ein: str) -> int | None:
 
 def resolved_organization_name(ein: str, supplied_name: str = "") -> str:
     supplied_name = (supplied_name or "").strip()
-    if supplied_name:
-        return supplied_name
-    return organization_name_for_ein(ein) or public_profile_name_for_ein(ein)
+    profile_name = public_profile_name_for_ein(ein)
+    reference_name = organization_name_for_ein(ein)
+    return profile_name or reference_name or supplied_name
 
 
 def format_ein(value: str) -> str:
@@ -1060,7 +1063,12 @@ def latest_year_from_text(body: str, state: str) -> int | None:
             re.I,
         )
         if annual_match:
-            annual_years = [int(match.group(1)) for match in re.finditer(r"\b(20\d{2})\b", annual_match.group(1))]
+            annual_section = annual_match.group(1)
+            annual_years = []
+            for match in re.finditer(r"\b(20\d{2})\b[^\n\r]{0,140}\bForm[\s-]*PC\b", annual_section, re.I):
+                annual_years.append(int(match.group(1)))
+            for match in re.finditer(r"\bForm[\s-]*PC\b[^\n\r]{0,140}\b(20\d{2})\b", annual_section, re.I):
+                annual_years.append(int(match.group(1)))
             return max(annual_years) if annual_years else None
         return None
     if state == "CA":
@@ -2421,6 +2429,8 @@ def true_status_from_body(result, body: str) -> str:
 
     if "site not reachable" in normalized:
         return base_status
+    if normalized == "suspended":
+        return "Suspended"
     if (result.status or "").strip().lower() in {"closed", "inactive"} or (result.raw_status_text or "").strip().lower() in {"closed", "inactive"}:
         return "Delinquent"
 
@@ -2529,6 +2539,8 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         return f"The {state} public registry was reachable, but CharityClarity could not confirm a final interpreted status from the available registry page."
     if normalized_status == "exempt":
         return f"The {state} public registry indicates the organization is exempt from charitable registration or annual filing requirements in that state."
+    if normalized_status == "suspended":
+        return f"The {state} public registry shows the organization registration status as Suspended."
     if state == "CA" and normalized_status == "current" and not context.get("due_date"):
         return "The CA public registry shows Registry Status Current. CharityClarity did not identify a delinquency in this quick check."
     if state == "MD" and normalized_status == "current" and not context.get("represented_year"):
