@@ -33,7 +33,7 @@ STATUS_UPCOMING = "Upcoming Filing"
 STATUS_DELINQUENT = "Delinquent/Non-compliant"
 STATUS_UNKNOWN = "Unknown"
 
-AK_SEARCH_URL = "https://online-registrations-law.alaska.gov/TLP/WebDoc/_/#4"
+AK_SEARCH_URL = "https://online-registrations-law.alaska.gov/TLP/WebDoc/?link=PubQry"
 AK_YEARS_TO_TRY = [2026, 2025, 2024, 2023]
 FAST_WAIT_MAX_MS = max(750, min(int(os.environ.get("CE_FAST_WAIT_MAX_MS", "1500")), 2000))
 FULL_PAGE_ARTIFACTS = os.environ.get("CE_FULL_PAGE_ARTIFACTS", "0").strip().lower() in {"1", "true", "yes"}
