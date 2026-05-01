@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.01.18"
+APP_VERSION = "2026.05.01.19"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -724,7 +724,7 @@ def public_status(result) -> str:
         return "Suspended"
     if "upcoming" in normalized or "due" in normalized:
         return "Upcoming Filing"
-    if any(token in normalized for token in ["delinquent", "non-compliant", "non compliant", "expired", "revoked", "suspended", "overdue", "closed", "inactive"]):
+    if any(token in normalized for token in ["delinquent", "non-compliant", "non compliant", "expired", "revoked", "suspended", "overdue", "closed", "inactive", "failed to renew"]):
         return "Delinquent"
 
     return status
@@ -2546,6 +2546,8 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         )
     if normalized_status == "delinquent" and re.search(r"\b(closed|inactive)\b", " ".join([result.status or "", result.raw_status_text or ""]), re.I):
         return f"The {state} public registry shows a found organization record with a closed or inactive registration status."
+    if normalized_status == "delinquent" and state == "ME" and re.search(r"failed\s+to\s+renew", " ".join([result.status or "", result.raw_status_text or "", result.source_note or ""]), re.I):
+        return "The ME public registry shows the matched organization status as Failed to Renew, which CharityClarity treats as Delinquent."
     if normalized_status == "delinquent" and state == "VA" and re.search(r"not\s+authorized\s+to\s+solicit", " ".join([result.status or "", result.raw_status_text or "", result.source_note or ""]), re.I):
         return "The VA public registry shows the organization is not authorized to solicit in Virginia, which CharityClarity treats as Delinquent."
     if state == "CO" and normalized_status == "delinquent" and re.search(r"\b(expired|may not solicit)\b", combined_result_text(result, body), re.I):
