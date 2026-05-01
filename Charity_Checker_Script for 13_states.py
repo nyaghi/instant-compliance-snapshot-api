@@ -352,6 +352,16 @@ def open_ak_public_search(page) -> bool:
             fast_sleep(3.5)
             if page.locator("#Dq-8").count() > 0:
                 return True
+            try:
+                if page.get_by_label(re.compile(r"Submission\s+type", re.I)).first.is_visible(timeout=1500):
+                    return True
+            except Exception:
+                pass
+            try:
+                if page.get_by_label(re.compile(r"FEIN", re.I)).first.is_visible(timeout=1500):
+                    return True
+            except Exception:
+                pass
             public_search = page.locator("#l_Df-3-1")
             if public_search.count() > 0:
                 try:
@@ -361,22 +371,50 @@ def open_ak_public_search(page) -> bool:
                 fast_sleep(3)
                 if page.locator("#Dq-8").count() > 0:
                     return True
+            try:
+                page.get_by_text(re.compile(r"Public\s+Search", re.I)).first.click(timeout=5000)
+                fast_sleep(3)
+                if page.get_by_label(re.compile(r"FEIN", re.I)).first.is_visible(timeout=1500):
+                    return True
+            except Exception:
+                pass
         except Exception:
             pass
         fast_sleep(3)
     return False
 
 def fill_ak_search_form(page, org: Organization, year: int) -> None:
-    page.locator("#Dq-8").wait_for(state="visible", timeout=30000)
-    page.locator("#Dq-8").select_option(label="Charitable Organization")
+    submission = page.locator("#Dq-8")
+    if submission.count() == 0:
+        submission = page.get_by_label(re.compile(r"Submission\s+type", re.I)).first
+    submission.wait_for(state="visible", timeout=30000)
+    submission.select_option(label="Charitable Organization")
     fast_sleep(0.5)
-    page.locator("#Dq-9").select_option(label=str(year))
+    year_select = page.locator("#Dq-9")
+    if year_select.count() == 0:
+        year_select = page.get_by_label(re.compile(r"Year", re.I)).first
+    try:
+        year_select.select_option(label=str(year))
+    except Exception:
+        try:
+            year_select.select_option(value=str(year))
+        except Exception:
+            pass
     fast_sleep(0.5)
-    page.locator("#Dq-a").fill(org.organization_name)
+    name_input = page.locator("#Dq-a")
+    if name_input.count() == 0:
+        name_input = page.get_by_label(re.compile(r"^Name$", re.I)).first
+    name_input.fill(org.organization_name)
     fast_sleep(0.5)
-    page.locator("#Dq-b").fill(format_ein_with_dash(org.ein))
+    fein_input = page.locator("#Dq-b")
+    if fein_input.count() == 0:
+        fein_input = page.get_by_label(re.compile(r"FEIN", re.I)).first
+    fein_input.fill(format_ein_with_dash(org.ein))
     fast_sleep(0.5)
-    page.locator("#Dq-c").click(timeout=30000, force=True)
+    search_button = page.locator("#Dq-c")
+    if search_button.count() == 0:
+        search_button = page.get_by_role("button", name=re.compile(r"^Search$", re.I)).first
+    search_button.click(timeout=30000, force=True)
     fast_sleep(5)
 
 def find_ak_print_link(page, org: Organization):
