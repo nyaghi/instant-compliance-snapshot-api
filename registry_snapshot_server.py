@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.01.7"
+APP_VERSION = "2026.05.01.8"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1408,7 +1408,24 @@ def organization_name_variants(name: str, ein: str = "") -> list[str]:
         no_comma = re.sub(r",\s*", " ", base).strip()
         no_punctuation = re.sub(r"[^\w\s]", " ", base).strip()
         no_punctuation = re.sub(r"\s+", " ", no_punctuation)
-        for variant in [without_comma_suffix, without_suffix, no_comma, no_punctuation, without_trailing_the, without_leading_the]:
+        hyphen_as_space = re.sub(r"[-\u2010-\u2015]+", " ", base).strip()
+        hyphen_removed = re.sub(r"[-\u2010-\u2015]+", "", base).strip()
+        ampersand_as_and = re.sub(r"\s*&\s*", " and ", base).strip()
+        ampersand_removed = re.sub(r"\s*&\s*", " ", base).strip()
+        apostrophe_removed = re.sub(r"[']", "", base).strip()
+        for variant in [
+            without_comma_suffix,
+            without_suffix,
+            no_comma,
+            no_punctuation,
+            hyphen_as_space,
+            hyphen_removed,
+            ampersand_as_and,
+            ampersand_removed,
+            apostrophe_removed,
+            without_trailing_the,
+            without_leading_the,
+        ]:
             add(variant)
     return variants or [""]
 
