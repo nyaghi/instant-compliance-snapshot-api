@@ -2421,9 +2421,9 @@ def search_me(page, org: Organization) -> StateResult:
             result.error = "Could not find ME Search button"
             return result
         search_button.click(timeout=5000, no_wait_after=True)
-        fast_sleep(12)
-        safe_wait_for_network_idle(page, timeout=30000)
-        fast_sleep(2)
+        fast_sleep(5)
+        safe_wait_for_network_idle(page, timeout=10000)
+        fast_sleep(1)
 
         body = page.locator("body").inner_text(timeout=15000)
         if re.search(r"0 records found|no records|no results|no companies found|no data", body, re.I):
@@ -2527,12 +2527,12 @@ def search_me(page, org: Organization) -> StateResult:
                 return True
             return False
 
-        for detail_attempt in range(2):
+        for detail_attempt in range(1):
             try:
                 if detail_attempt > 0:
-                    page.goto(url, wait_until="domcontentloaded", timeout=60000)
-                    safe_wait_for_network_idle(page, timeout=20000)
-                    fast_sleep(2)
+                    page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    safe_wait_for_network_idle(page, timeout=10000)
+                    fast_sleep(1)
                     regulator = None
                     for sel in ["#scRegulator", 'select[name="ctl00$ctl00$mainContent$mainContent$scRegulator"]']:
                         try:
@@ -2575,9 +2575,9 @@ def search_me(page, org: Organization) -> StateResult:
                     if not search_button:
                         raise RuntimeError("Could not find ME Search button after retry.")
                     search_button.click(timeout=5000, no_wait_after=True)
-                    fast_sleep(12)
-                    safe_wait_for_network_idle(page, timeout=30000)
-                    fast_sleep(2)
+                    fast_sleep(5)
+                    safe_wait_for_network_idle(page, timeout=10000)
+                    fast_sleep(1)
 
                     reacquired_link = None
                     best_priority = -1
@@ -2621,12 +2621,12 @@ def search_me(page, org: Organization) -> StateResult:
                     best_link = reacquired_link
 
                 if detail_url:
-                    page.goto(detail_url, wait_until="domcontentloaded", timeout=60000)
+                    page.goto(detail_url, wait_until="domcontentloaded", timeout=30000)
                 else:
                     best_link.click(timeout=5000, no_wait_after=True)
-                    fast_sleep(12)
-                safe_wait_for_network_idle(page, timeout=30000)
-                fast_sleep(2)
+                    fast_sleep(5)
+                safe_wait_for_network_idle(page, timeout=10000)
+                fast_sleep(1)
                 if not me_detail_page_ready():
                     raise RuntimeError("ME detail page markers not found after navigation.")
                 detail_text = page.locator("body").inner_text(timeout=30000)
@@ -2662,38 +2662,6 @@ def search_me(page, org: Organization) -> StateResult:
             return result
 
         combined_status = status_text
-        definition_text = ""
-        status_link = None
-        try:
-            status_link = page.locator("a[href*='LicenseStatusDefinitions.aspx']").first
-            if not status_link.is_visible(timeout=1000):
-                status_link = None
-        except Exception:
-            status_link = None
-
-        if status_link:
-            try:
-                with page.expect_popup(timeout=10000) as popup_info:
-                    status_link.click(timeout=5000, no_wait_after=True)
-                popup = popup_info.value
-                popup.wait_for_load_state("domcontentloaded", timeout=30000)
-                popup.wait_for_timeout(3000)
-                popup_text = popup.locator("body").inner_text(timeout=12000)
-                status_key = status_text.strip().upper()
-                lines = [re.sub(r"\s+", " ", ln).strip() for ln in popup_text.splitlines() if ln.strip()]
-                for idx, line in enumerate(lines):
-                    if line.upper() == status_key and idx + 1 < len(lines):
-                        definition_text = lines[idx + 1].strip()
-                        break
-                    if line.upper().startswith(status_key + " "):
-                        definition_text = line[len(status_key):].strip(" -:")
-                        break
-                popup.close()
-            except Exception:
-                definition_text = ""
-
-        if definition_text:
-            combined_status = f"{status_text} - {definition_text}"
 
         if license_number:
             result.raw_status_text = combined_status
