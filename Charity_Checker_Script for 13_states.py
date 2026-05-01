@@ -813,9 +813,9 @@ def search_ma(page, org: Organization) -> StateResult:
         section_text = m_section.group(1) if m_section else body
 
         filing_years = []
-        for m in re.finditer(r"Form[\s-]*PC[^\n\r0-9]{0,140}(20\d{2})", section_text, re.I):
+        for m in re.finditer(r"Form[\s-]*PC[\s\S]{0,140}(20\d{2})", section_text, re.I):
             filing_years.append(int(m.group(1)))
-        for m in re.finditer(r"(20\d{2})[^\n\rA-Za-z0-9]{0,140}Form[\s-]*PC", section_text, re.I):
+        for m in re.finditer(r"(20\d{2})[\s\S]{0,140}Form[\s-]*PC", section_text, re.I):
             filing_years.append(int(m.group(1)))
         filing_years = sorted(set(filing_years))
 
