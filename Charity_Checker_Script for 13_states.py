@@ -2435,6 +2435,64 @@ def search_me(page, org: Organization) -> StateResult:
 
         target_exact = re.sub(r"\s+", " ", (org.organization_name or "").strip()).upper()
         target_normalized = normalize_name(org.organization_name)
+
+        best_table_status = ""
+        best_table_row = ""
+        best_table_score = (-1, -999)
+        try:
+            rows = page.locator("tr")
+            for i in range(min(rows.count(), 100)):
+                row = rows.nth(i)
+                try:
+                    if not row.is_visible(timeout=750):
+                        continue
+                    row_text = re.sub(r"\s+", " ", row.inner_text(timeout=1500)).strip()
+                    if not row_text or re.search(r"\b(Name|Number|Location|Profession|Status)\b", row_text, re.I) and not re.search(r"\b(ACTIVE|FAILED\s+TO\s+RENEW|EXPIRED|REVOKED|SUSPENDED|INACTIVE|CURRENT)\b", row_text, re.I):
+                        continue
+                    links = row.locator("a[href]")
+                    link_text = ""
+                    if links.count() > 0:
+                        link_text = re.sub(r"\s+", " ", links.first.inner_text(timeout=1000)).strip()
+                    row_name_normalized = normalize_name(link_text or row_text)
+                    name_priority = -1
+                    if link_text.upper() == target_exact:
+                        name_priority = 3
+                    elif row_name_normalized == target_normalized:
+                        name_priority = 2
+                    elif target_normalized and (target_normalized in row_name_normalized or row_name_normalized in target_normalized):
+                        name_priority = 1
+                    if name_priority < 0:
+                        continue
+                    status_match = re.search(
+                        r"\b(ACTIVE|FAILED\s+TO\s+RENEW|EXPIRED|REVOKED|SUSPENDED|INACTIVE|CURRENT)\b",
+                        row_text,
+                        re.I,
+                    )
+                    if not status_match:
+                        continue
+                    row_status = re.sub(r"\s+", " ", status_match.group(1)).strip()
+                    status_priority = 0
+                    if re.search(r"\bACTIVE\b", row_status, re.I):
+                        status_priority = 10
+                    elif re.search(r"\b(CURRENT|GOOD\s+STANDING)\b", row_status, re.I):
+                        status_priority = 8
+                    elif re.search(r"\b(FAILED\s+TO\s+RENEW|EXPIRED|REVOKED|SUSPENDED|INACTIVE)\b", row_status, re.I):
+                        status_priority = -10
+                    if (name_priority, status_priority) > best_table_score:
+                        best_table_score = (name_priority, status_priority)
+                        best_table_status = row_status
+                        best_table_row = row_text
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        if best_table_status and best_table_score[0] >= 2:
+            result.raw_status_text = best_table_status
+            result.status = best_table_status
+            result.source_note = "Maine uses the Status shown on the best exact-name search result row, preferring Active when duplicate records are present."
+            result.success = True
+            return result
+
         best_link = None
         best_priority = -1
         best_status_priority = -999
