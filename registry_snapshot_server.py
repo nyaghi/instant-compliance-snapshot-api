@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.01.21"
+APP_VERSION = "2026.05.02.1"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -716,16 +716,20 @@ def public_status(result) -> str:
         return "Unknown" if result.success else "Site Not Reachable"
     if normalized in {"not registered", "not found", "no record", "no record found"}:
         return "Not Registered"
-    if normalized in {"current", "active", "good standing", "compliant"} or re.search(r"\bgood\s+as\s+of\b", normalized):
-        return "Current"
     if "exempt" in normalized:
         return "Exempt"
+    if "revoked" in normalized:
+        return "Revoked"
     if "suspended" in normalized:
         return "Suspended"
+    if re.search(r"not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist", normalized, re.I):
+        return "Suspended"
+    if any(token in normalized for token in ["delinquent", "non-compliant", "non compliant", "expired", "overdue", "closed", "inactive", "failed to renew"]):
+        return "Delinquent"
+    if normalized in {"current", "active", "good standing", "compliant"} or re.search(r"\bgood\s+as\s+of\b", normalized):
+        return "Current"
     if "upcoming" in normalized or "due" in normalized:
         return "Upcoming Filing"
-    if any(token in normalized for token in ["delinquent", "non-compliant", "non compliant", "expired", "revoked", "suspended", "overdue", "closed", "inactive", "failed to renew"]):
-        return "Delinquent"
 
     return status
 
@@ -1166,6 +1170,8 @@ def filing_context(result, body: str) -> dict:
         latest_year = md_represented_year_from_text(body, result.ein, result.organization_name)
     else:
         latest_year = latest_year_from_text(body, result.state)
+    if state == "PA":
+        latest_year = None
     if latest_year is None and re.search(r"registration\s+found|year\s+represented|latest|most\s+recent|filing\s+year", result.raw_status_text or "", re.I):
         year_match = re.search(r"(20\d{2})", result.raw_status_text or "")
         latest_year = int(year_match.group(1)) if year_match else None
@@ -1192,7 +1198,7 @@ def filing_context(result, body: str) -> dict:
         and re.search(r"\b(current|active|registered|compliant)\b", " ".join([result.status or "", result.raw_status_text or "", body or ""]), re.I)
     ):
         latest_year = public_profile_latest_tax_year_for_ein(result.ein)
-    if latest_year is None and period_end and state not in {"CA", "MA", "MD", "NJ"}:
+    if latest_year is None and period_end and state not in {"CA", "MA", "MD", "NJ", "PA"}:
         latest_year = period_end.year
     registry_fiscal_end = fiscal_year_end_from_body(body, state)
     fiscal_end = registry_fiscal_end or fiscal_year_end_for_ein(result.ein)
@@ -2408,6 +2414,30 @@ def source_note_for_result(result) -> str:
     return result.source_note or ""
 
 
+def explicit_adverse_registry_status(result, body: str) -> str:
+    """Return registry-adverse statuses that should trump filing-year math."""
+    text = combined_result_text(result, body)
+    fields = " ".join([
+        result.status or "",
+        result.raw_status_text or "",
+        result.source_note or "",
+    ])
+    if result_explicitly_exempt(result):
+        return ""
+    confirmed = organization_record_confirmed(result, text) or md_detail_page_matched(result, text)
+    if not confirmed and not re.search(r"\b(revoked|suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist)\b", fields, re.I):
+        return ""
+    if re.search(r"\brevoked\b", fields, re.I):
+        return "Revoked"
+    if re.search(r"\brevoked\b", text, re.I) and re.search(r"\b(?:registry\s+status|registration\s+status|status)\b[\s\S]{0,80}\brevoked\b", text, re.I):
+        return "Revoked"
+    if re.search(r"\b(suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist)\b", fields, re.I):
+        return "Suspended"
+    if re.search(r"\b(?:registry\s+status|registration\s+status|registration\s+filing\s+status|status)\b[\s\S]{0,140}\b(suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist)\b", text, re.I):
+        return "Suspended"
+    return ""
+
+
 def true_status_from_body(result, body: str) -> str:
     base_status = public_status(result)
     normalized = base_status.lower()
@@ -2417,8 +2447,15 @@ def true_status_from_body(result, body: str) -> str:
 
     if "site not reachable" in normalized:
         return base_status
+    if result_explicitly_exempt(result):
+        return "Exempt"
+    adverse_status = explicit_adverse_registry_status(result, combined)
+    if adverse_status:
+        return adverse_status
     if normalized == "suspended":
         return "Suspended"
+    if normalized == "revoked":
+        return "Revoked"
     if (result.status or "").strip().lower() in {"closed", "inactive"} or (result.raw_status_text or "").strip().lower() in {"closed", "inactive"}:
         return "Delinquent"
 
@@ -2433,9 +2470,6 @@ def true_status_from_body(result, body: str) -> str:
             or re.search(r"due date|next report|renewal|expiration|expires|automatic extension", " ".join([result.raw_status_text or "", result.source_note or ""]), re.I)
         )
     )
-
-    if result_explicitly_exempt(result):
-        return "Exempt"
 
     if state == "MD" and md_detail_page_matched(result, combined):
         filed_cycle_status = status_for_filed_cycle(state, context, registry_date)
@@ -2456,6 +2490,8 @@ def true_status_from_body(result, body: str) -> str:
         return "Exempt"
     if state == "PA" and use_registry_date:
         return status_from_calendar_date(registry_date)
+    if state == "PA" and record_confirmed and not use_registry_date:
+        return "Unknown"
     if state in EXTENSION_SCENARIO_STATES and record_confirmed and represented_year and due_date:
         return status_from_calendar_date(due_date)
     if state == "AK" and re.search(r"\b20\d{2}\s+registration\s+found\b", combined, re.I):
@@ -2524,10 +2560,16 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
     if normalized_status == "not registered":
         return f"The {state} public registry was reachable, but no matching registration record was found for the organization/EIN searched."
     if normalized_status == "unknown":
+        if state == "PA" and organization_record_confirmed(result, combined_result_text(result, body)):
+            return "The PA public registry returned a matching record, but CharityClarity did not identify a usable expiration date or final interpreted status from the available page."
         return f"The {state} public registry was reachable, but CharityClarity could not confirm a final interpreted status from the available registry page."
     if normalized_status == "exempt":
         return f"The {state} public registry indicates the organization is exempt from charitable registration or annual filing requirements in that state."
+    if normalized_status == "revoked":
+        return f"The {state} public registry shows the organization registration status as Revoked, which CharityClarity treats as an adverse status."
     if normalized_status == "suspended":
+        if state == "VA" and re.search(r"not\s+authorized\s+to\s+solicit", combined_result_text(result, body), re.I):
+            return "The VA public registry shows the organization is not authorized to solicit in Virginia, which CharityClarity treats as Suspended."
         return f"The {state} public registry shows the organization registration status as Suspended."
     if state == "CA" and normalized_status == "current" and not context.get("due_date"):
         return "The CA public registry shows Registry Status Current. CharityClarity did not identify a delinquency in this quick check."
