@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.02.1"
+APP_VERSION = "2026.05.02.2"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1809,8 +1809,8 @@ def search_hi_precise(page, org):
     try:
         ein_digits = re.sub(r"\D", "", org.ein or "")
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
-        checker.safe_wait_for_network_idle(page, timeout=20000)
-        time.sleep(3)
+        checker.safe_wait_for_network_idle(page, timeout=6000)
+        time.sleep(1)
         try:
             page.locator("#nameFilter").select_option(label="Contains...")
         except Exception:
@@ -1822,87 +1822,84 @@ def search_hi_precise(page, org):
             return result
         body = ""
         clicked_result = False
-        ein_values = []
+        attempts = []
         if ein_digits:
-            ein_values.extend([checker.format_ein_with_dash(org.ein), ein_digits])
-        ein_values.append("")
-        seen_eins = set()
-        ein_values = [item for item in ein_values if item not in seen_eins and not seen_eins.add(item)]
-        search_variants = [""] if ein_digits else []
+            for ein_value in [checker.format_ein_with_dash(org.ein), ein_digits]:
+                if ein_value and ("", ein_value) not in attempts:
+                    attempts.append(("", ein_value))
         for variant in organization_name_variants(org.organization_name, org.ein):
-            if variant not in search_variants:
-                search_variants.append(variant)
-        for variant in search_variants:
-            for ein_value in ein_values:
-                name_input.fill("")
-                name_input.fill(variant)
-                fein_input.fill("")
-                if ein_value:
-                    fein_input.fill(ein_value)
-                clicked = False
-                for sel in ["#trigger-organization-search", 'button[id="trigger-organization-search"]', 'button[type="submit"]', "button"]:
-                    try:
-                        buttons = page.locator(sel)
-                        for i in range(min(buttons.count(), 10)):
-                            button = buttons.nth(i)
-                            try:
-                                text = re.sub(r"\s+", " ", button.inner_text(timeout=1000)).strip()
-                            except Exception:
-                                text = (button.get_attribute("value") or "").strip()
-                            if button.is_visible(timeout=750) and re.search(r"\bSearch\b", text, re.I):
-                                button.click(timeout=5000)
-                                clicked = True
-                                break
-                        if clicked:
+            if variant:
+                for ein_value in ([checker.format_ein_with_dash(org.ein), ein_digits] if ein_digits else [""]):
+                    if (variant, ein_value) not in attempts:
+                        attempts.append((variant, ein_value))
+        for variant, ein_value in attempts[:5]:
+            name_input.fill("")
+            name_input.fill(variant)
+            fein_input.fill("")
+            if ein_value:
+                fein_input.fill(ein_value)
+            clicked = False
+            for sel in ["#trigger-organization-search", 'button[id="trigger-organization-search"]', 'button[type="submit"]', "button"]:
+                try:
+                    buttons = page.locator(sel)
+                    for i in range(min(buttons.count(), 10)):
+                        button = buttons.nth(i)
+                        try:
+                            text = re.sub(r"\s+", " ", button.inner_text(timeout=1000)).strip()
+                        except Exception:
+                            text = (button.get_attribute("value") or "").strip()
+                        if button.is_visible(timeout=750) and re.search(r"\bSearch\b", text, re.I):
+                            button.click(timeout=5000)
+                            clicked = True
                             break
-                    except Exception:
-                        continue
-                if not clicked:
-                    result.error = "Could not click HI Search button"
-                    return result
-                checker.safe_wait_for_network_idle(page, timeout=30000)
-                time.sleep(3)
-                wanted_variants = [checker.normalize_name(item) for item in organization_name_variants(org.organization_name, org.ein)]
-                for selector in ["#searchOrgTable tbody tr", "#searchResultTable tbody tr", "table tbody tr", "a[href]"]:
-                    try:
-                        rows = page.locator(selector)
-                        for i in range(min(rows.count(), 100)):
-                            row = rows.nth(i)
-                            try:
-                                if not row.is_visible(timeout=750):
-                                    continue
-                                row_text = re.sub(r"\s+", " ", row.inner_text(timeout=1500)).strip()
-                                if not row_text or re.search(r"no data available", row_text, re.I):
-                                    continue
-                                row_digits = re.sub(r"\D", "", row_text)
-                                row_name = checker.normalize_name(row_text)
-                                name_match = any(name and (name in row_name or row_name in name) for name in wanted_variants)
-                                if ein_digits and ein_digits not in row_digits:
-                                    continue
-                                if not ein_digits and not name_match:
-                                    continue
-                                links = row.locator("a[href]")
-                                if selector == "a[href]":
-                                    row.click(timeout=5000)
-                                elif links.count():
-                                    links.first.click(timeout=5000)
-                                else:
-                                    row.click(timeout=5000)
-                                clicked_result = True
-                                break
-                            except Exception:
+                    if clicked:
+                        break
+                except Exception:
+                    continue
+            if not clicked:
+                result.error = "Could not click HI Search button"
+                return result
+            checker.safe_wait_for_network_idle(page, timeout=7000)
+            time.sleep(1.25)
+            wanted_variants = [checker.normalize_name(item) for item in organization_name_variants(org.organization_name, org.ein)]
+            for selector in ["#searchOrgTable tbody tr", "#searchResultTable tbody tr", "table tbody tr", "a[href]"]:
+                try:
+                    rows = page.locator(selector)
+                    for i in range(min(rows.count(), 100)):
+                        row = rows.nth(i)
+                        try:
+                            if not row.is_visible(timeout=750):
                                 continue
-                        if clicked_result:
+                            row_text = re.sub(r"\s+", " ", row.inner_text(timeout=1500)).strip()
+                            if not row_text or re.search(r"no data available", row_text, re.I):
+                                continue
+                            row_digits = re.sub(r"\D", "", row_text)
+                            row_name = checker.normalize_name(row_text)
+                            name_match = any(name and (name in row_name or row_name in name) for name in wanted_variants)
+                            if ein_digits and ein_digits not in row_digits:
+                                continue
+                            if not ein_digits and not name_match:
+                                continue
+                            links = row.locator("a[href]")
+                            if selector == "a[href]":
+                                row.click(timeout=5000)
+                            elif links.count():
+                                links.first.click(timeout=5000)
+                            else:
+                                row.click(timeout=5000)
+                            clicked_result = True
                             break
-                    except Exception:
-                        continue
-                if clicked_result:
-                    break
-                body = page.locator("body").inner_text(timeout=15000)
-                if re.search(r"no results|no records|0 results|showing 0 to 0 of 0 entries|no data available in table|not registered in our system", body, re.I):
+                        except Exception:
+                            continue
+                    if clicked_result:
+                        break
+                except Exception:
                     continue
             if clicked_result:
                 break
+            body = page.locator("body").inner_text(timeout=15000)
+            if re.search(r"no results|no records|0 results|showing 0 to 0 of 0 entries|no data available in table|not registered in our system", body, re.I):
+                continue
         if not clicked_result:
             result.raw_status_text = "No record found" if re.search(r"no results|no records|0 results|showing 0 to 0 of 0 entries|no data available in table|not registered in our system", body, re.I) else "No matching organization result"
             result.status = "Not registered"
@@ -1910,8 +1907,8 @@ def search_hi_precise(page, org):
             result.success = True
             return result
         page.wait_for_load_state("domcontentloaded", timeout=30000)
-        checker.safe_wait_for_network_idle(page, timeout=20000)
-        time.sleep(2)
+        checker.safe_wait_for_network_idle(page, timeout=6000)
+        time.sleep(1)
         detail_text = page.locator("body").inner_text(timeout=12000)
         detail_ein = (
             checker.extract_labeled_value(page, ["FEIN", "Federal Tax ID (EIN)", "Federal Tax ID", "EIN"])
@@ -2416,6 +2413,7 @@ def source_note_for_result(result) -> str:
 
 def explicit_adverse_registry_status(result, body: str) -> str:
     """Return registry-adverse statuses that should trump filing-year math."""
+    state = (result.state or "").upper()
     text = combined_result_text(result, body)
     fields = " ".join([
         result.status or "",
@@ -2426,6 +2424,12 @@ def explicit_adverse_registry_status(result, body: str) -> str:
         return ""
     confirmed = organization_record_confirmed(result, text) or md_detail_page_matched(result, text)
     if not confirmed and not re.search(r"\b(revoked|suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist)\b", fields, re.I):
+        return ""
+    if state == "NJ":
+        if re.search(r"\brevoked\b", fields, re.I):
+            return "Revoked"
+        if re.search(r"\b(suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist)\b", fields, re.I):
+            return "Suspended"
         return ""
     if re.search(r"\brevoked\b", fields, re.I):
         return "Revoked"
