@@ -847,8 +847,8 @@ def search_ny(page, org: Organization) -> StateResult:
     url = "https://www.charitiesnys.com/RegistrySearch/search_charities.jsp"
     result = StateResult(org.organization_name, org.ein, "NY", STATUS_UNKNOWN, url)
     try:
-        page.goto(url, wait_until="domcontentloaded", timeout=20000)
-        safe_wait_for_network_idle(page, timeout=5000)
+        page.goto(url, wait_until="domcontentloaded", timeout=12000)
+        safe_wait_for_network_idle(page, timeout=2500)
         fast_sleep(1)
 
         ein_digits = digits_only(org.ein)
@@ -2380,7 +2380,7 @@ def search_me(page, org: Organization) -> StateResult:
         for sel in ["#scRegulator", 'select[name="ctl00$ctl00$mainContent$mainContent$scRegulator"]']:
             try:
                 loc = page.locator(sel).first
-                loc.wait_for(state="visible", timeout=5000)
+                loc.wait_for(state="visible", timeout=3000)
                 regulator = loc
                 break
             except Exception:
@@ -2395,7 +2395,7 @@ def search_me(page, org: Organization) -> StateResult:
         for sel in ["#scCompanyName", 'input[name="ctl00$ctl00$mainContent$mainContent$scCompanyName"]']:
             try:
                 loc = page.locator(sel).first
-                loc.wait_for(state="visible", timeout=5000)
+                loc.wait_for(state="visible", timeout=3000)
                 name_input = loc
                 break
             except Exception:
@@ -2403,16 +2403,16 @@ def search_me(page, org: Organization) -> StateResult:
         if not name_input:
             result.error = "Could not find ME Company Name input"
             return result
-        name_input.click(timeout=5000)
+        name_input.click(timeout=3000)
         name_input.fill("")
-        name_input.type(org.organization_name, delay=35)
+        name_input.fill(org.organization_name)
         fast_sleep(1)
 
         search_button = None
         for sel in ["#btnSearch", 'input[name="ctl00$ctl00$mainContent$mainContent$btnSearch"]', 'input[type="submit"][value="Search"]']:
             try:
                 loc = page.locator(sel).first
-                loc.wait_for(state="visible", timeout=5000)
+                loc.wait_for(state="visible", timeout=3000)
                 search_button = loc
                 break
             except Exception:
@@ -2420,12 +2420,12 @@ def search_me(page, org: Organization) -> StateResult:
         if not search_button:
             result.error = "Could not find ME Search button"
             return result
-        search_button.click(timeout=5000, no_wait_after=True)
-        fast_sleep(2)
-        safe_wait_for_network_idle(page, timeout=5000)
-        fast_sleep(1)
+        search_button.click(timeout=3000, no_wait_after=True)
+        fast_sleep(1.5)
+        safe_wait_for_network_idle(page, timeout=2500)
+        fast_sleep(0.5)
 
-        body = page.locator("body").inner_text(timeout=8000)
+        body = page.locator("body").inner_text(timeout=4000)
         if re.search(r"0 records found|no records|no results|no companies found|no data", body, re.I):
             result.raw_status_text = "No record found"
             result.status = STATUS_NOT_REGISTERED
