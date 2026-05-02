@@ -591,29 +591,29 @@ def search_ca(page, org: Organization) -> StateResult:
 
         if not raw:
             ca_statuses = [
+                "Not Registered - Cease and Desist Order",
+                "Subject to Cease and Desist Order",
+                "Delinquent - Late Fees Due",
+                "Suspended",
+                "Revoked",
+                "Withdrawn",
+                "Dissolved",
+                "Delinquent",
+                "Closed - Registration Not Required",
+                "Closed",
                 "Current - Reporting Incomplete",
                 "Current - Awaiting Reporting",
                 "Current - Probationary Registration",
                 "Current - In Process",
-                "Closed - Registration Not Required",
-                "Delinquent - Late Fees Due",
-                "Not Registered - Cease and Desist Order",
-                "Subject to Cease and Desist Order",
                 "Dissolution Waiver Issued",
                 "Dissolution Pending",
                 "Registered - Corporate Trustee",
                 "Exempt - Form 990-PF Required",
                 "Exempt - Facility Financing",
                 "Not Registered",
-                "Delinquent",
-                "Suspended",
-                "Revoked",
-                "Withdrawn",
-                "Dissolved",
                 "Exempt - Religious",
                 "Exempt",
                 "Current",
-                "Closed",
             ]
             for status_text in ca_statuses:
                 if status_text.lower() in body.lower():
@@ -1560,7 +1560,7 @@ def search_va(page, org: Organization) -> StateResult:
         registration_status = extract_labeled_value(page, ["Registration Filing Status"])
         result.raw_status_text = registration_status
         if re.search(r"not\s+authorized\s+to\s+solicit", registration_status or "", re.I):
-            result.status = STATUS_DELINQUENT
+            result.status = "Suspended"
             result.source_note = "Virginia public registry says the organization is not authorized to solicit in Virginia."
         elif registration_status:
             result.status = STATUS_UNKNOWN
