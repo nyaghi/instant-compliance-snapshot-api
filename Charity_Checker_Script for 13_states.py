@@ -523,8 +523,8 @@ def search_ca(page, org: Organization) -> StateResult:
     result = StateResult(org.organization_name, org.ein, "CA", STATUS_UNKNOWN, url)
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
-        safe_wait_for_network_idle(page, timeout=20000)
-        fast_sleep(2)
+        safe_wait_for_network_idle(page, timeout=8000)
+        fast_sleep(0.75)
 
         query = digits_only(org.ein) if digits_only(org.ein) else org.organization_name
         filled = False
@@ -561,8 +561,8 @@ def search_ca(page, org: Organization) -> StateResult:
         if not clicked:
             page.keyboard.press("Enter")
 
-        safe_wait_for_network_idle(page, timeout=20000)
-        fast_sleep(2)
+        safe_wait_for_network_idle(page, timeout=8000)
+        fast_sleep(0.75)
         body = page.locator("body").inner_text(timeout=10000)
         if re.search(r"no records|no results|not registered", body, re.I):
             result.raw_status_text = "No record found"
