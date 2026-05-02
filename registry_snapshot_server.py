@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.02.6"
+APP_VERSION = "2026.05.02.7"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1666,8 +1666,8 @@ def ca_detail_body(page, org) -> str:
                 continue
         if target_href:
             page.goto(urljoin(page.url, target_href), wait_until="domcontentloaded", timeout=45000)
-            checker.safe_wait_for_network_idle(page, timeout=20000)
-            time.sleep(2)
+            checker.safe_wait_for_network_idle(page, timeout=8000)
+            time.sleep(0.75)
     except Exception:
         pass
 
@@ -1675,7 +1675,7 @@ def ca_detail_body(page, org) -> str:
         try:
             page.get_by_text(re.compile(text, re.I)).first.scroll_into_view_if_needed(timeout=4000)
             page.locator("body").evaluate("window.scrollBy(0, -80)")
-            time.sleep(1)
+            time.sleep(0.5)
             break
         except Exception:
             continue
@@ -1683,7 +1683,7 @@ def ca_detail_body(page, org) -> str:
         current_body = registry_page_body(page)
         if not scroll_to_latest_year_evidence(page, "CA", current_body):
             page.locator("body").evaluate("window.scrollTo(0, Math.max(0, document.body.scrollHeight * 0.28))")
-            time.sleep(1)
+            time.sleep(0.5)
     except Exception:
         pass
     pieces.append(registry_page_body(page))
@@ -2079,7 +2079,7 @@ def search_nj_direct(page, org):
     try:
         ein_digits = re.sub(r"\D", "", org.ein or "")
         page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        time.sleep(8)
+        time.sleep(1)
         input_box = None
         for selector in [
             "#SearchBox28",
@@ -2104,13 +2104,13 @@ def search_nj_direct(page, org):
         input_box.fill(ein_digits or org.organization_name)
         page.keyboard.press("Enter")
         body = ""
-        deadline = time.time() + 35
+        deadline = time.time() + 22
         while time.time() < deadline:
-            body = page.locator("body").inner_text(timeout=15000)
+            body = page.locator("body").inner_text(timeout=5000)
             body_digits = re.sub(r"\D", "", body)
             if (ein_digits and ein_digits in body_digits) or re.search(r"no records found|no records|no matching|0 results", body, re.I):
                 break
-            time.sleep(1.5)
+            time.sleep(0.75)
         if re.search(r"no records found|no records|no matching|0 results", body, re.I):
             result.raw_status_text = "No record found"
             result.status = checker.STATUS_NOT_REGISTERED
