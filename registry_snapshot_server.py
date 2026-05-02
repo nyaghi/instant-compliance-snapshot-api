@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.01.19"
+APP_VERSION = "2026.05.01.20"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1466,10 +1466,13 @@ def result_is_retryable_name_miss(result) -> bool:
     ))
 
 
-def search_with_name_variants(page, org, search_func):
+def search_with_name_variants(page, org, search_func, max_variants: int | None = None):
     best_result = None
     original_name = org.organization_name
-    for variant in organization_name_variants(original_name, org.ein):
+    variants = organization_name_variants(original_name, org.ein)
+    if max_variants:
+        variants = variants[:max_variants]
+    for variant in variants:
         result = search_func(page, org_with_name(org, variant))
         if getattr(result, "organization_name", "") != original_name:
             result.organization_name = original_name
@@ -1603,39 +1606,28 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
     if len(re.sub(r"\D", "", org.ein or "")) != 9:
         result.error = "AK search requires 9-digit EIN"
         return result, ""
-    years_to_try = getattr(checker, "AK_YEARS_TO_TRY", [date.today().year, date.today().year - 1])
+    years_to_try = getattr(checker, "AK_YEARS_TO_TRY", [date.today().year, date.today().year - 1])[:2]
     for idx, year in enumerate(years_to_try):
-        for variant in organization_name_variants(org.organization_name, org.ein):
-            ak_context = browser.new_context(viewport={"width": 1365, "height": 900}, accept_downloads=True)
-            configure_browser_context(ak_context)
-            ak_page = ak_context.new_page()
-            try:
-                if not checker.open_ak_public_search(ak_page):
-                    result.error = "Could not open Alaska Public Search form"
-                    continue
-                search_org = org_with_name(org, variant)
-                checker.fill_ak_search_form(ak_page, search_org, year)
-                print_link = find_ak_print_link_relaxed(ak_page, search_org)
-                if not print_link:
-                    if idx == len(years_to_try) - 1:
-                        checker.save_artifacts(ak_page, ARTIFACTS_DIR, "AK", artifact_name)
-                    continue
-                checker.save_artifacts(ak_page, ARTIFACTS_DIR, "AK", artifact_name)
-                pdf_text, pdf_url = fetch_ak_registration_pdf(ak_page, ak_context, print_link, artifact_name)
-                accounting_year_end = checker.extract_ak_accounting_end_year(pdf_text) if pdf_text else None
-                result.status, result.raw_status_text, result.source_note = checker.classify_ak_registration_year(year, accounting_year_end)
-                signature_date = extract_ak_signature_date(pdf_text)
-                if signature_date:
-                    result.source_note = f"{result.source_note}; print registration signature date {signature_date}"
-                if pdf_url:
-                    result.source_url = pdf_url
-                result.success = True
-                return result, "\n".join([registry_page_body(ak_page), pdf_text])
-            except Exception as e:
-                result.error = f"AK error: {e}"
+        ak_context = browser.new_context(viewport={"width": 1365, "height": 900}, accept_downloads=False)
+        configure_browser_context(ak_context)
+        ak_page = ak_context.new_page()
+        try:
+            if not checker.open_ak_public_search(ak_page):
+                result.error = "Could not open Alaska Public Search form"
                 continue
-            finally:
-                ak_context.close()
+            checker.fill_ak_search_form(ak_page, org, year)
+            print_link = find_ak_print_link_relaxed(ak_page, org)
+            page_body = registry_page_body(ak_page)
+            if not print_link:
+                continue
+            result.status, result.raw_status_text, result.source_note = checker.classify_ak_registration_year(year, None)
+            result.success = True
+            return result, page_body
+        except Exception as e:
+            result.error = f"AK error: {e}"
+            continue
+        finally:
+            ak_context.close()
     checked_years = ", ".join(str(year) for year in years_to_try)
     result.raw_status_text = f"No Alaska registration found for checked years {checked_years}"
     result.status = "Not registered"
@@ -2787,9 +2779,13 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 if public_status(result) != "Not Registered":
                     body = hi_detail_body(page)
             elif state == "ME":
-                result = search_with_name_variants(page, org, checker.search_me)
-                body = me_detail_body(page, org)
-                enrich_me_result_from_body(result, body)
+                result = search_with_name_variants(page, org, checker.search_me, max_variants=3)
+                me_status_source = " ".join([result.raw_status_text or "", result.source_note or ""])
+                if re.search(r"Maine uses the Status shown|No matching organization|No record found|no matching", me_status_source, re.I):
+                    body = registry_page_body(page)
+                else:
+                    body = me_detail_body(page, org)
+                    enrich_me_result_from_body(result, body)
             elif state == "ND":
                 result = search_with_name_variants(page, org, checker.search_nd)
             else:
