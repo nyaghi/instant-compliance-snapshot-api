@@ -2486,13 +2486,6 @@ def search_me(page, org: Organization) -> StateResult:
                     continue
         except Exception:
             pass
-        if best_table_status and best_table_score[0] >= 2:
-            result.raw_status_text = best_table_status
-            result.status = best_table_status
-            result.source_note = "Maine uses the Status shown on the best exact-name search result row, preferring Active when duplicate records are present."
-            result.success = True
-            return result
-
         best_link = None
         best_priority = -1
         best_status_priority = -999
@@ -2547,18 +2540,14 @@ def search_me(page, org: Organization) -> StateResult:
             result.success = True
             return result
 
+        fallback_row_status = ""
         row_status_match = re.search(
             r"\b(ACTIVE|FAILED\s+TO\s+RENEW|EXPIRED|REVOKED|SUSPENDED|INACTIVE|CURRENT)\b",
             best_row_text or "",
             re.I,
         )
         if row_status_match:
-            row_status = re.sub(r"\s+", " ", row_status_match.group(1)).strip()
-            result.raw_status_text = row_status
-            result.status = row_status
-            result.source_note = "Maine uses the Status shown on the matched search result row."
-            result.success = True
-            return result
+            fallback_row_status = re.sub(r"\s+", " ", row_status_match.group(1)).strip()
 
         try:
             href = (best_link.get_attribute("href") or "").strip()
@@ -2729,18 +2718,23 @@ def search_me(page, org: Organization) -> StateResult:
         if not status_text:
             status_text = extract_labeled_value_from_text(detail_text, ["Status"])
         if not status_text:
-            result.raw_status_text = "Status not found"
-            result.status = STATUS_UNKNOWN
-            result.source_note = "Registration status with definition (ME)"
+            if fallback_row_status:
+                result.raw_status_text = fallback_row_status
+                result.status = fallback_row_status
+                result.source_note = "Maine uses the Status shown on the matched search result row."
+            else:
+                result.raw_status_text = "Status not found"
+                result.status = STATUS_UNKNOWN
+                result.source_note = "Registration status with definition (ME)"
             result.success = True
             return result
 
         combined_status = status_text
+        expiration_text = extract_labeled_value(page, ["Expiration Date", "Expiration"]) or extract_labeled_value_from_text(detail_text, ["Expiration Date", "Expiration"])
+        if expiration_text:
+            combined_status = f"{combined_status}; expiration date {expiration_text}"
 
-        if license_number:
-            result.raw_status_text = combined_status
-        else:
-            result.raw_status_text = combined_status
+        result.raw_status_text = combined_status
         result.status = status_text
         result.source_note = "Registration status with definition (ME)"
         result.success = True
