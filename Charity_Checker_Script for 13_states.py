@@ -346,10 +346,10 @@ def classify_ak_registration_year(registration_year: int, accounting_year_end: O
     return status, raw_status_text, source_note
 
 def open_ak_public_search(page) -> bool:
-    for _ in range(4):
+    for _ in range(2):
         try:
-            page.goto(AK_SEARCH_URL, wait_until="domcontentloaded", timeout=60000)
-            fast_sleep(3.5)
+            page.goto(AK_SEARCH_URL, wait_until="domcontentloaded", timeout=25000)
+            fast_sleep(1.5)
             if page.locator("#Dq-8").count() > 0:
                 return True
             try:
@@ -365,29 +365,29 @@ def open_ak_public_search(page) -> bool:
             public_search = page.locator("#l_Df-3-1")
             if public_search.count() > 0:
                 try:
-                    public_search.first.click(timeout=30000, force=True)
+                    public_search.first.click(timeout=10000, force=True)
                 except Exception:
                     pass
-                fast_sleep(3)
+                fast_sleep(1.5)
                 if page.locator("#Dq-8").count() > 0:
                     return True
             try:
                 page.get_by_text(re.compile(r"Public\s+Search", re.I)).first.click(timeout=5000)
-                fast_sleep(3)
+                fast_sleep(1.5)
                 if page.get_by_label(re.compile(r"FEIN", re.I)).first.is_visible(timeout=1500):
                     return True
             except Exception:
                 pass
         except Exception:
             pass
-        fast_sleep(3)
+        fast_sleep(1)
     return False
 
 def fill_ak_search_form(page, org: Organization, year: int) -> None:
     submission = page.locator("#Dq-8")
     if submission.count() == 0:
         submission = page.get_by_label(re.compile(r"Submission\s+type", re.I)).first
-    submission.wait_for(state="visible", timeout=30000)
+    submission.wait_for(state="visible", timeout=10000)
     submission.select_option(label="Charitable Organization")
     try:
         submission.dispatch_event("change")
@@ -397,7 +397,7 @@ def fill_ak_search_form(page, org: Organization, year: int) -> None:
     year_select = page.locator("#Dq-9")
     if year_select.count() == 0:
         year_select = page.get_by_label(re.compile(r"Year", re.I)).first
-    year_select.wait_for(state="visible", timeout=15000)
+    year_select.wait_for(state="visible", timeout=8000)
     selected_year = False
     try:
         year_select.select_option(label=str(year))
@@ -429,7 +429,7 @@ def fill_ak_search_form(page, org: Organization, year: int) -> None:
     fein_input = page.locator("#Dq-b")
     if fein_input.count() == 0:
         fein_input = page.get_by_label(re.compile(r"FEIN", re.I)).first
-    fein_input.wait_for(state="visible", timeout=15000)
+    fein_input.wait_for(state="visible", timeout=8000)
     fein_input.fill("")
     fein_input.type(format_ein_with_dash(org.ein), delay=40)
     try:
@@ -441,8 +441,8 @@ def fill_ak_search_form(page, org: Organization, year: int) -> None:
     search_button = page.locator("#Dq-c")
     if search_button.count() == 0:
         search_button = page.get_by_role("button", name=re.compile(r"^Search$", re.I)).first
-    search_button.click(timeout=30000, force=True)
-    fast_sleep(5)
+    search_button.click(timeout=10000, force=True)
+    fast_sleep(2)
 
 def find_ak_print_link(page, org: Organization):
     return page.evaluate(
@@ -847,9 +847,9 @@ def search_ny(page, org: Organization) -> StateResult:
     url = "https://www.charitiesnys.com/RegistrySearch/search_charities.jsp"
     result = StateResult(org.organization_name, org.ein, "NY", STATUS_UNKNOWN, url)
     try:
-        page.goto(url, wait_until="domcontentloaded", timeout=45000)
-        safe_wait_for_network_idle(page, timeout=20000)
-        fast_sleep(3)
+        page.goto(url, wait_until="domcontentloaded", timeout=20000)
+        safe_wait_for_network_idle(page, timeout=5000)
+        fast_sleep(1)
 
         ein_digits = digits_only(org.ein)
         formatted_ein = format_ein_with_dash(org.ein) if ein_digits else ""
@@ -2372,15 +2372,15 @@ def search_me(page, org: Organization) -> StateResult:
     url = "https://www.pfr.maine.gov/almsonline/almsquery/SearchCompany.aspx"
     result = StateResult(org.organization_name, org.ein, "ME", STATUS_UNKNOWN, url)
     try:
-        page.goto(url, wait_until="domcontentloaded", timeout=45000)
-        safe_wait_for_network_idle(page, timeout=20000)
-        fast_sleep(3)
+        page.goto(url, wait_until="domcontentloaded", timeout=20000)
+        safe_wait_for_network_idle(page, timeout=5000)
+        fast_sleep(1)
 
         regulator = None
         for sel in ["#scRegulator", 'select[name="ctl00$ctl00$mainContent$mainContent$scRegulator"]']:
             try:
                 loc = page.locator(sel).first
-                loc.wait_for(state="visible", timeout=15000)
+                loc.wait_for(state="visible", timeout=5000)
                 regulator = loc
                 break
             except Exception:
@@ -2395,7 +2395,7 @@ def search_me(page, org: Organization) -> StateResult:
         for sel in ["#scCompanyName", 'input[name="ctl00$ctl00$mainContent$mainContent$scCompanyName"]']:
             try:
                 loc = page.locator(sel).first
-                loc.wait_for(state="visible", timeout=15000)
+                loc.wait_for(state="visible", timeout=5000)
                 name_input = loc
                 break
             except Exception:
@@ -2405,14 +2405,14 @@ def search_me(page, org: Organization) -> StateResult:
             return result
         name_input.click(timeout=5000)
         name_input.fill("")
-        name_input.type(org.organization_name, delay=85)
+        name_input.type(org.organization_name, delay=35)
         fast_sleep(1)
 
         search_button = None
         for sel in ["#btnSearch", 'input[name="ctl00$ctl00$mainContent$mainContent$btnSearch"]', 'input[type="submit"][value="Search"]']:
             try:
                 loc = page.locator(sel).first
-                loc.wait_for(state="visible", timeout=15000)
+                loc.wait_for(state="visible", timeout=5000)
                 search_button = loc
                 break
             except Exception:
@@ -2421,11 +2421,11 @@ def search_me(page, org: Organization) -> StateResult:
             result.error = "Could not find ME Search button"
             return result
         search_button.click(timeout=5000, no_wait_after=True)
-        fast_sleep(5)
-        safe_wait_for_network_idle(page, timeout=10000)
+        fast_sleep(2)
+        safe_wait_for_network_idle(page, timeout=5000)
         fast_sleep(1)
 
-        body = page.locator("body").inner_text(timeout=15000)
+        body = page.locator("body").inner_text(timeout=8000)
         if re.search(r"0 records found|no records|no results|no companies found|no data", body, re.I):
             result.raw_status_text = "No record found"
             result.status = STATUS_NOT_REGISTERED
