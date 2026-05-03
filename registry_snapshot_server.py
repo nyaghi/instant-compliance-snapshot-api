@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.03.3"
+APP_VERSION = "2026.05.03.4"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1217,8 +1217,9 @@ def filing_context(result, body: str) -> dict:
         latest_year = public_profile_latest_tax_year_for_ein(result.ein)
     if latest_year is None and period_end and state not in {"CA", "MA", "MD", "NJ", "PA"}:
         latest_year = period_end.year
+    override_fiscal_end = FISCAL_YEAR_END_OVERRIDES.get(re.sub(r"\D", "", result.ein or ""))
     registry_fiscal_end = fiscal_year_end_from_body(body, state)
-    fiscal_end = registry_fiscal_end or fiscal_year_end_for_ein(result.ein)
+    fiscal_end = override_fiscal_end or registry_fiscal_end or fiscal_year_end_for_ein(result.ein)
 
     if latest_year is None or fiscal_end is None:
         return {
@@ -1669,19 +1670,38 @@ def ca_detail_body(page, org) -> str:
         detail_links = page.locator('a[href*="Details.aspx"]')
         link_count = detail_links.count()
         target_href = ""
+        best_score = -10_000
         ein_digits = re.sub(r"\D", "", org.ein or "")
+        wanted_name = getattr(checker, "normalize_name", lambda value: re.sub(r"\s+", " ", (value or "").lower()).strip())(
+            org.organization_name
+        )
         for i in range(min(link_count, 20)):
             link = detail_links.nth(i)
             try:
                 row_text = ""
                 row = link.locator("xpath=ancestor::tr[1]")
                 if row.count():
-                    row_text = row.first.inner_text(timeout=1500)
+                    row_text = re.sub(r"\s+", " ", row.first.inner_text(timeout=1500)).strip()
                 href = link.get_attribute("href", timeout=1500) or ""
-                if ein_digits and ein_digits in re.sub(r"\D", "", row_text):
-                    target_href = href
-                    break
-                if not target_href:
+                if not href:
+                    continue
+                row_digits = re.sub(r"\D", "", row_text)
+                row_name = getattr(checker, "normalize_name", lambda value: re.sub(r"\s+", " ", (value or "").lower()).strip())(
+                    row_text
+                )
+                score = 0
+                if ein_digits and ein_digits in row_digits:
+                    score += 40
+                if wanted_name and wanted_name in row_name:
+                    score += 12
+                if re.search(r"\bcharity\s+registration\b", row_text, re.I):
+                    score += 10
+                if re.search(r"\b(current|active|exempt|registered)\b", row_text, re.I):
+                    score += 8
+                if re.search(r"\b(merged\s+out|withdrawn|dissolved|closed)\b", row_text, re.I):
+                    score -= 35
+                if score > best_score:
+                    best_score = score
                     target_href = href
             except Exception:
                 continue
