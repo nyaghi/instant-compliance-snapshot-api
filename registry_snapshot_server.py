@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.03.13"
+APP_VERSION = "2026.05.03.14"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -874,6 +874,31 @@ def public_profile_latest_tax_year_for_ein(ein: str) -> int | None:
     return max(candidates) if candidates else None
 
 
+def public_profile_latest_tax_period_for_ein(ein: str) -> tuple[int, tuple[int, int]] | None:
+    """Return the latest public profile tax year and fiscal year end, if available."""
+    payload = public_profile_for_ein(ein)
+    candidates: list[tuple[int, tuple[int, int]]] = []
+    raw_tax_period = str((payload.get("organization") or {}).get("tax_period") or "")
+    match = re.match(r"(20\d{2})[-/]?(\d{1,2})?", raw_tax_period)
+    if match:
+        year = int(match.group(1))
+        month = int(match.group(2) or "12")
+        if 1 <= month <= 12:
+            candidates.append((year, (month, calendar.monthrange(year, month)[1])))
+    for filing in payload.get("filings_with_data") or []:
+        raw_period = str(filing.get("tax_prd") or "")
+        match = re.fullmatch(r"(20\d{2})(\d{2})", raw_period)
+        if match:
+            year = int(match.group(1))
+            month = int(match.group(2))
+            if 1 <= month <= 12:
+                candidates.append((year, (month, calendar.monthrange(year, month)[1])))
+        raw_year = str(filing.get("tax_prd_yr") or "")
+        if re.fullmatch(r"20\d{2}", raw_year):
+            candidates.append((int(raw_year), (12, 31)))
+    return max(candidates, key=lambda item: item[0]) if candidates else None
+
+
 def resolved_organization_name(ein: str, supplied_name: str = "") -> str:
     supplied_name = (supplied_name or "").strip()
     reference_name = organization_name_for_ein(ein)
@@ -1128,6 +1153,29 @@ def latest_year_from_text(body: str, state: str) -> int | None:
     return max(years) if years else None
 
 
+def fiscal_year_end_from_result(result) -> tuple[int, int] | None:
+    """Prefer fiscal year ends that the state lookup itself exposed."""
+    text = " ".join([
+        result.raw_status_text or "",
+        result.source_note or "",
+    ])
+    match = re.search(r"Latest\s+FYE\s*:?\s*(20\d{2})-(\d{1,2})-(\d{1,2})", text, re.I)
+    if match:
+        year = int(match.group(1))
+        month = int(match.group(2))
+        day = int(match.group(3))
+        if 1 <= month <= 12:
+            return month, min(day, calendar.monthrange(year, month)[1])
+    match = re.search(r"Fiscal\s+Year\s+End\s*:?\s*(\d{1,2})[/-](\d{1,2})[/-](20\d{2})", text, re.I)
+    if match:
+        month = int(match.group(1))
+        day = int(match.group(2))
+        year = int(match.group(3))
+        if 1 <= month <= 12:
+            return month, min(day, calendar.monthrange(year, month)[1])
+    return None
+
+
 def md_represented_year_from_text(body: str, ein: str = "", organization_name: str = "") -> int | None:
     source = body or ""
     for escaped, replacement in {
@@ -1214,9 +1262,17 @@ def filing_context(result, body: str) -> dict:
             latest_year = profile_latest_year
         if ce_latest_year and ce_latest_year > latest_year:
             latest_year = ce_latest_year
-    # For Massachusetts, do not substitute a ProPublica/IRS tax year for a
-    # state Form PC year. If the MA portal does not expose Annual Filings rows,
-    # the comment should say that instead of inventing a visible Form PC.
+    # If the Massachusetts portal record loads but the Annual Filings grid does
+    # not expose rows in this run, use the public profile tax period only as a
+    # fallback so the result still explains year/due-date logic.
+    if (
+        latest_year is None
+        and state == "MA"
+        and re.search(r"Annual\s+Filings?\s+not\s+visible", " ".join([result.raw_status_text or "", result.source_note or "", body or ""]), re.I)
+    ):
+        profile_period = public_profile_latest_tax_period_for_ein(result.ein)
+        if profile_period:
+            latest_year = profile_period[0]
     if (
         latest_year is None
         and state == "CA"
@@ -1226,8 +1282,11 @@ def filing_context(result, body: str) -> dict:
     if latest_year is None and period_end and state not in {"CA", "MA", "MD", "NJ", "PA"}:
         latest_year = period_end.year
     override_fiscal_end = FISCAL_YEAR_END_OVERRIDES.get(re.sub(r"\D", "", result.ein or ""))
+    result_fiscal_end = fiscal_year_end_from_result(result)
     registry_fiscal_end = fiscal_year_end_from_body(body, state)
-    fiscal_end = override_fiscal_end or registry_fiscal_end or fiscal_year_end_for_ein(result.ein)
+    profile_period = public_profile_latest_tax_period_for_ein(result.ein)
+    profile_fiscal_end = profile_period[1] if profile_period else None
+    fiscal_end = result_fiscal_end or registry_fiscal_end or profile_fiscal_end or override_fiscal_end or fiscal_year_end_for_ein(result.ein)
 
     if latest_year is None or fiscal_end is None:
         return {
