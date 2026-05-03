@@ -1036,6 +1036,17 @@ def search_ny(page, org: Organization) -> StateResult:
         detail_text = page.locator("body").inner_text(timeout=20000)
         if text_has_wrong_ein_match(detail_text, org.ein):
             return reject_wrong_ein_result(result, "New York")
+        if re.search(
+            r"(?:Registration\s+(?:Status|Type)|Filing\s+Type|Exemption\s+Status|Category)\s*:?\s*Exempt\b|"
+            r"\bExempt\s+from\s+(?:charitable\s+)?(?:registration|filing)",
+            detail_text,
+            re.I,
+        ) and not re.search(r"\bnot\s+exempt\b|\bnon[- ]exempt\b", detail_text, re.I):
+            result.raw_status_text = "Exempt"
+            result.status = "Exempt"
+            result.source_note = "New York public registry detail page indicates exempt status for the matched organization."
+            result.success = True
+            return result
         if re.search(r"no rows available|no records|no results found|search home", detail_text, re.I) and not re.search(r"Annual Filing Documents", detail_text, re.I):
             result.raw_status_text = "Detail page not reached"
             result.status = STATUS_UNKNOWN
