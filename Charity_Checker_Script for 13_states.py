@@ -1563,6 +1563,14 @@ def search_va(page, org: Organization) -> StateResult:
         page.wait_for_load_state("domcontentloaded", timeout=15000)
         fast_sleep(0.75)
 
+        registration_status = extract_labeled_value(page, ["Registration Filing Status"])
+        if re.search(r"not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|revoked|suspended", registration_status or "", re.I):
+            result.raw_status_text = registration_status
+            result.status = "Suspended"
+            result.source_note = "Virginia public registry shows a restricted solicitation status, which takes priority over date-based filing interpretation."
+            result.success = True
+            return result
+
         extension_raw = extract_labeled_value(page, ["Registration Extended Until"])
         extension_date = parse_date_value(extension_raw)
         if extension_date:
@@ -1602,7 +1610,6 @@ def search_va(page, org: Organization) -> StateResult:
             result.success = True
             return result
 
-        registration_status = extract_labeled_value(page, ["Registration Filing Status"])
         result.raw_status_text = registration_status
         if re.search(r"not\s+authorized\s+to\s+solicit", registration_status or "", re.I):
             result.status = "Suspended"
