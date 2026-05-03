@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.02.10"
+APP_VERSION = "2026.05.03.1"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1194,6 +1194,14 @@ def filing_context(result, body: str) -> dict:
         and re.search(r"\b(compliant|current|active)\b", " ".join([result.status or "", result.raw_status_text or "", body or ""]), re.I)
     ):
         latest_year = public_profile_latest_tax_year_for_ein(result.ein)
+    if (
+        latest_year is not None
+        and state == "NJ"
+        and re.search(r"\b(compliant|current|active)\b", " ".join([result.status or "", result.raw_status_text or "", body or ""]), re.I)
+    ):
+        profile_latest_year = public_profile_latest_tax_year_for_ein(result.ein)
+        if profile_latest_year and profile_latest_year > latest_year:
+            latest_year = profile_latest_year
     # For Massachusetts, do not substitute a ProPublica/IRS tax year for a
     # state Form PC year. If the MA portal does not expose Annual Filings rows,
     # the comment should say that instead of inventing a visible Form PC.
@@ -2259,6 +2267,16 @@ def result_explicitly_exempt(result) -> bool:
     ))
 
 
+def result_fields_indicate_exempt(result) -> bool:
+    """Use this for states where the page body has generic exemption language."""
+    status_text = " ".join([
+        result.status or "",
+        result.raw_status_text or "",
+        result.source_note or "",
+    ])
+    return bool(re.search(r"\bexempt\b", status_text, re.I))
+
+
 def md_detail_page_matched(result, text: str) -> bool:
     readable = html.unescape(re.sub(r"<[^>]+>", " ", text or ""))
     readable = re.sub(r"\s+", " ", readable)
@@ -2503,11 +2521,7 @@ def true_status_from_body(result, body: str) -> str:
         return "Not Registered"
     if state not in {"NJ", "NY"} and record_confirmed and indicates_exempt_registration(combined):
         return "Exempt"
-    if state == "NY" and record_confirmed and re.search(
-        r"\b(?:registration\s+type|registration\s+status|status)\b[\s\S]{0,120}\bexempt\b",
-        combined,
-        re.I,
-    ):
+    if state == "NY" and record_confirmed and result_fields_indicate_exempt(result):
         return "Exempt"
     if state == "PA" and use_registry_date:
         return status_from_calendar_date(registry_date)
@@ -2653,6 +2667,20 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
             filing_label = "annual renewal"
         elif state == "HI":
             filing_label = "annual filing"
+        if context.get("due_date") and context.get("fiscal_end"):
+            extension_sentence = ""
+            extended_due = context.get("extended_due_date")
+            if extended_due:
+                extended_status = status_from_calendar_date(extended_due)
+                if state == "MD":
+                    extension_sentence = f" If Maryland's automatic extension applies, the due date becomes {format_date(extended_due)} and the status becomes {extended_status}."
+                elif state in EXTENSION_SCENARIO_STATES:
+                    extension_sentence = f" If a six-month extension was applied for and approved, the due date becomes {format_date(extended_due)} and the status becomes {extended_status}."
+            return (
+                f"{context['represented_year']} appears to be the most recent {state} {filing_label} year identified in the CharityClarity check. "
+                f"Based on a {context['fiscal_end'][0]}/{context['fiscal_end'][1]} fiscal year end, the {context['next_report_year']} {filing_label} initial due date is {format_date(context['due_date'])}. "
+                f"CE Status is Current based on the initial due date.{extension_sentence}"
+            )
         return (
             f"The {state} public registry shows a {context['represented_year']} {filing_label} on record. "
             f"Based on the filing year identified in this CharityClarity check, no {state} charitable filing appears overdue for the period reviewed, so CharityClarity treats the organization as Current."
@@ -2836,15 +2864,15 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             elif state == "PA":
                 result = checker.search_pa(page, org)
             elif state == "VA":
-                result = search_with_name_variants(page, org, checker.search_va)
+                result = search_with_name_variants(page, org, checker.search_va, max_variants=6)
             elif state == "SC":
-                result = search_with_name_variants(page, org, checker.search_sc)
+                result = search_with_name_variants(page, org, checker.search_sc, max_variants=6)
             elif state == "HI":
                 result = search_hi_precise(page, org)
                 if public_status(result) != "Not Registered":
                     body = hi_detail_body(page)
             elif state == "ME":
-                result = search_with_name_variants(page, org, checker.search_me, max_variants=10)
+                result = search_with_name_variants(page, org, checker.search_me, max_variants=6)
                 me_status_source = " ".join([result.raw_status_text or "", result.source_note or ""])
                 if re.search(r"Maine uses the Status shown|No matching organization|No record found|no matching", me_status_source, re.I):
                     body = registry_page_body(page)
@@ -2852,7 +2880,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     body = me_detail_body(page, org)
                     enrich_me_result_from_body(result, body)
             elif state == "ND":
-                result = search_with_name_variants(page, org, checker.search_nd)
+                result = search_with_name_variants(page, org, checker.search_nd, max_variants=5)
             else:
                 raise ValueError(f"Unsupported state: {state}")
             if page:
