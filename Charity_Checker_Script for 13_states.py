@@ -1660,7 +1660,12 @@ def search_md(page, org: Organization) -> StateResult:
                     re.I | re.S,
                 )
                 if not status_match:
-                    status_match = re.search(r"Registration\s+Status[^A-Za-z0-9]{0,80}(Current|Delinquent|Expired|Active|Inactive)", body, re.I)
+                    status_match = re.search(
+                        r"Registration\s+Status[^A-Za-z0-9]{0,80}"
+                        r"(Current|Delinquent|Expired|Active|Inactive|Closed|Revoked|Suspended|Withdrawn|Retired|Terminated|Cancelled|Canceled)",
+                        body,
+                        re.I,
+                    )
                 status_text = status_match.group(1).strip() if status_match else STATUS_UNKNOWN
                 result.raw_status_text = status_text
                 result.status = status_text
