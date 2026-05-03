@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.03.5"
+APP_VERSION = "2026.05.03.6"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -2500,6 +2500,29 @@ def explicit_adverse_registry_status(result, body: str) -> str:
     return ""
 
 
+def explicit_no_registration_status(result, body: str) -> bool:
+    """Return true when the matched registry response clearly says no registration exists."""
+    text = combined_result_text(result, body)
+    fields = " ".join([
+        result.status or "",
+        result.raw_status_text or "",
+        result.source_note or "",
+    ])
+    no_registration_pattern = (
+        r"\b(not\s+registered|not\s+found|no\s+(?:matching\s+)?(?:registration\s+)?record|"
+        r"no\s+(?:matching\s+)?results?|0\s+records?|0\s+results?)\b"
+    )
+    if re.search(no_registration_pattern, fields, re.I):
+        return True
+    return bool(re.search(
+        r"\b(?:registry\s+status|registration\s+status|registration\s+filing\s+status|status)\b"
+        r"[\s\S]{0,140}"
+        r"\b(not\s+registered|not\s+found|no\s+(?:matching\s+)?(?:registration\s+)?record)\b",
+        text,
+        re.I,
+    ))
+
+
 def true_status_from_body(result, body: str) -> str:
     base_status = public_status(result)
     normalized = base_status.lower()
@@ -2511,6 +2534,8 @@ def true_status_from_body(result, body: str) -> str:
         return base_status
     if result_explicitly_exempt(result):
         return "Exempt"
+    if explicit_no_registration_status(result, combined):
+        return "Not Registered"
     adverse_status = explicit_adverse_registry_status(result, combined)
     if adverse_status:
         return adverse_status
