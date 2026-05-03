@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.03.11"
+APP_VERSION = "2026.05.03.12"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -723,6 +723,8 @@ def public_status(result) -> str:
         return "Revoked"
     if "suspended" in normalized:
         return "Suspended"
+    if re.search(r"\bpending\b", normalized, re.I):
+        return "Pending"
     if re.search(r"not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist", normalized, re.I):
         return "Suspended"
     if re.search(r"\b(withdrawn|retired|terminated|cancelled|canceled|voluntar(?:y|ily)\s+deactivat(?:ed|ion))\b", normalized, re.I):
@@ -2481,8 +2483,13 @@ def explicit_adverse_registry_status(result, body: str) -> str:
     withdrawn_pattern = r"\b(withdrawn|retired|terminated|cancelled|canceled|voluntar(?:y|ily)\s+deactivat(?:ed|ion))\b"
     closed_pattern = r"\b(closed|inactive)\b"
     terminal_pattern = rf"(?:{withdrawn_pattern}|{closed_pattern})"
-    if not confirmed and not re.search(r"\b(revoked|suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist)\b|" + terminal_pattern, fields, re.I):
+    pending_pattern = r"\bpending\b"
+    if not confirmed and not re.search(r"\b(revoked|suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist|pending)\b|" + terminal_pattern, fields, re.I):
         return ""
+    if re.search(pending_pattern, fields, re.I):
+        return "Pending"
+    if re.search(r"\b(?:registry\s+status|registration\s+status|registration\s+filing\s+status|status)\b[\s\S]{0,140}" + pending_pattern, text, re.I):
+        return "Pending"
     if re.search(withdrawn_pattern, fields, re.I):
         return "Closed / Withdrawn / Canceled"
     if re.search(withdrawn_pattern, text, re.I):
@@ -2555,6 +2562,8 @@ def true_status_from_body(result, body: str) -> str:
         return "Suspended"
     if normalized == "revoked":
         return "Revoked"
+    if normalized == "pending":
+        return "Pending"
     if normalized in {"withdrawn", "closed", "closed / withdrawn / canceled"}:
         return "Closed / Withdrawn / Canceled"
 
@@ -2674,6 +2683,11 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         if state == "VA" and re.search(r"not\s+authorized\s+to\s+solicit", combined_result_text(result, body), re.I):
             return "The VA public registry shows the organization is not authorized to solicit in Virginia, which CharityClarity treats as Suspended."
         return f"The {state} public registry shows the organization registration status as Suspended."
+    if normalized_status == "pending":
+        return (
+            f"The {state} public registry shows the organization registration status as Pending. "
+            "CharityClarity uses that registry status instead of calculating status from annual filing records."
+        )
     if normalized_status in {"withdrawn", "closed", "closed / withdrawn / canceled"}:
         if re.search(r"voluntar(?:y|ily)\s+deactivat(?:ed|ion)", combined_result_text(result, body), re.I):
             return (
