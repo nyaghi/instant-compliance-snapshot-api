@@ -849,7 +849,7 @@ def search_ma(page, org: Organization) -> StateResult:
 
         body = page.locator("body").inner_text(timeout=15000)
         m_section = re.search(
-            r"Annual Filings(?: and Documents)?(.*?)(?:Financial Statements|Additional Documents|$)",
+            r"Annual Filings(?: and Documents)?(.*?)(?:Charity Registration Documents|Registration Documents|Other Filed Documents|Financial Statements|Additional Documents|$)",
             body,
             re.I | re.S,
         )
