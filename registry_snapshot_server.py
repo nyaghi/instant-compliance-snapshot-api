@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.02.9"
+APP_VERSION = "2026.05.02.10"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1173,6 +1173,10 @@ def filing_context(result, body: str) -> dict:
         latest_year = latest_year_from_text(body, result.state)
     if state == "PA":
         latest_year = None
+    if latest_year is None and state in {"MA", "CA", "HI", "NJ"}:
+        raw_year = re.fullmatch(r"\s*(20\d{2})\s*", result.raw_status_text or "")
+        if raw_year:
+            latest_year = int(raw_year.group(1))
     if latest_year is None and re.search(r"registration\s+found|year\s+represented|latest|most\s+recent|filing\s+year", result.raw_status_text or "", re.I):
         year_match = re.search(r"(20\d{2})", result.raw_status_text or "")
         latest_year = int(year_match.group(1)) if year_match else None
