@@ -9,11 +9,15 @@ import os
 import re
 import sys
 import time
+import html
+import http.cookiejar
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass, asdict
 from datetime import datetime, date
 from pathlib import Path
 from typing import List, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urljoin
 
 try:
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -2440,6 +2444,132 @@ def search_me(page, org: Organization) -> StateResult:
                     seen.add(key)
                     output.append(variant)
             return (output or [cleaned])[:4]
+
+        def run_me_direct_search(query: str) -> tuple[str, list[dict[str, str]], urllib.request.OpenerDirector]:
+            cookie_jar = http.cookiejar.CookieJar()
+            opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+            opener.addheaders = [("User-Agent", "Mozilla/5.0 CharityClarity/1.0")]
+            response = opener.open(url, timeout=20)
+            html_text = response.read().decode("utf-8", "replace")
+            fields: dict[str, str] = {}
+            for hidden in re.finditer(r'<input[^>]+type="hidden"[^>]*>', html_text, re.I):
+                tag = hidden.group(0)
+                name_match = re.search(r'name="([^"]+)"', tag, re.I)
+                value_match = re.search(r'value="([^"]*)"', tag, re.I)
+                if name_match:
+                    fields[html.unescape(name_match.group(1))] = html.unescape(value_match.group(1) if value_match else "")
+            fields.update({
+                "ctl00$ctl00$mainContent$mainContent$scRegulator": "4076",
+                "ctl00$ctl00$mainContent$mainContent$scCompanyName": (query or "")[:30],
+                "ctl00$ctl00$mainContent$mainContent$ctl24": "BW",
+                "ctl00$ctl00$mainContent$mainContent$btnSearch": "Search",
+            })
+            encoded = urllib.parse.urlencode(fields).encode("utf-8")
+            request = urllib.request.Request(
+                "https://www.pfr.maine.gov/almsonline/almsquery/SearchCompany.aspx?AspxAutoDetectCookieSupport=1",
+                data=encoded,
+                method="POST",
+            )
+            request.add_header("Content-Type", "application/x-www-form-urlencoded")
+            posted = opener.open(request, timeout=25)
+            result_html = posted.read().decode("utf-8", "replace")
+            rows: list[dict[str, str]] = []
+            for match in re.finditer(
+                r'<tr[^>]*>\s*<td[^>]*>\s*<a\s+href="(?P<href>ShowDetail\.aspx[^"]+)"[^>]*>(?P<name>.*?)</a>\s*</td>\s*'
+                r'<td[^>]*>(?P<number>.*?)</td>\s*<td[^>]*>(?P<location>.*?)</td>\s*'
+                r'<td[^>]*>(?P<profession>.*?)</td>\s*<td[^>]*>(?P<status>.*?)</td>',
+                result_html,
+                re.I | re.S,
+            ):
+                rows.append({
+                    "href": html.unescape(match.group("href")),
+                    "name": re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", match.group("name")))).strip(),
+                    "number": re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", match.group("number")))).strip(),
+                    "location": re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", match.group("location")))).strip(),
+                    "profession": re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", match.group("profession")))).strip(),
+                    "status": re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", match.group("status")))).strip(),
+                })
+            readable = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", result_html))).strip()
+            return readable, rows, opener
+
+        def direct_name_priority(row_name: str) -> int:
+            target = normalize_name(org.organization_name)
+            candidate = normalize_name(row_name)
+            target_base = re.sub(r"\b(inc|incorporated|foundation|the)\b$", "", target).strip()
+            candidate_base = re.sub(r"\b(inc|incorporated|foundation|the)\b$", "", candidate).strip()
+            if not target or not candidate:
+                return -1
+            if candidate == target:
+                return 4
+            if candidate_base and candidate_base == target_base:
+                return 3
+            if candidate.startswith(target) or target.startswith(candidate):
+                return 2
+            if target in candidate or candidate in target:
+                return 1
+            return -1
+
+        def direct_status_priority(status_text: str) -> int:
+            if re.search(r"\bACTIVE\b", status_text or "", re.I):
+                return 10
+            if re.search(r"\b(CURRENT|GOOD\s+STANDING)\b", status_text or "", re.I):
+                return 8
+            if re.search(r"\b(FAILED\s+TO\s+RENEW|EXPIRED|REVOKED|SUSPENDED|INACTIVE|WITHDRAWN|TERMINATED)\b", status_text or "", re.I):
+                return -10
+            return 0
+
+        direct_body = ""
+        direct_rows: list[dict[str, str]] = []
+        direct_opener = None
+        for query in me_query_variants(org.organization_name):
+            try:
+                direct_body, direct_rows, direct_opener = run_me_direct_search(query)
+            except Exception:
+                direct_body, direct_rows, direct_opener = "", [], None
+            if direct_rows or re.search(r"\b0\s+records?\s+found\b|no records|no results", direct_body, re.I):
+                break
+
+        if direct_rows and direct_opener:
+            best_row = None
+            best_score = (-999, -1)
+            for row in direct_rows:
+                name_priority = direct_name_priority(row.get("name", ""))
+                if name_priority < 0:
+                    continue
+                row_score = (direct_status_priority(row.get("status", "")), name_priority)
+                if row_score > best_score:
+                    best_score = row_score
+                    best_row = row
+            if best_row:
+                detail_url = urljoin("https://www.pfr.maine.gov/ALMSOnline/ALMSQuery/", best_row.get("href", ""))
+                detail_text = ""
+                try:
+                    detail_response = direct_opener.open(detail_url, timeout=15)
+                    detail_html = detail_response.read().decode("utf-8", "replace")
+                    detail_text = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", detail_html))).strip()
+                except Exception:
+                    detail_text = ""
+                status_match = re.search(r"\bStatus:\s*(.+?)\s+Expiration\s+Date:", detail_text, re.I)
+                expiration_match = re.search(r"\bExpiration\s+Date:\s*(\d{1,2}/\d{1,2}/\d{4})", detail_text, re.I)
+                status_text = (status_match.group(1).strip() if status_match else "") or best_row.get("status", "")
+                expiration_text = expiration_match.group(1).strip() if expiration_match else ""
+                result.source_url = detail_url or url
+                result.status = status_text or best_row.get("status") or STATUS_UNKNOWN
+                result.raw_status_text = "; ".join(
+                    part for part in [result.status, f"Expiration Date: {expiration_text}" if expiration_text else ""] if part
+                )
+                if re.search(r"\bACTIVE\b", result.raw_status_text, re.I) and expiration_text:
+                    result.source_note = "Maine uses the Status and Expiration Date shown on the public detail page."
+                else:
+                    result.source_note = "Maine uses the Status shown on the matched public registry result."
+                result.success = True
+                return result
+        elif direct_body and re.search(r"\b0\s+records?\s+found\b|no records|no results", direct_body, re.I):
+            result.raw_status_text = "No record found"
+            result.status = STATUS_NOT_REGISTERED
+            result.source_note = "Maine search returned no matching organization result."
+            result.success = True
+            return result
 
         def run_me_search(query: str) -> str:
             page.goto(url, wait_until="domcontentloaded", timeout=20000)
