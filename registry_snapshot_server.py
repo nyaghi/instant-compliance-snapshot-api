@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.03.10"
+APP_VERSION = "2026.05.03.11"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -726,9 +726,9 @@ def public_status(result) -> str:
     if re.search(r"not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist", normalized, re.I):
         return "Suspended"
     if re.search(r"\b(withdrawn|retired|terminated|cancelled|canceled|voluntar(?:y|ily)\s+deactivat(?:ed|ion))\b", normalized, re.I):
-        return "Withdrawn"
+        return "Closed / Withdrawn / Canceled"
     if re.search(r"\b(closed|inactive)\b", normalized, re.I):
-        return "Closed"
+        return "Closed / Withdrawn / Canceled"
     if any(token in normalized for token in ["delinquent", "non-compliant", "non compliant", "expired", "overdue", "failed to renew"]):
         return "Delinquent"
     if normalized in {"current", "active", "good standing", "compliant"} or re.search(r"\bgood\s+as\s+of\b", normalized):
@@ -2484,15 +2484,15 @@ def explicit_adverse_registry_status(result, body: str) -> str:
     if not confirmed and not re.search(r"\b(revoked|suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist)\b|" + terminal_pattern, fields, re.I):
         return ""
     if re.search(withdrawn_pattern, fields, re.I):
-        return "Withdrawn"
+        return "Closed / Withdrawn / Canceled"
     if re.search(withdrawn_pattern, text, re.I):
-        return "Withdrawn"
+        return "Closed / Withdrawn / Canceled"
     if re.search(closed_pattern, fields, re.I):
-        return "Closed"
+        return "Closed / Withdrawn / Canceled"
     if re.search(r"\b(?:registry\s+status|registration\s+status|registration\s+filing\s+status|status)\b[\s\S]{0,140}" + withdrawn_pattern, text, re.I):
-        return "Withdrawn"
+        return "Closed / Withdrawn / Canceled"
     if re.search(r"\b(?:registry\s+status|registration\s+status|registration\s+filing\s+status|status)\b[\s\S]{0,140}" + closed_pattern, text, re.I):
-        return "Closed"
+        return "Closed / Withdrawn / Canceled"
     if state == "NJ":
         if re.search(r"\brevoked\b", fields, re.I):
             return "Revoked"
@@ -2555,10 +2555,8 @@ def true_status_from_body(result, body: str) -> str:
         return "Suspended"
     if normalized == "revoked":
         return "Revoked"
-    if normalized == "withdrawn":
-        return "Withdrawn"
-    if normalized == "closed":
-        return "Closed"
+    if normalized in {"withdrawn", "closed", "closed / withdrawn / canceled"}:
+        return "Closed / Withdrawn / Canceled"
 
     context = filing_context(result, body)
     due_date = context["due_date"]
@@ -2676,19 +2674,19 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         if state == "VA" and re.search(r"not\s+authorized\s+to\s+solicit", combined_result_text(result, body), re.I):
             return "The VA public registry shows the organization is not authorized to solicit in Virginia, which CharityClarity treats as Suspended."
         return f"The {state} public registry shows the organization registration status as Suspended."
-    if normalized_status == "withdrawn":
+    if normalized_status in {"withdrawn", "closed", "closed / withdrawn / canceled"}:
         if re.search(r"voluntar(?:y|ily)\s+deactivat(?:ed|ion)", combined_result_text(result, body), re.I):
             return (
                 f"The {state} public registry shows the organization registration status as Voluntarily Deactivated. "
-                "CharityClarity treats that as Withdrawn instead of calculating status from older annual filing records."
+                "CharityClarity treats that as Closed / Withdrawn / Canceled instead of calculating status from older annual filing records."
+            )
+        if re.search(r"\bcancell?ed\b", combined_result_text(result, body), re.I):
+            return (
+                f"The {state} public registry shows the organization registration status as Canceled. "
+                "CharityClarity treats that as Closed / Withdrawn / Canceled instead of calculating status from older annual filing records."
             )
         return (
-            f"The {state} public registry shows the organization registration status as Withdrawn. "
-            "CharityClarity uses that registry status instead of calculating status from older annual filing records."
-        )
-    if normalized_status == "closed":
-        return (
-            f"The {state} public registry shows the organization registration status as Closed or inactive. "
+            f"The {state} public registry shows the organization registration status as Closed, Withdrawn, Canceled, or inactive. "
             "CharityClarity uses that registry status instead of calculating status from older annual filing records."
         )
     if state == "CA" and normalized_status == "current" and not context.get("due_date"):
