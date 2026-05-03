@@ -1369,9 +1369,9 @@ def search_pa(page, org: Organization) -> StateResult:
         last_goto_error = None
         for goto_attempt in range(2):
             try:
-                page.goto(url, wait_until="domcontentloaded", timeout=45000)
-                safe_wait_for_network_idle(page, timeout=8000)
-                fast_sleep(1)
+                page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                safe_wait_for_network_idle(page, timeout=5000)
+                fast_sleep(0.75)
                 last_goto_error = None
                 break
             except Exception as e:
@@ -1387,8 +1387,8 @@ def search_pa(page, org: Organization) -> StateResult:
             ein_input = find_pa_ein_input(page)
             if ein_input:
                 break
-            safe_wait_for_network_idle(page, timeout=10000)
-            fast_sleep(2)
+            safe_wait_for_network_idle(page, timeout=5000)
+            fast_sleep(1)
         if not ein_input:
             result.error = "Could not find PA EIN input"
             return result
@@ -1524,8 +1524,8 @@ def search_va(page, org: Organization) -> StateResult:
     url = "https://cos.vdacs.virginia.gov/cgi-bin/char_search.cgi"
     result = StateResult(org.organization_name, org.ein, "VA", STATUS_UNKNOWN, url)
     try:
-        page.goto(url, wait_until="domcontentloaded", timeout=45000)
-        fast_sleep(1)
+        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        fast_sleep(0.75)
 
         name_input = find_va_name_input(page)
         if not name_input:
@@ -1538,10 +1538,10 @@ def search_va(page, org: Organization) -> StateResult:
             result.error = "Could not click VA Search button"
             return result
 
-        page.wait_for_load_state("load", timeout=30000)
-        fast_sleep(1)
+        page.wait_for_load_state("domcontentloaded", timeout=15000)
+        fast_sleep(0.75)
 
-        body = page.locator("body").inner_text(timeout=10000)
+        body = page.locator("body").inner_text(timeout=8000)
         if re.search(r"\bNo record found\b", body, re.I):
             result.raw_status_text = "No record found"
             result.status = STATUS_NOT_REGISTERED
@@ -1556,8 +1556,8 @@ def search_va(page, org: Organization) -> StateResult:
             result.success = True
             return result
 
-        page.wait_for_load_state("load", timeout=30000)
-        fast_sleep(1)
+        page.wait_for_load_state("domcontentloaded", timeout=15000)
+        fast_sleep(0.75)
 
         extension_raw = extract_labeled_value(page, ["Registration Extended Until"])
         extension_date = parse_date_value(extension_raw)
@@ -2415,17 +2415,21 @@ def search_me(page, org: Organization) -> StateResult:
     try:
         def me_query_variants(name: str) -> list[str]:
             cleaned = re.sub(r"\s+", " ", name or "").strip()
-            institute_plural = re.sub(r"\bInstitute\s+of\b", "Institutes of", cleaned, flags=re.I).strip()
-            institute_singular = re.sub(r"\bInstitutes\s+of\b", "Institute of", cleaned, flags=re.I).strip()
             without_suffix = re.sub(
                 r",?\s+(incorporated|inc|foundation|the)\.?\s*$",
                 "",
                 cleaned,
                 flags=re.I,
             ).strip()
-            variants = [cleaned, institute_plural, institute_singular, without_suffix]
-            for seed in [cleaned, institute_plural, institute_singular, without_suffix]:
+            no_punctuation = re.sub(r"[^\w\s]", " ", cleaned).strip()
+            no_punctuation = re.sub(r"\s+", " ", no_punctuation)
+            institute_plural = re.sub(r"\bInstitute\s+of\b", "Institutes of", cleaned, flags=re.I).strip()
+            institute_singular = re.sub(r"\bInstitutes\s+of\b", "Institute of", cleaned, flags=re.I).strip()
+            variants = [cleaned, no_punctuation, without_suffix, institute_plural, institute_singular]
+            for seed in [cleaned, no_punctuation, without_suffix, institute_plural, institute_singular]:
                 words = seed.split()
+                if len(words) > 3:
+                    variants.append(" ".join(words[:3]))
                 if len(words) > 4:
                     variants.append(" ".join(words[:4]))
             seen = set()
@@ -2435,7 +2439,7 @@ def search_me(page, org: Organization) -> StateResult:
                 if variant and key not in seen:
                     seen.add(key)
                     output.append(variant)
-            return output or [cleaned]
+            return (output or [cleaned])[:4]
 
         def run_me_search(query: str) -> str:
             page.goto(url, wait_until="domcontentloaded", timeout=20000)
@@ -2465,6 +2469,36 @@ def search_me(page, org: Organization) -> StateResult:
                     break
                 except Exception:
                     pass
+            try:
+                page.evaluate(
+                    """
+                    () => {
+                        const labels = Array.from(document.querySelectorAll('label'));
+                        for (const label of labels) {
+                            if (/begins\\s+with/i.test(label.innerText || label.textContent || '')) {
+                                const input = label.control || document.getElementById(label.getAttribute('for') || '');
+                                if (input && input.type === 'radio') {
+                                    input.checked = true;
+                                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                                    return true;
+                                }
+                            }
+                        }
+                        const radios = Array.from(document.querySelectorAll('input[type="radio"]'));
+                        for (const radio of radios) {
+                            const text = ((radio.parentElement && radio.parentElement.innerText) || '').trim();
+                            if (/begins\\s+with/i.test(text)) {
+                                radio.checked = true;
+                                radio.dispatchEvent(new Event('change', { bubbles: true }));
+                                return true;
+                            }
+                        }
+                        return false;
+                    }
+                    """
+                )
+            except Exception:
+                pass
 
             name_input = None
             for sel in ["#scCompanyName", 'input[name="ctl00$ctl00$mainContent$mainContent$scCompanyName"]']:
@@ -2497,12 +2531,12 @@ def search_me(page, org: Organization) -> StateResult:
             fast_sleep(1)
             safe_wait_for_network_idle(page, timeout=2000)
             try:
-                return page.locator("body").inner_text(timeout=12000)
+                return page.locator("body").inner_text(timeout=6000)
             except Exception:
                 try:
-                    page.wait_for_load_state("domcontentloaded", timeout=12000)
+                    page.wait_for_load_state("domcontentloaded", timeout=6000)
                     fast_sleep(1)
-                    return page.locator("body").inner_text(timeout=12000)
+                    return page.locator("body").inner_text(timeout=6000)
                 except Exception:
                     return ""
 
@@ -2840,15 +2874,15 @@ def search_nd(page, org: Organization) -> StateResult:
         last_goto_error = None
         for goto_attempt in range(2):
             try:
-                page.goto(url, wait_until="domcontentloaded", timeout=45000)
-                safe_wait_for_network_idle(page, timeout=20000)
-                fast_sleep(3)
+                page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                safe_wait_for_network_idle(page, timeout=8000)
+                fast_sleep(1.5)
                 last_goto_error = None
                 break
             except Exception as e:
                 last_goto_error = e
                 if goto_attempt == 0:
-                    fast_sleep(4)
+                    fast_sleep(2)
                     continue
         if last_goto_error:
             raise last_goto_error
@@ -2870,7 +2904,7 @@ def search_nd(page, org: Organization) -> StateResult:
         for sel in ['button[aria-label="Execute search"]', 'button[aria-label*="Execute search"]']:
             try:
                 loc = page.locator(sel).first
-                loc.wait_for(state="visible", timeout=10000)
+                loc.wait_for(state="visible", timeout=6000)
                 search_button = loc
                 break
             except Exception:
@@ -2880,10 +2914,10 @@ def search_nd(page, org: Organization) -> StateResult:
             return result
         search_button.click(timeout=5000)
         fast_sleep(2)
-        safe_wait_for_network_idle(page, timeout=8000)
-        fast_sleep(0.75)
+        safe_wait_for_network_idle(page, timeout=5000)
+        fast_sleep(0.5)
 
-        body = page.locator("body").inner_text(timeout=15000)
+        body = page.locator("body").inner_text(timeout=8000)
         if re.search(r"Results:\s*0\b|No results|No matching", body, re.I):
             result.raw_status_text = "No record found"
             result.status = STATUS_NOT_REGISTERED
@@ -2959,13 +2993,13 @@ def search_nd(page, org: Organization) -> StateResult:
 
         best_button.click(timeout=5000)
         try:
-            page.get_by_text("Registration Date", exact=True).wait_for(timeout=15000)
+            page.get_by_text("Registration Date", exact=True).wait_for(timeout=8000)
         except Exception:
-            fast_sleep(4)
-        safe_wait_for_network_idle(page, timeout=10000)
-        fast_sleep(1)
+            fast_sleep(2)
+        safe_wait_for_network_idle(page, timeout=5000)
+        fast_sleep(0.5)
 
-        detail_text = page.locator("body").inner_text(timeout=15000)
+        detail_text = page.locator("body").inner_text(timeout=8000)
         if text_has_wrong_ein_match(detail_text, org.ein):
             return reject_wrong_ein_result(result, "North Dakota")
         status_text = ""
