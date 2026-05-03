@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.03.15"
+APP_VERSION = "2026.05.03.16"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -2538,6 +2538,19 @@ def explicit_adverse_registry_status(result, body: str) -> str:
         result.raw_status_text or "",
         result.source_note or "",
     ])
+    primary_status_fields = " ".join([
+        result.status or "",
+        result.raw_status_text or "",
+    ])
+    if (
+        re.search(r"\b(active|current|compliant|good\s+standing)\b", primary_status_fields, re.I)
+        and not re.search(
+            r"\b(revoked|suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist|pending|failed\s+to\s+renew|withdrawn|retired|terminated|cancelled|canceled|voluntar(?:y|ily)\s+deactivat(?:ed|ion)|closed|inactive)\b",
+            primary_status_fields,
+            re.I,
+        )
+    ):
+        return ""
     labeled_status_text = " ".join(
         match.group(0)
         for match in re.finditer(
