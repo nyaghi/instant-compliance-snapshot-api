@@ -571,10 +571,76 @@ def search_ca(page, org: Organization) -> StateResult:
             result.success = True
             return result
 
+        ca_statuses = [
+            "Not Registered - Cease and Desist Order",
+            "Subject to Cease and Desist Order",
+            "Delinquent - Late Fees Due",
+            "Suspended",
+            "Revoked",
+            "Withdrawn",
+            "Dissolved",
+            "Delinquent",
+            "Closed - Registration Not Required",
+            "Closed",
+            "Current - Reporting Incomplete",
+            "Current - Awaiting Reporting",
+            "Current - Probationary Registration",
+            "Current - In Process",
+            "Dissolution Waiver Issued",
+            "Dissolution Pending",
+            "Registered - Corporate Trustee",
+            "Exempt - Form 990-PF Required",
+            "Exempt - Facility Financing",
+            "Not Registered",
+            "Exempt - Religious",
+            "Exempt",
+            "Current",
+        ]
+
         raw = ""
+        try:
+            ein_digits = digits_only(org.ein)
+            wanted_name = normalize_name(org.organization_name)
+            best_row = ("", -999)
+            rows = page.locator("tr")
+            for i in range(min(rows.count(), 120)):
+                row = rows.nth(i)
+                try:
+                    row_text = re.sub(r"\s+", " ", row.inner_text(timeout=1500)).strip()
+                    if not row_text:
+                        continue
+                    row_digits = digits_only(row_text)
+                    if ein_digits and ein_digits not in row_digits:
+                        continue
+                    row_name = normalize_name(row_text)
+                    row_status = ""
+                    for status_text in ca_statuses:
+                        if status_text.lower() in row_text.lower():
+                            row_status = status_text
+                            break
+                    if not row_status:
+                        continue
+                    score = 10
+                    if re.search(r"\bcharity\s+registration\b", row_text, re.I):
+                        score += 6
+                    if wanted_name and wanted_name in row_name:
+                        score += 4
+                    if re.search(r"\b(merged\s+out|withdrawn|dissolved|closed)\b", row_text, re.I):
+                        score -= 15
+                    if score > best_row[1]:
+                        best_row = (row_status, score)
+                except Exception:
+                    continue
+            if best_row[0]:
+                raw = best_row[0]
+        except Exception:
+            pass
+
         try:
             tables = page.locator("table")
             for ti in range(tables.count()):
+                if raw:
+                    break
                 table_text = tables.nth(ti).inner_text(timeout=2000)
                 if "REGISTRY STATUS" not in table_text.upper():
                     continue
@@ -590,31 +656,6 @@ def search_ca(page, org: Organization) -> StateResult:
             pass
 
         if not raw:
-            ca_statuses = [
-                "Not Registered - Cease and Desist Order",
-                "Subject to Cease and Desist Order",
-                "Delinquent - Late Fees Due",
-                "Suspended",
-                "Revoked",
-                "Withdrawn",
-                "Dissolved",
-                "Delinquent",
-                "Closed - Registration Not Required",
-                "Closed",
-                "Current - Reporting Incomplete",
-                "Current - Awaiting Reporting",
-                "Current - Probationary Registration",
-                "Current - In Process",
-                "Dissolution Waiver Issued",
-                "Dissolution Pending",
-                "Registered - Corporate Trustee",
-                "Exempt - Form 990-PF Required",
-                "Exempt - Facility Financing",
-                "Not Registered",
-                "Exempt - Religious",
-                "Exempt",
-                "Current",
-            ]
             for status_text in ca_statuses:
                 if status_text.lower() in body.lower():
                     raw = status_text
@@ -700,8 +741,8 @@ def search_ma(page, org: Organization) -> StateResult:
     result = StateResult(org.organization_name, org.ein, "MA", STATUS_UNKNOWN, url)
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
-        safe_wait_for_network_idle(page, timeout=30000)
-        fast_sleep(6)
+        safe_wait_for_network_idle(page, timeout=10000)
+        fast_sleep(2)
 
         query = digits_only(org.ein) if digits_only(org.ein) else org.organization_name
         switched = False
@@ -764,8 +805,8 @@ def search_ma(page, org: Organization) -> StateResult:
         if not clicked:
             page.keyboard.press("Enter")
 
-        safe_wait_for_network_idle(page, timeout=25000)
-        fast_sleep(3)
+        safe_wait_for_network_idle(page, timeout=10000)
+        fast_sleep(1)
 
         body = page.locator("body").inner_text(timeout=15000)
         if re.search(r"no results|no records|0 records|no matching", body, re.I):
@@ -786,9 +827,9 @@ def search_ma(page, org: Organization) -> StateResult:
                 break
             except Exception:
                 pass
-        safe_wait_for_network_idle(page, timeout=25000)
-        for _ in range(15):
-            fast_sleep(1)
+        safe_wait_for_network_idle(page, timeout=10000)
+        for _ in range(8):
+            fast_sleep(0.75)
             try:
                 loading_text = page.locator("body").inner_text(timeout=5000)
             except Exception:
@@ -819,8 +860,8 @@ def search_ma(page, org: Organization) -> StateResult:
 
         if not filing_years:
             result.raw_status_text = "Annual Filings not visible"
-            result.status = STATUS_UNKNOWN
-            result.source_note = "Massachusetts public portal did not expose a visible filing year after Get Filings."
+            result.status = STATUS_DELINQUENT
+            result.source_note = "Massachusetts public portal showed the organization record, but did not expose a visible Form PC filing year after Get Filings."
             result.success = True
             return result
 
@@ -1329,14 +1370,14 @@ def search_pa(page, org: Organization) -> StateResult:
         for goto_attempt in range(2):
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=45000)
-                safe_wait_for_network_idle(page, timeout=20000)
-                fast_sleep(3)
+                safe_wait_for_network_idle(page, timeout=8000)
+                fast_sleep(1)
                 last_goto_error = None
                 break
             except Exception as e:
                 last_goto_error = e
                 if goto_attempt == 0:
-                    fast_sleep(4)
+                    fast_sleep(2)
                     continue
         if last_goto_error:
             raise last_goto_error
@@ -2372,60 +2413,102 @@ def search_me(page, org: Organization) -> StateResult:
     url = "https://www.pfr.maine.gov/almsonline/almsquery/SearchCompany.aspx"
     result = StateResult(org.organization_name, org.ein, "ME", STATUS_UNKNOWN, url)
     try:
-        page.goto(url, wait_until="domcontentloaded", timeout=20000)
-        safe_wait_for_network_idle(page, timeout=5000)
-        fast_sleep(1)
+        def me_query_variants(name: str) -> list[str]:
+            cleaned = re.sub(r"\s+", " ", name or "").strip()
+            without_suffix = re.sub(
+                r",?\s+(incorporated|inc|foundation|the)\.?\s*$",
+                "",
+                cleaned,
+                flags=re.I,
+            ).strip()
+            variants = [cleaned, without_suffix]
+            words = cleaned.split()
+            if len(words) > 4:
+                variants.append(" ".join(words[:4]))
+            seen = set()
+            output = []
+            for variant in variants:
+                key = variant.lower()
+                if variant and key not in seen:
+                    seen.add(key)
+                    output.append(variant)
+            return output or [cleaned]
 
-        regulator = None
-        for sel in ["#scRegulator", 'select[name="ctl00$ctl00$mainContent$mainContent$scRegulator"]']:
+        def run_me_search(query: str) -> str:
+            page.goto(url, wait_until="domcontentloaded", timeout=20000)
+            safe_wait_for_network_idle(page, timeout=3000)
+            fast_sleep(0.4)
+
+            regulator = None
+            for sel in ["#scRegulator", 'select[name="ctl00$ctl00$mainContent$mainContent$scRegulator"]']:
+                try:
+                    loc = page.locator(sel).first
+                    loc.wait_for(state="visible", timeout=3000)
+                    regulator = loc
+                    break
+                except Exception:
+                    continue
+            if not regulator:
+                raise RuntimeError("Could not find ME Regulator dropdown")
             try:
-                loc = page.locator(sel).first
-                loc.wait_for(state="visible", timeout=3000)
-                regulator = loc
-                break
+                regulator.select_option(label="CHARITABLE SOLICITATION")
             except Exception:
-                continue
-        if not regulator:
-            result.error = "Could not find ME Regulator dropdown"
-            return result
-        regulator.select_option(label="ALL")
-        fast_sleep(1)
+                regulator.select_option(label="ALL")
+            fast_sleep(0.3)
 
-        name_input = None
-        for sel in ["#scCompanyName", 'input[name="ctl00$ctl00$mainContent$mainContent$scCompanyName"]']:
+            for label in ["Begins with", "Begins With"]:
+                try:
+                    page.get_by_label(re.compile(label, re.I)).check(timeout=1500)
+                    break
+                except Exception:
+                    pass
+
+            name_input = None
+            for sel in ["#scCompanyName", 'input[name="ctl00$ctl00$mainContent$mainContent$scCompanyName"]']:
+                try:
+                    loc = page.locator(sel).first
+                    loc.wait_for(state="visible", timeout=3000)
+                    name_input = loc
+                    break
+                except Exception:
+                    continue
+            if not name_input:
+                raise RuntimeError("Could not find ME Company Name input")
+            name_input.click(timeout=3000)
+            name_input.fill("")
+            name_input.fill(query)
+            fast_sleep(0.3)
+
+            search_button = None
+            for sel in ["#btnSearch", 'input[name="ctl00$ctl00$mainContent$mainContent$btnSearch"]', 'input[type="submit"][value="Search"]']:
+                try:
+                    loc = page.locator(sel).first
+                    loc.wait_for(state="visible", timeout=3000)
+                    search_button = loc
+                    break
+                except Exception:
+                    continue
+            if not search_button:
+                raise RuntimeError("Could not find ME Search button")
+            search_button.click(timeout=3000, no_wait_after=True)
+            fast_sleep(1)
+            safe_wait_for_network_idle(page, timeout=2000)
             try:
-                loc = page.locator(sel).first
-                loc.wait_for(state="visible", timeout=3000)
-                name_input = loc
-                break
+                return page.locator("body").inner_text(timeout=12000)
             except Exception:
-                continue
-        if not name_input:
-            result.error = "Could not find ME Company Name input"
-            return result
-        name_input.click(timeout=3000)
-        name_input.fill("")
-        name_input.fill(org.organization_name)
-        fast_sleep(1)
+                try:
+                    page.wait_for_load_state("domcontentloaded", timeout=12000)
+                    fast_sleep(1)
+                    return page.locator("body").inner_text(timeout=12000)
+                except Exception:
+                    return ""
 
-        search_button = None
-        for sel in ["#btnSearch", 'input[name="ctl00$ctl00$mainContent$mainContent$btnSearch"]', 'input[type="submit"][value="Search"]']:
-            try:
-                loc = page.locator(sel).first
-                loc.wait_for(state="visible", timeout=3000)
-                search_button = loc
+        body = ""
+        for query in me_query_variants(org.organization_name):
+            body = run_me_search(query)
+            if not re.search(r"0 records found|no records|no results|no companies found|no data", body, re.I):
                 break
-            except Exception:
-                continue
-        if not search_button:
-            result.error = "Could not find ME Search button"
-            return result
-        search_button.click(timeout=3000, no_wait_after=True)
-        fast_sleep(1.5)
-        safe_wait_for_network_idle(page, timeout=2500)
-        fast_sleep(0.5)
 
-        body = page.locator("body").inner_text(timeout=4000)
         if re.search(r"0 records found|no records|no results|no companies found|no data", body, re.I):
             result.raw_status_text = "No record found"
             result.status = STATUS_NOT_REGISTERED
@@ -2478,8 +2561,9 @@ def search_me(page, org: Organization) -> StateResult:
                         status_priority = 8
                     elif re.search(r"\b(FAILED\s+TO\s+RENEW|EXPIRED|REVOKED|SUSPENDED|INACTIVE)\b", row_status, re.I):
                         status_priority = -10
-                    if (name_priority, status_priority) > best_table_score:
-                        best_table_score = (name_priority, status_priority)
+                    row_score = (status_priority, name_priority)
+                    if row_score > best_table_score:
+                        best_table_score = row_score
                         best_table_status = row_status
                         best_table_row = row_text
                 except Exception:
@@ -2523,7 +2607,10 @@ def search_me(page, org: Organization) -> StateResult:
                                 status_priority = -5
                         except Exception:
                             status_priority = 0
-                        if priority > best_priority or (priority == best_priority and status_priority > best_status_priority):
+                        if (
+                            status_priority > best_status_priority
+                            or (status_priority == best_status_priority and priority > best_priority)
+                        ):
                             best_priority = priority
                             best_status_priority = status_priority
                             best_link = link
@@ -2773,8 +2860,8 @@ def search_nd(page, org: Organization) -> StateResult:
             return result
         search_input.click(timeout=5000)
         search_input.fill("")
-        search_input.type(org.organization_name, delay=85)
-        fast_sleep(1)
+        search_input.fill(org.organization_name)
+        fast_sleep(0.5)
 
         search_button = None
         for sel in ['button[aria-label="Execute search"]', 'button[aria-label*="Execute search"]']:
@@ -2789,9 +2876,9 @@ def search_nd(page, org: Organization) -> StateResult:
             result.error = "Could not find ND search button"
             return result
         search_button.click(timeout=5000)
-        fast_sleep(6)
-        safe_wait_for_network_idle(page, timeout=20000)
         fast_sleep(2)
+        safe_wait_for_network_idle(page, timeout=8000)
+        fast_sleep(0.75)
 
         body = page.locator("body").inner_text(timeout=15000)
         if re.search(r"Results:\s*0\b|No results|No matching", body, re.I):
@@ -2845,7 +2932,13 @@ def search_nd(page, org: Organization) -> StateResult:
                             status_score += 5
                         if re.search(r"\b(inactive|closed|expired|failed|failed to renew|revoked|terminated|withdrawn|cancelled|canceled)\b", combined_txt, re.I):
                             status_score -= 8
-                        if (priority, status_score) > (best_priority, best_status_score):
+                        if (
+                            priority >= 0
+                            and (
+                                status_score > best_status_score
+                                or (status_score == best_status_score and priority > best_priority)
+                            )
+                        ):
                             best_priority = priority
                             best_status_score = status_score
                             best_button = item
