@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.03.1"
+APP_VERSION = "2026.05.03.2"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1200,8 +1200,12 @@ def filing_context(result, body: str) -> dict:
         and re.search(r"\b(compliant|current|active)\b", " ".join([result.status or "", result.raw_status_text or "", body or ""]), re.I)
     ):
         profile_latest_year = public_profile_latest_tax_year_for_ein(result.ein)
+        _, ce_period_end = fiscal_period_for_ein(result.ein)
+        ce_latest_year = ce_period_end.year if ce_period_end else None
         if profile_latest_year and profile_latest_year > latest_year:
             latest_year = profile_latest_year
+        if ce_latest_year and ce_latest_year > latest_year:
+            latest_year = ce_latest_year
     # For Massachusetts, do not substitute a ProPublica/IRS tax year for a
     # state Form PC year. If the MA portal does not expose Annual Filings rows,
     # the comment should say that instead of inventing a visible Form PC.
