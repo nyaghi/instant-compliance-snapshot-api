@@ -2541,12 +2541,19 @@ def search_me(page, org: Organization) -> StateResult:
                     return ""
 
         body = ""
+        found_positive_result = False
         for query in me_query_variants(org.organization_name):
             body = run_me_search(query)
-            if not re.search(r"0 records found|no records|no results|no companies found|no data", body, re.I):
+            no_match = re.search(r"0 records found|no records|no results|no companies found|no data", body, re.I)
+            found_positive_result = bool(re.search(r"\b[1-9]\d*\s+records?\s+found\b|Search\s+Result", body, re.I))
+            try:
+                found_positive_result = found_positive_result or page.locator("a[href*='ShowDetail.aspx'], a[href*='ShowDetail']").count() > 0
+            except Exception:
+                pass
+            if found_positive_result:
                 break
 
-        if re.search(r"0 records found|no records|no results|no companies found|no data", body, re.I):
+        if not found_positive_result or re.search(r"0 records found|no records|no results|no companies found|no data", body, re.I):
             result.raw_status_text = "No record found"
             result.status = STATUS_NOT_REGISTERED
             result.source_note = "Maine search returned no matching organization result."
