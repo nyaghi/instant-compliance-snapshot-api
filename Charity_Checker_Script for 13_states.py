@@ -2415,16 +2415,19 @@ def search_me(page, org: Organization) -> StateResult:
     try:
         def me_query_variants(name: str) -> list[str]:
             cleaned = re.sub(r"\s+", " ", name or "").strip()
+            institute_plural = re.sub(r"\bInstitute\s+of\b", "Institutes of", cleaned, flags=re.I).strip()
+            institute_singular = re.sub(r"\bInstitutes\s+of\b", "Institute of", cleaned, flags=re.I).strip()
             without_suffix = re.sub(
                 r",?\s+(incorporated|inc|foundation|the)\.?\s*$",
                 "",
                 cleaned,
                 flags=re.I,
             ).strip()
-            variants = [cleaned, without_suffix]
-            words = cleaned.split()
-            if len(words) > 4:
-                variants.append(" ".join(words[:4]))
+            variants = [cleaned, institute_plural, institute_singular, without_suffix]
+            for seed in [cleaned, institute_plural, institute_singular, without_suffix]:
+                words = seed.split()
+                if len(words) > 4:
+                    variants.append(" ".join(words[:4]))
             seen = set()
             output = []
             for variant in variants:
