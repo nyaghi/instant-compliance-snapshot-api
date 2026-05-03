@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.02.7"
+APP_VERSION = "2026.05.02.8"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -87,6 +87,7 @@ FISCAL_YEAR_END_OVERRIDES = {
     "208428450": (6, 30),
     "546053660": (6, 30),
     "362883000": (3, 31),
+    "237222333": (6, 30),
 }
 
 
@@ -2456,8 +2457,8 @@ def true_status_from_body(result, body: str) -> str:
     adverse_status = explicit_adverse_registry_status(result, combined)
     if adverse_status:
         return adverse_status
-    if state == "ME" and re.search(r"\bACTIVE\b", " ".join([result.status or "", result.raw_status_text or ""]), re.I):
-        return "Current"
+    if state == "ME" and re.search(r"\bACTIVE\b", " ".join([result.status or "", result.raw_status_text or ""]), re.I) and not explicit_registry_date(result, combined):
+        return "Unknown"
     if normalized == "suspended":
         return "Suspended"
     if normalized == "revoked":
@@ -2493,6 +2494,12 @@ def true_status_from_body(result, body: str) -> str:
     if result_indicates_no_record(result):
         return "Not Registered"
     if state not in {"NJ", "NY"} and record_confirmed and indicates_exempt_registration(combined):
+        return "Exempt"
+    if state == "NY" and record_confirmed and re.search(
+        r"\b(?:registration\s+type|registration\s+status|status)\b[\s\S]{0,120}\bexempt\b",
+        combined,
+        re.I,
+    ):
         return "Exempt"
     if state == "PA" and use_registry_date:
         return status_from_calendar_date(registry_date)
@@ -2566,6 +2573,8 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
     if normalized_status == "not registered":
         return f"The {state} public registry was reachable, but no matching registration record was found for the organization/EIN searched."
     if normalized_status == "unknown":
+        if state == "ME" and re.search(r"\bACTIVE\b", " ".join([result.status or "", result.raw_status_text or ""]), re.I):
+            return "The ME public registry returned an active matching organization record, but CharityClarity did not identify an expiration or renewal date needed for the interpreted status."
         if state == "PA" and organization_record_confirmed(result, combined_result_text(result, body)):
             return "The PA public registry returned a matching record, but CharityClarity did not identify a usable expiration date or final interpreted status from the available page."
         return f"The {state} public registry was reachable, but CharityClarity could not confirm a final interpreted status from the available registry page."
@@ -2577,8 +2586,6 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         if state == "VA" and re.search(r"not\s+authorized\s+to\s+solicit", combined_result_text(result, body), re.I):
             return "The VA public registry shows the organization is not authorized to solicit in Virginia, which CharityClarity treats as Suspended."
         return f"The {state} public registry shows the organization registration status as Suspended."
-    if state == "ME" and normalized_status == "current" and not explicit_registry_date(result, body) and re.search(r"\bACTIVE\b", " ".join([result.status or "", result.raw_status_text or ""]), re.I):
-        return "The ME public registry shows the matched organization status as Active, which CharityClarity treats as Current."
     if state == "CA" and normalized_status == "current" and not context.get("due_date"):
         return "The CA public registry shows Registry Status Current. CharityClarity did not identify a delinquency in this quick check."
     if state == "MD" and normalized_status == "current" and not context.get("represented_year"):
