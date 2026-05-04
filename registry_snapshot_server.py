@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.04.3"
+APP_VERSION = "2026.05.04.4"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -2582,6 +2582,24 @@ def explicit_adverse_registry_status(result, body: str) -> str:
     failed_to_renew_pattern = r"\bfailed\s+to\s+renew\b"
     if not confirmed and not re.search(r"\b(revoked|suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist|pending)\b|" + terminal_pattern + "|" + failed_to_renew_pattern, status_evidence, re.I):
         return ""
+    if state == "NJ":
+        if re.search(r"\brevoked\b", status_evidence, re.I):
+            return "Revoked"
+        if re.search(r"\b(suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist)\b", status_evidence, re.I):
+            return "Suspended"
+        if re.search(failed_to_renew_pattern, status_evidence, re.I):
+            return "Failed to Renew"
+        if re.search(pending_pattern, status_evidence, re.I):
+            return "Pending"
+        if re.search(withdrawn_pattern, status_evidence, re.I):
+            return "Closed / Withdrawn / Canceled"
+        if re.search(closed_pattern, status_evidence, re.I):
+            return "Closed / Withdrawn / Canceled"
+        return ""
+    if re.search(r"\brevoked\b", status_evidence, re.I):
+        return "Revoked"
+    if re.search(r"\b(suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist)\b", status_evidence, re.I):
+        return "Suspended"
     if re.search(failed_to_renew_pattern, status_evidence, re.I):
         return "Failed to Renew"
     if re.search(pending_pattern, status_evidence, re.I):
@@ -2590,16 +2608,6 @@ def explicit_adverse_registry_status(result, body: str) -> str:
         return "Closed / Withdrawn / Canceled"
     if re.search(closed_pattern, status_evidence, re.I):
         return "Closed / Withdrawn / Canceled"
-    if state == "NJ":
-        if re.search(r"\brevoked\b", status_evidence, re.I):
-            return "Revoked"
-        if re.search(r"\b(suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist)\b", status_evidence, re.I):
-            return "Suspended"
-        return ""
-    if re.search(r"\brevoked\b", status_evidence, re.I):
-        return "Revoked"
-    if re.search(r"\b(suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist)\b", status_evidence, re.I):
-        return "Suspended"
     return ""
 
 
