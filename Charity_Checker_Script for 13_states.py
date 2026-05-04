@@ -2482,17 +2482,28 @@ def search_me(page, org: Organization) -> StateResult:
         def me_query_variants(name: str) -> list[str]:
             cleaned = re.sub(r"\s+", " ", name or "").strip()
             cleaned = re.sub(r"\s*,?\s+", " ", cleaned)
+            cleaned_no_punctuation = re.sub(r"[^\w\s]", " ", cleaned).strip()
+            cleaned_no_punctuation = re.sub(r"\s+", " ", cleaned_no_punctuation)
+            legal_suffix_clean = cleaned_no_punctuation
+            for _ in range(4):
+                next_value = re.sub(
+                    r"\s+\b(the|incorporated|inc|corp|corporation|llc|ltd|limited)\b\.?\s*$",
+                    "",
+                    legal_suffix_clean,
+                    flags=re.I,
+                ).strip()
+                if next_value == legal_suffix_clean:
+                    break
+                legal_suffix_clean = next_value
             without_suffix = re.sub(
                 r",?\s+(incorporated|inc|foundation|the|corp|corporation|ltd|limited)\.?\s*$",
                 "",
                 cleaned,
                 flags=re.I,
             ).strip()
-            no_punctuation = re.sub(r"[^\w\s]", " ", cleaned).strip()
-            no_punctuation = re.sub(r"\s+", " ", no_punctuation)
             institute_plural = re.sub(r"\bInstitute\s+of\b", "Institutes of", cleaned, flags=re.I).strip()
             institute_singular = re.sub(r"\bInstitutes\s+of\b", "Institute of", cleaned, flags=re.I).strip()
-            variants = [without_suffix, no_punctuation, cleaned, institute_plural, institute_singular]
+            variants = [legal_suffix_clean, without_suffix, cleaned_no_punctuation, cleaned, institute_plural, institute_singular]
             seen = set()
             output = []
             for variant in variants:
