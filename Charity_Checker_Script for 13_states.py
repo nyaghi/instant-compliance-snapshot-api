@@ -1503,6 +1503,7 @@ def search_pa(page, org: Organization) -> StateResult:
         return result
 def normalize_name(value: str) -> str:
     txt = (value or "").lower()
+    txt = re.sub(r"\bu\s*\.?\s*s\.?\b", "us", txt)
     txt = re.sub(r"\b(the|and|a)\b", " ", txt)
     txt = re.sub(r"\b(inc|incorporated|corp|corporation|foundation|llc|ltd)\b", " ", txt)
     txt = re.sub(r"[^a-z0-9]+", " ", txt)
@@ -2482,6 +2483,13 @@ def search_me(page, org: Organization) -> StateResult:
         def me_query_variants(name: str) -> list[str]:
             cleaned = re.sub(r"\s+", " ", name or "").strip()
             cleaned = re.sub(r"\s*,?\s+", " ", cleaned)
+            us_prefixed_variants = []
+            if re.match(r"^us\s+", cleaned, re.I):
+                us_prefixed_variants.append(re.sub(r"^us\s+", "U.S. ", cleaned, flags=re.I))
+                us_prefixed_variants.append(re.sub(r"^us\s+", "United States ", cleaned, flags=re.I))
+            elif re.match(r"^u\.?\s*s\.?\s+", cleaned, re.I):
+                us_prefixed_variants.append(re.sub(r"^u\.?\s*s\.?\s+", "US ", cleaned, flags=re.I))
+                us_prefixed_variants.append(re.sub(r"^u\.?\s*s\.?\s+", "United States ", cleaned, flags=re.I))
             cleaned_no_punctuation = re.sub(r"[^\w\s]", " ", cleaned).strip()
             cleaned_no_punctuation = re.sub(r"\s+", " ", cleaned_no_punctuation)
             legal_suffix_clean = cleaned_no_punctuation
@@ -2503,7 +2511,7 @@ def search_me(page, org: Organization) -> StateResult:
             ).strip()
             institute_plural = re.sub(r"\bInstitute\s+of\b", "Institutes of", cleaned, flags=re.I).strip()
             institute_singular = re.sub(r"\bInstitutes\s+of\b", "Institute of", cleaned, flags=re.I).strip()
-            variants = [legal_suffix_clean, without_suffix, cleaned_no_punctuation, cleaned, institute_plural, institute_singular]
+            variants = [*us_prefixed_variants, legal_suffix_clean, without_suffix, cleaned_no_punctuation, cleaned, institute_plural, institute_singular]
             seen = set()
             output = []
             for variant in variants:

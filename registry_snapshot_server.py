@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.04.2"
+APP_VERSION = "2026.05.04.3"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1487,6 +1487,13 @@ def organization_name_variants(name: str, ein: str = "") -> list[str]:
         if not base:
             continue
         add(base)
+        us_prefixed_variants = []
+        if re.match(r"^us\s+", base, re.I):
+            us_prefixed_variants.append(re.sub(r"^us\s+", "U.S. ", base, flags=re.I))
+            us_prefixed_variants.append(re.sub(r"^us\s+", "United States ", base, flags=re.I))
+        elif re.match(r"^u\.?\s*s\.?\s+", base, re.I):
+            us_prefixed_variants.append(re.sub(r"^u\.?\s*s\.?\s+", "US ", base, flags=re.I))
+            us_prefixed_variants.append(re.sub(r"^u\.?\s*s\.?\s+", "United States ", base, flags=re.I))
         without_trailing_the = re.sub(r",\s*the\s*$", "", base, flags=re.I).strip()
         without_leading_the = re.sub(r"^the\s+", "", base, flags=re.I).strip()
         without_comma_suffix = re.sub(r",\s*(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?)\s*$", "", base, flags=re.I).strip()
@@ -1542,6 +1549,7 @@ def organization_name_variants(name: str, ein: str = "") -> list[str]:
             and_no_punctuation,
             and_without_suffix,
             compact_legal_suffixes,
+            *us_prefixed_variants,
             without_trailing_the,
             without_leading_the,
             *hyphenated_word_pairs,
@@ -2674,7 +2682,9 @@ def true_status_from_body(result, body: str) -> str:
 
     if result_indicates_no_record(result):
         return "Not Registered"
-    if state not in {"NJ", "NY"} and record_confirmed and indicates_exempt_registration(combined):
+    if state == "HI" and record_confirmed and result_fields_indicate_exempt(result):
+        return "Exempt"
+    if state not in {"HI", "NJ", "NY"} and record_confirmed and indicates_exempt_registration(combined):
         return "Exempt"
     if state == "NY" and record_confirmed and result_fields_indicate_exempt(result):
         return "Exempt"
