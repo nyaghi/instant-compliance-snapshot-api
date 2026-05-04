@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.03.16"
+APP_VERSION = "2026.05.03.17"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1286,7 +1286,7 @@ def filing_context(result, body: str) -> dict:
     registry_fiscal_end = fiscal_year_end_from_body(body, state)
     profile_period = public_profile_latest_tax_period_for_ein(result.ein)
     profile_fiscal_end = profile_period[1] if profile_period else None
-    fiscal_end = result_fiscal_end or registry_fiscal_end or profile_fiscal_end or override_fiscal_end or fiscal_year_end_for_ein(result.ein)
+    fiscal_end = result_fiscal_end or registry_fiscal_end or override_fiscal_end or profile_fiscal_end or fiscal_year_end_for_ein(result.ein)
 
     if latest_year is None or fiscal_end is None:
         return {
@@ -2976,7 +2976,7 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
 def run_state_lookup(organization_name: str, ein: str, state: str, capture_source_snapshot: bool = False) -> dict:
     lookup_started = time.perf_counter()
     artifact_name = organization_name or f"EIN {format_ein(ein)}"
-    lookup_name = "" if state == "NY" else organization_name
+    lookup_name = organization_name
     org = checker.Organization(organization_name=lookup_name, ein=ein)
     if hasattr(org, "evidence_mode"):
         org.evidence_mode = capture_source_snapshot
@@ -3030,7 +3030,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             elif state == "CO":
                 result = checker.search_co(page, org)
             elif state == "NY":
-                result = checker.search_ny(page, org)
+                result = search_with_name_variants(page, org, checker.search_ny, max_variants=12)
             elif state == "NJ":
                 result = search_nj_direct(page, org)
                 if public_status(result) != "Not Registered":
@@ -3046,7 +3046,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 if public_status(result) != "Not Registered":
                     body = hi_detail_body(page)
             elif state == "ME":
-                result = search_with_name_variants(page, org, checker.search_me, max_variants=6)
+                result = checker.search_me(page, org)
                 me_status_source = " ".join([result.raw_status_text or "", result.source_note or ""])
                 if re.search(r"Maine uses the Status shown|No matching organization|No record found|no matching", me_status_source, re.I):
                     body = registry_page_body(page)
