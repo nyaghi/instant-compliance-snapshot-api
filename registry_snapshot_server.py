@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.03.17"
+APP_VERSION = "2026.05.04.1"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1262,17 +1262,8 @@ def filing_context(result, body: str) -> dict:
             latest_year = profile_latest_year
         if ce_latest_year and ce_latest_year > latest_year:
             latest_year = ce_latest_year
-    # If the Massachusetts portal record loads but the Annual Filings grid does
-    # not expose rows in this run, use the public profile tax period only as a
-    # fallback so the result still explains year/due-date logic.
-    if (
-        latest_year is None
-        and state == "MA"
-        and re.search(r"Annual\s+Filings?\s+not\s+visible", " ".join([result.raw_status_text or "", result.source_note or "", body or ""]), re.I)
-    ):
-        profile_period = public_profile_latest_tax_period_for_ein(result.ein)
-        if profile_period:
-            latest_year = profile_period[0]
+    # For Massachusetts, do not infer a Form PC year from outside profile data
+    # when the MA Annual Filings grid itself does not expose a filing year.
     if (
         latest_year is None
         and state == "CA"
@@ -1510,6 +1501,16 @@ def organization_name_variants(name: str, ein: str = "") -> list[str]:
         ampersand_as_and = re.sub(r"\s*&\s*", " and ", base).strip()
         ampersand_removed = re.sub(r"\s*&\s*", " ", base).strip()
         apostrophe_removed = re.sub(r"[']", "", base).strip()
+        possessive_removed = re.sub(r"\b([A-Za-z]+)'s\b", r"\1s", base).strip()
+        and_no_punctuation = re.sub(r"[^\w\s]", " ", ampersand_as_and).strip()
+        and_no_punctuation = re.sub(r"\s+", " ", and_no_punctuation)
+        and_without_suffix = re.sub(
+            r"\b(inc\.?|incorporated|corp\.?|corporation|foundation|fund|llc|ltd\.?)\b",
+            " ",
+            and_no_punctuation,
+            flags=re.I,
+        ).strip()
+        and_without_suffix = re.sub(r"\s+", " ", and_without_suffix)
         compact_legal_suffixes = re.sub(
             r"\b(the|inc\.?|incorporated|corp\.?|corporation|foundation|fund|llc|ltd\.?)\b",
             " ",
@@ -1537,6 +1538,9 @@ def organization_name_variants(name: str, ein: str = "") -> list[str]:
             ampersand_as_and,
             ampersand_removed,
             apostrophe_removed,
+            possessive_removed,
+            and_no_punctuation,
+            and_without_suffix,
             compact_legal_suffixes,
             without_trailing_the,
             without_leading_the,
@@ -3030,7 +3034,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             elif state == "CO":
                 result = checker.search_co(page, org)
             elif state == "NY":
-                result = search_with_name_variants(page, org, checker.search_ny, max_variants=12)
+                result = search_with_name_variants(page, org, checker.search_ny, max_variants=25)
             elif state == "NJ":
                 result = search_nj_direct(page, org)
                 if public_status(result) != "Not Registered":
