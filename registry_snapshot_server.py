@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.04.5"
+APP_VERSION = "2026.05.04.6"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -88,6 +88,7 @@ FISCAL_YEAR_END_OVERRIDES = {
     "546053660": (6, 30),
     "362883000": (3, 31),
     "237222333": (6, 30),
+    "141707425": (3, 31),
 }
 
 
@@ -903,7 +904,7 @@ def resolved_organization_name(ein: str, supplied_name: str = "") -> str:
     supplied_name = (supplied_name or "").strip()
     reference_name = organization_name_for_ein(ein)
     profile_name = public_profile_name_for_ein(ein)
-    return reference_name or profile_name or supplied_name
+    return supplied_name or reference_name or profile_name
 
 
 def format_ein(value: str) -> str:
@@ -1057,6 +1058,20 @@ def filing_due_date_options(state: str, report_year: int, fiscal_end: tuple[int,
         "uses_extension_assumption": False,
         "rule_note": rule_note,
     }
+
+
+def nj_inferred_latest_filing_year(fiscal_end: tuple[int, int]) -> int | None:
+    """Infer the latest NJ filing year that should be on record for a compliant charity."""
+    today = date.today()
+    for report_year in range(today.year, today.year - 5, -1):
+        try:
+            due_options = filing_due_date_options("NJ", report_year, fiscal_end)
+            due_date = due_options.get("base_due") or due_options.get("effective_due")
+        except Exception:
+            due_date = None
+        if due_date and due_date <= today:
+            return report_year
+    return None
 
 
 def latest_year_from_text(body: str, state: str) -> int | None:
@@ -1278,6 +1293,15 @@ def filing_context(result, body: str) -> dict:
     profile_period = public_profile_latest_tax_period_for_ein(result.ein)
     profile_fiscal_end = profile_period[1] if profile_period else None
     fiscal_end = result_fiscal_end or registry_fiscal_end or override_fiscal_end or profile_fiscal_end or fiscal_year_end_for_ein(result.ein)
+
+    if (
+        state == "NJ"
+        and fiscal_end
+        and re.search(r"\b(compliant|current|active)\b", " ".join([result.status or "", result.raw_status_text or "", body or ""]), re.I)
+    ):
+        inferred_latest_year = nj_inferred_latest_filing_year(fiscal_end)
+        if inferred_latest_year and (latest_year is None or inferred_latest_year > latest_year):
+            latest_year = inferred_latest_year
 
     if latest_year is None or fiscal_end is None:
         return {
@@ -1578,8 +1602,13 @@ def is_leading_the_drop(original_name: str, variant: str) -> bool:
     candidate = re.sub(r"\s+", " ", (variant or "").strip())
     if not re.match(r"^the\s+", original, re.I):
         return False
+    if re.match(r"^the\s+", candidate, re.I):
+        return False
     without_the = re.sub(r"^the\s+", "", original, flags=re.I).strip()
-    return without_the.lower() == candidate.lower()
+    normalize = getattr(checker, "normalize_name", lambda value: re.sub(r"\W+", " ", (value or "").lower()).strip())
+    without_the_norm = normalize(without_the)
+    candidate_norm = normalize(candidate)
+    return bool(candidate_norm and without_the_norm and (candidate_norm in without_the_norm or without_the_norm in candidate_norm))
 
 
 def search_with_name_variants(
@@ -2722,6 +2751,8 @@ def true_status_from_body(result, body: str) -> str:
     if state == "PA" and record_confirmed and not use_registry_date:
         return "Unknown"
     if state in EXTENSION_SCENARIO_STATES and record_confirmed and represented_year and due_date:
+        if state == "NJ" and due_date > date.today() and due_date.year == date.today().year:
+            return "Upcoming Filing"
         return status_from_calendar_date(due_date)
     if state == "AK" and re.search(r"\b20\d{2}\s+registration\s+found\b", combined, re.I):
         found_years = [int(match.group(1)) for match in re.finditer(r"\b(20\d{2})\s+registration\s+found\b", combined, re.I)]
@@ -2747,6 +2778,8 @@ def true_status_from_body(result, body: str) -> str:
         return "Delinquent"
 
     if state in EXTENSION_SCENARIO_STATES and due_date and represented_year and not result_indicates_no_record(result):
+        if state == "NJ" and due_date > date.today() and due_date.year == date.today().year:
+            return "Upcoming Filing"
         return status_from_calendar_date(due_date)
 
     if "not registered" in normalized:
@@ -2958,6 +2991,16 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
                     filing_name = "CHAR500 annual filing"
                 elif state == "PA":
                     filing_name = "annual renewal"
+                if state == "NJ":
+                    nj_status = "Upcoming Filing" if base_due and base_due > date.today() and base_due.year == date.today().year else base_status
+                    fiscal_end = context["fiscal_end"]
+                    report_year = context["next_report_year"]
+                    fy_end = date(report_year, fiscal_end[0], fiscal_end[1])
+                    return (
+                        f"{context['represented_year']} appears to be the most recent New Jersey filing year identified in the CharityClarity check. "
+                        f"Based on a {fiscal_end[0]}/{fiscal_end[1]} fiscal year end, the next New Jersey annual filing is for FY ending {format_date(fy_end)} "
+                        f"and is due {format_date(base_due)}. CE Status is {nj_status}."
+                    )
                 if state == "MD":
                     extension_label = "Maryland automatic extension"
                 elif state == "MA":
@@ -3004,8 +3047,16 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
                     f"If an extension applies, the extended deadline is approximately {format_date(extended_due)}."
                 )
             if state == "NJ":
-                calculated_status = status_from_calendar_date(context["due_date"])
-                return f"{context['comment']} CE Status is {calculated_status} based on that due date."
+                due_date = context["due_date"]
+                calculated_status = "Upcoming Filing" if due_date and due_date > date.today() and due_date.year == date.today().year else status_from_calendar_date(due_date)
+                fiscal_end = context["fiscal_end"]
+                report_year = context["next_report_year"]
+                fy_end = date(report_year, fiscal_end[0], fiscal_end[1])
+                return (
+                    f"{context['represented_year']} appears to be the most recent New Jersey filing year identified in the CharityClarity check. "
+                    f"Based on a {fiscal_end[0]}/{fiscal_end[1]} fiscal year end, the next New Jersey annual filing is for FY ending {format_date(fy_end)} "
+                    f"and is due {format_date(due_date)}. CE Status is {calculated_status}."
+                )
             return context["comment"]
     if normalized_status == "upcoming filing":
         return "A filing or renewal appears to be due soon based on the CharityClarity check."
