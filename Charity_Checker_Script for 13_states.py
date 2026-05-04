@@ -718,6 +718,18 @@ def search_co(page, org: Organization) -> StateResult:
             result.success = True
             return result
 
+        adverse_match = re.search(
+            r"\b(revoked|suspended|may\s+not\s+solicit|may\s+not\s+raise\s+funds|may\s+not\s+operate|not\s+authorized\s+to\s+solicit)\b",
+            body,
+            re.I,
+        )
+        if adverse_match:
+            result.raw_status_text = adverse_match.group(1).strip()
+            result.status = "Suspended"
+            result.source_note = "Colorado public search shows an adverse solicitation status."
+            result.success = True
+            return result
+
         expires_match = re.search(r"Expir(?:es|ed)\s+on[:\s]+(\d{1,2}/\d{1,2}/\d{4})", body, re.I)
         if expires_match:
             expires_on = datetime.strptime(expires_match.group(1), "%m/%d/%Y").date()
@@ -970,6 +982,29 @@ def search_ny(page, org: Organization) -> StateResult:
         fast_sleep(3)
 
         body = page.locator("body").inner_text(timeout=12000)
+        if re.search(r"no rows available|no records|no results found|no results|not found|error fetching data", body, re.I) and org.organization_name.strip():
+            try:
+                name_input.fill("")
+                ein_input.fill("")
+                if formatted_ein:
+                    ein_input.fill(formatted_ein)
+                else:
+                    ein_input.fill(org.ein)
+                clicked = False
+                for label in ["Search", "Find"]:
+                    try:
+                        page.get_by_role("button", name=re.compile(label, re.I)).click(timeout=4000)
+                        clicked = True
+                        break
+                    except Exception:
+                        pass
+                if not clicked:
+                    page.keyboard.press("Enter")
+                safe_wait_for_network_idle(page, timeout=25000)
+                fast_sleep(3)
+                body = page.locator("body").inner_text(timeout=12000)
+            except Exception:
+                pass
         if re.search(r"no rows available|no records|no results found|no results|not found", body, re.I):
             result.raw_status_text = "No results found"
             result.status = "Not Found"
@@ -2446,8 +2481,9 @@ def search_me(page, org: Organization) -> StateResult:
     try:
         def me_query_variants(name: str) -> list[str]:
             cleaned = re.sub(r"\s+", " ", name or "").strip()
+            cleaned = re.sub(r"\s*,?\s+", " ", cleaned)
             without_suffix = re.sub(
-                r",?\s+(incorporated|inc|foundation|the)\.?\s*$",
+                r",?\s+(incorporated|inc|foundation|the|corp|corporation|ltd|limited)\.?\s*$",
                 "",
                 cleaned,
                 flags=re.I,
@@ -2456,7 +2492,7 @@ def search_me(page, org: Organization) -> StateResult:
             no_punctuation = re.sub(r"\s+", " ", no_punctuation)
             institute_plural = re.sub(r"\bInstitute\s+of\b", "Institutes of", cleaned, flags=re.I).strip()
             institute_singular = re.sub(r"\bInstitutes\s+of\b", "Institute of", cleaned, flags=re.I).strip()
-            variants = [cleaned, no_punctuation, without_suffix, institute_plural, institute_singular]
+            variants = [without_suffix, no_punctuation, cleaned, institute_plural, institute_singular]
             seen = set()
             output = []
             for variant in variants:
@@ -2464,7 +2500,7 @@ def search_me(page, org: Organization) -> StateResult:
                 if variant and key not in seen:
                     seen.add(key)
                     output.append(variant)
-            return (output or [cleaned])[:4]
+            return (output or [cleaned])[:5]
 
         def run_me_direct_search(query: str) -> tuple[str, list[dict[str, str]], urllib.request.OpenerDirector]:
             cookie_jar = http.cookiejar.CookieJar()
@@ -2481,7 +2517,7 @@ def search_me(page, org: Organization) -> StateResult:
                     fields[html.unescape(name_match.group(1))] = html.unescape(value_match.group(1) if value_match else "")
             fields.update({
                 "ctl00$ctl00$mainContent$mainContent$scRegulator": "4076",
-                "ctl00$ctl00$mainContent$mainContent$scCompanyName": (query or "")[:30],
+                "ctl00$ctl00$mainContent$mainContent$scCompanyName": (query or ""),
                 "ctl00$ctl00$mainContent$mainContent$ctl24": "BW",
                 "ctl00$ctl00$mainContent$mainContent$btnSearch": "Search",
             })
@@ -2547,7 +2583,7 @@ def search_me(page, org: Organization) -> StateResult:
                 direct_body, direct_rows, direct_opener = run_me_direct_search(query)
             except Exception:
                 direct_body, direct_rows, direct_opener = "", [], None
-            if direct_rows or re.search(r"\b0\s+records?\s+found\b|no records|no results", direct_body, re.I):
+            if direct_rows:
                 break
 
         if direct_rows and direct_opener:
