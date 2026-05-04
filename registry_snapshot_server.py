@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.04.4"
+APP_VERSION = "2026.05.04.5"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1573,7 +1573,22 @@ def result_is_retryable_name_miss(result) -> bool:
     ))
 
 
-def search_with_name_variants(page, org, search_func, max_variants: int | None = None):
+def is_leading_the_drop(original_name: str, variant: str) -> bool:
+    original = re.sub(r"\s+", " ", (original_name or "").strip())
+    candidate = re.sub(r"\s+", " ", (variant or "").strip())
+    if not re.match(r"^the\s+", original, re.I):
+        return False
+    without_the = re.sub(r"^the\s+", "", original, flags=re.I).strip()
+    return without_the.lower() == candidate.lower()
+
+
+def search_with_name_variants(
+    page,
+    org,
+    search_func,
+    max_variants: int | None = None,
+    reject_va_suspended_from_leading_the_drop: bool = False,
+):
     best_result = None
     original_name = org.organization_name
     variants = organization_name_variants(original_name, org.ein)
@@ -1583,6 +1598,12 @@ def search_with_name_variants(page, org, search_func, max_variants: int | None =
         result = search_func(page, org_with_name(org, variant))
         if getattr(result, "organization_name", "") != original_name:
             result.organization_name = original_name
+        if (
+            reject_va_suspended_from_leading_the_drop
+            and public_status(result) == "Suspended"
+            and is_leading_the_drop(original_name, variant)
+        ):
+            continue
         if not result_is_retryable_name_miss(result):
             return result
         best_result = result
@@ -3060,7 +3081,13 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             elif state == "PA":
                 result = checker.search_pa(page, org)
             elif state == "VA":
-                result = search_with_name_variants(page, org, checker.search_va, max_variants=6)
+                result = search_with_name_variants(
+                    page,
+                    org,
+                    checker.search_va,
+                    max_variants=6,
+                    reject_va_suspended_from_leading_the_drop=True,
+                )
             elif state == "SC":
                 result = search_with_name_variants(page, org, checker.search_sc, max_variants=6)
             elif state == "HI":
