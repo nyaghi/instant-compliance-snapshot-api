@@ -629,7 +629,11 @@ def search_ca(page, org: Organization) -> StateResult:
                         score += 6
                     if wanted_name and wanted_name in row_name:
                         score += 4
-                    if re.search(r"\b(merged\s+out|withdrawn|dissolved|closed)\b", row_text, re.I):
+                    if re.search(r"\bcurrent\b", row_text, re.I):
+                        score += 8
+                    if re.search(r"\bcharity\s+registration\b", row_text, re.I) and re.search(r"\bcurrent\b", row_text, re.I):
+                        score += 4
+                    if re.search(r"\b(merged\s+out|withdrawn|dissolved|closed|revoked|suspended)\b", row_text, re.I):
                         score -= 15
                     if score > best_row[1]:
                         best_row = (row_status, score)
@@ -2453,12 +2457,6 @@ def search_me(page, org: Organization) -> StateResult:
             institute_plural = re.sub(r"\bInstitute\s+of\b", "Institutes of", cleaned, flags=re.I).strip()
             institute_singular = re.sub(r"\bInstitutes\s+of\b", "Institute of", cleaned, flags=re.I).strip()
             variants = [cleaned, no_punctuation, without_suffix, institute_plural, institute_singular]
-            for seed in [cleaned, no_punctuation, without_suffix, institute_plural, institute_singular]:
-                words = seed.split()
-                if len(words) > 3:
-                    variants.append(" ".join(words[:3]))
-                if len(words) > 4:
-                    variants.append(" ".join(words[:4]))
             seen = set()
             output = []
             for variant in variants:
