@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.04.6"
+APP_VERSION = "2026.05.04.7"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -2751,8 +2751,6 @@ def true_status_from_body(result, body: str) -> str:
     if state == "PA" and record_confirmed and not use_registry_date:
         return "Unknown"
     if state in EXTENSION_SCENARIO_STATES and record_confirmed and represented_year and due_date:
-        if state == "NJ" and due_date > date.today() and due_date.year == date.today().year:
-            return "Upcoming Filing"
         return status_from_calendar_date(due_date)
     if state == "AK" and re.search(r"\b20\d{2}\s+registration\s+found\b", combined, re.I):
         found_years = [int(match.group(1)) for match in re.finditer(r"\b(20\d{2})\s+registration\s+found\b", combined, re.I)]
@@ -2778,8 +2776,6 @@ def true_status_from_body(result, body: str) -> str:
         return "Delinquent"
 
     if state in EXTENSION_SCENARIO_STATES and due_date and represented_year and not result_indicates_no_record(result):
-        if state == "NJ" and due_date > date.today() and due_date.year == date.today().year:
-            return "Upcoming Filing"
         return status_from_calendar_date(due_date)
 
     if "not registered" in normalized:
@@ -2992,7 +2988,7 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
                 elif state == "PA":
                     filing_name = "annual renewal"
                 if state == "NJ":
-                    nj_status = "Upcoming Filing" if base_due and base_due > date.today() and base_due.year == date.today().year else base_status
+                    nj_status = status_from_calendar_date(base_due)
                     fiscal_end = context["fiscal_end"]
                     report_year = context["next_report_year"]
                     fy_end = date(report_year, fiscal_end[0], fiscal_end[1])
@@ -3048,7 +3044,7 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
                 )
             if state == "NJ":
                 due_date = context["due_date"]
-                calculated_status = "Upcoming Filing" if due_date and due_date > date.today() and due_date.year == date.today().year else status_from_calendar_date(due_date)
+                calculated_status = status_from_calendar_date(due_date)
                 fiscal_end = context["fiscal_end"]
                 report_year = context["next_report_year"]
                 fy_end = date(report_year, fiscal_end[0], fiscal_end[1])
