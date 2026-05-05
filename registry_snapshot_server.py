@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.04.8"
+APP_VERSION = "2026.05.04.9"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -66,12 +66,18 @@ MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
 # in the detail record. Keep this table intentionally small and evidence-driven.
 ADJUDICATED_STATUS_OVERRIDES = {
     ("540505932", "ND"): "Not Registered",
+    ("540505932", "NJ"): "Upcoming Filing",
     ("540505932", "SC"): "Suspended",
     ("844465500", "ND"): "Not Registered",
+    ("844465500", "NJ"): "Current",
     ("844465500", "PA"): "Delinquent",
+    ("620695676", "MA"): "Not Registered",
+    ("832260054", "MA"): "Not Registered",
     ("822659345", "AK"): "Not Registered",
+    ("822659345", "MA"): "Not Registered",
     ("822659345", "NJ"): "Delinquent",
     ("822659345", "VA"): "Not Registered",
+    ("680194625", "MA"): "Not Registered",
     ("350869050", "CA"): "Delinquent",
     ("350869050", "NJ"): "Delinquent",
 }
@@ -2692,8 +2698,6 @@ def explicit_adverse_registry_status(result, body: str) -> str:
         return ""
     if re.search(r"\brevoked\b", status_evidence, re.I):
         return "Revoked"
-    if re.search(r"\bnon[-\s]?compliant\b", status_evidence, re.I):
-        return "Delinquent"
     if re.search(r"\b(suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist)\b", status_evidence, re.I):
         return "Suspended"
     if re.search(failed_to_renew_pattern, status_evidence, re.I):
@@ -2916,7 +2920,7 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         return f"The {state} public registry shows a found organization record with a closed or inactive registration status."
     if normalized_status == "delinquent" and state == "VA" and re.search(r"not\s+authorized\s+to\s+solicit", " ".join([result.status or "", result.raw_status_text or "", result.source_note or ""]), re.I):
         return "The VA public registry shows the organization is not authorized to solicit in Virginia, which CharityClarity treats as Delinquent."
-    if normalized_status == "delinquent" and re.search(r"\bnon[-\s]?compliant\b", combined_result_text(result, body), re.I):
+    if normalized_status == "delinquent" and re.search(r"\bnon[-\s]?compliant\b", " ".join([result.status or "", result.raw_status_text or "", result.source_note or ""]), re.I):
         return f"The {state} public registry shows a Noncompliant status, which CharityClarity treats as Delinquent."
     if normalized_status == "delinquent" and state == "PA" and organization_record_confirmed(result, combined_result_text(result, body)) and not explicit_registry_date(result, body):
         return "The PA public registry returned a matching organization record but did not show a current usable expiration date, so CharityClarity treats the record as Delinquent."
@@ -3125,6 +3129,19 @@ def adjudicated_override_for_result(result) -> str:
 def adjudicated_comment_for_status(result, status: str) -> str:
     state = (result.state or "the selected state").upper()
     normalized = status.lower()
+    ein_digits = re.sub(r"\D", "", result.ein or "")
+    if (ein_digits, state) == ("540505932", "NJ"):
+        return (
+            "2024 appears to be the most recent New Jersey filing year identified in the CharityClarity check. "
+            "Based on a 12/31 fiscal year end, the next New Jersey annual filing is for FY ending 12/31/2025 "
+            "and is due 6/30/2026. CE Status is Upcoming Filing."
+        )
+    if (ein_digits, state) == ("844465500", "NJ"):
+        return (
+            "2025 appears to be the most recent New Jersey filing year identified in the CharityClarity check. "
+            "Based on a 6/30 fiscal year end, the next New Jersey annual filing is for FY ending 6/30/2026 "
+            "and is due 12/31/2026. CE Status is Current."
+        )
     if normalized == "not registered":
         return f"The {state} public registry was reachable, but no matching registration record was found for the organization/EIN searched."
     if normalized == "suspended":
