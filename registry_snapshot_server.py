@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.04.9"
+APP_VERSION = "2026.05.05.1"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -3126,7 +3126,7 @@ def adjudicated_override_for_result(result) -> str:
     return ADJUDICATED_STATUS_OVERRIDES.get((ein_digits, state), "")
 
 
-def adjudicated_comment_for_status(result, status: str) -> str:
+def adjudicated_comment_for_status(result, body: str, status: str) -> str:
     state = (result.state or "the selected state").upper()
     normalized = status.lower()
     ein_digits = re.sub(r"\D", "", result.ein or "")
@@ -3151,6 +3151,25 @@ def adjudicated_comment_for_status(result, status: str) -> str:
             return "The NJ public registry shows a Noncompliant status, which CharityClarity treats as Delinquent."
         if state == "PA":
             return "The PA public registry returned a matching organization record but did not show a current usable expiration date, so CharityClarity treats the record as Delinquent."
+        if state == "CA":
+            context = filing_context(result, body)
+            if context.get("represented_year") and context.get("fiscal_end") and context.get("due_date"):
+                extension_sentence = ""
+                extended_due = context.get("extended_due_date")
+                if extended_due:
+                    extended_status = status_from_calendar_date(extended_due)
+                    extension_sentence = (
+                        f" If a six-month extension was applied for and approved, the due date becomes "
+                        f"{format_date(extended_due)} and the status becomes {extended_status}."
+                    )
+                return (
+                    f"{context['represented_year']} appears to be the most recent CA annual renewal year identified in the CharityClarity check. "
+                    f"Based on a {context['fiscal_end'][0]}/{context['fiscal_end'][1]} fiscal year end, the "
+                    f"{context['next_report_year']} annual renewal initial due date is {format_date(context['due_date'])}. "
+                    "The CA public registry indicates a delinquency, so CharityClarity treats the organization as Delinquent."
+                    f"{extension_sentence}"
+                )
+            return "The CA public registry indicates a delinquency, so CharityClarity treats the organization as Delinquent."
         return f"The {state} public registry indicates a delinquency."
     return comments_for_result(result, "", status)
 
@@ -3291,7 +3310,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
     override_status = adjudicated_override_for_result(result)
     if override_status:
         data["status"] = override_status
-        data["comments"] = adjudicated_comment_for_status(result, override_status)
+        data["comments"] = adjudicated_comment_for_status(result, body, override_status)
     else:
         data["comments"] = comments_for_result(result, body, data["status"])
     data["evidence_url"] = ""
