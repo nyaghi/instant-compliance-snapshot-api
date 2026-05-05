@@ -835,6 +835,13 @@ def search_ma(page, org: Organization) -> StateResult:
             result.source_note = "Massachusetts search returned no matching record."
             result.success = True
             return result
+        query_digits = digits_only(org.ein)
+        if query_digits and query_digits not in digits_only(body):
+            result.raw_status_text = "No matching EIN result"
+            result.status = STATUS_NOT_REGISTERED
+            result.source_note = "Massachusetts EIN search did not return a record containing the requested EIN."
+            result.success = True
+            return result
 
         for label in ["Get filings", "Get Filings"]:
             try:
