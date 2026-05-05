@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.05.2"
+APP_VERSION = "2026.05.05.3"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -80,6 +80,17 @@ ADJUDICATED_STATUS_OVERRIDES = {
     ("680194625", "MA"): "Not Registered",
     ("350869050", "CA"): "Delinquent",
     ("350869050", "NJ"): "Delinquent",
+    ("261188925", "MA"): "Not Registered",
+    ("461791738", "MA"): "Not Registered",
+    ("263433353", "MA"): "Not Registered",
+    ("912144422", "MA"): "Not Registered",
+    ("912144422", "ND"): "Not Registered",
+    ("912144422", "SC"): "Not Registered",
+    ("912144422", "VA"): "Not Registered",
+    ("133599581", "MA"): "Not Registered",
+    ("410972298", "MA"): "Not Registered",
+    ("841445744", "MA"): "Not Registered",
+    ("911785342", "MA"): "Not Registered",
 }
 REQUESTED_PARALLEL_LOOKUPS = max(1, int(os.environ.get("CE_MAX_PARALLEL_LOOKUPS", "1")))
 ALLOW_PARALLEL_BROWSER_LOOKUPS = os.environ.get("CE_ALLOW_PARALLEL_BROWSER_LOOKUPS", "1").strip().lower() in {"1", "true", "yes"}
