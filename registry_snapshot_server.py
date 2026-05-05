@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.05.1"
+APP_VERSION = "2026.05.05.2"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1146,21 +1146,8 @@ def latest_year_from_text(body: str, state: str) -> int | None:
             return max(annual_years) if annual_years else None
         return None
     if state == "CA":
-        annual_match = re.search(
-            r"Annual\s+Renewal\s+Data([\s\S]{0,12000}?)(?:Fundraising\s+Platform\s+Data|Related\s+Registration|Filing\s+and\s+Correspondence|$)",
-            readable_body,
-            re.I,
-        )
-        if annual_match:
-            annual_years = [
-                int(match.group(1))
-                for match in re.finditer(
-                    r"(?:Accounting\s+Period\s+End\s+Date|Fiscal\s+Year\s+End|Period\s+End(?:ing)?)[^0-9]{0,120}\d{1,2}\s*[/-]\s*\d{1,2}\s*[/-]\s*(20\d{2})",
-                    annual_match.group(1),
-                    re.I,
-                )
-            ]
-            return max(annual_years) if annual_years else None
+        ca_years = ca_annual_renewal_years_from_text(readable_body)
+        return ca_years.get("latest_submitted_year")
         return None
     for pattern in patterns:
         for match in re.finditer(pattern, readable_body, re.I):
@@ -1187,6 +1174,47 @@ def latest_year_from_text(body: str, state: str) -> int | None:
             if ny_years:
                 return max(ny_years)
     return max(years) if years else None
+
+
+def ca_annual_renewal_years_from_text(body: str) -> dict:
+    readable_body = html.unescape(re.sub(r"<[^>]+>", " ", body or ""))
+    readable_body = re.sub(r"\s+", " ", readable_body)
+    annual_match = re.search(
+        r"Annual\s+Renewal\s+Data([\s\S]{0,16000}?)(?:Fundraising\s+Platform\s+Data|Related\s+Registration|Filing\s+and\s+Correspondence|$)",
+        readable_body,
+        re.I,
+    )
+    if not annual_match:
+        return {"latest_submitted_year": None, "latest_not_submitted_year": None}
+    annual_section = annual_match.group(1)
+    blocks = re.split(r"(?=Status\s+of\s+Filing\s*:)", annual_section, flags=re.I)
+    submitted_years = []
+    not_submitted_years = []
+    for block in blocks:
+        if not re.search(r"Status\s+of\s+Filing\s*:", block, re.I):
+            continue
+        status_match = re.search(
+            r"Status\s+of\s+Filing\s*:?\s*(.*?)(?=\s+Accounting\s+Period\s+Begin\s+Date|\s+Accounting\s+Period\s+End\s+Date|\s+Filing\s+Received\s+Date|$)",
+            block,
+            re.I,
+        )
+        status_text = re.sub(r"\s+", " ", status_match.group(1)).strip() if status_match else ""
+        end_match = re.search(
+            r"Accounting\s+Period\s+End\s+Date\s*:?\s*\d{1,2}\s*[/-]\s*\d{1,2}\s*[/-]\s*(20\d{2})",
+            block,
+            re.I,
+        )
+        if not end_match:
+            continue
+        year = int(end_match.group(1))
+        if re.search(r"\bnot\s+submitted\b", status_text, re.I):
+            not_submitted_years.append(year)
+        elif re.search(r"\b(?:e-)?accepted\b", status_text, re.I) and not re.search(r"\breject|incomplete|not\s+submitted\b", status_text, re.I):
+            submitted_years.append(year)
+    return {
+        "latest_submitted_year": max(submitted_years) if submitted_years else None,
+        "latest_not_submitted_year": max(not_submitted_years) if not_submitted_years else None,
+    }
 
 
 def fiscal_year_end_from_result(result) -> tuple[int, int] | None:
@@ -3153,6 +3181,36 @@ def adjudicated_comment_for_status(result, body: str, status: str) -> str:
             return "The PA public registry returned a matching organization record but did not show a current usable expiration date, so CharityClarity treats the record as Delinquent."
         if state == "CA":
             context = filing_context(result, body)
+            ca_years = ca_annual_renewal_years_from_text(body)
+            latest_not_submitted_year = ca_years.get("latest_not_submitted_year")
+            latest_submitted_year = ca_years.get("latest_submitted_year")
+            if latest_not_submitted_year:
+                fiscal_end = context.get("fiscal_end") or fiscal_year_end_for_ein(result.ein)
+                due_sentence = ""
+                if fiscal_end:
+                    due_options = filing_due_date_options("CA", latest_not_submitted_year, fiscal_end)
+                    base_due = due_options.get("base_due_date") or due_options.get("base_due") or due_options.get("effective_due")
+                    extended_due = due_options.get("extended_due")
+                    if base_due:
+                        due_sentence = (
+                            f" Based on a {fiscal_end[0]}/{fiscal_end[1]} fiscal year end, the "
+                            f"{latest_not_submitted_year} annual renewal initial due date is {format_date(base_due)}."
+                        )
+                    if extended_due:
+                        extended_status = status_from_calendar_date(extended_due)
+                        due_sentence += (
+                            f" If a six-month extension was applied for and approved, the due date becomes "
+                            f"{format_date(extended_due)} and the status becomes {extended_status}."
+                        )
+                submitted_sentence = (
+                    f" The most recent CA annual renewal CharityClarity identified as submitted/accepted is {latest_submitted_year}."
+                    if latest_submitted_year else
+                    " CharityClarity did not identify a submitted/accepted CA annual renewal year in the available Annual Renewal Data."
+                )
+                return (
+                    f"The CA Annual Renewal Data shows the {latest_not_submitted_year} annual renewal with Status of Filing: Not Submitted."
+                    f"{submitted_sentence}{due_sentence} CharityClarity treats the organization as Delinquent."
+                )
             if context.get("represented_year") and context.get("fiscal_end") and context.get("due_date"):
                 extension_sentence = ""
                 extended_due = context.get("extended_due_date")
