@@ -811,8 +811,12 @@ def search_ma(page, org: Organization) -> StateResult:
             result.error = "Could not find MA EIN search input"
             return result
 
+        search_input.click()
         search_input.fill("")
-        search_input.fill(query)
+        try:
+            search_input.type(query, delay=35)
+        except Exception:
+            search_input.fill(query)
 
         clicked = False
         for label in ["Search", "Find"]:
@@ -829,17 +833,10 @@ def search_ma(page, org: Organization) -> StateResult:
         fast_sleep(1)
 
         body = page.locator("body").inner_text(timeout=15000)
-        if re.search(r"no results|no records|0 records|no matching", body, re.I):
+        if re.search(r"no results|no records|0 records|no matching|no charity found", body, re.I):
             result.raw_status_text = "No record found"
             result.status = STATUS_NOT_REGISTERED
             result.source_note = "Massachusetts search returned no matching record."
-            result.success = True
-            return result
-        query_digits = digits_only(org.ein)
-        if query_digits and query_digits not in digits_only(body):
-            result.raw_status_text = "No matching EIN result"
-            result.status = STATUS_NOT_REGISTERED
-            result.source_note = "Massachusetts EIN search did not return a record containing the requested EIN."
             result.success = True
             return result
 
