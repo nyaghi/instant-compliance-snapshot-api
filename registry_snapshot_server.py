@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.05.5"
+APP_VERSION = "2026.05.05.6"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -3018,7 +3018,8 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         return f"The {state} public registry shows a found organization record with a closed or inactive registration status."
     if normalized_status == "delinquent" and state == "VA" and re.search(r"not\s+authorized\s+to\s+solicit", " ".join([result.status or "", result.raw_status_text or "", result.source_note or ""]), re.I):
         return "The VA public registry shows the organization is not authorized to solicit in Virginia, which CharityClarity treats as Delinquent."
-    if normalized_status == "delinquent" and re.search(r"\bnon[-\s]?compliant\b", " ".join([result.status or "", result.raw_status_text or "", result.source_note or ""]), re.I):
+    registry_noncompliant_text = " ".join([result.raw_status_text or "", result.source_note or "", body or ""])
+    if normalized_status == "delinquent" and re.search(r"\bnon[-\s]?compliant\b", registry_noncompliant_text, re.I):
         return f"The {state} public registry shows a Noncompliant status, which CharityClarity treats as Delinquent."
     if normalized_status == "delinquent" and state == "PA" and organization_record_confirmed(result, combined_result_text(result, body)) and not explicit_registry_date(result, body):
         return "The PA public registry returned a matching organization record but did not show a current usable expiration date, so CharityClarity treats the record as Delinquent."
