@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.05.4"
+APP_VERSION = "2026.05.05.5"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -2033,6 +2033,65 @@ def ma_detail_body(page) -> str:
     return "\n".join(piece for piece in pieces if piece)
 
 
+def repair_ma_false_not_registered(page, org, result, body: str):
+    """Massachusetts EIN results often show the charity name without exposing EIN text."""
+    if public_status(result) != "Not Registered":
+        return result, body
+    readable = re.sub(r"\s+", " ", body or "")
+    if re.search(r"No\s+Charity\s+Found", readable, re.I):
+        return result, body
+    if not (re.search(r"Select\s+a\s+Charity", readable, re.I) and re.search(r"Get\s+Filings", readable, re.I)):
+        return result, body
+
+    for label in ["Get filings", "Get Filings"]:
+        try:
+            page.get_by_role("button", name=re.compile(label, re.I)).click(timeout=4000)
+            break
+        except Exception:
+            pass
+        try:
+            page.get_by_text(re.compile(label, re.I)).click(timeout=4000)
+            break
+        except Exception:
+            pass
+
+    try:
+        checker.safe_wait_for_network_idle(page, timeout=10000)
+    except Exception:
+        pass
+    for _ in range(8):
+        time.sleep(0.75)
+        try:
+            refreshed = registry_page_body(page)
+        except Exception:
+            continue
+        if re.search(r"Form[\s-]*PC|No documents found|No rows available", refreshed, re.I):
+            body = refreshed
+            break
+    try:
+        page.locator("body").evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    except Exception:
+        pass
+    body = ma_detail_body(page) or body
+    latest_year = latest_year_from_text(body, "MA")
+    if latest_year:
+        result.raw_status_text = str(latest_year)
+        classifier = getattr(checker, "classify_ma_visible_filing_year", None)
+        result.status = classifier(latest_year) if classifier else checker.STATUS_DELINQUENT
+        result.source_note = (
+            "Massachusetts EIN search returned a charity record; CharityClarity uses the latest visible Form PC year "
+            "from Annual Filings because the search result does not expose EIN text in the visible page."
+        )
+    else:
+        result.raw_status_text = "Annual Filings not visible"
+        result.status = checker.STATUS_DELINQUENT
+        result.source_note = (
+            "Massachusetts EIN search returned a charity record, but did not expose a visible Form PC filing year after Get Filings."
+        )
+    result.success = True
+    return result, body
+
+
 def search_hi_precise(page, org):
     url = "https://charity.ehawaii.gov/charity/new-search.html"
     result = checker.StateResult(org.organization_name, org.ein, "HI", checker.STATUS_UNKNOWN, url)
@@ -3276,6 +3335,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             elif state == "MA":
                 result = checker.search_ma(page, org)
                 body = ma_detail_body(page)
+                result, body = repair_ma_false_not_registered(page, org, result, body)
             elif state == "MD":
                 result = checker.search_md(page, org)
                 md_body = registry_page_body(page)
