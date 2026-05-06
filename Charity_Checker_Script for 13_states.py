@@ -38,7 +38,7 @@ STATUS_DELINQUENT = "Delinquent/Non-compliant"
 STATUS_UNKNOWN = "Unknown"
 
 AK_SEARCH_URL = "https://online-registrations-law.alaska.gov/TLP/WebDoc/?link=PubQry"
-AK_YEARS_TO_TRY = [2026, 2025, 2024, 2023]
+AK_YEARS_TO_TRY = list(range(date.today().year, date.today().year - 8, -1))
 FAST_WAIT_MAX_MS = max(750, min(int(os.environ.get("CE_FAST_WAIT_MAX_MS", "1500")), 2000))
 FULL_PAGE_ARTIFACTS = os.environ.get("CE_FULL_PAGE_ARTIFACTS", "0").strip().lower() in {"1", "true", "yes"}
 ARTIFACT_SCREENSHOT_TIMEOUT_MS = max(1000, int(os.environ.get("CE_ARTIFACT_SCREENSHOT_TIMEOUT_MS", "10000")))
@@ -93,7 +93,10 @@ def text_has_wrong_ein_match(text: str, ein: str) -> bool:
     target = digits_only(ein)
     if not target:
         return False
-    return text_exposes_ein(text) and target not in digits_only(text or "")
+    readable = re.sub(r"\s+", " ", text or "")
+    if not re.search(r"\b(?:EIN|FEIN|Federal\s+Tax|Tax\s+ID|Employer\s+Identification)\b", readable, re.I):
+        return False
+    return target not in digits_only(readable)
 
 def reject_wrong_ein_result(result: StateResult, state_name: str) -> StateResult:
     result.raw_status_text = "No matching EIN result"
@@ -1545,6 +1548,17 @@ def active_row_priority(text: str) -> int:
         return 20
     return 10
 
+def candidate_selection_score(candidate_name: str, target_name: str, row_text: str) -> tuple[int, int]:
+    """Choose the best matching entity first; use active/current status to break ties."""
+    name_priority = name_match_priority(candidate_name, target_name)
+    if name_priority < 0:
+        return (-1, -999)
+    status_priority = active_row_priority(row_text)
+    if name_priority >= 3 and re.search(r"\b(registration\s+pending|pending)\b", row_text or "", re.I):
+        name_priority += 10
+        status_priority += 50
+    return (name_priority, status_priority)
+
 def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
     cleaned = re.sub(r"\s+", " ", name or "").strip()
     cleaned = re.sub(r"\s*,\s*", " ", cleaned)
@@ -1624,7 +1638,9 @@ def click_va_organization_link(page, org_name: str) -> bool:
                         row_text = re.sub(r"\s+", " ", link.locator("xpath=ancestor::tr[1]").inner_text(timeout=1000)).strip()
                     except Exception:
                         pass
-                    candidates.append((priority, active_row_priority(row_text), link))
+                    score = candidate_selection_score(txt, org_name, row_text)
+                    if score[0] >= 0:
+                        candidates.append((score[0], score[1], link))
             except Exception:
                 continue
     except Exception:
@@ -1633,6 +1649,28 @@ def click_va_organization_link(page, org_name: str) -> bool:
         candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
         candidates[0][2].click(timeout=5000)
         return True
+    return False
+
+def va_search_results_show_pending(page, org_name: str) -> bool:
+    links = page.locator('a[href*="act=2"][href*="sysorgno"]')
+    try:
+        count = min(links.count(), 100)
+        for i in range(count):
+            link = links.nth(i)
+            try:
+                txt = re.sub(r"\s+", " ", link.inner_text(timeout=1000)).strip()
+                row_text = txt
+                try:
+                    row_text = re.sub(r"\s+", " ", link.locator("xpath=ancestor::tr[1]").inner_text(timeout=1000)).strip()
+                except Exception:
+                    pass
+                score = candidate_selection_score(txt, org_name, row_text)
+                if score[0] >= 3 and re.search(r"\bregistration\s+pending\b", row_text, re.I):
+                    return True
+            except Exception:
+                continue
+    except Exception:
+        pass
     return False
 
 def search_va(page, org: Organization) -> StateResult:
@@ -1661,6 +1699,13 @@ def search_va(page, org: Organization) -> StateResult:
             result.raw_status_text = "No record found"
             result.status = STATUS_NOT_REGISTERED
             result.source_note = "Virginia search returned no matching organization link."
+            result.success = True
+            return result
+
+        if va_search_results_show_pending(page, org.organization_name):
+            result.raw_status_text = "Registration Pending"
+            result.status = "Pending"
+            result.source_note = "Virginia public registry search results show Registration Pending for the matched organization."
             result.success = True
             return result
 
@@ -2296,7 +2341,9 @@ def search_sc(page, org: Organization) -> StateResult:
                             row_text = re.sub(r"\s+", " ", link.locator("xpath=ancestor::tr[1]").inner_text(timeout=1000)).strip()
                         except Exception:
                             pass
-                        candidates.append((priority, active_row_priority(row_text), link))
+                        score = candidate_selection_score(txt, org.organization_name, row_text)
+                        if score[0] >= 0:
+                            candidates.append((score[0], score[1], link))
                 except Exception:
                     continue
         except Exception:
@@ -2324,6 +2371,26 @@ def search_sc(page, org: Organization) -> StateResult:
         detail_text = page.locator("body").inner_text(timeout=15000)
         if text_has_wrong_ein_match(detail_text, org.ein):
             return reject_wrong_ein_result(result, "South Carolina")
+        status_text = extract_labeled_value(page, ["Status", "Registration Status"]) or extract_labeled_value_from_text(detail_text, ["Status", "Registration Status"])
+        if re.search(r"\b(suspended|revoked|not\s+authorized|may\s+not\s+solicit|may\s+not\s+raise\s+funds|may\s+not\s+operate)\b", status_text or "", re.I):
+            result.raw_status_text = status_text
+            result.status = "Suspended"
+            result.source_note = "South Carolina public registry shows a restricted solicitation status, which takes priority over date-based filing interpretation."
+            result.success = True
+            return result
+        if re.search(r"\bexpired\b", status_text or "", re.I):
+            result.raw_status_text = status_text
+            result.status = "Suspended"
+            result.source_note = "South Carolina public registry shows an expired registration status, which CharityClarity treats as Suspended."
+            result.success = True
+            return result
+        if re.search(r"\b(terminated|withdrawn|cancelled|canceled|closed)\b", status_text or "", re.I):
+            result.raw_status_text = status_text
+            result.status = "Closed / Withdrawn / Canceled"
+            result.source_note = "South Carolina public registry shows a terminal registration status."
+            result.success = True
+            return result
+
         m = re.search(r"Due Date:\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})", detail_text, re.I)
         due_raw = m.group(1).strip() if m else extract_labeled_value_from_text(detail_text, ["Due Date"])
         due_date = parse_date_value(due_raw)
@@ -2334,7 +2401,6 @@ def search_sc(page, org: Organization) -> StateResult:
             result.success = True
             return result
 
-        status_text = extract_labeled_value(page, ["Status", "Registration Status"]) or extract_labeled_value_from_text(detail_text, ["Status", "Registration Status"])
         result.raw_status_text = status_text or "Due Date not found"
         result.status = status_text if status_text else STATUS_UNKNOWN
         result.source_note = "South Carolina fallback uses visible registration status when no Due Date is exposed."
@@ -2659,7 +2725,7 @@ def search_me(page, org: Organization) -> StateResult:
                 name_priority = direct_name_priority(row.get("name", ""))
                 if name_priority < 0:
                     continue
-                row_score = (direct_status_priority(row.get("status", "")), name_priority)
+                row_score = (name_priority, direct_status_priority(row.get("status", "")))
                 if row_score > best_score:
                     best_score = row_score
                     best_row = row
@@ -2845,7 +2911,7 @@ def search_me(page, org: Organization) -> StateResult:
                         continue
                     row_status = re.sub(r"\s+", " ", status_match.group(1)).strip()
                     status_priority = active_row_priority(row_status)
-                    row_score = (status_priority, name_priority)
+                    row_score = (name_priority, status_priority)
                     if row_score > best_table_score:
                         best_table_score = row_score
                         best_table_status = row_status
@@ -2881,8 +2947,8 @@ def search_me(page, org: Organization) -> StateResult:
                         except Exception:
                             status_priority = 0
                         if (
-                            status_priority > best_status_priority
-                            or (status_priority == best_status_priority and priority > best_priority)
+                            priority > best_priority
+                            or (priority == best_priority and status_priority > best_status_priority)
                         ):
                             best_priority = priority
                             best_status_priority = status_priority
@@ -3026,7 +3092,7 @@ def search_me(page, org: Organization) -> StateResult:
                                     except Exception:
                                         pass
                                     status_priority = active_row_priority(row_text)
-                                    if status_priority > best_status_priority or (status_priority == best_status_priority and priority > best_priority):
+                                    if priority > best_priority or (priority == best_priority and status_priority > best_status_priority):
                                         best_priority = priority
                                         best_status_priority = status_priority
                                         reacquired_link = link
@@ -3200,8 +3266,8 @@ def search_nd(page, org: Organization) -> StateResult:
                         if (
                             priority >= 0
                             and (
-                                status_score > best_status_score
-                                or (status_score == best_status_score and priority > best_priority)
+                                priority > best_priority
+                                or (priority == best_priority and status_score > best_status_score)
                             )
                         ):
                             best_priority = priority
