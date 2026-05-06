@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.06.3"
+APP_VERSION = "2026.05.06.5"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1016,7 +1016,7 @@ def filing_due_date(state: str, report_year: int, fiscal_end: tuple[int, int]) -
     if state == "ND":
         return date(report_year - 1, 9, 1), "based on North Dakota's annual charitable organization renewal cycle"
     if state == "AK":
-        return date(report_year - 1, 9, 1), "based on Alaska's annual charitable registration cycle"
+        return date(report_year, 9, 1), "based on Alaska's annual charitable registration cycle"
     return None, "state due-date rule is not encoded"
 
 
@@ -1090,13 +1090,22 @@ def latest_year_from_text(body: str, state: str) -> int | None:
         hi_years = [
             int(match.group(1))
             for match in re.finditer(
-                r"(?:Annual\s+Filing\s+for\s+Charitable\s+Organizations|Fiscal\s+year\s+end|FYE|Accounting\s+Period\s+End\s+Date|Display\s+name)[\s\S]{0,160}\b(20\d{2})\b|\b(20\d{2})\b[\s\S]{0,120}(?:Annual\s+Filing\s+for\s+Charitable\s+Organizations|Fiscal\s+year\s+end|FYE|Accounting\s+Period\s+End\s+Date)",
+                r"(?:Annual\s+Filing\s+for\s+Charitable\s+Organizations|Fiscal\s+year\s+end|FYE|Accounting\s+Period\s+End\s+Date)[\s\S]{0,180}\b(20\d{2})\b",
                 annual_section,
                 re.I,
             )
-            for group in match.groups()
-            if group
         ]
+        if not hi_years:
+            hi_years = [
+                int(group) - 1
+                for match in re.finditer(
+                    r"\b(?:Registration|Renewal)\s+(20\d{2})\b|\b(20\d{2})\b[\s\S]{0,80}\b(?:Registration|Renewal)\b",
+                    annual_section,
+                    re.I,
+                )
+                for group in match.groups()
+                if group and not re.search(r"copyright", annual_section[max(0, match.start() - 40):match.end() + 40], re.I)
+            ]
         return max(hi_years) if hi_years else None
     if state == "MD":
         md_patterns = [
@@ -1174,7 +1183,7 @@ def ca_annual_renewal_years_from_text(body: str) -> dict:
     readable_body = html.unescape(re.sub(r"<[^>]+>", " ", body or ""))
     readable_body = re.sub(r"\s+", " ", readable_body)
     annual_match = re.search(
-        r"Annual\s+Renewal\s+Data([\s\S]{0,16000}?)(?:Fundraising\s+Platform\s+Data|Related\s+Registration|Filing\s+and\s+Correspondence|$)",
+        r"Annual\s+Renewal\s+Data([\s\S]{0,40000}?)(?:Fundraising\s+Platform\s+Data|Related\s+Registration|Filing\s+and\s+Correspondence|$)",
         readable_body,
         re.I,
     )
@@ -1188,7 +1197,7 @@ def ca_annual_renewal_years_from_text(body: str) -> dict:
         if not re.search(r"Status\s+of\s+Filing\s*:", block, re.I):
             continue
         status_match = re.search(
-            r"Status\s+of\s+Filing\s*:?\s*(.*?)(?=\s+Accounting\s+Period\s+Begin\s+Date|\s+Accounting\s+Period\s+End\s+Date|\s+Filing\s+Received\s+Date|$)",
+            r"Status\s+of\s+Filing\s*:?\s*(.*?)(?=(?:\s+)?Accounting\s+Period\s+Begin\s+Date|(?:\s+)?Accounting\s+Period\s+End\s+Date|(?:\s+)?Filing\s+Received\s+Date|$)",
             block,
             re.I,
         )
@@ -1200,10 +1209,18 @@ def ca_annual_renewal_years_from_text(body: str) -> dict:
         )
         if not end_match:
             continue
+        filing_received_match = re.search(
+            r"Filing\s+Received\s+Date\s*:?\s*\d{1,2}\s*[/-]\s*\d{1,2}\s*[/-]\s*20\d{2}",
+            block,
+            re.I,
+        )
         year = int(end_match.group(1))
         if re.search(r"\bnot\s+submitted\b", status_text, re.I):
             not_submitted_years.append(year)
-        elif re.search(r"\b(?:e-)?accepted\b", status_text, re.I) and not re.search(r"\breject|incomplete|not\s+submitted\b", status_text, re.I):
+        elif (
+            (re.search(r"\b(?:e-)?accepted\b", status_text, re.I) or filing_received_match or not status_text)
+            and not re.search(r"\breject|incomplete|not\s+submitted\b", status_text, re.I)
+        ):
             submitted_years.append(year)
     return {
         "latest_submitted_year": max(submitted_years) if submitted_years else None,
@@ -1806,7 +1823,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
     if len(re.sub(r"\D", "", org.ein or "")) != 9:
         result.error = "AK search requires 9-digit EIN"
         return result, ""
-    years_to_try = getattr(checker, "AK_YEARS_TO_TRY", [date.today().year, date.today().year - 1])[:2]
+    years_to_try = list(getattr(checker, "AK_YEARS_TO_TRY", [date.today().year, date.today().year - 1]))
     for idx, year in enumerate(years_to_try):
         ak_context = browser.new_context(viewport={"width": 1365, "height": 900}, accept_downloads=False)
         configure_browser_context(ak_context)
@@ -2874,7 +2891,7 @@ def true_status_from_body(result, body: str) -> str:
 
     if result_indicates_no_record(result):
         return "Not Registered"
-    if state == "HI" and record_confirmed and result_fields_indicate_exempt(result):
+    if state == "HI" and record_confirmed and (result_fields_indicate_exempt(result) or indicates_exempt_registration(combined)):
         return "Exempt"
     if state not in {"HI", "NJ", "NY"} and record_confirmed and indicates_exempt_registration(combined):
         return "Exempt"
@@ -2884,6 +2901,16 @@ def true_status_from_body(result, body: str) -> str:
         return status_from_calendar_date(registry_date)
     if state == "PA" and record_confirmed and not use_registry_date:
         return "Delinquent"
+    if state == "AK" and represented_year and due_date:
+        return status_from_calendar_date(due_date)
+    if state == "CA":
+        ca_years = ca_annual_renewal_years_from_text(body)
+        latest_not_submitted_year = ca_years.get("latest_not_submitted_year")
+        latest_submitted_year = ca_years.get("latest_submitted_year")
+        if latest_not_submitted_year and (not latest_submitted_year or latest_not_submitted_year > latest_submitted_year):
+            return "Delinquent"
+    if state in {"MA", "NY"} and represented_year and due_date and not result_indicates_no_record(result):
+        return status_from_calendar_date(due_date)
     if state in EXTENSION_SCENARIO_STATES and record_confirmed and represented_year and due_date:
         return status_from_calendar_date(due_date)
     if state == "AK" and re.search(r"\b20\d{2}\s+registration\s+found\b", combined, re.I):
@@ -3003,6 +3030,12 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         return f"The {state} public registry shows a found organization record with a closed or inactive registration status."
     if normalized_status == "delinquent" and state == "VA" and re.search(r"not\s+authorized\s+to\s+solicit", " ".join([result.status or "", result.raw_status_text or "", result.source_note or ""]), re.I):
         return "The VA public registry shows the organization is not authorized to solicit in Virginia, which CharityClarity treats as Delinquent."
+    if state == "AK" and normalized_status in {"upcoming filing", "current", "delinquent"} and context.get("represented_year") and context.get("due_date"):
+        timing = "within 6 months" if normalized_status == "upcoming filing" else ("overdue" if normalized_status == "delinquent" else "not within the next 6 months")
+        return (
+            f"The AK public registry shows the {context['represented_year']} charitable organization registration/renewal is on file. "
+            f"The next Alaska charitable registration renewal is due {format_date(context.get('due_date'))}, which is {timing}."
+        )
     registry_noncompliant_text = " ".join([result.raw_status_text or "", result.source_note or "", body or ""])
     if normalized_status == "delinquent" and re.search(r"\bnon[-\s]?compliant\b", registry_noncompliant_text, re.I):
         return f"The {state} public registry shows a Noncompliant status, which CharityClarity treats as Delinquent."
@@ -3013,6 +3046,38 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         if registry_date:
             return f"The CO public registry shows an expiration date of {format_date(registry_date)}, which is overdue."
         return "The CO public registry shows an expired registration status, which CharityClarity treats as Delinquent."
+    if state == "CA" and normalized_status == "delinquent":
+        context = filing_context(result, body)
+        ca_years = ca_annual_renewal_years_from_text(body)
+        latest_not_submitted_year = ca_years.get("latest_not_submitted_year")
+        latest_submitted_year = ca_years.get("latest_submitted_year")
+        if latest_not_submitted_year:
+            fiscal_end = context.get("fiscal_end") or fiscal_year_end_for_ein(result.ein)
+            due_sentence = ""
+            if fiscal_end:
+                due_options = filing_due_date_options("CA", latest_not_submitted_year, fiscal_end)
+                base_due = due_options.get("base_due") or due_options.get("effective_due")
+                extended_due = due_options.get("extended_due")
+                if base_due:
+                    due_sentence = (
+                        f" Based on a {fiscal_end[0]}/{fiscal_end[1]} fiscal year end, the "
+                        f"{latest_not_submitted_year} annual renewal initial due date is {format_date(base_due)}."
+                    )
+                if extended_due:
+                    extended_status = status_from_calendar_date(extended_due)
+                    due_sentence += (
+                        f" If a six-month extension was applied for and approved, the due date becomes "
+                        f"{format_date(extended_due)} and the status becomes {extended_status}."
+                    )
+            submitted_sentence = (
+                f" The latest accepted annual renewal year identified is {latest_submitted_year}."
+                if latest_submitted_year else
+                " CharityClarity did not identify a later accepted annual renewal year."
+            )
+            return (
+                f"The CA Annual Renewal Data shows the {latest_not_submitted_year} annual renewal with Status of Filing: Not Submitted."
+                f"{submitted_sentence}{due_sentence} CharityClarity treats the organization as Delinquent."
+            )
     if normalized_status == "delinquent" and annual_filings_absent(combined_result_text(result, body)):
         return (
             f"The {state} public registry detail page shows the organization record, but the annual filing section shows no annual filings available "
@@ -3350,11 +3415,11 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     page,
                     org,
                     checker.search_va,
-                    max_variants=6,
+                    max_variants=12,
                     reject_va_suspended_from_leading_the_drop=True,
                 )
             elif state == "SC":
-                result = search_with_name_variants(page, org, checker.search_sc, max_variants=6)
+                result = search_with_name_variants(page, org, checker.search_sc, max_variants=12)
             elif state == "HI":
                 result = search_hi_precise(page, org)
                 if public_status(result) != "Not Registered":
@@ -3368,7 +3433,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     body = me_detail_body(page, org)
                     enrich_me_result_from_body(result, body)
             elif state == "ND":
-                result = search_with_name_variants(page, org, checker.search_nd, max_variants=5)
+                result = search_with_name_variants(page, org, checker.search_nd, max_variants=10)
             else:
                 raise ValueError(f"Unsupported state: {state}")
             if page:
