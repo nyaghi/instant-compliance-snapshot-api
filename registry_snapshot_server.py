@@ -56,72 +56,14 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.06.1"
+APP_VERSION = "2026.05.06.2"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
 
-# Narrow source-truth disambiguations for public registries that return stale or
-# different-entity records when a state search is name-only or does not expose EIN
-# in the detail record. Keep this table intentionally small and evidence-driven.
-ADJUDICATED_STATUS_OVERRIDES = {
-    ("540505932", "ND"): "Not Registered",
-    ("540505932", "NJ"): "Upcoming Filing",
-    ("540505932", "SC"): "Suspended",
-    ("844465500", "ND"): "Not Registered",
-    ("844465500", "NJ"): "Current",
-    ("844465500", "PA"): "Delinquent",
-    ("620695676", "MA"): "Not Registered",
-    ("832260054", "MA"): "Not Registered",
-    ("822659345", "AK"): "Not Registered",
-    ("822659345", "MA"): "Not Registered",
-    ("822659345", "NJ"): "Delinquent",
-    ("822659345", "VA"): "Not Registered",
-    ("680194625", "MA"): "Not Registered",
-    ("350869050", "CA"): "Delinquent",
-    ("350869050", "NJ"): "Delinquent",
-    ("261188925", "MA"): "Not Registered",
-    ("461791738", "MA"): "Not Registered",
-    ("263433353", "MA"): "Not Registered",
-    ("912144422", "MA"): "Not Registered",
-    ("912144422", "ND"): "Not Registered",
-    ("912144422", "SC"): "Not Registered",
-    ("912144422", "VA"): "Not Registered",
-    ("133599581", "MA"): "Not Registered",
-    ("410972298", "MA"): "Not Registered",
-    ("841445744", "MA"): "Not Registered",
-    ("911785342", "MA"): "Not Registered",
-    ("131950856", "NY"): "Upcoming Filing",
-    ("141707425", "NY"): "Upcoming Filing",
-    ("510165015", "MA"): "Upcoming Filing",
-    ("510165015", "NY"): "Upcoming Filing",
-    ("540505932", "NJ"): "Delinquent",
-    ("844465500", "NJ"): "Delinquent",
-    ("520902868", "MA"): "Upcoming Filing",
-    ("134331855", "VA"): "Suspended",
-    ("043099027", "MA"): "Upcoming Filing",
-    ("911397792", "PA"): "Current",
-    ("474547136", "ND"): "Not Registered",
-    ("812285654", "SC"): "Closed / Withdrawn / Canceled",
-    ("521038433", "HI"): "Delinquent",
-    ("521038433", "SC"): "Delinquent",
-    ("363937766", "CA"): "Current",
-    ("261303951", "HI"): "Upcoming Filing",
-    ("820253346", "SC"): "Suspended",
-    ("136113816", "NJ"): "Closed / Withdrawn / Canceled",
-    ("273067958", "SC"): "Suspended",
-    ("131623892", "NJ"): "Current",
-    ("300805768", "VA"): "Delinquent",
-    ("237036780", "CA"): "Current",
-    ("237036780", "HI"): "Exempt",
-    ("560989620", "HI"): "Exempt",
-    ("270743821", "ND"): "Delinquent",
-    ("770071852", "SC"): "Suspended",
-    ("912166435", "AK"): "Delinquent",
-    ("464845389", "ND"): "Upcoming Filing",
-    ("464162735", "SC"): "Suspended",
-    ("840731930", "VA"): "Pending",
-}
+# Emergency-only override hook. Routine corrections must be implemented as
+# generalized lookup/status rules, not EIN-specific adjudications.
+ADJUDICATED_STATUS_OVERRIDES = {}
 REQUESTED_PARALLEL_LOOKUPS = max(1, int(os.environ.get("CE_MAX_PARALLEL_LOOKUPS", "1")))
 ALLOW_PARALLEL_BROWSER_LOOKUPS = os.environ.get("CE_ALLOW_PARALLEL_BROWSER_LOOKUPS", "1").strip().lower() in {"1", "true", "yes"}
 MAX_BROWSER_LOOKUPS = max(1, int(os.environ.get("CE_MAX_BROWSER_LOOKUPS", "2")))
@@ -796,7 +738,7 @@ def public_status(result) -> str:
         return "Closed / Withdrawn / Canceled"
     if re.search(r"\b(closed|inactive)\b", normalized, re.I):
         return "Closed / Withdrawn / Canceled"
-    if any(token in normalized for token in ["delinquent", "non-compliant", "non compliant", "expired", "overdue"]):
+    if re.search(r"\b(delinquent|non[-\s]?compliant|expired|overdue)\b", normalized, re.I):
         return "Delinquent"
     if normalized in {"current", "active", "good standing", "compliant"} or re.search(r"\bgood\s+as\s+of\b", normalized):
         return "Current"
@@ -1137,13 +1079,6 @@ def nj_inferred_latest_filing_year(fiscal_end: tuple[int, int]) -> int | None:
 
 
 def latest_year_from_text(body: str, state: str) -> int | None:
-    if state == "HI":
-        tab_years = [
-            int(match.group(1))
-            for match in re.finditer(r"<li[^>]*>\s*<a[^>]*>\s*(20\d{2})\s*</a>", body or "", re.I)
-        ]
-        if tab_years:
-            return max(tab_years)
     readable_body = html.unescape(re.sub(r"<[^>]+>", " ", body))
     if state == "MD":
         md_patterns = [
@@ -3258,19 +3193,6 @@ def adjudicated_override_for_result(result) -> str:
 def adjudicated_comment_for_status(result, body: str, status: str) -> str:
     state = (result.state or "the selected state").upper()
     normalized = status.lower()
-    ein_digits = re.sub(r"\D", "", result.ein or "")
-    if (ein_digits, state) == ("540505932", "NJ"):
-        return (
-            "2024 appears to be the most recent New Jersey filing year identified in the CharityClarity check. "
-            "Based on a 12/31 fiscal year end, the next New Jersey annual filing is for FY ending 12/31/2025 "
-            "and is due 6/30/2026. CE Status is Upcoming Filing."
-        )
-    if (ein_digits, state) == ("844465500", "NJ"):
-        return (
-            "2025 appears to be the most recent New Jersey filing year identified in the CharityClarity check. "
-            "Based on a 6/30 fiscal year end, the next New Jersey annual filing is for FY ending 6/30/2026 "
-            "and is due 12/31/2026. CE Status is Current."
-        )
     if normalized == "not registered":
         return f"The {state} public registry was reachable, but no matching registration record was found for the organization/EIN searched."
     if normalized == "suspended":
