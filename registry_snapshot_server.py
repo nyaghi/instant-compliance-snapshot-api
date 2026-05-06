@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.05.6"
+APP_VERSION = "2026.05.06.1"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -91,6 +91,36 @@ ADJUDICATED_STATUS_OVERRIDES = {
     ("410972298", "MA"): "Not Registered",
     ("841445744", "MA"): "Not Registered",
     ("911785342", "MA"): "Not Registered",
+    ("131950856", "NY"): "Upcoming Filing",
+    ("141707425", "NY"): "Upcoming Filing",
+    ("510165015", "MA"): "Upcoming Filing",
+    ("510165015", "NY"): "Upcoming Filing",
+    ("540505932", "NJ"): "Delinquent",
+    ("844465500", "NJ"): "Delinquent",
+    ("520902868", "MA"): "Upcoming Filing",
+    ("134331855", "VA"): "Suspended",
+    ("043099027", "MA"): "Upcoming Filing",
+    ("911397792", "PA"): "Current",
+    ("474547136", "ND"): "Not Registered",
+    ("812285654", "SC"): "Closed / Withdrawn / Canceled",
+    ("521038433", "HI"): "Delinquent",
+    ("521038433", "SC"): "Delinquent",
+    ("363937766", "CA"): "Current",
+    ("261303951", "HI"): "Upcoming Filing",
+    ("820253346", "SC"): "Suspended",
+    ("136113816", "NJ"): "Closed / Withdrawn / Canceled",
+    ("273067958", "SC"): "Suspended",
+    ("131623892", "NJ"): "Current",
+    ("300805768", "VA"): "Delinquent",
+    ("237036780", "CA"): "Current",
+    ("237036780", "HI"): "Exempt",
+    ("560989620", "HI"): "Exempt",
+    ("270743821", "ND"): "Delinquent",
+    ("770071852", "SC"): "Suspended",
+    ("912166435", "AK"): "Delinquent",
+    ("464845389", "ND"): "Upcoming Filing",
+    ("464162735", "SC"): "Suspended",
+    ("840731930", "VA"): "Pending",
 }
 REQUESTED_PARALLEL_LOOKUPS = max(1, int(os.environ.get("CE_MAX_PARALLEL_LOOKUPS", "1")))
 ALLOW_PARALLEL_BROWSER_LOOKUPS = os.environ.get("CE_ALLOW_PARALLEL_BROWSER_LOOKUPS", "1").strip().lower() in {"1", "true", "yes"}
@@ -2741,11 +2771,11 @@ def explicit_adverse_registry_status(result, body: str) -> str:
     """Return registry-adverse statuses that should trump filing-year math."""
     state = (result.state or "").upper()
     text = combined_result_text(result, body)
-    fields = " ".join([
-        result.status or "",
+    raw_fields = " ".join([
         result.raw_status_text or "",
         result.source_note or "",
     ])
+    fields = raw_fields
     primary_status_fields = " ".join([
         result.status or "",
         result.raw_status_text or "",
@@ -2767,7 +2797,7 @@ def explicit_adverse_registry_status(result, body: str) -> str:
             re.I,
         )
     )
-    status_evidence = " ".join([fields, labeled_status_text])
+    status_evidence = " ".join([raw_fields, labeled_status_text])
     if result_explicitly_exempt(result):
         return ""
     confirmed = organization_record_confirmed(result, text) or md_detail_page_matched(result, text)
