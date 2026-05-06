@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.06.9"
+APP_VERSION = "2026.05.06.10"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1561,7 +1561,12 @@ def extract_ak_signature_date(pdf_text: str) -> str:
     return match.group(1).strip() if match else ""
 
 
-def organization_name_variants(name: str, ein: str = "", include_ein_aliases: bool = True) -> list[str]:
+def organization_name_variants(
+    name: str,
+    ein: str = "",
+    include_ein_aliases: bool = True,
+    include_name_segments: bool = False,
+) -> list[str]:
     variants = []
 
     def add(value: str) -> None:
@@ -1572,6 +1577,19 @@ def organization_name_variants(name: str, ein: str = "", include_ein_aliases: bo
     seed_names = [name]
     if ein and include_ein_aliases:
         seed_names.extend([organization_name_for_ein(ein), public_profile_name_for_ein(ein)])
+
+    if include_name_segments:
+        segmented_seeds = []
+        for seed in list(seed_names):
+            for part in re.split(
+                r"\s*(?:/|\\|\bd/?b/?a\b|\bdoing\s+business\s+as\b|\baka\b|\bfka\b|\bformerly\b)\s*",
+                seed or "",
+                flags=re.I,
+            ):
+                part = re.sub(r"\s+", " ", part.strip(" ,;-"))
+                if len(part.split()) >= 2:
+                    segmented_seeds.append(part)
+        seed_names.extend(segmented_seeds)
 
     for seed in seed_names:
         base = re.sub(r"\s+", " ", (seed or "").strip())
@@ -1685,10 +1703,16 @@ def search_with_name_variants(
     max_variants: int | None = None,
     reject_va_suspended_from_leading_the_drop: bool = False,
     include_ein_aliases: bool = True,
+    include_name_segments: bool = False,
 ):
     best_result = None
     original_name = org.organization_name
-    variants = organization_name_variants(original_name, org.ein, include_ein_aliases=include_ein_aliases)
+    variants = organization_name_variants(
+        original_name,
+        org.ein,
+        include_ein_aliases=include_ein_aliases,
+        include_name_segments=include_name_segments,
+    )
     if max_variants:
         variants = variants[:max_variants]
     for variant in variants:
@@ -3425,18 +3449,33 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     page,
                     org,
                     checker.search_va,
-                    max_variants=12,
+                    max_variants=18,
                     reject_va_suspended_from_leading_the_drop=True,
                     include_ein_aliases=False,
+                    include_name_segments=True,
                 )
             elif state == "SC":
-                result = search_with_name_variants(page, org, checker.search_sc, max_variants=12, include_ein_aliases=False)
+                result = search_with_name_variants(
+                    page,
+                    org,
+                    checker.search_sc,
+                    max_variants=18,
+                    include_ein_aliases=False,
+                    include_name_segments=True,
+                )
             elif state == "HI":
                 result = search_hi_precise(page, org)
                 if public_status(result) != "Not Registered":
                     body = hi_detail_body(page)
             elif state == "ME":
-                result = checker.search_me(page, org)
+                result = search_with_name_variants(
+                    page,
+                    org,
+                    checker.search_me,
+                    max_variants=18,
+                    include_ein_aliases=False,
+                    include_name_segments=True,
+                )
                 me_status_source = " ".join([result.raw_status_text or "", result.source_note or ""])
                 if re.search(r"Maine uses the Status shown|No matching organization|No record found|no matching", me_status_source, re.I):
                     body = registry_page_body(page)
@@ -3444,7 +3483,14 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     body = me_detail_body(page, org)
                     enrich_me_result_from_body(result, body)
             elif state == "ND":
-                result = search_with_name_variants(page, org, checker.search_nd, max_variants=10, include_ein_aliases=False)
+                result = search_with_name_variants(
+                    page,
+                    org,
+                    checker.search_nd,
+                    max_variants=18,
+                    include_ein_aliases=False,
+                    include_name_segments=True,
+                )
             else:
                 raise ValueError(f"Unsupported state: {state}")
             if page:
