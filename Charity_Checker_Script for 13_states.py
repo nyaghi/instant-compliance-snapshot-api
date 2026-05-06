@@ -873,7 +873,7 @@ def search_ma(page, org: Organization) -> StateResult:
             body,
             re.I | re.S,
         )
-        section_text = m_section.group(1) if m_section else body
+        section_text = m_section.group(1) if m_section else ""
 
         filing_years = []
         for m in re.finditer(r"Form[\s-]*PC[\s\S]{0,140}(20\d{2})", section_text, re.I):
@@ -964,7 +964,7 @@ def search_ny(page, org: Organization) -> StateResult:
             return result
 
         name_input.fill("")
-        name_input.fill(org.organization_name)
+        name_input.fill(search_name_query_variants(org.organization_name, max_words=5)[0])
         ein_input.fill("")
         if formatted_ein:
             ein_input.fill(formatted_ein)
@@ -1513,6 +1513,61 @@ def normalize_name(value: str) -> str:
     txt = re.sub(r"[^a-z0-9]+", " ", txt)
     return re.sub(r"\s+", " ", txt).strip()
 
+def name_match_priority(candidate_name: str, target_name: str) -> int:
+    """Score a registry result name without letting weak substring matches win."""
+    candidate = normalize_name(candidate_name)
+    target = normalize_name(target_name)
+    if not candidate or not target:
+        return -1
+    if candidate == target:
+        return 5
+    if candidate.startswith(target) or target.startswith(candidate):
+        return 4
+    candidate_words = candidate.split()
+    target_words = target.split()
+    if len(target_words) >= 3 and " ".join(target_words[:3]) in candidate:
+        return 3
+    if target in candidate:
+        return 2
+    shared = set(candidate_words) & set(target_words)
+    if target_words and target_words[0] in shared and len(shared) >= min(3, len(target_words)):
+        return 1
+    return -1
+
+def active_row_priority(text: str) -> int:
+    """Prefer active/current rows when a name search returns stale duplicates."""
+    value = text or ""
+    if re.search(r"\b(registration\s+pending|pending)\b", value, re.I):
+        return 35
+    if re.search(r"\b(active|current|compliant|good\s+standing|registered)\b", value, re.I):
+        return 30
+    if re.search(r"\b(non[-\s]?compliant|delinquent|expired|failed\s+to\s+renew|suspended|revoked|not\s+authorized|may\s+not\s+solicit|terminated|withdrawn|inactive|closed|cancelled|canceled)\b", value, re.I):
+        return 20
+    return 10
+
+def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
+    cleaned = re.sub(r"\s+", " ", name or "").strip()
+    cleaned = re.sub(r"\s*,\s*", " ", cleaned)
+    no_suffix = re.sub(
+        r"\s+\b(the|inc\.?|incorporated|corp\.?|corporation|foundation|fund|llc|ltd\.?|limited)\b\.?\s*$",
+        "",
+        cleaned,
+        flags=re.I,
+    ).strip()
+    no_punct = re.sub(r"[^\w\s']", " ", no_suffix or cleaned).strip()
+    no_punct = re.sub(r"\s+", " ", no_punct)
+    words = no_punct.split()
+    prefix = " ".join(words[:max_words]) if words else no_punct
+    variants = [prefix, no_punct, no_suffix, cleaned]
+    output = []
+    seen = set()
+    for variant in variants:
+        key = variant.lower()
+        if variant and key not in seen:
+            seen.add(key)
+            output.append(variant)
+    return output or [cleaned]
+
 def find_va_name_input(page):
     try:
         inp = page.get_by_label(re.compile("Organization Name", re.I))
@@ -1562,20 +1617,21 @@ def click_va_organization_link(page, org_name: str) -> bool:
             link = links.nth(i)
             try:
                 txt = re.sub(r"\s+", " ", link.inner_text(timeout=1000)).strip()
-                normalized = normalize_name(txt)
-                if normalized == wanted:
-                    link.click(timeout=5000)
-                    return True
-                if wanted and (wanted in normalized or normalized in wanted):
-                    score = 2 if normalized.startswith(wanted) or wanted.startswith(normalized) else 1
-                    candidates.append((score, link))
+                priority = name_match_priority(txt, org_name)
+                if priority >= 0:
+                    row_text = txt
+                    try:
+                        row_text = re.sub(r"\s+", " ", link.locator("xpath=ancestor::tr[1]").inner_text(timeout=1000)).strip()
+                    except Exception:
+                        pass
+                    candidates.append((priority, active_row_priority(row_text), link))
             except Exception:
                 continue
     except Exception:
         pass
     if candidates:
-        candidates.sort(key=lambda item: item[0], reverse=True)
-        candidates[0][1].click(timeout=5000)
+        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        candidates[0][2].click(timeout=5000)
         return True
     return False
 
@@ -1591,7 +1647,7 @@ def search_va(page, org: Organization) -> StateResult:
             result.error = "Could not find VA organization name input"
             return result
         name_input.fill("")
-        name_input.fill(org.organization_name)
+        name_input.fill(search_name_query_variants(org.organization_name, max_words=5)[0])
 
         if not click_va_search_button(page):
             result.error = "Could not click VA Search button"
@@ -1617,6 +1673,14 @@ def search_va(page, org: Organization) -> StateResult:
 
         page.wait_for_load_state("domcontentloaded", timeout=15000)
         fast_sleep(0.75)
+
+        detail_text_for_status = page.locator("body").inner_text(timeout=8000)
+        if re.search(r"\bregistration\s+pending\b", detail_text_for_status, re.I):
+            result.raw_status_text = "Registration Pending"
+            result.status = "Pending"
+            result.source_note = "Virginia public registry shows Registration Pending for the matched organization."
+            result.success = True
+            return result
 
         registration_status = extract_labeled_value(page, ["Registration Filing Status"])
         if re.search(r"not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|revoked|suspended", registration_status or "", re.I):
@@ -2216,7 +2280,6 @@ def search_sc(page, org: Organization) -> StateResult:
             result.success = True
             return result
 
-        wanted = normalize_name(org.organization_name)
         clicked_result = False
         links = page.locator("a[href*='CharityInfo']")
         candidates = []
@@ -2226,21 +2289,21 @@ def search_sc(page, org: Organization) -> StateResult:
                 link = links.nth(i)
                 try:
                     txt = re.sub(r"\s+", " ", link.inner_text(timeout=1000)).strip()
-                    normalized = normalize_name(txt)
-                    if normalized == wanted:
-                        link.click(timeout=5000)
-                        clicked_result = True
-                        break
-                    if wanted and (wanted in normalized or normalized in wanted):
-                        score = 2 if normalized.startswith(wanted) or wanted.startswith(normalized) else 1
-                        candidates.append((score, link))
+                    priority = name_match_priority(txt, org.organization_name)
+                    if priority >= 0:
+                        row_text = txt
+                        try:
+                            row_text = re.sub(r"\s+", " ", link.locator("xpath=ancestor::tr[1]").inner_text(timeout=1000)).strip()
+                        except Exception:
+                            pass
+                        candidates.append((priority, active_row_priority(row_text), link))
                 except Exception:
                     continue
         except Exception:
             pass
         if not clicked_result and candidates:
-            candidates.sort(key=lambda item: item[0], reverse=True)
-            candidates[0][1].click(timeout=5000)
+            candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+            candidates[0][2].click(timeout=5000)
             clicked_result = True
         if not clicked_result:
             result.raw_status_text = "No matching organization result"
@@ -2515,7 +2578,7 @@ def search_me(page, org: Organization) -> StateResult:
             ).strip()
             institute_plural = re.sub(r"\bInstitute\s+of\b", "Institutes of", cleaned, flags=re.I).strip()
             institute_singular = re.sub(r"\bInstitutes\s+of\b", "Institute of", cleaned, flags=re.I).strip()
-            variants = [*us_prefixed_variants, legal_suffix_clean, without_suffix, cleaned_no_punctuation, cleaned, institute_plural, institute_singular]
+            variants = [*search_name_query_variants(cleaned, max_words=5), *us_prefixed_variants, legal_suffix_clean, without_suffix, cleaned_no_punctuation, cleaned, institute_plural, institute_singular]
             seen = set()
             output = []
             for variant in variants:
@@ -2573,30 +2636,10 @@ def search_me(page, org: Organization) -> StateResult:
             return readable, rows, opener
 
         def direct_name_priority(row_name: str) -> int:
-            target = normalize_name(org.organization_name)
-            candidate = normalize_name(row_name)
-            target_base = re.sub(r"\b(inc|incorporated|foundation|the)\b$", "", target).strip()
-            candidate_base = re.sub(r"\b(inc|incorporated|foundation|the)\b$", "", candidate).strip()
-            if not target or not candidate:
-                return -1
-            if candidate == target:
-                return 4
-            if candidate_base and candidate_base == target_base:
-                return 3
-            if candidate.startswith(target) or target.startswith(candidate):
-                return 2
-            if target in candidate or candidate in target:
-                return 1
-            return -1
+            return name_match_priority(row_name, org.organization_name)
 
         def direct_status_priority(status_text: str) -> int:
-            if re.search(r"\bACTIVE\b", status_text or "", re.I):
-                return 10
-            if re.search(r"\b(CURRENT|GOOD\s+STANDING)\b", status_text or "", re.I):
-                return 8
-            if re.search(r"\b(FAILED\s+TO\s+RENEW|EXPIRED|REVOKED|SUSPENDED|INACTIVE|WITHDRAWN|TERMINATED)\b", status_text or "", re.I):
-                return -10
-            return 0
+            return active_row_priority(status_text)
 
         direct_body = ""
         direct_rows: list[dict[str, str]] = []
@@ -2790,14 +2833,7 @@ def search_me(page, org: Organization) -> StateResult:
                     link_text = ""
                     if links.count() > 0:
                         link_text = re.sub(r"\s+", " ", links.first.inner_text(timeout=1000)).strip()
-                    row_name_normalized = normalize_name(link_text or row_text)
-                    name_priority = -1
-                    if link_text.upper() == target_exact:
-                        name_priority = 3
-                    elif row_name_normalized == target_normalized:
-                        name_priority = 2
-                    elif target_normalized and (target_normalized in row_name_normalized or row_name_normalized in target_normalized):
-                        name_priority = 1
+                    name_priority = name_match_priority(link_text or row_text, org.organization_name)
                     if name_priority < 0:
                         continue
                     status_match = re.search(
@@ -2808,13 +2844,7 @@ def search_me(page, org: Organization) -> StateResult:
                     if not status_match:
                         continue
                     row_status = re.sub(r"\s+", " ", status_match.group(1)).strip()
-                    status_priority = 0
-                    if re.search(r"\bACTIVE\b", row_status, re.I):
-                        status_priority = 10
-                    elif re.search(r"\b(CURRENT|GOOD\s+STANDING)\b", row_status, re.I):
-                        status_priority = 8
-                    elif re.search(r"\b(FAILED\s+TO\s+RENEW|EXPIRED|REVOKED|SUSPENDED|INACTIVE)\b", row_status, re.I):
-                        status_priority = -10
+                    status_priority = active_row_priority(row_status)
                     row_score = (status_priority, name_priority)
                     if row_score > best_table_score:
                         best_table_score = row_score
@@ -2840,25 +2870,14 @@ def search_me(page, org: Organization) -> StateResult:
                         txt = re.sub(r"\s+", " ", link.inner_text(timeout=1500)).strip()
                         if not txt:
                             continue
-                        link_exact = txt.upper()
-                        link_normalized = normalize_name(txt)
-                        priority = -1
-                        if link_exact == target_exact:
-                            priority = 3
-                        elif link_normalized == target_normalized:
-                            priority = 2
-                        elif target_normalized and (target_normalized in link_normalized or link_normalized in target_normalized):
-                            priority = 1
+                        priority = name_match_priority(txt, org.organization_name)
+                        if priority < 0:
+                            continue
                         status_priority = 0
                         row_text = txt
                         try:
                             row_text = re.sub(r"\s+", " ", link.locator("xpath=ancestor::tr[1]").inner_text(timeout=1500)).strip()
-                            if re.search(r"\bACTIVE\b", row_text, re.I):
-                                status_priority = 5
-                            elif re.search(r"\b(CURRENT|GOOD\s+STANDING)\b", row_text, re.I):
-                                status_priority = 4
-                            elif re.search(r"\b(FAILED\s+TO\s+RENEW|EXPIRED|REVOKED|SUSPENDED|INACTIVE)\b", row_text, re.I):
-                                status_priority = -5
+                            status_priority = active_row_priority(row_text)
                         except Exception:
                             status_priority = 0
                         if (
@@ -2985,6 +3004,7 @@ def search_me(page, org: Organization) -> StateResult:
 
                     reacquired_link = None
                     best_priority = -1
+                    best_status_priority = -999
                     for selector in ["a[href*='ShowDetail.aspx']", "a[href]"]:
                         try:
                             links = page.locator(selector)
@@ -2997,17 +3017,18 @@ def search_me(page, org: Organization) -> StateResult:
                                     txt = re.sub(r"\s+", " ", link.inner_text(timeout=1500)).strip()
                                     if not txt:
                                         continue
-                                    link_exact = txt.upper()
-                                    link_normalized = normalize_name(txt)
-                                    priority = -1
-                                    if link_exact == target_exact:
-                                        priority = 3
-                                    elif link_normalized == target_normalized:
-                                        priority = 2
-                                    elif target_normalized and (target_normalized in link_normalized or link_normalized in target_normalized):
-                                        priority = 1
-                                    if priority > best_priority:
+                                    priority = name_match_priority(txt, org.organization_name)
+                                    if priority < 0:
+                                        continue
+                                    row_text = txt
+                                    try:
+                                        row_text = re.sub(r"\s+", " ", link.locator("xpath=ancestor::tr[1]").inner_text(timeout=1000)).strip()
+                                    except Exception:
+                                        pass
+                                    status_priority = active_row_priority(row_text)
+                                    if status_priority > best_status_priority or (status_priority == best_status_priority and priority > best_priority):
                                         best_priority = priority
+                                        best_status_priority = status_priority
                                         reacquired_link = link
                                 except Exception:
                                     continue
@@ -3114,7 +3135,7 @@ def search_nd(page, org: Organization) -> StateResult:
             return result
         search_input.click(timeout=5000)
         search_input.fill("")
-        search_input.fill(org.organization_name)
+        search_input.fill(search_name_query_variants(org.organization_name, max_words=5)[0])
         fast_sleep(0.5)
 
         search_button = None
@@ -3142,8 +3163,6 @@ def search_nd(page, org: Organization) -> StateResult:
             result.success = True
             return result
 
-        target_exact = re.sub(r"\s+", " ", (org.organization_name or "").strip()).upper()
-        target_normalized = normalize_name(org.organization_name)
         best_button = None
         best_priority = -1
         best_status_score = -999
@@ -3172,15 +3191,7 @@ def search_nd(page, org: Organization) -> StateResult:
                         if text_has_wrong_ein_match(combined_txt, org.ein):
                             continue
                         name_text = lines[0]
-                        name_exact = name_text.upper()
-                        name_normalized = normalize_name(name_text)
-                        priority = -1
-                        if name_exact == target_exact:
-                            priority = 3
-                        elif name_normalized == target_normalized:
-                            priority = 2
-                        elif target_normalized and (target_normalized in name_normalized or name_normalized in target_normalized):
-                            priority = 1
+                        priority = name_match_priority(name_text, org.organization_name)
                         status_score = 0
                         if re.search(r"\b(active|current|good standing|registered)\b", combined_txt, re.I):
                             status_score += 5
