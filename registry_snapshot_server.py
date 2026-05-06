@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.06.2"
+APP_VERSION = "2026.05.06.3"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1080,6 +1080,24 @@ def nj_inferred_latest_filing_year(fiscal_end: tuple[int, int]) -> int | None:
 
 def latest_year_from_text(body: str, state: str) -> int | None:
     readable_body = html.unescape(re.sub(r"<[^>]+>", " ", body))
+    if state == "HI":
+        annual_section_match = re.search(
+            r"(?:Annual\s+filing\s+documents|Annual\s+filings?|Documents)([\s\S]{0,5000}?)(?:Registration\s+documents|Other\s+Info|Current\s+CCV|Past\s+CCV|$)",
+            readable_body,
+            re.I,
+        )
+        annual_section = annual_section_match.group(1) if annual_section_match else ""
+        hi_years = [
+            int(match.group(1))
+            for match in re.finditer(
+                r"(?:Annual\s+Filing\s+for\s+Charitable\s+Organizations|Fiscal\s+year\s+end|FYE|Accounting\s+Period\s+End\s+Date|Display\s+name)[\s\S]{0,160}\b(20\d{2})\b|\b(20\d{2})\b[\s\S]{0,120}(?:Annual\s+Filing\s+for\s+Charitable\s+Organizations|Fiscal\s+year\s+end|FYE|Accounting\s+Period\s+End\s+Date)",
+                annual_section,
+                re.I,
+            )
+            for group in match.groups()
+            if group
+        ]
+        return max(hi_years) if hi_years else None
     if state == "MD":
         md_patterns = [
             r"Most\s+Recent\s+Fiscal\s+Year\s*:?\s*(20\d{2})",
@@ -2813,7 +2831,7 @@ def true_status_from_body(result, body: str) -> str:
     adverse_status = explicit_adverse_registry_status(result, combined)
     if adverse_status:
         return adverse_status
-    primary_registry_fields = " ".join([result.status or "", result.raw_status_text or ""])
+    primary_registry_fields = " ".join([result.raw_status_text or "", result.source_note or ""])
     if re.search(r"\b(non[-\s]?compliant|delinquent)\b", primary_registry_fields, re.I):
         return "Delinquent"
     if state == "ME" and re.search(r"\bACTIVE\b", " ".join([result.status or "", result.raw_status_text or ""]), re.I) and not explicit_registry_date(result, combined):
@@ -2877,6 +2895,8 @@ def true_status_from_body(result, body: str) -> str:
             return status_for_filed_cycle(state, context, registry_date) or "Current"
     if state == "HI" and record_confirmed and represented_year and represented_year >= date.today().year - 1 and re.search(r"\bActive\b", combined, re.I):
         return status_for_filed_cycle(state, context, registry_date) or "Current"
+    if state == "HI" and record_confirmed and not represented_year and re.search(r"\bActive\b", combined, re.I):
+        return "Delinquent"
     if state == "MA" and record_confirmed and represented_year and represented_year >= date.today().year - 1 and re.search(r"Annual\s+Filings?\s+not\s+visible", combined, re.I):
         return status_for_filed_cycle(state, context, registry_date) or "Current"
     if use_registry_date:
@@ -2997,6 +3017,11 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         return (
             f"The {state} public registry detail page shows the organization record, but the annual filing section shows no annual filings available "
             "and the CharityClarity check does not show an exempt registration status."
+        )
+    if normalized_status == "delinquent" and state == "HI" and not context.get("represented_year"):
+        return (
+            "The HI public registry shows an active organization record, but CharityClarity did not identify a visible annual filing year "
+            "from the annual filing/document section and the record does not show an exempt registration status."
         )
     if normalized_status == "delinquent" and stale_represented_year_is_delinquent(context.get("represented_year")) and not context.get("due_date"):
         return (
