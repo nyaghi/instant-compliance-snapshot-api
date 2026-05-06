@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.06.5"
+APP_VERSION = "2026.05.06.9"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1097,7 +1097,7 @@ def latest_year_from_text(body: str, state: str) -> int | None:
         ]
         if not hi_years:
             hi_years = [
-                int(group) - 1
+                int(group)
                 for match in re.finditer(
                     r"\b(?:Registration|Renewal)\s+(20\d{2})\b|\b(20\d{2})\b[\s\S]{0,80}\b(?:Registration|Renewal)\b",
                     annual_section,
@@ -1193,6 +1193,7 @@ def ca_annual_renewal_years_from_text(body: str) -> dict:
     blocks = re.split(r"(?=Status\s+of\s+Filing\s*:)", annual_section, flags=re.I)
     submitted_years = []
     not_submitted_years = []
+    not_submitted_status_by_year = {}
     for block in blocks:
         if not re.search(r"Status\s+of\s+Filing\s*:", block, re.I):
             continue
@@ -1215,16 +1216,22 @@ def ca_annual_renewal_years_from_text(body: str) -> dict:
             re.I,
         )
         year = int(end_match.group(1))
-        if re.search(r"\bnot\s+submitted\b", status_text, re.I):
+        if re.search(r"\b(?:not\s+submitted|in\s+process|pending)\b", status_text, re.I):
             not_submitted_years.append(year)
+            not_submitted_status_by_year[year] = status_text or "Not Submitted"
         elif (
-            (re.search(r"\b(?:e-)?accepted\b", status_text, re.I) or filing_received_match or not status_text)
+            (
+                re.search(r"\b(?:e-)?accepted\b", status_text, re.I)
+                or (not status_text and filing_received_match)
+            )
             and not re.search(r"\breject|incomplete|not\s+submitted\b", status_text, re.I)
         ):
             submitted_years.append(year)
+    latest_not_submitted_year = max(not_submitted_years) if not_submitted_years else None
     return {
         "latest_submitted_year": max(submitted_years) if submitted_years else None,
-        "latest_not_submitted_year": max(not_submitted_years) if not_submitted_years else None,
+        "latest_not_submitted_year": latest_not_submitted_year,
+        "latest_not_submitted_status": not_submitted_status_by_year.get(latest_not_submitted_year) if latest_not_submitted_year else None,
     }
 
 
@@ -1554,7 +1561,7 @@ def extract_ak_signature_date(pdf_text: str) -> str:
     return match.group(1).strip() if match else ""
 
 
-def organization_name_variants(name: str, ein: str = "") -> list[str]:
+def organization_name_variants(name: str, ein: str = "", include_ein_aliases: bool = True) -> list[str]:
     variants = []
 
     def add(value: str) -> None:
@@ -1563,7 +1570,7 @@ def organization_name_variants(name: str, ein: str = "") -> list[str]:
             variants.append(value)
 
     seed_names = [name]
-    if ein:
+    if ein and include_ein_aliases:
         seed_names.extend([organization_name_for_ein(ein), public_profile_name_for_ein(ein)])
 
     for seed in seed_names:
@@ -1677,10 +1684,11 @@ def search_with_name_variants(
     search_func,
     max_variants: int | None = None,
     reject_va_suspended_from_leading_the_drop: bool = False,
+    include_ein_aliases: bool = True,
 ):
     best_result = None
     original_name = org.organization_name
-    variants = organization_name_variants(original_name, org.ein)
+    variants = organization_name_variants(original_name, org.ein, include_ein_aliases=include_ein_aliases)
     if max_variants:
         variants = variants[:max_variants]
     for variant in variants:
@@ -2906,6 +2914,7 @@ def true_status_from_body(result, body: str) -> str:
     if state == "CA":
         ca_years = ca_annual_renewal_years_from_text(body)
         latest_not_submitted_year = ca_years.get("latest_not_submitted_year")
+        latest_not_submitted_status = ca_years.get("latest_not_submitted_status") or "Not Submitted"
         latest_submitted_year = ca_years.get("latest_submitted_year")
         if latest_not_submitted_year and (not latest_submitted_year or latest_not_submitted_year > latest_submitted_year):
             return "Delinquent"
@@ -3050,6 +3059,7 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         context = filing_context(result, body)
         ca_years = ca_annual_renewal_years_from_text(body)
         latest_not_submitted_year = ca_years.get("latest_not_submitted_year")
+        latest_not_submitted_status = ca_years.get("latest_not_submitted_status") or "Not Submitted"
         latest_submitted_year = ca_years.get("latest_submitted_year")
         if latest_not_submitted_year:
             fiscal_end = context.get("fiscal_end") or fiscal_year_end_for_ein(result.ein)
@@ -3075,7 +3085,7 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
                 " CharityClarity did not identify a later accepted annual renewal year."
             )
             return (
-                f"The CA Annual Renewal Data shows the {latest_not_submitted_year} annual renewal with Status of Filing: Not Submitted."
+                f"The CA Annual Renewal Data shows the {latest_not_submitted_year} annual renewal with Status of Filing: {latest_not_submitted_status}."
                 f"{submitted_sentence}{due_sentence} CharityClarity treats the organization as Delinquent."
             )
     if normalized_status == "delinquent" and annual_filings_absent(combined_result_text(result, body)):
@@ -3417,9 +3427,10 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     checker.search_va,
                     max_variants=12,
                     reject_va_suspended_from_leading_the_drop=True,
+                    include_ein_aliases=False,
                 )
             elif state == "SC":
-                result = search_with_name_variants(page, org, checker.search_sc, max_variants=12)
+                result = search_with_name_variants(page, org, checker.search_sc, max_variants=12, include_ein_aliases=False)
             elif state == "HI":
                 result = search_hi_precise(page, org)
                 if public_status(result) != "Not Registered":
@@ -3433,7 +3444,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     body = me_detail_body(page, org)
                     enrich_me_result_from_body(result, body)
             elif state == "ND":
-                result = search_with_name_variants(page, org, checker.search_nd, max_variants=10)
+                result = search_with_name_variants(page, org, checker.search_nd, max_variants=10, include_ein_aliases=False)
             else:
                 raise ValueError(f"Unsupported state: {state}")
             if page:
