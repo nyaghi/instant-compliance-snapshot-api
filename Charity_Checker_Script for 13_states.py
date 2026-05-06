@@ -1551,7 +1551,10 @@ def active_row_priority(text: str) -> int:
 def candidate_selection_score(candidate_name: str, target_name: str, row_text: str) -> tuple[int, int]:
     """Choose the best matching entity first; use active/current status to break ties."""
     name_priority = name_match_priority(candidate_name, target_name)
-    if name_priority < 0:
+    # Name-only state portals can return loosely related charities. A shared
+    # first word plus a few generic terms is not enough to treat the record as
+    # the requested organization.
+    if name_priority < 2:
         return (-1, -999)
     status_priority = active_row_priority(row_text)
     if name_priority >= 3 and re.search(r"\b(registration\s+pending|pending)\b", row_text or "", re.I):
@@ -3257,12 +3260,7 @@ def search_nd(page, org: Organization) -> StateResult:
                         if text_has_wrong_ein_match(combined_txt, org.ein):
                             continue
                         name_text = lines[0]
-                        priority = name_match_priority(name_text, org.organization_name)
-                        status_score = 0
-                        if re.search(r"\b(active|current|good standing|registered)\b", combined_txt, re.I):
-                            status_score += 5
-                        if re.search(r"\b(inactive|closed|expired|failed|failed to renew|revoked|terminated|withdrawn|cancelled|canceled)\b", combined_txt, re.I):
-                            status_score -= 8
+                        priority, status_score = candidate_selection_score(name_text, org.organization_name, combined_txt)
                         if (
                             priority >= 0
                             and (
