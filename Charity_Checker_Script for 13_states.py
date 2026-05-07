@@ -1508,8 +1508,14 @@ def search_pa(page, org: Organization) -> StateResult:
     except Exception as e:
         result.error = f"PA error: {e}"
         return result
+def strip_registry_display_labels(value: str) -> str:
+    """Remove registry-only labels before comparing organization names."""
+    txt = re.sub(r"^\s*\d+\.\s*", " ", value or "")
+    txt = re.sub(r"\s*\(\s*(?:primary\s+name|registration\s+pending)\s*\)\s*", " ", txt, flags=re.I)
+    return re.sub(r"\s+", " ", txt).strip()
+
 def normalize_name(value: str) -> str:
-    txt = (value or "").lower()
+    txt = strip_registry_display_labels(value).lower()
     txt = re.sub(r"\bu\s*\.?\s*s\.?\b", "us", txt)
     txt = re.sub(r"\b(the|and|a)\b", " ", txt)
     # Keep substantive words like "foundation" and "fund" in the match key.
@@ -1568,9 +1574,6 @@ def candidate_selection_score(candidate_name: str, target_name: str, row_text: s
     if name_priority < 2:
         return (-1, -999)
     status_priority = active_row_priority(row_text)
-    if name_priority >= 3 and re.search(r"\b(registration\s+pending|pending)\b", row_text or "", re.I):
-        name_priority += 10
-        status_priority += 50
     return (name_priority, status_priority)
 
 def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
@@ -1673,6 +1676,7 @@ def click_va_organization_link(page, org_name: str) -> bool:
 
 def va_search_results_show_pending(page, org_name: str) -> bool:
     links = page.locator('a[href*="act=2"][href*="sysorgno"]')
+    candidates = []
     try:
         count = min(links.count(), 100)
         for i in range(count):
@@ -1685,13 +1689,16 @@ def va_search_results_show_pending(page, org_name: str) -> bool:
                 except Exception:
                     pass
                 score = candidate_selection_score(txt, org_name, row_text)
-                if score[0] >= 3 and re.search(r"\bregistration\s+pending\b", row_text, re.I):
-                    return True
+                if score[0] >= 0:
+                    candidates.append((score[0], score[1], bool(re.search(r"\bregistration\s+pending\b", row_text, re.I))))
             except Exception:
                 continue
     except Exception:
         pass
-    return False
+    if not candidates:
+        return False
+    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return candidates[0][2]
 
 def search_va(page, org: Organization) -> StateResult:
     url = "https://cos.vdacs.virginia.gov/cgi-bin/char_search.cgi"
