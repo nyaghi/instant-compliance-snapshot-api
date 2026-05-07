@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.06.10"
+APP_VERSION = "2026.05.07.1"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1095,17 +1095,6 @@ def latest_year_from_text(body: str, state: str) -> int | None:
                 re.I,
             )
         ]
-        if not hi_years:
-            hi_years = [
-                int(group)
-                for match in re.finditer(
-                    r"\b(?:Registration|Renewal)\s+(20\d{2})\b|\b(20\d{2})\b[\s\S]{0,80}\b(?:Registration|Renewal)\b",
-                    annual_section,
-                    re.I,
-                )
-                for group in match.groups()
-                if group and not re.search(r"copyright", annual_section[max(0, match.start() - 40):match.end() + 40], re.I)
-            ]
         return max(hi_years) if hi_years else None
     if state == "MD":
         md_patterns = [
@@ -1344,14 +1333,8 @@ def filing_context(result, body: str) -> dict:
             latest_year = profile_latest_year
         if ce_latest_year and ce_latest_year > latest_year:
             latest_year = ce_latest_year
-    # For Massachusetts, do not infer a Form PC year from outside profile data
-    # when the MA Annual Filings grid itself does not expose a filing year.
-    if (
-        latest_year is None
-        and state == "CA"
-        and re.search(r"\b(current|active|registered|compliant)\b", " ".join([result.status or "", result.raw_status_text or "", body or ""]), re.I)
-    ):
-        latest_year = public_profile_latest_tax_year_for_ein(result.ein)
+    # For CA, use Annual Renewal Data only. Pulling a Form 990/profile year here
+    # can create a filing year that the California registry did not show.
     if latest_year is None and period_end and state not in {"CA", "MA", "MD", "NJ", "PA"}:
         latest_year = period_end.year
     override_fiscal_end = FISCAL_YEAR_END_OVERRIDES.get(re.sub(r"\D", "", result.ein or ""))
@@ -1566,6 +1549,8 @@ def organization_name_variants(
     ein: str = "",
     include_ein_aliases: bool = True,
     include_name_segments: bool = False,
+    include_compact_legal_suffixes: bool = True,
+    include_leading_article_variants: bool = True,
 ) -> list[str]:
     variants = []
 
@@ -1642,6 +1627,8 @@ def organization_name_variants(
                 pair_variant[idx] = f"{pair_variant[idx]}-{pair_variant[idx + 1]}"
                 del pair_variant[idx + 1]
                 hyphenated_word_pairs.append(" ".join(pair_variant))
+        broad_variants = [and_without_suffix, compact_legal_suffixes] if include_compact_legal_suffixes else []
+        article_variants = [without_leading_the] if include_leading_article_variants else []
         for variant in [
             without_comma_suffix,
             without_suffix,
@@ -1656,11 +1643,10 @@ def organization_name_variants(
             apostrophe_removed,
             possessive_removed,
             and_no_punctuation,
-            and_without_suffix,
-            compact_legal_suffixes,
+            *broad_variants,
             *us_prefixed_variants,
             without_trailing_the,
-            without_leading_the,
+            *article_variants,
             *hyphenated_word_pairs,
         ]:
             add(variant)
@@ -1704,6 +1690,8 @@ def search_with_name_variants(
     reject_va_suspended_from_leading_the_drop: bool = False,
     include_ein_aliases: bool = True,
     include_name_segments: bool = False,
+    include_compact_legal_suffixes: bool = True,
+    include_leading_article_variants: bool = True,
 ):
     best_result = None
     original_name = org.organization_name
@@ -1712,6 +1700,8 @@ def search_with_name_variants(
         org.ein,
         include_ein_aliases=include_ein_aliases,
         include_name_segments=include_name_segments,
+        include_compact_legal_suffixes=include_compact_legal_suffixes,
+        include_leading_article_variants=include_leading_article_variants,
     )
     if max_variants:
         variants = variants[:max_variants]
@@ -2443,6 +2433,8 @@ def search_nj_direct(page, org):
         status_patterns = [
             ("Noncompliant", r"\bnon[-\s]?compliant\b"),
             ("Delinquent", r"\bdelinquent\b"),
+            ("Retired", r"\bretired\b"),
+            ("Withdrawn", r"\bwithdrawn\b"),
             ("Revoked", r"\brevoked\b"),
             ("Suspended", r"\bsuspended\b"),
             ("Expired", r"\bexpired\b"),
@@ -2450,8 +2442,6 @@ def search_nj_direct(page, org):
             ("Compliant", r"\bcompliant\b"),
             ("Active", r"\bactive\b"),
             ("Current", r"\bcurrent\b"),
-            ("Withdrawn", r"\bwithdrawn\b"),
-            ("Retired", r"\bretired\b"),
         ]
         if ein_digits and ein_digits in re.sub(r"\D", "", body):
             try:
@@ -2478,7 +2468,12 @@ def search_nj_direct(page, org):
             if status_match:
                 status = status_match.group(1).strip()
         result.raw_status_text = status or "Status not found"
-        result.status = "Delinquent" if re.search(r"\bnon[-\s]?compliant\b", status, re.I) else (status or checker.STATUS_UNKNOWN)
+        if re.search(r"\b(retired|withdrawn|terminated|cancelled|canceled|closed)\b", status, re.I):
+            result.status = "Closed / Withdrawn / Canceled"
+        elif re.search(r"\bnon[-\s]?compliant\b", status, re.I):
+            result.status = "Delinquent"
+        else:
+            result.status = status or checker.STATUS_UNKNOWN
         result.source_note = "New Jersey uses the public search result Status value."
         result.success = True
         return result
@@ -2580,6 +2575,18 @@ def indicates_exempt_registration(text: str) -> bool:
             r"\bexempt\s+from\s+(charitable\s+|annual\s+)?registration\b",
             r"\bexempt\s*-\s*[A-Za-z0-9 /-]+",
             r"^\s*exempt\b",
+        ]
+    )
+
+
+def hi_indicates_exempt_registration(text: str) -> bool:
+    readable = html.unescape(re.sub(r"<[^>]+>", " ", text or ""))
+    readable = re.sub(r"\s+", " ", readable)
+    return any(
+        re.search(pattern, readable, re.I)
+        for pattern in [
+            r"\bRegistration\s+Type\b[\s\S]{0,80}\bExempt\b",
+            r"\bExempt\s+Registration\b",
         ]
     )
 
@@ -2813,6 +2820,10 @@ def explicit_adverse_registry_status(result, body: str) -> str:
     if state == "NJ":
         if re.search(r"\bnon[-\s]?compliant\b", status_evidence, re.I):
             return "Delinquent"
+        if re.search(withdrawn_pattern, status_evidence, re.I):
+            return "Closed / Withdrawn / Canceled"
+        if re.search(closed_pattern, status_evidence, re.I):
+            return "Closed / Withdrawn / Canceled"
         if re.search(r"\brevoked\b", status_evidence, re.I):
             return "Revoked"
         if re.search(r"\b(suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist)\b", status_evidence, re.I):
@@ -2821,10 +2832,6 @@ def explicit_adverse_registry_status(result, body: str) -> str:
             return "Failed to Renew"
         if re.search(pending_pattern, status_evidence, re.I):
             return "Pending"
-        if re.search(withdrawn_pattern, status_evidence, re.I):
-            return "Closed / Withdrawn / Canceled"
-        if re.search(closed_pattern, status_evidence, re.I):
-            return "Closed / Withdrawn / Canceled"
         return ""
     if re.search(r"\brevoked\b", status_evidence, re.I):
         return "Revoked"
@@ -2923,7 +2930,7 @@ def true_status_from_body(result, body: str) -> str:
 
     if result_indicates_no_record(result):
         return "Not Registered"
-    if state == "HI" and record_confirmed and (result_fields_indicate_exempt(result) or indicates_exempt_registration(combined)):
+    if state == "HI" and record_confirmed and (result_fields_indicate_exempt(result) or hi_indicates_exempt_registration(combined)):
         return "Exempt"
     if state not in {"HI", "NJ", "NY"} and record_confirmed and indicates_exempt_registration(combined):
         return "Exempt"
@@ -3450,9 +3457,10 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     org,
                     checker.search_va,
                     max_variants=18,
-                    reject_va_suspended_from_leading_the_drop=True,
+                    reject_va_suspended_from_leading_the_drop=False,
                     include_ein_aliases=False,
-                    include_name_segments=True,
+                    include_name_segments=False,
+                    include_compact_legal_suffixes=False,
                 )
             elif state == "SC":
                 result = search_with_name_variants(
@@ -3461,7 +3469,9 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     checker.search_sc,
                     max_variants=18,
                     include_ein_aliases=False,
-                    include_name_segments=True,
+                    include_name_segments=False,
+                    include_compact_legal_suffixes=False,
+                    include_leading_article_variants=False,
                 )
             elif state == "HI":
                 result = search_hi_precise(page, org)
@@ -3474,7 +3484,9 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     checker.search_me,
                     max_variants=18,
                     include_ein_aliases=False,
-                    include_name_segments=True,
+                    include_name_segments=False,
+                    include_compact_legal_suffixes=False,
+                    include_leading_article_variants=False,
                 )
                 me_status_source = " ".join([result.raw_status_text or "", result.source_note or ""])
                 if re.search(r"Maine uses the Status shown|No matching organization|No record found|no matching", me_status_source, re.I):
@@ -3489,7 +3501,9 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     checker.search_nd,
                     max_variants=18,
                     include_ein_aliases=False,
-                    include_name_segments=True,
+                    include_name_segments=False,
+                    include_compact_legal_suffixes=False,
+                    include_leading_article_variants=False,
                 )
             else:
                 raise ValueError(f"Unsupported state: {state}")
