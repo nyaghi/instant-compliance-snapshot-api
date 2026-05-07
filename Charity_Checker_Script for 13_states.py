@@ -632,11 +632,10 @@ def search_ca(page, org: Organization) -> StateResult:
                         score += 6
                     if wanted_name and wanted_name in row_name:
                         score += 4
-                    if re.search(r"\bcurrent\b", row_text, re.I):
-                        score += 8
+                    score += active_row_priority(row_text) // 5
                     if re.search(r"\bcharity\s+registration\b", row_text, re.I) and re.search(r"\bcurrent\b", row_text, re.I):
                         score += 4
-                    if re.search(r"\b(merged\s+out|withdrawn|dissolved|closed|revoked|suspended)\b", row_text, re.I):
+                    if re.search(r"\b(merged\s+out|withdrawn|dissolved|closed|retired|inactive|terminated|cancelled|canceled)\b", row_text, re.I):
                         score -= 15
                     if score > best_row[1]:
                         best_row = (row_status, score)
@@ -1023,6 +1022,7 @@ def search_ny(page, org: Organization) -> StateResult:
         clicked_id = False
         best_row = None
         best_priority = -1
+        best_status_priority = -999
         try:
             rows = page.locator("tr")
             count = min(rows.count(), 100)
@@ -1043,8 +1043,10 @@ def search_ny(page, org: Organization) -> StateResult:
                         priority = 2
                     elif wanted_name and (wanted_name in row_name or row_name in wanted_name):
                         priority = 1
-                    if priority > best_priority:
+                    status_priority = active_row_priority(row_text)
+                    if priority > best_priority or (priority == best_priority and status_priority > best_status_priority):
                         best_priority = priority
+                        best_status_priority = status_priority
                         best_row = row
                 except Exception:
                     continue
@@ -1555,15 +1557,19 @@ def name_match_priority(candidate_name: str, target_name: str) -> int:
     return -1
 
 def active_row_priority(text: str) -> int:
-    """Prefer active/current rows when a name search returns stale duplicates."""
+    """Prefer non-terminal records when duplicate search results match similarly."""
     value = text or ""
+    if re.search(r"\bnot\s+registered\b", value, re.I):
+        return 5
+    if re.search(r"\b(retired|inactive|closed|withdrawn|terminated|cancelled|canceled|dissolved|merged\s+out)\b", value, re.I):
+        return 10
     if re.search(r"\b(registration\s+pending|pending)\b", value, re.I):
-        return 35
+        return 80
+    if re.search(r"\b(non[-\s]?compliant|delinquent|expired|failed\s+to\s+renew|suspended|revoked|not\s+authorized|may\s+not\s+solicit|may\s+not\s+raise\s+funds|may\s+not\s+operate|cease\s+and\s+desist)\b", value, re.I):
+        return 60
     if re.search(r"\b(active|current|compliant|good\s+standing|registered)\b", value, re.I):
-        return 30
-    if re.search(r"\b(non[-\s]?compliant|delinquent|expired|failed\s+to\s+renew|suspended|revoked|not\s+authorized|may\s+not\s+solicit|terminated|withdrawn|inactive|closed|cancelled|canceled)\b", value, re.I):
-        return 20
-    return 10
+        return 70
+    return 40
 
 def candidate_selection_score(candidate_name: str, target_name: str, row_text: str) -> tuple[int, int]:
     """Choose the best matching entity first; use active/current status to break ties."""
