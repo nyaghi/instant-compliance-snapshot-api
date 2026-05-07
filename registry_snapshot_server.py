@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.07.6"
+APP_VERSION = "2026.05.07.7"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -2446,16 +2446,30 @@ def search_nj_direct(page, org):
         if ein_digits and ein_digits in re.sub(r"\D", "", body):
             try:
                 rows = page.locator("tr")
+                best_status = ""
+                best_score = (-999, -999, -999)
                 for i in range(min(rows.count(), 80)):
                     row_text = re.sub(r"\s+", " ", rows.nth(i).inner_text(timeout=1500)).strip()
                     if ein_digits not in re.sub(r"\D", "", row_text):
                         continue
+                    row_status = ""
                     for label, pattern in status_patterns:
                         if re.search(pattern, row_text, re.I):
-                            status = label
+                            row_status = label
                             break
-                    if status:
-                        break
+                    if not row_status:
+                        continue
+                    try:
+                        name_priority = checker.name_match_priority(row_text, org.organization_name)
+                    except Exception:
+                        name_priority = -1
+                    status_priority = checker.active_row_priority(row_text)
+                    row_score = (status_priority, name_priority, -i)
+                    if row_score > best_score:
+                        best_score = row_score
+                        best_status = row_status
+                if best_status:
+                    status = best_status
             except Exception:
                 pass
         if not status and ein_digits and ein_digits in re.sub(r"\D", "", body):
