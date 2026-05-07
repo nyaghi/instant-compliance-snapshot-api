@@ -1512,7 +1512,9 @@ def normalize_name(value: str) -> str:
     txt = (value or "").lower()
     txt = re.sub(r"\bu\s*\.?\s*s\.?\b", "us", txt)
     txt = re.sub(r"\b(the|and|a)\b", " ", txt)
-    txt = re.sub(r"\b(inc|incorporated|corp|corporation|foundation|llc|ltd)\b", " ", txt)
+    # Keep substantive words like "foundation" and "fund" in the match key.
+    # Dropping them made name-only state searches confuse related but separate entities.
+    txt = re.sub(r"\b(inc|incorporated|corp|corporation|llc|ltd)\b", " ", txt)
     txt = re.sub(r"[^a-z0-9]+", " ", txt)
     return re.sub(r"\s+", " ", txt).strip()
 
@@ -1525,6 +1527,15 @@ def name_match_priority(candidate_name: str, target_name: str) -> int:
     if candidate == target:
         return 5
     if candidate.startswith(target) or target.startswith(candidate):
+        return 4
+    def remove_terminal_entity_word(value: str) -> str:
+        words = value.split()
+        if len(words) >= 4 and words[-1] in {"foundation", "fund"}:
+            return " ".join(words[:-1])
+        return value
+    candidate_without_entity = remove_terminal_entity_word(candidate)
+    target_without_entity = remove_terminal_entity_word(target)
+    if candidate_without_entity and target_without_entity and candidate_without_entity == target_without_entity:
         return 4
     candidate_words = candidate.split()
     target_words = target.split()
@@ -1565,8 +1576,14 @@ def candidate_selection_score(candidate_name: str, target_name: str, row_text: s
 def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
     cleaned = re.sub(r"\s+", " ", name or "").strip()
     cleaned = re.sub(r"\s*,\s*", " ", cleaned)
+    lead_segment = ""
+    if re.search(r"/|\\", cleaned):
+        lead_segment = re.split(r"\s*(?:/|\\)\s*", cleaned, maxsplit=1)[0].strip()
+        lead_segment = re.sub(r"\s+", " ", re.sub(r"[^\w\s']", " ", lead_segment)).strip()
+        if len(lead_segment.split()) < 2:
+            lead_segment = ""
     no_suffix = re.sub(
-        r"\s+\b(the|inc\.?|incorporated|corp\.?|corporation|foundation|fund|llc|ltd\.?|limited)\b\.?\s*$",
+        r"\s+\b(the|inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\b\.?\s*$",
         "",
         cleaned,
         flags=re.I,
@@ -1575,7 +1592,7 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
     no_punct = re.sub(r"\s+", " ", no_punct)
     words = no_punct.split()
     prefix = " ".join(words[:max_words]) if words else no_punct
-    variants = [prefix, no_punct, no_suffix, cleaned]
+    variants = [lead_segment, no_suffix, cleaned, prefix, no_punct]
     output = []
     seen = set()
     for variant in variants:
@@ -1727,6 +1744,16 @@ def search_va(page, org: Organization) -> StateResult:
             result.raw_status_text = "Registration Pending"
             result.status = "Pending"
             result.source_note = "Virginia public registry shows Registration Pending for the matched organization."
+            result.success = True
+            return result
+        if re.search(r"not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|revoked|suspended", detail_text_for_status or "", re.I):
+            result.raw_status_text = (
+                extract_labeled_value(page, ["Registration Filing Status"])
+                or extract_labeled_value_from_text(detail_text_for_status, ["Registration Filing Status"])
+                or "Not authorized to solicit"
+            )
+            result.status = "Suspended"
+            result.source_note = "Virginia public registry shows a restricted solicitation status, which takes priority over date-based filing interpretation."
             result.success = True
             return result
 
@@ -2640,7 +2667,7 @@ def search_me(page, org: Organization) -> StateResult:
                     break
                 legal_suffix_clean = next_value
             without_suffix = re.sub(
-                r",?\s+(incorporated|inc|foundation|the|corp|corporation|ltd|limited)\.?\s*$",
+                r",?\s+(incorporated|inc|the|corp|corporation|ltd|limited)\.?\s*$",
                 "",
                 cleaned,
                 flags=re.I,
