@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.07.10"
+APP_VERSION = "2026.05.07.11"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -2449,7 +2449,7 @@ def search_nj_direct(page, org):
             ("Active", r"\bactive\b"),
             ("Current", r"\bcurrent\b"),
         ]
-        if ein_digits and ein_near_registry_pattern(body, org.ein, r"\bnon[-\s]?compliant\b"):
+        if ein_digits and ein_line_has_registry_pattern(body, org.ein, r"\bnon[-\s]?compliant\b"):
             status = "Noncompliant"
         if not status and ein_digits and ein_digits in re.sub(r"\D", "", body):
             try:
@@ -2824,6 +2824,16 @@ def ein_near_registry_pattern(text: str, ein: str, pattern: str, radius: int = 3
     return False
 
 
+def ein_line_has_registry_pattern(text: str, ein: str, pattern: str) -> bool:
+    ein_digits = re.sub(r"\D", "", ein or "")
+    if not ein_digits:
+        return False
+    for line in re.split(r"[\r\n]+", text or ""):
+        if ein_digits in re.sub(r"\D", "", line) and re.search(pattern, line, re.I):
+            return True
+    return False
+
+
 def explicit_adverse_registry_status(result, body: str) -> str:
     """Return registry-adverse statuses that should trump filing-year math."""
     state = (result.state or "").upper()
@@ -2859,30 +2869,47 @@ def explicit_adverse_registry_status(result, body: str) -> str:
     status_evidence = " ".join([raw_fields, labeled_status_text])
     if result_explicitly_exempt(result):
         return ""
-    if state == "NJ" and ein_near_registry_pattern(text, result.ein, r"\bnon[-\s]?compliant\b"):
-        return "Delinquent"
-    confirmed = organization_record_confirmed(result, text) or md_detail_page_matched(result, text)
     withdrawn_pattern = r"\b(withdrawn|retired|terminated|cancelled|canceled|voluntar(?:y|ily)\s+deactivat(?:ed|ion))\b"
     closed_pattern = r"\b(closed|inactive)\b"
     terminal_pattern = rf"(?:{withdrawn_pattern}|{closed_pattern})"
     pending_pattern = r"\bpending\b"
     failed_to_renew_pattern = r"\bfailed\s+to\s+renew\b"
+    if state == "NJ":
+        def nj_status_confirmed(pattern: str) -> bool:
+            return bool(re.search(pattern, raw_fields, re.I) or ein_line_has_registry_pattern(text, result.ein, pattern))
+
+        if nj_status_confirmed(r"\bnon[-\s]?compliant\b"):
+            return "Delinquent"
+        if nj_status_confirmed(pending_pattern):
+            return "Pending"
+        if nj_status_confirmed(withdrawn_pattern) or nj_status_confirmed(closed_pattern):
+            return "Closed / Withdrawn / Canceled"
+        if nj_status_confirmed(r"\brevoked\b"):
+            return "Revoked"
+        if nj_status_confirmed(r"\b(suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist)\b"):
+            return "Suspended"
+        if nj_status_confirmed(failed_to_renew_pattern):
+            return "Failed to Renew"
+    confirmed = organization_record_confirmed(result, text) or md_detail_page_matched(result, text)
     if not confirmed and not re.search(r"\b(revoked|suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist|pending)\b|" + terminal_pattern + "|" + failed_to_renew_pattern, status_evidence, re.I):
         return ""
     if state == "NJ":
-        if re.search(r"\bnon[-\s]?compliant\b", status_evidence, re.I):
+        def nj_status_confirmed(pattern: str) -> bool:
+            return bool(re.search(pattern, raw_fields, re.I) or ein_line_has_registry_pattern(text, result.ein, pattern))
+
+        if nj_status_confirmed(r"\bnon[-\s]?compliant\b"):
             return "Delinquent"
-        if re.search(pending_pattern, status_evidence, re.I):
+        if nj_status_confirmed(pending_pattern):
             return "Pending"
-        if re.search(withdrawn_pattern, status_evidence, re.I):
+        if nj_status_confirmed(withdrawn_pattern):
             return "Closed / Withdrawn / Canceled"
-        if re.search(closed_pattern, status_evidence, re.I):
+        if nj_status_confirmed(closed_pattern):
             return "Closed / Withdrawn / Canceled"
-        if re.search(r"\brevoked\b", status_evidence, re.I):
+        if nj_status_confirmed(r"\brevoked\b"):
             return "Revoked"
-        if re.search(r"\b(suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist)\b", status_evidence, re.I):
+        if nj_status_confirmed(r"\b(suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist)\b"):
             return "Suspended"
-        if re.search(failed_to_renew_pattern, status_evidence, re.I):
+        if nj_status_confirmed(failed_to_renew_pattern):
             return "Failed to Renew"
         return ""
     if re.search(pending_pattern, status_evidence, re.I):
