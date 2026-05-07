@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.07.9"
+APP_VERSION = "2026.05.07.10"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1095,6 +1095,12 @@ def latest_year_from_text(body: str, state: str) -> int | None:
                 re.I,
             )
         ]
+        # Hawaii often exposes the filing years as document tabs/list entries
+        # rather than repeating "Annual Filing" beside each year.
+        for match in re.finditer(r"\b(20\d{2})\b", annual_section):
+            year = int(match.group(1))
+            if 2000 <= year <= date.today().year:
+                hi_years.append(year)
         return max(hi_years) if hi_years else None
     if state == "MD":
         md_patterns = [
@@ -2443,7 +2449,9 @@ def search_nj_direct(page, org):
             ("Active", r"\bactive\b"),
             ("Current", r"\bcurrent\b"),
         ]
-        if ein_digits and ein_digits in re.sub(r"\D", "", body):
+        if ein_digits and ein_near_registry_pattern(body, org.ein, r"\bnon[-\s]?compliant\b"):
+            status = "Noncompliant"
+        if not status and ein_digits and ein_digits in re.sub(r"\D", "", body):
             try:
                 rows = page.locator("tr")
                 best_status = ""
@@ -2804,6 +2812,18 @@ def source_note_for_result(result) -> str:
     return result.source_note or ""
 
 
+def ein_near_registry_pattern(text: str, ein: str, pattern: str, radius: int = 320) -> bool:
+    compact = re.sub(r"\s+", " ", text or "")
+    ein_digits = re.sub(r"\D", "", ein or "")
+    if not ein_digits:
+        return False
+    for match in re.finditer(pattern, compact, re.I):
+        window = compact[max(0, match.start() - radius):match.end() + radius]
+        if ein_digits in re.sub(r"\D", "", window):
+            return True
+    return False
+
+
 def explicit_adverse_registry_status(result, body: str) -> str:
     """Return registry-adverse statuses that should trump filing-year math."""
     state = (result.state or "").upper()
@@ -2818,6 +2838,8 @@ def explicit_adverse_registry_status(result, body: str) -> str:
         result.raw_status_text or "",
     ])
     if (
+        state != "NJ"
+        and
         re.search(r"\b(active|current|compliant|good\s+standing)\b", primary_status_fields, re.I)
         and not re.search(
             r"\b(revoked|suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist|pending|failed\s+to\s+renew|withdrawn|retired|terminated|cancelled|canceled|voluntar(?:y|ily)\s+deactivat(?:ed|ion)|closed|inactive)\b",
@@ -2837,6 +2859,8 @@ def explicit_adverse_registry_status(result, body: str) -> str:
     status_evidence = " ".join([raw_fields, labeled_status_text])
     if result_explicitly_exempt(result):
         return ""
+    if state == "NJ" and ein_near_registry_pattern(text, result.ein, r"\bnon[-\s]?compliant\b"):
+        return "Delinquent"
     confirmed = organization_record_confirmed(result, text) or md_detail_page_matched(result, text)
     withdrawn_pattern = r"\b(withdrawn|retired|terminated|cancelled|canceled|voluntar(?:y|ily)\s+deactivat(?:ed|ion))\b"
     closed_pattern = r"\b(closed|inactive)\b"
