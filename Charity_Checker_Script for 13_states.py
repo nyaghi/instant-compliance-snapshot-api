@@ -1729,13 +1729,6 @@ def search_va(page, org: Organization) -> StateResult:
             result.success = True
             return result
 
-        if va_search_results_show_pending(page, org.organization_name):
-            result.raw_status_text = "Registration Pending"
-            result.status = "Pending"
-            result.source_note = "Virginia public registry search results show Registration Pending for the matched organization."
-            result.success = True
-            return result
-
         if not click_va_organization_link(page, org.organization_name):
             result.raw_status_text = "No matching organization link"
             result.status = STATUS_NOT_REGISTERED
