@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.07.7"
+APP_VERSION = "2026.05.07.8"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -2473,10 +2473,24 @@ def search_nj_direct(page, org):
             except Exception:
                 pass
         if not status and ein_digits and ein_digits in re.sub(r"\D", "", body):
+            body_candidates = []
+            compact_body = re.sub(r"\s+", " ", body)
             for label, pattern in status_patterns:
-                if re.search(pattern, body, re.I):
-                    status = label
-                    break
+                for match in re.finditer(pattern, compact_body, re.I):
+                    start = max(0, match.start() - 220)
+                    end = min(len(compact_body), match.end() + 220)
+                    window = compact_body[start:end]
+                    if ein_digits not in re.sub(r"\D", "", window):
+                        continue
+                    try:
+                        name_priority = checker.name_match_priority(window, org.organization_name)
+                    except Exception:
+                        name_priority = -1
+                    status_priority = checker.active_row_priority(label)
+                    body_candidates.append((status_priority, name_priority, -match.start(), label))
+            if body_candidates:
+                body_candidates.sort(reverse=True)
+                status = body_candidates[0][3]
         if not status:
             status_match = re.search(r"Status\s+([A-Za-z][A-Za-z /-]+?)\s+Federal\s+EIN", re.sub(r"\s+", " ", body), re.I)
             if status_match:
