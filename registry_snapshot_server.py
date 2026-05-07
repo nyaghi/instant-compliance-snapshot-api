@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.07.8"
+APP_VERSION = "2026.05.07.9"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1047,7 +1047,7 @@ def filing_due_date_options(state: str, report_year: int, fiscal_end: tuple[int,
         extended_due = md_automatic_extension_due_date(fy_end)
     else:
         extended_due = add_months_preserving_end_of_month(base_due, 6) if state in EXTENSION_SCENARIO_STATES else None
-    effective_due = extended_due if state == "NY" and extended_due else base_due
+    effective_due = base_due
     if state == "MD":
         rule_note = "Maryland has an automatic extension process; CE Status is based on the base due date"
     elif extended_due:
@@ -3291,8 +3291,8 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
                     )
                 elif state == "NY":
                     status_sentence = (
-                        f"CE Status is {extended_status} based on New York's extension window. "
-                        f"The base due date status without an extension would be {base_status}."
+                        f"CE Status is {base_status} based on the base due date. "
+                        f"If the {extension_label} was granted, the extended deadline would be {format_date(extended_due)} and the status would be {extended_status}."
                     )
                 else:
                     status_sentence = (
