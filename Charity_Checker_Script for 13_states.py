@@ -1729,6 +1729,8 @@ def search_va(page, org: Organization) -> StateResult:
             result.success = True
             return result
 
+        selected_search_row_pending = va_search_results_show_pending(page, org.organization_name)
+
         if not click_va_organization_link(page, org.organization_name):
             result.raw_status_text = "No matching organization link"
             result.status = STATUS_NOT_REGISTERED
@@ -1740,10 +1742,10 @@ def search_va(page, org: Organization) -> StateResult:
         fast_sleep(0.75)
 
         detail_text_for_status = page.locator("body").inner_text(timeout=8000)
-        if re.search(r"\bregistration\s+pending\b", detail_text_for_status, re.I):
+        if selected_search_row_pending or re.search(r"\bregistration\s+pending\b", detail_text_for_status, re.I):
             result.raw_status_text = "Registration Pending"
             result.status = "Pending"
-            result.source_note = "Virginia public registry shows Registration Pending for the matched organization."
+            result.source_note = "Virginia public registry shows Registration Pending for the matched organization, which CharityClarity treats as a trumping state-provided status."
             result.success = True
             return result
         if re.search(r"not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|revoked|suspended", detail_text_for_status or "", re.I):
