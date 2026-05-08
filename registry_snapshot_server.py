@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.07.11"
+APP_VERSION = "2026.05.08.4"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -730,6 +730,8 @@ def public_status(result) -> str:
         return "Suspended"
     if re.search(r"\bpending\b", normalized, re.I):
         return "Pending"
+    if re.search(r"\bin\s+process\b", normalized, re.I):
+        return "Pending"
     if re.search(r"\bfailed\s+to\s+renew\b", normalized, re.I):
         return "Failed to Renew"
     if re.search(r"not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist", normalized, re.I):
@@ -738,7 +740,7 @@ def public_status(result) -> str:
         return "Closed / Withdrawn / Canceled"
     if re.search(r"\b(closed|inactive)\b", normalized, re.I):
         return "Closed / Withdrawn / Canceled"
-    if re.search(r"\b(delinquent|non[-\s]?compliant|expired|overdue)\b", normalized, re.I):
+    if re.search(r"\b(delinquent|non\W*compliant|expired|overdue)\b", normalized, re.I):
         return "Delinquent"
     if normalized in {"current", "active", "good standing", "compliant"} or re.search(r"\bgood\s+as\s+of\b", normalized):
         return "Current"
@@ -1183,12 +1185,18 @@ def ca_annual_renewal_years_from_text(body: str) -> dict:
         re.I,
     )
     if not annual_match:
-        return {"latest_submitted_year": None, "latest_not_submitted_year": None}
+        return {
+            "latest_submitted_year": None,
+            "latest_not_submitted_year": None,
+            "latest_pending_year": None,
+        }
     annual_section = annual_match.group(1)
     blocks = re.split(r"(?=Status\s+of\s+Filing\s*:)", annual_section, flags=re.I)
     submitted_years = []
     not_submitted_years = []
+    pending_years = []
     not_submitted_status_by_year = {}
+    pending_status_by_year = {}
     for block in blocks:
         if not re.search(r"Status\s+of\s+Filing\s*:", block, re.I):
             continue
@@ -1211,7 +1219,10 @@ def ca_annual_renewal_years_from_text(body: str) -> dict:
             re.I,
         )
         year = int(end_match.group(1))
-        if re.search(r"\b(?:not\s+submitted|in\s+process|pending)\b", status_text, re.I):
+        if re.search(r"\b(?:in\s+process|pending)\b", status_text, re.I):
+            pending_years.append(year)
+            pending_status_by_year[year] = status_text or "In Process"
+        elif re.search(r"\bnot\s+submitted\b", status_text, re.I):
             not_submitted_years.append(year)
             not_submitted_status_by_year[year] = status_text or "Not Submitted"
         elif (
@@ -1223,10 +1234,13 @@ def ca_annual_renewal_years_from_text(body: str) -> dict:
         ):
             submitted_years.append(year)
     latest_not_submitted_year = max(not_submitted_years) if not_submitted_years else None
+    latest_pending_year = max(pending_years) if pending_years else None
     return {
         "latest_submitted_year": max(submitted_years) if submitted_years else None,
         "latest_not_submitted_year": latest_not_submitted_year,
         "latest_not_submitted_status": not_submitted_status_by_year.get(latest_not_submitted_year) if latest_not_submitted_year else None,
+        "latest_pending_year": latest_pending_year,
+        "latest_pending_status": pending_status_by_year.get(latest_pending_year) if latest_pending_year else None,
     }
 
 
@@ -1609,6 +1623,7 @@ def organization_name_variants(
         ampersand_removed = re.sub(r"\s*&\s*", " ", base).strip()
         apostrophe_removed = re.sub(r"[']", "", base).strip()
         possessive_removed = re.sub(r"\b([A-Za-z]+)'s\b", r"\1s", base).strip()
+        ms_expanded = re.sub(r"\bMS\s+Society\b", "Multiple Sclerosis Society", base, flags=re.I).strip()
         and_no_punctuation = re.sub(r"[^\w\s]", " ", ampersand_as_and).strip()
         and_no_punctuation = re.sub(r"\s+", " ", and_no_punctuation)
         and_without_suffix = re.sub(
@@ -1648,6 +1663,7 @@ def organization_name_variants(
             ampersand_removed,
             apostrophe_removed,
             possessive_removed,
+            ms_expanded,
             and_no_punctuation,
             *broad_variants,
             *us_prefixed_variants,
@@ -2087,13 +2103,20 @@ def repair_ma_false_not_registered(page, org, result, body: str):
         checker.safe_wait_for_network_idle(page, timeout=10000)
     except Exception:
         pass
-    for _ in range(8):
+    for attempt in range(10):
         time.sleep(0.75)
         try:
             refreshed = registry_page_body(page)
         except Exception:
             continue
-        if re.search(r"Form[\s-]*PC|No documents found|No rows available", refreshed, re.I):
+        if re.search(r"Form[\s-]*PC", refreshed, re.I):
+            body = refreshed
+            break
+        if attempt >= 5 and re.search(
+            r"Annual\s+Filings(?:\s+and\s+Documents)?[\s\S]{0,1200}(?:No documents found|No rows available)",
+            refreshed,
+            re.I,
+        ):
             body = refreshed
             break
     try:
@@ -2293,6 +2316,24 @@ def nj_detail_body(page, org) -> str:
     normalize_name = getattr(checker, "normalize_name", lambda value: re.sub(r"\s+", " ", (value or "").lower()).strip())
     wanted_name = normalize_name(org.organization_name)
     clicked = False
+    candidates = []
+
+    def score_nj_candidate(row_text: str, label_text: str = "", index: int = 0) -> tuple[int, int, int, int]:
+        haystack = re.sub(r"\s+", " ", f"{row_text} {label_text}").strip()
+        row_digits = re.sub(r"\D", "", haystack)
+        row_name = normalize_name(haystack)
+        if ein_digits and ein_digits not in row_digits and wanted_name not in row_name:
+            return (-999, -999, -index)
+        try:
+            status_priority = checker.active_row_priority(haystack)
+        except Exception:
+            status_priority = 40
+        try:
+            name_priority = checker.name_match_priority(haystack, org.organization_name)
+        except Exception:
+            name_priority = 0
+        ein_priority = 3 if ein_digits and ein_digits in row_digits else 0
+        return (ein_priority, name_priority, status_priority, -index)
 
     for selector in ["button.ms-Link", "button[role='link']", "[data-automation-key='name'] button"]:
         try:
@@ -2303,22 +2344,16 @@ def nj_detail_body(page, org) -> str:
                     row = button.locator("xpath=ancestor::*[@role='row'][1]")
                     row_text = re.sub(r"\s+", " ", row.inner_text(timeout=1500)).strip() if row.count() else ""
                     button_text = re.sub(r"\s+", " ", button.inner_text(timeout=1500)).strip()
-                    haystack = f"{row_text} {button_text}"
-                    if ein_digits not in re.sub(r"\D", "", haystack) and wanted_name not in normalize_name(haystack):
+                    score = score_nj_candidate(row_text, button_text, i)
+                    if score[0] < 0:
                         continue
-                    button.click(timeout=5000)
-                    clicked = True
-                    break
+                    candidates.append((score, button))
                 except Exception:
                     continue
-            if clicked:
-                break
         except Exception:
             continue
 
     for selector in ["tbody tr", "tr", "[role='row']", ".card", ".search-result", "a[href]"]:
-        if clicked:
-            break
         try:
             rows = page.locator(selector)
             for i in range(min(rows.count(), 80)):
@@ -2327,25 +2362,26 @@ def nj_detail_body(page, org) -> str:
                     if not row.is_visible(timeout=750):
                         continue
                     row_text = re.sub(r"\s+", " ", row.inner_text(timeout=1500)).strip()
-                    row_digits = re.sub(r"\D", "", row_text)
-                    row_name = normalize_name(row_text)
-                    if ein_digits not in row_digits and wanted_name not in row_name:
+                    score = score_nj_candidate(row_text, "", i)
+                    if score[0] < 0:
                         continue
+                    target = row
                     links = row.locator("a[href]")
-                    if selector == "a[href]":
-                        row.click(timeout=5000)
-                    elif links.count():
-                        links.first.click(timeout=5000)
-                    else:
-                        row.click(timeout=5000)
-                    clicked = True
-                    break
+                    if selector != "a[href]" and links.count():
+                        target = links.first
+                    candidates.append((score, target))
                 except Exception:
                     continue
-            if clicked:
-                break
         except Exception:
             continue
+
+    if candidates:
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        try:
+            candidates[0][1].click(timeout=5000)
+            clicked = True
+        except Exception:
+            clicked = False
 
     if clicked:
         try:
@@ -2437,7 +2473,7 @@ def search_nj_direct(page, org):
 
         status = ""
         status_patterns = [
-            ("Noncompliant", r"\bnon[-\s]?compliant\b"),
+            ("Noncompliant", r"\bnon\W*compliant\b"),
             ("Delinquent", r"\bdelinquent\b"),
             ("Retired", r"\bretired\b"),
             ("Withdrawn", r"\bwithdrawn\b"),
@@ -2449,8 +2485,17 @@ def search_nj_direct(page, org):
             ("Active", r"\bactive\b"),
             ("Current", r"\bcurrent\b"),
         ]
-        if ein_digits and ein_line_has_registry_pattern(body, org.ein, r"\bnon[-\s]?compliant\b"):
+        if ein_digits and ein_line_has_registry_pattern(body, org.ein, r"\bnon\W*compliant\b"):
             status = "Noncompliant"
+        if not status and ein_digits and ein_digits in re.sub(r"\D", "", body):
+            compact_body = re.sub(r"\s+", " ", body)
+            for match in re.finditer(r"\bnon\W*compliant\b", compact_body, re.I):
+                start = max(0, match.start() - 260)
+                end = min(len(compact_body), match.end() + 260)
+                window = compact_body[start:end]
+                if ein_digits in re.sub(r"\D", "", window):
+                    status = "Noncompliant"
+                    break
         if not status and ein_digits and ein_digits in re.sub(r"\D", "", body):
             try:
                 rows = page.locator("tr")
@@ -2472,7 +2517,7 @@ def search_nj_direct(page, org):
                     except Exception:
                         name_priority = -1
                     status_priority = checker.active_row_priority(row_text)
-                    row_score = (status_priority, name_priority, -i)
+                    row_score = (name_priority, status_priority, -i)
                     if row_score > best_score:
                         best_score = row_score
                         best_status = row_status
@@ -2506,7 +2551,7 @@ def search_nj_direct(page, org):
         result.raw_status_text = status or "Status not found"
         if re.search(r"\b(retired|withdrawn|terminated|cancelled|canceled|closed)\b", status, re.I):
             result.status = "Closed / Withdrawn / Canceled"
-        elif re.search(r"\bnon[-\s]?compliant\b", status, re.I):
+        elif re.search(r"\bnon\W*compliant\b", status, re.I):
             result.status = "Delinquent"
         else:
             result.status = status or checker.STATUS_UNKNOWN
@@ -2788,6 +2833,16 @@ def organization_record_confirmed(result, body: str) -> bool:
 def annual_filings_absent(text: str) -> bool:
     readable = html.unescape(re.sub(r"<[^>]+>", " ", text or ""))
     readable = re.sub(r"\s+", " ", readable)
+    filing_evidence_patterns = [
+        r"Annual\s+filings?(?:\s+and\s+documents)?[\s\S]{0,4000}\bForm[\s-]*PC\b[\s\S]{0,4000}\b20\d{2}\b",
+        r"Annual\s+filings?(?:\s+and\s+documents)?[\s\S]{0,4000}\b20\d{2}\b[\s\S]{0,4000}\bForm[\s-]*PC\b",
+        r"Annual\s+filing\s+documents[\s\S]{0,4000}\bFiscal\s+Year\s+End\b[\s\S]{0,4000}\b20\d{2}\b",
+        r"Annual\s+renewal\s+data[\s\S]{0,4000}\bStatus\s+of\s+Filing\b[\s\S]{0,4000}\b20\d{2}\b",
+        r"Year\s+Represented\s*:?\s*20\d{2}",
+        r"Latest\s+FYE\s*:?\s*20\d{2}",
+    ]
+    if any(re.search(pattern, readable, re.I) for pattern in filing_evidence_patterns):
+        return False
     annual_section_patterns = [
         r"Annual\s+filing\s+documents[\s\S]{0,500}?No\s+rows\s+available",
         r"Annual\s+filing\s+documents[\s\S]{0,500}?No\s+documents\s+found",
@@ -2848,6 +2903,16 @@ def explicit_adverse_registry_status(result, body: str) -> str:
         result.raw_status_text or "",
     ])
     if (
+        state == "NJ"
+        and re.search(r"\b(active|current|compliant|good\s+standing)\b", primary_status_fields, re.I)
+        and not re.search(
+            r"\b(non\W*compliant|revoked|suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist|pending|failed\s+to\s+renew|withdrawn|retired|terminated|cancelled|canceled|voluntar(?:y|ily)\s+deactivat(?:ed|ion)|closed|inactive)\b",
+            primary_status_fields,
+            re.I,
+        )
+    ):
+        return ""
+    if (
         state != "NJ"
         and
         re.search(r"\b(active|current|compliant|good\s+standing)\b", primary_status_fields, re.I)
@@ -2878,7 +2943,7 @@ def explicit_adverse_registry_status(result, body: str) -> str:
         def nj_status_confirmed(pattern: str) -> bool:
             return bool(re.search(pattern, raw_fields, re.I) or ein_line_has_registry_pattern(text, result.ein, pattern))
 
-        if nj_status_confirmed(r"\bnon[-\s]?compliant\b"):
+        if nj_status_confirmed(r"\bnon\W*compliant\b"):
             return "Delinquent"
         if nj_status_confirmed(pending_pattern):
             return "Pending"
@@ -2897,7 +2962,7 @@ def explicit_adverse_registry_status(result, body: str) -> str:
         def nj_status_confirmed(pattern: str) -> bool:
             return bool(re.search(pattern, raw_fields, re.I) or ein_line_has_registry_pattern(text, result.ein, pattern))
 
-        if nj_status_confirmed(r"\bnon[-\s]?compliant\b"):
+        if nj_status_confirmed(r"\bnon\W*compliant\b"):
             return "Delinquent"
         if nj_status_confirmed(pending_pattern):
             return "Pending"
@@ -2967,7 +3032,7 @@ def true_status_from_body(result, body: str) -> str:
     if adverse_status:
         return adverse_status
     primary_registry_fields = " ".join([result.raw_status_text or "", result.source_note or ""])
-    if re.search(r"\b(non[-\s]?compliant|delinquent)\b", primary_registry_fields, re.I):
+    if re.search(r"\b(non\W*compliant|delinquent)\b", primary_registry_fields, re.I):
         return "Delinquent"
     if state == "ME" and re.search(r"\bACTIVE\b", " ".join([result.status or "", result.raw_status_text or ""]), re.I) and not explicit_registry_date(result, combined):
         return "Unknown"
@@ -3023,9 +3088,11 @@ def true_status_from_body(result, body: str) -> str:
         return status_from_calendar_date(due_date)
     if state == "CA":
         ca_years = ca_annual_renewal_years_from_text(body)
+        latest_pending_year = ca_years.get("latest_pending_year")
         latest_not_submitted_year = ca_years.get("latest_not_submitted_year")
-        latest_not_submitted_status = ca_years.get("latest_not_submitted_status") or "Not Submitted"
         latest_submitted_year = ca_years.get("latest_submitted_year")
+        if latest_pending_year and (not latest_submitted_year or latest_pending_year > latest_submitted_year):
+            return "Pending"
         if latest_not_submitted_year and (not latest_submitted_year or latest_not_submitted_year > latest_submitted_year):
             return "Delinquent"
     if state in {"MA", "NY"} and represented_year and due_date and not result_indicates_no_record(result):
@@ -3113,16 +3180,6 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         if state == "VA" and re.search(r"not\s+authorized\s+to\s+solicit", combined_result_text(result, body), re.I):
             return "The VA public registry shows the organization is not authorized to solicit in Virginia, which CharityClarity treats as Suspended."
         return f"The {state} public registry shows the organization registration status as Suspended."
-    if normalized_status == "pending":
-        return (
-            f"The {state} public registry shows the organization registration status as Pending. "
-            "CharityClarity uses that registry status instead of calculating status from annual filing records."
-        )
-    if normalized_status == "failed to renew":
-        return (
-            f"The {state} public registry shows the organization registration status as Failed to Renew. "
-            "CharityClarity uses that registry status instead of calculating status from annual filing records."
-        )
     if normalized_status in {"withdrawn", "closed", "closed / withdrawn / canceled"}:
         if re.search(r"voluntar(?:y|ily)\s+deactivat(?:ed|ion)", combined_result_text(result, body), re.I):
             return (
@@ -3140,6 +3197,35 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         )
     if state == "CA" and normalized_status == "current" and not context.get("due_date"):
         return "The CA public registry shows Registry Status Current. CharityClarity did not identify a delinquency in this quick check."
+    if state == "CA" and normalized_status == "pending":
+        ca_years = ca_annual_renewal_years_from_text(body)
+        latest_pending_year = ca_years.get("latest_pending_year")
+        latest_pending_status = ca_years.get("latest_pending_status") or "In Process"
+        latest_submitted_year = ca_years.get("latest_submitted_year")
+        submitted_sentence = (
+            f" The latest accepted annual renewal year identified is {latest_submitted_year}."
+            if latest_submitted_year else
+            " CharityClarity did not identify a later accepted annual renewal year."
+        )
+        if latest_pending_year:
+            return (
+                f"The CA Annual Renewal Data shows the {latest_pending_year} annual renewal with Status of Filing: {latest_pending_status}. "
+                f"CharityClarity treats that as Pending because the public registry indicates the filing is still being processed.{submitted_sentence}"
+            )
+        return (
+            "The CA public registry shows an In Process or Pending registration/filing status. "
+            "CharityClarity treats that registry status as Pending because the filing appears to still be under review."
+        )
+    if normalized_status == "pending":
+        return (
+            f"The {state} public registry shows the organization registration status as Pending. "
+            "CharityClarity uses that registry status instead of calculating status from annual filing records."
+        )
+    if normalized_status == "failed to renew":
+        return (
+            f"The {state} public registry shows the organization registration status as Failed to Renew. "
+            "CharityClarity uses that registry status instead of calculating status from annual filing records."
+        )
     if state == "MD" and normalized_status == "current" and not context.get("represented_year"):
         return (
             "The MD public registry shows Registration Status: Current. CharityClarity did not identify a Maryland filing-year value "
@@ -3156,7 +3242,7 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
             f"The next Alaska charitable registration renewal is due {format_date(context.get('due_date'))}, which is {timing}."
         )
     registry_noncompliant_text = " ".join([result.raw_status_text or "", result.source_note or "", body or ""])
-    if normalized_status == "delinquent" and re.search(r"\bnon[-\s]?compliant\b", registry_noncompliant_text, re.I):
+    if normalized_status == "delinquent" and re.search(r"\bnon\W*compliant\b", registry_noncompliant_text, re.I):
         return f"The {state} public registry shows a Noncompliant status, which CharityClarity treats as Delinquent."
     if normalized_status == "delinquent" and state == "PA" and organization_record_confirmed(result, combined_result_text(result, body)) and not explicit_registry_date(result, body):
         return "The PA public registry returned a matching organization record but did not show a current usable expiration date, so CharityClarity treats the record as Delinquent."
@@ -3198,7 +3284,7 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
                 f"The CA Annual Renewal Data shows the {latest_not_submitted_year} annual renewal with Status of Filing: {latest_not_submitted_status}."
                 f"{submitted_sentence}{due_sentence} CharityClarity treats the organization as Delinquent."
             )
-    if normalized_status == "delinquent" and annual_filings_absent(combined_result_text(result, body)):
+    if normalized_status == "delinquent" and not context.get("represented_year") and annual_filings_absent(combined_result_text(result, body)):
         return (
             f"The {state} public registry detail page shows the organization record, but the annual filing section shows no annual filings available "
             "and the CharityClarity check does not show an exempt registration status."
@@ -3540,22 +3626,23 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     page,
                     org,
                     checker.search_va,
-                    max_variants=18,
+                    max_variants=28,
                     reject_va_suspended_from_leading_the_drop=False,
                     include_ein_aliases=False,
-                    include_name_segments=False,
+                    include_name_segments=True,
                     include_compact_legal_suffixes=False,
+                    include_leading_article_variants=True,
                 )
             elif state == "SC":
                 result = search_with_name_variants(
                     page,
                     org,
                     checker.search_sc,
-                    max_variants=18,
+                    max_variants=28,
                     include_ein_aliases=False,
-                    include_name_segments=False,
+                    include_name_segments=True,
                     include_compact_legal_suffixes=False,
-                    include_leading_article_variants=False,
+                    include_leading_article_variants=True,
                 )
             elif state == "HI":
                 result = search_hi_precise(page, org)
@@ -3566,11 +3653,11 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     page,
                     org,
                     checker.search_me,
-                    max_variants=18,
+                    max_variants=28,
                     include_ein_aliases=False,
-                    include_name_segments=False,
+                    include_name_segments=True,
                     include_compact_legal_suffixes=False,
-                    include_leading_article_variants=False,
+                    include_leading_article_variants=True,
                 )
                 me_status_source = " ".join([result.raw_status_text or "", result.source_note or ""])
                 if re.search(r"Maine uses the Status shown|No matching organization|No record found|no matching", me_status_source, re.I):
@@ -3583,11 +3670,11 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     page,
                     org,
                     checker.search_nd,
-                    max_variants=18,
+                    max_variants=28,
                     include_ein_aliases=False,
-                    include_name_segments=False,
+                    include_name_segments=True,
                     include_compact_legal_suffixes=False,
-                    include_leading_article_variants=False,
+                    include_leading_article_variants=True,
                 )
             else:
                 raise ValueError(f"Unsupported state: {state}")

@@ -854,13 +854,19 @@ def search_ma(page, org: Organization) -> StateResult:
             except Exception:
                 pass
         safe_wait_for_network_idle(page, timeout=10000)
-        for _ in range(8):
+        for attempt in range(10):
             fast_sleep(0.75)
             try:
                 loading_text = page.locator("body").inner_text(timeout=5000)
             except Exception:
                 continue
-            if re.search(r"Form[\s-]*PC|No documents found|No rows available", loading_text, re.I):
+            if re.search(r"Form[\s-]*PC", loading_text, re.I):
+                break
+            if attempt >= 5 and re.search(
+                r"Annual\s+Filings(?:\s+and\s+Documents)?[\s\S]{0,1200}(?:No documents found|No rows available)",
+                loading_text,
+                re.I,
+            ):
                 break
 
         try:
@@ -1559,17 +1565,18 @@ def name_match_priority(candidate_name: str, target_name: str) -> int:
 def active_row_priority(text: str) -> int:
     """Prefer non-terminal records when duplicate search results match similarly."""
     value = text or ""
+    primary_bonus = 15 if re.search(r"\(\s*primary\s+name\s*\)", value, re.I) else 0
     if re.search(r"\bnot\s+registered\b", value, re.I):
         return 5
     if re.search(r"\b(retired|inactive|closed|withdrawn|terminated|cancelled|canceled|dissolved|merged\s+out)\b", value, re.I):
-        return 10
+        return 10 + primary_bonus
     if re.search(r"\b(registration\s+pending|pending)\b", value, re.I):
-        return 80
-    if re.search(r"\b(non[-\s]?compliant|delinquent|expired|failed\s+to\s+renew|suspended|revoked|not\s+authorized|may\s+not\s+solicit|may\s+not\s+raise\s+funds|may\s+not\s+operate|cease\s+and\s+desist)\b", value, re.I):
-        return 60
+        return 80 + primary_bonus
+    if re.search(r"\b(non\W*compliant|delinquent|expired|failed\s+to\s+renew|suspended|revoked|not\s+authorized|may\s+not\s+solicit|may\s+not\s+raise\s+funds|may\s+not\s+operate|cease\s+and\s+desist)\b", value, re.I):
+        return 60 + primary_bonus
     if re.search(r"\b(active|current|compliant|good\s+standing|registered)\b", value, re.I):
-        return 70
-    return 40
+        return 70 + primary_bonus
+    return 40 + primary_bonus
 
 def candidate_selection_score(candidate_name: str, target_name: str, row_text: str) -> tuple[int, int]:
     """Choose the best matching entity first; use active/current status to break ties."""
@@ -1586,11 +1593,20 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
     cleaned = re.sub(r"\s+", " ", name or "").strip()
     cleaned = re.sub(r"\s*,\s*", " ", cleaned)
     lead_segment = ""
+    trailing_segment = ""
     if re.search(r"/|\\", cleaned):
         lead_segment = re.split(r"\s*(?:/|\\)\s*", cleaned, maxsplit=1)[0].strip()
+        trailing_segment = re.split(r"\s*(?:/|\\)\s*", cleaned, maxsplit=1)[1].strip()
         lead_segment = re.sub(r"\s+", " ", re.sub(r"[^\w\s']", " ", lead_segment)).strip()
+        trailing_segment = re.sub(r"\s+", " ", re.sub(r"[^\w\s']", " ", trailing_segment)).strip()
         if len(lead_segment.split()) < 2:
             lead_segment = ""
+        if len(trailing_segment.split()) < 2:
+            trailing_segment = ""
+    without_leading_the = re.sub(r"^the\s+", "", cleaned, flags=re.I).strip()
+    without_leading_acronym = re.sub(r"^[A-Z]{2,8}\s*[-/\\]\s*", "", cleaned).strip()
+    if without_leading_acronym == cleaned:
+        without_leading_acronym = ""
     no_suffix = re.sub(
         r"\s+\b(the|inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\b\.?\s*$",
         "",
@@ -1601,7 +1617,20 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
     no_punct = re.sub(r"\s+", " ", no_punct)
     words = no_punct.split()
     prefix = " ".join(words[:max_words]) if words else no_punct
-    variants = [lead_segment, no_suffix, cleaned, prefix, no_punct]
+    ms_expanded = ""
+    if re.search(r"\bMS\s+Society\b", cleaned, re.I):
+        ms_expanded = re.sub(r"\bMS\s+Society\b", "Multiple Sclerosis Society", cleaned, flags=re.I)
+    variants = [
+        trailing_segment,
+        without_leading_acronym,
+        without_leading_the,
+        lead_segment,
+        no_suffix,
+        cleaned,
+        prefix,
+        no_punct,
+        ms_expanded,
+    ]
     output = []
     seen = set()
     for variant in variants:
