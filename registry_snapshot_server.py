@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.08.6"
+APP_VERSION = "2026.05.08.7"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -656,21 +656,35 @@ def save_device_limits(limits: dict) -> None:
     DEVICE_LIMIT_PATH.write_text(json.dumps(limits, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def domain_is_limited(domain: str) -> bool:
+def usage_limit_key(identifier: str, ein: str) -> str:
+    ein_digits = re.sub(r"\D", "", ein or "")
+    identifier = (identifier or "").strip().lower()
+    if not identifier or len(ein_digits) != 9:
+        return ""
+    return f"{identifier}|{ein_digits}"
+
+
+def domain_is_limited(domain: str, ein: str) -> bool:
     if not domain or is_exempt_domain(domain):
         return False
+    key = usage_limit_key(domain, ein)
+    if not key:
+        return False
     limits = load_domain_limits()
-    prior = int(limits.get(domain, 0) or 0)
+    prior = int(limits.get(key, 0) or 0)
     if not prior:
         return False
     return int(time.time()) - prior < DOMAIN_LIMIT_DAYS * 24 * 60 * 60
 
 
-def record_domain_check(domain: str) -> None:
+def record_domain_check(domain: str, ein: str) -> None:
     if not domain or is_exempt_domain(domain):
         return
+    key = usage_limit_key(domain, ein)
+    if not key:
+        return
     limits = load_domain_limits()
-    limits[domain] = int(time.time())
+    limits[key] = int(time.time())
     save_domain_limits(limits)
 
 
@@ -678,23 +692,29 @@ def normalize_device_id(device_id: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.:-]", "", (device_id or "").strip())[:120]
 
 
-def device_is_limited(device_id: str) -> bool:
+def device_is_limited(device_id: str, ein: str) -> bool:
     device_id = normalize_device_id(device_id)
     if not device_id:
         return False
+    key = usage_limit_key(device_id, ein)
+    if not key:
+        return False
     limits = load_device_limits()
-    prior = int(limits.get(device_id, 0) or 0)
+    prior = int(limits.get(key, 0) or 0)
     if not prior:
         return False
     return int(time.time()) - prior < DOMAIN_LIMIT_DAYS * 24 * 60 * 60
 
 
-def record_device_check(device_id: str) -> None:
+def record_device_check(device_id: str, ein: str) -> None:
     device_id = normalize_device_id(device_id)
     if not device_id:
         return
+    key = usage_limit_key(device_id, ein)
+    if not key:
+        return
     limits = load_device_limits()
-    limits[device_id] = int(time.time())
+    limits[key] = int(time.time())
     save_device_limits(limits)
 
 
@@ -4007,11 +4027,12 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": f"This email can submit up to {org_limit} organization{'s' if org_limit != 1 else ''} at a time."})
                 return
 
+            limit_ein = organizations[0]["ein"] if organizations else ""
             is_batch = isinstance(requested_states, list)
-            if is_batch and not privileged and domain_is_limited(domain):
+            if is_batch and not privileged and domain_is_limited(domain, limit_ein):
                 self._send_json(429, {"error": "A complimentary snapshot was already requested for this email domain."})
                 return
-            if is_batch and not privileged and device_is_limited(device_id):
+            if is_batch and not privileged and device_is_limited(device_id, limit_ein):
                 self._send_json(429, {"error": "A complimentary snapshot was already requested from this browser."})
                 return
 
@@ -4019,8 +4040,8 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
             append_lead_log(email, results)
             if is_batch:
                 if not privileged and should_record_domain_check(results):
-                    record_domain_check(domain)
-                    record_device_check(device_id)
+                    record_domain_check(domain, limit_ein)
+                    record_device_check(device_id, limit_ein)
                 self._send_json(200, {"results": results, "checked_at_epoch": int(time.time())})
             else:
                 self._send_json(200, results[0])
