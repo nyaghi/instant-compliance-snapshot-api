@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.08.5"
+APP_VERSION = "2026.05.08.6"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1576,7 +1576,7 @@ def organization_name_variants(
 
     def add(value: str) -> None:
         value = re.sub(r"\s+", " ", (value or "").strip())
-        if value and value.lower() not in {item.lower() for item in variants}:
+        if value and value not in variants:
             variants.append(value)
 
     seed_names = [name]
@@ -1619,6 +1619,15 @@ def organization_name_variants(
         institute_singular = re.sub(r"\bInstitutes\s+of\b", "Institute of", base, flags=re.I).strip()
         hyphen_as_space = re.sub(r"[-\u2010-\u2015]+", " ", base).strip()
         hyphen_removed = re.sub(r"[-\u2010-\u2015]+", "", base).strip()
+        title_hyphen_base = ""
+        if re.match(r"^[A-Z]{2,8}[-\u2010-\u2015][A-Za-z]", base):
+            # A few name-search registries are picky about casing for acronym-hyphen names.
+            title_hyphen_base = re.sub(
+                r"^[A-Z]{2,8}",
+                lambda match: match.group(0).title(),
+                base,
+                count=1,
+            )
         ampersand_as_and = re.sub(r"\s*&\s*", " and ", base).strip()
         ampersand_removed = re.sub(r"\s*&\s*", " ", base).strip()
         apostrophe_removed = re.sub(r"[']", "", base).strip()
@@ -1657,6 +1666,8 @@ def organization_name_variants(
                 f"{base}, Inc.",
                 f"{hyphen_as_space} Inc" if hyphen_as_space and hyphen_as_space.lower() != base.lower() else "",
                 f"{hyphen_as_space}, Inc." if hyphen_as_space and hyphen_as_space.lower() != base.lower() else "",
+                f"{title_hyphen_base} Inc" if title_hyphen_base else "",
+                f"{title_hyphen_base}, Inc." if title_hyphen_base else "",
             ])
         broad_variants = [and_without_suffix, compact_legal_suffixes] if include_compact_legal_suffixes else []
         article_variants = [without_leading_the] if include_leading_article_variants else []
@@ -1673,6 +1684,7 @@ def organization_name_variants(
             ampersand_removed,
             apostrophe_removed,
             possessive_removed,
+            title_hyphen_base,
             ms_expanded,
             and_no_punctuation,
             *broad_variants,
