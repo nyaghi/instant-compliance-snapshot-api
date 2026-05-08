@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.08.4"
+APP_VERSION = "2026.05.08.5"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1648,6 +1648,16 @@ def organization_name_variants(
                 pair_variant[idx] = f"{pair_variant[idx]}-{pair_variant[idx + 1]}"
                 del pair_variant[idx + 1]
                 hyphenated_word_pairs.append(" ".join(pair_variant))
+        legal_suffix_additions = []
+        if not re.search(r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\s*$", base, re.I):
+            # Some public profiles omit the legal suffix even when name-search
+            # registries require it to find the organization.
+            legal_suffix_additions.extend([
+                f"{base} Inc",
+                f"{base}, Inc.",
+                f"{hyphen_as_space} Inc" if hyphen_as_space and hyphen_as_space.lower() != base.lower() else "",
+                f"{hyphen_as_space}, Inc." if hyphen_as_space and hyphen_as_space.lower() != base.lower() else "",
+            ])
         broad_variants = [and_without_suffix, compact_legal_suffixes] if include_compact_legal_suffixes else []
         article_variants = [without_leading_the] if include_leading_article_variants else []
         for variant in [
@@ -1670,6 +1680,7 @@ def organization_name_variants(
             without_trailing_the,
             *article_variants,
             *hyphenated_word_pairs,
+            *legal_suffix_additions,
         ]:
             add(variant)
     return variants or [""]
