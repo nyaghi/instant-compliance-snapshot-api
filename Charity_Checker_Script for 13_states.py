@@ -1581,14 +1581,24 @@ def active_row_priority(text: str) -> int:
         return 70 + primary_bonus
     return 40 + primary_bonus
 
+def non_terminal_row_bonus(text: str) -> int:
+    """Let credible active-ish duplicate rows beat inactive/closed duplicate rows."""
+    value = text or ""
+    if re.search(r"\bnot\s+registered\b", value, re.I):
+        return 0
+    if re.search(r"\b(retired|inactive|closed|withdrawn|terminated|cancelled|canceled|dissolved|merged\s+out)\b", value, re.I):
+        return 0
+    return 10
+
 def candidate_selection_score(candidate_name: str, target_name: str, row_text: str) -> tuple[int, int]:
-    """Choose the best matching entity first; use active/current status to break ties."""
+    """Choose the best matching entity while preferring non-terminal duplicate rows."""
     name_priority = name_match_priority(candidate_name, target_name)
     # Name-only state portals can return loosely related charities. A shared
     # first word plus a few generic terms is not enough to treat the record as
     # the requested organization.
     if name_priority < 2:
         return (-1, -999)
+    name_priority = (non_terminal_row_bonus(row_text) + name_priority)
     status_priority = active_row_priority(row_text)
     return (name_priority, status_priority)
 
