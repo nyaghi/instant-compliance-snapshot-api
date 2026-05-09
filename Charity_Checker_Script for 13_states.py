@@ -1186,7 +1186,7 @@ def search_ny(page, org: Organization) -> StateResult:
         fye_dates = sorted(set(fye_dates))
         if not fye_dates:
             result.raw_status_text = "No filings found"
-            result.status = STATUS_UNKNOWN
+            result.status = "Delinquent"
             result.source_note = "Annual Filing Documents did not expose any Fiscal Year End values."
             result.success = True
             return result
