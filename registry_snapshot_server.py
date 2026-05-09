@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.08.7"
+APP_VERSION = "2026.05.09.1"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -2889,10 +2889,14 @@ def annual_filings_absent(text: str) -> bool:
     annual_section_patterns = [
         r"Annual\s+filing\s+documents[\s\S]{0,500}?No\s+rows\s+available",
         r"Annual\s+filing\s+documents[\s\S]{0,500}?No\s+documents\s+found",
+        r"Annual\s+filing\s+documents[\s\S]{0,500}?No\s+filings?\s+found",
         r"Annual\s+filing\s+documents[\s\S]{0,500}?No\s+results\s+found",
         r"Annual\s+filings?(?:\s+and\s+documents)?[\s\S]{0,500}?No\s+rows\s+available",
         r"Annual\s+filings?(?:\s+and\s+documents)?[\s\S]{0,500}?No\s+documents\s+found",
+        r"Annual\s+filings?(?:\s+and\s+documents)?[\s\S]{0,500}?No\s+filings?\s+found",
         r"Annual\s+filings?(?:\s+and\s+documents)?[\s\S]{0,500}?No\s+results\s+found",
+        r"Annual\s+Filing\s+Documents\s+did\s+not\s+expose\s+any\s+Fiscal\s+Year\s+End\s+values",
+        r"\bNo\s+filings?\s+found\b",
         r"Annual\s+renewal\s+data[\s\S]{0,500}?No\s+rows\s+available",
         r"Annual\s+renewal\s+data[\s\S]{0,500}?No\s+documents\s+found",
         r"Annual\s+renewal\s+data[\s\S]{0,500}?No\s+results\s+found",
