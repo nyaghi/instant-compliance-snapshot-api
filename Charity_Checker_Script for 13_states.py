@@ -46,6 +46,9 @@ STATE_RESULT_WAIT_SECONDS = max(3, int(os.environ.get("CE_STATE_RESULT_WAIT_SECO
 MD_FAST_SEARCH_ONLY = os.environ.get("CE_MD_FAST_SEARCH_ONLY", "1").strip().lower() not in {"0", "false", "no"}
 MD_FAST_RESULT_WAIT_SECONDS = max(2, min(STATE_RESULT_WAIT_SECONDS, int(os.environ.get("CE_MD_FAST_RESULT_WAIT_SECONDS", "3"))))
 MAX_FIXED_SLEEP_SECONDS = max(0.25, float(os.environ.get("CE_MAX_FIXED_SLEEP_SECONDS", "1.5")))
+SC_GOTO_TIMEOUT_MS = max(5000, int(os.environ.get("CE_SC_GOTO_TIMEOUT_MS", "12000")))
+SC_NETWORK_IDLE_TIMEOUT_MS = max(500, int(os.environ.get("CE_SC_NETWORK_IDLE_TIMEOUT_MS", "1500")))
+SC_MAX_GOTO_ATTEMPTS = max(1, int(os.environ.get("CE_SC_MAX_GOTO_ATTEMPTS", "2")))
 _REAL_SLEEP = time.sleep
 
 
@@ -2323,17 +2326,17 @@ def search_sc(page, org: Organization) -> StateResult:
     result = StateResult(org.organization_name, org.ein, "SC", STATUS_UNKNOWN, url)
     try:
         last_goto_error = None
-        for goto_attempt in range(2):
+        for goto_attempt in range(SC_MAX_GOTO_ATTEMPTS):
             try:
-                page.goto(url, wait_until="domcontentloaded", timeout=45000)
-                safe_wait_for_network_idle(page, timeout=15000)
-                fast_sleep(1)
+                page.goto(url, wait_until="domcontentloaded", timeout=SC_GOTO_TIMEOUT_MS)
+                safe_wait_for_network_idle(page, timeout=SC_NETWORK_IDLE_TIMEOUT_MS)
+                fast_sleep(0.5)
                 last_goto_error = None
                 break
             except Exception as e:
                 last_goto_error = e
-                if goto_attempt == 0:
-                    fast_sleep(3)
+                if goto_attempt + 1 < SC_MAX_GOTO_ATTEMPTS:
+                    fast_sleep(1)
                     continue
         if last_goto_error:
             raise last_goto_error
