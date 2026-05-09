@@ -57,7 +57,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.09.8"
+APP_VERSION = "2026.05.09.9"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1639,6 +1639,10 @@ def organization_name_variants(
             us_prefixed_variants.append(re.sub(r"^u\.?\s*s\.?\s+", "US ", base, flags=re.I))
             us_prefixed_variants.append(re.sub(r"^u\.?\s*s\.?\s+", "United States ", base, flags=re.I))
         without_trailing_the = re.sub(r",\s*the\s*$", "", base, flags=re.I).strip()
+        leading_article_from_trailing = ""
+        trailing_article_match = re.match(r"^(.*?),\s*the\s*$", base, flags=re.I)
+        if trailing_article_match:
+            leading_article_from_trailing = f"The {trailing_article_match.group(1).strip()}"
         without_leading_the = re.sub(r"^the\s+", "", base, flags=re.I).strip()
         without_comma_suffix = re.sub(r",\s*(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?)\s*$", "", base, flags=re.I).strip()
         without_suffix = re.sub(r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?)\s*$", "", without_comma_suffix, flags=re.I).strip()
@@ -1719,6 +1723,7 @@ def organization_name_variants(
             and_no_punctuation,
             *broad_variants,
             *us_prefixed_variants,
+            leading_article_from_trailing,
             without_trailing_the,
             *article_variants,
             *hyphenated_word_pairs,
