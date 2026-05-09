@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.09.6"
+APP_VERSION = "2026.05.09.7"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -74,6 +74,7 @@ CAPTURE_EVIDENCE_SCREENSHOTS = os.environ.get("CE_CAPTURE_EVIDENCE_SCREENSHOTS",
 CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT = os.environ.get("CE_CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT", "0").strip().lower() in {"1", "true", "yes"}
 ON_DEMAND_EVIDENCE_SCREENSHOT = os.environ.get("CE_ON_DEMAND_EVIDENCE_SCREENSHOT", "1").strip().lower() not in {"0", "false", "no"}
 SC_NAME_VARIANT_MAX_SECONDS = max(15.0, float(os.environ.get("CE_SC_NAME_VARIANT_MAX_SECONDS", "35")))
+SC_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_SC_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
 MAX_EXTERNAL_EXEMPT_ORGS = 3
 DOMAIN_LIMIT_DAYS = 7
 ADMIN_PASSCODE = "8977"
@@ -1724,6 +1725,18 @@ def org_with_name(org, name: str):
     if hasattr(org, "evidence_mode"):
         clone.evidence_mode = getattr(org, "evidence_mode")
     return clone
+
+
+def quick_registry_preflight(url: str, timeout_seconds: float) -> tuple[bool, str]:
+    try:
+        request = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 CharityClarity preflight"},
+        )
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            return response.status < 500, f"HTTP {response.status}"
+    except Exception as exc:
+        return False, str(exc)
 
 
 def result_is_retryable_name_miss(result) -> bool:
@@ -3708,17 +3721,28 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     include_leading_article_variants=True,
                 )
             elif state == "SC":
-                result = search_with_name_variants(
-                    page,
-                    org,
-                    checker.search_sc,
-                    max_variants=10,
-                    max_elapsed_seconds=SC_NAME_VARIANT_MAX_SECONDS,
-                    include_ein_aliases=False,
-                    include_name_segments=True,
-                    include_compact_legal_suffixes=False,
-                    include_leading_article_variants=True,
+                sc_reachable, sc_preflight_note = quick_registry_preflight(
+                    "https://search.scsos.com/charities",
+                    SC_PREFLIGHT_TIMEOUT_SECONDS,
                 )
+                if not sc_reachable:
+                    result = checker.StateResult(org.organization_name, org.ein, "SC", "Site Not Reachable", "https://search.scsos.com/charities")
+                    result.raw_status_text = "SC registry preflight failed"
+                    result.source_note = f"South Carolina public registry did not respond to a quick preflight check: {sc_preflight_note}"
+                    result.error = f"SC preflight failed: {sc_preflight_note}"
+                    result.success = False
+                else:
+                    result = search_with_name_variants(
+                        page,
+                        org,
+                        checker.search_sc,
+                        max_variants=10,
+                        max_elapsed_seconds=SC_NAME_VARIANT_MAX_SECONDS,
+                        include_ein_aliases=False,
+                        include_name_segments=True,
+                        include_compact_legal_suffixes=False,
+                        include_leading_article_variants=True,
+                    )
             elif state == "HI":
                 result = search_hi_precise(page, org)
                 if public_status(result) != "Not Registered":
