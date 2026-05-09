@@ -21,6 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
+import urllib.error
 import urllib.request
 
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "0")
@@ -56,7 +57,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.09.7"
+APP_VERSION = "2026.05.09.8"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -75,6 +76,13 @@ CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT = os.environ.get("CE_CAPTURE_LIGHTWEIGHT_SOU
 ON_DEMAND_EVIDENCE_SCREENSHOT = os.environ.get("CE_ON_DEMAND_EVIDENCE_SCREENSHOT", "1").strip().lower() not in {"0", "false", "no"}
 SC_NAME_VARIANT_MAX_SECONDS = max(15.0, float(os.environ.get("CE_SC_NAME_VARIANT_MAX_SECONDS", "35")))
 SC_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_SC_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
+NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
+NAME_SEARCH_PREFLIGHT_URLS = {
+    "ME": "https://www.pfr.maine.gov/almsonline/almsquery/SearchCompany.aspx",
+    "ND": "https://firststop.sos.nd.gov/search/charitable",
+    "SC": "https://search.scsos.com/charities",
+    "VA": "https://cos.vdacs.virginia.gov/cgi-bin/char_search.cgi",
+}
 MAX_EXTERNAL_EXEMPT_ORGS = 3
 DOMAIN_LIMIT_DAYS = 7
 ADMIN_PASSCODE = "8977"
@@ -1735,8 +1743,29 @@ def quick_registry_preflight(url: str, timeout_seconds: float) -> tuple[bool, st
         )
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             return response.status < 500, f"HTTP {response.status}"
+    except urllib.error.HTTPError as exc:
+        # Some older state sites prove reachability with redirects that urllib
+        # treats as errors. A non-5xx HTTP response is still enough to continue.
+        return exc.code < 500, f"HTTP {exc.code}"
     except Exception as exc:
         return False, str(exc)
+
+
+def preflight_name_search_registry(org, state: str) -> tuple[bool, str, object | None]:
+    state = state.upper()
+    url = NAME_SEARCH_PREFLIGHT_URLS.get(state)
+    if not url:
+        return True, "", None
+    timeout = SC_PREFLIGHT_TIMEOUT_SECONDS if state == "SC" else NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS
+    reachable, note = quick_registry_preflight(url, timeout)
+    if reachable:
+        return True, note, None
+    result = checker.StateResult(org.organization_name, org.ein, state, "Site Not Reachable", url)
+    result.raw_status_text = f"{state} registry preflight failed"
+    result.source_note = f"{state} public registry did not respond to a quick preflight check: {note}"
+    result.error = f"{state} preflight failed: {note}"
+    result.success = False
+    return False, note, result
 
 
 def result_is_retryable_name_miss(result) -> bool:
@@ -3709,28 +3738,25 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             elif state == "PA":
                 result = checker.search_pa(page, org)
             elif state == "VA":
-                result = search_with_name_variants(
-                    page,
-                    org,
-                    checker.search_va,
-                    max_variants=28,
-                    reject_va_suspended_from_leading_the_drop=False,
-                    include_ein_aliases=False,
-                    include_name_segments=True,
-                    include_compact_legal_suffixes=False,
-                    include_leading_article_variants=True,
-                )
+                reachable, _, preflight_result = preflight_name_search_registry(org, "VA")
+                if not reachable:
+                    result = preflight_result
+                else:
+                    result = search_with_name_variants(
+                        page,
+                        org,
+                        checker.search_va,
+                        max_variants=28,
+                        reject_va_suspended_from_leading_the_drop=False,
+                        include_ein_aliases=False,
+                        include_name_segments=True,
+                        include_compact_legal_suffixes=False,
+                        include_leading_article_variants=True,
+                    )
             elif state == "SC":
-                sc_reachable, sc_preflight_note = quick_registry_preflight(
-                    "https://search.scsos.com/charities",
-                    SC_PREFLIGHT_TIMEOUT_SECONDS,
-                )
-                if not sc_reachable:
-                    result = checker.StateResult(org.organization_name, org.ein, "SC", "Site Not Reachable", "https://search.scsos.com/charities")
-                    result.raw_status_text = "SC registry preflight failed"
-                    result.source_note = f"South Carolina public registry did not respond to a quick preflight check: {sc_preflight_note}"
-                    result.error = f"SC preflight failed: {sc_preflight_note}"
-                    result.success = False
+                reachable, _, preflight_result = preflight_name_search_registry(org, "SC")
+                if not reachable:
+                    result = preflight_result
                 else:
                     result = search_with_name_variants(
                         page,
@@ -3748,33 +3774,43 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 if public_status(result) != "Not Registered":
                     body = hi_detail_body(page)
             elif state == "ME":
-                result = search_with_name_variants(
-                    page,
-                    org,
-                    checker.search_me,
-                    max_variants=28,
-                    include_ein_aliases=False,
-                    include_name_segments=True,
-                    include_compact_legal_suffixes=False,
-                    include_leading_article_variants=True,
-                )
+                reachable, _, preflight_result = preflight_name_search_registry(org, "ME")
+                if not reachable:
+                    result = preflight_result
+                else:
+                    result = search_with_name_variants(
+                        page,
+                        org,
+                        checker.search_me,
+                        max_variants=28,
+                        include_ein_aliases=False,
+                        include_name_segments=True,
+                        include_compact_legal_suffixes=False,
+                        include_leading_article_variants=True,
+                    )
                 me_status_source = " ".join([result.raw_status_text or "", result.source_note or ""])
-                if re.search(r"Maine uses the Status shown|No matching organization|No record found|no matching", me_status_source, re.I):
+                if public_status(result) == "Site Not Reachable":
+                    body = ""
+                elif re.search(r"Maine uses the Status shown|No matching organization|No record found|no matching", me_status_source, re.I):
                     body = registry_page_body(page)
                 else:
                     body = me_detail_body(page, org)
                     enrich_me_result_from_body(result, body)
             elif state == "ND":
-                result = search_with_name_variants(
-                    page,
-                    org,
-                    checker.search_nd,
-                    max_variants=28,
-                    include_ein_aliases=False,
-                    include_name_segments=True,
-                    include_compact_legal_suffixes=False,
-                    include_leading_article_variants=True,
-                )
+                reachable, _, preflight_result = preflight_name_search_registry(org, "ND")
+                if not reachable:
+                    result = preflight_result
+                else:
+                    result = search_with_name_variants(
+                        page,
+                        org,
+                        checker.search_nd,
+                        max_variants=28,
+                        include_ein_aliases=False,
+                        include_name_segments=True,
+                        include_compact_legal_suffixes=False,
+                        include_leading_article_variants=True,
+                    )
             else:
                 raise ValueError(f"Unsupported state: {state}")
             if page:
