@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.09.5"
+APP_VERSION = "2026.05.09.6"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -73,6 +73,7 @@ EAGER_EVIDENCE_PDF = os.environ.get("CE_EAGER_EVIDENCE_PDF", "0").strip().lower(
 CAPTURE_EVIDENCE_SCREENSHOTS = os.environ.get("CE_CAPTURE_EVIDENCE_SCREENSHOTS", "0").strip().lower() in {"1", "true", "yes"}
 CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT = os.environ.get("CE_CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT", "0").strip().lower() in {"1", "true", "yes"}
 ON_DEMAND_EVIDENCE_SCREENSHOT = os.environ.get("CE_ON_DEMAND_EVIDENCE_SCREENSHOT", "1").strip().lower() not in {"0", "false", "no"}
+SC_NAME_VARIANT_MAX_SECONDS = max(15.0, float(os.environ.get("CE_SC_NAME_VARIANT_MAX_SECONDS", "35")))
 MAX_EXTERNAL_EXEMPT_ORGS = 3
 DOMAIN_LIMIT_DAYS = 7
 ADMIN_PASSCODE = "8977"
@@ -1752,6 +1753,7 @@ def search_with_name_variants(
     org,
     search_func,
     max_variants: int | None = None,
+    max_elapsed_seconds: float | None = None,
     reject_va_suspended_from_leading_the_drop: bool = False,
     include_ein_aliases: bool = True,
     include_name_segments: bool = False,
@@ -1770,10 +1772,17 @@ def search_with_name_variants(
     )
     if max_variants:
         variants = variants[:max_variants]
+    started = time.perf_counter()
     for variant in variants:
+        if max_elapsed_seconds and best_result is not None and (time.perf_counter() - started) >= max_elapsed_seconds:
+            if getattr(best_result, "organization_name", "") != original_name:
+                best_result.organization_name = original_name
+            return best_result
         result = search_func(page, org_with_name(org, variant))
         if getattr(result, "organization_name", "") != original_name:
             result.organization_name = original_name
+        if public_status(result) == "Site Not Reachable":
+            return result
         if (
             reject_va_suspended_from_leading_the_drop
             and public_status(result) == "Suspended"
@@ -3703,7 +3712,8 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     page,
                     org,
                     checker.search_sc,
-                    max_variants=28,
+                    max_variants=10,
+                    max_elapsed_seconds=SC_NAME_VARIANT_MAX_SECONDS,
                     include_ein_aliases=False,
                     include_name_segments=True,
                     include_compact_legal_suffixes=False,
