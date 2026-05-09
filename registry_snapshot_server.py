@@ -56,7 +56,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.09.3"
+APP_VERSION = "2026.05.09.4"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -3307,6 +3307,15 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         if registry_date:
             return f"The CO public registry shows an expiration date of {format_date(registry_date)}, which is overdue."
         return "The CO public registry shows an expired registration status, which CharityClarity treats as Delinquent."
+    if (
+        state == "NY"
+        and normalized_status == "delinquent"
+        and re.search(r"Annual\s+Filing\s+Documents\s+did\s+not\s+expose\s+any\s+Fiscal\s+Year\s+End\s+values", combined_result_text(result, body), re.I)
+    ):
+        return (
+            "The NY public registry detail page shows the organization record, but the annual filing section shows no annual filings available. "
+            "Because the record does not show an exempt registration status, CharityClarity treats the organization as Delinquent."
+        )
     if state == "CA" and normalized_status == "delinquent":
         context = filing_context(result, body)
         ca_years = ca_annual_renewal_years_from_text(body)
