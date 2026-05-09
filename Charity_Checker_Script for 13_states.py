@@ -1607,6 +1607,13 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
         if len(trailing_segment.split()) < 2:
             trailing_segment = ""
     without_leading_the = re.sub(r"^the\s+", "", cleaned, flags=re.I).strip()
+    without_trailing_the = ""
+    trailing_the_query = ""
+    if re.search(r"(?:,\s*the|\s+the)\s*$", name or "", re.I) and not re.match(r"^the\s+", cleaned, re.I):
+        without_trailing_the = re.sub(r"\s+\bthe\b\.?\s*$", "", cleaned, flags=re.I).strip()
+        trailing_the_words = re.sub(r"[^\w\s']", " ", without_trailing_the).strip()
+        trailing_the_words = re.sub(r"\s+", " ", trailing_the_words)
+        trailing_the_query = " ".join(trailing_the_words.split()[:max_words]) if trailing_the_words else ""
     without_leading_acronym = re.sub(r"^[A-Z]{2,8}\s*[-/\\]\s*", "", cleaned).strip()
     if without_leading_acronym == cleaned:
         without_leading_acronym = ""
@@ -1626,7 +1633,9 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
     variants = [
         trailing_segment,
         without_leading_acronym,
-        without_leading_the,
+        without_leading_the if without_leading_the.lower() != cleaned.lower() else "",
+        trailing_the_query,
+        without_trailing_the,
         lead_segment,
         no_suffix,
         cleaned,
