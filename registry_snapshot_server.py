@@ -57,7 +57,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.09.12"
+APP_VERSION = "2026.05.10.1"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -759,7 +759,7 @@ def public_status(result) -> str:
     if "suspended" in normalized:
         return "Suspended"
     if re.search(r"\binactive\b", normalized, re.I):
-        return "Suspended"
+        return "Closed / Withdrawn / Canceled"
     if re.search(r"\bfailed\s+to\s+renew\b", normalized, re.I):
         return "Failed to Renew"
     if re.search(r"not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist", normalized, re.I):
@@ -1655,6 +1655,18 @@ def organization_name_variants(
         no_comma = re.sub(r",\s*", " ", base).strip()
         no_punctuation = re.sub(r"[^\w\s]", " ", base).strip()
         no_punctuation = re.sub(r"\s+", " ", no_punctuation)
+        broad_query_prefixes = []
+        prefix_source = re.sub(r"^the\s+", "", no_punctuation, flags=re.I).strip()
+        prefix_words = prefix_source.split()
+        if len(prefix_words) >= 5:
+            # Some name-only registries fail on long formal names but return
+            # the right row from a shorter prefix. Candidate scoring still has
+            # to match the full target name before any result is accepted.
+            broad_query_prefixes.extend([
+                " ".join(prefix_words[:4]),
+                " ".join(prefix_words[:3]),
+                " ".join(prefix_words[:2]),
+            ])
         institute_plural = re.sub(r"\bInstitute\s+of\b", "Institutes of", base, flags=re.I).strip()
         institute_singular = re.sub(r"\bInstitutes\s+of\b", "Institute of", base, flags=re.I).strip()
         hyphen_as_space = re.sub(r"[-\u2010-\u2015]+", " ", base).strip()
@@ -1710,7 +1722,8 @@ def organization_name_variants(
                 f"{title_hyphen_base}, Inc." if title_hyphen_base else "",
             ])
         broad_variants = [and_without_suffix, compact_legal_suffixes] if include_compact_legal_suffixes else []
-        article_variants = [without_leading_the] if include_leading_article_variants else []
+        with_leading_the = "" if re.match(r"^the\s+", base, re.I) else f"The {base}"
+        article_variants = [with_leading_the, without_leading_the] if include_leading_article_variants else []
         for variant in [
             without_comma_suffix,
             without_suffix,
@@ -1727,6 +1740,7 @@ def organization_name_variants(
             title_hyphen_base,
             ms_expanded,
             and_no_punctuation,
+            *broad_query_prefixes,
             *broad_variants,
             *us_prefixed_variants,
             leading_article_from_trailing,
@@ -3050,6 +3064,8 @@ def explicit_adverse_registry_status(result, body: str) -> str:
     terminal_pattern = rf"(?:{withdrawn_pattern}|{closed_pattern}|{inactive_pattern})"
     pending_pattern = r"\bpending\b"
     failed_to_renew_pattern = r"\bfailed\s+to\s+renew\b"
+    if re.search(inactive_pattern, primary_status_fields, re.I):
+        return "Closed / Withdrawn / Canceled"
     if state == "NJ":
         def nj_status_confirmed(pattern: str) -> bool:
             return bool(re.search(pattern, raw_fields, re.I) or ein_line_has_registry_pattern(text, result.ein, pattern))
@@ -3058,10 +3074,12 @@ def explicit_adverse_registry_status(result, body: str) -> str:
             return "Delinquent"
         if nj_status_confirmed(r"\brevoked\b"):
             return "Revoked"
-        if nj_status_confirmed(r"\b(suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist)\b") or nj_status_confirmed(inactive_pattern):
-            return "Suspended"
         if nj_status_confirmed(pending_pattern):
             return "Pending"
+        if nj_status_confirmed(r"\b(suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist)\b"):
+            return "Suspended"
+        if nj_status_confirmed(inactive_pattern):
+            return "Closed / Withdrawn / Canceled"
         if nj_status_confirmed(failed_to_renew_pattern):
             return "Failed to Renew"
         if nj_status_confirmed(withdrawn_pattern) or nj_status_confirmed(closed_pattern):
@@ -3077,10 +3095,12 @@ def explicit_adverse_registry_status(result, body: str) -> str:
             return "Delinquent"
         if nj_status_confirmed(r"\brevoked\b"):
             return "Revoked"
-        if nj_status_confirmed(r"\b(suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist)\b") or nj_status_confirmed(inactive_pattern):
-            return "Suspended"
         if nj_status_confirmed(pending_pattern):
             return "Pending"
+        if nj_status_confirmed(r"\b(suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist)\b"):
+            return "Suspended"
+        if nj_status_confirmed(inactive_pattern):
+            return "Closed / Withdrawn / Canceled"
         if nj_status_confirmed(failed_to_renew_pattern):
             return "Failed to Renew"
         if nj_status_confirmed(withdrawn_pattern):
@@ -3090,10 +3110,12 @@ def explicit_adverse_registry_status(result, body: str) -> str:
         return ""
     if re.search(r"\brevoked\b", status_evidence, re.I):
         return "Revoked"
-    if re.search(r"\b(suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist)\b", status_evidence, re.I) or re.search(inactive_pattern, status_evidence, re.I):
-        return "Suspended"
     if re.search(pending_pattern, status_evidence, re.I):
         return "Pending"
+    if re.search(r"\b(suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist)\b", status_evidence, re.I):
+        return "Suspended"
+    if re.search(inactive_pattern, status_evidence, re.I):
+        return "Closed / Withdrawn / Canceled"
     if re.search(failed_to_renew_pattern, status_evidence, re.I):
         return "Failed to Renew"
     if re.search(withdrawn_pattern, status_evidence, re.I):
@@ -3299,8 +3321,6 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
     if normalized_status == "suspended":
         if state == "VA" and re.search(r"not\s+authorized\s+to\s+solicit", combined_result_text(result, body), re.I):
             return "The VA public registry shows the organization is not authorized to solicit in Virginia, which CharityClarity treats as Suspended."
-        if re.search(r"\binactive\b", combined_result_text(result, body), re.I):
-            return f"The {state} public registry shows the organization registration status as Inactive, which CharityClarity treats as Suspended."
         return f"The {state} public registry shows the organization registration status as Suspended."
     if normalized_status in {"withdrawn", "closed", "closed / withdrawn / canceled"}:
         if re.search(r"voluntar(?:y|ily)\s+deactivat(?:ed|ion)", combined_result_text(result, body), re.I):
