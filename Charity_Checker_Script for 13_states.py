@@ -1640,18 +1640,20 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
     ms_expanded = ""
     if re.search(r"\bMS\s+Society\b", cleaned, re.I):
         ms_expanded = re.sub(r"\bMS\s+Society\b", "Multiple Sclerosis Society", cleaned, flags=re.I)
+    with_leading_the = "" if re.match(r"^the\s+", cleaned, re.I) else f"The {cleaned}"
     variants = [
         trailing_segment,
         without_leading_acronym,
-        without_leading_the if without_leading_the.lower() != cleaned.lower() else "",
-        trailing_the_query,
-        without_trailing_the,
         lead_segment,
         no_suffix,
         cleaned,
         prefix,
         no_punct,
         ms_expanded,
+        with_leading_the,
+        without_leading_the if without_leading_the.lower() != cleaned.lower() else "",
+        trailing_the_query,
+        without_trailing_the,
     ]
     output = []
     seen = set()
