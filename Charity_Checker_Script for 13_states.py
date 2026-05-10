@@ -1247,7 +1247,7 @@ def search_nj(page, org: Organization) -> StateResult:
         if status_match:
             raw = status_match.group(1).strip()
         if not raw:
-            for status_text in ["Compliant", "Active", "Delinquent", "Expired", "Revoked", "Suspended", "Withdrawn"]:
+            for status_text in ["Exempt", "Compliant", "Active", "Delinquent", "Expired", "Revoked", "Suspended", "Withdrawn"]:
                 if re.search(rf"\b{re.escape(status_text)}\b", body, re.I):
                     raw = status_text
                     break
