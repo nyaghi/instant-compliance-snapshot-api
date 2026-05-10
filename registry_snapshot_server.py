@@ -57,7 +57,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.09.10"
+APP_VERSION = "2026.05.09.11"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1223,6 +1223,7 @@ def ca_annual_renewal_years_from_text(body: str) -> dict:
             "latest_pending_year": None,
         }
     annual_section = annual_match.group(1)
+    reporting_incomplete = bool(re.search(r"\b(reporting\s+incomplete|awaiting\s+reporting)\b", readable_body, re.I))
     blocks = re.split(r"(?=Status\s+of\s+Filing\s*:)", annual_section, flags=re.I)
     submitted_years = []
     not_submitted_years = []
@@ -1257,6 +1258,9 @@ def ca_annual_renewal_years_from_text(body: str) -> dict:
         elif re.search(r"\bnot\s+submitted\b", status_text, re.I):
             not_submitted_years.append(year)
             not_submitted_status_by_year[year] = status_text or "Not Submitted"
+        elif reporting_incomplete and not status_text and not filing_received_match:
+            not_submitted_years.append(year)
+            not_submitted_status_by_year[year] = "Reporting Incomplete"
         elif (
             (
                 re.search(r"\b(?:e-)?accepted\b", status_text, re.I)
