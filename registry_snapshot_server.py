@@ -57,7 +57,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.11.8"
+APP_VERSION = "2026.05.11.9"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -942,7 +942,7 @@ def resolved_organization_name(ein: str, supplied_name: str = "") -> str:
     supplied_name = (supplied_name or "").strip()
     reference_name = organization_name_for_ein(ein)
     profile_name = public_profile_name_for_ein(ein)
-    return supplied_name or reference_name or profile_name
+    return supplied_name or profile_name or reference_name
 
 
 def format_ein(value: str) -> str:
@@ -3216,14 +3216,14 @@ def explicit_adverse_registry_status(result, body: str) -> str:
         return "Suspended"
     if re.search(inactive_pattern, status_evidence, re.I):
         return "Closed / Withdrawn / Canceled"
-    if re.search(failed_to_renew_pattern, status_evidence, re.I):
-        return "Failed to Renew"
-    if re.search(expired_pattern, status_evidence, re.I):
-        return "Delinquent"
     if re.search(withdrawn_pattern, status_evidence, re.I):
         return "Closed / Withdrawn / Canceled"
     if re.search(closed_pattern, status_evidence, re.I):
         return "Closed / Withdrawn / Canceled"
+    if re.search(failed_to_renew_pattern, status_evidence, re.I):
+        return "Failed to Renew"
+    if re.search(expired_pattern, status_evidence, re.I):
+        return "Delinquent"
     return ""
 
 
@@ -4037,10 +4037,10 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
         ein_key = re.sub(r"\D", "", result.get("ein") or "")
         current_name = (result.get("organization_name") or "").strip()
         matched_name = (result.get("matched_registry_name") or "").strip()
-        if ein_key and matched_name:
-            discovered_names.setdefault(ein_key, matched_name)
-        elif ein_key and current_name and current_name.lower() != "organization not identified":
+        if ein_key and current_name and current_name.lower() != "organization not identified":
             discovered_names.setdefault(ein_key, current_name)
+        elif ein_key and matched_name:
+            discovered_names.setdefault(ein_key, matched_name)
 
     if discovered_names:
         name_only_states = {"ME", "ND", "SC", "VA"}
