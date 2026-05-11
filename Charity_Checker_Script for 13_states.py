@@ -1607,6 +1607,11 @@ def name_match_priority(candidate_name: str, target_name: str) -> int:
         and target_words[-1] in entity_words
     ):
         return 3
+    if len(target_words) <= 2 and len(candidate_words) > len(target_words) and target in candidate:
+        # Short names are especially prone to false positives in name-only
+        # portals. "Allen Institute" is not the same entity as "Allen Institute
+        # for Artificial Intelligence"; status should not rescue that mismatch.
+        return -1
     if target in candidate:
         return 2
     shared = set(candidate_words) & set(target_words)
