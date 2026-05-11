@@ -735,6 +735,9 @@ def search_co(page, org: Organization) -> StateResult:
         fast_sleep(0.75)
 
         body = page.locator("body").inner_text(timeout=5000)
+        registry_name = extract_labeled_value_from_text(body, ["Name"])
+        if registry_name:
+            result.matched_registry_name = registry_name
         if re.search(r"no records|no results|not found", body, re.I):
             result.raw_status_text = "No record found"
             result.status = STATUS_NOT_REGISTERED
