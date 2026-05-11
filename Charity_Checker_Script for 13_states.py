@@ -1647,7 +1647,11 @@ def candidate_selection_score(candidate_name: str, target_name: str, row_text: s
     # the requested organization.
     if name_priority < 2:
         return (-1, -999)
-    name_priority = (non_terminal_row_bonus(row_text) + name_priority)
+    # Identity strength must beat status. For example, "Allen Institute" should
+    # not lose to "The Allen Institute for Artificial Intelligence" merely
+    # because the latter is active and the exact entity is inactive. The
+    # non-terminal bonus only breaks ties among similarly strong name matches.
+    name_priority = (name_priority * 100) + non_terminal_row_bonus(row_text)
     status_priority = active_row_priority(row_text)
     return (name_priority, status_priority)
 
