@@ -110,6 +110,23 @@ def reject_wrong_ein_result(result: StateResult, state_name: str) -> StateResult
     result.success = True
     return result
 
+def extract_registry_identifier_from_text(text: str, requested_ein: str = "") -> str:
+    """Best-effort public registry identifier for audit/debug output."""
+    readable = re.sub(r"\s+", " ", text or "").strip()
+    target_ein = digits_only(requested_ein)
+    patterns = [
+        r"\b(?:Registration|Registry|License|Certificate|Charity|Public|AG\s+Account)\s*(?:#|No\.?|Number|ID)?\s*[:#]?\s*([A-Z]{0,4}\d{3,}[\w-]*)",
+        r"\b(CO\d{2,}|CH\d{2,}|CT\d{2,}|P\d{2,})\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, readable, re.I)
+        if not match:
+            continue
+        value = re.sub(r"\s+", "", match.group(1)).strip()
+        if value and digits_only(value) != target_ein:
+            return value.upper()
+    return ""
+
 def read_input_csv(path: Path) -> List[Organization]:
     with path.open("r", newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
@@ -1801,7 +1818,7 @@ def click_va_search_button(page) -> bool:
     except Exception:
         return False
 
-def click_va_organization_link(page, org_name: str, target_names=None) -> bool:
+def click_va_organization_link(page, org_name: str, target_names=None):
     links = page.locator('a[href*="act=2"][href*="sysorgno"]')
     candidates = []
     try:
@@ -1819,16 +1836,28 @@ def click_va_organization_link(page, org_name: str, target_names=None) -> bool:
                         pass
                     score = candidate_selection_score_for_targets(txt, target_names or org_name, row_text)
                     if score[0] >= 0:
-                        candidates.append((score[0], score[1], link))
+                        href = ""
+                        try:
+                            href = link.get_attribute("href") or ""
+                        except Exception:
+                            href = ""
+                        id_match = re.search(r"sysorgno=([^&]+)", href, re.I)
+                        identifier = urllib.parse.unquote(id_match.group(1)).strip() if id_match else ""
+                        candidates.append((score[0], score[1], link, txt, identifier, row_text))
             except Exception:
                 continue
     except Exception:
         pass
     if candidates:
         candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
-        candidates[0][2].click(timeout=5000)
-        return True
-    return False
+        selected = candidates[0]
+        selected[2].click(timeout=5000)
+        return {
+            "name": selected[3],
+            "identifier": selected[4],
+            "row_text": selected[5],
+        }
+    return None
 
 def va_search_results_show_pending(page, org_name: str, target_names=None) -> bool:
     links = page.locator('a[href*="act=2"][href*="sysorgno"]')
@@ -1891,7 +1920,10 @@ def search_va(page, org: Organization) -> StateResult:
 
             selected_search_row_pending = va_search_results_show_pending(page, org.organization_name, target_names)
 
-            if click_va_organization_link(page, org.organization_name, target_names):
+            selected_va_match = click_va_organization_link(page, org.organization_name, target_names)
+            if selected_va_match:
+                result.matched_registry_name = selected_va_match.get("name", "")
+                result.matched_registry_identifier = selected_va_match.get("identifier", "")
                 clicked_match = True
                 break
 
@@ -1906,6 +1938,10 @@ def search_va(page, org: Organization) -> StateResult:
         fast_sleep(0.75)
 
         detail_text_for_status = page.locator("body").inner_text(timeout=8000)
+        if not result.matched_registry_name:
+            result.matched_registry_name = extract_labeled_value_from_text(detail_text_for_status, ["Primary Name", "Name"])
+        if not result.matched_registry_identifier:
+            result.matched_registry_identifier = extract_registry_identifier_from_text(detail_text_for_status, org.ein)
         if selected_search_row_pending or re.search(r"\bregistration\s+pending\b", detail_text_for_status, re.I):
             result.raw_status_text = "Registration Pending"
             result.status = "Pending"
@@ -2540,13 +2576,22 @@ def search_sc(page, org: Organization) -> StateResult:
                             pass
                         score = candidate_selection_score_for_targets(txt, target_names, row_text)
                         if score[0] >= 0:
-                            candidates.append((score[0], score[1], link))
+                            href = ""
+                            try:
+                                href = link.get_attribute("href") or ""
+                            except Exception:
+                                href = ""
+                            identifier = extract_registry_identifier_from_text(f"{href} {row_text}", org.ein)
+                            candidates.append((score[0], score[1], link, txt, identifier, row_text))
                 except Exception:
                     continue
         except Exception:
             pass
         if not clicked_result and candidates:
             candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+            selected_sc_match = candidates[0]
+            result.matched_registry_name = selected_sc_match[3]
+            result.matched_registry_identifier = selected_sc_match[4]
             candidates[0][2].click(timeout=5000)
             clicked_result = True
         if not clicked_result:
@@ -2568,6 +2613,10 @@ def search_sc(page, org: Organization) -> StateResult:
         detail_text = page.locator("body").inner_text(timeout=15000)
         if text_has_wrong_ein_match(detail_text, org.ein):
             return reject_wrong_ein_result(result, "South Carolina")
+        if not result.matched_registry_name:
+            result.matched_registry_name = extract_labeled_value_from_text(detail_text, ["Organization", "Charity Name", "Name"])
+        if not result.matched_registry_identifier:
+            result.matched_registry_identifier = extract_registry_identifier_from_text(detail_text, org.ein)
         status_text = extract_labeled_value(page, ["Status", "Registration Status"]) or extract_labeled_value_from_text(detail_text, ["Status", "Registration Status"])
         if re.search(r"\b(suspended|revoked|not\s+authorized|may\s+not\s+solicit|may\s+not\s+raise\s+funds|may\s+not\s+operate)\b", status_text or "", re.I):
             result.raw_status_text = status_text
@@ -3448,6 +3497,9 @@ def search_nd(page, org: Organization) -> StateResult:
         best_button = None
         best_priority = -1
         best_status_score = -999
+        best_match_name = ""
+        best_match_identifier = ""
+        best_match_row_text = ""
         for selector in ['div.interactive-cell-button', 'div[role="button"]']:
             try:
                 items = page.locator(selector)
@@ -3484,6 +3536,9 @@ def search_nd(page, org: Organization) -> StateResult:
                             best_priority = priority
                             best_status_score = status_score
                             best_button = item
+                            best_match_name = name_text
+                            best_match_row_text = combined_txt
+                            best_match_identifier = extract_registry_identifier_from_text(combined_txt, org.ein)
                     except Exception:
                         continue
             except Exception:
@@ -3564,6 +3619,9 @@ def search_nd(page, org: Organization) -> StateResult:
                                         best_priority = priority
                                         best_status_score = status_score
                                         best_button = item
+                                        best_match_name = name_text
+                                        best_match_row_text = combined_txt
+                                        best_match_identifier = extract_registry_identifier_from_text(combined_txt, org.ein)
                                 except Exception:
                                     continue
                         except Exception:
@@ -3580,6 +3638,8 @@ def search_nd(page, org: Organization) -> StateResult:
             result.success = True
             return result
 
+        result.matched_registry_name = best_match_name
+        result.matched_registry_identifier = best_match_identifier
         best_button.click(timeout=5000)
         try:
             page.get_by_text("Registration Date", exact=True).wait_for(timeout=8000)
@@ -3591,6 +3651,10 @@ def search_nd(page, org: Organization) -> StateResult:
         detail_text = page.locator("body").inner_text(timeout=8000)
         if text_has_wrong_ein_match(detail_text, org.ein):
             return reject_wrong_ein_result(result, "North Dakota")
+        if not result.matched_registry_name:
+            result.matched_registry_name = extract_labeled_value_from_text(detail_text, ["Organization Name", "Charity Name", "Name"])
+        if not result.matched_registry_identifier:
+            result.matched_registry_identifier = extract_registry_identifier_from_text(f"{best_match_row_text} {detail_text}", org.ein)
         status_text = ""
         try:
             detail_rows = page.locator("tr.detail")
