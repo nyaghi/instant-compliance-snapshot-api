@@ -57,7 +57,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.10.1"
+APP_VERSION = "2026.05.11.1"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1607,6 +1607,7 @@ def organization_name_variants(
     include_name_segments: bool = False,
     include_compact_legal_suffixes: bool = True,
     include_leading_article_variants: bool = True,
+    include_broad_query_prefixes: bool = True,
 ) -> list[str]:
     variants = []
 
@@ -1658,7 +1659,7 @@ def organization_name_variants(
         broad_query_prefixes = []
         prefix_source = re.sub(r"^the\s+", "", no_punctuation, flags=re.I).strip()
         prefix_words = prefix_source.split()
-        if len(prefix_words) >= 5:
+        if include_broad_query_prefixes and len(prefix_words) >= 5:
             # Some name-only registries fail on long formal names but return
             # the right row from a shorter prefix. Candidate scoring still has
             # to match the full target name before any result is accepted.
@@ -1684,6 +1685,14 @@ def organization_name_variants(
         ampersand_removed = re.sub(r"\s*&\s*", " ", base).strip()
         apostrophe_removed = re.sub(r"[']", "", base).strip()
         possessive_removed = re.sub(r"\b([A-Za-z]+)'s\b", r"\1s", base).strip()
+        saint_expanded = re.sub(r"\bSt\.?\s+", "Saint ", base, flags=re.I).strip()
+        saint_abbreviated = re.sub(r"\bSaint\s+", "St. ", base, flags=re.I).strip()
+        childrens_hospital = re.sub(
+            r"\b(Children'?s?)\s+Foundation\b",
+            r"\1 Hospital Foundation",
+            base,
+            flags=re.I,
+        ).strip()
         ms_expanded = re.sub(r"\bMS\s+Society\b", "Multiple Sclerosis Society", base, flags=re.I).strip()
         and_no_punctuation = re.sub(r"[^\w\s]", " ", ampersand_as_and).strip()
         and_no_punctuation = re.sub(r"\s+", " ", and_no_punctuation)
@@ -1737,6 +1746,9 @@ def organization_name_variants(
             ampersand_removed,
             apostrophe_removed,
             possessive_removed,
+            saint_expanded,
+            saint_abbreviated,
+            childrens_hospital,
             title_hyphen_base,
             ms_expanded,
             and_no_punctuation,
@@ -1753,8 +1765,92 @@ def organization_name_variants(
     return variants or [""]
 
 
+def compatible_ein_alias_for_name(original_name: str, alias_name: str) -> bool:
+    """Only let EIN-resolved aliases accept rows when they remain specific.
+
+    The query layer can stay flexible, but the acceptance layer should not let a
+    broad alias such as "University of Missouri" certify a row for "The Curators
+    of University of Missouri". That was the source of the recent name-only
+    false positives.
+    """
+    normalize = getattr(checker, "normalize_name", lambda value: re.sub(r"\W+", " ", (value or "").lower()).strip())
+    original = normalize(original_name)
+    alias = normalize(alias_name)
+    if not original or not alias:
+        return False
+    if original == alias:
+        return True
+
+    original_words = original.split()
+    alias_words = alias.split()
+    if not original_words or not alias_words:
+        return False
+
+    governance_words = {"trustees", "curators", "regents", "board"}
+    if original_words[0] in governance_words and alias_words[0] != original_words[0]:
+        return False
+
+    if alias in original or original in alias:
+        shorter_words = alias_words if len(alias_words) <= len(original_words) else original_words
+        if len(shorter_words) >= 3:
+            return True
+        # Allow established two-word fund aliases, e.g. "The Global Fund", but
+        # avoid broad two-word institution aliases such as "Allen Institute".
+        if len(alias_words) == 2 and alias_words == original_words[:2] and alias_words[-1] == "fund":
+            return True
+        return False
+
+    entity_words = {"foundation", "fund", "association", "society", "institute", "center", "centre", "network", "mission", "trust"}
+    if (
+        len(original_words) >= 3
+        and len(alias_words) >= 3
+        and original_words[:2] == alias_words[:2]
+        and original_words[-1] == alias_words[-1]
+        and original_words[-1] in entity_words
+    ):
+        return True
+
+    return False
+
+
+def organization_match_target_variants(name: str, ein: str = "") -> list[str]:
+    """Safe names used to accept a registry row after a broad search query.
+
+    Name-only registries often need loose queries to find a row, but the row
+    itself must still match the requested organization. These variants preserve
+    safe aliases such as punctuation, leading/trailing "The", slash segments,
+    hyphen variants, acronym expansion, and legal suffix differences while
+    excluding broad two/three/four-word prefixes such as "Trustees Of".
+    """
+    variants = organization_name_variants(
+        name,
+        ein,
+        include_ein_aliases=False,
+        include_name_segments=True,
+        include_compact_legal_suffixes=True,
+        include_leading_article_variants=True,
+        include_broad_query_prefixes=False,
+    )
+    for alias in [organization_name_for_ein(ein), public_profile_name_for_ein(ein)]:
+        if compatible_ein_alias_for_name(name, alias):
+            variants.extend(organization_name_variants(
+                alias,
+                "",
+                include_ein_aliases=False,
+                include_name_segments=True,
+                include_compact_legal_suffixes=True,
+                include_leading_article_variants=True,
+                include_broad_query_prefixes=False,
+            ))
+    return variants or [name]
+
+
 def org_with_name(org, name: str):
     clone = SimpleNamespace(organization_name=name, ein=org.ein)
+    if hasattr(org, "match_target_names"):
+        clone.match_target_names = getattr(org, "match_target_names")
+    else:
+        clone.match_target_names = organization_match_target_variants(getattr(org, "organization_name", ""), getattr(org, "ein", ""))
     if hasattr(org, "evidence_mode"):
         clone.evidence_mode = getattr(org, "evidence_mode")
     return clone
@@ -1837,6 +1933,7 @@ def search_with_name_variants(
         include_compact_legal_suffixes=include_compact_legal_suffixes,
         include_leading_article_variants=include_leading_article_variants,
     )
+    safe_match_targets = organization_match_target_variants(original_name, org.ein)
     if max_variants:
         variants = variants[:max_variants]
     started = time.perf_counter()
@@ -1845,7 +1942,9 @@ def search_with_name_variants(
             if getattr(best_result, "organization_name", "") != original_name:
                 best_result.organization_name = original_name
             return best_result
-        result = search_func(page, org_with_name(org, variant))
+        variant_org = org_with_name(org, variant)
+        variant_org.match_target_names = safe_match_targets
+        result = search_func(page, variant_org)
         if getattr(result, "organization_name", "") != original_name:
             result.organization_name = original_name
         if public_status(result) == "Site Not Reachable":
@@ -3781,7 +3880,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                         page,
                         org,
                         checker.search_va,
-                        max_variants=28,
+                        max_variants=1,
                         reject_va_suspended_from_leading_the_drop=False,
                         include_ein_aliases=False,
                         include_name_segments=True,
@@ -3817,7 +3916,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                         page,
                         org,
                         checker.search_me,
-                        max_variants=28,
+                        max_variants=1,
                         include_ein_aliases=False,
                         include_name_segments=True,
                         include_compact_legal_suffixes=False,
@@ -3840,7 +3939,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                         page,
                         org,
                         checker.search_nd,
-                        max_variants=28,
+                        max_variants=1,
                         include_ein_aliases=False,
                         include_name_segments=True,
                         include_compact_legal_suffixes=False,
