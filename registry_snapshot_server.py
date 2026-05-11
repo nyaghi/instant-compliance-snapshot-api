@@ -57,7 +57,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.11.6"
+APP_VERSION = "2026.05.11.7"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -3863,6 +3863,11 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     body = md_no_results_body(page)
             elif state == "CO":
                 result = checker.search_co(page, org)
+                body = registry_page_body(page)
+                if not (getattr(result, "matched_registry_name", "") or "").strip():
+                    co_name = checker.extract_labeled_value_from_text(body, ["Name"])
+                    if co_name:
+                        result.matched_registry_name = co_name
             elif state == "NY":
                 result = search_with_name_variants(page, org, checker.search_ny, max_variants=25)
             elif state == "NJ":
