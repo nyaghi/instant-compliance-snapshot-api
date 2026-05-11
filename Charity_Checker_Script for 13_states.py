@@ -1552,6 +1552,7 @@ def normalize_name(value: str) -> str:
     txt = re.sub(r"\b(the|and|a)\b", " ", txt)
     # Keep substantive words like "foundation" and "fund" in the match key.
     # Dropping them made name-only state searches confuse related but separate entities.
+    txt = re.sub(r"\bnon[\s-]*profit\b", " ", txt)
     txt = re.sub(r"\b(inc|incorporated|corp|corporation|llc|ltd)\b", " ", txt)
     txt = re.sub(r"[^a-z0-9]+", " ", txt)
     return re.sub(r"\s+", " ", txt).strip()
@@ -3554,6 +3555,44 @@ def search_nd(page, org: Organization) -> StateResult:
                 continue
 
         if not best_button or best_priority < 0:
+            try:
+                rows = page.locator("tr")
+                count = min(rows.count(), 100)
+                for i in range(count):
+                    row = rows.nth(i)
+                    try:
+                        row_txt = re.sub(r"\s+", " ", row.inner_text(timeout=1000)).strip()
+                        if not row_txt or re.search(r"\bForm\s+Info\b.*\bSOS\s+Control\b", row_txt, re.I):
+                            continue
+                        cells = row.locator("td")
+                        if cells.count() < 2:
+                            continue
+                        name_text = re.sub(r"\s+", " ", cells.nth(0).inner_text(timeout=1000)).strip()
+                        if not name_text or text_has_wrong_ein_match(row_txt, org.ein):
+                            continue
+                        priority, status_score = candidate_selection_score_for_targets(name_text, target_names, row_txt)
+                        if (
+                            priority >= 0
+                            and (
+                                priority > best_priority
+                                or (priority == best_priority and status_score > best_status_score)
+                            )
+                        ):
+                            click_target = row.locator('div.interactive-cell-button, div[role="button"], a, button').first
+                            if click_target.count() == 0:
+                                click_target = cells.nth(0)
+                            best_priority = priority
+                            best_status_score = status_score
+                            best_button = click_target
+                            best_match_name = name_text
+                            best_match_row_text = row_txt
+                            best_match_identifier = extract_registry_identifier_from_text(row_txt, org.ein)
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+        if not best_button or best_priority < 0:
             # If the first formal name query does not produce an acceptable row,
             # try the safe query variants. Candidate acceptance still uses the
             # full target-name set, so broad queries cannot be accepted unless
@@ -3635,6 +3674,43 @@ def search_nd(page, org: Organization) -> StateResult:
                                     continue
                         except Exception:
                             continue
+                    if not best_button or best_priority < 0:
+                        try:
+                            rows = page.locator("tr")
+                            count = min(rows.count(), 100)
+                            for i in range(count):
+                                row = rows.nth(i)
+                                try:
+                                    row_txt = re.sub(r"\s+", " ", row.inner_text(timeout=1000)).strip()
+                                    if not row_txt or re.search(r"\bForm\s+Info\b.*\bSOS\s+Control\b", row_txt, re.I):
+                                        continue
+                                    cells = row.locator("td")
+                                    if cells.count() < 2:
+                                        continue
+                                    name_text = re.sub(r"\s+", " ", cells.nth(0).inner_text(timeout=1000)).strip()
+                                    if not name_text or text_has_wrong_ein_match(row_txt, org.ein):
+                                        continue
+                                    priority, status_score = candidate_selection_score_for_targets(name_text, target_names, row_txt)
+                                    if (
+                                        priority >= 0
+                                        and (
+                                            priority > best_priority
+                                            or (priority == best_priority and status_score > best_status_score)
+                                        )
+                                    ):
+                                        click_target = row.locator('div.interactive-cell-button, div[role="button"], a, button').first
+                                        if click_target.count() == 0:
+                                            click_target = cells.nth(0)
+                                        best_priority = priority
+                                        best_status_score = status_score
+                                        best_button = click_target
+                                        best_match_name = name_text
+                                        best_match_row_text = row_txt
+                                        best_match_identifier = extract_registry_identifier_from_text(row_txt, org.ein)
+                                except Exception:
+                                    continue
+                        except Exception:
+                            pass
                     if best_button and best_priority >= 0:
                         break
                 except Exception:
