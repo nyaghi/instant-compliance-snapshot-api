@@ -75,6 +75,8 @@ class StateResult:
     source_url: str
     raw_status_text: str = ""
     source_note: str = ""
+    matched_registry_name: str = ""
+    matched_registry_identifier: str = ""
     success: bool = False
     error: str = ""
 
@@ -1527,7 +1529,9 @@ def strip_registry_display_labels(value: str) -> str:
 
 def normalize_name(value: str) -> str:
     txt = strip_registry_display_labels(value).lower()
+    txt = re.sub(r"\b([a-z]+)'s\b", r"\1s", txt)
     txt = re.sub(r"\bu\s*\.?\s*s\.?\b", "us", txt)
+    txt = re.sub(r"\bst\.?\b", "saint", txt)
     txt = re.sub(r"\b(the|and|a)\b", " ", txt)
     # Keep substantive words like "foundation" and "fund" in the match key.
     # Dropping them made name-only state searches confuse related but separate entities.
@@ -1543,7 +1547,18 @@ def name_match_priority(candidate_name: str, target_name: str) -> int:
         return -1
     if candidate == target:
         return 5
+    candidate_words = candidate.split()
+    target_words = target.split()
     if candidate.startswith(target) or target.startswith(candidate):
+        shorter_words = candidate_words if len(candidate_words) <= len(target_words) else target_words
+        if len(shorter_words) >= 4:
+            return 4
+        # Short prefixes such as "Global Fund" or "Trustees Of" are useful
+        # search queries, but not enough by themselves to accept a registry row.
+        # Let the more specific entity-word rule below handle safe abbreviations.
+    else:
+        shorter_words = []
+    if shorter_words and len(shorter_words) >= 4:
         return 4
     def remove_terminal_entity_word(value: str) -> str:
         words = value.split()
@@ -1554,9 +1569,26 @@ def name_match_priority(candidate_name: str, target_name: str) -> int:
     target_without_entity = remove_terminal_entity_word(target)
     if candidate_without_entity and target_without_entity and candidate_without_entity == target_without_entity:
         return 4
-    candidate_words = candidate.split()
-    target_words = target.split()
     if len(target_words) >= 3 and " ".join(target_words[:3]) in candidate:
+        # Do not accept a row solely because it shares a weak prefix ending in
+        # a connector ("Allen Institute for ..." matched "Allen Institute for
+        # Brain Science"). Require the prefix itself to end on a substantive
+        # word, or require another distinctive word beyond the prefix.
+        connector_words = {"of", "for", "to", "in", "on", "at", "by"}
+        if target_words[2] not in connector_words:
+            return 3
+        candidate_later = set(candidate_words[3:])
+        target_later = set(target_words[3:])
+        if candidate_later & target_later:
+            return 3
+    entity_words = {"foundation", "fund", "association", "society", "institute", "center", "centre", "network", "mission"}
+    if (
+        len(target_words) >= 3
+        and len(candidate_words) >= 3
+        and candidate_words[:2] == target_words[:2]
+        and candidate_words[-1] == target_words[-1]
+        and target_words[-1] in entity_words
+    ):
         return 3
     if target in candidate:
         return 2
@@ -1602,6 +1634,37 @@ def candidate_selection_score(candidate_name: str, target_name: str, row_text: s
     status_priority = active_row_priority(row_text)
     return (name_priority, status_priority)
 
+def match_target_names(org_or_name) -> list[str]:
+    if isinstance(org_or_name, str):
+        values = [org_or_name]
+    elif isinstance(org_or_name, (list, tuple, set)):
+        values = list(org_or_name)
+    else:
+        values = getattr(org_or_name, "match_target_names", None) or [getattr(org_or_name, "organization_name", "")]
+    output = []
+    seen = set()
+    for value in values:
+        value = re.sub(r"\s+", " ", str(value or "").strip())
+        key = normalize_name(value)
+        if value and key and key not in seen:
+            seen.add(key)
+            output.append(value)
+    return output or [str(org_or_name or "")]
+
+def candidate_selection_score_for_targets(candidate_name: str, target_names, row_text: str) -> tuple[int, int]:
+    best = (-1, -999)
+    for target_name in match_target_names(target_names):
+        score = candidate_selection_score(candidate_name, target_name, row_text)
+        if score > best:
+            best = score
+    return best
+
+def name_match_priority_for_targets(candidate_name: str, target_names) -> int:
+    best = -1
+    for target_name in match_target_names(target_names):
+        best = max(best, name_match_priority(candidate_name, target_name))
+    return best
+
 def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
     cleaned = re.sub(r"\s+", " ", name or "").strip()
     cleaned = re.sub(r"\s*,\s*", " ", cleaned)
@@ -1627,6 +1690,27 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
     without_leading_acronym = re.sub(r"^[A-Z]{2,8}\s*[-/\\]\s*", "", cleaned).strip()
     if without_leading_acronym == cleaned:
         without_leading_acronym = ""
+    possessive_removed = re.sub(r"\b([A-Za-z]+)'s\b", r"\1s", cleaned, flags=re.I).strip()
+    if possessive_removed == cleaned:
+        possessive_removed = ""
+    possessive_root_prefix = ""
+    possessive_root_match = re.match(r"^(.+?\b[A-Za-z]+)'s\b", cleaned, re.I)
+    if possessive_root_match:
+        possessive_root_words = re.sub(r"[^\w\s]", " ", possessive_root_match.group(1)).split()
+        if len(possessive_root_words) >= 2:
+            possessive_root_prefix = " ".join(possessive_root_words[:3])
+    hyphen_tail_prefix = ""
+    if "-" in cleaned:
+        tail = re.split(r"\s*-\s*", cleaned, maxsplit=1)[1].strip()
+        tail_words = re.sub(r"[^\w\s']", " ", tail).split()
+        if len(tail_words) >= 2:
+            hyphen_tail_prefix = " ".join(tail_words[:3])
+    saint_expanded = re.sub(r"\bSt\.?\s+", "Saint ", cleaned, flags=re.I).strip()
+    if saint_expanded == cleaned:
+        saint_expanded = ""
+    saint_abbreviated = re.sub(r"\bSaint\s+", "St. ", cleaned, flags=re.I).strip()
+    if saint_abbreviated == cleaned:
+        saint_abbreviated = ""
     no_suffix = re.sub(
         r"\s+\b(the|inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\b\.?\s*$",
         "",
@@ -1637,23 +1721,37 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
     no_punct = re.sub(r"\s+", " ", no_punct)
     words = no_punct.split()
     prefix = " ".join(words[:max_words]) if words else no_punct
+    normalized_words = normalize_name(cleaned).split()
+    short_distinctive_prefix = " ".join(normalized_words[:2]) if len(normalized_words) >= 2 else ""
     ms_expanded = ""
     if re.search(r"\bMS\s+Society\b", cleaned, re.I):
         ms_expanded = re.sub(r"\bMS\s+Society\b", "Multiple Sclerosis Society", cleaned, flags=re.I)
+    childrens_hospital_foundation = ""
+    childrens_match = re.match(r"^(.+?\bchildren'?s?)\s+foundation\b", cleaned, re.I)
+    if childrens_match:
+        childrens_prefix = re.sub(r"\b([A-Za-z]+)'s\b", r"\1s", childrens_match.group(1), flags=re.I)
+        childrens_hospital_foundation = f"{childrens_prefix} Hospital Foundation"
     with_leading_the = "" if re.match(r"^the\s+", cleaned, re.I) else f"The {cleaned}"
     variants = [
         trailing_segment,
         without_leading_acronym,
         lead_segment,
+        possessive_removed,
+        possessive_root_prefix,
+        hyphen_tail_prefix,
+        saint_expanded,
+        saint_abbreviated,
         no_suffix,
         cleaned,
         prefix,
         no_punct,
         ms_expanded,
+        childrens_hospital_foundation,
         with_leading_the,
         without_leading_the if without_leading_the.lower() != cleaned.lower() else "",
         trailing_the_query,
         without_trailing_the,
+        short_distinctive_prefix,
     ]
     output = []
     seen = set()
@@ -1703,8 +1801,7 @@ def click_va_search_button(page) -> bool:
     except Exception:
         return False
 
-def click_va_organization_link(page, org_name: str) -> bool:
-    wanted = normalize_name(org_name)
+def click_va_organization_link(page, org_name: str, target_names=None) -> bool:
     links = page.locator('a[href*="act=2"][href*="sysorgno"]')
     candidates = []
     try:
@@ -1713,14 +1810,14 @@ def click_va_organization_link(page, org_name: str) -> bool:
             link = links.nth(i)
             try:
                 txt = re.sub(r"\s+", " ", link.inner_text(timeout=1000)).strip()
-                priority = name_match_priority(txt, org_name)
+                priority = name_match_priority_for_targets(txt, target_names or org_name)
                 if priority >= 0:
                     row_text = txt
                     try:
                         row_text = re.sub(r"\s+", " ", link.locator("xpath=ancestor::tr[1]").inner_text(timeout=1000)).strip()
                     except Exception:
                         pass
-                    score = candidate_selection_score(txt, org_name, row_text)
+                    score = candidate_selection_score_for_targets(txt, target_names or org_name, row_text)
                     if score[0] >= 0:
                         candidates.append((score[0], score[1], link))
             except Exception:
@@ -1733,7 +1830,7 @@ def click_va_organization_link(page, org_name: str) -> bool:
         return True
     return False
 
-def va_search_results_show_pending(page, org_name: str) -> bool:
+def va_search_results_show_pending(page, org_name: str, target_names=None) -> bool:
     links = page.locator('a[href*="act=2"][href*="sysorgno"]')
     candidates = []
     try:
@@ -1747,7 +1844,7 @@ def va_search_results_show_pending(page, org_name: str) -> bool:
                     row_text = re.sub(r"\s+", " ", link.locator("xpath=ancestor::tr[1]").inner_text(timeout=1000)).strip()
                 except Exception:
                     pass
-                score = candidate_selection_score(txt, org_name, row_text)
+                score = candidate_selection_score_for_targets(txt, target_names or org_name, row_text)
                 if score[0] >= 0:
                     candidates.append((score[0], score[1], bool(re.search(r"\bregistration\s+pending\b", row_text, re.I))))
             except Exception:
@@ -1763,37 +1860,45 @@ def search_va(page, org: Organization) -> StateResult:
     url = "https://cos.vdacs.virginia.gov/cgi-bin/char_search.cgi"
     result = StateResult(org.organization_name, org.ein, "VA", STATUS_UNKNOWN, url)
     try:
+        target_names = match_target_names(org)
         page.goto(url, wait_until="domcontentloaded", timeout=30000)
         fast_sleep(0.75)
 
-        name_input = find_va_name_input(page)
-        if not name_input:
-            result.error = "Could not find VA organization name input"
-            return result
-        name_input.fill("")
-        name_input.fill(search_name_query_variants(org.organization_name, max_words=5)[0])
+        selected_search_row_pending = False
+        clicked_match = False
+        for query_index, query in enumerate(search_name_query_variants(org.organization_name, max_words=5)[:6]):
+            if query_index:
+                page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                fast_sleep(0.5)
 
-        if not click_va_search_button(page):
-            result.error = "Could not click VA Search button"
-            return result
+            name_input = find_va_name_input(page)
+            if not name_input:
+                result.error = "Could not find VA organization name input"
+                return result
+            name_input.fill("")
+            name_input.fill(query)
 
-        page.wait_for_load_state("domcontentloaded", timeout=15000)
-        fast_sleep(0.75)
+            if not click_va_search_button(page):
+                result.error = "Could not click VA Search button"
+                return result
 
-        body = page.locator("body").inner_text(timeout=8000)
-        if re.search(r"\bNo record found\b", body, re.I):
+            page.wait_for_load_state("domcontentloaded", timeout=15000)
+            fast_sleep(0.75)
+
+            body = page.locator("body").inner_text(timeout=8000)
+            if re.search(r"\bNo record found\b", body, re.I):
+                continue
+
+            selected_search_row_pending = va_search_results_show_pending(page, org.organization_name, target_names)
+
+            if click_va_organization_link(page, org.organization_name, target_names):
+                clicked_match = True
+                break
+
+        if not clicked_match:
             result.raw_status_text = "No record found"
             result.status = STATUS_NOT_REGISTERED
             result.source_note = "Virginia search returned no matching organization link."
-            result.success = True
-            return result
-
-        selected_search_row_pending = va_search_results_show_pending(page, org.organization_name)
-
-        if not click_va_organization_link(page, org.organization_name):
-            result.raw_status_text = "No matching organization link"
-            result.status = STATUS_NOT_REGISTERED
-            result.source_note = "Virginia search results did not contain a matching organization name link."
             result.success = True
             return result
 
@@ -2346,6 +2451,7 @@ def search_sc(page, org: Organization) -> StateResult:
     url = "https://search.scsos.com/charities"
     result = StateResult(org.organization_name, org.ein, "SC", STATUS_UNKNOWN, url)
     try:
+        target_names = match_target_names(org)
         last_goto_error = None
         for goto_attempt in range(SC_MAX_GOTO_ATTEMPTS):
             try:
@@ -2425,14 +2531,14 @@ def search_sc(page, org: Organization) -> StateResult:
                 link = links.nth(i)
                 try:
                     txt = re.sub(r"\s+", " ", link.inner_text(timeout=1000)).strip()
-                    priority = name_match_priority(txt, org.organization_name)
+                    priority = name_match_priority_for_targets(txt, target_names)
                     if priority >= 0:
                         row_text = txt
                         try:
                             row_text = re.sub(r"\s+", " ", link.locator("xpath=ancestor::tr[1]").inner_text(timeout=1000)).strip()
                         except Exception:
                             pass
-                        score = candidate_selection_score(txt, org.organization_name, row_text)
+                        score = candidate_selection_score_for_targets(txt, target_names, row_text)
                         if score[0] >= 0:
                             candidates.append((score[0], score[1], link))
                 except Exception:
@@ -2471,8 +2577,8 @@ def search_sc(page, org: Organization) -> StateResult:
             return result
         if re.search(r"\bexpired\b", status_text or "", re.I):
             result.raw_status_text = status_text
-            result.status = "Suspended"
-            result.source_note = "South Carolina public registry shows an expired registration status, which CharityClarity treats as Suspended."
+            result.status = STATUS_DELINQUENT
+            result.source_note = "South Carolina public registry shows an expired registration status, which CharityClarity treats as Delinquent."
             result.success = True
             return result
         if re.search(r"\b(terminated|withdrawn|cancelled|canceled|closed)\b", status_text or "", re.I):
@@ -2704,6 +2810,7 @@ def search_me(page, org: Organization) -> StateResult:
     url = "https://www.pfr.maine.gov/almsonline/almsquery/SearchCompany.aspx"
     result = StateResult(org.organization_name, org.ein, "ME", STATUS_UNKNOWN, url)
     try:
+        target_names = match_target_names(org)
         def me_query_variants(name: str) -> list[str]:
             cleaned = re.sub(r"\s+", " ", name or "").strip()
             cleaned = re.sub(r"\s*,?\s+", " ", cleaned)
@@ -2793,7 +2900,7 @@ def search_me(page, org: Organization) -> StateResult:
             return readable, rows, opener
 
         def direct_name_priority(row_name: str) -> int:
-            return name_match_priority(row_name, org.organization_name)
+            return name_match_priority_for_targets(row_name, target_names)
 
         def direct_status_priority(status_text: str) -> int:
             return active_row_priority(status_text)
@@ -2801,49 +2908,56 @@ def search_me(page, org: Organization) -> StateResult:
         direct_body = ""
         direct_rows: list[dict[str, str]] = []
         direct_opener = None
+        best_row = None
+        best_score = (-999, -1)
+        best_opener = None
         for query in me_query_variants(org.organization_name):
             try:
                 direct_body, direct_rows, direct_opener = run_me_direct_search(query)
             except Exception:
                 direct_body, direct_rows, direct_opener = "", [], None
-            if direct_rows:
-                break
-
-        if direct_rows and direct_opener:
-            best_row = None
-            best_score = (-999, -1)
-            for row in direct_rows:
-                name_priority = direct_name_priority(row.get("name", ""))
-                if name_priority < 0:
+            if not direct_rows:
+                if direct_body and re.search(r"\b0\s+records?\s+found\b|no records|no results", direct_body, re.I):
                     continue
-                row_score = (name_priority, direct_status_priority(row.get("status", "")))
+                continue
+            for row in direct_rows:
+                row_text = " ".join(row.get(key, "") for key in ["name", "number", "location", "profession", "status"])
+                row_score = candidate_selection_score_for_targets(row.get("name", ""), target_names, row_text)
+                if row_score[0] < 0:
+                    continue
                 if row_score > best_score:
                     best_score = row_score
                     best_row = row
-            if best_row:
-                detail_url = urljoin("https://www.pfr.maine.gov/ALMSOnline/ALMSQuery/", best_row.get("href", ""))
+                    best_opener = direct_opener
+            if best_row and best_opener:
+                break
+
+        if best_row and best_opener:
+            detail_url = urljoin("https://www.pfr.maine.gov/ALMSOnline/ALMSQuery/", best_row.get("href", ""))
+            detail_text = ""
+            try:
+                detail_response = best_opener.open(detail_url, timeout=15)
+                detail_html = detail_response.read().decode("utf-8", "replace")
+                detail_text = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", detail_html))).strip()
+            except Exception:
                 detail_text = ""
-                try:
-                    detail_response = direct_opener.open(detail_url, timeout=15)
-                    detail_html = detail_response.read().decode("utf-8", "replace")
-                    detail_text = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", detail_html))).strip()
-                except Exception:
-                    detail_text = ""
-                status_match = re.search(r"\bStatus:\s*(.+?)\s+Expiration\s+Date:", detail_text, re.I)
-                expiration_match = re.search(r"\bExpiration\s+Date:\s*(\d{1,2}/\d{1,2}/\d{4})", detail_text, re.I)
-                status_text = (status_match.group(1).strip() if status_match else "") or best_row.get("status", "")
-                expiration_text = expiration_match.group(1).strip() if expiration_match else ""
-                result.source_url = detail_url or url
-                result.status = status_text or best_row.get("status") or STATUS_UNKNOWN
-                result.raw_status_text = "; ".join(
-                    part for part in [result.status, f"Expiration Date: {expiration_text}" if expiration_text else ""] if part
-                )
-                if re.search(r"\bACTIVE\b", result.raw_status_text, re.I) and expiration_text:
-                    result.source_note = "Maine uses the Status and Expiration Date shown on the public detail page."
-                else:
-                    result.source_note = "Maine uses the Status shown on the matched public registry result."
-                result.success = True
-                return result
+            status_match = re.search(r"\bStatus:\s*(.+?)\s+Expiration\s+Date:", detail_text, re.I)
+            expiration_match = re.search(r"\bExpiration\s+Date:\s*(\d{1,2}/\d{1,2}/\d{4})", detail_text, re.I)
+            status_text = (status_match.group(1).strip() if status_match else "") or best_row.get("status", "")
+            expiration_text = expiration_match.group(1).strip() if expiration_match else ""
+            result.source_url = detail_url or url
+            result.matched_registry_name = best_row.get("name", "")
+            result.matched_registry_identifier = best_row.get("number", "")
+            result.status = status_text or best_row.get("status") or STATUS_UNKNOWN
+            result.raw_status_text = "; ".join(
+                part for part in [result.status, f"Expiration Date: {expiration_text}" if expiration_text else ""] if part
+            )
+            if re.search(r"\bACTIVE\b", result.raw_status_text, re.I) and expiration_text:
+                result.source_note = "Maine uses the Status and Expiration Date shown on the public detail page."
+            else:
+                result.source_note = "Maine uses the Status shown on the matched public registry result."
+            result.success = True
+            return result
         elif direct_body and re.search(r"\b0\s+records?\s+found\b|no records|no results", direct_body, re.I):
             result.raw_status_text = "No record found"
             result.status = STATUS_NOT_REGISTERED
@@ -2971,7 +3085,7 @@ def search_me(page, org: Organization) -> StateResult:
             return result
 
         target_exact = re.sub(r"\s+", " ", (org.organization_name or "").strip()).upper()
-        target_normalized = normalize_name(org.organization_name)
+        target_normalized = normalize_name(target_names[0])
 
         best_table_status = ""
         best_table_row = ""
@@ -2990,7 +3104,7 @@ def search_me(page, org: Organization) -> StateResult:
                     link_text = ""
                     if links.count() > 0:
                         link_text = re.sub(r"\s+", " ", links.first.inner_text(timeout=1000)).strip()
-                    name_priority = name_match_priority(link_text or row_text, org.organization_name)
+                    name_priority = name_match_priority_for_targets(link_text or row_text, target_names)
                     if name_priority < 0:
                         continue
                     status_match = re.search(
@@ -3027,16 +3141,19 @@ def search_me(page, org: Organization) -> StateResult:
                         txt = re.sub(r"\s+", " ", link.inner_text(timeout=1500)).strip()
                         if not txt:
                             continue
-                        priority = name_match_priority(txt, org.organization_name)
+                        priority = name_match_priority_for_targets(txt, target_names)
                         if priority < 0:
                             continue
                         status_priority = 0
                         row_text = txt
                         try:
                             row_text = re.sub(r"\s+", " ", link.locator("xpath=ancestor::tr[1]").inner_text(timeout=1500)).strip()
-                            status_priority = active_row_priority(row_text)
                         except Exception:
-                            status_priority = 0
+                            row_text = txt
+                        candidate_score = candidate_selection_score_for_targets(txt, target_names, row_text)
+                        if candidate_score[0] < 0:
+                            continue
+                        priority, status_priority = candidate_score
                         if (
                             priority > best_priority
                             or (priority == best_priority and status_priority > best_status_priority)
@@ -3065,6 +3182,14 @@ def search_me(page, org: Organization) -> StateResult:
         )
         if row_status_match:
             fallback_row_status = re.sub(r"\s+", " ", row_status_match.group(1)).strip()
+        if best_row_text:
+            try:
+                result.matched_registry_name = re.sub(r"\s+", " ", best_link.inner_text(timeout=1000)).strip()
+            except Exception:
+                result.matched_registry_name = ""
+            number_match = re.search(r"\b(CO\d+)\b", best_row_text, re.I)
+            if number_match:
+                result.matched_registry_identifier = number_match.group(1).upper()
 
         try:
             href = (best_link.get_attribute("href") or "").strip()
@@ -3174,7 +3299,7 @@ def search_me(page, org: Organization) -> StateResult:
                                     txt = re.sub(r"\s+", " ", link.inner_text(timeout=1500)).strip()
                                     if not txt:
                                         continue
-                                    priority = name_match_priority(txt, org.organization_name)
+                                    priority = name_match_priority_for_targets(txt, target_names)
                                     if priority < 0:
                                         continue
                                     row_text = txt
@@ -3266,12 +3391,13 @@ def search_nd(page, org: Organization) -> StateResult:
     url = "https://firststop.sos.nd.gov/search/charitable"
     result = StateResult(org.organization_name, org.ein, "ND", STATUS_UNKNOWN, url)
     try:
+        target_names = match_target_names(org)
         last_goto_error = None
         for goto_attempt in range(2):
             try:
-                page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                safe_wait_for_network_idle(page, timeout=8000)
-                fast_sleep(1.5)
+                page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                safe_wait_for_network_idle(page, timeout=3000)
+                fast_sleep(0.75)
                 last_goto_error = None
                 break
             except Exception as e:
@@ -3312,13 +3438,12 @@ def search_nd(page, org: Organization) -> StateResult:
         safe_wait_for_network_idle(page, timeout=5000)
         fast_sleep(0.5)
 
-        body = page.locator("body").inner_text(timeout=8000)
+        body = page.locator("body").inner_text(timeout=5000)
         if re.search(r"Results:\s*0\b|No results|No matching", body, re.I):
-            result.raw_status_text = "No record found"
-            result.status = STATUS_NOT_REGISTERED
-            result.source_note = "North Dakota search returned no matching organization result."
-            result.success = True
-            return result
+            # Do not stop on the first no-result response. North Dakota's name
+            # search can miss punctuation/possessive variants that a later safe
+            # query variant finds.
+            body = ""
 
         best_button = None
         best_priority = -1
@@ -3348,7 +3473,7 @@ def search_nd(page, org: Organization) -> StateResult:
                         if text_has_wrong_ein_match(combined_txt, org.ein):
                             continue
                         name_text = lines[0]
-                        priority, status_score = candidate_selection_score(name_text, org.organization_name, combined_txt)
+                        priority, status_score = candidate_selection_score_for_targets(name_text, target_names, combined_txt)
                         if (
                             priority >= 0
                             and (
@@ -3363,6 +3488,90 @@ def search_nd(page, org: Organization) -> StateResult:
                         continue
             except Exception:
                 continue
+
+        if not best_button or best_priority < 0:
+            # If the first formal name query does not produce an acceptable row,
+            # try the safe query variants. Candidate acceptance still uses the
+            # full target-name set, so broad queries cannot be accepted unless
+            # the returned row itself is a credible match.
+            for query in search_name_query_variants(org.organization_name, max_words=5)[1:5]:
+                try:
+                    page.goto(url, wait_until="domcontentloaded", timeout=12000)
+                    safe_wait_for_network_idle(page, timeout=2500)
+                    fast_sleep(0.5)
+                    search_input = find_visible_input(page, [
+                        'input[placeholder*="Search by name"]',
+                        'input[aria-label*="Search by name"]',
+                        'input[type="text"]',
+                    ])
+                    if not search_input:
+                        continue
+                    search_input.click(timeout=5000)
+                    search_input.fill("")
+                    search_input.fill(query)
+                    fast_sleep(0.4)
+                    search_button = None
+                    for sel in ['button[aria-label="Execute search"]', 'button[aria-label*="Execute search"]']:
+                        try:
+                            loc = page.locator(sel).first
+                            loc.wait_for(state="visible", timeout=3000)
+                            search_button = loc
+                            break
+                        except Exception:
+                            continue
+                    if not search_button:
+                        continue
+                    search_button.click(timeout=5000)
+                    fast_sleep(3)
+                    safe_wait_for_network_idle(page, timeout=2500)
+                    fast_sleep(0.25)
+                    body = page.locator("body").inner_text(timeout=4000)
+                    if re.search(r"Results:\s*0\b|No results|No matching", body, re.I):
+                        continue
+                    for selector in ['div.interactive-cell-button', 'div[role="button"]']:
+                        try:
+                            items = page.locator(selector)
+                            count = min(items.count(), 100)
+                            for i in range(count):
+                                item = items.nth(i)
+                                try:
+                                    if not item.is_visible(timeout=750):
+                                        continue
+                                    txt = item.inner_text(timeout=1500)
+                                    row_txt = txt
+                                    try:
+                                        row_txt = item.locator("xpath=ancestor::*[self::tr or @role='row' or contains(@class,'row')][1]").inner_text(timeout=1000)
+                                    except Exception:
+                                        try:
+                                            row_txt = item.locator("xpath=ancestor::div[contains(@class,'row')][1]").inner_text(timeout=1000)
+                                        except Exception:
+                                            row_txt = txt
+                                    combined_txt = re.sub(r"\s+", " ", f"{txt} {row_txt}").strip()
+                                    lines = [re.sub(r"\s+", " ", ln).strip() for ln in txt.splitlines() if ln.strip()]
+                                    if not lines:
+                                        continue
+                                    if text_has_wrong_ein_match(combined_txt, org.ein):
+                                        continue
+                                    name_text = lines[0]
+                                    priority, status_score = candidate_selection_score_for_targets(name_text, target_names, combined_txt)
+                                    if (
+                                        priority >= 0
+                                        and (
+                                            priority > best_priority
+                                            or (priority == best_priority and status_score > best_status_score)
+                                        )
+                                    ):
+                                        best_priority = priority
+                                        best_status_score = status_score
+                                        best_button = item
+                                except Exception:
+                                    continue
+                        except Exception:
+                            continue
+                    if best_button and best_priority >= 0:
+                        break
+                except Exception:
+                    continue
 
         if not best_button or best_priority < 0:
             result.raw_status_text = "No matching organization result"
