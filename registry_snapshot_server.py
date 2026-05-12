@@ -12,6 +12,7 @@ import re
 import secrets
 import smtplib
 import sys
+import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -53,11 +54,14 @@ CHARITY_OR_PATH = Path(os.environ["CE_CHARITY_OR_PATH"]) if os.environ.get("CE_C
 LOG_PATH = Path(os.environ.get("CE_LOG_PATH", str(BASE_DIR / "registry_snapshot_server.log")))
 LEAD_LOG_PATH = Path(__file__).with_name("registry_snapshot_leads.csv")
 PIN_LOG_PATH = Path(__file__).with_name("registry_snapshot_passcodes.log")
+LEAD_LOG_WEBHOOK_URL = os.environ.get("CE_LEAD_LOG_WEBHOOK_URL", "").strip()
+LEAD_LOG_WEBHOOK_SECRET = os.environ.get("CE_LEAD_LOG_WEBHOOK_SECRET", "").strip()
+LEAD_LOG_WEBHOOK_TIMEOUT_SECONDS = min(max(1.0, float(os.environ.get("CE_LEAD_LOG_WEBHOOK_TIMEOUT_SECONDS", "4"))), 8.0)
 ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifacts")))
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.11.9"
+APP_VERSION = "2026.05.11.11"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -475,6 +479,37 @@ def log_event(message: str) -> None:
         f.write(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] {message}\n")
 
 
+def append_master_lead_log(rows: list[dict]) -> None:
+    if not LEAD_LOG_WEBHOOK_URL or not rows:
+        return
+    payload = {
+        "secret": LEAD_LOG_WEBHOOK_SECRET,
+        "app_version": APP_VERSION,
+        "rows": rows,
+    }
+    try:
+        request = urllib.request.Request(
+            LEAD_LOG_WEBHOOK_URL,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "CharityClarityLeadLogger/1.0",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=LEAD_LOG_WEBHOOK_TIMEOUT_SECONDS) as response:
+            response.read(200)
+    except Exception as exc:
+        log_error(f"Master lead log webhook failed: {exc}")
+
+
+def append_master_lead_log_async(rows: list[dict]) -> None:
+    if not LEAD_LOG_WEBHOOK_URL or not rows:
+        return
+    thread = threading.Thread(target=append_master_lead_log, args=(rows,), daemon=True)
+    thread.start()
+
+
 def append_lead_log(email: str, results: list[dict]) -> None:
     if not email or not results:
         return
@@ -494,12 +529,13 @@ def append_lead_log(email: str, results: list[dict]) -> None:
     write_header = not LEAD_LOG_PATH.exists() or LEAD_LOG_PATH.stat().st_size == 0
     checked_at = datetime.now().isoformat(timespec="seconds")
     domain = email_domain(email)
+    master_rows = []
     with LEAD_LOG_PATH.open("a", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         if write_header:
             writer.writeheader()
         for result in results:
-            writer.writerow({
+            row = {
                 "checked_at": checked_at,
                 "email": email.strip(),
                 "domain": domain,
@@ -510,7 +546,34 @@ def append_lead_log(email: str, results: list[dict]) -> None:
                 "comments": result.get("comments", ""),
                 "evidence_url": result.get("evidence_url", ""),
                 "source_url": result.get("source_url", ""),
+                "lookup_seconds": result.get("lookup_seconds", ""),
+                "app_version": result.get("app_version", APP_VERSION),
+            }
+            writer.writerow({key: row.get(key, "") for key in fieldnames})
+            master_rows.append(row)
+    append_master_lead_log_async(master_rows)
+
+
+def append_submission_log(email: str, organizations: list[dict], states: list[str]) -> None:
+    """Capture valid usage before the slower registry lookups begin."""
+    if not email or not organizations or not states:
+        return
+    rows = []
+    for org in organizations:
+        ein = org.get("ein", "")
+        organization_name = org.get("organization_name") or f"EIN {ein}"
+        for state in states:
+            rows.append({
+                "organization_name": organization_name,
+                "ein": ein,
+                "state": state,
+                "status": "Lookup Started",
+                "comments": "Submission received. CharityClarity started the public registry lookup.",
+                "source_url": "",
+                "lookup_seconds": "",
+                "app_version": APP_VERSION,
             })
+    append_lead_log(email, rows)
 
 
 def email_domain(email_address: str) -> str:
@@ -4305,6 +4368,7 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
                 self._send_json(429, {"error": "A complimentary snapshot was already requested from this browser."})
                 return
 
+            append_submission_log(email, organizations, states)
             results = run_state_lookups_parallel(organizations, states)
             append_lead_log(email, results)
             if is_batch:
