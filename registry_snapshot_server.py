@@ -90,6 +90,7 @@ NAME_SEARCH_PREFLIGHT_URLS = {
 MAX_EXTERNAL_EXEMPT_ORGS = 3
 DOMAIN_LIMIT_DAYS = 7
 ADMIN_PASSCODE = "8977"
+STAGING_ACCESS_REQUIRED = os.environ.get("CE_STAGING_ACCESS_REQUIRED", "0").strip().lower() in {"1", "true", "yes"}
 PIN_EXPIRY_SECONDS = 10 * 60
 PIN_MAX_ATTEMPTS = 5
 VERIFICATION_TOKEN_SECONDS = 60 * 60
@@ -675,6 +676,16 @@ def is_verified_email_token(email_address: str, token: str) -> bool:
 
 def is_verified_internal_passcode(email_address: str, passcode: str) -> bool:
     return is_exempt_domain(email_domain(email_address)) and (passcode or "").strip() == ADMIN_PASSCODE
+
+
+def staging_access_error(email_address: str, passcode: str) -> str:
+    if not STAGING_ACCESS_REQUIRED:
+        return ""
+    if not is_exempt_domain(email_domain(email_address)):
+        return "Staging access requires a Compliance Express email address."
+    if (passcode or "").strip() != ADMIN_PASSCODE:
+        return "Enter the Compliance Express passcode to use staging."
+    return ""
 
 
 def is_exempt_domain(domain: str) -> bool:
@@ -4330,6 +4341,10 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
             state = (payload.get("state") or "").strip().upper()
             domain = email_domain(email)
             admin_passcode = (payload.get("admin_passcode") or "").strip()
+            staging_error = staging_access_error(email, admin_passcode)
+            if staging_error:
+                self._send_json(403, {"error": staging_error})
+                return
             if is_exempt_domain(domain) and admin_passcode != ADMIN_PASSCODE:
                 self._send_json(401, {"error": "Enter the Compliance Express passcode to use internal features."})
                 return
