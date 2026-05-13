@@ -62,7 +62,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.13.1"
+APP_VERSION = "2026.05.13.2"
 BASE_SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 ENABLE_WI_STATE = os.environ.get("CE_ENABLE_WI_STATE", "0").strip().lower() in {"1", "true", "yes"}
 SUPPORTED_STATES = BASE_SUPPORTED_STATES + (["WI"] if ENABLE_WI_STATE else [])
@@ -1833,6 +1833,13 @@ def organization_name_variants(
         no_comma = re.sub(r",\s*", " ", base).strip()
         no_punctuation = re.sub(r"[^\w\s]", " ", base).strip()
         no_punctuation = re.sub(r"\s+", " ", no_punctuation)
+        digit_word_compact = ""
+        if re.search(r"(?:[A-Za-z]\s+\d|\d\s+[A-Za-z])", no_punctuation):
+            # Public profile names sometimes insert spaces into compact brands
+            # such as Give2Asia. Name-only registries may require the compact
+            # spelling, but we keep this limited to digit/word blends to avoid
+            # broad space-stripping for ordinary organization names.
+            digit_word_compact = re.sub(r"(?<=\w)\s+(?=\w)", "", no_punctuation).strip()
         broad_query_prefixes = []
         prefix_source = re.sub(r"^the\s+", "", no_punctuation, flags=re.I).strip()
         prefix_words = prefix_source.split()
@@ -1915,6 +1922,7 @@ def organization_name_variants(
             without_suffix,
             no_comma,
             no_punctuation,
+            digit_word_compact,
             institute_plural,
             institute_singular,
             hyphen_as_space,
@@ -2112,7 +2120,14 @@ def search_with_name_variants(
     )
     safe_match_targets = organization_match_target_variants(original_name, org.ein)
     if max_variants:
-        variants = variants[:max_variants]
+        selected_variants = variants[:max_variants]
+        if re.search(r"(?:[A-Za-z]\s+\d|\d\s+[A-Za-z])", original_name or ""):
+            compact_original = re.sub(r"[^\w]", "", original_name or "").lower()
+            for variant in variants[max_variants:]:
+                if re.sub(r"[^\w]", "", variant or "").lower() == compact_original and variant not in selected_variants:
+                    selected_variants.append(variant)
+                    break
+        variants = selected_variants
     started = time.perf_counter()
     for variant in variants:
         if max_elapsed_seconds and best_result is not None and (time.perf_counter() - started) >= max_elapsed_seconds:
