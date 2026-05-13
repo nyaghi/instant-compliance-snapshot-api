@@ -16,7 +16,7 @@ import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -24,6 +24,7 @@ from types import SimpleNamespace
 from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
 import urllib.error
 import urllib.request
+from zoneinfo import ZoneInfo
 
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "0")
 
@@ -61,7 +62,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.11.11"
+APP_VERSION = "2026.05.11.12"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -90,6 +91,7 @@ NAME_SEARCH_PREFLIGHT_URLS = {
 MAX_EXTERNAL_EXEMPT_ORGS = 3
 DOMAIN_LIMIT_DAYS = 7
 ADMIN_PASSCODE = "8977"
+STAGING_ACCESS_REQUIRED = os.environ.get("CE_STAGING_ACCESS_REQUIRED", "0").strip().lower() in {"1", "true", "yes"}
 PIN_EXPIRY_SECONDS = 10 * 60
 PIN_MAX_ATTEMPTS = 5
 VERIFICATION_TOKEN_SECONDS = 60 * 60
@@ -97,6 +99,30 @@ EXEMPT_EMAIL_DOMAIN = "compliance-express.com"
 EXEMPT_EMAIL_ADDRESSES = {"nyaghi17@gmail.com"}
 DOMAIN_LIMIT_PATH = Path(__file__).with_name("registry_snapshot_domain_limits.json")
 DEVICE_LIMIT_PATH = Path(__file__).with_name("registry_snapshot_device_limits.json")
+EASTERN_TZ = ZoneInfo("America/New_York")
+LEAD_LOG_FIELDNAMES = [
+    "checked_at",
+    "checked_at_timezone",
+    "email",
+    "domain",
+    "organization_name",
+    "ein",
+    "state",
+    "status",
+    "comments",
+    "lookup_seconds",
+    "app_version",
+    "evidence_url",
+    "source_url",
+    "environment",
+    "origin",
+    "page_url",
+    "referrer",
+    "remote_ip",
+    "user_agent",
+    "device_id",
+    "submission_id",
+]
 PIN_STORE: dict[str, dict] = {}
 VERIFICATION_TOKENS: dict[str, dict] = {}
 ORG_NAME_CACHE: dict[str, str] = {}
@@ -510,25 +536,74 @@ def append_master_lead_log_async(rows: list[dict]) -> None:
     thread.start()
 
 
-def append_lead_log(email: str, results: list[dict]) -> None:
+def eastern_timestamp() -> tuple[str, str]:
+    now = datetime.now(EASTERN_TZ)
+    return now.strftime("%Y-%m-%d %H:%M:%S %Z"), now.tzname() or "Eastern"
+
+
+def safe_audit_value(value: object, max_length: int = 500) -> str:
+    return re.sub(r"[\r\n\t]+", " ", str(value or "")).strip()[:max_length]
+
+
+def first_header_ip(headers) -> str:
+    for name in ("CF-Connecting-IP", "X-Forwarded-For", "X-Real-IP"):
+        value = headers.get(name, "")
+        if value:
+            return safe_audit_value(value.split(",")[0], 80)
+    return ""
+
+
+def request_audit_context(handler: BaseHTTPRequestHandler, payload: dict) -> dict:
+    origin = safe_audit_value(payload.get("origin") or handler.headers.get("Origin", ""), 300)
+    page_url = safe_audit_value(payload.get("page_url") or "", 500)
+    referrer = safe_audit_value(payload.get("referrer") or handler.headers.get("Referer", ""), 500)
+    environment = safe_audit_value(payload.get("environment") or "", 80)
+    if not environment:
+        environment = "staging" if "staging" in f"{origin} {page_url}".lower() else "production"
+    remote_ip = first_header_ip(handler.headers)
+    if not remote_ip and handler.client_address:
+        remote_ip = safe_audit_value(handler.client_address[0], 80)
+    return {
+        "environment": environment,
+        "origin": origin,
+        "page_url": page_url,
+        "referrer": referrer,
+        "remote_ip": remote_ip,
+        "user_agent": safe_audit_value(handler.headers.get("User-Agent", "") or payload.get("client_user_agent", ""), 500),
+        "device_id": normalize_device_id(payload.get("device_id") or ""),
+        "submission_id": secrets.token_hex(8),
+    }
+
+
+def ensure_lead_log_header(fieldnames: list[str]) -> None:
+    if not LEAD_LOG_PATH.exists() or LEAD_LOG_PATH.stat().st_size == 0:
+        return
+    try:
+        with LEAD_LOG_PATH.open("r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            existing = reader.fieldnames or []
+            if existing == fieldnames:
+                return
+            rows = list(reader)
+        with LEAD_LOG_PATH.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({key: row.get(key, "") for key in fieldnames})
+    except Exception as exc:
+        log_error(f"Lead log header migration failed: {exc}")
+
+
+def append_lead_log(email: str, results: list[dict], audit_context: dict | None = None) -> None:
     if not email or not results:
         return
     LEAD_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = [
-        "checked_at",
-        "email",
-        "domain",
-        "organization_name",
-        "ein",
-        "state",
-        "status",
-        "comments",
-        "evidence_url",
-        "source_url",
-    ]
+    fieldnames = LEAD_LOG_FIELDNAMES
+    ensure_lead_log_header(fieldnames)
     write_header = not LEAD_LOG_PATH.exists() or LEAD_LOG_PATH.stat().st_size == 0
-    checked_at = datetime.now().isoformat(timespec="seconds")
+    checked_at, checked_at_timezone = eastern_timestamp()
     domain = email_domain(email)
+    audit_context = audit_context or {}
     master_rows = []
     with LEAD_LOG_PATH.open("a", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -548,13 +623,22 @@ def append_lead_log(email: str, results: list[dict]) -> None:
                 "source_url": result.get("source_url", ""),
                 "lookup_seconds": result.get("lookup_seconds", ""),
                 "app_version": result.get("app_version", APP_VERSION),
+                "checked_at_timezone": checked_at_timezone,
+                "environment": audit_context.get("environment", ""),
+                "origin": audit_context.get("origin", ""),
+                "page_url": audit_context.get("page_url", ""),
+                "referrer": audit_context.get("referrer", ""),
+                "remote_ip": audit_context.get("remote_ip", ""),
+                "user_agent": audit_context.get("user_agent", ""),
+                "device_id": audit_context.get("device_id", ""),
+                "submission_id": audit_context.get("submission_id", ""),
             }
             writer.writerow({key: row.get(key, "") for key in fieldnames})
             master_rows.append(row)
     append_master_lead_log_async(master_rows)
 
 
-def append_submission_log(email: str, organizations: list[dict], states: list[str]) -> None:
+def append_submission_log(email: str, organizations: list[dict], states: list[str], audit_context: dict | None = None) -> None:
     """Capture valid usage before the slower registry lookups begin."""
     if not email or not organizations or not states:
         return
@@ -573,7 +657,7 @@ def append_submission_log(email: str, organizations: list[dict], states: list[st
                 "lookup_seconds": "",
                 "app_version": APP_VERSION,
             })
-    append_lead_log(email, rows)
+    append_lead_log(email, rows, audit_context)
 
 
 def email_domain(email_address: str) -> str:
@@ -675,6 +759,16 @@ def is_verified_email_token(email_address: str, token: str) -> bool:
 
 def is_verified_internal_passcode(email_address: str, passcode: str) -> bool:
     return is_exempt_domain(email_domain(email_address)) and (passcode or "").strip() == ADMIN_PASSCODE
+
+
+def staging_access_error(email_address: str, passcode: str) -> str:
+    if not STAGING_ACCESS_REQUIRED:
+        return ""
+    if not is_exempt_domain(email_domain(email_address)):
+        return "Staging access requires a Compliance Express email address."
+    if (passcode or "").strip() != ADMIN_PASSCODE:
+        return "Enter the Compliance Express passcode to use staging."
+    return ""
 
 
 def is_exempt_domain(domain: str) -> bool:
@@ -4325,11 +4419,16 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
             email = normalize_email(payload.get("email") or "")
             device_id = normalize_device_id(payload.get("device_id") or "")
+            audit_context = request_audit_context(self, payload)
 
             requested_states = payload.get("states")
             state = (payload.get("state") or "").strip().upper()
             domain = email_domain(email)
             admin_passcode = (payload.get("admin_passcode") or "").strip()
+            staging_error = staging_access_error(email, admin_passcode)
+            if staging_error:
+                self._send_json(403, {"error": staging_error})
+                return
             if is_exempt_domain(domain) and admin_passcode != ADMIN_PASSCODE:
                 self._send_json(401, {"error": "Enter the Compliance Express passcode to use internal features."})
                 return
@@ -4368,9 +4467,9 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
                 self._send_json(429, {"error": "A complimentary snapshot was already requested from this browser."})
                 return
 
-            append_submission_log(email, organizations, states)
+            append_submission_log(email, organizations, states, audit_context)
             results = run_state_lookups_parallel(organizations, states)
-            append_lead_log(email, results)
+            append_lead_log(email, results, audit_context)
             if is_batch:
                 if not privileged and should_record_domain_check(results):
                     record_domain_check(domain, limit_ein)
