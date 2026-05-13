@@ -54,7 +54,17 @@ Recommended permanent setup:
 3. Netlify publish directory: `deployment/staging-netlify`
 4. DNS: CNAME `staging` to the Netlify staging site hostname
 
-The staging frontend currently calls:
+Interim operational setup:
+
+`https://compliance-express-staging.netlify.app`
+
+This staging frontend currently uses the production API after the staging access gate:
+
+`https://instant-compliance-snapshot-api.onrender.com`
+
+This makes the page usable while the separate Render staging backend is pending.
+
+Target final setup:
 
 `https://instant-compliance-snapshot-api-staging.onrender.com`
 
