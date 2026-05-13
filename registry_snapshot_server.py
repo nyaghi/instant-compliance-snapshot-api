@@ -16,7 +16,7 @@ import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -99,7 +99,10 @@ EXEMPT_EMAIL_DOMAIN = "compliance-express.com"
 EXEMPT_EMAIL_ADDRESSES = {"nyaghi17@gmail.com"}
 DOMAIN_LIMIT_PATH = Path(__file__).with_name("registry_snapshot_domain_limits.json")
 DEVICE_LIMIT_PATH = Path(__file__).with_name("registry_snapshot_device_limits.json")
-EASTERN_TZ = ZoneInfo("America/New_York")
+try:
+    EASTERN_TZ = ZoneInfo("America/New_York")
+except Exception:
+    EASTERN_TZ = None
 LEAD_LOG_FIELDNAMES = [
     "checked_at",
     "checked_at_timezone",
@@ -537,8 +540,10 @@ def append_master_lead_log_async(rows: list[dict]) -> None:
 
 
 def eastern_timestamp() -> tuple[str, str]:
-    now = datetime.now(EASTERN_TZ)
-    return now.strftime("%Y-%m-%d %H:%M:%S %Z"), now.tzname() or "Eastern"
+    now = datetime.now(EASTERN_TZ) if EASTERN_TZ else datetime.now().astimezone()
+    tz_name = now.tzname() or "Eastern"
+    tz_label = "EDT" if "daylight" in tz_name.lower() else ("EST" if "standard" in tz_name.lower() else tz_name)
+    return f"{now:%Y-%m-%d %H:%M:%S} {tz_label}", tz_label
 
 
 def safe_audit_value(value: object, max_length: int = 500) -> str:
