@@ -62,7 +62,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.13.4"
+APP_VERSION = "2026.05.13.5"
 BASE_SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 ENABLE_WI_STATE = os.environ.get("CE_ENABLE_WI_STATE", "0").strip().lower() in {"1", "true", "yes"}
 SUPPORTED_STATES = BASE_SUPPORTED_STATES + (["WI"] if ENABLE_WI_STATE else [])
@@ -2729,6 +2729,7 @@ def search_wi(page, org):
 
     best_match = None
     last_body = ""
+    target_names = organization_match_target_variants(org.organization_name, org.ein)
     try:
         for search_name in searched_names[:6]:
             page.goto(WI_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
@@ -2779,9 +2780,14 @@ def search_wi(page, org):
                 expiration_date = parse_due_date(expiration_text)
                 if not expiration_date:
                     continue
-                score = checker.name_match_priority(registry_name, org.organization_name)
+                score = checker.name_match_priority_for_targets(registry_name, target_names)
                 if score < 4:
                     continue
+                href = ""
+                try:
+                    href = rows.nth(i).locator("a").first.get_attribute("href") or ""
+                except Exception:
+                    href = ""
                 candidate = {
                     "score": score,
                     "expiration_date": expiration_date,
@@ -2789,6 +2795,7 @@ def search_wi(page, org):
                     "registry_name": registry_name,
                     "location": location,
                     "granted_date": granted_date,
+                    "detail_href": href,
                 }
                 if (
                     not best_match
@@ -2809,8 +2816,35 @@ def search_wi(page, org):
             result.success = True
             return result
 
+        detail_status = ""
+        if best_match.get("detail_href"):
+            try:
+                page.goto(urljoin(WI_SEARCH_URL, best_match["detail_href"]), wait_until="domcontentloaded", timeout=30000)
+                try:
+                    checker.safe_wait_for_network_idle(page, timeout=3000)
+                except Exception:
+                    pass
+                detail_text = registry_page_body(page)
+                detail_status_match = re.search(r"\bStatus\s+(License\s+is\s+(?:not\s+)?current\s*\([^)]+\))", detail_text, re.I)
+                if detail_status_match:
+                    detail_status = re.sub(r"\s+", " ", detail_status_match.group(1)).strip()
+                    if re.search(r"\brevoked\b", detail_status, re.I):
+                        result.status = "Revoked"
+                        result.raw_status_text = f"{detail_status}; License current through {format_date(best_match['expiration_date'])}"
+                        result.source_note = "Wisconsin DFI credential detail page shows the license is not current (Revoked), which CharityClarity treats as an adverse status."
+                        result.matched_registry_name = best_match["registry_name"]
+                        result.matched_registry_identifier = best_match["license_number"]
+                        result.success = True
+                        return result
+            except Exception:
+                pass
+
         result.status = status_from_calendar_date(best_match["expiration_date"])
-        result.raw_status_text = f"Expiration Date {format_date(best_match['expiration_date'])}"
+        result.raw_status_text = (
+            f"{detail_status}; License current through {format_date(best_match['expiration_date'])}"
+            if detail_status
+            else f"Expiration Date {format_date(best_match['expiration_date'])}"
+        )
         result.source_note = (
             "Wisconsin DFI public registry shows a Charitable Organization credential "
             f"expiration date of {format_date(best_match['expiration_date'])}."
