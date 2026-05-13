@@ -1,14 +1,20 @@
 services:
   - type: web
-    name: instant-compliance-snapshot-api
+    name: instant-compliance-snapshot-api-staging
     runtime: python
     plan: starter
-    buildCommand: pip install -r requirements.txt && python -m playwright install chromium
+    buildCommand: pip install -r requirements.txt && PLAYWRIGHT_BROWSERS_PATH=0 python -m playwright install chromium
     startCommand: python registry_snapshot_server.py
     envVars:
       - key: HOST
         value: 0.0.0.0
       - key: PUBLIC_BASE_URL
-        sync: false
+        value: https://instant-compliance-snapshot-api-staging.onrender.com
+      - key: CE_STAGING_ACCESS_REQUIRED
+        value: "1"
+      - key: CE_ENABLE_WI_STATE
+        value: "1"
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: "0"
       - key: PYTHONUNBUFFERED
         value: "1"
