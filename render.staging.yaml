@@ -12,6 +12,8 @@ services:
         value: https://instant-compliance-snapshot-api-staging.onrender.com
       - key: CE_STAGING_ACCESS_REQUIRED
         value: "1"
+      - key: CE_ENABLE_WI_STATE
+        value: "1"
       - key: PLAYWRIGHT_BROWSERS_PATH
         value: "0"
       - key: PYTHONUNBUFFERED
