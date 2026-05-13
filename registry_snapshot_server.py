@@ -62,7 +62,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.13.3"
+APP_VERSION = "2026.05.13.4"
 BASE_SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 ENABLE_WI_STATE = os.environ.get("CE_ENABLE_WI_STATE", "0").strip().lower() in {"1", "true", "yes"}
 SUPPORTED_STATES = BASE_SUPPORTED_STATES + (["WI"] if ENABLE_WI_STATE else [])
@@ -1921,7 +1921,12 @@ def organization_name_variants(
                 pair_variant = words[:]
                 pair_variant[idx] = f"{pair_variant[idx]}-{pair_variant[idx + 1]}"
                 del pair_variant[idx + 1]
-                hyphenated_word_pairs.append(" ".join(pair_variant))
+                hyphenated = " ".join(pair_variant)
+                hyphenated_word_pairs.append(hyphenated)
+                legal_suffix_match = re.search(r"\s+(inc|corp|llc|ltd)\.?$", hyphenated, re.I)
+                if legal_suffix_match:
+                    suffix = legal_suffix_match.group(1).title()
+                    hyphenated_word_pairs.append(re.sub(r"\s+(inc|corp|llc|ltd)\.?$", f", {suffix}.", hyphenated, flags=re.I))
         legal_suffix_additions = []
         if not re.search(r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\s*$", base, re.I):
             # Some public profiles omit the legal suffix even when name-search
@@ -2153,6 +2158,11 @@ def search_with_name_variants(
             acronym = acronym_hyphen_match.group(1).upper()
             for variant in variants[max_variants:]:
                 if re.match(rf"^{re.escape(acronym)}\s+", variant or "") and variant not in selected_variants:
+                    selected_variants.append(variant)
+                    break
+        if "-" not in (original_name or ""):
+            for variant in variants[max_variants:]:
+                if "-" in (variant or "") and variant not in selected_variants:
                     selected_variants.append(variant)
                     break
         variants = selected_variants
