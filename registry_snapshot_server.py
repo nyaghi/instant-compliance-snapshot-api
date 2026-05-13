@@ -62,7 +62,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.13.2"
+APP_VERSION = "2026.05.13.3"
 BASE_SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 ENABLE_WI_STATE = os.environ.get("CE_ENABLE_WI_STATE", "0").strip().lower() in {"1", "true", "yes"}
 SUPPORTED_STATES = BASE_SUPPORTED_STATES + (["WI"] if ENABLE_WI_STATE else [])
@@ -1865,6 +1865,26 @@ def organization_name_variants(
                 base,
                 count=1,
             )
+        acronym_hyphen_variants = []
+        acronym_hyphen_match = re.match(r"^([A-Za-z]{2,8})[-\u2010-\u2015](.+)$", base)
+        if acronym_hyphen_match:
+            acronym = acronym_hyphen_match.group(1).upper()
+            remainder = acronym_hyphen_match.group(2).strip()
+            acronym_space = f"{acronym} {remainder}"
+            acronym_space_no_punctuation = re.sub(r"[^\w\s]", " ", acronym_space).strip()
+            acronym_space_no_punctuation = re.sub(r"\s+", " ", acronym_space_no_punctuation)
+            acronym_space_without_suffix = re.sub(
+                r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?)\s*$",
+                "",
+                acronym_space_no_punctuation,
+                flags=re.I,
+            ).strip()
+            acronym_hyphen_variants.extend([
+                acronym_space_no_punctuation,
+                acronym_space_without_suffix,
+                acronym_space,
+                f"{acronym}-{remainder}",
+            ])
         ampersand_as_and = re.sub(r"\s*&\s*", " and ", base).strip()
         ampersand_removed = re.sub(r"\s*&\s*", " ", base).strip()
         apostrophe_removed = re.sub(r"[']", "", base).strip()
@@ -1935,6 +1955,7 @@ def organization_name_variants(
             saint_abbreviated,
             childrens_hospital,
             title_hyphen_base,
+            *acronym_hyphen_variants,
             ms_expanded,
             and_no_punctuation,
             *broad_query_prefixes,
@@ -2125,6 +2146,13 @@ def search_with_name_variants(
             compact_original = re.sub(r"[^\w]", "", original_name or "").lower()
             for variant in variants[max_variants:]:
                 if re.sub(r"[^\w]", "", variant or "").lower() == compact_original and variant not in selected_variants:
+                    selected_variants.append(variant)
+                    break
+        acronym_hyphen_match = re.match(r"^([A-Za-z]{2,8})[-\u2010-\u2015]", original_name or "")
+        if acronym_hyphen_match:
+            acronym = acronym_hyphen_match.group(1).upper()
+            for variant in variants[max_variants:]:
+                if re.match(rf"^{re.escape(acronym)}\s+", variant or "") and variant not in selected_variants:
                     selected_variants.append(variant)
                     break
         variants = selected_variants
