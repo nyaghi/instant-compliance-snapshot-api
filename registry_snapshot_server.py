@@ -57,7 +57,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.14.5"
+APP_VERSION = "2026.05.14.6"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA", "WI"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -65,6 +65,13 @@ MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
 # Emergency-only override hook. Routine corrections must be implemented as
 # generalized lookup/status rules, not EIN-specific adjudications.
 ADJUDICATED_STATUS_OVERRIDES = {}
+EIN_NAME_ALIASES = {
+    "844465500": [
+        "Operation Rapid Response",
+        "Operation Rapid Response Inc",
+        "Rapid Response Charities Inc",
+    ],
+}
 REQUESTED_PARALLEL_LOOKUPS = max(1, int(os.environ.get("CE_MAX_PARALLEL_LOOKUPS", "1")))
 ALLOW_PARALLEL_BROWSER_LOOKUPS = os.environ.get("CE_ALLOW_PARALLEL_BROWSER_LOOKUPS", "1").strip().lower() in {"1", "true", "yes"}
 MAX_BROWSER_LOOKUPS = max(1, int(os.environ.get("CE_MAX_BROWSER_LOOKUPS", "2")))
@@ -899,6 +906,24 @@ def public_profile_name_for_ein(ein: str) -> str:
     return name
 
 
+def curated_name_aliases_for_ein(ein: str) -> list[str]:
+    target = re.sub(r"\D", "", ein or "")
+    return EIN_NAME_ALIASES.get(target, [])
+
+
+def known_names_for_ein(ein: str) -> list[str]:
+    names = []
+    for name in [
+        *curated_name_aliases_for_ein(ein),
+        organization_name_for_ein(ein),
+        public_profile_name_for_ein(ein),
+    ]:
+        cleaned = re.sub(r"\s+", " ", (name or "").strip())
+        if cleaned and cleaned not in names:
+            names.append(cleaned)
+    return names
+
+
 def public_profile_latest_tax_year_for_ein(ein: str) -> int | None:
     payload = public_profile_for_ein(ein)
     candidates = []
@@ -942,9 +967,8 @@ def public_profile_latest_tax_period_for_ein(ein: str) -> tuple[int, tuple[int, 
 
 def resolved_organization_name(ein: str, supplied_name: str = "") -> str:
     supplied_name = (supplied_name or "").strip()
-    reference_name = organization_name_for_ein(ein)
-    profile_name = public_profile_name_for_ein(ein)
-    return supplied_name or reference_name or profile_name
+    known_names = known_names_for_ein(ein)
+    return supplied_name or (known_names[0] if known_names else "")
 
 
 def format_ein(value: str) -> str:
@@ -1632,7 +1656,7 @@ def organization_name_variants(
 
     seed_names = [name]
     if ein and include_ein_aliases:
-        seed_names.extend([organization_name_for_ein(ein), public_profile_name_for_ein(ein)])
+        seed_names.extend(known_names_for_ein(ein))
 
     if include_name_segments:
         segmented_seeds = []
@@ -1863,7 +1887,7 @@ def organization_match_target_variants(name: str, ein: str = "") -> list[str]:
         include_leading_article_variants=True,
         include_broad_query_prefixes=False,
     )
-    for alias in [organization_name_for_ein(ein), public_profile_name_for_ein(ein)]:
+    for alias in known_names_for_ein(ein):
         if compatible_ein_alias_for_name(name, alias):
             variants.extend(organization_name_variants(
                 alias,
@@ -2522,7 +2546,7 @@ def search_wi(page, org):
     searched_names = organization_name_variants(
         org.organization_name,
         org.ein,
-        include_ein_aliases=False,
+        include_ein_aliases=True,
         include_name_segments=True,
         include_compact_legal_suffixes=True,
         include_leading_article_variants=True,
@@ -2533,7 +2557,7 @@ def search_wi(page, org):
     last_body = ""
     target_names = organization_match_target_variants(org.organization_name, org.ein)
     try:
-        for search_name in searched_names[:6]:
+        for search_name in searched_names[:16]:
             page.goto(WI_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
             try:
                 checker.safe_wait_for_network_idle(page, timeout=3000)
