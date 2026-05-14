@@ -57,7 +57,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.14.11"
+APP_VERSION = "2026.05.14.12"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA", "WI"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -84,6 +84,7 @@ NAME_SEARCH_PREFLIGHT_URLS = {
     "VA": "https://cos.vdacs.virginia.gov/cgi-bin/char_search.cgi",
 }
 WI_SEARCH_URL = "https://apps.dfi.wi.gov/ice/berg/Registration/OrganizationCredentialSearch.aspx"
+WI_RESULTS_URL = "https://apps.dfi.wi.gov/ice/berg/Registration/OrgCredentialSearchResults.aspx"
 MAX_EXTERNAL_EXEMPT_ORGS = 3
 DOMAIN_LIMIT_DAYS = 7
 ADMIN_PASSCODE = "8977"
@@ -2590,16 +2591,123 @@ def wi_expiration_suffix(expiration_date: date | None) -> str:
     return f"; License current through {format_date(expiration_date)}" if expiration_date else ""
 
 
+def wi_request_headers(referer: str = WI_SEARCH_URL) -> dict[str, str]:
+    return {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": referer,
+    }
+
+
+def wi_search_names_for_org(org) -> list[str]:
+    names: list[str] = []
+
+    def add_many(values) -> None:
+        for value in values:
+            value = re.sub(r"\s+", " ", (value or "").strip())
+            if value and value not in names:
+                names.append(value)
+
+    original_name = getattr(org, "organization_name", "")
+    add_many([original_name])
+    add_many(known_names_for_ein(getattr(org, "ein", "")))
+    for seed in list(names):
+        add_many(organization_name_variants(
+            seed,
+            "",
+            include_ein_aliases=False,
+            include_name_segments=True,
+            include_compact_legal_suffixes=True,
+            include_leading_article_variants=True,
+            include_broad_query_prefixes=False,
+        ))
+    return names
+
+
+def wi_candidate_from_row_html(row_html: str, target_names: list[str]) -> dict | None:
+    values = html_table_cells(row_html)
+    if len(values) < 6:
+        return None
+    license_number, profession, registry_name, location, granted_date, expiration_text = values[:6]
+    if not re.search(r"Charitable\s+Organization", profession, re.I):
+        return None
+    score = checker.name_match_priority_for_targets(registry_name, target_names)
+    if score < 4:
+        return None
+    href_match = re.search(r"<a[^>]+href=[\"']([^\"']+)[\"']", row_html, re.I)
+    href = html.unescape(href_match.group(1)) if href_match else ""
+    expiration_date = parse_due_date(expiration_text)
+    detail_status = wi_http_detail_status(href)
+    if not expiration_date and not wi_status_from_detail_status(detail_status):
+        return None
+    return {
+        "score": score,
+        "expiration_date": expiration_date,
+        "license_number": license_number,
+        "registry_name": registry_name,
+        "location": location,
+        "granted_date": granted_date,
+        "detail_href": href,
+        "detail_status": detail_status,
+    }
+
+
+def wi_better_candidate(candidate: dict, best_match: dict | None) -> bool:
+    if not best_match:
+        return True
+    if candidate["score"] > best_match["score"]:
+        return True
+    return (
+        candidate["score"] == best_match["score"]
+        and (candidate["expiration_date"] or date.min) > (best_match["expiration_date"] or date.min)
+    )
+
+
+def wi_best_match_from_html(result_html: str, target_names: list[str], best_match: dict | None = None) -> dict | None:
+    table_match = re.search(
+        r"<table[^>]+id=[\"']ctl00_cphMainContent_OrgCredentialSearch_gvCredentialSearchResults[\"'][^>]*>([\s\S]*?)</table>",
+        result_html,
+        re.I,
+    )
+    if not table_match:
+        return best_match
+
+    for row_match in re.finditer(r"<tr[^>]*>([\s\S]*?)</tr>", table_match.group(1), re.I):
+        row_html = row_match.group(1)
+        if re.search(r"<th\b", row_html, re.I):
+            continue
+        candidate = wi_candidate_from_row_html(row_html, target_names)
+        if candidate and wi_better_candidate(candidate, best_match):
+            best_match = candidate
+    return best_match
+
+
 def wi_http_search_best_match(search_names: list[str], target_names: list[str]) -> dict | None:
     best_match = None
     try:
-        base_request = urllib.request.Request(WI_SEARCH_URL, headers={"User-Agent": "Mozilla/5.0"})
+        base_request = urllib.request.Request(WI_SEARCH_URL, headers=wi_request_headers())
         with urllib.request.urlopen(base_request, timeout=30) as response:
             base_html = response.read().decode("utf-8", errors="replace")
     except Exception:
         return None
 
     for search_name in search_names:
+        try:
+            direct_url = f"{WI_RESULTS_URL}?{urlencode({'CredentialType': '800', 'LicenseNumber': '', 'FirmName': search_name})}"
+            request = urllib.request.Request(direct_url, headers=wi_request_headers())
+            with urllib.request.urlopen(request, timeout=30) as response:
+                result_html = response.read().decode("utf-8", errors="replace")
+            best_match = wi_best_match_from_html(result_html, target_names, best_match)
+            if best_match and best_match["score"] >= 5:
+                break
+        except Exception:
+            pass
+
         form_data = {
             "__VIEWSTATE": html_input_value(base_html, "__VIEWSTATE"),
             "__VIEWSTATEGENERATOR": html_input_value(base_html, "__VIEWSTATEGENERATOR"),
@@ -2613,7 +2721,8 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str]) 
                 data=urlencode(form_data).encode("utf-8"),
                 headers={
                     "Content-Type": "application/x-www-form-urlencoded",
-                    "User-Agent": "Mozilla/5.0",
+                    **wi_request_headers(),
+                    "Origin": "https://apps.dfi.wi.gov",
                 },
                 method="POST",
             )
@@ -2622,52 +2731,7 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str]) 
         except Exception:
             continue
 
-        table_match = re.search(
-            r"<table[^>]+id=[\"']ctl00_cphMainContent_OrgCredentialSearch_gvCredentialSearchResults[\"'][^>]*>([\s\S]*?)</table>",
-            result_html,
-            re.I,
-        )
-        if not table_match:
-            continue
-
-        for row_match in re.finditer(r"<tr[^>]*>([\s\S]*?)</tr>", table_match.group(1), re.I):
-            row_html = row_match.group(1)
-            if re.search(r"<th\b", row_html, re.I):
-                continue
-            values = html_table_cells(row_html)
-            if len(values) < 6:
-                continue
-            license_number, profession, registry_name, location, granted_date, expiration_text = values[:6]
-            if not re.search(r"Charitable\s+Organization", profession, re.I):
-                continue
-            score = checker.name_match_priority_for_targets(registry_name, target_names)
-            if score < 4:
-                continue
-            href_match = re.search(r"<a[^>]+href=[\"']([^\"']+)[\"']", row_html, re.I)
-            href = html.unescape(href_match.group(1)) if href_match else ""
-            expiration_date = parse_due_date(expiration_text)
-            detail_status = wi_http_detail_status(href)
-            if not expiration_date and not wi_status_from_detail_status(detail_status):
-                continue
-            candidate = {
-                "score": score,
-                "expiration_date": expiration_date,
-                "license_number": license_number,
-                "registry_name": registry_name,
-                "location": location,
-                "granted_date": granted_date,
-                "detail_href": href,
-                "detail_status": detail_status,
-            }
-            if (
-                not best_match
-                or candidate["score"] > best_match["score"]
-                or (
-                    candidate["score"] == best_match["score"]
-                    and (candidate["expiration_date"] or date.min) > (best_match["expiration_date"] or date.min)
-                )
-            ):
-                best_match = candidate
+        best_match = wi_best_match_from_html(result_html, target_names, best_match)
         if best_match and best_match["score"] >= 5:
             break
     return best_match
@@ -2675,24 +2739,16 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str]) 
 
 def search_wi(page, org):
     result = checker.StateResult(org.organization_name, org.ein, "WI", checker.STATUS_UNKNOWN, WI_SEARCH_URL)
-    searched_names = organization_name_variants(
-        org.organization_name,
-        org.ein,
-        include_ein_aliases=True,
-        include_name_segments=True,
-        include_compact_legal_suffixes=True,
-        include_leading_article_variants=True,
-        include_broad_query_prefixes=False,
-    ) or [org.organization_name]
+    searched_names = wi_search_names_for_org(org) or [org.organization_name]
 
     best_match = None
     last_body = ""
     target_names = organization_match_target_variants(org.organization_name, org.ein)
     try:
-        best_match = wi_http_search_best_match(searched_names[:16], target_names)
+        best_match = wi_http_search_best_match(searched_names[:12], target_names)
 
         if not best_match:
-            for search_name in searched_names[:16]:
+            for search_name in searched_names[:12]:
                 page.goto(WI_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
                 try:
                     checker.safe_wait_for_network_idle(page, timeout=3000)
@@ -2773,7 +2829,7 @@ def search_wi(page, org):
                     break
 
         if not best_match:
-            best_match = wi_http_search_best_match(searched_names[:16], target_names)
+            best_match = wi_http_search_best_match(searched_names[:12], target_names)
 
         if not best_match:
             if re.search(r"\b403\b|forbidden|access\s+is\s+denied", last_body or "", re.I):
