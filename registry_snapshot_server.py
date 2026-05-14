@@ -57,7 +57,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.14.13"
+APP_VERSION = "2026.05.14.14"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA", "WI"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -2756,15 +2756,18 @@ def wi_best_match_from_markdown(result_text: str, target_names: list[str], best_
     return best_match
 
 
-def wi_reader_search_best_match(search_names: list[str], target_names: list[str]) -> dict | None:
+def wi_reader_search_best_match(search_names: list[str], target_names: list[str]) -> tuple[dict | None, bool]:
     best_match = None
+    reader_reached = False
     for search_name in search_names:
         source_url = f"{WI_RESULTS_URL}?{urlencode({'CredentialType': '800', 'FirmName': search_name, 'LicenseNumber': ''})}"
         result_text = wi_reader_text(source_url)
+        if re.search(r"Organization Search Results|Search Parameters|Total Search Results", result_text or "", re.I):
+            reader_reached = True
         best_match = wi_best_match_from_markdown(result_text, target_names, best_match)
         if best_match and best_match["score"] >= 5:
             break
-    return best_match
+    return best_match, reader_reached
 
 
 def wi_http_search_best_match(search_names: list[str], target_names: list[str]) -> dict | None:
@@ -2823,11 +2826,12 @@ def search_wi(page, org):
 
     best_match = None
     last_body = ""
+    wi_reader_reached = False
     target_names = organization_match_target_variants(org.organization_name, org.ein)
     try:
         best_match = wi_http_search_best_match(searched_names[:12], target_names)
         if not best_match:
-            best_match = wi_reader_search_best_match(searched_names[:12], target_names)
+            best_match, wi_reader_reached = wi_reader_search_best_match(searched_names[:12], target_names)
 
         if not best_match:
             for search_name in searched_names[:12]:
@@ -2913,9 +2917,16 @@ def search_wi(page, org):
         if not best_match:
             best_match = wi_http_search_best_match(searched_names[:12], target_names)
         if not best_match:
-            best_match = wi_reader_search_best_match(searched_names[:12], target_names)
+            best_match, reached = wi_reader_search_best_match(searched_names[:12], target_names)
+            wi_reader_reached = wi_reader_reached or reached
 
         if not best_match:
+            if wi_reader_reached:
+                result.raw_status_text = "No matching Wisconsin charitable organization credential"
+                result.status = checker.STATUS_NOT_REGISTERED
+                result.source_note = "Wisconsin DFI returned no matching Charitable Organization credential for the organization name searched."
+                result.success = True
+                return result
             if re.search(r"\b403\b|forbidden|access\s+is\s+denied", last_body or "", re.I):
                 result.raw_status_text = "Wisconsin registry returned 403 Forbidden"
                 result.status = "Site Not Reachable"
