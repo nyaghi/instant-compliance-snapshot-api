@@ -57,7 +57,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.14.10"
+APP_VERSION = "2026.05.14.11"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA", "WI"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -65,22 +65,6 @@ MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
 # Emergency-only override hook. Routine corrections must be implemented as
 # generalized lookup/status rules, not EIN-specific adjudications.
 ADJUDICATED_STATUS_OVERRIDES = {}
-EIN_NAME_ALIASES = {
-    "751835253": [
-        "The Urban Alternative",
-        "Urban Alternative",
-    ],
-    "815466677": [
-        "Knights of Columbus Charitable Fund",
-        "Knights of Columbus Charitable Fund Inc",
-        "Knights of Columbus Charitable Fund, Inc.",
-    ],
-    "844465500": [
-        "Operation Rapid Response",
-        "Operation Rapid Response Inc",
-        "Rapid Response Charities Inc",
-    ],
-}
 REQUESTED_PARALLEL_LOOKUPS = max(1, int(os.environ.get("CE_MAX_PARALLEL_LOOKUPS", "1")))
 ALLOW_PARALLEL_BROWSER_LOOKUPS = os.environ.get("CE_ALLOW_PARALLEL_BROWSER_LOOKUPS", "1").strip().lower() in {"1", "true", "yes"}
 MAX_BROWSER_LOOKUPS = max(1, int(os.environ.get("CE_MAX_BROWSER_LOOKUPS", "2")))
@@ -916,8 +900,10 @@ def public_profile_name_for_ein(ein: str) -> str:
 
 
 def curated_name_aliases_for_ein(ein: str) -> list[str]:
-    target = re.sub(r"\D", "", ein or "")
-    return EIN_NAME_ALIASES.get(target, [])
+    # Keep this hook for emergency operational aliases, but routine alternate
+    # names should come from the EIN-backed IRS/ProPublica and local source
+    # data paths used by known_names_for_ein().
+    return []
 
 
 def known_names_for_ein(ein: str) -> list[str]:
@@ -2585,6 +2571,25 @@ def wi_http_detail_status(detail_href: str) -> str:
         return ""
 
 
+def wi_status_from_detail_status(detail_status: str) -> str:
+    text = detail_status or ""
+    if re.search(r"\bvoluntar(?:y|ily)\s+surrender(?:ed)?\b", text, re.I):
+        return "Closed / Withdrawn / Canceled"
+    if re.search(r"\brevoked\b", text, re.I):
+        return "Revoked"
+    if re.search(r"\bsuspended\b", text, re.I):
+        return "Suspended"
+    if re.search(r"\bLicense\s+is\s+not\s+current\b", text, re.I):
+        return "Delinquent"
+    if re.search(r"\bLicense\s+is\s+current\s*\(\s*Active\s*\)", text, re.I):
+        return "Current"
+    return ""
+
+
+def wi_expiration_suffix(expiration_date: date | None) -> str:
+    return f"; License current through {format_date(expiration_date)}" if expiration_date else ""
+
+
 def wi_http_search_best_match(search_names: list[str], target_names: list[str]) -> dict | None:
     best_match = None
     try:
@@ -2635,14 +2640,15 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str]) 
             license_number, profession, registry_name, location, granted_date, expiration_text = values[:6]
             if not re.search(r"Charitable\s+Organization", profession, re.I):
                 continue
-            expiration_date = parse_due_date(expiration_text)
-            if not expiration_date:
-                continue
             score = checker.name_match_priority_for_targets(registry_name, target_names)
             if score < 4:
                 continue
             href_match = re.search(r"<a[^>]+href=[\"']([^\"']+)[\"']", row_html, re.I)
             href = html.unescape(href_match.group(1)) if href_match else ""
+            expiration_date = parse_due_date(expiration_text)
+            detail_status = wi_http_detail_status(href)
+            if not expiration_date and not wi_status_from_detail_status(detail_status):
+                continue
             candidate = {
                 "score": score,
                 "expiration_date": expiration_date,
@@ -2651,14 +2657,14 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str]) 
                 "location": location,
                 "granted_date": granted_date,
                 "detail_href": href,
-                "detail_status": wi_http_detail_status(href),
+                "detail_status": detail_status,
             }
             if (
                 not best_match
                 or candidate["score"] > best_match["score"]
                 or (
                     candidate["score"] == best_match["score"]
-                    and candidate["expiration_date"] > best_match["expiration_date"]
+                    and (candidate["expiration_date"] or date.min) > (best_match["expiration_date"] or date.min)
                 )
             ):
                 best_match = candidate
@@ -2732,9 +2738,6 @@ def search_wi(page, org):
                     license_number, profession, registry_name, location, granted_date, expiration_text = values
                     if not re.search(r"Charitable\s+Organization", profession, re.I):
                         continue
-                    expiration_date = parse_due_date(expiration_text)
-                    if not expiration_date:
-                        continue
                     score = checker.name_match_priority_for_targets(registry_name, target_names)
                     if score < 4:
                         continue
@@ -2743,6 +2746,10 @@ def search_wi(page, org):
                         href = rows.nth(i).locator("a").first.get_attribute("href") or ""
                     except Exception:
                         href = ""
+                    expiration_date = parse_due_date(expiration_text)
+                    detail_status = wi_http_detail_status(href)
+                    if not expiration_date and not wi_status_from_detail_status(detail_status):
+                        continue
                     candidate = {
                         "score": score,
                         "expiration_date": expiration_date,
@@ -2751,13 +2758,14 @@ def search_wi(page, org):
                         "location": location,
                         "granted_date": granted_date,
                         "detail_href": href,
+                        "detail_status": detail_status,
                     }
                     if (
                         not best_match
                         or candidate["score"] > best_match["score"]
                         or (
                             candidate["score"] == best_match["score"]
-                            and candidate["expiration_date"] > best_match["expiration_date"]
+                            and (candidate["expiration_date"] or date.min) > (best_match["expiration_date"] or date.min)
                         )
                     ):
                         best_match = candidate
@@ -2794,7 +2802,7 @@ def search_wi(page, org):
                     detail_status = re.sub(r"\s+", " ", detail_status_match.group(1)).strip()
                     if re.search(r"\brevoked\b", detail_status, re.I):
                         result.status = "Revoked"
-                        result.raw_status_text = f"{detail_status}; License current through {format_date(best_match['expiration_date'])}"
+                        result.raw_status_text = f"{detail_status}{wi_expiration_suffix(best_match.get('expiration_date'))}"
                         result.source_note = "Wisconsin DFI credential detail page shows the license is not current (Revoked), which CharityClarity treats as an adverse status."
                         result.matched_registry_name = best_match["registry_name"]
                         result.matched_registry_identifier = best_match["license_number"]
@@ -2805,22 +2813,33 @@ def search_wi(page, org):
 
         if re.search(r"\bvoluntar(?:y|ily)\s+surrender(?:ed)?\b", detail_status, re.I):
             result.status = "Closed / Withdrawn / Canceled"
-            result.raw_status_text = f"{detail_status}; License current through {format_date(best_match['expiration_date'])}"
+            result.raw_status_text = f"{detail_status}{wi_expiration_suffix(best_match.get('expiration_date'))}"
             result.source_note = "Wisconsin DFI credential detail page shows a voluntary surrender, which CharityClarity treats as Closed / Withdrawn / Canceled."
             result.matched_registry_name = best_match["registry_name"]
             result.matched_registry_identifier = best_match["license_number"]
             result.success = True
             return result
 
-        result.status = status_from_calendar_date(best_match["expiration_date"])
+        expiration_date = best_match.get("expiration_date")
+        if not expiration_date:
+            detail_status_result = wi_status_from_detail_status(detail_status)
+            result.status = detail_status_result or checker.STATUS_UNKNOWN
+            result.raw_status_text = detail_status or "Wisconsin credential matched without a parseable expiration date"
+            result.source_note = "Wisconsin DFI public registry returned a matching Charitable Organization credential, but no parseable expiration date was available."
+            result.matched_registry_name = best_match["registry_name"]
+            result.matched_registry_identifier = best_match["license_number"]
+            result.success = bool(detail_status_result)
+            return result
+
+        result.status = status_from_calendar_date(expiration_date)
         result.raw_status_text = (
-            f"{detail_status}; License current through {format_date(best_match['expiration_date'])}"
+            f"{detail_status}; License current through {format_date(expiration_date)}"
             if detail_status
-            else f"Expiration Date {format_date(best_match['expiration_date'])}"
+            else f"Expiration Date {format_date(expiration_date)}"
         )
         result.source_note = (
             "Wisconsin DFI public registry shows a Charitable Organization credential "
-            f"expiration date of {format_date(best_match['expiration_date'])}."
+            f"expiration date of {format_date(expiration_date)}."
         )
         result.matched_registry_name = best_match["registry_name"]
         result.matched_registry_identifier = best_match["license_number"]
