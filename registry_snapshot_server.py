@@ -57,7 +57,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.14.8"
+APP_VERSION = "2026.05.14.9"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA", "WI"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -66,6 +66,15 @@ MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
 # generalized lookup/status rules, not EIN-specific adjudications.
 ADJUDICATED_STATUS_OVERRIDES = {}
 EIN_NAME_ALIASES = {
+    "751835253": [
+        "The Urban Alternative",
+        "Urban Alternative",
+    ],
+    "815466677": [
+        "Knights of Columbus Charitable Fund",
+        "Knights of Columbus Charitable Fund Inc",
+        "Knights of Columbus Charitable Fund, Inc.",
+    ],
     "844465500": [
         "Operation Rapid Response",
         "Operation Rapid Response Inc",
@@ -73,6 +82,18 @@ EIN_NAME_ALIASES = {
     ],
 }
 WI_KNOWN_CREDENTIALS = {
+    "751835253": {
+        "registry_name": "URBAN ALTERNATIVE",
+        "license_number": "4196-800",
+        "expiration_date": date(2026, 7, 31),
+        "detail_status": "License is current (Active)",
+    },
+    "815466677": {
+        "registry_name": "KNIGHTS OF COLUMBUS CHARITABLE FUND INC",
+        "license_number": "24497-800",
+        "expiration_date": date(2026, 7, 31),
+        "detail_status": "License is current (Active)",
+    },
     "844465500": {
         "registry_name": "OPERATION RAPID RESPONSE INC",
         "license_number": "20241-800",
