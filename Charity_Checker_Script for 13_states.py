@@ -1712,6 +1712,13 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
     without_leading_article = re.sub(r"^(?:the|a|an)\s+", "", cleaned, flags=re.I).strip()
     without_trailing_the = ""
     trailing_the_query = ""
+    us_prefixed_variants = []
+    if re.match(r"^us\s+", cleaned, re.I):
+        us_prefixed_variants.append(re.sub(r"^us\s+", "U.S. ", cleaned, flags=re.I))
+        us_prefixed_variants.append(re.sub(r"^us\s+", "United States ", cleaned, flags=re.I))
+    elif re.match(r"^u\.?\s*s\.?\s+", cleaned, re.I):
+        us_prefixed_variants.append(re.sub(r"^u\.?\s*s\.?\s+", "US ", cleaned, flags=re.I))
+        us_prefixed_variants.append(re.sub(r"^u\.?\s*s\.?\s+", "United States ", cleaned, flags=re.I))
     if re.search(r"(?:,\s*the|\s+the)\s*$", name or "", re.I) and not re.match(r"^the\s+", cleaned, re.I):
         without_trailing_the = re.sub(r"\s+\bthe\b\.?\s*$", "", cleaned, flags=re.I).strip()
         trailing_the_words = re.sub(r"[^\w\s']", " ", without_trailing_the).strip()
@@ -1789,6 +1796,7 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
         possessive_removed,
         display_short_prefix,
         cleaned,
+        *us_prefixed_variants,
         childrens_hospital_foundation,
         saint_expanded,
         saint_abbreviated,
