@@ -1759,6 +1759,10 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
     no_punct_full = re.sub(r"\s+", " ", no_punct_full)
     no_punct = re.sub(r"[^\w\s']", " ", no_suffix or cleaned).strip()
     no_punct = re.sub(r"\s+", " ", no_punct)
+    display_source = re.sub(r"[^\w\s]", " ", cleaned).strip()
+    display_source = re.sub(r"\s+", " ", display_source)
+    display_words = [word for word in display_source.split() if word.lower() != "s"]
+    display_short_prefix = " ".join(display_words[:2]) if len(display_words) >= 2 else ""
     words = no_punct.split()
     prefix = " ".join(words[:max_words]) if words else no_punct
     normalized_words = normalize_name(cleaned).split()
@@ -1782,18 +1786,19 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
             f"{suffix_base}, Inc.",
         ]
     variants = [
+        possessive_removed,
+        display_short_prefix,
         cleaned,
+        childrens_hospital_foundation,
+        saint_expanded,
+        saint_abbreviated,
         no_suffix,
         no_punct_full,
         no_punct,
         hyphen_as_space,
         slash_as_space,
         *legal_suffix_variants,
-        possessive_removed,
-        saint_expanded,
-        saint_abbreviated,
         ms_expanded,
-        childrens_hospital_foundation,
         with_leading_the,
         without_leading_article if without_leading_article.lower() != cleaned.lower() else "",
         trailing_segment,
