@@ -57,7 +57,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.14.6"
+APP_VERSION = "2026.05.14.7"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA", "WI"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -4264,9 +4264,21 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
             if (
                 state in name_only_states
                 and (result.get("status") or "").lower() == "not registered"
-                and discovered_name
+                and (discovered_name or known_names_for_ein(result.get("ein") or ""))
             ):
-                results[index] = run_state_lookup(discovered_name, result.get("ein") or "", state)
+                retry_names = []
+                for name in [
+                    discovered_name,
+                    *known_names_for_ein(result.get("ein") or ""),
+                ]:
+                    cleaned = re.sub(r"\s+", " ", (name or "").strip())
+                    if cleaned and cleaned.lower() not in {existing.lower() for existing in retry_names}:
+                        retry_names.append(cleaned)
+                for retry_name in retry_names:
+                    retry_result = run_state_lookup(retry_name, result.get("ein") or "", state)
+                    results[index] = retry_result
+                    if (retry_result.get("status") or "").lower() != "not registered":
+                        break
     return results
 
 
