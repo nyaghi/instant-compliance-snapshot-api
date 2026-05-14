@@ -1590,12 +1590,12 @@ def name_match_priority(candidate_name: str, target_name: str) -> int:
     target_without_entity = remove_terminal_entity_word(target)
     if candidate_without_entity and target_without_entity and candidate_without_entity == target_without_entity:
         return 4
-    if len(target_words) >= 3 and " ".join(target_words[:3]) in candidate:
+    connector_words = {"of", "for", "to", "in", "on", "at", "by"}
+    if len(target_words) >= 3 and candidate_words[:3] == target_words[:3]:
         # Do not accept a row solely because it shares a weak prefix ending in
         # a connector ("Allen Institute for ..." matched "Allen Institute for
         # Brain Science"). Require the prefix itself to end on a substantive
         # word, or require another distinctive word beyond the prefix.
-        connector_words = {"of", "for", "to", "in", "on", "at", "by"}
         if target_words[2] not in connector_words:
             return 3
         candidate_later = set(candidate_words[3:])
@@ -1607,6 +1607,7 @@ def name_match_priority(candidate_name: str, target_name: str) -> int:
         len(target_words) >= 3
         and len(candidate_words) >= 3
         and candidate_words[:2] == target_words[:2]
+        and target_words[1] not in connector_words
         and candidate_words[-1] == target_words[-1]
         and target_words[-1] in entity_words
     ):

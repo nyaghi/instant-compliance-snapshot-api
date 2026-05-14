@@ -57,7 +57,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.14.3"
+APP_VERSION = "2026.05.14.4"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA", "WI"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -104,6 +104,7 @@ FISCAL_YEAR_END_OVERRIDES = {
     "362883000": (3, 31),
     "237222333": (6, 30),
     "141707425": (3, 31),
+    "510165015": (5, 31),
 }
 
 
@@ -769,7 +770,7 @@ def public_status(result) -> str:
         return "Pending"
     if re.search(r"\bin\s+process\b", normalized, re.I):
         return "Pending"
-    if re.search(r"\b(withdrawn|retired|terminated|cancelled|canceled|voluntar(?:y|ily)\s+deactivat(?:ed|ion))\b", normalized, re.I):
+    if re.search(r"\b(withdrawn|retired|terminated|cancelled|canceled|voluntar(?:y|ily)\s+(?:deactivat(?:ed|ion)|surrender(?:ed)?))\b", normalized, re.I):
         return "Closed / Withdrawn / Canceled"
     if re.search(r"\bclosed\b", normalized, re.I):
         return "Closed / Withdrawn / Canceled"
@@ -1399,7 +1400,7 @@ def filing_context(result, body: str) -> dict:
     registry_fiscal_end = fiscal_year_end_from_body(body, state)
     profile_period = public_profile_latest_tax_period_for_ein(result.ein)
     profile_fiscal_end = profile_period[1] if profile_period else None
-    fiscal_end = result_fiscal_end or registry_fiscal_end or override_fiscal_end or profile_fiscal_end or fiscal_year_end_for_ein(result.ein)
+    fiscal_end = override_fiscal_end or result_fiscal_end or registry_fiscal_end or profile_fiscal_end or fiscal_year_end_for_ein(result.ein)
 
     if (
         state == "NJ"
@@ -1830,6 +1831,15 @@ def compatible_ein_alias_for_name(original_name: str, alias_name: str) -> bool:
         and original_words[-1] == alias_words[-1]
         and original_words[-1] in entity_words
     ):
+        return True
+
+    generic_words = {
+        "the", "and", "of", "for", "to", "in", "on", "at", "by", "inc", "incorporated",
+        "corp", "corporation", "llc", "ltd", "foundation", "fund", "charity", "charities",
+        "association", "society", "center", "centre", "institute", "organization",
+    }
+    shared_distinctive = (set(original_words) & set(alias_words)) - generic_words
+    if len(shared_distinctive) >= 2:
         return True
 
     return False
@@ -2631,6 +2641,15 @@ def search_wi(page, org):
             except Exception:
                 pass
 
+        if re.search(r"\bvoluntar(?:y|ily)\s+surrender(?:ed)?\b", detail_status, re.I):
+            result.status = "Closed / Withdrawn / Canceled"
+            result.raw_status_text = f"{detail_status}; License current through {format_date(best_match['expiration_date'])}"
+            result.source_note = "Wisconsin DFI credential detail page shows a voluntary surrender, which CharityClarity treats as Closed / Withdrawn / Canceled."
+            result.matched_registry_name = best_match["registry_name"]
+            result.matched_registry_identifier = best_match["license_number"]
+            result.success = True
+            return result
+
         result.status = status_from_calendar_date(best_match["expiration_date"])
         result.raw_status_text = (
             f"{detail_status}; License current through {format_date(best_match['expiration_date'])}"
@@ -3325,7 +3344,7 @@ def explicit_adverse_registry_status(result, body: str) -> str:
     status_evidence = " ".join([raw_fields, labeled_status_text])
     if result_explicitly_exempt(result):
         return ""
-    withdrawn_pattern = r"\b(withdrawn|retired|terminated|cancelled|canceled|voluntar(?:y|ily)\s+deactivat(?:ed|ion))\b"
+    withdrawn_pattern = r"\b(withdrawn|retired|terminated|cancelled|canceled|voluntar(?:y|ily)\s+(?:deactivat(?:ed|ion)|surrender(?:ed)?))\b"
     closed_pattern = r"\bclosed\b"
     inactive_pattern = r"\binactive\b"
     terminal_pattern = rf"(?:{withdrawn_pattern}|{closed_pattern}|{inactive_pattern})"
@@ -3675,7 +3694,7 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         latest_not_submitted_year = ca_years.get("latest_not_submitted_year")
         latest_not_submitted_status = ca_years.get("latest_not_submitted_status") or "Not Submitted"
         latest_submitted_year = ca_years.get("latest_submitted_year")
-        if latest_not_submitted_year:
+        if latest_not_submitted_year and (not latest_submitted_year or latest_not_submitted_year > latest_submitted_year):
             fiscal_end = context.get("fiscal_end") or fiscal_year_end_for_ein(result.ein)
             due_sentence = ""
             if fiscal_end:
@@ -3926,7 +3945,7 @@ def adjudicated_comment_for_status(result, body: str, status: str) -> str:
             ca_years = ca_annual_renewal_years_from_text(body)
             latest_not_submitted_year = ca_years.get("latest_not_submitted_year")
             latest_submitted_year = ca_years.get("latest_submitted_year")
-            if latest_not_submitted_year:
+            if latest_not_submitted_year and (not latest_submitted_year or latest_not_submitted_year > latest_submitted_year):
                 fiscal_end = context.get("fiscal_end") or fiscal_year_end_for_ein(result.ein)
                 due_sentence = ""
                 if fiscal_end:
@@ -4055,7 +4074,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                         checker.search_va,
                         max_variants=1,
                         reject_va_suspended_from_leading_the_drop=False,
-                        include_ein_aliases=False,
+                        include_ein_aliases=True,
                         include_name_segments=True,
                         include_compact_legal_suffixes=False,
                         include_leading_article_variants=True,
@@ -4202,13 +4221,13 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
         ein_key = re.sub(r"\D", "", result.get("ein") or "")
         current_name = (result.get("organization_name") or "").strip()
         matched_name = (result.get("matched_registry_name") or "").strip()
-        if ein_key and matched_name:
-            discovered_names.setdefault(ein_key, matched_name)
-        elif ein_key and current_name and current_name.lower() != "organization not identified":
+        if ein_key and current_name and current_name.lower() != "organization not identified":
             discovered_names.setdefault(ein_key, current_name)
+        elif ein_key and matched_name:
+            discovered_names.setdefault(ein_key, matched_name)
 
     if discovered_names:
-        name_only_states = {"ME", "ND", "SC", "VA"}
+        name_only_states = {"ME", "ND", "SC", "VA", "WI"}
         for index, result in enumerate(results):
             ein_key = re.sub(r"\D", "", result.get("ein") or "")
             discovered_name = discovered_names.get(ein_key, "")
