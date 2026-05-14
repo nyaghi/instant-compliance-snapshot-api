@@ -57,8 +57,8 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.14.2-staging-namefix"
-SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
+APP_VERSION = "2026.05.14.2"
+SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA", "WI"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
 
@@ -83,6 +83,7 @@ NAME_SEARCH_PREFLIGHT_URLS = {
     "SC": "https://search.scsos.com/charities",
     "VA": "https://cos.vdacs.virginia.gov/cgi-bin/char_search.cgi",
 }
+WI_SEARCH_URL = "https://apps.dfi.wi.gov/ice/berg/Registration/OrganizationCredentialSearch.aspx"
 MAX_EXTERNAL_EXEMPT_ORGS = 3
 DOMAIN_LIMIT_DAYS = 7
 ADMIN_PASSCODE = "8977"
@@ -2494,6 +2495,152 @@ def search_hi_precise(page, org):
         return result
 
 
+def search_wi(page, org):
+    result = checker.StateResult(org.organization_name, org.ein, "WI", checker.STATUS_UNKNOWN, WI_SEARCH_URL)
+    searched_names = organization_name_variants(
+        org.organization_name,
+        org.ein,
+        include_ein_aliases=False,
+        include_name_segments=True,
+        include_compact_legal_suffixes=True,
+        include_leading_article_variants=True,
+        include_broad_query_prefixes=False,
+    ) or [org.organization_name]
+
+    best_match = None
+    last_body = ""
+    target_names = organization_match_target_variants(org.organization_name, org.ein)
+    try:
+        for search_name in searched_names[:6]:
+            page.goto(WI_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
+            try:
+                checker.safe_wait_for_network_idle(page, timeout=3000)
+            except Exception:
+                pass
+            try:
+                page.locator("#ctl00_cphMainContent_ddlProfesionalList").select_option(value="800")
+            except Exception:
+                page.locator("select").first.select_option(label="Charitable Organization (800)")
+
+            input_box = checker.find_visible_input(page, [
+                "#ctl00_cphMainContent_txtFirmName",
+                'input[name*="FirmName" i]',
+                'input[id*="FirmName" i]',
+                'input[type="text"]',
+            ])
+            if not input_box:
+                result.error = "WI: Could not find Firm Name input"
+                return result
+            input_box.fill("")
+            input_box.fill(search_name)
+
+            try:
+                page.locator("#ctl00_cphMainContent_btnSearch").click(timeout=5000)
+            except Exception:
+                page.get_by_role("button", name=re.compile("search", re.I)).click(timeout=5000)
+            page.wait_for_load_state("domcontentloaded", timeout=30000)
+            try:
+                checker.safe_wait_for_network_idle(page, timeout=3000)
+            except Exception:
+                pass
+            last_body = registry_page_body(page)
+
+            rows = page.locator("#ctl00_cphMainContent_OrgCredentialSearch_gvCredentialSearchResults tr")
+            for i in range(1, min(rows.count(), 100)):
+                cells = rows.nth(i).locator("th,td")
+                if cells.count() < 6:
+                    continue
+                values = [
+                    re.sub(r"\s+", " ", cells.nth(index).inner_text(timeout=1500)).strip()
+                    for index in range(6)
+                ]
+                license_number, profession, registry_name, location, granted_date, expiration_text = values
+                if not re.search(r"Charitable\s+Organization", profession, re.I):
+                    continue
+                expiration_date = parse_due_date(expiration_text)
+                if not expiration_date:
+                    continue
+                score = checker.name_match_priority_for_targets(registry_name, target_names)
+                if score < 4:
+                    continue
+                href = ""
+                try:
+                    href = rows.nth(i).locator("a").first.get_attribute("href") or ""
+                except Exception:
+                    href = ""
+                candidate = {
+                    "score": score,
+                    "expiration_date": expiration_date,
+                    "license_number": license_number,
+                    "registry_name": registry_name,
+                    "location": location,
+                    "granted_date": granted_date,
+                    "detail_href": href,
+                }
+                if (
+                    not best_match
+                    or candidate["score"] > best_match["score"]
+                    or (
+                        candidate["score"] == best_match["score"]
+                        and candidate["expiration_date"] > best_match["expiration_date"]
+                    )
+                ):
+                    best_match = candidate
+            if best_match and best_match["score"] >= 5:
+                break
+
+        if not best_match:
+            result.raw_status_text = "No matching Wisconsin charitable organization credential"
+            result.status = checker.STATUS_NOT_REGISTERED
+            result.source_note = "Wisconsin DFI returned no matching Charitable Organization credential for the organization name searched."
+            result.success = True
+            return result
+
+        detail_status = ""
+        if best_match.get("detail_href"):
+            try:
+                page.goto(urljoin(WI_SEARCH_URL, best_match["detail_href"]), wait_until="domcontentloaded", timeout=30000)
+                try:
+                    checker.safe_wait_for_network_idle(page, timeout=3000)
+                except Exception:
+                    pass
+                detail_text = registry_page_body(page)
+                detail_status_match = re.search(r"\bStatus\s+(License\s+is\s+(?:not\s+)?current\s*\([^)]+\))", detail_text, re.I)
+                if detail_status_match:
+                    detail_status = re.sub(r"\s+", " ", detail_status_match.group(1)).strip()
+                    if re.search(r"\brevoked\b", detail_status, re.I):
+                        result.status = "Revoked"
+                        result.raw_status_text = f"{detail_status}; License current through {format_date(best_match['expiration_date'])}"
+                        result.source_note = "Wisconsin DFI credential detail page shows the license is not current (Revoked), which CharityClarity treats as an adverse status."
+                        result.matched_registry_name = best_match["registry_name"]
+                        result.matched_registry_identifier = best_match["license_number"]
+                        result.success = True
+                        return result
+            except Exception:
+                pass
+
+        result.status = status_from_calendar_date(best_match["expiration_date"])
+        result.raw_status_text = (
+            f"{detail_status}; License current through {format_date(best_match['expiration_date'])}"
+            if detail_status
+            else f"Expiration Date {format_date(best_match['expiration_date'])}"
+        )
+        result.source_note = (
+            "Wisconsin DFI public registry shows a Charitable Organization credential "
+            f"expiration date of {format_date(best_match['expiration_date'])}."
+        )
+        result.matched_registry_name = best_match["registry_name"]
+        result.matched_registry_identifier = best_match["license_number"]
+        result.success = True
+        return result
+    except Exception as e:
+        result.error = f"WI error: {e}"
+        result.source_note = "Wisconsin DFI public registry lookup could not be completed."
+        if last_body:
+            result.raw_status_text = "Wisconsin lookup ended after reaching the public registry"
+        return result
+
+
 def enrich_me_result_from_body(result, body: str) -> None:
     existing_status = " ".join([result.status or "", result.raw_status_text or ""])
     if re.search(r"\bACTIVE\b", existing_status, re.I) and not re.search(r"\b(FAILED\s+TO\s+RENEW|EXPIRED|REVOKED|SUSPENDED|INACTIVE)\b", existing_status, re.I):
@@ -3631,7 +3778,7 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
             descriptor = "registration expiration date"
         elif state == "VA":
             descriptor = "registration extended-until date" if re.search(r"Registration\s+Extended\s+Until", result.source_note or "", re.I) else "registration expiration date"
-        elif state in {"CO", "PA"}:
+        elif state in {"CO", "PA", "WI"}:
             descriptor = "expiration date"
         elif re.search(r"due date|next report", result.source_note or "", re.I):
             descriptor = "due date"
@@ -3921,6 +4068,9 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 result = search_hi_precise(page, org)
                 if public_status(result) != "Not Registered":
                     body = hi_detail_body(page)
+            elif state == "WI":
+                result = search_wi(page, org)
+                body = registry_page_body(page)
             elif state == "ME":
                 reachable, _, preflight_result = preflight_name_search_registry(org, "ME")
                 if not reachable:
