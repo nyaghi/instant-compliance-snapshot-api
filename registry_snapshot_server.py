@@ -57,7 +57,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.14.9"
+APP_VERSION = "2026.05.14.10"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA", "WI"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -80,26 +80,6 @@ EIN_NAME_ALIASES = {
         "Operation Rapid Response Inc",
         "Rapid Response Charities Inc",
     ],
-}
-WI_KNOWN_CREDENTIALS = {
-    "751835253": {
-        "registry_name": "URBAN ALTERNATIVE",
-        "license_number": "4196-800",
-        "expiration_date": date(2026, 7, 31),
-        "detail_status": "License is current (Active)",
-    },
-    "815466677": {
-        "registry_name": "KNIGHTS OF COLUMBUS CHARITABLE FUND INC",
-        "license_number": "24497-800",
-        "expiration_date": date(2026, 7, 31),
-        "detail_status": "License is current (Active)",
-    },
-    "844465500": {
-        "registry_name": "OPERATION RAPID RESPONSE INC",
-        "license_number": "20241-800",
-        "expiration_date": date(2023, 7, 31),
-        "detail_status": "License is not current (Revoked)",
-    },
 }
 REQUESTED_PARALLEL_LOOKUPS = max(1, int(os.environ.get("CE_MAX_PARALLEL_LOOKUPS", "1")))
 ALLOW_PARALLEL_BROWSER_LOOKUPS = os.environ.get("CE_ALLOW_PARALLEL_BROWSER_LOOKUPS", "1").strip().lower() in {"1", "true", "yes"}
@@ -2703,22 +2683,7 @@ def search_wi(page, org):
     last_body = ""
     target_names = organization_match_target_variants(org.organization_name, org.ein)
     try:
-        ein_digits = re.sub(r"\D", "", org.ein or "")
-        known_credential = WI_KNOWN_CREDENTIALS.get(ein_digits)
-        if known_credential and checker.name_match_priority_for_targets(known_credential["registry_name"], target_names) >= 4:
-            best_match = {
-                "score": 5,
-                "expiration_date": known_credential["expiration_date"],
-                "license_number": known_credential["license_number"],
-                "registry_name": known_credential["registry_name"],
-                "location": "",
-                "granted_date": "",
-                "detail_href": "",
-                "detail_status": known_credential["detail_status"],
-            }
-
-        if not best_match:
-            best_match = wi_http_search_best_match(searched_names[:16], target_names)
+        best_match = wi_http_search_best_match(searched_names[:16], target_names)
 
         if not best_match:
             for search_name in searched_names[:16]:
