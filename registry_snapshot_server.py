@@ -57,7 +57,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.14.12"
+APP_VERSION = "2026.05.14.13"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA", "WI"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -85,6 +85,7 @@ NAME_SEARCH_PREFLIGHT_URLS = {
 }
 WI_SEARCH_URL = "https://apps.dfi.wi.gov/ice/berg/Registration/OrganizationCredentialSearch.aspx"
 WI_RESULTS_URL = "https://apps.dfi.wi.gov/ice/berg/Registration/OrgCredentialSearchResults.aspx"
+WI_READER_BASE_URL = os.environ.get("CE_WI_READER_BASE_URL", "https://r.jina.ai/http://")
 MAX_EXTERNAL_EXEMPT_ORGS = 3
 DOMAIN_LIMIT_DAYS = 7
 ADMIN_PASSCODE = "8977"
@@ -2572,6 +2573,35 @@ def wi_http_detail_status(detail_href: str) -> str:
         return ""
 
 
+def wi_reader_url(source_url: str) -> str:
+    return f"{WI_READER_BASE_URL}{source_url}"
+
+
+def wi_reader_text(source_url: str) -> str:
+    try:
+        request = urllib.request.Request(wi_reader_url(source_url), headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(request, timeout=45) as response:
+            return response.read().decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def wi_reader_detail_status(detail_href: str) -> str:
+    if not detail_href:
+        return ""
+    detail_url = urljoin(WI_SEARCH_URL, html.unescape(detail_href))
+    detail_text = wi_reader_text(detail_url)
+    status_match = re.search(r"\bStatus\s+(License\s+is\s+(?:not\s+)?current\s*\([^)]+\))", detail_text, re.I)
+    return re.sub(r"\s+", " ", status_match.group(1)).strip() if status_match else ""
+
+
+def wi_markdown_link_parts(value: str) -> tuple[str, str]:
+    match = re.search(r"\[([^\]]+)\]\(([^)]+)\)", value or "")
+    if match:
+        return html.unescape(match.group(1)).strip(), html.unescape(match.group(2)).strip()
+    return html.unescape(value or "").strip(), ""
+
+
 def wi_status_from_detail_status(detail_status: str) -> str:
     text = detail_status or ""
     if re.search(r"\bvoluntar(?:y|ily)\s+surrender(?:ed)?\b", text, re.I):
@@ -2657,6 +2687,35 @@ def wi_candidate_from_row_html(row_html: str, target_names: list[str]) -> dict |
     }
 
 
+def wi_candidate_from_markdown_row(row_text: str, target_names: list[str]) -> dict | None:
+    cells = [cell.strip() for cell in (row_text or "").strip().strip("|").split("|")]
+    if len(cells) < 6:
+        return None
+    license_number, profession, registry_cell, location, granted_date, expiration_text = cells[:6]
+    if not re.search(r"Charitable\s+Organization", profession, re.I):
+        return None
+    if re.match(r"^-+$", license_number) or re.match(r"license#?$", license_number, re.I):
+        return None
+    registry_name, detail_href = wi_markdown_link_parts(registry_cell)
+    score = checker.name_match_priority_for_targets(registry_name, target_names)
+    if score < 4:
+        return None
+    expiration_date = parse_due_date(expiration_text)
+    detail_status = wi_reader_detail_status(detail_href)
+    if not expiration_date and not wi_status_from_detail_status(detail_status):
+        return None
+    return {
+        "score": score,
+        "expiration_date": expiration_date,
+        "license_number": license_number,
+        "registry_name": registry_name,
+        "location": location,
+        "granted_date": granted_date,
+        "detail_href": detail_href,
+        "detail_status": detail_status,
+    }
+
+
 def wi_better_candidate(candidate: dict, best_match: dict | None) -> bool:
     if not best_match:
         return True
@@ -2684,6 +2743,27 @@ def wi_best_match_from_html(result_html: str, target_names: list[str], best_matc
         candidate = wi_candidate_from_row_html(row_html, target_names)
         if candidate and wi_better_candidate(candidate, best_match):
             best_match = candidate
+    return best_match
+
+
+def wi_best_match_from_markdown(result_text: str, target_names: list[str], best_match: dict | None = None) -> dict | None:
+    for line in (result_text or "").splitlines():
+        if not line.strip().startswith("|"):
+            continue
+        candidate = wi_candidate_from_markdown_row(line, target_names)
+        if candidate and wi_better_candidate(candidate, best_match):
+            best_match = candidate
+    return best_match
+
+
+def wi_reader_search_best_match(search_names: list[str], target_names: list[str]) -> dict | None:
+    best_match = None
+    for search_name in search_names:
+        source_url = f"{WI_RESULTS_URL}?{urlencode({'CredentialType': '800', 'FirmName': search_name, 'LicenseNumber': ''})}"
+        result_text = wi_reader_text(source_url)
+        best_match = wi_best_match_from_markdown(result_text, target_names, best_match)
+        if best_match and best_match["score"] >= 5:
+            break
     return best_match
 
 
@@ -2746,6 +2826,8 @@ def search_wi(page, org):
     target_names = organization_match_target_variants(org.organization_name, org.ein)
     try:
         best_match = wi_http_search_best_match(searched_names[:12], target_names)
+        if not best_match:
+            best_match = wi_reader_search_best_match(searched_names[:12], target_names)
 
         if not best_match:
             for search_name in searched_names[:12]:
@@ -2830,6 +2912,8 @@ def search_wi(page, org):
 
         if not best_match:
             best_match = wi_http_search_best_match(searched_names[:12], target_names)
+        if not best_match:
+            best_match = wi_reader_search_best_match(searched_names[:12], target_names)
 
         if not best_match:
             if re.search(r"\b403\b|forbidden|access\s+is\s+denied", last_body or "", re.I):
