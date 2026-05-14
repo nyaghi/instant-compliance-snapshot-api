@@ -1709,7 +1709,7 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
             lead_segment = ""
         if len(trailing_segment.split()) < 2:
             trailing_segment = ""
-    without_leading_the = re.sub(r"^the\s+", "", cleaned, flags=re.I).strip()
+    without_leading_article = re.sub(r"^(?:the|a|an)\s+", "", cleaned, flags=re.I).strip()
     without_trailing_the = ""
     trailing_the_query = ""
     if re.search(r"(?:,\s*the|\s+the)\s*$", name or "", re.I) and not re.match(r"^the\s+", cleaned, re.I):
@@ -1720,6 +1720,14 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
     without_leading_acronym = re.sub(r"^[A-Z]{2,8}\s*[-/\\]\s*", "", cleaned).strip()
     if without_leading_acronym == cleaned:
         without_leading_acronym = ""
+    hyphen_as_space = re.sub(r"[-\u2010-\u2015]+", " ", cleaned).strip()
+    hyphen_as_space = re.sub(r"\s+", " ", hyphen_as_space)
+    if hyphen_as_space == cleaned:
+        hyphen_as_space = ""
+    slash_as_space = re.sub(r"\s*(?:/|\\)\s*", " ", cleaned).strip()
+    slash_as_space = re.sub(r"\s+", " ", slash_as_space)
+    if slash_as_space == cleaned:
+        slash_as_space = ""
     possessive_removed = re.sub(r"\b([A-Za-z]+)'s\b", r"\1s", cleaned, flags=re.I).strip()
     if possessive_removed == cleaned:
         possessive_removed = ""
@@ -1747,6 +1755,8 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
         cleaned,
         flags=re.I,
     ).strip()
+    no_punct_full = re.sub(r"[^\w\s']", " ", cleaned).strip()
+    no_punct_full = re.sub(r"\s+", " ", no_punct_full)
     no_punct = re.sub(r"[^\w\s']", " ", no_suffix or cleaned).strip()
     no_punct = re.sub(r"\s+", " ", no_punct)
     words = no_punct.split()
@@ -1762,23 +1772,36 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
         childrens_prefix = re.sub(r"\b([A-Za-z]+)'s\b", r"\1s", childrens_match.group(1), flags=re.I)
         childrens_hospital_foundation = f"{childrens_prefix} Hospital Foundation"
     with_leading_the = "" if re.match(r"^the\s+", cleaned, re.I) else f"The {cleaned}"
+    suffix_base = no_suffix or cleaned
+    legal_suffix_variants = []
+    if suffix_base and not re.search(r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\s*$", suffix_base, re.I):
+        legal_suffix_variants = [
+            f"{suffix_base} Inc",
+            f"{suffix_base} Inc.",
+            f"{suffix_base}, Inc",
+            f"{suffix_base}, Inc.",
+        ]
     variants = [
-        trailing_segment,
-        without_leading_acronym,
-        lead_segment,
+        cleaned,
+        no_suffix,
+        no_punct_full,
+        no_punct,
+        hyphen_as_space,
+        slash_as_space,
+        *legal_suffix_variants,
         possessive_removed,
-        possessive_root_prefix,
-        hyphen_tail_prefix,
         saint_expanded,
         saint_abbreviated,
-        no_suffix,
-        cleaned,
-        prefix,
-        no_punct,
         ms_expanded,
         childrens_hospital_foundation,
         with_leading_the,
-        without_leading_the if without_leading_the.lower() != cleaned.lower() else "",
+        without_leading_article if without_leading_article.lower() != cleaned.lower() else "",
+        trailing_segment,
+        lead_segment,
+        without_leading_acronym,
+        possessive_root_prefix,
+        hyphen_tail_prefix,
+        prefix,
         trailing_the_query,
         without_trailing_the,
         short_distinctive_prefix,

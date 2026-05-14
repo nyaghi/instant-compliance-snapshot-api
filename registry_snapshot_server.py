@@ -57,7 +57,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.11.7"
+APP_VERSION = "2026.05.14.1-staging-namefix"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1650,12 +1650,14 @@ def organization_name_variants(
         trailing_article_match = re.match(r"^(.*?),\s*the\s*$", base, flags=re.I)
         if trailing_article_match:
             leading_article_from_trailing = f"The {trailing_article_match.group(1).strip()}"
-        without_leading_the = re.sub(r"^the\s+", "", base, flags=re.I).strip()
+        without_leading_article = re.sub(r"^(?:the|a|an)\s+", "", base, flags=re.I).strip()
         without_comma_suffix = re.sub(r",\s*(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?)\s*$", "", base, flags=re.I).strip()
         without_suffix = re.sub(r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?)\s*$", "", without_comma_suffix, flags=re.I).strip()
         no_comma = re.sub(r",\s*", " ", base).strip()
         no_punctuation = re.sub(r"[^\w\s]", " ", base).strip()
         no_punctuation = re.sub(r"\s+", " ", no_punctuation)
+        slash_as_space = re.sub(r"\s*(?:/|\\)\s*", " ", base).strip()
+        slash_as_space = re.sub(r"\s+", " ", slash_as_space)
         broad_query_prefixes = []
         prefix_source = re.sub(r"^the\s+", "", no_punctuation, flags=re.I).strip()
         prefix_words = prefix_source.split()
@@ -1697,14 +1699,14 @@ def organization_name_variants(
         and_no_punctuation = re.sub(r"[^\w\s]", " ", ampersand_as_and).strip()
         and_no_punctuation = re.sub(r"\s+", " ", and_no_punctuation)
         and_without_suffix = re.sub(
-            r"\b(inc\.?|incorporated|corp\.?|corporation|foundation|fund|llc|ltd\.?)\b",
+            r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?)\b",
             " ",
             and_no_punctuation,
             flags=re.I,
         ).strip()
         and_without_suffix = re.sub(r"\s+", " ", and_without_suffix)
         compact_legal_suffixes = re.sub(
-            r"\b(the|inc\.?|incorporated|corp\.?|corporation|foundation|fund|llc|ltd\.?)\b",
+            r"\b(the|inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?)\b",
             " ",
             no_punctuation,
             flags=re.I,
@@ -1724,20 +1726,27 @@ def organization_name_variants(
             # registries require it to find the organization.
             legal_suffix_additions.extend([
                 f"{base} Inc",
+                f"{base} Inc.",
+                f"{base}, Inc",
                 f"{base}, Inc.",
                 f"{hyphen_as_space} Inc" if hyphen_as_space and hyphen_as_space.lower() != base.lower() else "",
+                f"{hyphen_as_space} Inc." if hyphen_as_space and hyphen_as_space.lower() != base.lower() else "",
+                f"{hyphen_as_space}, Inc" if hyphen_as_space and hyphen_as_space.lower() != base.lower() else "",
                 f"{hyphen_as_space}, Inc." if hyphen_as_space and hyphen_as_space.lower() != base.lower() else "",
                 f"{title_hyphen_base} Inc" if title_hyphen_base else "",
+                f"{title_hyphen_base} Inc." if title_hyphen_base else "",
+                f"{title_hyphen_base}, Inc" if title_hyphen_base else "",
                 f"{title_hyphen_base}, Inc." if title_hyphen_base else "",
             ])
         broad_variants = [and_without_suffix, compact_legal_suffixes] if include_compact_legal_suffixes else []
         with_leading_the = "" if re.match(r"^the\s+", base, re.I) else f"The {base}"
-        article_variants = [with_leading_the, without_leading_the] if include_leading_article_variants else []
+        article_variants = [with_leading_the, without_leading_article] if include_leading_article_variants else []
         for variant in [
             without_comma_suffix,
             without_suffix,
             no_comma,
             no_punctuation,
+            slash_as_space,
             institute_plural,
             institute_singular,
             hyphen_as_space,
@@ -3901,11 +3910,11 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                         page,
                         org,
                         checker.search_sc,
-                        max_variants=10,
+                        max_variants=16,
                         max_elapsed_seconds=SC_NAME_VARIANT_MAX_SECONDS,
                         include_ein_aliases=False,
                         include_name_segments=True,
-                        include_compact_legal_suffixes=False,
+                        include_compact_legal_suffixes=True,
                         include_leading_article_variants=True,
                     )
             elif state == "HI":
