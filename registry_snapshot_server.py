@@ -1423,6 +1423,18 @@ def filing_context(result, body: str) -> dict:
     due_options = filing_due_date_options(result.state, next_report_year, fiscal_end)
     due_date = due_options["effective_due"]
     rule_note = due_options["rule_note"]
+    if due_date is None:
+        return {
+            "represented_year": latest_year,
+            "fiscal_end": fiscal_end,
+            "next_report_year": next_report_year,
+            "due_date": None,
+            "base_due_date": due_options.get("base_due"),
+            "extended_due_date": due_options.get("extended_due"),
+            "uses_extension_assumption": due_options.get("uses_extension_assumption", False),
+            "uses_extension_scenario": due_options.get("uses_extension_scenario", False),
+            "comment": "Annual filing due date could not be determined from the available CharityClarity check."
+        }
     comment = (
         f"{next_report_year} annual filing is due {format_date(due_date)} "
         f"based on a {fiscal_end[0]}/{fiscal_end[1]} fiscal year end; {rule_note}."
