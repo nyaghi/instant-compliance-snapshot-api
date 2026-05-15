@@ -1570,6 +1570,46 @@ def name_match_priority(candidate_name: str, target_name: str) -> int:
         return 5
     candidate_words = candidate.split()
     target_words = target.split()
+    if len(target) <= 3 and len(target_words) == 1:
+        # Very short organization names/acronyms must match as their own word.
+        # Substring matches made iDE accept IDEALWARE, 864Pride, and
+        # AlumniFidelity in name-only registries.
+        return -1
+    try:
+        target_greater_index = target_words.index("greater")
+    except ValueError:
+        target_greater_index = -1
+    try:
+        candidate_greater_index = candidate_words.index("greater")
+    except ValueError:
+        candidate_greater_index = -1
+    if (
+        target_greater_index >= 1
+        and candidate_greater_index >= 1
+        and target_words[:target_greater_index + 1] == candidate_words[:candidate_greater_index + 1]
+    ):
+        target_place = target_words[target_greater_index + 1:]
+        candidate_place = candidate_words[candidate_greater_index + 1:]
+        if target_place and candidate_place and target_place[0] != candidate_place[0]:
+            return -1
+    if target_greater_index >= 1 and candidate_greater_index < 0:
+        target_prefix = target_words[:target_greater_index]
+        if (
+            target_prefix
+            and candidate_words[:len(target_prefix)] == target_prefix
+            and len(candidate_words) > len(target_prefix)
+            and candidate_words[len(target_prefix)] != "greater"
+        ):
+            return -1
+    if (
+        len(target_words) >= 4
+        and len(candidate_words) >= 4
+        and target_words[0] in {"center", "centre", "institute", "foundation", "association", "society"}
+        and target_words[1] in {"for", "of"}
+        and candidate_words[:3] == target_words[:3]
+        and candidate_words[3] != target_words[3]
+    ):
+        return -1
     if candidate.startswith(target) or target.startswith(candidate):
         shorter_words = candidate_words if len(candidate_words) <= len(target_words) else target_words
         if len(shorter_words) >= 4:
@@ -1590,12 +1630,12 @@ def name_match_priority(candidate_name: str, target_name: str) -> int:
     target_without_entity = remove_terminal_entity_word(target)
     if candidate_without_entity and target_without_entity and candidate_without_entity == target_without_entity:
         return 4
-    if len(target_words) >= 3 and " ".join(target_words[:3]) in candidate:
+    connector_words = {"of", "for", "to", "in", "on", "at", "by"}
+    if len(target_words) >= 3 and candidate_words[:3] == target_words[:3]:
         # Do not accept a row solely because it shares a weak prefix ending in
         # a connector ("Allen Institute for ..." matched "Allen Institute for
         # Brain Science"). Require the prefix itself to end on a substantive
         # word, or require another distinctive word beyond the prefix.
-        connector_words = {"of", "for", "to", "in", "on", "at", "by"}
         if target_words[2] not in connector_words:
             return 3
         candidate_later = set(candidate_words[3:])
@@ -1607,6 +1647,7 @@ def name_match_priority(candidate_name: str, target_name: str) -> int:
         len(target_words) >= 3
         and len(candidate_words) >= 3
         and candidate_words[:2] == target_words[:2]
+        and target_words[1] not in connector_words
         and candidate_words[-1] == target_words[-1]
         and target_words[-1] in entity_words
     ):
@@ -1698,6 +1739,9 @@ def name_match_priority_for_targets(candidate_name: str, target_names) -> int:
 def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
     cleaned = re.sub(r"\s+", " ", name or "").strip()
     cleaned = re.sub(r"\s*,\s*", " ", cleaned)
+    normalized_cleaned = normalize_name(cleaned)
+    if len(normalized_cleaned) <= 3 and len(normalized_cleaned.split()) == 1:
+        return [cleaned]
     lead_segment = ""
     trailing_segment = ""
     if re.search(r"/|\\", cleaned):
@@ -1709,9 +1753,16 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
             lead_segment = ""
         if len(trailing_segment.split()) < 2:
             trailing_segment = ""
-    without_leading_the = re.sub(r"^the\s+", "", cleaned, flags=re.I).strip()
+    without_leading_article = re.sub(r"^(?:the|a|an)\s+", "", cleaned, flags=re.I).strip()
     without_trailing_the = ""
     trailing_the_query = ""
+    us_prefixed_variants = []
+    if re.match(r"^us\s+", cleaned, re.I):
+        us_prefixed_variants.append(re.sub(r"^us\s+", "U.S. ", cleaned, flags=re.I))
+        us_prefixed_variants.append(re.sub(r"^us\s+", "United States ", cleaned, flags=re.I))
+    elif re.match(r"^u\.?\s*s\.?\s+", cleaned, re.I):
+        us_prefixed_variants.append(re.sub(r"^u\.?\s*s\.?\s+", "US ", cleaned, flags=re.I))
+        us_prefixed_variants.append(re.sub(r"^u\.?\s*s\.?\s+", "United States ", cleaned, flags=re.I))
     if re.search(r"(?:,\s*the|\s+the)\s*$", name or "", re.I) and not re.match(r"^the\s+", cleaned, re.I):
         without_trailing_the = re.sub(r"\s+\bthe\b\.?\s*$", "", cleaned, flags=re.I).strip()
         trailing_the_words = re.sub(r"[^\w\s']", " ", without_trailing_the).strip()
@@ -1720,6 +1771,14 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
     without_leading_acronym = re.sub(r"^[A-Z]{2,8}\s*[-/\\]\s*", "", cleaned).strip()
     if without_leading_acronym == cleaned:
         without_leading_acronym = ""
+    hyphen_as_space = re.sub(r"[-\u2010-\u2015]+", " ", cleaned).strip()
+    hyphen_as_space = re.sub(r"\s+", " ", hyphen_as_space)
+    if hyphen_as_space == cleaned:
+        hyphen_as_space = ""
+    slash_as_space = re.sub(r"\s*(?:/|\\)\s*", " ", cleaned).strip()
+    slash_as_space = re.sub(r"\s+", " ", slash_as_space)
+    if slash_as_space == cleaned:
+        slash_as_space = ""
     possessive_removed = re.sub(r"\b([A-Za-z]+)'s\b", r"\1s", cleaned, flags=re.I).strip()
     if possessive_removed == cleaned:
         possessive_removed = ""
@@ -1747,8 +1806,25 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
         cleaned,
         flags=re.I,
     ).strip()
+    no_punct_full = re.sub(r"[^\w\s']", " ", cleaned).strip()
+    no_punct_full = re.sub(r"\s+", " ", no_punct_full)
+    us_word_variants = []
+    for us_source in [cleaned, without_leading_article]:
+        if re.search(r"\bu\.?\s*s\.?(?=\W|$)", us_source or "", re.I):
+            compact = re.sub(r"\bu\.?\s*s\.?(?=\W|$)", "US", us_source, flags=re.I).strip()
+            expanded = re.sub(r"\bu\.?\s*s\.?(?=\W|$)", "United States", us_source, flags=re.I).strip()
+            us_word_variants.extend([
+                compact,
+                expanded,
+                re.sub(r"^(?:the|a|an)\s+", "", compact, flags=re.I).strip(),
+                re.sub(r"^(?:the|a|an)\s+", "", expanded, flags=re.I).strip(),
+            ])
     no_punct = re.sub(r"[^\w\s']", " ", no_suffix or cleaned).strip()
     no_punct = re.sub(r"\s+", " ", no_punct)
+    display_source = re.sub(r"[^\w\s]", " ", cleaned).strip()
+    display_source = re.sub(r"\s+", " ", display_source)
+    display_words = [word for word in display_source.split() if word.lower() != "s"]
+    display_short_prefix = " ".join(display_words[:2]) if len(display_words) >= 2 else ""
     words = no_punct.split()
     prefix = " ".join(words[:max_words]) if words else no_punct
     normalized_words = normalize_name(cleaned).split()
@@ -1762,23 +1838,39 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
         childrens_prefix = re.sub(r"\b([A-Za-z]+)'s\b", r"\1s", childrens_match.group(1), flags=re.I)
         childrens_hospital_foundation = f"{childrens_prefix} Hospital Foundation"
     with_leading_the = "" if re.match(r"^the\s+", cleaned, re.I) else f"The {cleaned}"
+    suffix_base = no_suffix or cleaned
+    legal_suffix_variants = []
+    if suffix_base and not re.search(r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\s*$", suffix_base, re.I):
+        legal_suffix_variants = [
+            f"{suffix_base} Inc",
+            f"{suffix_base} Inc.",
+            f"{suffix_base}, Inc",
+            f"{suffix_base}, Inc.",
+        ]
     variants = [
-        trailing_segment,
-        without_leading_acronym,
-        lead_segment,
         possessive_removed,
-        possessive_root_prefix,
-        hyphen_tail_prefix,
+        display_short_prefix,
+        cleaned,
+        *us_prefixed_variants,
+        *us_word_variants,
+        childrens_hospital_foundation,
         saint_expanded,
         saint_abbreviated,
         no_suffix,
-        cleaned,
-        prefix,
+        hyphen_as_space,
+        no_punct_full,
         no_punct,
+        slash_as_space,
+        *legal_suffix_variants,
         ms_expanded,
-        childrens_hospital_foundation,
         with_leading_the,
-        without_leading_the if without_leading_the.lower() != cleaned.lower() else "",
+        without_leading_article if without_leading_article.lower() != cleaned.lower() else "",
+        trailing_segment,
+        lead_segment,
+        without_leading_acronym,
+        possessive_root_prefix,
+        hyphen_tail_prefix,
+        prefix,
         trailing_the_query,
         without_trailing_the,
         short_distinctive_prefix,
