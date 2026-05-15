@@ -57,7 +57,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.15.3"
+APP_VERSION = "2026.05.15.4"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA", "WI"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1700,6 +1700,16 @@ def organization_name_variants(
         no_comma = re.sub(r",\s*", " ", base).strip()
         no_punctuation = re.sub(r"[^\w\s]", " ", base).strip()
         no_punctuation = re.sub(r"\s+", " ", no_punctuation)
+        us_word_variants = []
+        for us_source in [base, without_leading_article]:
+            if re.search(r"\bu\.?\s*s\.?(?=\W|$)", us_source or "", re.I):
+                compact = re.sub(r"\bu\.?\s*s\.?(?=\W|$)", "US", us_source, flags=re.I).strip()
+                expanded = re.sub(r"\bu\.?\s*s\.?(?=\W|$)", "United States", us_source, flags=re.I).strip()
+                us_word_variants.extend([compact, expanded])
+                us_word_variants.extend([
+                    re.sub(r"^(?:the|a|an)\s+", "", compact, flags=re.I).strip(),
+                    re.sub(r"^(?:the|a|an)\s+", "", expanded, flags=re.I).strip(),
+                ])
         slash_as_space = re.sub(r"\s*(?:/|\\)\s*", " ", base).strip()
         slash_as_space = re.sub(r"\s+", " ", slash_as_space)
         broad_query_prefixes = []
@@ -1789,6 +1799,7 @@ def organization_name_variants(
             without_comma_suffix,
             without_suffix,
             no_comma,
+            *us_word_variants,
             no_punctuation,
             slash_as_space,
             institute_plural,

@@ -1808,6 +1808,17 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
     ).strip()
     no_punct_full = re.sub(r"[^\w\s']", " ", cleaned).strip()
     no_punct_full = re.sub(r"\s+", " ", no_punct_full)
+    us_word_variants = []
+    for us_source in [cleaned, without_leading_article]:
+        if re.search(r"\bu\.?\s*s\.?(?=\W|$)", us_source or "", re.I):
+            compact = re.sub(r"\bu\.?\s*s\.?(?=\W|$)", "US", us_source, flags=re.I).strip()
+            expanded = re.sub(r"\bu\.?\s*s\.?(?=\W|$)", "United States", us_source, flags=re.I).strip()
+            us_word_variants.extend([
+                compact,
+                expanded,
+                re.sub(r"^(?:the|a|an)\s+", "", compact, flags=re.I).strip(),
+                re.sub(r"^(?:the|a|an)\s+", "", expanded, flags=re.I).strip(),
+            ])
     no_punct = re.sub(r"[^\w\s']", " ", no_suffix or cleaned).strip()
     no_punct = re.sub(r"\s+", " ", no_punct)
     display_source = re.sub(r"[^\w\s]", " ", cleaned).strip()
@@ -1841,13 +1852,14 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
         display_short_prefix,
         cleaned,
         *us_prefixed_variants,
+        *us_word_variants,
         childrens_hospital_foundation,
         saint_expanded,
         saint_abbreviated,
         no_suffix,
+        hyphen_as_space,
         no_punct_full,
         no_punct,
-        hyphen_as_space,
         slash_as_space,
         *legal_suffix_variants,
         ms_expanded,
