@@ -1827,6 +1827,13 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
     display_short_prefix = " ".join(display_words[:2]) if len(display_words) >= 2 else ""
     words = no_punct.split()
     prefix = " ".join(words[:max_words]) if words else no_punct
+    hyphenated_word_pairs = []
+    if "-" not in cleaned and 2 <= len(words) <= 8:
+        for idx in range(len(words) - 1):
+            pair_variant = words[:]
+            pair_variant[idx] = f"{pair_variant[idx]}-{pair_variant[idx + 1]}"
+            del pair_variant[idx + 1]
+            hyphenated_word_pairs.append(" ".join(pair_variant))
     normalized_words = normalize_name(cleaned).split()
     short_distinctive_prefix = " ".join(normalized_words[:2]) if len(normalized_words) >= 2 else ""
     ms_expanded = ""
@@ -1851,6 +1858,7 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
         possessive_removed,
         display_short_prefix,
         cleaned,
+        *hyphenated_word_pairs,
         *us_prefixed_variants,
         *us_word_variants,
         childrens_hospital_foundation,
