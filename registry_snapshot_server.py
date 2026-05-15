@@ -57,7 +57,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.15.1"
+APP_VERSION = "2026.05.15.2"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA", "WI"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -2147,27 +2147,33 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
         result.error = "AK search requires 9-digit EIN"
         return result, ""
     years_to_try = list(getattr(checker, "AK_YEARS_TO_TRY", [date.today().year, date.today().year - 1]))
-    for idx, year in enumerate(years_to_try):
-        ak_context = browser.new_context(viewport={"width": 1365, "height": 900}, accept_downloads=False)
-        configure_browser_context(ak_context)
-        ak_page = ak_context.new_page()
-        try:
-            if not checker.open_ak_public_search(ak_page):
-                result.error = "Could not open Alaska Public Search form"
+    ak_context = browser.new_context(viewport={"width": 1365, "height": 900}, accept_downloads=False)
+    configure_browser_context(ak_context)
+    ak_page = ak_context.new_page()
+    try:
+        if not checker.open_ak_public_search(ak_page):
+            result.error = "Could not open Alaska Public Search form"
+            return result, ""
+        for year in years_to_try:
+            page_body = ""
+            try:
+                checker.fill_ak_search_form(ak_page, org, year)
+                print_link = find_ak_print_link_relaxed(ak_page, org)
+                page_body = registry_page_body(ak_page)
+                if not print_link:
+                    continue
+                result.status, result.raw_status_text, result.source_note = checker.classify_ak_registration_year(year, None)
+                result.success = True
+                return result, page_body
+            except Exception as e:
+                result.error = f"AK error: {e}"
+                try:
+                    checker.open_ak_public_search(ak_page)
+                except Exception:
+                    pass
                 continue
-            checker.fill_ak_search_form(ak_page, org, year)
-            print_link = find_ak_print_link_relaxed(ak_page, org)
-            page_body = registry_page_body(ak_page)
-            if not print_link:
-                continue
-            result.status, result.raw_status_text, result.source_note = checker.classify_ak_registration_year(year, None)
-            result.success = True
-            return result, page_body
-        except Exception as e:
-            result.error = f"AK error: {e}"
-            continue
-        finally:
-            ak_context.close()
+    finally:
+        ak_context.close()
     checked_years = ", ".join(str(year) for year in years_to_try)
     result.raw_status_text = f"No Alaska registration found for checked years {checked_years}"
     result.status = "Not registered"
