@@ -57,7 +57,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.15.4"
+APP_VERSION = "2026.05.15.5"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA", "WI"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1799,6 +1799,7 @@ def organization_name_variants(
             without_comma_suffix,
             without_suffix,
             no_comma,
+            *hyphenated_word_pairs,
             *us_word_variants,
             no_punctuation,
             slash_as_space,
@@ -1822,7 +1823,6 @@ def organization_name_variants(
             leading_article_from_trailing,
             without_trailing_the,
             *article_variants,
-            *hyphenated_word_pairs,
             *legal_suffix_additions,
         ]:
             add(variant)
