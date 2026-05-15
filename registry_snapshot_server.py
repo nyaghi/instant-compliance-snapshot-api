@@ -57,7 +57,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.14.14"
+APP_VERSION = "2026.05.15.1"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA", "WI"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -1666,7 +1666,15 @@ def organization_name_variants(
                 part = re.sub(r"\s+", " ", part.strip(" ,;-"))
                 if len(part.split()) >= 2:
                     segmented_seeds.append(part)
-        seed_names.extend(segmented_seeds)
+        # Try slash/DBA/AKA sides early. Several name-only registries do not
+        # find "A / B" as a combined string, but do find the formal side by
+        # itself. Keep the original name first, then the meaningful segments,
+        # then any EIN-sourced aliases.
+        seed_names = [seed_names[0], *segmented_seeds, *seed_names[1:]]
+        if segmented_seeds:
+            add(seed_names[0])
+            for segmented_seed in segmented_seeds:
+                add(segmented_seed)
 
     for seed in seed_names:
         base = re.sub(r"\s+", " ", (seed or "").strip())
@@ -3008,7 +3016,7 @@ def enrich_me_result_from_body(result, body: str) -> None:
     existing_status = " ".join([result.status or "", result.raw_status_text or ""])
     if re.search(r"\bACTIVE\b", existing_status, re.I) and not re.search(r"\b(FAILED\s+TO\s+RENEW|EXPIRED|REVOKED|SUSPENDED|INACTIVE)\b", existing_status, re.I):
         result.raw_status_text = result.raw_status_text or "Active"
-        result.status = result.status or "Active"
+        result.status = "Current" if re.search(r"\bunknown\b|^\s*active\s*$", result.status or "", re.I) else (result.status or "Current")
         result.source_note = result.source_note or "Registration status with definition (ME)"
         result.error = ""
         result.success = True
@@ -3795,7 +3803,7 @@ def true_status_from_body(result, body: str) -> str:
     if normalized == "delinquent" and annual_filings_absent(combined) and not result_indicates_no_record(result):
         return "Delinquent"
     if state == "ME" and re.search(r"\bACTIVE\b", " ".join([result.status or "", result.raw_status_text or ""]), re.I) and not explicit_registry_date(result, combined):
-        return "Unknown"
+        return "Current"
     if normalized == "suspended":
         return "Suspended"
     if normalized == "revoked":
@@ -4404,7 +4412,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                         page,
                         org,
                         checker.search_va,
-                        max_variants=1,
+                        max_variants=6,
                         reject_va_suspended_from_leading_the_drop=False,
                         include_ein_aliases=True,
                         include_name_segments=True,
@@ -4443,7 +4451,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                         page,
                         org,
                         checker.search_me,
-                        max_variants=1,
+                        max_variants=6,
                         include_ein_aliases=False,
                         include_name_segments=True,
                         include_compact_legal_suffixes=False,
@@ -4466,7 +4474,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                         page,
                         org,
                         checker.search_nd,
-                        max_variants=1,
+                        max_variants=6,
                         include_ein_aliases=False,
                         include_name_segments=True,
                         include_compact_legal_suffixes=False,

@@ -1570,6 +1570,46 @@ def name_match_priority(candidate_name: str, target_name: str) -> int:
         return 5
     candidate_words = candidate.split()
     target_words = target.split()
+    if len(target) <= 3 and len(target_words) == 1:
+        # Very short organization names/acronyms must match as their own word.
+        # Substring matches made iDE accept IDEALWARE, 864Pride, and
+        # AlumniFidelity in name-only registries.
+        return -1
+    try:
+        target_greater_index = target_words.index("greater")
+    except ValueError:
+        target_greater_index = -1
+    try:
+        candidate_greater_index = candidate_words.index("greater")
+    except ValueError:
+        candidate_greater_index = -1
+    if (
+        target_greater_index >= 1
+        and candidate_greater_index >= 1
+        and target_words[:target_greater_index + 1] == candidate_words[:candidate_greater_index + 1]
+    ):
+        target_place = target_words[target_greater_index + 1:]
+        candidate_place = candidate_words[candidate_greater_index + 1:]
+        if target_place and candidate_place and target_place[0] != candidate_place[0]:
+            return -1
+    if target_greater_index >= 1 and candidate_greater_index < 0:
+        target_prefix = target_words[:target_greater_index]
+        if (
+            target_prefix
+            and candidate_words[:len(target_prefix)] == target_prefix
+            and len(candidate_words) > len(target_prefix)
+            and candidate_words[len(target_prefix)] != "greater"
+        ):
+            return -1
+    if (
+        len(target_words) >= 4
+        and len(candidate_words) >= 4
+        and target_words[0] in {"center", "centre", "institute", "foundation", "association", "society"}
+        and target_words[1] in {"for", "of"}
+        and candidate_words[:3] == target_words[:3]
+        and candidate_words[3] != target_words[3]
+    ):
+        return -1
     if candidate.startswith(target) or target.startswith(candidate):
         shorter_words = candidate_words if len(candidate_words) <= len(target_words) else target_words
         if len(shorter_words) >= 4:
@@ -1699,6 +1739,9 @@ def name_match_priority_for_targets(candidate_name: str, target_names) -> int:
 def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
     cleaned = re.sub(r"\s+", " ", name or "").strip()
     cleaned = re.sub(r"\s*,\s*", " ", cleaned)
+    normalized_cleaned = normalize_name(cleaned)
+    if len(normalized_cleaned) <= 3 and len(normalized_cleaned.split()) == 1:
+        return [cleaned]
     lead_segment = ""
     trailing_segment = ""
     if re.search(r"/|\\", cleaned):
