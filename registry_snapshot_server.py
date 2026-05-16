@@ -12,6 +12,7 @@ import re
 import secrets
 import smtplib
 import sys
+import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -23,6 +24,7 @@ from types import SimpleNamespace
 from urllib.parse import parse_qs, quote, unquote, urlencode, urljoin, urlparse
 import urllib.error
 import urllib.request
+from zoneinfo import ZoneInfo
 
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "0")
 
@@ -53,11 +55,14 @@ CHARITY_OR_PATH = Path(os.environ["CE_CHARITY_OR_PATH"]) if os.environ.get("CE_C
 LOG_PATH = Path(os.environ.get("CE_LOG_PATH", str(BASE_DIR / "registry_snapshot_server.log")))
 LEAD_LOG_PATH = Path(__file__).with_name("registry_snapshot_leads.csv")
 PIN_LOG_PATH = Path(__file__).with_name("registry_snapshot_passcodes.log")
+LEAD_LOG_WEBHOOK_URL = os.environ.get("CE_LEAD_LOG_WEBHOOK_URL", "").strip()
+LEAD_LOG_WEBHOOK_SECRET = os.environ.get("CE_LEAD_LOG_WEBHOOK_SECRET", "").strip()
+LEAD_LOG_WEBHOOK_TIMEOUT_SECONDS = min(max(1.0, float(os.environ.get("CE_LEAD_LOG_WEBHOOK_TIMEOUT_SECONDS", "4"))), 8.0)
 ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifacts")))
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.15.5"
+APP_VERSION = "2026.05.16.1"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA", "WI"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -90,6 +95,7 @@ WI_READER_BASE_URL = os.environ.get("CE_WI_READER_BASE_URL", "https://r.jina.ai/
 MAX_EXTERNAL_EXEMPT_ORGS = 3
 DOMAIN_LIMIT_DAYS = 7
 ADMIN_PASSCODE = "8977"
+STAGING_ACCESS_REQUIRED = os.environ.get("CE_STAGING_ACCESS_REQUIRED", "0").strip().lower() in {"1", "true", "yes"}
 PIN_EXPIRY_SECONDS = 10 * 60
 PIN_MAX_ATTEMPTS = 5
 VERIFICATION_TOKEN_SECONDS = 60 * 60
@@ -97,6 +103,33 @@ EXEMPT_EMAIL_DOMAIN = "compliance-express.com"
 EXEMPT_EMAIL_ADDRESSES = {"nyaghi17@gmail.com"}
 DOMAIN_LIMIT_PATH = Path(__file__).with_name("registry_snapshot_domain_limits.json")
 DEVICE_LIMIT_PATH = Path(__file__).with_name("registry_snapshot_device_limits.json")
+try:
+    EASTERN_TZ = ZoneInfo("America/New_York")
+except Exception:
+    EASTERN_TZ = None
+LEAD_LOG_FIELDNAMES = [
+    "checked_at",
+    "checked_at_timezone",
+    "email",
+    "domain",
+    "organization_name",
+    "ein",
+    "state",
+    "status",
+    "comments",
+    "lookup_seconds",
+    "app_version",
+    "evidence_url",
+    "source_url",
+    "environment",
+    "origin",
+    "page_url",
+    "referrer",
+    "remote_ip",
+    "user_agent",
+    "device_id",
+    "submission_id",
+]
 PIN_STORE: dict[str, dict] = {}
 VERIFICATION_TOKENS: dict[str, dict] = {}
 ORG_NAME_CACHE: dict[str, str] = {}
@@ -480,31 +513,114 @@ def log_event(message: str) -> None:
         f.write(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] {message}\n")
 
 
-def append_lead_log(email: str, results: list[dict]) -> None:
+def append_master_lead_log(rows: list[dict]) -> None:
+    if not LEAD_LOG_WEBHOOK_URL or not rows:
+        return
+    payload = {
+        "secret": LEAD_LOG_WEBHOOK_SECRET,
+        "app_version": APP_VERSION,
+        "rows": rows,
+    }
+    try:
+        request = urllib.request.Request(
+            LEAD_LOG_WEBHOOK_URL,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "CharityClarityLeadLogger/1.0",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=LEAD_LOG_WEBHOOK_TIMEOUT_SECONDS) as response:
+            response.read(200)
+    except Exception as exc:
+        log_error(f"Master lead log webhook failed: {exc}")
+
+
+def append_master_lead_log_async(rows: list[dict]) -> None:
+    if not LEAD_LOG_WEBHOOK_URL or not rows:
+        return
+    thread = threading.Thread(target=append_master_lead_log, args=(rows,), daemon=True)
+    thread.start()
+
+
+def eastern_timestamp() -> tuple[str, str]:
+    now = datetime.now(EASTERN_TZ) if EASTERN_TZ else datetime.now().astimezone()
+    tz_name = now.tzname() or "Eastern"
+    tz_label = "EDT" if "daylight" in tz_name.lower() else ("EST" if "standard" in tz_name.lower() else tz_name)
+    return f"{now:%Y-%m-%d %H:%M:%S} {tz_label}", tz_label
+
+
+def safe_audit_value(value: object, max_length: int = 500) -> str:
+    return re.sub(r"[\r\n\t]+", " ", str(value or "")).strip()[:max_length]
+
+
+def first_header_ip(headers) -> str:
+    for name in ("CF-Connecting-IP", "X-Forwarded-For", "X-Real-IP"):
+        value = headers.get(name, "")
+        if value:
+            return safe_audit_value(value.split(",")[0], 80)
+    return ""
+
+
+def request_audit_context(handler: BaseHTTPRequestHandler, payload: dict) -> dict:
+    origin = safe_audit_value(payload.get("origin") or handler.headers.get("Origin", ""), 300)
+    page_url = safe_audit_value(payload.get("page_url") or "", 500)
+    referrer = safe_audit_value(payload.get("referrer") or handler.headers.get("Referer", ""), 500)
+    environment = safe_audit_value(payload.get("environment") or "", 80)
+    if not environment:
+        environment = "staging" if "staging" in f"{origin} {page_url}".lower() else "production"
+    remote_ip = first_header_ip(handler.headers)
+    if not remote_ip and handler.client_address:
+        remote_ip = safe_audit_value(handler.client_address[0], 80)
+    return {
+        "environment": environment,
+        "origin": origin,
+        "page_url": page_url,
+        "referrer": referrer,
+        "remote_ip": remote_ip,
+        "user_agent": safe_audit_value(handler.headers.get("User-Agent", "") or payload.get("client_user_agent", ""), 500),
+        "device_id": normalize_device_id(payload.get("device_id") or ""),
+        "submission_id": secrets.token_hex(8),
+    }
+
+
+def ensure_lead_log_header(fieldnames: list[str]) -> None:
+    if not LEAD_LOG_PATH.exists() or LEAD_LOG_PATH.stat().st_size == 0:
+        return
+    try:
+        with LEAD_LOG_PATH.open("r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            existing = reader.fieldnames or []
+            if existing == fieldnames:
+                return
+            rows = list(reader)
+        with LEAD_LOG_PATH.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({key: row.get(key, "") for key in fieldnames})
+    except Exception as exc:
+        log_error(f"Lead log header migration failed: {exc}")
+
+
+def append_lead_log(email: str, results: list[dict], audit_context: dict | None = None) -> None:
     if not email or not results:
         return
     LEAD_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = [
-        "checked_at",
-        "email",
-        "domain",
-        "organization_name",
-        "ein",
-        "state",
-        "status",
-        "comments",
-        "evidence_url",
-        "source_url",
-    ]
+    fieldnames = LEAD_LOG_FIELDNAMES
+    ensure_lead_log_header(fieldnames)
     write_header = not LEAD_LOG_PATH.exists() or LEAD_LOG_PATH.stat().st_size == 0
-    checked_at = datetime.now().isoformat(timespec="seconds")
+    checked_at, checked_at_timezone = eastern_timestamp()
     domain = email_domain(email)
+    audit_context = audit_context or {}
+    master_rows = []
     with LEAD_LOG_PATH.open("a", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         if write_header:
             writer.writeheader()
         for result in results:
-            writer.writerow({
+            row = {
                 "checked_at": checked_at,
                 "email": email.strip(),
                 "domain": domain,
@@ -515,7 +631,43 @@ def append_lead_log(email: str, results: list[dict]) -> None:
                 "comments": result.get("comments", ""),
                 "evidence_url": result.get("evidence_url", ""),
                 "source_url": result.get("source_url", ""),
+                "lookup_seconds": result.get("lookup_seconds", ""),
+                "app_version": result.get("app_version", APP_VERSION),
+                "checked_at_timezone": checked_at_timezone,
+                "environment": audit_context.get("environment", ""),
+                "origin": audit_context.get("origin", ""),
+                "page_url": audit_context.get("page_url", ""),
+                "referrer": audit_context.get("referrer", ""),
+                "remote_ip": audit_context.get("remote_ip", ""),
+                "user_agent": audit_context.get("user_agent", ""),
+                "device_id": audit_context.get("device_id", ""),
+                "submission_id": audit_context.get("submission_id", ""),
+            }
+            writer.writerow({key: row.get(key, "") for key in fieldnames})
+            master_rows.append(row)
+    append_master_lead_log_async(master_rows)
+
+
+def append_submission_log(email: str, organizations: list[dict], states: list[str], audit_context: dict | None = None) -> None:
+    """Capture valid usage before the slower registry lookups begin."""
+    if not email or not organizations or not states:
+        return
+    rows = []
+    for org in organizations:
+        ein = org.get("ein", "")
+        organization_name = org.get("organization_name") or f"EIN {ein}"
+        for state in states:
+            rows.append({
+                "organization_name": organization_name,
+                "ein": ein,
+                "state": state,
+                "status": "Lookup Started",
+                "comments": "Submission received. CharityClarity started the public registry lookup.",
+                "source_url": "",
+                "lookup_seconds": "",
+                "app_version": APP_VERSION,
             })
+    append_lead_log(email, rows, audit_context)
 
 
 def email_domain(email_address: str) -> str:
@@ -617,6 +769,16 @@ def is_verified_email_token(email_address: str, token: str) -> bool:
 
 def is_verified_internal_passcode(email_address: str, passcode: str) -> bool:
     return is_exempt_domain(email_domain(email_address)) and (passcode or "").strip() == ADMIN_PASSCODE
+
+
+def staging_access_error(email_address: str, passcode: str) -> str:
+    if not STAGING_ACCESS_REQUIRED:
+        return ""
+    if not is_exempt_domain(email_domain(email_address)):
+        return "Staging access requires a Compliance Express email address."
+    if (passcode or "").strip() != ADMIN_PASSCODE:
+        return "Enter the Compliance Express passcode to use staging."
+    return ""
 
 
 def is_exempt_domain(domain: str) -> bool:
@@ -965,8 +1127,10 @@ def public_profile_latest_tax_period_for_ein(ein: str) -> tuple[int, tuple[int, 
 
 def resolved_organization_name(ein: str, supplied_name: str = "") -> str:
     supplied_name = (supplied_name or "").strip()
+    reference_name = organization_name_for_ein(ein)
+    profile_name = public_profile_name_for_ein(ein)
     known_names = known_names_for_ein(ein)
-    return supplied_name or (known_names[0] if known_names else "")
+    return supplied_name or profile_name or reference_name or (known_names[0] if known_names else "")
 
 
 def format_ein(value: str) -> str:
@@ -3729,7 +3893,8 @@ def explicit_adverse_registry_status(result, body: str) -> str:
         if nj_status_confirmed(withdrawn_pattern) or nj_status_confirmed(closed_pattern):
             return "Closed / Withdrawn / Canceled"
     confirmed = organization_record_confirmed(result, text) or md_detail_page_matched(result, text)
-    if not confirmed and not re.search(r"\b(revoked|suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist|pending)\b|" + terminal_pattern + "|" + failed_to_renew_pattern, status_evidence, re.I):
+    expired_pattern = r"\bexpired\b"
+    if not confirmed and not re.search(r"\b(revoked|suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist|pending)\b|" + terminal_pattern + "|" + failed_to_renew_pattern + "|" + expired_pattern, status_evidence, re.I):
         return ""
     if state == "NJ":
         def nj_status_confirmed(pattern: str) -> bool:
@@ -3760,12 +3925,14 @@ def explicit_adverse_registry_status(result, body: str) -> str:
         return "Suspended"
     if re.search(inactive_pattern, status_evidence, re.I):
         return "Closed / Withdrawn / Canceled"
-    if re.search(failed_to_renew_pattern, status_evidence, re.I):
-        return "Failed to Renew"
     if re.search(withdrawn_pattern, status_evidence, re.I):
         return "Closed / Withdrawn / Canceled"
     if re.search(closed_pattern, status_evidence, re.I):
         return "Closed / Withdrawn / Canceled"
+    if re.search(failed_to_renew_pattern, status_evidence, re.I):
+        return "Failed to Renew"
+    if re.search(expired_pattern, status_evidence, re.I):
+        return "Delinquent"
     return ""
 
 
@@ -4030,6 +4197,9 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
     registry_noncompliant_text = " ".join([result.raw_status_text or "", result.source_note or "", body or ""])
     if normalized_status == "delinquent" and re.search(r"\bnon\W*compliant\b", registry_noncompliant_text, re.I):
         return f"The {state} public registry shows a Noncompliant status, which CharityClarity treats as Delinquent."
+    registry_status_text = " ".join([result.raw_status_text or "", result.source_note or ""])
+    if normalized_status == "delinquent" and re.search(r"\bexpired\b", registry_status_text, re.I):
+        return f"The {state} public registry shows the organization registration status as Expired, which CharityClarity treats as Delinquent."
     if normalized_status == "delinquent" and state == "PA" and organization_record_confirmed(result, combined_result_text(result, body)) and not explicit_registry_date(result, body):
         return "The PA public registry returned a matching organization record but did not show a current usable expiration date, so CharityClarity treats the record as Delinquent."
     if state == "CO" and normalized_status == "delinquent" and re.search(r"\b(expired|may not solicit)\b", combined_result_text(result, body), re.I):
@@ -4819,11 +4989,16 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
             email = normalize_email(payload.get("email") or "")
             device_id = normalize_device_id(payload.get("device_id") or "")
+            audit_context = request_audit_context(self, payload)
 
             requested_states = payload.get("states")
             state = (payload.get("state") or "").strip().upper()
             domain = email_domain(email)
             admin_passcode = (payload.get("admin_passcode") or "").strip()
+            staging_error = staging_access_error(email, admin_passcode)
+            if staging_error:
+                self._send_json(403, {"error": staging_error})
+                return
             if is_exempt_domain(domain) and admin_passcode != ADMIN_PASSCODE:
                 self._send_json(401, {"error": "Enter the Compliance Express passcode to use internal features."})
                 return
@@ -4862,8 +5037,9 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
                 self._send_json(429, {"error": "A complimentary snapshot was already requested from this browser."})
                 return
 
+            append_submission_log(email, organizations, states, audit_context)
             results = run_state_lookups_parallel(organizations, states)
-            append_lead_log(email, results)
+            append_lead_log(email, results, audit_context)
             if is_batch:
                 if not privileged and should_record_domain_check(results):
                     record_domain_check(domain, limit_ein)
