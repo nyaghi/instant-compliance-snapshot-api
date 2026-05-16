@@ -1554,6 +1554,7 @@ def normalize_name(value: str) -> str:
     txt = re.sub(r"\bst\.?\b", "saint", txt)
     txt = re.sub(r"\bassoc\.?\b", "association", txt)
     txt = re.sub(r"\bassn\.?\b", "association", txt)
+    txt = re.sub(r"\b([a-z]\d)\s+([a-z])\b", r"\1\2", txt)
     txt = re.sub(r"\b(the|and|a)\b", " ", txt)
     # Keep substantive words like "foundation" and "fund" in the match key.
     # Dropping them made name-only state searches confuse related but separate entities.
@@ -1858,6 +1859,9 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
         cleaned,
         flags=re.I,
     ).strip()
+    compact_alnum_token = re.sub(r"\b([A-Za-z]\d)\s+([A-Za-z])\b", r"\1\2", cleaned).strip()
+    if compact_alnum_token == cleaned:
+        compact_alnum_token = ""
     no_punct_full = re.sub(r"[^\w\s']", " ", cleaned).strip()
     no_punct_full = re.sub(r"\s+", " ", no_punct_full)
     us_word_variants = []
@@ -1932,6 +1936,7 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
         saint_expanded,
         saint_abbreviated,
         no_suffix,
+        compact_alnum_token,
         hyphen_as_space,
         no_punct_full,
         no_punct,
