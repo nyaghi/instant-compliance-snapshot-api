@@ -62,7 +62,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.16.4"
+APP_VERSION = "2026.05.16.5"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA", "WI"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -137,7 +137,6 @@ PUBLIC_PROFILE_CACHE: dict[str, dict] = {}
 FISCAL_YEAR_END_OVERRIDES = {
     "208428450": (6, 30),
     "546053660": (6, 30),
-    "362883000": (3, 31),
     "237222333": (6, 30),
     "141707425": (3, 31),
     "510165015": (5, 31),
@@ -1104,13 +1103,6 @@ def public_profile_latest_tax_period_for_ein(ein: str) -> tuple[int, tuple[int, 
     """Return the latest public profile tax year and fiscal year end, if available."""
     payload = public_profile_for_ein(ein)
     candidates: list[tuple[int, tuple[int, int]]] = []
-    raw_tax_period = str((payload.get("organization") or {}).get("tax_period") or "")
-    match = re.match(r"(20\d{2})[-/]?(\d{1,2})?", raw_tax_period)
-    if match:
-        year = int(match.group(1))
-        month = int(match.group(2) or "12")
-        if 1 <= month <= 12:
-            candidates.append((year, (month, calendar.monthrange(year, month)[1])))
     for filing in payload.get("filings_with_data") or []:
         raw_period = str(filing.get("tax_prd") or "")
         match = re.fullmatch(r"(20\d{2})(\d{2})", raw_period)
@@ -1122,6 +1114,15 @@ def public_profile_latest_tax_period_for_ein(ein: str) -> tuple[int, tuple[int, 
         raw_year = str(filing.get("tax_prd_yr") or "")
         if re.fullmatch(r"20\d{2}", raw_year):
             candidates.append((int(raw_year), (12, 31)))
+    if candidates:
+        return max(candidates, key=lambda item: item[0])
+    raw_tax_period = str((payload.get("organization") or {}).get("tax_period") or "")
+    match = re.match(r"(20\d{2})[-/]?(\d{1,2})?", raw_tax_period)
+    if match:
+        year = int(match.group(1))
+        month = int(match.group(2) or "12")
+        if 1 <= month <= 12:
+            candidates.append((year, (month, calendar.monthrange(year, month)[1])))
     return max(candidates, key=lambda item: item[0]) if candidates else None
 
 
@@ -1144,9 +1145,6 @@ def fiscal_year_end_for_ein(ein: str) -> tuple[int, int] | None:
     target = re.sub(r"\D", "", ein or "")
     if target in FISCAL_YEAR_END_OVERRIDES:
         return FISCAL_YEAR_END_OVERRIDES[target]
-    _, period_end = fiscal_period_for_ein(ein)
-    if period_end:
-        return period_end.month, period_end.day
     payload = public_profile_for_ein(ein)
     filings = payload.get("filings_with_data") or []
     for filing in filings:
@@ -1167,6 +1165,9 @@ def fiscal_year_end_for_ein(ein: str) -> tuple[int, int] | None:
             if day == 1:
                 day = calendar.monthrange(year, month)[1]
             return month, min(day, calendar.monthrange(year, month)[1])
+    _, period_end = fiscal_period_for_ein(ein)
+    if period_end:
+        return period_end.month, period_end.day
     return None
 
 
@@ -1905,6 +1906,7 @@ def organization_name_variants(
         ampersand_removed = re.sub(r"\s*&\s*", " ", base).strip()
         apostrophe_removed = re.sub(r"[']", "", base).strip()
         possessive_removed = re.sub(r"\b([A-Za-z]+)'s\b", r"\1s", base).strip()
+        compact_alnum_token = re.sub(r"\b([A-Za-z]\d)\s+([A-Za-z])\b", r"\1\2", base).strip()
         saint_expanded = re.sub(r"\bSt\.?\s+", "Saint ", base, flags=re.I).strip()
         saint_abbreviated = re.sub(r"\bSaint\s+", "St. ", base, flags=re.I).strip()
         childrens_hospital = re.sub(
@@ -1971,6 +1973,7 @@ def organization_name_variants(
             institute_singular,
             hyphen_as_space,
             hyphen_removed,
+            compact_alnum_token,
             ampersand_as_and,
             ampersand_removed,
             apostrophe_removed,
