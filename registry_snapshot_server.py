@@ -62,7 +62,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.16.6"
+APP_VERSION = "2026.05.16.7"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA", "WI"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -83,12 +83,16 @@ SC_NAME_VARIANT_MAX_SECONDS = max(15.0, float(os.environ.get("CE_SC_NAME_VARIANT
 NAME_SEARCH_VARIANT_MAX_SECONDS = max(20.0, float(os.environ.get("CE_NAME_SEARCH_VARIANT_MAX_SECONDS", "65")))
 SC_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_SC_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
 NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
+ME_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_LOOKUP_MIN_INTERVAL_SECONDS", "3.0"))), 15.0)
+ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(2.0, float(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "8.0"))), 25.0)
 NAME_SEARCH_PREFLIGHT_URLS = {
     "ME": "https://www.pfr.maine.gov/almsonline/almsquery/SearchCompany.aspx",
     "ND": "https://firststop.sos.nd.gov/search/charitable",
     "SC": "https://search.scsos.com/charities",
     "VA": "https://cos.vdacs.virginia.gov/cgi-bin/char_search.cgi",
 }
+ME_LOOKUP_LOCK = threading.Lock()
+ME_LAST_LOOKUP_FINISHED = 0.0
 WI_SEARCH_URL = "https://apps.dfi.wi.gov/ice/berg/Registration/OrganizationCredentialSearch.aspx"
 WI_RESULTS_URL = "https://apps.dfi.wi.gov/ice/berg/Registration/OrgCredentialSearchResults.aspx"
 WI_READER_BASE_URL = os.environ.get("CE_WI_READER_BASE_URL", "https://r.jina.ai/http://")
@@ -2201,6 +2205,41 @@ def search_with_name_variants(
     if best_result and getattr(best_result, "organization_name", "") != original_name:
         best_result.organization_name = original_name
     return best_result
+
+
+def search_me_serialized(page, org):
+    global ME_LAST_LOOKUP_FINISHED
+    with ME_LOOKUP_LOCK:
+        elapsed = time.perf_counter() - ME_LAST_LOOKUP_FINISHED
+        if elapsed < ME_LOOKUP_MIN_INTERVAL_SECONDS:
+            time.sleep(ME_LOOKUP_MIN_INTERVAL_SECONDS - elapsed)
+
+        def run_lookup():
+            return search_with_name_variants(
+                page,
+                org,
+                checker.search_me,
+                max_variants=10,
+                max_elapsed_seconds=max(NAME_SEARCH_VARIANT_MAX_SECONDS, 90.0),
+                include_ein_aliases=True,
+                include_name_segments=True,
+                include_compact_legal_suffixes=False,
+                include_leading_article_variants=True,
+            )
+
+        result = run_lookup()
+        if public_status(result) == "Not Registered":
+            time.sleep(ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS)
+            confirmation = run_lookup()
+            if public_status(confirmation) != "Not Registered":
+                result = confirmation
+            else:
+                result.source_note = (
+                    (result.source_note or "Maine search returned no matching organization result.")
+                    + " A second Maine search also returned no matching organization result."
+                )
+        ME_LAST_LOOKUP_FINISHED = time.perf_counter()
+        return result
 
 
 def find_ak_print_link_relaxed(page, org):
@@ -4635,17 +4674,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 result = search_wi(page, org)
                 body = registry_page_body(page)
             elif state == "ME":
-                result = search_with_name_variants(
-                    page,
-                    org,
-                    checker.search_me,
-                    max_variants=10,
-                    max_elapsed_seconds=max(NAME_SEARCH_VARIANT_MAX_SECONDS, 90.0),
-                    include_ein_aliases=True,
-                    include_name_segments=True,
-                    include_compact_legal_suffixes=False,
-                    include_leading_article_variants=True,
-                )
+                result = search_me_serialized(page, org)
                 me_status_source = " ".join([result.raw_status_text or "", result.source_note or ""])
                 if public_status(result) == "Site Not Reachable":
                     body = ""
