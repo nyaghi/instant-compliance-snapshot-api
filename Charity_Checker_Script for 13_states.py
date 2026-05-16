@@ -1601,6 +1601,39 @@ def name_match_priority(candidate_name: str, target_name: str) -> int:
             and candidate_words[len(target_prefix)] != "greater"
         ):
             return -1
+    def local_place_tail_mismatch(connector: str = "of") -> bool:
+        try:
+            target_connector_index = target_words.index(connector)
+            candidate_connector_index = candidate_words.index(connector)
+        except ValueError:
+            return False
+        target_prefix = target_words[:target_connector_index]
+        candidate_prefix = candidate_words[:candidate_connector_index]
+        target_tail = target_words[target_connector_index + 1:]
+        candidate_tail = candidate_words[candidate_connector_index + 1:]
+        if not target_prefix or target_prefix != candidate_prefix or not target_tail or not candidate_tail:
+            return False
+        prefix_text = " ".join(target_prefix)
+        local_prefixes = {
+            "community foundation",
+            "united way",
+            "ymca",
+            "boys girls club",
+            "habitat humanity",
+            "jewish federation",
+        }
+        place_indicators = {
+            "county", "city", "town", "township", "borough", "parish", "valley",
+            "region", "regional", "area", "greater", "north", "south", "east",
+            "west", "central", "northern", "southern", "eastern", "western",
+            "sarasota", "lorain", "grant", "kansas", "charleston", "richmond",
+            "tennessee", "indiana", "seattle", "new", "york",
+        }
+        prefix_is_local = prefix_text in local_prefixes
+        tail_looks_place = bool((set(target_tail) | set(candidate_tail)) & place_indicators)
+        return (prefix_is_local or tail_looks_place) and target_tail[0] != candidate_tail[0]
+    if local_place_tail_mismatch("of"):
+        return -1
     if (
         len(target_words) >= 4
         and len(candidate_words) >= 4
@@ -1737,7 +1770,19 @@ def name_match_priority_for_targets(candidate_name: str, target_names) -> int:
     return best
 
 def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
-    cleaned = re.sub(r"\s+", " ", name or "").strip()
+    raw_cleaned = re.sub(r"\s+", " ", name or "").strip()
+    comma_lead_segment = ""
+    comma_trailing_segment = ""
+    if "," in raw_cleaned:
+        comma_parts = [part.strip() for part in re.split(r"\s*,\s*", raw_cleaned, maxsplit=1)]
+        if len(comma_parts) == 2:
+            comma_lead_segment = re.sub(r"\s+", " ", re.sub(r"[^\w\s']", " ", comma_parts[0])).strip()
+            comma_trailing_segment = re.sub(r"\s+", " ", re.sub(r"[^\w\s']", " ", comma_parts[1])).strip()
+            if len(comma_lead_segment.split()) < 2:
+                comma_lead_segment = ""
+            if len(comma_trailing_segment.split()) < 2:
+                comma_trailing_segment = ""
+    cleaned = raw_cleaned
     cleaned = re.sub(r"\s*,\s*", " ", cleaned)
     normalized_cleaned = normalize_name(cleaned)
     if len(normalized_cleaned) <= 3 and len(normalized_cleaned.split()) == 1:
@@ -1754,6 +1799,11 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
         if len(trailing_segment.split()) < 2:
             trailing_segment = ""
     without_leading_article = re.sub(r"^(?:the|a|an)\s+", "", cleaned, flags=re.I).strip()
+    comma_lead_without_article = re.sub(r"^(?:the|a|an)\s+", "", comma_lead_segment, flags=re.I).strip()
+    ampersand_variant = ""
+    if re.search(r"\band\b", without_leading_article or cleaned, re.I):
+        ampersand_variant = re.sub(r"\band\b", "&", without_leading_article or cleaned, flags=re.I)
+        ampersand_variant = re.sub(r"\s+", " ", ampersand_variant).strip()
     without_trailing_the = ""
     trailing_the_query = ""
     us_prefixed_variants = []
@@ -1856,11 +1906,16 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
         ]
     variants = [
         possessive_removed,
-        display_short_prefix,
         cleaned,
-        *hyphenated_word_pairs,
+        without_leading_article if without_leading_article.lower() != cleaned.lower() else "",
+        comma_lead_without_article if comma_lead_without_article.lower() != comma_lead_segment.lower() else "",
+        comma_lead_segment,
+        comma_trailing_segment,
+        trailing_segment,
+        lead_segment,
         *us_prefixed_variants,
         *us_word_variants,
+        ampersand_variant,
         childrens_hospital_foundation,
         saint_expanded,
         saint_abbreviated,
@@ -1870,17 +1925,16 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
         no_punct,
         slash_as_space,
         *legal_suffix_variants,
+        *hyphenated_word_pairs,
         ms_expanded,
         with_leading_the,
-        without_leading_article if without_leading_article.lower() != cleaned.lower() else "",
-        trailing_segment,
-        lead_segment,
         without_leading_acronym,
         possessive_root_prefix,
         hyphen_tail_prefix,
         prefix,
         trailing_the_query,
         without_trailing_the,
+        display_short_prefix,
         short_distinctive_prefix,
     ]
     output = []
