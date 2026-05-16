@@ -1891,12 +1891,16 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
     ms_expanded = ""
     if re.search(r"\bMS\s+Society\b", cleaned, re.I):
         ms_expanded = re.sub(r"\bMS\s+Society\b", "Multiple Sclerosis Society", cleaned, flags=re.I)
+    childrens_root_prefix = ""
     childrens_hospital_foundation = ""
     childrens_hospital_foundation_possessive = ""
     childrens_match = re.match(r"^(.+?\bchildren'?s?)\s+foundation\b", cleaned, re.I)
     if childrens_match:
         childrens_prefix_original = childrens_match.group(1).strip()
         childrens_prefix = re.sub(r"\b([A-Za-z]+)'s\b", r"\1s", childrens_prefix_original, flags=re.I)
+        childrens_root_prefix = re.sub(r"\bchildren'?s\b", "Children", childrens_prefix_original, flags=re.I).strip()
+        if len(childrens_root_prefix.split()) < 2:
+            childrens_root_prefix = ""
         childrens_hospital_foundation = f"{childrens_prefix} Hospital Foundation"
         childrens_hospital_foundation_possessive = f"{childrens_prefix_original} Hospital Foundation"
     with_leading_the = "" if re.match(r"^the\s+", cleaned, re.I) else f"The {cleaned}"
@@ -1914,6 +1918,7 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
         cleaned,
         without_leading_article if without_leading_article.lower() != cleaned.lower() else "",
         possessive_root_prefix,
+        childrens_root_prefix,
         comma_lead_without_article if comma_lead_without_article.lower() != comma_lead_segment.lower() else "",
         comma_lead_segment,
         comma_trailing_segment,
