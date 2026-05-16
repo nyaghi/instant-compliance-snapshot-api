@@ -3082,7 +3082,7 @@ def search_me(page, org: Organization) -> StateResult:
                 if variant and key not in seen:
                     seen.add(key)
                     output.append(variant)
-            return (output or [cleaned])[:5]
+            return (output or [cleaned])[:8]
 
         def run_me_direct_search(query: str) -> tuple[str, list[dict[str, str]], urllib.request.OpenerDirector]:
             cookie_jar = http.cookiejar.CookieJar()
@@ -3190,12 +3190,10 @@ def search_me(page, org: Organization) -> StateResult:
                 result.source_note = "Maine uses the Status shown on the matched public registry result."
             result.success = True
             return result
-        elif direct_body and re.search(r"\b0\s+records?\s+found\b|no records|no results", direct_body, re.I):
-            result.raw_status_text = "No record found"
-            result.status = STATUS_NOT_REGISTERED
-            result.source_note = "Maine search returned no matching organization result."
-            result.success = True
-            return result
+        # Do not treat the lightweight HTTP path's no-record response as final.
+        # Maine can intermittently return an empty result set under load; the
+        # browser path below provides an independent confirmation before a true
+        # Not Registered result is emitted.
 
         def run_me_search(query: str) -> str:
             page.goto(url, wait_until="domcontentloaded", timeout=20000)
