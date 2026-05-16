@@ -1552,6 +1552,8 @@ def normalize_name(value: str) -> str:
     txt = re.sub(r"\b([a-z]+)'s\b", r"\1s", txt)
     txt = re.sub(r"\bu\s*\.?\s*s\.?\b", "us", txt)
     txt = re.sub(r"\bst\.?\b", "saint", txt)
+    txt = re.sub(r"\bassoc\.?\b", "association", txt)
+    txt = re.sub(r"\bassn\.?\b", "association", txt)
     txt = re.sub(r"\b(the|and|a)\b", " ", txt)
     # Keep substantive words like "foundation" and "fund" in the match key.
     # Dropping them made name-only state searches confuse related but separate entities.
@@ -1889,11 +1891,18 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
     ms_expanded = ""
     if re.search(r"\bMS\s+Society\b", cleaned, re.I):
         ms_expanded = re.sub(r"\bMS\s+Society\b", "Multiple Sclerosis Society", cleaned, flags=re.I)
+    childrens_root_prefix = ""
     childrens_hospital_foundation = ""
+    childrens_hospital_foundation_possessive = ""
     childrens_match = re.match(r"^(.+?\bchildren'?s?)\s+foundation\b", cleaned, re.I)
     if childrens_match:
-        childrens_prefix = re.sub(r"\b([A-Za-z]+)'s\b", r"\1s", childrens_match.group(1), flags=re.I)
+        childrens_prefix_original = childrens_match.group(1).strip()
+        childrens_prefix = re.sub(r"\b([A-Za-z]+)'s\b", r"\1s", childrens_prefix_original, flags=re.I)
+        childrens_root_prefix = re.sub(r"\bchildren'?s\b", "Children", childrens_prefix_original, flags=re.I).strip()
+        if len(childrens_root_prefix.split()) < 2:
+            childrens_root_prefix = ""
         childrens_hospital_foundation = f"{childrens_prefix} Hospital Foundation"
+        childrens_hospital_foundation_possessive = f"{childrens_prefix_original} Hospital Foundation"
     with_leading_the = "" if re.match(r"^the\s+", cleaned, re.I) else f"The {cleaned}"
     suffix_base = no_suffix or cleaned
     legal_suffix_variants = []
@@ -1908,6 +1917,8 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
         possessive_removed,
         cleaned,
         without_leading_article if without_leading_article.lower() != cleaned.lower() else "",
+        possessive_root_prefix,
+        childrens_root_prefix,
         comma_lead_without_article if comma_lead_without_article.lower() != comma_lead_segment.lower() else "",
         comma_lead_segment,
         comma_trailing_segment,
@@ -1917,6 +1928,7 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
         *us_word_variants,
         ampersand_variant,
         childrens_hospital_foundation,
+        childrens_hospital_foundation_possessive,
         saint_expanded,
         saint_abbreviated,
         no_suffix,
@@ -1929,7 +1941,6 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
         ms_expanded,
         with_leading_the,
         without_leading_acronym,
-        possessive_root_prefix,
         hyphen_tail_prefix,
         prefix,
         trailing_the_query,
