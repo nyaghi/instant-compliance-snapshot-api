@@ -62,7 +62,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.16.7"
+APP_VERSION = "2026.05.16.8"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA", "WI"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -83,8 +83,8 @@ SC_NAME_VARIANT_MAX_SECONDS = max(15.0, float(os.environ.get("CE_SC_NAME_VARIANT
 NAME_SEARCH_VARIANT_MAX_SECONDS = max(20.0, float(os.environ.get("CE_NAME_SEARCH_VARIANT_MAX_SECONDS", "65")))
 SC_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_SC_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
 NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
-ME_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_LOOKUP_MIN_INTERVAL_SECONDS", "3.0"))), 15.0)
-ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(2.0, float(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "8.0"))), 25.0)
+ME_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_LOOKUP_MIN_INTERVAL_SECONDS", "6.0"))), 20.0)
+ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(2.0, float(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "12.0"))), 30.0)
 NAME_SEARCH_PREFLIGHT_URLS = {
     "ME": "https://www.pfr.maine.gov/almsonline/almsquery/SearchCompany.aspx",
     "ND": "https://firststop.sos.nd.gov/search/charitable",
@@ -93,6 +93,11 @@ NAME_SEARCH_PREFLIGHT_URLS = {
 }
 ME_LOOKUP_LOCK = threading.Lock()
 ME_LAST_LOOKUP_FINISHED = 0.0
+BROWSER_USER_AGENT = os.environ.get(
+    "CE_BROWSER_USER_AGENT",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+)
 WI_SEARCH_URL = "https://apps.dfi.wi.gov/ice/berg/Registration/OrganizationCredentialSearch.aspx"
 WI_RESULTS_URL = "https://apps.dfi.wi.gov/ice/berg/Registration/OrgCredentialSearchResults.aspx"
 WI_READER_BASE_URL = os.environ.get("CE_WI_READER_BASE_URL", "https://r.jina.ai/http://")
@@ -4583,7 +4588,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             if state == "AK":
                 result, body = search_ak_with_registration_evidence(browser, org, artifact_name)
             else:
-                context = browser.new_context()
+                context = browser.new_context(user_agent=BROWSER_USER_AGENT, locale="en-US")
                 if state != "MA":
                     configure_browser_context(context)
                 page = context.new_page()

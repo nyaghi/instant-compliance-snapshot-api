@@ -3087,7 +3087,12 @@ def search_me(page, org: Organization) -> StateResult:
         def run_me_direct_search(query: str) -> tuple[str, list[dict[str, str]], urllib.request.OpenerDirector]:
             cookie_jar = http.cookiejar.CookieJar()
             opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
-            opener.addheaders = [("User-Agent", "Mozilla/5.0 CharityClarity/1.0")]
+            opener.addheaders = [
+                ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
+                ("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+                ("Accept-Language", "en-US,en;q=0.9"),
+                ("Upgrade-Insecure-Requests", "1"),
+            ]
             response = opener.open(url, timeout=20)
             html_text = response.read().decode("utf-8", "replace")
             fields: dict[str, str] = {}
@@ -3110,6 +3115,8 @@ def search_me(page, org: Organization) -> StateResult:
                 method="POST",
             )
             request.add_header("Content-Type", "application/x-www-form-urlencoded")
+            request.add_header("Origin", "https://www.pfr.maine.gov")
+            request.add_header("Referer", url)
             posted = opener.open(request, timeout=25)
             result_html = posted.read().decode("utf-8", "replace")
             rows: list[dict[str, str]] = []
