@@ -62,7 +62,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.16.8"
+APP_VERSION = "2026.05.16.9"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA", "WI"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -4666,7 +4666,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                         checker.search_sc,
                         max_variants=16,
                         max_elapsed_seconds=SC_NAME_VARIANT_MAX_SECONDS,
-                        include_ein_aliases=False,
+                        include_ein_aliases=True,
                         include_name_segments=True,
                         include_compact_legal_suffixes=True,
                         include_leading_article_variants=True,
