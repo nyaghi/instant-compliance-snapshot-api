@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.17.7"
+APP_VERSION = "2026.05.17.8"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -2674,12 +2674,15 @@ def search_mn(page, org):
             result.source_note = "Minnesota Attorney General charity search returned no matching EIN record."
             result.success = True
             return result
+        detail_link = page.locator(f'a[href*="FederalID={ein_digits}"]').first if ein_digits else None
+        if not detail_link or detail_link.count() == 0:
+            result.status = checker.STATUS_NOT_REGISTERED
+            result.raw_status_text = "No matching EIN result"
+            result.source_note = "Minnesota Attorney General charity search did not expose a matching FederalID detail link for the requested EIN."
+            result.success = True
+            return result
         try:
-            detail_link = page.locator(f'a[href*="FederalID={ein_digits}"]').first
-            if detail_link.count():
-                detail_link.click(timeout=5000)
-            else:
-                page.locator("a").filter(has_text=re.compile(re.escape(org.organization_name), re.I)).first.click(timeout=5000)
+            detail_link.click(timeout=5000)
             checker.safe_wait_for_network_idle(page, timeout=10000)
             time.sleep(1)
         except Exception:
