@@ -62,7 +62,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.16.9"
+APP_VERSION = "2026.05.16.10"
 SUPPORTED_STATES = ["AK", "CA", "CO", "HI", "MA", "MD", "ME", "ND", "NJ", "NY", "PA", "SC", "VA", "WI"]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -72,8 +72,9 @@ MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
 ADJUDICATED_STATUS_OVERRIDES = {}
 REQUESTED_PARALLEL_LOOKUPS = max(1, int(os.environ.get("CE_MAX_PARALLEL_LOOKUPS", "1")))
 ALLOW_PARALLEL_BROWSER_LOOKUPS = os.environ.get("CE_ALLOW_PARALLEL_BROWSER_LOOKUPS", "1").strip().lower() in {"1", "true", "yes"}
-MAX_BROWSER_LOOKUPS = max(1, int(os.environ.get("CE_MAX_BROWSER_LOOKUPS", "2")))
+MAX_BROWSER_LOOKUPS = max(1, int(os.environ.get("CE_MAX_BROWSER_LOOKUPS", "1")))
 MAX_PARALLEL_LOOKUPS = min(REQUESTED_PARALLEL_LOOKUPS, MAX_BROWSER_LOOKUPS) if ALLOW_PARALLEL_BROWSER_LOOKUPS else 1
+BROWSER_LOOKUP_SEMAPHORE = threading.BoundedSemaphore(MAX_BROWSER_LOOKUPS)
 BLOCK_HEAVY_BROWSER_RESOURCES = os.environ.get("CE_BLOCK_HEAVY_BROWSER_RESOURCES", "1").strip().lower() not in {"0", "false", "no"}
 EAGER_EVIDENCE_PDF = os.environ.get("CE_EAGER_EVIDENCE_PDF", "0").strip().lower() in {"1", "true", "yes"}
 CAPTURE_EVIDENCE_SCREENSHOTS = os.environ.get("CE_CAPTURE_EVIDENCE_SCREENSHOTS", "0").strip().lower() in {"1", "true", "yes"}
@@ -1815,6 +1816,7 @@ def organization_name_variants(
     ein: str = "",
     include_ein_aliases: bool = True,
     include_name_segments: bool = False,
+    include_and_segments: bool = True,
     include_compact_legal_suffixes: bool = True,
     include_leading_article_variants: bool = True,
     include_broad_query_prefixes: bool = True,
@@ -1833,13 +1835,18 @@ def organization_name_variants(
     if include_name_segments:
         segmented_seeds = []
         for seed in list(seed_names):
+            segment_pattern = (
+                r"\s*(?:/|\\|&|\band\b|\bd/?b/?a\b|\bdoing\s+business\s+as\b|\baka\b|\bfka\b|\bformerly\b)\s*"
+                if include_and_segments
+                else r"\s*(?:/|\\|\bd/?b/?a\b|\bdoing\s+business\s+as\b|\baka\b|\bfka\b|\bformerly\b)\s*"
+            )
             for part in re.split(
-                r"\s*(?:/|\\|\bd/?b/?a\b|\bdoing\s+business\s+as\b|\baka\b|\bfka\b|\bformerly\b)\s*",
+                segment_pattern,
                 seed or "",
                 flags=re.I,
             ):
                 part = re.sub(r"\s+", " ", part.strip(" ,;-"))
-                if len(part.split()) >= 2:
+                if (len(part.split()) >= 2) or len(part) >= 4:
                     segmented_seeds.append(part)
         # Try slash/DBA/AKA sides early. Several name-only registries do not
         # find "A / B" as a combined string, but do find the formal side by
@@ -1916,6 +1923,8 @@ def organization_name_variants(
         apostrophe_removed = re.sub(r"[']", "", base).strip()
         possessive_removed = re.sub(r"\b([A-Za-z]+)'s\b", r"\1s", base).strip()
         compact_alnum_token = re.sub(r"\b([A-Za-z]\d)\s+([A-Za-z])\b", r"\1\2", base).strip()
+        compact_alnum_token = re.sub(r"\b([A-Za-z]+)\s+(\d+)\s+([A-Za-z]+)\b", r"\1\2\3", compact_alnum_token).strip()
+        spaced_alnum_token = re.sub(r"\b([A-Za-z]+)(\d+)([A-Za-z]+)\b", r"\1 \2 \3", base).strip()
         saint_expanded = re.sub(r"\bSt\.?\s+", "Saint ", base, flags=re.I).strip()
         saint_abbreviated = re.sub(r"\bSaint\s+", "St. ", base, flags=re.I).strip()
         childrens_hospital = re.sub(
@@ -1983,6 +1992,7 @@ def organization_name_variants(
             hyphen_as_space,
             hyphen_removed,
             compact_alnum_token,
+            spaced_alnum_token,
             ampersand_as_and,
             ampersand_removed,
             apostrophe_removed,
@@ -2076,6 +2086,7 @@ def organization_match_target_variants(name: str, ein: str = "") -> list[str]:
         ein,
         include_ein_aliases=False,
         include_name_segments=True,
+        include_and_segments=False,
         include_compact_legal_suffixes=True,
         include_leading_article_variants=True,
         include_broad_query_prefixes=False,
@@ -2087,6 +2098,7 @@ def organization_match_target_variants(name: str, ein: str = "") -> list[str]:
                 "",
                 include_ein_aliases=False,
                 include_name_segments=True,
+                include_and_segments=False,
                 include_compact_legal_suffixes=True,
                 include_leading_article_variants=True,
                 include_broad_query_prefixes=False,
@@ -2896,6 +2908,19 @@ def wi_search_names_for_org(org) -> list[str]:
     return names
 
 
+def wi_contains_full_target_name(registry_name: str, target_names: list[str]) -> bool:
+    """Allow WI rows where the full target is embedded in a longer legal name."""
+    normalize = getattr(checker, "normalize_name", lambda value: re.sub(r"\W+", " ", (value or "").lower()).strip())
+    candidate = normalize(registry_name)
+    if not candidate:
+        return False
+    for target_name in target_names or []:
+        target = normalize(target_name)
+        if target and len(target.split()) >= 4 and target in candidate:
+            return True
+    return False
+
+
 def wi_candidate_from_row_html(row_html: str, target_names: list[str]) -> dict | None:
     values = html_table_cells(row_html)
     if len(values) < 6:
@@ -2904,7 +2929,7 @@ def wi_candidate_from_row_html(row_html: str, target_names: list[str]) -> dict |
     if not re.search(r"Charitable\s+Organization", profession, re.I):
         return None
     score = checker.name_match_priority_for_targets(registry_name, target_names)
-    if score < 4:
+    if score < 4 and not wi_contains_full_target_name(registry_name, target_names):
         return None
     href_match = re.search(r"<a[^>]+href=[\"']([^\"']+)[\"']", row_html, re.I)
     href = html.unescape(href_match.group(1)) if href_match else ""
@@ -2935,7 +2960,7 @@ def wi_candidate_from_markdown_row(row_text: str, target_names: list[str]) -> di
         return None
     registry_name, detail_href = wi_markdown_link_parts(registry_cell)
     score = checker.name_match_priority_for_targets(registry_name, target_names)
-    if score < 4:
+    if score < 4 and not wi_contains_full_target_name(registry_name, target_names):
         return None
     expiration_date = parse_due_date(expiration_text)
     detail_status = wi_reader_detail_status(detail_href)
@@ -3066,12 +3091,12 @@ def search_wi(page, org):
     wi_reader_reached = False
     target_names = organization_match_target_variants(org.organization_name, org.ein)
     try:
-        best_match = wi_http_search_best_match(searched_names[:12], target_names)
+        best_match, wi_reader_reached = wi_reader_search_best_match(searched_names[:24], target_names)
         if not best_match:
-            best_match, wi_reader_reached = wi_reader_search_best_match(searched_names[:12], target_names)
+            best_match = wi_http_search_best_match(searched_names[:24], target_names)
 
         if not best_match:
-            for search_name in searched_names[:12]:
+            for search_name in searched_names[:24]:
                 page.goto(WI_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
                 try:
                     checker.safe_wait_for_network_idle(page, timeout=3000)
@@ -3118,7 +3143,7 @@ def search_wi(page, org):
                     if not re.search(r"Charitable\s+Organization", profession, re.I):
                         continue
                     score = checker.name_match_priority_for_targets(registry_name, target_names)
-                    if score < 4:
+                    if score < 4 and not wi_contains_full_target_name(registry_name, target_names):
                         continue
                     href = ""
                     try:
@@ -3152,9 +3177,9 @@ def search_wi(page, org):
                     break
 
         if not best_match:
-            best_match = wi_http_search_best_match(searched_names[:12], target_names)
-        if not best_match:
-            best_match, reached = wi_reader_search_best_match(searched_names[:12], target_names)
+            best_match, reached = wi_reader_search_best_match(searched_names[:24], target_names)
+            if not best_match:
+                best_match = wi_http_search_best_match(searched_names[:24], target_names)
             wi_reader_reached = wi_reader_reached or reached
 
         if not best_match:
@@ -4579,6 +4604,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
     proof_url = None
 
     result = None
+    BROWSER_LOOKUP_SEMAPHORE.acquire()
     with checker.sync_playwright() as p:
         browser = None
         context = None
@@ -4647,7 +4673,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                         page,
                         org,
                         checker.search_va,
-                        max_variants=6,
+                        max_variants=14,
                         max_elapsed_seconds=NAME_SEARCH_VARIANT_MAX_SECONDS,
                         reject_va_suspended_from_leading_the_drop=False,
                         include_ein_aliases=True,
@@ -4697,9 +4723,9 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                         page,
                         org,
                         checker.search_nd,
-                        max_variants=6,
+                        max_variants=18,
                         max_elapsed_seconds=NAME_SEARCH_VARIANT_MAX_SECONDS,
-                        include_ein_aliases=False,
+                        include_ein_aliases=True,
                         include_name_segments=True,
                         include_compact_legal_suffixes=False,
                         include_leading_article_variants=True,
@@ -4732,6 +4758,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 context.close()
             if browser:
                 browser.close()
+            BROWSER_LOOKUP_SEMAPHORE.release()
 
     if result is None:
         result = checker.StateResult(organization_name or f"EIN {format_ein(ein)}", format_ein(ein), state, "Site Not Reachable", "")
