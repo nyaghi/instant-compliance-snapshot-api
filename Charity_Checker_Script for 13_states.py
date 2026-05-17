@@ -1555,6 +1555,8 @@ def normalize_name(value: str) -> str:
     txt = re.sub(r"\bassoc\.?\b", "association", txt)
     txt = re.sub(r"\bassn\.?\b", "association", txt)
     txt = re.sub(r"\b([a-z]\d)\s+([a-z])\b", r"\1\2", txt)
+    txt = re.sub(r"\b([a-z]+)\s+(\d+)\s+([a-z]+)\b", r"\1\2\3", txt)
+    txt = re.sub(r"\b([a-z]+)(\d+)([a-z]+)\b", r"\1\2\3", txt)
     txt = re.sub(r"\b(the|and|a)\b", " ", txt)
     # Keep substantive words like "foundation" and "fund" in the match key.
     # Dropping them made name-only state searches confuse related but separate entities.
@@ -1637,6 +1639,15 @@ def name_match_priority(candidate_name: str, target_name: str) -> int:
         return (prefix_is_local or tail_looks_place) and target_tail[0] != candidate_tail[0]
     if local_place_tail_mismatch("of"):
         return -1
+    if "ymca" in target_words and "ymca" in candidate_words and candidate != target:
+        generic_local_words = {
+            "ymca", "of", "for", "the", "a", "an", "greater", "association",
+            "family", "center", "centre", "metropolitan", "area", "regional",
+        }
+        target_distinctive = [word for word in target_words if word not in generic_local_words]
+        candidate_distinctive = [word for word in candidate_words if word not in generic_local_words]
+        if target_distinctive and not set(target_distinctive).issubset(set(candidate_distinctive)):
+            return -1
     if (
         len(target_words) >= 4
         and len(candidate_words) >= 4
@@ -1801,6 +1812,16 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
             lead_segment = ""
         if len(trailing_segment.split()) < 2:
             trailing_segment = ""
+    and_lead_segment = ""
+    and_trailing_segment = ""
+    and_split_source = re.split(r"\s*(?:&|\band\b)\s*", cleaned, maxsplit=1, flags=re.I)
+    if len(and_split_source) == 2:
+        and_lead_segment = re.sub(r"\s+", " ", re.sub(r"[^\w\s']", " ", and_split_source[0])).strip()
+        and_trailing_segment = re.sub(r"\s+", " ", re.sub(r"[^\w\s']", " ", and_split_source[1])).strip()
+        if len(and_lead_segment.split()) < 1 or len(and_lead_segment) < 4:
+            and_lead_segment = ""
+        if len(and_trailing_segment.split()) < 1 or len(and_trailing_segment) < 4:
+            and_trailing_segment = ""
     without_leading_article = re.sub(r"^(?:the|a|an)\s+", "", cleaned, flags=re.I).strip()
     comma_lead_without_article = re.sub(r"^(?:the|a|an)\s+", "", comma_lead_segment, flags=re.I).strip()
     ampersand_variant = ""
@@ -1860,8 +1881,12 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
         flags=re.I,
     ).strip()
     compact_alnum_token = re.sub(r"\b([A-Za-z]\d)\s+([A-Za-z])\b", r"\1\2", cleaned).strip()
+    compact_alnum_token = re.sub(r"\b([A-Za-z]+)\s+(\d+)\s+([A-Za-z]+)\b", r"\1\2\3", compact_alnum_token).strip()
     if compact_alnum_token == cleaned:
         compact_alnum_token = ""
+    spaced_alnum_token = re.sub(r"\b([A-Za-z]+)(\d+)([A-Za-z]+)\b", r"\1 \2 \3", cleaned).strip()
+    if spaced_alnum_token == cleaned:
+        spaced_alnum_token = ""
     no_punct_full = re.sub(r"[^\w\s']", " ", cleaned).strip()
     no_punct_full = re.sub(r"\s+", " ", no_punct_full)
     us_word_variants = []
@@ -1926,6 +1951,8 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
         comma_lead_without_article if comma_lead_without_article.lower() != comma_lead_segment.lower() else "",
         comma_lead_segment,
         comma_trailing_segment,
+        and_lead_segment,
+        and_trailing_segment,
         trailing_segment,
         lead_segment,
         *us_prefixed_variants,
@@ -1937,6 +1964,7 @@ def search_name_query_variants(name: str, max_words: int = 4) -> list[str]:
         saint_abbreviated,
         no_suffix,
         compact_alnum_token,
+        spaced_alnum_token,
         hyphen_as_space,
         no_punct_full,
         no_punct,
