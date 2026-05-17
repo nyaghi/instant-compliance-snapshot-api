@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.17.8"
+APP_VERSION = "2026.05.17.9"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -965,6 +965,8 @@ def public_status(result) -> str:
             result.raw_status_text or "",
             result.source_note or "",
         ])
+        if re.search(r"\bexempt\b", no_record_text, re.I):
+            return "Exempt"
         if re.search(r"no matching|no record|not found|no results|0 records|0 results", no_record_text, re.I):
             return "Not Registered"
         return "Unknown" if result.success else "Site Not Reachable"
@@ -1976,6 +1978,12 @@ def organization_name_variants(
             flags=re.I,
         ).strip()
         ms_expanded = re.sub(r"\bMS\s+Society\b", "Multiple Sclerosis Society", base, flags=re.I).strip()
+        institution_descriptor_removed = re.sub(
+            r"\b(?:national\s+)?(?:medical\s+center|hospital\s+center|hospital)\b\.?\s*$",
+            "",
+            base,
+            flags=re.I,
+        ).strip(" ,;-")
         and_no_punctuation = re.sub(r"[^\w\s]", " ", ampersand_as_and).strip()
         and_no_punctuation = re.sub(r"\s+", " ", and_no_punctuation)
         and_without_suffix = re.sub(
@@ -2022,6 +2030,7 @@ def organization_name_variants(
         with_leading_the = "" if re.match(r"^the\s+", base, re.I) else f"The {base}"
         article_variants = [with_leading_the, without_leading_article] if include_leading_article_variants else []
         for variant in [
+            institution_descriptor_removed,
             without_comma_suffix,
             without_suffix,
             no_comma,
@@ -2353,6 +2362,18 @@ def search_bundled_extension_state(page, org, state: str):
     bundle_org = module.Organization(organization_name=org.organization_name, ein=org.ein)
     if state == "MI":
         external_result = module.search_mi(page, bundle_org, ARTIFACTS_DIR / "MI", True)
+        copied = copy_external_result(org, state, external_result)
+        if public_status(copied) == "Not Registered" and re.search(
+            r"clickable organization summary link|No matching organization link",
+            " ".join([getattr(external_result, "raw_status_text", "") or "", getattr(external_result, "source_note", "") or ""]),
+            re.I,
+        ):
+            # Michigan's EIN search is authoritative. If the exact EIN returns a
+            # row under a registry/legal name that differs from the supplied
+            # public-profile name, use the first EIN-confirmed row instead of
+            # rejecting it on name alone.
+            external_result = module.search_mi(page, module.Organization(organization_name="", ein=org.ein), ARTIFACTS_DIR / "MI", True)
+        return copy_external_result(org, state, external_result)
     elif state == "OH":
         external_result = module.search_oh(page, bundle_org, ARTIFACTS_DIR / "OH", True)
     elif state == "OR":
@@ -2387,11 +2408,114 @@ def search_bundled_extension_state(page, org, state: str):
                 return result
             if not result_is_retryable_name_miss(result):
                 return result
+            try:
+                row_candidates = page.evaluate(
+                    """
+                    () => Array.from(document.querySelectorAll('table tbody tr, table tr')).map((row) => {
+                        const cells = Array.from(row.querySelectorAll('td')).map((cell) => (cell.innerText || cell.textContent || '').replace(/\\s+/g, ' ').trim());
+                        const link = row.querySelector('a');
+                        return { cells, text: (row.innerText || row.textContent || '').replace(/\\s+/g, ' ').trim(), linkText: link ? (link.innerText || link.textContent || '').replace(/\\s+/g, ' ').trim() : '' };
+                    }).filter((row) => row.linkText && row.cells.length >= 1);
+                    """
+                )
+            except Exception:
+                row_candidates = []
+            safe_targets = organization_match_target_variants(org.organization_name, org.ein)
+            best_candidate_name = ""
+            best_candidate_score = -10000
+            for candidate in row_candidates:
+                candidate_name = clean_registry_name(candidate.get("linkText") or (candidate.get("cells") or [""])[0])
+                score = target_name_score(candidate_name, safe_targets)
+                if score > best_candidate_score:
+                    best_candidate_score = score
+                    best_candidate_name = candidate_name
+            if best_candidate_name and best_candidate_score >= 450:
+                external_result = module.search_or(
+                    page,
+                    module.Organization(organization_name=best_candidate_name, ein=org.ein),
+                )
+                result = copy_external_result(org, "OR", external_result)
+                if not result.matched_registry_name:
+                    result.matched_registry_name = best_candidate_name
+                if public_status(result) == "Site Not Reachable":
+                    return result
+                if not result_is_retryable_name_miss(result):
+                    return result
             best_result = result
         return best_result or copy_external_result(org, "OR", module.search_or(page, bundle_org))
     else:
         raise ValueError(f"Unsupported bundled extension state: {state}")
     return copy_external_result(org, state, external_result)
+
+
+def search_mi_name_fallback(page, org):
+    module = state_extension_module("MI")
+    result = checker.StateResult(org.organization_name, org.ein, "MI", checker.STATUS_NOT_REGISTERED, "")
+    safe_targets = organization_match_target_variants(org.organization_name, org.ein)
+    for variant in organization_name_variants(
+        org.organization_name,
+        org.ein,
+        include_ein_aliases=True,
+        include_name_segments=True,
+        include_compact_legal_suffixes=True,
+        include_leading_article_variants=True,
+        include_broad_query_prefixes=False,
+    )[:10]:
+        try:
+            if not module.open_search_form(page):
+                result.error = "MI: Could not reopen search form for name fallback"
+                return result
+            page.locator("#ctl00_MainContent_txtName").fill("")
+            page.locator("#ctl00_MainContent_txtName").fill(variant)
+            page.locator("#ctl00_MainContent_txtEIN").fill("")
+            page.locator("#ctl00_MainContent_btnTextSearch").click(timeout=10000, no_wait_after=True)
+            time.sleep(8)
+            frame = module.find_results_frame(page)
+            if not frame:
+                continue
+            results_text = re.sub(r"\s+", " ", module.body_text(frame, timeout=15000)).strip()
+            if no_registry_results_seen(results_text):
+                continue
+            chosen = module.choose_result_link(frame, variant) or module.choose_result_link(frame, "")
+            if not chosen:
+                continue
+            _, clicked_name, link, href = chosen
+            if target_name_score(clicked_name, safe_targets) < 0:
+                try:
+                    checker_score = checker.candidate_selection_score_for_targets(results_text, safe_targets, results_text)
+                    if checker_score[0] < 0:
+                        continue
+                except Exception:
+                    continue
+            module.click_result_link(frame, link, href)
+            time.sleep(8)
+            detail_frame = module.find_detail_frame(page)
+            if not detail_frame:
+                continue
+            site_name = module.extract_legal_name(detail_frame) or clicked_name or org.organization_name
+            raw_status = module.extract_solicitation_status(detail_frame)
+            charitable_trust_status = module.extract_charitable_trust_status(detail_frame)
+            if not raw_status and not charitable_trust_status:
+                continue
+            result.status = external_status_to_checker_status(module.classify_mi_status(raw_status, charitable_trust_status))
+            result.raw_status_text = (
+                f"Solicitation Registration Status: {raw_status or 'N/A'} | "
+                f"Charitable Trust Registration Status: {charitable_trust_status or 'N/A'} | "
+                "Matched by organization name after EIN search returned no exact result"
+            )
+            result.source_note = "MI tried EIN search first, then used the public organization-name search when the EIN field returned no exact result."
+            result.matched_registry_name = clean_registry_name(site_name)
+            result.success = True
+            return result
+        except Exception as exc:
+            result.error = f"MI name fallback error: {exc}"
+            return result
+    result.status = checker.STATUS_NOT_REGISTERED
+    result.raw_status_text = "No matching organization record"
+    result.source_note = "Michigan EIN and organization-name searches returned no matching result."
+    result.success = True
+    result.error = ""
+    return result
 
 
 def classify_expiration_date(exp_date: date | None) -> str:
@@ -2410,7 +2534,7 @@ def readable_page_text(page) -> str:
 def no_registry_results_seen(text: str) -> bool:
     return bool(re.search(
         r"\b(no\s+(?:matching\s+)?(?:records?|results?|organizations?|licenses?)\s+(?:found|match)|"
-        r"0\s+(?:records?|results?)|your\s+search\s+returned\s+no|sorry,\s+there\s+are\s+no\s+matches|did\s+not\s+match\s+any)\b",
+        r"showing\s+0\s+results?|0\s+(?:records?|results?)|your\s+search\s+returned\s+no|sorry,\s+there\s+are\s+no\s+matches|did\s+not\s+match\s+any)\b",
         text or "",
         re.I,
     ))
@@ -2490,6 +2614,79 @@ def best_row_with_link_by_name(page, targets: list[str], link_pattern: str = r"d
     return best_row.locator("a, button").first if count else None, best_text
 
 
+def normalized_match_name(value: str) -> str:
+    normalized = checker.normalize_name(value or "") if hasattr(checker, "normalize_name") else re.sub(r"\W+", " ", (value or "").lower()).strip()
+    normalized = re.sub(r"\b(the|a|an|inc|incorporated|corp|corporation|llc|ltd|limited)\b", " ", normalized, flags=re.I)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def target_name_score(row_name: str, targets: list[str]) -> int:
+    row_norm = normalized_match_name(row_name)
+    if not row_norm:
+        return -1000
+    best = -1000
+    for target in targets:
+        target_norm = normalized_match_name(target)
+        if not target_norm:
+            continue
+        if row_norm == target_norm:
+            best = max(best, 1000)
+        elif row_norm.startswith(target_norm) or target_norm.startswith(row_norm):
+            shorter = min(len(row_norm.split()), len(target_norm.split()))
+            best = max(best, 700 + shorter)
+        elif target_norm in row_norm or row_norm in target_norm:
+            shorter = min(len(row_norm.split()), len(target_norm.split()))
+            if shorter >= 3:
+                best = max(best, 450 + shorter)
+    return best
+
+
+def clean_registry_name(value: str) -> str:
+    cleaned = re.sub(r"\s+", " ", (value or "").strip())
+    cleaned = re.sub(r"\s*/\s*DBA\s*/\s*Nickname\s*:?.*$", "", cleaned, flags=re.I).strip()
+    cleaned = re.sub(r"\b(Credential|License/Registration Number|Status|Expiration Date)\b.*$", "", cleaned, flags=re.I).strip()
+    return cleaned.strip(" :-")
+
+
+def text_between_labels(text: str, start_label: str, end_labels: list[str]) -> str:
+    compact = re.sub(r"\s+", " ", text or "").strip()
+    if not compact:
+        return ""
+    end_pattern = "|".join(re.escape(label) for label in end_labels)
+    match = re.search(rf"{re.escape(start_label)}\s*:?\s*(.*?)(?=\s+(?:{end_pattern})\s*:?\s|$)", compact, re.I)
+    return re.sub(r"\s+", " ", match.group(1)).strip(" :-") if match else ""
+
+
+def click_nth_details_control(page, index: int) -> bool:
+    locator = page.locator("a, button, input[type='button'], input[type='submit']")
+    try:
+        count = locator.count()
+    except Exception:
+        return False
+    seen = 0
+    for item_index in range(count):
+        item = locator.nth(item_index)
+        try:
+            label = " ".join([
+                item.inner_text(timeout=500) if item.evaluate("el => el.tagName.toLowerCase() !== 'input'") else "",
+                item.get_attribute("value") or "",
+                item.get_attribute("title") or "",
+                item.get_attribute("aria-label") or "",
+            ])
+        except Exception:
+            continue
+        if not re.search(r"details|view", label or "", re.I):
+            continue
+        if seen == index:
+            try:
+                item.click(timeout=5000)
+            except Exception:
+                item.click(force=True, timeout=5000)
+            return True
+        seen += 1
+    return False
+
+
 def search_ct(page, org):
     url = "https://www.elicense.ct.gov/lookup/licenselookup.aspx"
     original_name = org.organization_name
@@ -2541,30 +2738,111 @@ def search_ct(page, org):
                 result.success = True
                 best_result = result
                 continue
-            link, row_text = best_row_with_link_by_name(page, safe_targets, r"details|view")
-            if not link:
-                continue
-            try:
-                link.click(timeout=5000)
-            except Exception:
-                link.click(force=True, timeout=5000)
-            checker.safe_wait_for_network_idle(page, timeout=10000)
-            detail_text = readable_page_text(page)
-            exp_date = first_date_near_label(detail_text, ["Expiration Date", "Expiration", "Expires", "Expire Date"])
-            matched_name = (
-                checker.extract_labeled_value_from_text(detail_text, ["Business Name", "Name", "Licensee Name", "Organization Name"])
-                or re.split(r"\s{2,}", row_text)[0].strip()
+            candidate_rows = page.evaluate(
+                """
+                () => Array.from(document.querySelectorAll('tr')).map((row, index) => {
+                    const text = (row.innerText || row.textContent || '').replace(/\\s+/g, ' ').trim();
+                    const detailControl = Array.from(row.querySelectorAll('a,button,input')).find((el) => {
+                        const label = ((el.innerText || el.textContent || '') + ' ' + (el.value || '') + ' ' + (el.title || '')).trim();
+                        return /details|view/i.test(label);
+                    });
+                    const hasDetails = Array.from(row.querySelectorAll('a,button,input')).some((el) => {
+                        const label = ((el.innerText || el.textContent || '') + ' ' + (el.value || '') + ' ' + (el.title || '')).trim();
+                        return /details|view/i.test(label);
+                    });
+                    return { index, text, hasDetails, detailHref: detailControl ? (detailControl.getAttribute('href') || '') : '' };
+                }).filter((row) => row.hasDetails && row.text && /Credential|Status|PUBLIC CHARITY|CHR\\./i.test(row.text));
+                """
             )
+            best_candidate = None
+            best_score = -10000
+            details_index = 0
+            for candidate in candidate_rows:
+                row_text = re.sub(r"\s+", " ", candidate.get("text") or "").strip()
+                row_name = clean_registry_name(re.split(r"\bCredential\b|\bStatus\b|\bLicense\b", row_text, maxsplit=1, flags=re.I)[0])
+                name_score = target_name_score(row_name, safe_targets)
+                if name_score < 0:
+                    details_index += 1
+                    continue
+                score = name_score
+                if re.search(r"\bPUBLIC\s+CHARITY\b|\bCHR\.", row_text, re.I):
+                    score += 80
+                else:
+                    score -= 250
+                if re.search(r"\bEXEMPT\b", row_text, re.I):
+                    score += 120
+                if re.search(r"\bSCIENTIFIC\s+RESEARCH\b|\bRESEARCH\s+CERTIFICATE\b", row_text, re.I):
+                    score -= 300
+                if score > best_score:
+                    best_score = score
+                    best_candidate = {**candidate, "details_index": details_index, "row_text": row_text, "row_name": row_name}
+                details_index += 1
+            if not best_candidate:
+                continue
+            row_text = best_candidate["row_text"]
+            clicked_detail = False
+            detail_href = (best_candidate.get("detailHref") or "").strip()
+            if detail_href.lower().startswith("javascript:"):
+                try:
+                    clicked_detail = bool(page.evaluate("(href) => { eval(href.slice(11)); return true; }", detail_href))
+                except Exception:
+                    clicked_detail = False
+            if not clicked_detail and not click_nth_details_control(page, best_candidate["details_index"]):
+                continue
+            checker.safe_wait_for_network_idle(page, timeout=10000)
+            try:
+                page.get_by_text(re.compile(r"License\s+Details|Credential\s+Details", re.I)).wait_for(timeout=6000)
+            except Exception:
+                time.sleep(4)
+            time.sleep(2)
+            detail_text = readable_page_text(page)
+            detail_segment = detail_text
+            for marker in ("License Details", "Lookup Detail View"):
+                marker_index = detail_segment.rfind(marker)
+                if marker_index >= 0:
+                    detail_segment = detail_segment[marker_index:]
+                    break
+            if detail_segment == detail_text and not re.search(r"Registration\s+Information|Expiration\s+Date", detail_segment, re.I):
+                detail_segment = row_text
+            exp_date = first_date_near_label(detail_segment, ["Expiration Date", "Expiration", "Expires", "Expire Date"])
+            matched_name = clean_registry_name(
+                checker.extract_labeled_value_from_text(detail_segment, ["Business Name", "DBA Name", "Name and Address", "Name", "Licensee Name", "Organization Name"])
+                or best_candidate.get("row_name", "")
+            )
+            credential = text_between_labels(detail_segment, "Credential", ["Credential Description", "Registration Type", "Status", "Effective Date", "Expiration Date"]) or text_between_labels(row_text, "Credential", ["Credential Description", "Registration Type", "Status", "Effective Date", "Expiration Date"])
+            credential_description = text_between_labels(detail_segment, "Credential Description", ["Registration Type", "Status", "Effective Date", "Expiration Date"]) or text_between_labels(row_text, "Credential Description", ["Department", "Status", "Effective Date", "Expiration Date"])
+            registration_type = text_between_labels(detail_segment, "Registration Type", ["Status", "Effective Date", "Expiration Date", "Status Reason"])
+            status_text = text_between_labels(detail_segment, "Status", ["Status Reason", "Effective Date", "Expiration Date", "Credential", "Registration Type"]) or text_between_labels(row_text, "Status", ["Status Reason", "City", "DBA", "Details"])
+            status_reason = text_between_labels(detail_segment, "Status Reason", ["Effective Date", "Expiration Date", "Credential", "Registration Type"]) or text_between_labels(row_text, "Status Reason", ["City", "DBA", "Details"])
+            status_after_expiration = re.search(r"Expiration\s+Date\s+\d{1,2}/\d{1,2}/\d{2,4}\s+Status\s+([A-Z ]{3,40})(?:\s+\d{1,2}/\d{1,2}/\d{4}|$)", detail_segment, re.I)
+            if status_after_expiration:
+                status_text = re.sub(r"\s+", " ", status_after_expiration.group(1)).strip()
+            combined_detail = " ".join([detail_segment, row_text, credential, credential_description, registration_type, status_text, status_reason])
             result.matched_registry_name = matched_name
-            result.matched_registry_identifier = checker.extract_registry_identifier_from_text(detail_text, org.ein) if hasattr(checker, "extract_registry_identifier_from_text") else ""
-            if exp_date:
+            credential_match = re.search(r"\b[A-Z]{2,5}\.[0-9A-Z.-]+", " ".join([credential, row_text, detail_segment]))
+            result.matched_registry_identifier = credential_match.group(0) if credential_match else (checker.extract_registry_identifier_from_text(detail_text, org.ein) if hasattr(checker, "extract_registry_identifier_from_text") else "")
+            if re.search(r"\bEXEMPT\b", " ".join([credential, credential_description, registration_type, row_text]), re.I):
+                result.status = "Exempt"
+            elif re.search(r"\b(non\W*compliant|not\s+in\s+compliance)\b", combined_detail, re.I):
+                result.status = checker.STATUS_DELINQUENT
+            elif re.search(r"\bINACTIVE\b", status_text or combined_detail, re.I):
+                result.status = "Closed / Withdrawn / Canceled"
+            elif exp_date:
                 result.status = classify_expiration_date(exp_date)
             elif re.search(r"\bStatus\s+ACTIVE\b|\bStatus\s+Reason\s+CURRENT\b|\bACTIVE\s+Status\s+Reason\s+CURRENT\b", detail_text, re.I):
                 result.status = checker.STATUS_CURRENT
             else:
                 result.status = checker.STATUS_UNKNOWN
-            result.raw_status_text = f"Expiration Date {format_date(exp_date)}" if exp_date else "Connecticut registry record found"
-            result.source_note = "CT uses the expiration date shown by the public registry."
+            result.raw_status_text = " | ".join(
+                item for item in [
+                    f"Status: {status_text}" if status_text else "",
+                    f"Status Reason: {status_reason}" if status_reason else "",
+                    f"Registration Type: {registration_type}" if registration_type else "",
+                    f"Credential Description: {credential_description}" if credential_description else "",
+                    f"Expiration Date {format_date(exp_date)}" if exp_date else "",
+                ]
+            ) or "Connecticut registry record found"
+            result.source_note = "CT uses the selected public-registry detail record, including exemption, inactive/noncompliance, and expiration fields."
             result.success = True
             return result
         except Exception as exc:
@@ -2576,15 +2854,17 @@ def search_ct(page, org):
 def search_fl(page, org):
     url = "https://csapp.fdacs.gov/CSPublicApp/CheckACharity/CheckACharity.aspx"
     original_name = org.organization_name
+    safe_targets = organization_match_target_variants(original_name, org.ein)
     best_result = None
     for variant in organization_name_variants(
         original_name,
         org.ein,
         include_ein_aliases=True,
-        include_name_segments=True,
+        include_name_segments=False,
         include_compact_legal_suffixes=True,
         include_leading_article_variants=True,
-    )[:14]:
+        include_broad_query_prefixes=False,
+    )[:10]:
         result = checker.StateResult(original_name, org.ein, "FL", checker.STATUS_UNKNOWN, url)
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
@@ -2614,15 +2894,47 @@ def search_fl(page, org):
                 result.success = True
                 best_result = result
                 continue
-            exp_date = first_date_near_label(text, ["Expiration Date", "Expiration", "Expires"])
+            candidate_rows = page.evaluate(
+                """
+                () => Array.from(document.querySelectorAll('tr')).map((row) => {
+                    const text = (row.innerText || row.textContent || '').replace(/\\s+/g, ' ').trim();
+                    return { text };
+                }).filter((row) => row.text && /License\\/Registration Number|Expiration Date|Solicitation|Business Name|CH\\d+/i.test(row.text));
+                """
+            )
+            best_candidate = None
+            best_score = -10000
+            for candidate in candidate_rows:
+                row_text = re.sub(r"\s+", " ", candidate.get("text") or "").strip()
+                row_name = (
+                    text_between_labels(row_text, "Business Name", ["License/Registration Number", "Registration Number", "Expiration Date", "Status"])
+                    or clean_registry_name(re.split(r"\bLicense/Registration Number\b|\bRegistration Number\b|\bExpiration Date\b", row_text, maxsplit=1, flags=re.I)[0])
+                )
+                name_score = target_name_score(row_name, safe_targets)
+                if name_score < 0:
+                    continue
+                if re.search(r"\bAdvanced\s+Search\b", row_name, re.I):
+                    continue
+                score = name_score
+                if re.search(r"\bCH\d+\b", row_text, re.I):
+                    score += 40
+                if score > best_score:
+                    best_score = score
+                    best_candidate = {"row_text": row_text, "row_name": row_name}
+            if not best_candidate:
+                best_result = result
+                continue
+            row_text = best_candidate["row_text"]
+            exp_date = first_date_near_label(row_text, ["Expiration Date", "Expiration", "Expires"])
             if not exp_date:
                 best_result = result
                 continue
             result.status = classify_expiration_date(exp_date)
             result.raw_status_text = f"Expiration Date {format_date(exp_date)}"
             result.source_note = "FL uses the expiration date shown by Check-A-Charity."
-            result.matched_registry_name = checker.extract_labeled_value_from_text(text, ["Business Name", "Organization Name", "Name", "Charity Name"])
-            result.matched_registry_identifier = checker.extract_registry_identifier_from_text(text, org.ein) if hasattr(checker, "extract_registry_identifier_from_text") else ""
+            result.matched_registry_name = clean_registry_name(best_candidate["row_name"])
+            id_match = re.search(r"\bCH\d+\b", row_text, re.I)
+            result.matched_registry_identifier = id_match.group(0).upper() if id_match else ""
             result.success = True
             return result
         except Exception as exc:
@@ -2646,65 +2958,353 @@ def search_mn(page, org):
     url = "https://www.ag.state.mn.us/Charity/Search/"
     result = checker.StateResult(org.organization_name, org.ein, "MN", checker.STATUS_UNKNOWN, url)
     ein_digits = re.sub(r"\D", "", org.ein or "")
+    formatted_ein = format_ein(org.ein)
+    search_values = []
+    for value in [ein_digits, formatted_ein, org.ein]:
+        value = (value or "").strip()
+        if value and value not in search_values:
+            search_values.append(value)
     try:
-        page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        checker.safe_wait_for_network_idle(page, timeout=8000)
-        input_box = checker.find_visible_input(page, [
-            '#txtEIN',
-            'input[name*="EIN" i]',
-            'input[id*="EIN" i]',
-            'input[name*="FEIN" i]',
-            'input[type="text"]',
-        ])
-        if not input_box:
-            result.error = "MN: Could not find EIN input"
+        for search_value in search_values:
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            checker.safe_wait_for_network_idle(page, timeout=8000)
+            input_box = checker.find_visible_input(page, [
+                '#txtEIN',
+                'input[name*="EIN" i]',
+                'input[id*="EIN" i]',
+                'input[name*="FEIN" i]',
+                'input[type="text"]',
+            ])
+            if not input_box:
+                result.error = "MN: Could not find EIN input"
+                return result
+            input_box.fill("")
+            input_box.fill(search_value)
+            try:
+                page.locator('input[name="cmdSearch"], input[type="submit"]').last.click(timeout=5000)
+            except Exception:
+                page.keyboard.press("Enter")
+            checker.safe_wait_for_network_idle(page, timeout=10000)
+            time.sleep(1)
+            text = readable_page_text(page)
+            if no_registry_results_seen(text):
+                result.status = checker.STATUS_NOT_REGISTERED
+                result.raw_status_text = "No matching EIN result"
+                result.source_note = "Minnesota Attorney General charity search returned no matching EIN record."
+                result.success = True
+                continue
+            detail_link = None
+            if ein_digits:
+                detail_link = page.locator(f'a[href*="FederalID={ein_digits}"]').first
+                try:
+                    if detail_link.count() == 0:
+                        detail_link = page.locator(f'a[href*="{formatted_ein}"]').first
+                except Exception:
+                    pass
+            try:
+                if not detail_link or detail_link.count() == 0:
+                    detail_link = page.locator("a[href*='FederalID=']").first
+            except Exception:
+                detail_link = None
+            if not detail_link or detail_link.count() == 0:
+                result.status = checker.STATUS_NOT_REGISTERED
+                result.raw_status_text = "No matching EIN result"
+                result.source_note = "Minnesota Attorney General charity search did not expose a matching FederalID detail link for the requested EIN."
+                result.success = True
+                continue
+            try:
+                detail_link.click(timeout=5000)
+                checker.safe_wait_for_network_idle(page, timeout=10000)
+                time.sleep(1)
+            except Exception:
+                pass
+            detail_text = readable_page_text(page)
+            if ein_digits and ein_digits not in re.sub(r"\D", "", detail_text):
+                result.status = checker.STATUS_NOT_REGISTERED
+                result.raw_status_text = "No matching EIN result"
+                result.source_note = "Minnesota search returned a possible record, but the public detail did not confirm the requested EIN."
+                result.success = True
+                continue
+            year_match = re.search(r"(?:Fiscal\s+Year\s+Ending|For\s+Fiscal\s+Year\s+Ending)\s*:?\s*(?:\d{1,2}[/-]\d{1,2}[/-])?(20\d{2})", detail_text, re.I)
+            year = int(year_match.group(1)) if year_match else None
+            result.status = mn_status_from_fiscal_year(year)
+            result.raw_status_text = f"Fiscal Year Ending {year}" if year else "Minnesota registry record found"
+            result.source_note = "MN uses the latest fiscal year ending shown by the Attorney General charity search. CharityClarity tried both undashed and dashed EIN formats when needed."
+            result.matched_registry_name = checker.extract_labeled_value_from_text(detail_text, ["Organization Name", "Charity Name", "Name"])
+            result.matched_registry_identifier = checker.extract_registry_identifier_from_text(detail_text, org.ein) if hasattr(checker, "extract_registry_identifier_from_text") else ""
+            result.success = True
             return result
-        input_box.fill("")
-        input_box.fill(ein_digits or org.ein)
+        safe_targets = organization_match_target_variants(org.organization_name, org.ein)
+        for variant in organization_name_variants(
+            org.organization_name,
+            org.ein,
+            include_ein_aliases=True,
+            include_name_segments=True,
+            include_compact_legal_suffixes=True,
+            include_leading_article_variants=True,
+            include_broad_query_prefixes=False,
+        )[:10]:
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            checker.safe_wait_for_network_idle(page, timeout=8000)
+            org_box = checker.find_visible_input(page, ["#txtOrg", 'input[name="txtOrg"]'])
+            if not org_box:
+                break
+            org_box.fill("")
+            org_box.fill(variant)
+            try:
+                page.locator('input[name="cmdSearch"], input[type="submit"]').last.click(timeout=5000)
+            except Exception:
+                page.keyboard.press("Enter")
+            checker.safe_wait_for_network_idle(page, timeout=10000)
+            time.sleep(1)
+            text = readable_page_text(page)
+            if no_registry_results_seen(text):
+                continue
+            try:
+                row_candidates = page.evaluate(
+                    """
+                    () => Array.from(document.querySelectorAll('table tr, tr')).map((row, index) => {
+                        const text = (row.innerText || row.textContent || '').replace(/\\s+/g, ' ').trim();
+                        const link = row.querySelector('a[href*="CHR_GeneralInfo"]');
+                        return { index, text, linkText: link ? (link.innerText || link.textContent || '').replace(/\\s+/g, ' ').trim() : '' };
+                    }).filter((row) => row.linkText && row.text);
+                    """
+                )
+            except Exception:
+                row_candidates = []
+            best_index = None
+            best_score = -10000
+            best_name = ""
+            for candidate in row_candidates:
+                row_text = candidate.get("text") or ""
+                score = target_name_score(candidate.get("linkText") or "", safe_targets)
+                try:
+                    checker_score = checker.candidate_selection_score_for_targets(row_text, safe_targets, row_text)
+                    if checker_score[0] >= 0:
+                        score = max(score, 520 + checker_score[0] * 20 + checker_score[1])
+                except Exception:
+                    pass
+                if score > best_score:
+                    best_score = score
+                    best_index = candidate.get("index")
+                    best_name = candidate.get("linkText") or ""
+            if best_index is None or best_score < 450:
+                continue
+            try:
+                link = page.get_by_role("link", name=re.compile(re.escape(best_name), re.I)).first
+            except Exception:
+                link = page.locator("a[href*='CHR_GeneralInfo']").first
+            try:
+                link.click(timeout=5000)
+                checker.safe_wait_for_network_idle(page, timeout=10000)
+                time.sleep(1)
+            except Exception:
+                continue
+            detail_text = readable_page_text(page)
+            year_match = re.search(r"(?:Fiscal\s+Year\s+Ending|For\s+Fiscal\s+Year\s+Ending)\s*:?\s*(?:\d{1,2}[/-]\d{1,2}[/-])?(20\d{2})", detail_text, re.I)
+            year = int(year_match.group(1)) if year_match else None
+            status_line = text_between_labels(detail_text, "Status", ["Extension", "Financial Information", "For Fiscal Year Ending"])
+            if re.search(r"\binactive|closed|withdrawn|cancel", status_line or "", re.I):
+                result.status = "Closed / Withdrawn / Canceled"
+            else:
+                result.status = mn_status_from_fiscal_year(year)
+            result.raw_status_text = " | ".join(item for item in [
+                f"Status: {status_line}" if status_line else "",
+                f"Fiscal Year Ending {year}" if year else "",
+                "Matched by organization name after EIN search returned no exact result",
+            ])
+            result.source_note = "MN tried EIN search first, then used the public organization-name search when the EIN field returned no exact result."
+            result.matched_registry_name = clean_registry_name(best_name or checker.extract_labeled_value_from_text(detail_text, ["Organization Name", "Charity Name", "Name"]))
+            federal_match = re.search(r"FEDERAL\s+ID#?\s*([0-9-]+)", detail_text, re.I)
+            result.matched_registry_identifier = federal_match.group(1) if federal_match else ""
+            result.success = True
+            return result
+        return result
+    except Exception as exc:
+        result.error = f"MN error: {exc}"
+        return result
+
+
+def ohio_due_date(most_recent_filing_year: int, fiscal_year_end_month: int) -> date:
+    next_fiscal_year = most_recent_filing_year + 1
+    _, fiscal_end_day = calendar.monthrange(next_fiscal_year, fiscal_year_end_month)
+    fiscal_end_date = date(next_fiscal_year, fiscal_year_end_month, fiscal_end_day)
+    due_month_index = fiscal_end_date.month - 1 + 5
+    due_year = fiscal_end_date.year + due_month_index // 12
+    due_month = due_month_index % 12 + 1
+    return date(due_year, due_month, 15)
+
+
+def search_oh(page, org):
+    url = "https://charitableregistration.ohioago.gov/Charities/ResearchCharities"
+    result = checker.StateResult(org.organization_name or format_ein(org.ein), org.ein, "OH", checker.STATUS_UNKNOWN, url)
+    ein_digits = re.sub(r"\D", "", org.ein or "")
+    formatted_ein = format_ein(org.ein)
+    month_names = {name.lower(): index for index, name in enumerate(calendar.month_name) if name}
+    month_names.update({name.lower(): index for index, name in enumerate(calendar.month_abbr) if name})
+    if len(ein_digits) != 9:
+        result.error = "OH: EIN search requires a 9-digit EIN."
+        return result
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=45000)
+        checker.safe_wait_for_network_idle(page, timeout=8000)
+        page.locator("#EIN").fill("")
+        page.locator("#EIN").fill(formatted_ein)
         try:
-            page.locator('input[name="cmdSearch"], input[type="submit"]').last.click(timeout=5000)
+            page.locator("#ddlEINFilterCriteriaList").select_option(label=re.compile("Equals", re.I))
         except Exception:
-            page.keyboard.press("Enter")
-        checker.safe_wait_for_network_idle(page, timeout=10000)
-        time.sleep(1)
+            try:
+                page.locator("#ddlEINFilterCriteriaList").select_option(value="Equals")
+            except Exception:
+                pass
+        page.locator("#OnSubmit").click(timeout=10000)
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=15000)
+        except Exception:
+            pass
+        checker.safe_wait_for_network_idle(page, timeout=12000)
+        time.sleep(2)
         text = readable_page_text(page)
         if no_registry_results_seen(text):
             result.status = checker.STATUS_NOT_REGISTERED
             result.raw_status_text = "No matching EIN result"
-            result.source_note = "Minnesota Attorney General charity search returned no matching EIN record."
+            result.source_note = "Ohio EIN search returned no matching record."
             result.success = True
             return result
-        detail_link = page.locator(f'a[href*="FederalID={ein_digits}"]').first if ein_digits else None
-        if not detail_link or detail_link.count() == 0:
-            result.status = checker.STATUS_NOT_REGISTERED
-            result.raw_status_text = "No matching EIN result"
-            result.source_note = "Minnesota Attorney General charity search did not expose a matching FederalID detail link for the requested EIN."
-            result.success = True
-            return result
-        try:
-            detail_link.click(timeout=5000)
-            checker.safe_wait_for_network_idle(page, timeout=10000)
-            time.sleep(1)
-        except Exception:
-            pass
+        detail_id = page.evaluate(
+            """
+            (einDigits) => {
+                const rows = Array.from(document.querySelectorAll('tr'));
+                for (const row of rows) {
+                    const rowText = (row.innerText || row.textContent || '').replace(/\\D/g, '');
+                    if (!rowText.includes(einDigits)) continue;
+                    const links = Array.from(row.querySelectorAll('a'));
+                    for (const link of links) {
+                        const onclick = link.getAttribute('onclick') || '';
+                        const match = onclick.match(/OpenDetailsLink\\('[^']+','(\\d+)'\\)/i);
+                        if (match) return match[1];
+                    }
+                }
+                const body = document.body ? document.body.innerHTML : '';
+                const match = body.match(/OpenDetailsLink\\('OrganizationDetails','(\\d+)'\\)/i);
+                return match ? match[1] : '';
+            }
+            """,
+            ein_digits,
+        )
+        if not detail_id:
+            safe_targets = organization_match_target_variants(org.organization_name, org.ein)
+            for variant in organization_name_variants(
+                org.organization_name,
+                org.ein,
+                include_ein_aliases=True,
+                include_name_segments=True,
+                include_compact_legal_suffixes=True,
+                include_leading_article_variants=True,
+                include_broad_query_prefixes=False,
+            )[:10]:
+                page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                checker.safe_wait_for_network_idle(page, timeout=8000)
+                page.locator("#OrgNameOrDBAName").fill("")
+                page.locator("#OrgNameOrDBAName").fill(variant)
+                try:
+                    page.locator("#ddlOrgNameFilterCriteriaList").select_option(label="Contains")
+                except Exception:
+                    pass
+                page.locator("#OnSubmit").click(timeout=10000)
+                try:
+                    page.wait_for_load_state("domcontentloaded", timeout=15000)
+                except Exception:
+                    pass
+                checker.safe_wait_for_network_idle(page, timeout=12000)
+                time.sleep(2)
+                detail_id = page.evaluate(
+                    """
+                    ({ einDigits, targets }) => {
+                        const normalize = (value) => (value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\\b(the|a|an|inc|incorporated|corp|corporation|llc|ltd)\\b/g, ' ').replace(/\\s+/g, ' ').trim();
+                        const targetNorms = (targets || []).map(normalize).filter(Boolean);
+                        const rows = Array.from(document.querySelectorAll('tr'));
+                        let best = null;
+                        let bestScore = -1;
+                        for (const row of rows) {
+                            const text = (row.innerText || row.textContent || '').replace(/\\s+/g, ' ').trim();
+                            if (!text) continue;
+                            const digits = text.replace(/\\D/g, '');
+                            let score = digits.includes(einDigits) ? 1000 : -1;
+                            const cells = Array.from(row.querySelectorAll('td')).map((cell) => (cell.innerText || cell.textContent || '').replace(/\\s+/g, ' ').trim());
+                            const rowName = cells[0] || text;
+                            const rowNorm = normalize(rowName);
+                            for (const target of targetNorms) {
+                                if (rowNorm && (rowNorm === target || rowNorm.includes(target) || target.includes(rowNorm))) {
+                                    score = Math.max(score, 500 + Math.min(rowNorm.length, target.length));
+                                }
+                            }
+                            if (score < bestScore) continue;
+                            const link = Array.from(row.querySelectorAll('a')).find((a) => /View Details/i.test((a.innerText || a.textContent || '')));
+                            const onclick = link ? (link.getAttribute('onclick') || '') : '';
+                            const match = onclick.match(/OpenDetailsLink\\('[^']+','(\\d+)'\\)/i);
+                            if (match) {
+                                best = match[1];
+                                bestScore = score;
+                            }
+                        }
+                        return best || '';
+                    }
+                    """,
+                    {"einDigits": ein_digits, "targets": safe_targets},
+                )
+                if detail_id:
+                    break
+            if not detail_id:
+                result.status = checker.STATUS_NOT_REGISTERED
+                result.raw_status_text = "No matching EIN or organization-name result"
+                result.source_note = "Ohio EIN search did not return a detail link, and the organization-name fallback did not find a matching Ohio record."
+                result.success = True
+                return result
+        detail_url = f"https://charitableregistration.ohioago.gov/Charities/OrganizationDetails/{detail_id}"
+        page.goto(detail_url, wait_until="domcontentloaded", timeout=45000)
+        checker.safe_wait_for_network_idle(page, timeout=10000)
+        time.sleep(1)
         detail_text = readable_page_text(page)
-        if ein_digits and ein_digits not in re.sub(r"\D", "", detail_text):
+        if ein_digits not in re.sub(r"\D", "", detail_text):
             result.status = checker.STATUS_NOT_REGISTERED
             result.raw_status_text = "No matching EIN result"
-            result.source_note = "Minnesota search returned a possible record, but the public detail did not confirm the requested EIN."
+            result.source_note = "Ohio detail page did not confirm the requested EIN."
             result.success = True
             return result
-        year_match = re.search(r"(?:Fiscal\s+Year\s+Ending|For\s+Fiscal\s+Year\s+Ending)\s*:?\s*(?:\d{1,2}[/-]\d{1,2}[/-])?(20\d{2})", detail_text, re.I)
-        year = int(year_match.group(1)) if year_match else None
-        result.status = mn_status_from_fiscal_year(year)
-        result.raw_status_text = f"Fiscal Year Ending {year}" if year else "Minnesota registry record found"
-        result.source_note = "MN uses the latest fiscal year ending shown by the Attorney General charity search."
-        result.matched_registry_name = checker.extract_labeled_value_from_text(detail_text, ["Organization Name", "Charity Name", "Name"])
-        result.matched_registry_identifier = checker.extract_registry_identifier_from_text(detail_text, org.ein) if hasattr(checker, "extract_registry_identifier_from_text") else ""
+        site_name = text_between_labels(detail_text, "Organization Name", ["Organization Phone", "EIN", "Registration Status"])
+        registration_status = text_between_labels(detail_text, "Registration Status", ["Annual Reports Filed", "Most Recent Report Filing Year", "Fiscal Year End"])
+        filing_year_raw = text_between_labels(detail_text, "Most Recent Report Filing Year", ["The financial information below", "Fiscal Year End", "Total Revenue"])
+        fiscal_year_end_raw = text_between_labels(detail_text, "Fiscal Year End", ["Street Address", "Organization Phone", "Most Recent Report Filing Year"])
+        filing_year_match = re.search(r"\b(20\d{2})\b", filing_year_raw or "")
+        fiscal_month = month_names.get((fiscal_year_end_raw or "").split()[0].lower()) if fiscal_year_end_raw else None
+        result.source_url = detail_url
+        result.matched_registry_name = clean_registry_name(site_name)
+        result.matched_registry_identifier = detail_id
+        result.raw_status_text = (
+            f"Registration Status: {registration_status or 'N/A'} | "
+            f"Most Recent Report Filing Year: {filing_year_raw or 'N/A'} | "
+            f"Fiscal Year End: {fiscal_year_end_raw or 'N/A'}"
+        )
+        if re.search(r"\bexempt\b", registration_status or "", re.I):
+            result.status = "Exempt"
+        elif re.search(r"\bpending\b", registration_status or "", re.I):
+            result.status = "Pending"
+        elif re.search(r"\b(revoked|suspended)\b", registration_status or "", re.I):
+            result.status = registration_status.title()
+        elif filing_year_match and fiscal_month:
+            due = ohio_due_date(int(filing_year_match.group(1)), fiscal_month)
+            result.status = classify_expiration_date(due)
+            result.raw_status_text += f" | Next Due: {format_date(due)}"
+        elif re.search(r"\bregistered\b|\bin\s+compliance\b|\byes\b", registration_status or "", re.I):
+            result.status = checker.STATUS_CURRENT
+        else:
+            result.status = checker.STATUS_UNKNOWN
+        result.source_note = "OH uses EIN search first and computes the next base annual-report due date from the public detail page."
         result.success = True
         return result
     except Exception as exc:
-        result.error = f"MN error: {exc}"
+        result.error = f"OH error: {exc}"
         return result
 
 
@@ -5161,12 +5761,16 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     body = hi_detail_body(page)
             elif state == "MI":
                 result = search_bundled_extension_state(page, org, "MI")
+                if public_status(result) == "Not Registered":
+                    fallback_result = search_mi_name_fallback(page, org)
+                    if public_status(fallback_result) != "Not Registered":
+                        result = fallback_result
                 body = registry_page_body(page)
             elif state == "MN":
                 result = search_mn(page, org)
                 body = registry_page_body(page)
             elif state == "OH":
-                result = search_bundled_extension_state(page, org, "OH")
+                result = search_oh(page, org)
                 body = registry_page_body(page)
             elif state == "WI":
                 result = search_wi(page, org)
