@@ -2867,8 +2867,11 @@ def search_fl(page, org):
     )[:10]:
         result = checker.StateResult(original_name, org.ein, "FL", checker.STATUS_UNKNOWN, url)
         try:
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            checker.safe_wait_for_network_idle(page, timeout=8000)
+            page.goto(url, wait_until="commit", timeout=20000)
+            try:
+                page.locator('input[name*="BusinessName" i], input[id*="BusinessName" i], input[type="text"]').first.wait_for(state="visible", timeout=12000)
+            except Exception:
+                checker.safe_wait_for_network_idle(page, timeout=5000)
             input_box = checker.find_visible_input(page, [
                 'input[name*="BusinessName" i]',
                 'input[id*="BusinessName" i]',
