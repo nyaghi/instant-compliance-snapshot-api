@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.17.13"
+APP_VERSION = "2026.05.17.14"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -2428,6 +2428,9 @@ def search_mi_name_fallback(page, org):
     module = state_extension_module("MI")
     result = checker.StateResult(org.organization_name, org.ein, "MI", checker.STATUS_NOT_REGISTERED, "")
     safe_targets = organization_match_target_variants(org.organization_name, org.ein)
+    started = time.perf_counter()
+    original_has_hyphen = "-" in (org.organization_name or "")
+    variants = []
     for variant in organization_name_variants(
         org.organization_name,
         org.ein,
@@ -2436,7 +2439,19 @@ def search_mi_name_fallback(page, org):
         include_compact_legal_suffixes=True,
         include_leading_article_variants=True,
         include_broad_query_prefixes=False,
-    )[:10]:
+    ):
+        if not original_has_hyphen and "-" in variant:
+            continue
+        if variant not in variants:
+            variants.append(variant)
+    for variant in variants[:6]:
+        if time.perf_counter() - started > 110:
+            result.status = checker.STATUS_NOT_REGISTERED
+            result.raw_status_text = "No matching organization record"
+            result.source_note = "Michigan EIN search returned no exact result, and the bounded organization-name fallback found no matching record before the safe retry limit."
+            result.success = True
+            result.error = ""
+            return result
         try:
             if not module.open_search_form(page):
                 result.error = "MI: Could not reopen search form for name fallback"
