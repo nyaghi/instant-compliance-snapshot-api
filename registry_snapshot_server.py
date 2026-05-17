@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.17.10"
+APP_VERSION = "2026.05.17.11"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -2901,6 +2901,10 @@ def search_fl(page, org):
                     best_score = score
                     best_candidate = {"row_text": row_text, "row_name": row_name}
             if not best_candidate:
+                result.status = checker.STATUS_NOT_REGISTERED
+                result.raw_status_text = "No matching organization record"
+                result.source_note = "Florida Check-A-Charity returned search results, but none safely matched the requested organization."
+                result.success = True
                 best_result = result
                 continue
             row_text = best_candidate["row_text"]
