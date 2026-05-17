@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.17.11"
+APP_VERSION = "2026.05.17.13"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -2831,8 +2831,28 @@ def search_fl(page, org):
     url = "https://csapp.fdacs.gov/CSPublicApp/CheckACharity/CheckACharity.aspx"
     original_name = org.organization_name
     safe_targets = organization_match_target_variants(original_name, org.ein)
-    best_result = None
-    for variant in organization_name_variants(
+
+    def load_fl_search_page():
+        last_error = None
+        for attempt in range(2):
+            try:
+                page.goto(url, wait_until="commit", timeout=25000)
+                return
+            except Exception as exc:
+                last_error = exc
+                try:
+                    page.evaluate("window.stop()")
+                except Exception:
+                    pass
+                try:
+                    page.goto("about:blank", wait_until="commit", timeout=5000)
+                except Exception:
+                    pass
+                if attempt == 0:
+                    time.sleep(1)
+        raise last_error
+
+    generated_variants = organization_name_variants(
         original_name,
         org.ein,
         include_ein_aliases=True,
@@ -2840,10 +2860,23 @@ def search_fl(page, org):
         include_compact_legal_suffixes=True,
         include_leading_article_variants=True,
         include_broad_query_prefixes=False,
-    )[:10]:
+    )
+    original_has_hyphen = "-" in (original_name or "")
+    variants = []
+    for variant in generated_variants:
+        # Florida's partial-name search is slow and sometimes stalls when hit
+        # repeatedly. Avoid synthetic hyphen probes unless the source name
+        # actually contains a hyphen; legal suffix/article variants preserve
+        # the useful coverage without multiplying no-match page loads.
+        if not original_has_hyphen and "-" in variant:
+            continue
+        if variant not in variants:
+            variants.append(variant)
+    best_result = None
+    for variant in variants[:5]:
         result = checker.StateResult(original_name, org.ein, "FL", checker.STATUS_UNKNOWN, url)
         try:
-            page.goto(url, wait_until="commit", timeout=20000)
+            load_fl_search_page()
             try:
                 page.locator('input[name*="BusinessName" i], input[id*="BusinessName" i], input[type="text"]').first.wait_for(state="visible", timeout=12000)
             except Exception:
