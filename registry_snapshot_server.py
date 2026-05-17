@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.17.1"
+APP_VERSION = "2026.05.17.7"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -2321,6 +2321,16 @@ def external_status_to_checker_status(status: str) -> str:
 
 def copy_external_result(org, state: str, external_result):
     status = external_status_to_checker_status(getattr(external_result, "status", ""))
+    raw_status = getattr(external_result, "raw_status_text", "") or status
+    if state.upper() == "MI":
+        solicitation_match = re.search(
+            r"Solicitation\s+Registration\s+Status\s*:\s*Registered[\s\S]{0,160}?Expiration\s+Date\s*:\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})",
+            raw_status,
+            re.I,
+        )
+        if solicitation_match:
+            status = classify_expiration_date(parse_due_date(solicitation_match.group(1)))
+            raw_status = f"Solicitation Registration Status: Registered - Expiration Date: {solicitation_match.group(1)}"
     result = checker.StateResult(
         org.organization_name,
         org.ein,
@@ -2328,7 +2338,7 @@ def copy_external_result(org, state: str, external_result):
         status,
         getattr(external_result, "source_url", "") or "",
     )
-    result.raw_status_text = getattr(external_result, "raw_status_text", "") or status
+    result.raw_status_text = raw_status
     result.source_note = getattr(external_result, "source_note", "") or ""
     result.matched_registry_name = getattr(external_result, "matched_registry_name", "") or ""
     result.matched_registry_identifier = getattr(external_result, "matched_registry_identifier", "") or ""
@@ -2346,22 +2356,39 @@ def search_bundled_extension_state(page, org, state: str):
     elif state == "OH":
         external_result = module.search_oh(page, bundle_org, ARTIFACTS_DIR / "OH", True)
     elif state == "OR":
-        search_func = lambda active_page, active_org: copy_external_result(
-            active_org,
-            "OR",
-            module.search_or(active_page, module.Organization(organization_name=active_org.organization_name, ein=active_org.ein)),
-        )
-        return search_with_name_variants(
-            page,
-            org,
-            search_func,
-            max_variants=14,
-            max_elapsed_seconds=NAME_SEARCH_VARIANT_MAX_SECONDS,
+        variants = organization_name_variants(
+            org.organization_name,
+            org.ein,
             include_ein_aliases=True,
             include_name_segments=True,
             include_compact_legal_suffixes=True,
             include_leading_article_variants=True,
         )
+        expanded = []
+        for variant in variants:
+            if variant not in expanded:
+                expanded.append(variant)
+            for article in ("The", "A"):
+                trailing = f"{variant}, {article}"
+                if not re.search(rf",\s*{article}$", variant, re.I) and trailing not in expanded:
+                    expanded.append(trailing)
+        best_result = None
+        started = time.perf_counter()
+        for variant in expanded[:20]:
+            if best_result is not None and (time.perf_counter() - started) >= NAME_SEARCH_VARIANT_MAX_SECONDS:
+                return best_result
+            active_org = org_with_name(org, variant)
+            external_result = module.search_or(
+                page,
+                module.Organization(organization_name=active_org.organization_name, ein=active_org.ein),
+            )
+            result = copy_external_result(org, "OR", external_result)
+            if public_status(result) == "Site Not Reachable":
+                return result
+            if not result_is_retryable_name_miss(result):
+                return result
+            best_result = result
+        return best_result or copy_external_result(org, "OR", module.search_or(page, bundle_org))
     else:
         raise ValueError(f"Unsupported bundled extension state: {state}")
     return copy_external_result(org, state, external_result)
@@ -2383,7 +2410,7 @@ def readable_page_text(page) -> str:
 def no_registry_results_seen(text: str) -> bool:
     return bool(re.search(
         r"\b(no\s+(?:matching\s+)?(?:records?|results?|organizations?|licenses?)\s+(?:found|match)|"
-        r"0\s+(?:records?|results?)|your\s+search\s+returned\s+no|did\s+not\s+match\s+any)\b",
+        r"0\s+(?:records?|results?)|your\s+search\s+returned\s+no|sorry,\s+there\s+are\s+no\s+matches|did\s+not\s+match\s+any)\b",
         text or "",
         re.I,
     ))
@@ -2419,9 +2446,23 @@ def best_row_with_link_by_name(page, targets: list[str], link_pattern: str = r"d
         if not text:
             continue
         try:
+            if row.locator("a, button, input[type='submit'], input[type='button']").count() == 0:
+                continue
+        except Exception:
+            continue
+        try:
             score = checker.candidate_selection_score_for_targets(text, targets, text)
         except Exception:
             score = (1, len(text)) if any((target or "").lower() in text.lower() for target in targets) else (-1, len(text))
+        if score[0] < 0:
+            normalized_text = re.sub(r"\b(the|a|an)\b", " ", re.sub(r"[^a-z0-9]+", " ", text.lower()))
+            normalized_text = re.sub(r"\s+", " ", normalized_text).strip()
+            for target in targets:
+                normalized_target = re.sub(r"\b(the|a|an)\b", " ", re.sub(r"[^a-z0-9]+", " ", (target or "").lower()))
+                normalized_target = re.sub(r"\s+", " ", normalized_target).strip()
+                if normalized_target and normalized_target in normalized_text:
+                    score = (1, len(normalized_target))
+                    break
         if score > best_score:
             best_score = score
             best_row = row
@@ -2453,6 +2494,11 @@ def search_ct(page, org):
     url = "https://www.elicense.ct.gov/lookup/licenselookup.aspx"
     original_name = org.organization_name
     safe_targets = organization_match_target_variants(original_name, org.ein)
+    for target in list(safe_targets):
+        if not re.search(r"^\s*(the|a)\s+", target, re.I):
+            for suffix in (f"{target} (THE)", f"{target}, THE", f"{target}, The"):
+                if suffix not in safe_targets:
+                    safe_targets.append(suffix)
     best_result = None
     for variant in organization_name_variants(
         original_name,
@@ -2467,7 +2513,8 @@ def search_ct(page, org):
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
             checker.safe_wait_for_network_idle(page, timeout=8000)
             input_box = checker.find_visible_input(page, [
-                'input[name*="License" i]',
+                '#ctl00_MainContentPlaceHolder_ucLicenseLookup_ctl03_tbDBA_Contact',
+                'input[name*="tbDBA_Contact"]',
                 'input[name*="Business" i]',
                 'input[id*="Business" i]',
                 'input[type="text"]',
@@ -2477,9 +2524,15 @@ def search_ct(page, org):
                 return result
             input_box.fill("")
             input_box.fill(variant)
-            page.keyboard.press("Enter")
+            try:
+                page.locator("#ctl00_MainContentPlaceHolder_ucLicenseLookup_btnLookup, input[type='submit']").first.click(timeout=5000)
+            except Exception:
+                page.keyboard.press("Enter")
             checker.safe_wait_for_network_idle(page, timeout=10000)
-            time.sleep(1)
+            try:
+                page.get_by_text(re.compile(r"Showing\s+\d+\s+result", re.I)).wait_for(timeout=8000)
+            except Exception:
+                time.sleep(4)
             text = readable_page_text(page)
             if no_registry_results_seen(text):
                 result.status = checker.STATUS_NOT_REGISTERED
@@ -2504,7 +2557,12 @@ def search_ct(page, org):
             )
             result.matched_registry_name = matched_name
             result.matched_registry_identifier = checker.extract_registry_identifier_from_text(detail_text, org.ein) if hasattr(checker, "extract_registry_identifier_from_text") else ""
-            result.status = classify_expiration_date(exp_date)
+            if exp_date:
+                result.status = classify_expiration_date(exp_date)
+            elif re.search(r"\bStatus\s+ACTIVE\b|\bStatus\s+Reason\s+CURRENT\b|\bACTIVE\s+Status\s+Reason\s+CURRENT\b", detail_text, re.I):
+                result.status = checker.STATUS_CURRENT
+            else:
+                result.status = checker.STATUS_UNKNOWN
             result.raw_status_text = f"Expiration Date {format_date(exp_date)}" if exp_date else "Connecticut registry record found"
             result.source_note = "CT uses the expiration date shown by the public registry."
             result.success = True
@@ -2577,9 +2635,9 @@ def mn_status_from_fiscal_year(year: int | None) -> str:
     if not year:
         return checker.STATUS_UNKNOWN
     current_year = date.today().year
-    if year >= current_year - 1:
+    if year >= current_year:
         return checker.STATUS_CURRENT
-    if year == current_year - 2:
+    if year == current_year - 1:
         return checker.STATUS_UPCOMING
     return checker.STATUS_DELINQUENT
 
@@ -2592,6 +2650,7 @@ def search_mn(page, org):
         page.goto(url, wait_until="domcontentloaded", timeout=30000)
         checker.safe_wait_for_network_idle(page, timeout=8000)
         input_box = checker.find_visible_input(page, [
+            '#txtEIN',
             'input[name*="EIN" i]',
             'input[id*="EIN" i]',
             'input[name*="FEIN" i]',
@@ -2603,7 +2662,7 @@ def search_mn(page, org):
         input_box.fill("")
         input_box.fill(ein_digits or org.ein)
         try:
-            page.get_by_role("button", name=re.compile("search", re.I)).click(timeout=5000)
+            page.locator('input[name="cmdSearch"], input[type="submit"]').last.click(timeout=5000)
         except Exception:
             page.keyboard.press("Enter")
         checker.safe_wait_for_network_idle(page, timeout=10000)
@@ -2616,7 +2675,11 @@ def search_mn(page, org):
             result.success = True
             return result
         try:
-            page.locator("a").first.click(timeout=5000)
+            detail_link = page.locator(f'a[href*="FederalID={ein_digits}"]').first
+            if detail_link.count():
+                detail_link.click(timeout=5000)
+            else:
+                page.locator("a").filter(has_text=re.compile(re.escape(org.organization_name), re.I)).first.click(timeout=5000)
             checker.safe_wait_for_network_idle(page, timeout=10000)
             time.sleep(1)
         except Exception:
@@ -2628,7 +2691,7 @@ def search_mn(page, org):
             result.source_note = "Minnesota search returned a possible record, but the public detail did not confirm the requested EIN."
             result.success = True
             return result
-        year_match = re.search(r"Fiscal\s+Year\s+Ending\s*:?\s*(?:\d{1,2}[/-]\d{1,2}[/-])?(20\d{2})", detail_text, re.I)
+        year_match = re.search(r"(?:Fiscal\s+Year\s+Ending|For\s+Fiscal\s+Year\s+Ending)\s*:?\s*(?:\d{1,2}[/-]\d{1,2}[/-])?(20\d{2})", detail_text, re.I)
         year = int(year_match.group(1)) if year_match else None
         result.status = mn_status_from_fiscal_year(year)
         result.raw_status_text = f"Fiscal Year Ending {year}" if year else "Minnesota registry record found"
@@ -4423,6 +4486,9 @@ def true_status_from_body(result, body: str) -> str:
 
     if "site not reachable" in normalized:
         return base_status
+    if state == "MI" and re.search(r"Solicitation\s+Registration\s+Status\s*:\s*Registered", result.raw_status_text or "", re.I):
+        registry_date = explicit_registry_date(result, result.raw_status_text or "")
+        return status_from_calendar_date(registry_date) if registry_date else base_status
     if result_explicitly_exempt(result):
         return "Exempt"
     if explicit_no_registration_status(result, combined):
