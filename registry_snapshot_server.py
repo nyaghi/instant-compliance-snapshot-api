@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.17.9"
+APP_VERSION = "2026.05.17.10"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -78,9 +78,6 @@ SUPPORTED_STATES = [
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
 
-# Emergency-only override hook. Routine corrections must be implemented as
-# generalized lookup/status rules, not EIN-specific adjudications.
-ADJUDICATED_STATUS_OVERRIDES = {}
 REQUESTED_PARALLEL_LOOKUPS = max(1, int(os.environ.get("CE_MAX_PARALLEL_LOOKUPS", "1")))
 ALLOW_PARALLEL_BROWSER_LOOKUPS = os.environ.get("CE_ALLOW_PARALLEL_BROWSER_LOOKUPS", "1").strip().lower() in {"1", "true", "yes"}
 MAX_BROWSER_LOOKUPS = max(1, int(os.environ.get("CE_MAX_BROWSER_LOOKUPS", "1")))
@@ -158,15 +155,6 @@ PIN_STORE: dict[str, dict] = {}
 VERIFICATION_TOKENS: dict[str, dict] = {}
 ORG_NAME_CACHE: dict[str, str] = {}
 PUBLIC_PROFILE_CACHE: dict[str, dict] = {}
-FISCAL_YEAR_END_OVERRIDES = {
-    "208428450": (6, 30),
-    "546053660": (6, 30),
-    "237222333": (6, 30),
-    "141707425": (3, 31),
-    "510165015": (5, 31),
-}
-
-
 def load_checker():
     spec = importlib.util.spec_from_file_location("charity_state_checker_v9", CHECKER_PATH)
     if spec is None or spec.loader is None:
@@ -1117,17 +1105,9 @@ def public_profile_name_for_ein(ein: str) -> str:
     return name
 
 
-def curated_name_aliases_for_ein(ein: str) -> list[str]:
-    # Keep this hook for emergency operational aliases, but routine alternate
-    # names should come from the EIN-backed IRS/ProPublica and local source
-    # data paths used by known_names_for_ein().
-    return []
-
-
 def known_names_for_ein(ein: str) -> list[str]:
     names = []
     for name in [
-        *curated_name_aliases_for_ein(ein),
         organization_name_for_ein(ein),
         public_profile_name_for_ein(ein),
     ]:
@@ -1196,9 +1176,6 @@ def format_ein(value: str) -> str:
 
 
 def fiscal_year_end_for_ein(ein: str) -> tuple[int, int] | None:
-    target = re.sub(r"\D", "", ein or "")
-    if target in FISCAL_YEAR_END_OVERRIDES:
-        return FISCAL_YEAR_END_OVERRIDES[target]
     payload = public_profile_for_ein(ein)
     filings = payload.get("filings_with_data") or []
     for filing in filings:
@@ -1636,12 +1613,11 @@ def filing_context(result, body: str) -> dict:
     # can create a filing year that the California registry did not show.
     if latest_year is None and period_end and state not in {"CA", "MA", "MD", "NJ", "PA"}:
         latest_year = period_end.year
-    override_fiscal_end = FISCAL_YEAR_END_OVERRIDES.get(re.sub(r"\D", "", result.ein or ""))
     result_fiscal_end = fiscal_year_end_from_result(result)
     registry_fiscal_end = fiscal_year_end_from_body(body, state)
     profile_period = public_profile_latest_tax_period_for_ein(result.ein)
     profile_fiscal_end = profile_period[1] if profile_period else None
-    fiscal_end = override_fiscal_end or result_fiscal_end or registry_fiscal_end or profile_fiscal_end or fiscal_year_end_for_ein(result.ein)
+    fiscal_end = result_fiscal_end or registry_fiscal_end or profile_fiscal_end or fiscal_year_end_for_ein(result.ein)
 
     if (
         state == "NJ"
@@ -5577,12 +5553,6 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
     return "Review the CharityClarity result for additional details."
 
 
-def adjudicated_override_for_result(result) -> str:
-    ein_digits = re.sub(r"\D", "", result.ein or "")
-    state = (result.state or "").upper()
-    return ADJUDICATED_STATUS_OVERRIDES.get((ein_digits, state), "")
-
-
 def adjudicated_comment_for_status(result, body: str, status: str) -> str:
     state = (result.state or "the selected state").upper()
     normalized = status.lower()
@@ -5856,12 +5826,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
         data["organization_name"] = "Organization not identified"
         result.organization_name = data["organization_name"]
     data["status"] = true_status_from_body(result, body)
-    override_status = adjudicated_override_for_result(result)
-    if override_status:
-        data["status"] = override_status
-        data["comments"] = adjudicated_comment_for_status(result, body, override_status)
-    else:
-        data["comments"] = comments_for_result(result, body, data["status"])
+    data["comments"] = comments_for_result(result, body, data["status"])
     data["evidence_url"] = ""
     data["lookup_seconds"] = round(time.perf_counter() - lookup_started, 2)
     data["checked_at_epoch"] = int(time.time())
