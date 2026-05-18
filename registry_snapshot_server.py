@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.18.2"
+APP_VERSION = "2026.05.18.3"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -6101,19 +6101,22 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
         re.sub(r"\D", "", ein or ""): (name or "").strip()
         for name, ein, _ in lookup_requests
     }
+    name_only_states = {"CT", "FL", "ME", "ND", "OR", "SC", "VA", "WI"}
+    trusted_discovery_states = {"AK", "CA", "CO", "HI", "MA", "MD", "MI", "MN", "NJ", "NY", "OH", "PA"}
     discovered_names: dict[str, str] = {}
     for result in results:
         ein_key = re.sub(r"\D", "", result.get("ein") or "")
+        state = (result.get("state") or "").upper()
         matched_name = (result.get("matched_registry_name") or "").strip()
         submitted_name = submitted_names_by_ein.get(ein_key, "")
         if (
             ein_key
+            and state in trusted_discovery_states
             and matched_name
             and normalized_match_name(matched_name) != normalized_match_name(submitted_name)
         ):
             discovered_names.setdefault(ein_key, matched_name)
 
-    name_only_states = {"CT", "FL", "ME", "ND", "OR", "SC", "VA", "WI"}
     retry_jobs = []
     for index, result in enumerate(results):
         ein_key = re.sub(r"\D", "", result.get("ein") or "")
