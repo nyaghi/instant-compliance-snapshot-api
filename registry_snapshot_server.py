@@ -2860,9 +2860,11 @@ def useful_registry_name(value: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "", cleaned.lower())
     if not cleaned or len(normalized) < 4:
         return ""
-    if re.fullmatch(r"s|name|names|organization|charity|dba|nickname", normalized, re.I):
+    if re.fullmatch(r"s|name|names|organization|charity|dba|nickname|title", normalized, re.I):
         return ""
     if re.search(r"\b(search|advanced search|word phrase ein|no records?|results?)\b", cleaned, re.I):
+        return ""
+    if re.search(r"\b(Registration\s+Number|FEIN|Federal\s+EIN|Status|Expiration\s+Date)\b", cleaned, re.I):
         return ""
     return cleaned
 
@@ -2890,7 +2892,14 @@ def fill_registry_match_from_text(result, body: str, org) -> None:
             line_text = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", line))).strip()
             if not line_text or ein_digits not in re.sub(r"\D", "", line_text):
                 continue
-            line_name = useful_registry_name(re.split(r"\b(?:FEIN|Federal\s+EIN|Federal\s+ID|EIN|Status|Registration)\b", line_text, maxsplit=1, flags=re.I)[0])
+            line_name = ""
+            ein_pattern = rf"{re.escape(ein_digits[:2])}-?{re.escape(ein_digits[2:])}"
+            ein_match = re.search(ein_pattern, line_text)
+            if ein_match:
+                after_ein = line_text[ein_match.end():].strip(" :-")
+                line_name = useful_registry_name(re.split(r"\s+\d{2,}\b|\b(?:Status|Registration|License|Expiration|Address|City|State)\b", after_ein, maxsplit=1, flags=re.I)[0])
+            if not line_name:
+                line_name = useful_registry_name(re.split(r"\b(?:FEIN|Federal\s+EIN|Federal\s+ID|EIN|Status|Registration)\b", line_text, maxsplit=1, flags=re.I)[0])
             if line_name:
                 candidates.append(line_name)
     safe_targets = organization_match_target_variants(getattr(org, "organization_name", "") or getattr(result, "organization_name", ""), getattr(org, "ein", "") or getattr(result, "ein", ""))
@@ -3490,6 +3499,7 @@ def search_oh(page, org):
     formatted_ein = format_ein(org.ein)
     month_names = {name.lower(): index for index, name in enumerate(calendar.month_name) if name}
     month_names.update({name.lower(): index for index, name in enumerate(calendar.month_abbr) if name})
+    search_summary_text = ""
     if len(ein_digits) != 9:
         result.error = "OH: EIN search requires a 9-digit EIN."
         return result
@@ -3513,6 +3523,7 @@ def search_oh(page, org):
         checker.safe_wait_for_network_idle(page, timeout=12000)
         time.sleep(2)
         text = readable_page_text(page)
+        search_summary_text = text
         if no_registry_results_seen(text):
             result.status = checker.STATUS_NOT_REGISTERED
             result.raw_status_text = "No matching EIN result"
@@ -3566,6 +3577,7 @@ def search_oh(page, org):
                     pass
                 checker.safe_wait_for_network_idle(page, timeout=12000)
                 time.sleep(2)
+                search_summary_text = readable_page_text(page)
                 detail_id = page.evaluate(
                     """
                     ({ einDigits, targets }) => {
@@ -3636,7 +3648,15 @@ def search_oh(page, org):
             f"Most Recent Report Filing Year: {filing_year_raw or 'N/A'} | "
             f"Fiscal Year End: {fiscal_year_end_raw or 'N/A'}"
         )
-        if re.search(r"\bexempt\b", " ".join([exemption_status or "", registration_status or ""]), re.I):
+        educational_institution_exempt = bool(
+            re.search(r"\bB\s+Educational\s+Institutions\b", search_summary_text or "", re.I)
+            and re.search(r"\bIn\s+Compliance\b[\s\S]{0,120}\bYes\b", search_summary_text or "", re.I)
+            and re.search(r"\bregistered\b", registration_status or "", re.I)
+        )
+        if educational_institution_exempt:
+            result.status = "Exempt"
+            result.raw_status_text += " | Organization Purpose Category: B Educational Institutions | In Compliance: Yes"
+        elif re.search(r"\bexempt\b", " ".join([exemption_status or "", registration_status or ""]), re.I):
             result.status = "Exempt"
         elif re.search(r"\bpending\b", registration_status or "", re.I):
             result.status = "Pending"
