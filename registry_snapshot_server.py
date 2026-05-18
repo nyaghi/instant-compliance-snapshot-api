@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.18.9"
+APP_VERSION = "2026.05.18.10"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -1859,9 +1859,9 @@ def organization_name_variants(
         segmented_seeds = []
         for seed in list(seed_names):
             segment_pattern = (
-                r"\s*(?:/|\\|&|\band\b|\bd/?b/?a\b|\bdoing\s+business\s+as\b|\baka\b|\bfka\b|\bformerly\b)\s*"
+                r"\s*(?:/|\\|,|&|\band\b|\bd/?b/?a\b|\bdoing\s+business\s+as\b|\baka\b|\bfka\b|\bformerly\b)\s*"
                 if include_and_segments
-                else r"\s*(?:/|\\|\bd/?b/?a\b|\bdoing\s+business\s+as\b|\baka\b|\bfka\b|\bformerly\b)\s*"
+                else r"\s*(?:/|\\|,|\bd/?b/?a\b|\bdoing\s+business\s+as\b|\baka\b|\bfka\b|\bformerly\b)\s*"
             )
             for part in re.split(
                 segment_pattern,
@@ -2074,7 +2074,7 @@ def compatible_ein_alias_for_name(original_name: str, alias_name: str) -> bool:
         shorter_words = alias_words if len(alias_words) <= len(original_words) else original_words
         if len(shorter_words) >= 3:
             return True
-        # Allow established two-word fund aliases, e.g. "The Global Fund", but
+        # Allow established two-word fund aliases while
         # avoid broad two-word institution aliases such as "Allen Institute".
         if len(alias_words) == 2 and alias_words == original_words[:2] and alias_words[-1] == "fund":
             return True
@@ -3648,15 +3648,7 @@ def search_oh(page, org):
             f"Most Recent Report Filing Year: {filing_year_raw or 'N/A'} | "
             f"Fiscal Year End: {fiscal_year_end_raw or 'N/A'}"
         )
-        educational_institution_exempt = bool(
-            re.search(r"\bB\s+Educational\s+Institutions\b", search_summary_text or "", re.I)
-            and re.search(r"\bIn\s+Compliance\b[\s\S]{0,1000}\bYes\b", search_summary_text or "", re.I)
-            and re.search(r"\bregistered\b", registration_status or "", re.I)
-        )
-        if educational_institution_exempt:
-            result.status = "Exempt"
-            result.raw_status_text += " | Organization Purpose Category: B Educational Institutions | In Compliance: Yes"
-        elif re.search(r"\bexempt\b", " ".join([exemption_status or "", registration_status or ""]), re.I):
+        if re.search(r"\bexempt\b", " ".join([exemption_status or "", registration_status or ""]), re.I):
             result.status = "Exempt"
         elif re.search(r"\bpending\b", registration_status or "", re.I):
             result.status = "Pending"
