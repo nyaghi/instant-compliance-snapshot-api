@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.18.1"
+APP_VERSION = "2026.05.18.2"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -6097,45 +6097,61 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
         # executor.map preserves input order, so the table stays predictable.
         results = list(executor.map(lambda args: run_state_lookup(*args), lookup_requests))
 
+    submitted_names_by_ein = {
+        re.sub(r"\D", "", ein or ""): (name or "").strip()
+        for name, ein, _ in lookup_requests
+    }
     discovered_names: dict[str, str] = {}
     for result in results:
         ein_key = re.sub(r"\D", "", result.get("ein") or "")
-        current_name = (result.get("organization_name") or "").strip()
         matched_name = (result.get("matched_registry_name") or "").strip()
-        if ein_key and current_name and current_name.lower() != "organization not identified":
-            discovered_names.setdefault(ein_key, current_name)
-        elif ein_key and matched_name:
+        submitted_name = submitted_names_by_ein.get(ein_key, "")
+        if (
+            ein_key
+            and matched_name
+            and normalized_match_name(matched_name) != normalized_match_name(submitted_name)
+        ):
             discovered_names.setdefault(ein_key, matched_name)
 
-    if discovered_names:
-        name_only_states = {"CT", "FL", "ME", "ND", "OR", "SC", "VA", "WI"}
-        for index, result in enumerate(results):
-            ein_key = re.sub(r"\D", "", result.get("ein") or "")
-            discovered_name = discovered_names.get(ein_key, "")
-            if not discovered_name:
+    name_only_states = {"CT", "FL", "ME", "ND", "OR", "SC", "VA", "WI"}
+    retry_jobs = []
+    for index, result in enumerate(results):
+        ein_key = re.sub(r"\D", "", result.get("ein") or "")
+        original_name = submitted_names_by_ein.get(ein_key, "")
+        discovered_name = discovered_names.get(ein_key, "")
+        if discovered_name and not (result.get("organization_name") or "").strip():
+            result["organization_name"] = discovered_name
+        state = (result.get("state") or "").upper()
+        if state not in name_only_states or (result.get("status") or "").lower() != "not registered":
+            continue
+        retry_names = []
+        for name in [discovered_name, *known_names_for_ein(result.get("ein") or "")]:
+            cleaned = re.sub(r"\s+", " ", (name or "").strip())
+            if not cleaned:
                 continue
-            current_name = (result.get("organization_name") or "").strip()
-            if not current_name or current_name.lower() == "organization not identified":
-                result["organization_name"] = discovered_name
-            state = (result.get("state") or "").upper()
-            if (
-                state in name_only_states
-                and (result.get("status") or "").lower() == "not registered"
-                and (discovered_name or known_names_for_ein(result.get("ein") or ""))
-            ):
-                retry_names = []
-                for name in [
-                    discovered_name,
-                    *known_names_for_ein(result.get("ein") or ""),
-                ]:
-                    cleaned = re.sub(r"\s+", " ", (name or "").strip())
-                    if cleaned and cleaned.lower() not in {existing.lower() for existing in retry_names}:
-                        retry_names.append(cleaned)
-                for retry_name in retry_names:
-                    retry_result = run_state_lookup(retry_name, result.get("ein") or "", state)
+            if normalized_match_name(cleaned) == normalized_match_name(original_name):
+                continue
+            if cleaned.lower() not in {existing.lower() for existing in retry_names}:
+                retry_names.append(cleaned)
+        if retry_names:
+            retry_jobs.append((index, result.get("ein") or "", state, retry_names))
+
+    if retry_jobs:
+        retry_worker_count = min(MAX_PARALLEL_LOOKUPS, len(retry_jobs))
+
+        def run_retry_job(job):
+            index, ein, state, retry_names = job
+            last_retry = None
+            for retry_name in retry_names:
+                last_retry = run_state_lookup(retry_name, ein, state)
+                if (last_retry.get("status") or "").lower() != "not registered":
+                    return index, last_retry
+            return index, last_retry
+
+        with ThreadPoolExecutor(max_workers=retry_worker_count) as executor:
+            for index, retry_result in executor.map(run_retry_job, retry_jobs):
+                if retry_result is not None:
                     results[index] = retry_result
-                    if (retry_result.get("status") or "").lower() != "not registered":
-                        break
     return results
 
 
