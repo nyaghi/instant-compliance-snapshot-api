@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.17.14"
+APP_VERSION = "2026.05.18.1"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -78,9 +78,9 @@ SUPPORTED_STATES = [
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
 
-REQUESTED_PARALLEL_LOOKUPS = max(1, int(os.environ.get("CE_MAX_PARALLEL_LOOKUPS", "1")))
+REQUESTED_PARALLEL_LOOKUPS = max(1, int(os.environ.get("CE_MAX_PARALLEL_LOOKUPS", "3")))
 ALLOW_PARALLEL_BROWSER_LOOKUPS = os.environ.get("CE_ALLOW_PARALLEL_BROWSER_LOOKUPS", "1").strip().lower() in {"1", "true", "yes"}
-MAX_BROWSER_LOOKUPS = max(1, int(os.environ.get("CE_MAX_BROWSER_LOOKUPS", "1")))
+MAX_BROWSER_LOOKUPS = max(1, int(os.environ.get("CE_MAX_BROWSER_LOOKUPS", "3")))
 MAX_PARALLEL_LOOKUPS = min(REQUESTED_PARALLEL_LOOKUPS, MAX_BROWSER_LOOKUPS) if ALLOW_PARALLEL_BROWSER_LOOKUPS else 1
 BROWSER_LOOKUP_SEMAPHORE = threading.BoundedSemaphore(MAX_BROWSER_LOOKUPS)
 BLOCK_HEAVY_BROWSER_RESOURCES = os.environ.get("CE_BLOCK_HEAVY_BROWSER_RESOURCES", "1").strip().lower() not in {"0", "false", "no"}
@@ -92,8 +92,10 @@ SC_NAME_VARIANT_MAX_SECONDS = max(15.0, float(os.environ.get("CE_SC_NAME_VARIANT
 NAME_SEARCH_VARIANT_MAX_SECONDS = max(20.0, float(os.environ.get("CE_NAME_SEARCH_VARIANT_MAX_SECONDS", "65")))
 SC_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_SC_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
 NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
-ME_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_LOOKUP_MIN_INTERVAL_SECONDS", "6.0"))), 20.0)
+ME_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_LOOKUP_MIN_INTERVAL_SECONDS", "1.0"))), 20.0)
 ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(2.0, float(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "12.0"))), 30.0)
+ME_CONFIRM_NOT_REGISTERED = os.environ.get("CE_ME_CONFIRM_NOT_REGISTERED", "0").strip().lower() in {"1", "true", "yes"}
+MI_ENABLE_NAME_FALLBACK = os.environ.get("CE_MI_ENABLE_NAME_FALLBACK", "1").strip().lower() in {"1", "true", "yes"}
 NAME_SEARCH_PREFLIGHT_URLS = {
     "CT": "https://www.elicense.ct.gov/lookup/licenselookup.aspx",
     "FL": "https://csapp.fdacs.gov/CSPublicApp/CheckACharity/CheckACharity.aspx",
@@ -2264,7 +2266,7 @@ def search_me_serialized(page, org):
                 org,
                 checker.search_me,
                 max_variants=10,
-                max_elapsed_seconds=max(NAME_SEARCH_VARIANT_MAX_SECONDS, 90.0),
+                max_elapsed_seconds=min(max(NAME_SEARCH_VARIANT_MAX_SECONDS, 40.0), 50.0),
                 include_ein_aliases=True,
                 include_name_segments=True,
                 include_compact_legal_suffixes=False,
@@ -2272,7 +2274,7 @@ def search_me_serialized(page, org):
             )
 
         result = run_lookup()
-        if public_status(result) == "Not Registered":
+        if ME_CONFIRM_NOT_REGISTERED and public_status(result) == "Not Registered":
             time.sleep(ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS)
             confirmation = run_lookup()
             if public_status(confirmation) != "Not Registered":
@@ -2332,9 +2334,177 @@ def copy_external_result(org, state: str, external_result):
     return result
 
 
+def patch_mi_module_for_fast_lookups(module) -> None:
+    """Keep MI on the same registry path, but avoid 30-60s waits per phase."""
+    if getattr(module, "_cc_fast_lookup_patch", False):
+        return
+
+    def wait_for_search_form_fast(page) -> bool:
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            try:
+                locator = page.locator("#ctl00_MainContent_txtEIN")
+                if locator.count() > 0 and locator.first.is_visible(timeout=500):
+                    return True
+            except Exception:
+                pass
+            time.sleep(0.25)
+        return False
+
+    def open_search_form_fast(page) -> bool:
+        for _ in range(2):
+            page.goto(module.MI_DISCLAIMER_URL, wait_until="domcontentloaded", timeout=25000)
+            if wait_for_search_form_fast(page):
+                return True
+
+            actions = [
+                lambda: page.evaluate("__doPostBack('ctl00$MainContent$lblYes','')"),
+                lambda: page.locator("#ctl00_MainContent_lblYes").click(timeout=5000, no_wait_after=True),
+                lambda: page.locator("#ctl00_MainContent_lblYes").evaluate("el => el.click()"),
+            ]
+            for action in actions:
+                try:
+                    action()
+                except Exception:
+                    continue
+                if wait_for_search_form_fast(page):
+                    return True
+
+            try:
+                page.goto(module.MI_SEARCH_URL, wait_until="domcontentloaded", timeout=20000)
+                if wait_for_search_form_fast(page):
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def find_results_frame_fast(page):
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            for frame in reversed(page.frames):
+                text = re.sub(r"\s+", " ", module.body_text(frame, timeout=2500)).strip()
+                if not text:
+                    continue
+                if "Results for the following input" in text or "record(s) found" in text or "No records found" in text:
+                    return frame
+            time.sleep(0.25)
+        return None
+
+    def find_detail_frame_fast(page):
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            for frame in reversed(page.frames):
+                try:
+                    if frame.locator("#ctl00_MainContent_fvCSForm_lblSolicitationRegistrationStatus").count() > 0:
+                        return frame
+                except Exception:
+                    pass
+                text = re.sub(r"\s+", " ", module.body_text(frame, timeout=2500)).strip()
+                if "Solicitation Registration Status" in text and "Charitable Trust Registration Status" in text:
+                    return frame
+            time.sleep(0.25)
+        return None
+
+    def search_mi_fast(page, org, artifacts_dir, no_screenshot):
+        formatted_ein = module.format_ein(org.ein)
+        result = module.SearchResult(
+            organization_name=org.organization_name or formatted_ein,
+            ein=formatted_ein,
+            status=module.STATUS_UNKNOWN,
+            raw_status_text="",
+        )
+
+        if len(module.digits_only(org.ein)) != 9:
+            result.error = "Michigan search requires a 9-digit EIN."
+            return result
+
+        try:
+            if not open_search_form_fast(page):
+                result.error = "Could not open the Michigan search form after the disclaimer."
+                return result
+
+            page.locator("#ctl00_MainContent_txtEIN").fill("")
+            page.locator("#ctl00_MainContent_txtEIN").fill(formatted_ein)
+            page.locator("#ctl00_MainContent_btnTextSearch").click(timeout=8000, no_wait_after=True)
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=5000)
+            except Exception:
+                pass
+            time.sleep(8)
+
+            results_frame = find_results_frame_fast(page)
+            if not results_frame:
+                result.error = "Could not find the Michigan results frame."
+                return result
+
+            results_text = re.sub(r"\s+", " ", module.body_text(results_frame, timeout=5000)).strip()
+            if re.search(r"\b0 record\(s\) found\b|no records found|no results found|not found", results_text, re.I):
+                result.status = module.STATUS_NOT_REGISTERED
+                result.raw_status_text = "No results found"
+                result.success = True
+                result.source_note = "Michigan EIN search returned no matching result."
+                return result
+
+            chosen = module.choose_result_link(results_frame, org.organization_name)
+            if not chosen:
+                result.status = module.STATUS_NOT_REGISTERED
+                result.raw_status_text = "No matching organization link"
+                result.success = True
+                result.source_note = "Michigan results did not contain a clickable organization summary link."
+                return result
+
+            _, clicked_name, link, href = chosen
+            module.click_result_link(results_frame, link, href)
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=5000)
+            except Exception:
+                pass
+            time.sleep(2)
+
+            detail_frame = find_detail_frame_fast(page)
+            if not detail_frame:
+                result.error = "Could not load the Michigan detail page."
+                return result
+
+            site_name = module.extract_legal_name(detail_frame) or clicked_name or formatted_ein
+            raw_status = module.extract_solicitation_status(detail_frame)
+            charitable_trust_status = module.extract_charitable_trust_status(detail_frame)
+            if not raw_status and not charitable_trust_status:
+                result.organization_name = site_name
+                result.status = module.STATUS_UNKNOWN
+                result.raw_status_text = "Registration statuses not found"
+                result.success = True
+                result.source_note = (
+                    "Michigan detail page loaded, but neither Solicitation Registration Status "
+                    "nor Charitable Trust Registration Status could be extracted."
+                )
+                return result
+
+            result.organization_name = site_name
+            result.raw_status_text = (
+                f"Solicitation Registration Status: {raw_status or 'N/A'} | "
+                f"Charitable Trust Registration Status: {charitable_trust_status or 'N/A'}"
+            )
+            result.status = module.classify_mi_status(raw_status, charitable_trust_status)
+            result.success = True
+            return result
+        except Exception as exc:
+            result.error = f"MI error: {exc}"
+            return result
+
+    module.wait_for_search_form = wait_for_search_form_fast
+    module.open_search_form = open_search_form_fast
+    module.find_results_frame = find_results_frame_fast
+    module.find_detail_frame = find_detail_frame_fast
+    module.search_mi = search_mi_fast
+    module._cc_fast_lookup_patch = True
+
+
 def search_bundled_extension_state(page, org, state: str):
     state = state.upper()
     module = state_extension_module(state)
+    if state == "MI":
+        patch_mi_module_for_fast_lookups(module)
     bundle_org = module.Organization(organization_name=org.organization_name, ein=org.ein)
     if state == "MI":
         external_result = module.search_mi(page, bundle_org, ARTIFACTS_DIR / "MI", True)
@@ -2429,7 +2599,7 @@ def search_mi_name_fallback(page, org):
     result = checker.StateResult(org.organization_name, org.ein, "MI", checker.STATUS_NOT_REGISTERED, "")
     safe_targets = organization_match_target_variants(org.organization_name, org.ein)
     started = time.perf_counter()
-    original_has_hyphen = "-" in (org.organization_name or "")
+    original_words = re.findall(r"[A-Za-z0-9]+", org.organization_name or "")
     variants = []
     for variant in organization_name_variants(
         org.organization_name,
@@ -2440,12 +2610,30 @@ def search_mi_name_fallback(page, org):
         include_leading_article_variants=True,
         include_broad_query_prefixes=False,
     ):
-        if not original_has_hyphen and "-" in variant:
+        variant_words = re.findall(r"[A-Za-z0-9]+", variant or "")
+        substantive_variant_words = [
+            word for word in variant_words
+            if word.lower() not in {"the", "a", "an", "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited"}
+        ]
+        if len(substantive_variant_words) < 2:
+            continue
+        if len(original_words) >= 4 and len(variant_words) >= 2 and len(variant_words) <= max(2, len(original_words) - 2):
+            pass
+        elif re.match(r"^\s*(?:the|a|an)\s+", org.organization_name or "", re.I) and normalized_match_name(variant) == normalized_match_name(re.sub(r"^\s*(?:the|a|an)\s+", "", org.organization_name or "", flags=re.I)):
+            pass
+        else:
             continue
         if variant not in variants:
             variants.append(variant)
-    for variant in variants[:6]:
-        if time.perf_counter() - started > 110:
+    if not variants:
+        result.status = checker.STATUS_NOT_REGISTERED
+        result.raw_status_text = "No matching organization record"
+        result.source_note = "Michigan EIN search returned no exact result, and no narrow structural name fallback was appropriate."
+        result.success = True
+        result.error = ""
+        return result
+    for variant in variants[:2]:
+        if time.perf_counter() - started > 25:
             result.status = checker.STATUS_NOT_REGISTERED
             result.raw_status_text = "No matching organization record"
             result.source_note = "Michigan EIN search returned no exact result, and the bounded organization-name fallback found no matching record before the safe retry limit."
@@ -2460,7 +2648,11 @@ def search_mi_name_fallback(page, org):
             page.locator("#ctl00_MainContent_txtName").fill(variant)
             page.locator("#ctl00_MainContent_txtEIN").fill("")
             page.locator("#ctl00_MainContent_btnTextSearch").click(timeout=10000, no_wait_after=True)
-            time.sleep(8)
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=6000)
+            except Exception:
+                pass
+            time.sleep(2)
             frame = module.find_results_frame(page)
             if not frame:
                 continue
@@ -2479,7 +2671,11 @@ def search_mi_name_fallback(page, org):
                 except Exception:
                     continue
             module.click_result_link(frame, link, href)
-            time.sleep(8)
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=6000)
+            except Exception:
+                pass
+            time.sleep(2)
             detail_frame = module.find_detail_frame(page)
             if not detail_frame:
                 continue
@@ -5786,7 +5982,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     body = hi_detail_body(page)
             elif state == "MI":
                 result = search_bundled_extension_state(page, org, "MI")
-                if public_status(result) == "Not Registered":
+                if MI_ENABLE_NAME_FALLBACK and public_status(result) == "Not Registered":
                     fallback_result = search_mi_name_fallback(page, org)
                     if public_status(fallback_result) != "Not Registered":
                         result = fallback_result
