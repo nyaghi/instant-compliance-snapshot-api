@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.18.8"
+APP_VERSION = "2026.05.18.9"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -2618,7 +2618,6 @@ def search_mi_name_fallback(page, org):
     result = checker.StateResult(org.organization_name, org.ein, "MI", checker.STATUS_NOT_REGISTERED, "")
     safe_targets = organization_match_target_variants(org.organization_name, org.ein)
     started = time.perf_counter()
-    original_words = re.findall(r"[A-Za-z0-9]+", org.organization_name or "")
     variants = []
     for variant in organization_name_variants(
         org.organization_name,
@@ -2636,12 +2635,6 @@ def search_mi_name_fallback(page, org):
         ]
         if len(substantive_variant_words) < 2:
             continue
-        if len(original_words) >= 4 and len(variant_words) >= 2 and len(variant_words) <= max(2, len(original_words) - 2):
-            pass
-        elif re.match(r"^\s*(?:the|a|an)\s+", org.organization_name or "", re.I) and normalized_match_name(variant) == normalized_match_name(re.sub(r"^\s*(?:the|a|an)\s+", "", org.organization_name or "", flags=re.I)):
-            pass
-        else:
-            continue
         if variant not in variants:
             variants.append(variant)
     if not variants:
@@ -2651,8 +2644,8 @@ def search_mi_name_fallback(page, org):
         result.success = True
         result.error = ""
         return result
-    for variant in variants[:2]:
-        if time.perf_counter() - started > 25:
+    for variant in variants[:8]:
+        if time.perf_counter() - started > 45:
             result.status = checker.STATUS_NOT_REGISTERED
             result.raw_status_text = "No matching organization record"
             result.source_note = "Michigan EIN search returned no exact result, and the bounded organization-name fallback found no matching record before the safe retry limit."
@@ -2682,13 +2675,16 @@ def search_mi_name_fallback(page, org):
             if not chosen:
                 continue
             _, clicked_name, link, href = chosen
-            if target_name_score(clicked_name, safe_targets) < 0:
+            clicked_name_score = target_name_score(clicked_name, safe_targets)
+            if clicked_name_score < 0:
                 try:
                     checker_score = checker.candidate_selection_score_for_targets(results_text, safe_targets, results_text)
                     if checker_score[0] < 0:
-                        continue
+                        pass
+                    else:
+                        clicked_name_score = 450 + checker_score[0]
                 except Exception:
-                    continue
+                    pass
             module.click_result_link(frame, link, href)
             try:
                 page.wait_for_load_state("domcontentloaded", timeout=6000)
@@ -2698,7 +2694,12 @@ def search_mi_name_fallback(page, org):
             detail_frame = module.find_detail_frame(page)
             if not detail_frame:
                 continue
+            detail_text = re.sub(r"\s+", " ", module.body_text(detail_frame, timeout=15000)).strip()
             site_name = module.extract_legal_name(detail_frame) or clicked_name or org.organization_name
+            ein_digits = re.sub(r"\D", "", org.ein or "")
+            ein_confirmed = bool(ein_digits and ein_digits in re.sub(r"\D", "", detail_text))
+            if not ein_confirmed and clicked_name_score < 0 and target_name_score(site_name, safe_targets) < 0:
+                continue
             raw_status = module.extract_solicitation_status(detail_frame)
             charitable_trust_status = module.extract_charitable_trust_status(detail_frame)
             if not raw_status and not charitable_trust_status:
@@ -2852,6 +2853,56 @@ def clean_registry_name(value: str) -> str:
     cleaned = re.sub(r"\s*/\s*DBA\s*/\s*Nickname\s*:?.*$", "", cleaned, flags=re.I).strip()
     cleaned = re.sub(r"\b(Credential|License/Registration Number|Status|Expiration Date)\b.*$", "", cleaned, flags=re.I).strip()
     return cleaned.strip(" :-")
+
+
+def useful_registry_name(value: str) -> str:
+    cleaned = clean_registry_name(value)
+    normalized = re.sub(r"[^a-z0-9]+", "", cleaned.lower())
+    if not cleaned or len(normalized) < 4:
+        return ""
+    if re.fullmatch(r"s|name|names|organization|charity|dba|nickname", normalized, re.I):
+        return ""
+    if re.search(r"\b(search|advanced search|word phrase ein|no records?|results?)\b", cleaned, re.I):
+        return ""
+    return cleaned
+
+
+def fill_registry_match_from_text(result, body: str, org) -> None:
+    if (getattr(result, "matched_registry_name", "") or "").strip():
+        result.matched_registry_name = useful_registry_name(result.matched_registry_name)
+        return
+    if public_status(result) == "Not Registered":
+        return
+    readable = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", body or ""))).strip()
+    if not readable:
+        return
+    candidates = []
+    for label in ["Organization Name", "Organization name", "Charity Name", "Business Name", "Legal Name", "Entity Name", "Name"]:
+        candidate = useful_registry_name(text_between_labels(readable, label, [
+            "FEIN", "Federal EIN", "Federal ID", "EIN", "Status", "Registration Status",
+            "Registration Number", "License Number", "Expiration Date", "Address",
+        ]))
+        if candidate:
+            candidates.append(candidate)
+    ein_digits = re.sub(r"\D", "", getattr(org, "ein", "") or getattr(result, "ein", "") or "")
+    if ein_digits:
+        for line in re.split(r"[\r\n]+|\s{2,}", body or ""):
+            line_text = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", line))).strip()
+            if not line_text or ein_digits not in re.sub(r"\D", "", line_text):
+                continue
+            line_name = useful_registry_name(re.split(r"\b(?:FEIN|Federal\s+EIN|Federal\s+ID|EIN|Status|Registration)\b", line_text, maxsplit=1, flags=re.I)[0])
+            if line_name:
+                candidates.append(line_name)
+    safe_targets = organization_match_target_variants(getattr(org, "organization_name", "") or getattr(result, "organization_name", ""), getattr(org, "ein", "") or getattr(result, "ein", ""))
+    best_name = ""
+    best_score = -10000
+    for candidate in candidates:
+        score = target_name_score(candidate, safe_targets)
+        if score > best_score:
+            best_name = candidate
+            best_score = score
+    if best_name and best_score >= 450:
+        result.matched_registry_name = best_name
 
 
 def text_between_labels(text: str, start_label: str, end_labels: list[str]) -> str:
@@ -3066,6 +3117,17 @@ def search_fl(page, org):
     original_name = org.organization_name
     safe_targets = organization_match_target_variants(original_name, org.ein)
 
+    def florida_local_chapter_mismatch(row_name: str) -> bool:
+        row_norm = normalized_match_name(row_name)
+        target_norms = [normalized_match_name(target) for target in safe_targets]
+        if not row_norm or not target_norms:
+            return False
+        if re.search(r"\bchapter\b", row_norm, re.I) and not any(re.search(r"\bchapter\b", target, re.I) for target in target_norms):
+            return True
+        if re.search(r"\bflorida\s+chapter\b|\bfl\s+chapter\b", row_norm, re.I) and not any(re.search(r"\bflorida\s+chapter\b|\bfl\s+chapter\b", target, re.I) for target in target_norms):
+            return True
+        return False
+
     def load_fl_search_page():
         last_error = None
         for attempt in range(2):
@@ -3161,6 +3223,8 @@ def search_fl(page, org):
                     continue
                 if re.search(r"\bAdvanced\s+Search\b", row_name, re.I):
                     continue
+                if florida_local_chapter_mismatch(row_name):
+                    continue
                 score = name_score
                 if re.search(r"\bCH\d+\b", row_text, re.I):
                     score += 40
@@ -3176,11 +3240,38 @@ def search_fl(page, org):
                 continue
             row_text = best_candidate["row_text"]
             exp_date = first_date_near_label(row_text, ["Expiration Date", "Expiration", "Expires"])
+            suspended_match = re.search(r"\bSuspended\b", row_text, re.I)
+            revoked_match = re.search(r"\bRevoked\b", row_text, re.I)
             if not exp_date:
+                if suspended_match:
+                    result.status = "Suspended"
+                    result.raw_status_text = "Status: Suspended"
+                    result.source_note = "FL uses the registration status shown next to the Check-A-Charity registration number."
+                    result.matched_registry_name = clean_registry_name(best_candidate["row_name"])
+                    id_match = re.search(r"\bCH\d+\b", row_text, re.I)
+                    result.matched_registry_identifier = id_match.group(0).upper() if id_match else ""
+                    result.success = True
+                    return result
+                if revoked_match:
+                    result.status = "Revoked"
+                    result.raw_status_text = "Status: Revoked"
+                    result.source_note = "FL uses the registration status shown next to the Check-A-Charity registration number."
+                    result.matched_registry_name = clean_registry_name(best_candidate["row_name"])
+                    id_match = re.search(r"\bCH\d+\b", row_text, re.I)
+                    result.matched_registry_identifier = id_match.group(0).upper() if id_match else ""
+                    result.success = True
+                    return result
                 best_result = result
                 continue
-            result.status = classify_expiration_date(exp_date)
-            result.raw_status_text = f"Expiration Date {format_date(exp_date)}"
+            if suspended_match:
+                result.status = "Suspended"
+                result.raw_status_text = f"Status: Suspended | Expiration Date {format_date(exp_date)}"
+            elif revoked_match:
+                result.status = "Revoked"
+                result.raw_status_text = f"Status: Revoked | Expiration Date {format_date(exp_date)}"
+            else:
+                result.status = classify_expiration_date(exp_date)
+                result.raw_status_text = f"Expiration Date {format_date(exp_date)}"
             result.source_note = "FL uses the expiration date shown by Check-A-Charity."
             result.matched_registry_name = clean_registry_name(best_candidate["row_name"])
             id_match = re.search(r"\bCH\d+\b", row_text, re.I)
@@ -3279,7 +3370,7 @@ def search_mn(page, org):
             result.status = mn_status_from_fiscal_year(year)
             result.raw_status_text = f"Fiscal Year Ending {year}" if year else "Minnesota registry record found"
             result.source_note = "MN uses the latest fiscal year ending shown by the Attorney General charity search. CharityClarity tried both undashed and dashed EIN formats when needed."
-            result.matched_registry_name = checker.extract_labeled_value_from_text(detail_text, ["Organization Name", "Charity Name", "Name"])
+            result.matched_registry_name = useful_registry_name(checker.extract_labeled_value_from_text(detail_text, ["Organization Name", "Charity Name", "Name"]))
             result.matched_registry_identifier = checker.extract_registry_identifier_from_text(detail_text, org.ein) if hasattr(checker, "extract_registry_identifier_from_text") else ""
             result.success = True
             return result
@@ -3531,6 +3622,7 @@ def search_oh(page, org):
             return result
         site_name = text_between_labels(detail_text, "Organization Name", ["Organization Phone", "EIN", "Registration Status"])
         registration_status = text_between_labels(detail_text, "Registration Status", ["Annual Reports Filed", "Most Recent Report Filing Year", "Fiscal Year End"])
+        exemption_status = text_between_labels(detail_text, "Exemption Status", ["Annual Reports Filed", "Most Recent Report Filing Year", "Fiscal Year End", "Street Address", "Organization Phone"])
         filing_year_raw = text_between_labels(detail_text, "Most Recent Report Filing Year", ["The financial information below", "Fiscal Year End", "Total Revenue"])
         fiscal_year_end_raw = text_between_labels(detail_text, "Fiscal Year End", ["Street Address", "Organization Phone", "Most Recent Report Filing Year"])
         filing_year_match = re.search(r"\b(20\d{2})\b", filing_year_raw or "")
@@ -3540,10 +3632,11 @@ def search_oh(page, org):
         result.matched_registry_identifier = detail_id
         result.raw_status_text = (
             f"Registration Status: {registration_status or 'N/A'} | "
+            f"Exemption Status: {exemption_status or 'N/A'} | "
             f"Most Recent Report Filing Year: {filing_year_raw or 'N/A'} | "
             f"Fiscal Year End: {fiscal_year_end_raw or 'N/A'}"
         )
-        if re.search(r"\bexempt\b", registration_status or "", re.I):
+        if re.search(r"\bexempt\b", " ".join([exemption_status or "", registration_status or ""]), re.I):
             result.status = "Exempt"
         elif re.search(r"\bpending\b", registration_status or "", re.I):
             result.status = "Pending"
@@ -4083,6 +4176,10 @@ def search_hi_precise(page, org):
         if ein_digits and detail_ein and re.sub(r"\D", "", detail_ein) != ein_digits:
             return checker.reject_wrong_ein_result(result, "Hawaii")
         status_text = checker.extract_labeled_value(page, ["Registration Status", "Status"]) or checker.extract_labeled_value_from_text(detail_text, ["Registration Status", "Status"])
+        result.matched_registry_name = useful_registry_name(
+            checker.extract_labeled_value(page, ["Organization Name", "Charity Name", "Legal Name", "Name"])
+            or checker.extract_labeled_value_from_text(detail_text, ["Organization Name", "Charity Name", "Legal Name", "Name"])
+        )
         result.raw_status_text = status_text
         result.status = status_text if status_text else checker.STATUS_UNKNOWN
         result.source_note = "Registration status and filings from Hawaii detail page."
@@ -4854,6 +4951,16 @@ def search_nj_direct(page, org):
             status_match = re.search(r"Status\s+([A-Za-z][A-Za-z /-]+?)\s+Federal\s+EIN", re.sub(r"\s+", " ", body), re.I)
             if status_match:
                 status = status_match.group(1).strip()
+        registry_name = useful_registry_name(checker.extract_labeled_value_from_text(body, ["Organization Name", "Charity Name", "Legal Name", "Name"]))
+        if not registry_name and ein_digits:
+            for line in re.split(r"[\r\n]+", body or ""):
+                line_text = re.sub(r"\s+", " ", line).strip()
+                if ein_digits not in re.sub(r"\D", "", line_text):
+                    continue
+                registry_name = useful_registry_name(re.split(r"\b(?:Federal\s+EIN|EIN|Status|Registration)\b", line_text, maxsplit=1, flags=re.I)[0])
+                if registry_name:
+                    break
+        result.matched_registry_name = registry_name
         result.raw_status_text = status or "Status not found"
         if re.search(r"\b(retired|withdrawn|terminated|cancelled|canceled|closed)\b", status, re.I):
             result.status = "Closed / Withdrawn / Canceled"
@@ -6095,6 +6202,8 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
         result.error = "Browser launch failed"
         result.success = False
 
+    if public_status(result) != "Not Registered":
+        fill_registry_match_from_text(result, body, org)
     result.source_note = source_note_for_result(result)
     data = checker.asdict(result)
     if organization_name:
