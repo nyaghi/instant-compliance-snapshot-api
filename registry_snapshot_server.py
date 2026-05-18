@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.18.3"
+APP_VERSION = "2026.05.18.4"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -96,6 +96,7 @@ ME_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_LOOKUP
 ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(2.0, float(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "12.0"))), 30.0)
 ME_CONFIRM_NOT_REGISTERED = os.environ.get("CE_ME_CONFIRM_NOT_REGISTERED", "0").strip().lower() in {"1", "true", "yes"}
 MI_ENABLE_NAME_FALLBACK = os.environ.get("CE_MI_ENABLE_NAME_FALLBACK", "1").strip().lower() in {"1", "true", "yes"}
+ENABLE_CROSS_STATE_NAME_RETRY = os.environ.get("CE_ENABLE_CROSS_STATE_NAME_RETRY", "0").strip().lower() in {"1", "true", "yes"}
 NAME_SEARCH_PREFLIGHT_URLS = {
     "CT": "https://www.elicense.ct.gov/lookup/licenselookup.aspx",
     "FL": "https://csapp.fdacs.gov/CSPublicApp/CheckACharity/CheckACharity.aspx",
@@ -6139,7 +6140,7 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
         if retry_names:
             retry_jobs.append((index, result.get("ein") or "", state, retry_names))
 
-    if retry_jobs:
+    if retry_jobs and ENABLE_CROSS_STATE_NAME_RETRY:
         retry_worker_count = min(MAX_PARALLEL_LOOKUPS, len(retry_jobs))
 
         def run_retry_job(job):
