@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.18.7"
+APP_VERSION = "2026.05.18.8"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -2213,6 +2213,7 @@ def search_with_name_variants(
     include_name_segments: bool = False,
     include_compact_legal_suffixes: bool = True,
     include_leading_article_variants: bool = True,
+    prioritize_institution_reductions: bool = False,
 ):
     best_result = None
     original_name = org.organization_name
@@ -2224,6 +2225,23 @@ def search_with_name_variants(
         include_compact_legal_suffixes=include_compact_legal_suffixes,
         include_leading_article_variants=include_leading_article_variants,
     )
+    if prioritize_institution_reductions:
+        institutional_reductions = []
+        for variant in variants:
+            reduced = re.sub(
+                r"\b(?:national\s+)?(?:medical\s+center|hospital\s+center|hospital)\b\.?\s*$",
+                "",
+                variant or "",
+                flags=re.I,
+            ).strip(" ,;-")
+            if reduced and reduced.lower() != (variant or "").strip().lower():
+                institutional_reductions.append(reduced)
+        reordered = []
+        for variant in [*institutional_reductions, *variants]:
+            cleaned = re.sub(r"\s+", " ", (variant or "").strip())
+            if cleaned and cleaned.lower() not in {existing.lower() for existing in reordered}:
+                reordered.append(cleaned)
+        variants = reordered or variants
     safe_match_targets = organization_match_target_variants(original_name, org.ein)
     if max_variants:
         variants = variants[:max_variants]
@@ -5973,6 +5991,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                         include_name_segments=True,
                         include_compact_legal_suffixes=False,
                         include_leading_article_variants=True,
+                        prioritize_institution_reductions=True,
                     )
             elif state == "SC":
                 reachable, _, preflight_result = preflight_name_search_registry(org, "SC")
