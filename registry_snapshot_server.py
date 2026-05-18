@@ -3650,7 +3650,7 @@ def search_oh(page, org):
         )
         educational_institution_exempt = bool(
             re.search(r"\bB\s+Educational\s+Institutions\b", search_summary_text or "", re.I)
-            and re.search(r"\bIn\s+Compliance\b[\s\S]{0,120}\bYes\b", search_summary_text or "", re.I)
+            and re.search(r"\bIn\s+Compliance\b[\s\S]{0,1000}\bYes\b", search_summary_text or "", re.I)
             and re.search(r"\bregistered\b", registration_status or "", re.I)
         )
         if educational_institution_exempt:
