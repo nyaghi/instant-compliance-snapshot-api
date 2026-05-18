@@ -3178,15 +3178,23 @@ def search_me(page, org: Organization) -> StateResult:
         best_row = None
         best_score = (-999, -1)
         best_opener = None
+        direct_attempts = 0
+        direct_no_record_responses = 0
+        direct_result_responses = 0
+        direct_errors = 0
         for query in me_query_variants(org.organization_name):
             try:
+                direct_attempts += 1
                 direct_body, direct_rows, direct_opener = run_me_direct_search(query)
             except Exception:
+                direct_errors += 1
                 direct_body, direct_rows, direct_opener = "", [], None
             if not direct_rows:
                 if direct_body and re.search(r"\b0\s+records?\s+found\b|no records|no results", direct_body, re.I):
+                    direct_no_record_responses += 1
                     continue
                 continue
+            direct_result_responses += 1
             for row in direct_rows:
                 row_text = " ".join(row.get(key, "") for key in ["name", "number", "location", "profession", "status"])
                 row_score = candidate_selection_score_for_targets(row.get("name", ""), target_names, row_text)
@@ -3225,10 +3233,18 @@ def search_me(page, org: Organization) -> StateResult:
                 result.source_note = "Maine uses the Status shown on the matched public registry result."
             result.success = True
             return result
-        # Do not treat the lightweight HTTP path's no-record response as final.
-        # Maine can intermittently return an empty result set under load; the
-        # browser path below provides an independent confirmation before a true
-        # Not Registered result is emitted.
+        if direct_attempts and direct_errors == 0 and (direct_no_record_responses or direct_result_responses):
+            result.raw_status_text = "No matching organization result"
+            result.status = STATUS_NOT_REGISTERED
+            result.source_note = (
+                "Maine direct public registry search completed and returned no matching organization row. "
+                "CharityClarity did not use the slower browser fallback because the registry response was readable."
+            )
+            result.success = True
+            return result
+        # Use the browser path only when the lightweight HTTP path was ambiguous
+        # or unreachable. Clean HTTP no-match responses are final to avoid slow
+        # dropdown failures during bulk runs.
 
         def run_me_search(query: str) -> str:
             page.goto(url, wait_until="domcontentloaded", timeout=20000)
