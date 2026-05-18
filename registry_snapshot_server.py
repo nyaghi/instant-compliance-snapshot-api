@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.18.6"
+APP_VERSION = "2026.05.18.7"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -2939,7 +2939,7 @@ def search_ct(page, org):
                         return /details|view/i.test(label);
                     });
                     return { index, text, hasDetails, detailHref: detailControl ? (detailControl.getAttribute('href') || '') : '' };
-                }).filter((row) => row.hasDetails && row.text && /Credential|Status|PUBLIC CHARITY|CHR\\./i.test(row.text));
+                }).filter((row) => row.hasDetails && row.text && /PUBLIC CHARITY|CHR\\./i.test(row.text));
                 """
             )
             best_candidate = None
@@ -3306,9 +3306,17 @@ def search_mn(page, org):
             best_index = None
             best_score = -10000
             best_name = ""
+            safe_target_norms = [normalized_match_name(target) for target in safe_targets]
+            short_exact_targets = {
+                target_norm for target_norm in safe_target_norms
+                if target_norm and len(target_norm.split()) <= 1 and len(target_norm) <= 8
+            }
             for candidate in row_candidates:
                 row_text = candidate.get("text") or ""
-                score = target_name_score(candidate.get("linkText") or "", safe_targets)
+                link_text = candidate.get("linkText") or ""
+                if short_exact_targets and normalized_match_name(link_text) not in short_exact_targets:
+                    continue
+                score = target_name_score(link_text, safe_targets)
                 try:
                     checker_score = checker.candidate_selection_score_for_targets(row_text, safe_targets, row_text)
                     if checker_score[0] >= 0:
