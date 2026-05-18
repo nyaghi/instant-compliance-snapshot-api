@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.18.4"
+APP_VERSION = "2026.05.18.5"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -2709,7 +2709,7 @@ def search_mi_name_fallback(page, org):
 def classify_expiration_date(exp_date: date | None) -> str:
     if not exp_date:
         return checker.STATUS_UNKNOWN
-    return checker.status_from_due_date(exp_date)
+    return status_from_calendar_date(exp_date)
 
 
 def readable_page_text(page) -> str:
@@ -2957,8 +2957,12 @@ def search_ct(page, org):
                     score += 80
                 else:
                     score -= 250
+                if re.search(r"\bStatus\s+ACTIVE\b|\bACTIVE\b|\bStatus\s+Reason\s+CURRENT\b", row_text, re.I):
+                    score += 180
                 if re.search(r"\bEXEMPT\b", row_text, re.I):
-                    score += 120
+                    score += 10
+                if re.search(r"\bINACTIVE\b|\bCLOSED\b|\bWITHDRAWN\b|\bCANCEL(?:ED|LED)\b", row_text, re.I):
+                    score -= 180
                 if re.search(r"\bSCIENTIFIC\s+RESEARCH\b|\bRESEARCH\s+CERTIFICATE\b", row_text, re.I):
                     score -= 300
                 if score > best_score:
@@ -3174,12 +3178,11 @@ def search_fl(page, org):
 def mn_status_from_fiscal_year(year: int | None) -> str:
     if not year:
         return checker.STATUS_UNKNOWN
-    current_year = date.today().year
-    if year >= current_year:
-        return checker.STATUS_CURRENT
-    if year == current_year - 1:
-        return checker.STATUS_UPCOMING
-    return checker.STATUS_DELINQUENT
+    try:
+        next_report_due = date(year + 1, 12, 31)
+    except ValueError:
+        return checker.STATUS_UNKNOWN
+    return status_from_calendar_date(next_report_due)
 
 
 def search_mn(page, org):
