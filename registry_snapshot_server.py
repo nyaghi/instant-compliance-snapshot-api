@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.18.10"
+APP_VERSION = "2026.05.19.1"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -89,7 +89,7 @@ CAPTURE_EVIDENCE_SCREENSHOTS = os.environ.get("CE_CAPTURE_EVIDENCE_SCREENSHOTS",
 CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT = os.environ.get("CE_CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT", "0").strip().lower() in {"1", "true", "yes"}
 ON_DEMAND_EVIDENCE_SCREENSHOT = os.environ.get("CE_ON_DEMAND_EVIDENCE_SCREENSHOT", "1").strip().lower() not in {"0", "false", "no"}
 SC_NAME_VARIANT_MAX_SECONDS = max(15.0, float(os.environ.get("CE_SC_NAME_VARIANT_MAX_SECONDS", "35")))
-NAME_SEARCH_VARIANT_MAX_SECONDS = max(20.0, float(os.environ.get("CE_NAME_SEARCH_VARIANT_MAX_SECONDS", "65")))
+NAME_SEARCH_VARIANT_MAX_SECONDS = max(20.0, float(os.environ.get("CE_NAME_SEARCH_VARIANT_MAX_SECONDS", "55")))
 SC_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_SC_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
 NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
 ME_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_LOOKUP_MIN_INTERVAL_SECONDS", "1.0"))), 20.0)
@@ -108,6 +108,7 @@ NAME_SEARCH_PREFLIGHT_URLS = {
 }
 ME_LOOKUP_LOCK = threading.Lock()
 ME_LAST_LOOKUP_FINISHED = 0.0
+VA_SEARCH_VARIANT_LOCK = threading.Lock()
 BROWSER_USER_AGENT = os.environ.get(
     "CE_BROWSER_USER_AGENT",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -2272,6 +2273,25 @@ def search_with_name_variants(
     return best_result
 
 
+def search_va_bounded(page, org):
+    # Virginia's search helper already generates punctuation/article/name
+    # variants internally. During no-match cases, trying the full internal list
+    # for every outer variant can make a clean Not Registered result take more
+    # than a minute. Limit the internal query list to the strongest few forms
+    # while keeping the normal candidate matching and detail parsing.
+    with VA_SEARCH_VARIANT_LOCK:
+        original_variant_builder = checker.search_name_query_variants
+
+        def bounded_variants(name: str, max_words: int = 5):
+            return original_variant_builder(name, max_words=max_words)[:3]
+
+        checker.search_name_query_variants = bounded_variants
+        try:
+            return checker.search_va(page, org)
+        finally:
+            checker.search_name_query_variants = original_variant_builder
+
+
 def search_me_serialized(page, org):
     global ME_LAST_LOOKUP_FINISHED
     with ME_LOOKUP_LOCK:
@@ -2325,16 +2345,55 @@ def external_status_to_checker_status(status: str) -> str:
     return raw or checker.STATUS_UNKNOWN
 
 
+def classify_mi_solicitation_status(raw_status: str) -> str:
+    raw = re.sub(r"\s+", " ", raw_status or "").strip()
+    if not raw or raw.upper() == "N/A":
+        return ""
+    if re.search(r"\bpending\b", raw, re.I):
+        return "Pending"
+    if re.search(r"\b(exempt)\b", raw, re.I):
+        return "Exempt"
+    if re.search(r"\b(revoked|suspended)\b", raw, re.I):
+        return "Suspended"
+    if re.search(r"\b(withdrawn|terminated|closed|cancel(?:ed|led)|inactive)\b", raw, re.I):
+        return "Closed / Withdrawn / Canceled"
+    if re.search(r"\b(delinquent|non\W*compliant|expired)\b", raw, re.I):
+        return checker.STATUS_DELINQUENT
+    registered_expiration = re.search(
+        r"\b(?:registered|active)\b[\s\S]{0,180}?\bExpiration\s+Date\s*:?\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})",
+        raw,
+        re.I,
+    )
+    if registered_expiration:
+        return classify_expiration_date(parse_due_date(registered_expiration.group(1)))
+    if re.search(r"\b(registered|active|current|compliant)\b", raw, re.I):
+        return checker.STATUS_CURRENT
+    return checker.STATUS_UNKNOWN
+
+
+def mi_solicitation_raw_from_combined(raw_status: str) -> str:
+    match = re.search(
+        r"Solicitation\s+Registration\s+Status\s*:\s*(.*?)(?:\s*\|\s*Charitable\s+Trust\s+Registration\s+Status\s*:|$)",
+        raw_status or "",
+        re.I | re.S,
+    )
+    return re.sub(r"\s+", " ", match.group(1)).strip() if match else ""
+
+
 def copy_external_result(org, state: str, external_result):
     status = external_status_to_checker_status(getattr(external_result, "status", ""))
     raw_status = getattr(external_result, "raw_status_text", "") or status
     if state.upper() == "MI":
+        solicitation_raw = mi_solicitation_raw_from_combined(raw_status)
+        solicitation_status = classify_mi_solicitation_status(solicitation_raw)
+        if solicitation_status:
+            status = solicitation_status
         solicitation_match = re.search(
             r"Solicitation\s+Registration\s+Status\s*:\s*Registered[\s\S]{0,160}?Expiration\s+Date\s*:\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})",
             raw_status,
             re.I,
         )
-        if solicitation_match:
+        if solicitation_match and status != "Pending":
             status = classify_expiration_date(parse_due_date(solicitation_match.group(1)))
             raw_status = f"Solicitation Registration Status: Registered - Expiration Date: {solicitation_match.group(1)}"
     result = checker.StateResult(
@@ -2704,7 +2763,7 @@ def search_mi_name_fallback(page, org):
             charitable_trust_status = module.extract_charitable_trust_status(detail_frame)
             if not raw_status and not charitable_trust_status:
                 continue
-            result.status = external_status_to_checker_status(module.classify_mi_status(raw_status, charitable_trust_status))
+            result.status = classify_mi_solicitation_status(raw_status) or external_status_to_checker_status(module.classify_mi_status(raw_status, ""))
             result.raw_status_text = (
                 f"Solicitation Registration Status: {raw_status or 'N/A'} | "
                 f"Charitable Trust Registration Status: {charitable_trust_status or 'N/A'} | "
@@ -3492,6 +3551,18 @@ def ohio_due_date(most_recent_filing_year: int, fiscal_year_end_month: int) -> d
     return date(due_year, due_month, 15)
 
 
+def ohio_detail_url(page_name: str, detail_id: str) -> str:
+    page_name = str(page_name or "").strip()
+    detail_id = str(detail_id or "").strip()
+    if page_name in {"109", "1716"}:
+        return (
+            "https://charitableregistration.ohioago.gov/Charities/"
+            f"PartiallyExemptOrganization?Id={quote(detail_id)}&ExemptionStatus={quote(page_name)}"
+        )
+    page_name = page_name or "OrganizationDetails"
+    return f"https://charitableregistration.ohioago.gov/Charities/{quote(page_name)}?Id={quote(detail_id)}"
+
+
 def search_oh(page, org):
     url = "https://charitableregistration.ohioago.gov/Charities/ResearchCharities"
     result = checker.StateResult(org.organization_name or format_ein(org.ein), org.ein, "OH", checker.STATUS_UNKNOWN, url)
@@ -3530,7 +3601,7 @@ def search_oh(page, org):
             result.source_note = "Ohio EIN search returned no matching record."
             result.success = True
             return result
-        detail_id = page.evaluate(
+        detail_ref = page.evaluate(
             """
             (einDigits) => {
                 const rows = Array.from(document.querySelectorAll('tr'));
@@ -3540,18 +3611,18 @@ def search_oh(page, org):
                     const links = Array.from(row.querySelectorAll('a'));
                     for (const link of links) {
                         const onclick = link.getAttribute('onclick') || '';
-                        const match = onclick.match(/OpenDetailsLink\\('[^']+','(\\d+)'\\)/i);
-                        if (match) return match[1];
+                        const match = onclick.match(/OpenDetailsLink\\('([^']+)','(\\d+)'\\)/i);
+                        if (match) return { pageName: match[1], id: match[2] };
                     }
                 }
                 const body = document.body ? document.body.innerHTML : '';
-                const match = body.match(/OpenDetailsLink\\('OrganizationDetails','(\\d+)'\\)/i);
-                return match ? match[1] : '';
+                const match = body.match(/OpenDetailsLink\\('([^']+)','(\\d+)'\\)/i);
+                return match ? { pageName: match[1], id: match[2] } : null;
             }
             """,
             ein_digits,
         )
-        if not detail_id:
+        if not detail_ref:
             safe_targets = organization_match_target_variants(org.organization_name, org.ein)
             for variant in organization_name_variants(
                 org.organization_name,
@@ -3578,7 +3649,7 @@ def search_oh(page, org):
                 checker.safe_wait_for_network_idle(page, timeout=12000)
                 time.sleep(2)
                 search_summary_text = readable_page_text(page)
-                detail_id = page.evaluate(
+                detail_ref = page.evaluate(
                     """
                     ({ einDigits, targets }) => {
                         const normalize = (value) => (value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\\b(the|a|an|inc|incorporated|corp|corporation|llc|ltd)\\b/g, ' ').replace(/\\s+/g, ' ').trim();
@@ -3602,26 +3673,28 @@ def search_oh(page, org):
                             if (score < bestScore) continue;
                             const link = Array.from(row.querySelectorAll('a')).find((a) => /View Details/i.test((a.innerText || a.textContent || '')));
                             const onclick = link ? (link.getAttribute('onclick') || '') : '';
-                            const match = onclick.match(/OpenDetailsLink\\('[^']+','(\\d+)'\\)/i);
+                            const match = onclick.match(/OpenDetailsLink\\('([^']+)','(\\d+)'\\)/i);
                             if (match) {
-                                best = match[1];
+                                best = { pageName: match[1], id: match[2] };
                                 bestScore = score;
                             }
                         }
-                        return best || '';
+                        return best || null;
                     }
                     """,
                     {"einDigits": ein_digits, "targets": safe_targets},
                 )
-                if detail_id:
+                if detail_ref:
                     break
-            if not detail_id:
+            if not detail_ref:
                 result.status = checker.STATUS_NOT_REGISTERED
                 result.raw_status_text = "No matching EIN or organization-name result"
                 result.source_note = "Ohio EIN search did not return a detail link, and the organization-name fallback did not find a matching Ohio record."
                 result.success = True
                 return result
-        detail_url = f"https://charitableregistration.ohioago.gov/Charities/OrganizationDetails/{detail_id}"
+        detail_id = str((detail_ref or {}).get("id") or "")
+        detail_page_name = str((detail_ref or {}).get("pageName") or "OrganizationDetails")
+        detail_url = ohio_detail_url(detail_page_name, detail_id)
         page.goto(detail_url, wait_until="domcontentloaded", timeout=45000)
         checker.safe_wait_for_network_idle(page, timeout=10000)
         time.sleep(1)
@@ -5465,6 +5538,10 @@ def true_status_from_body(result, body: str) -> str:
 
     if "site not reachable" in normalized:
         return base_status
+    if state == "MI":
+        solicitation_status = classify_mi_solicitation_status(mi_solicitation_raw_from_combined(result.raw_status_text or ""))
+        if solicitation_status:
+            return solicitation_status
     if state == "MI" and re.search(r"Solicitation\s+Registration\s+Status\s*:\s*Registered", result.raw_status_text or "", re.I):
         registry_date = explicit_registry_date(result, result.raw_status_text or "")
         return status_from_calendar_date(registry_date) if registry_date else base_status
@@ -6102,9 +6179,9 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     result = search_with_name_variants(
                         page,
                         org,
-                        checker.search_va,
-                        max_variants=14,
-                        max_elapsed_seconds=NAME_SEARCH_VARIANT_MAX_SECONDS,
+                        search_va_bounded,
+                        max_variants=1,
+                        max_elapsed_seconds=min(NAME_SEARCH_VARIANT_MAX_SECONDS, 45.0),
                         reject_va_suspended_from_leading_the_drop=False,
                         include_ein_aliases=True,
                         include_name_segments=True,
