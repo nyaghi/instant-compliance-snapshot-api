@@ -2283,7 +2283,7 @@ def search_va_bounded(page, org):
         original_variant_builder = checker.search_name_query_variants
 
         def bounded_variants(name: str, max_words: int = 5):
-            return original_variant_builder(name, max_words=max_words)[:3]
+            return original_variant_builder(name, max_words=max_words)[:2]
 
         checker.search_name_query_variants = bounded_variants
         try:
