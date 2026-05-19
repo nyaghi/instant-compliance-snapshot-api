@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.19.1"
+APP_VERSION = "2026.05.19.2"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -117,6 +117,11 @@ BROWSER_USER_AGENT = os.environ.get(
 WI_SEARCH_URL = "https://apps.dfi.wi.gov/ice/berg/Registration/OrganizationCredentialSearch.aspx"
 WI_RESULTS_URL = "https://apps.dfi.wi.gov/ice/berg/Registration/OrgCredentialSearchResults.aspx"
 WI_READER_BASE_URL = os.environ.get("CE_WI_READER_BASE_URL", "https://r.jina.ai/http://")
+WI_LOOKUP_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_WI_LOOKUP_MAX_SECONDS", "55"))), 59.0)
+WI_READER_TIMEOUT_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_READER_TIMEOUT_SECONDS", "12"))), 20.0)
+WI_HTTP_TIMEOUT_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_HTTP_TIMEOUT_SECONDS", "10"))), 20.0)
+WI_DIRECT_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_WI_DIRECT_VARIANT_LIMIT", "8"))), 12)
+WI_BROWSER_VARIANT_LIMIT = min(max(0, int(os.environ.get("CE_WI_BROWSER_VARIANT_LIMIT", "2"))), 5)
 MAX_EXTERNAL_EXEMPT_ORGS = 3
 DOMAIN_LIMIT_DAYS = 7
 ADMIN_PASSCODE = "8977"
@@ -1957,6 +1962,8 @@ def organization_name_variants(
             base,
             flags=re.I,
         ).strip()
+        of_america_removed = re.sub(r"\bof\s+(?:america|the\s+united\s+states|united\s+states)\b\.?\s*$", "", base, flags=re.I).strip(" ,;-")
+        of_connector_removed = re.sub(r"\bof\s+(America|United\s+States)\b", r"\1", base, flags=re.I).strip()
         ms_expanded = re.sub(r"\bMS\s+Society\b", "Multiple Sclerosis Society", base, flags=re.I).strip()
         institution_descriptor_removed = re.sub(
             r"\b(?:national\s+)?(?:medical\s+center|hospital\s+center|hospital)\b\.?\s*$",
@@ -2011,6 +2018,7 @@ def organization_name_variants(
         article_variants = [with_leading_the, without_leading_article] if include_leading_article_variants else []
         for variant in [
             institution_descriptor_removed,
+            without_leading_article,
             without_comma_suffix,
             without_suffix,
             no_comma,
@@ -2031,6 +2039,8 @@ def organization_name_variants(
             saint_expanded,
             saint_abbreviated,
             childrens_hospital,
+            of_america_removed,
+            of_connector_removed,
             title_hyphen_base,
             ms_expanded,
             and_no_punctuation,
@@ -2226,6 +2236,20 @@ def search_with_name_variants(
         include_compact_legal_suffixes=include_compact_legal_suffixes,
         include_leading_article_variants=include_leading_article_variants,
     )
+    if include_leading_article_variants and re.match(r"^(?:the|a|an)\s+", original_name or "", re.I):
+        article_drop = re.sub(r"^(?:the|a|an)\s+", "", original_name or "", flags=re.I).strip()
+        article_drop_no_suffix = re.sub(
+            r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?)\s*$",
+            "",
+            re.sub(r",\s*(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?)\s*$", "", article_drop, flags=re.I).strip(),
+            flags=re.I,
+        ).strip()
+        prioritized = []
+        for variant in [article_drop, article_drop_no_suffix, variants[0] if variants else "", *variants[1:]]:
+            cleaned = re.sub(r"\s+", " ", (variant or "").strip())
+            if cleaned and cleaned.lower() not in {existing.lower() for existing in prioritized}:
+                prioritized.append(cleaned)
+        variants = prioritized or variants
     if prioritize_institution_reductions:
         institutional_reductions = []
         for variant in variants:
@@ -2283,7 +2307,22 @@ def search_va_bounded(page, org):
         original_variant_builder = checker.search_name_query_variants
 
         def bounded_variants(name: str, max_words: int = 5):
-            return original_variant_builder(name, max_words=max_words)[:2]
+            generated = original_variant_builder(name, max_words=max_words)
+            bounded = []
+
+            def add(value: str) -> None:
+                value = re.sub(r"\s+", " ", (value or "").strip())
+                if value and value not in bounded:
+                    bounded.append(value)
+
+            for variant in generated[:3]:
+                add(variant)
+            for variant in generated:
+                if "-" in variant or re.match(r"^(?:the|a|an)\s+", variant, re.I):
+                    add(variant)
+                if len(bounded) >= 6:
+                    break
+            return bounded or generated[:2]
 
         checker.search_name_query_variants = bounded_variants
         try:
@@ -2601,37 +2640,24 @@ def search_bundled_extension_state(page, org, state: str):
     elif state == "OH":
         external_result = module.search_oh(page, bundle_org, ARTIFACTS_DIR / "OH", True)
     elif state == "OR":
-        variants = organization_name_variants(
-            org.organization_name,
-            org.ein,
-            include_ein_aliases=True,
-            include_name_segments=True,
-            include_compact_legal_suffixes=True,
-            include_leading_article_variants=True,
-        )
-        expanded = []
-        for variant in variants:
-            if variant not in expanded:
-                expanded.append(variant)
-            for article in ("The", "A"):
-                trailing = f"{variant}, {article}"
-                if not re.search(rf",\s*{article}$", variant, re.I) and trailing not in expanded:
-                    expanded.append(trailing)
-        best_result = None
-        started = time.perf_counter()
-        for variant in expanded[:20]:
-            if best_result is not None and (time.perf_counter() - started) >= NAME_SEARCH_VARIANT_MAX_SECONDS:
-                return best_result
-            active_org = org_with_name(org, variant)
-            external_result = module.search_or(
-                page,
-                module.Organization(organization_name=active_org.organization_name, ein=active_org.ein),
-            )
-            result = copy_external_result(org, "OR", external_result)
-            if public_status(result) == "Site Not Reachable":
-                return result
-            if not result_is_retryable_name_miss(result):
-                return result
+        def or_detail_ein_mismatches() -> bool:
+            body_text = registry_page_body(page)
+            registry_ein = checker.extract_labeled_value_from_text(body_text, ["Federal EIN", "EIN"])
+            registry_digits = re.sub(r"\D", "", registry_ein or "")
+            requested_digits = re.sub(r"\D", "", org.ein or "")
+            return bool(registry_digits and requested_digits and registry_digits != requested_digits)
+
+        def or_registry_name_from_detail() -> str:
+            body_text = registry_page_body(page)
+            before_address = re.split(r"\bMailing\s+Address\s*:", body_text, maxsplit=1, flags=re.I)[0]
+            lines = [re.sub(r"\s+", " ", line).strip() for line in before_address.splitlines()]
+            for line in reversed(lines):
+                cleaned = useful_registry_name(line)
+                if cleaned and not re.search(r"Search Oregon Charities|Charitable Organizations Registered|Download Charity database", cleaned, re.I):
+                    return cleaned
+            return ""
+
+        def best_or_registry_name_from_page() -> str:
             try:
                 row_candidates = page.evaluate(
                     """
@@ -2653,14 +2679,74 @@ def search_bundled_extension_state(page, org, state: str):
                 if score > best_candidate_score:
                     best_candidate_score = score
                     best_candidate_name = candidate_name
-            if best_candidate_name and best_candidate_score >= 450:
+            return best_candidate_name if best_candidate_score >= 450 else ""
+
+        variants = organization_name_variants(
+            org.organization_name,
+            org.ein,
+            include_ein_aliases=True,
+            include_name_segments=True,
+            include_compact_legal_suffixes=True,
+            include_leading_article_variants=True,
+        )
+        expanded = []
+        for variant in variants:
+            if variant not in expanded:
+                expanded.append(variant)
+            for article in ("The", "A"):
+                trailing = f"{variant}, {article}"
+                if not re.search(rf",\s*{article}$", variant, re.I) and trailing not in expanded:
+                    expanded.append(trailing)
+        best_result = None
+        started = time.perf_counter()
+        for variant in expanded[:20]:
+            if best_result is not None and (time.perf_counter() - started) >= min(NAME_SEARCH_VARIANT_MAX_SECONDS, 45.0):
+                return best_result
+            active_org = org_with_name(org, variant)
+            external_result = module.search_or(
+                page,
+                module.Organization(organization_name=active_org.organization_name, ein=active_org.ein),
+            )
+            result = copy_external_result(org, "OR", external_result)
+            if public_status(result) == "Site Not Reachable":
+                return result
+            if not result_is_retryable_name_miss(result):
+                if or_detail_ein_mismatches():
+                    best_result = checker.StateResult(
+                        org.organization_name,
+                        org.ein,
+                        "OR",
+                        checker.STATUS_NOT_REGISTERED,
+                        getattr(external_result, "source_url", "") or "",
+                        raw_status_text="Oregon detail EIN did not match the requested EIN",
+                        source_note="Oregon returned a same/similar-name detail record, but its Federal EIN did not match the requested organization.",
+                        success=True,
+                    )
+                    continue
+                if not result.matched_registry_name:
+                    result.matched_registry_name = or_registry_name_from_detail() or best_or_registry_name_from_page()
+                return result
+            best_candidate_name = best_or_registry_name_from_page()
+            if best_candidate_name:
                 external_result = module.search_or(
                     page,
                     module.Organization(organization_name=best_candidate_name, ein=org.ein),
                 )
                 result = copy_external_result(org, "OR", external_result)
                 if not result.matched_registry_name:
-                    result.matched_registry_name = best_candidate_name
+                    result.matched_registry_name = or_registry_name_from_detail() or best_candidate_name
+                if or_detail_ein_mismatches():
+                    best_result = checker.StateResult(
+                        org.organization_name,
+                        org.ein,
+                        "OR",
+                        checker.STATUS_NOT_REGISTERED,
+                        getattr(external_result, "source_url", "") or "",
+                        raw_status_text="Oregon detail EIN did not match the requested EIN",
+                        source_note="Oregon returned a same/similar-name detail record, but its Federal EIN did not match the requested organization.",
+                        success=True,
+                    )
+                    continue
                 if public_status(result) == "Site Not Reachable":
                     return result
                 if not result_is_retryable_name_miss(result):
@@ -3196,6 +3282,22 @@ def search_fl(page, org):
             return True
         return False
 
+    def florida_related_entity_mismatch(row_name: str) -> bool:
+        row_norm = normalized_match_name(row_name)
+        target_norms = [normalized_match_name(target) for target in safe_targets]
+        related_entity_terms = [
+            "action fund",
+            "political action",
+            "pac",
+            "auxiliary",
+            "chapter",
+        ]
+        for term in related_entity_terms:
+            term_norm = normalized_match_name(term)
+            if term_norm and term_norm in row_norm and not any(term_norm in target for target in target_norms):
+                return True
+        return False
+
     def load_fl_search_page():
         last_error = None
         for attempt in range(2):
@@ -3292,6 +3394,8 @@ def search_fl(page, org):
                 if re.search(r"\bAdvanced\s+Search\b", row_name, re.I):
                     continue
                 if florida_local_chapter_mismatch(row_name):
+                    continue
+                if florida_related_entity_mismatch(row_name):
                     continue
                 score = name_score
                 if re.search(r"\bCH\d+\b", row_text, re.I):
@@ -4301,7 +4405,7 @@ def wi_http_detail_status(detail_href: str) -> str:
     try:
         detail_url = urljoin(WI_SEARCH_URL, html.unescape(detail_href))
         request = urllib.request.Request(detail_url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with urllib.request.urlopen(request, timeout=WI_HTTP_TIMEOUT_SECONDS) as response:
             detail_html = response.read().decode("utf-8", errors="replace")
         detail_text = html_to_text(detail_html)
         status_match = re.search(r"\bStatus\s+(License\s+is\s+(?:not\s+)?current\s*\([^)]+\))", detail_text, re.I)
@@ -4317,7 +4421,7 @@ def wi_reader_url(source_url: str) -> str:
 def wi_reader_text(source_url: str) -> str:
     try:
         request = urllib.request.Request(wi_reader_url(source_url), headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(request, timeout=45) as response:
+        with urllib.request.urlopen(request, timeout=WI_READER_TIMEOUT_SECONDS) as response:
             return response.read().decode("utf-8", errors="replace")
     except Exception:
         return ""
@@ -4506,10 +4610,12 @@ def wi_best_match_from_markdown(result_text: str, target_names: list[str], best_
     return best_match
 
 
-def wi_reader_search_best_match(search_names: list[str], target_names: list[str]) -> tuple[dict | None, bool]:
+def wi_reader_search_best_match(search_names: list[str], target_names: list[str], deadline: float | None = None) -> tuple[dict | None, bool]:
     best_match = None
     reader_reached = False
     for search_name in search_names:
+        if deadline and time.perf_counter() >= deadline:
+            break
         source_url = f"{WI_RESULTS_URL}?{urlencode({'CredentialType': '800', 'FirmName': search_name, 'LicenseNumber': ''})}"
         result_text = wi_reader_text(source_url)
         if re.search(r"Organization Search Results|Search Parameters|Total Search Results", result_text or "", re.I):
@@ -4520,21 +4626,25 @@ def wi_reader_search_best_match(search_names: list[str], target_names: list[str]
     return best_match, reader_reached
 
 
-def wi_http_search_best_match(search_names: list[str], target_names: list[str]) -> dict | None:
+def wi_http_search_best_match(search_names: list[str], target_names: list[str], deadline: float | None = None) -> tuple[dict | None, bool]:
     best_match = None
+    http_reached = False
     try:
         base_request = urllib.request.Request(WI_SEARCH_URL, headers=wi_request_headers())
-        with urllib.request.urlopen(base_request, timeout=30) as response:
+        with urllib.request.urlopen(base_request, timeout=WI_HTTP_TIMEOUT_SECONDS) as response:
             base_html = response.read().decode("utf-8", errors="replace")
     except Exception:
-        return None
+        return None, http_reached
 
     for search_name in search_names:
+        if deadline and time.perf_counter() >= deadline:
+            break
         try:
             direct_url = f"{WI_RESULTS_URL}?{urlencode({'CredentialType': '800', 'LicenseNumber': '', 'FirmName': search_name})}"
             request = urllib.request.Request(direct_url, headers=wi_request_headers())
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with urllib.request.urlopen(request, timeout=WI_HTTP_TIMEOUT_SECONDS) as response:
                 result_html = response.read().decode("utf-8", errors="replace")
+            http_reached = True
             best_match = wi_best_match_from_html(result_html, target_names, best_match)
             if best_match and best_match["score"] >= 5:
                 break
@@ -4559,33 +4669,40 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str]) 
                 },
                 method="POST",
             )
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with urllib.request.urlopen(request, timeout=WI_HTTP_TIMEOUT_SECONDS) as response:
                 result_html = response.read().decode("utf-8", errors="replace")
+            http_reached = True
         except Exception:
             continue
 
         best_match = wi_best_match_from_html(result_html, target_names, best_match)
         if best_match and best_match["score"] >= 5:
             break
-    return best_match
+    return best_match, http_reached
 
 
 def search_wi(page, org):
     result = checker.StateResult(org.organization_name, org.ein, "WI", checker.STATUS_UNKNOWN, WI_SEARCH_URL)
     searched_names = wi_search_names_for_org(org) or [org.organization_name]
+    started = time.perf_counter()
+    deadline = started + WI_LOOKUP_MAX_SECONDS
+    direct_names = searched_names[:WI_DIRECT_VARIANT_LIMIT]
 
     best_match = None
     last_body = ""
     wi_reader_reached = False
+    wi_http_reached = False
     target_names = organization_match_target_variants(org.organization_name, org.ein)
     try:
-        best_match, wi_reader_reached = wi_reader_search_best_match(searched_names[:24], target_names)
+        best_match, wi_reader_reached = wi_reader_search_best_match(direct_names, target_names, deadline)
         if not best_match:
-            best_match = wi_http_search_best_match(searched_names[:24], target_names)
+            best_match, wi_http_reached = wi_http_search_best_match(direct_names, target_names, deadline)
 
-        if not best_match:
-            for search_name in searched_names[:24]:
-                page.goto(WI_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
+        if not best_match and time.perf_counter() < deadline and WI_BROWSER_VARIANT_LIMIT > 0:
+            for search_name in searched_names[:WI_BROWSER_VARIANT_LIMIT]:
+                if time.perf_counter() >= deadline:
+                    break
+                page.goto(WI_SEARCH_URL, wait_until="domcontentloaded", timeout=min(30000, int(max(5000, (deadline - time.perf_counter()) * 1000))))
                 try:
                     checker.safe_wait_for_network_idle(page, timeout=3000)
                 except Exception:
@@ -4611,7 +4728,7 @@ def search_wi(page, org):
                     page.locator("#ctl00_cphMainContent_btnSearch").click(timeout=5000)
                 except Exception:
                     page.get_by_role("button", name=re.compile("search", re.I)).click(timeout=5000)
-                page.wait_for_load_state("domcontentloaded", timeout=30000)
+                page.wait_for_load_state("domcontentloaded", timeout=min(30000, int(max(5000, (deadline - time.perf_counter()) * 1000))))
                 try:
                     checker.safe_wait_for_network_idle(page, timeout=3000)
                 except Exception:
@@ -4664,14 +4781,15 @@ def search_wi(page, org):
                 if best_match and best_match["score"] >= 5:
                     break
 
-        if not best_match:
-            best_match, reached = wi_reader_search_best_match(searched_names[:24], target_names)
+        if not best_match and time.perf_counter() < deadline and not (wi_reader_reached or wi_http_reached):
+            best_match, reached = wi_reader_search_best_match(direct_names, target_names, deadline)
             if not best_match:
-                best_match = wi_http_search_best_match(searched_names[:24], target_names)
+                best_match, reached_http = wi_http_search_best_match(direct_names, target_names, deadline)
+                wi_http_reached = wi_http_reached or reached_http
             wi_reader_reached = wi_reader_reached or reached
 
         if not best_match:
-            if wi_reader_reached:
+            if wi_reader_reached or wi_http_reached:
                 result.raw_status_text = "No matching Wisconsin charitable organization credential"
                 result.status = checker.STATUS_NOT_REGISTERED
                 result.source_note = "Wisconsin DFI returned no matching Charitable Organization credential for the organization name searched."
@@ -4692,7 +4810,11 @@ def search_wi(page, org):
         detail_status = best_match.get("detail_status", "")
         if best_match.get("detail_href"):
             try:
-                page.goto(urljoin(WI_SEARCH_URL, best_match["detail_href"]), wait_until="domcontentloaded", timeout=30000)
+                page.goto(
+                    urljoin(WI_SEARCH_URL, best_match["detail_href"]),
+                    wait_until="domcontentloaded",
+                    timeout=min(30000, int(max(5000, (deadline - time.perf_counter()) * 1000))),
+                )
                 try:
                     checker.safe_wait_for_network_idle(page, timeout=3000)
                 except Exception:
@@ -5685,7 +5807,7 @@ def md_status_from_body(result, body: str) -> str:
     return true_status_from_body(result, body)
 
 
-def comments_for_result(result, body: str, public_facing_status: str) -> str:
+def comments_for_result_base(result, body: str, public_facing_status: str) -> str:
     normalized_status = public_facing_status.lower()
     state = (result.state or "the selected state").upper()
     context = filing_context(result, body)
@@ -6029,6 +6151,26 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
     return "Review the CharityClarity result for additional details."
 
 
+def append_registry_match_comment(result, comment: str, public_facing_status: str) -> str:
+    match_name = useful_registry_name(getattr(result, "matched_registry_name", ""))
+    if not match_name:
+        return comment
+    if public_facing_status.lower() in {"not registered", "site not reachable"}:
+        return comment
+    if re.search(r"\bRegistry\s+match\s*:", comment or "", re.I):
+        return comment
+    spacer = "" if (comment or "").endswith((" ", "\n")) else " "
+    return f"{comment}{spacer}Registry match: {match_name}."
+
+
+def comments_for_result(result, body: str, public_facing_status: str) -> str:
+    return append_registry_match_comment(
+        result,
+        comments_for_result_base(result, body, public_facing_status),
+        public_facing_status,
+    )
+
+
 def adjudicated_comment_for_status(result, body: str, status: str) -> str:
     state = (result.state or "the selected state").upper()
     normalized = status.lower()
@@ -6180,8 +6322,8 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                         page,
                         org,
                         search_va_bounded,
-                        max_variants=1,
-                        max_elapsed_seconds=min(NAME_SEARCH_VARIANT_MAX_SECONDS, 45.0),
+                        max_variants=3,
+                        max_elapsed_seconds=NAME_SEARCH_VARIANT_MAX_SECONDS,
                         reject_va_suspended_from_leading_the_drop=False,
                         include_ein_aliases=True,
                         include_name_segments=True,
