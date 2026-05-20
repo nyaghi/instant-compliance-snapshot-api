@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.20.8"
+APP_VERSION = "2026.05.20.9"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -1855,6 +1855,7 @@ def organization_name_variants(
     include_compact_legal_suffixes: bool = True,
     include_leading_article_variants: bool = True,
     include_broad_query_prefixes: bool = True,
+    include_institutional_reductions: bool = True,
 ) -> list[str]:
     variants = []
 
@@ -1998,12 +1999,7 @@ def organization_name_variants(
         disease_abbreviated_ampersand = re.sub(r"\s+and\s+", " & ", disease_abbreviated, flags=re.I).strip()
         disease_abbreviated_no_punctuation = re.sub(r"[^\w\s]", " ", disease_abbreviated_ampersand).strip()
         disease_abbreviated_no_punctuation = re.sub(r"\s+", " ", disease_abbreviated_no_punctuation)
-        institution_descriptor_removed = re.sub(
-            r"\b(?:national\s+)?(?:medical\s+center|hospital\s+center|hospital)\b\.?\s*$",
-            "",
-            base,
-            flags=re.I,
-        ).strip(" ,;-")
+        institution_descriptor_removed = institutional_tail_reduction(base) if include_institutional_reductions else ""
         and_no_punctuation = re.sub(r"[^\w\s]", " ", ampersand_as_and).strip()
         and_no_punctuation = re.sub(r"\s+", " ", and_no_punctuation)
         and_without_suffix = re.sub(
@@ -2094,6 +2090,34 @@ def organization_name_variants(
     return variants or [""]
 
 
+def institutional_tail_reduction(value: str) -> str:
+    """Trim narrow institutional suffixes used inconsistently by registries."""
+    reduced = re.sub(
+        r"\b(?:national\s+)?(?:medical\s+center|hospital\s+center|hospital)\b\.?\s*$",
+        "",
+        value or "",
+        flags=re.I,
+    ).strip(" ,;-")
+    return re.sub(r"\s+", " ", reduced)
+
+
+def prioritized_institutional_variants(variants: list[str]) -> list[str]:
+    prioritized = []
+
+    def add(value: str) -> None:
+        cleaned = re.sub(r"\s+", " ", (value or "").strip())
+        if cleaned and cleaned.lower() not in {existing.lower() for existing in prioritized}:
+            prioritized.append(cleaned)
+
+    for variant in variants:
+        reduced = institutional_tail_reduction(variant)
+        if reduced and reduced.lower() != (variant or "").strip().lower():
+            add(reduced)
+    for variant in variants:
+        add(variant)
+    return prioritized or variants
+
+
 def compatible_ein_alias_for_name(original_name: str, alias_name: str) -> bool:
     """Only let EIN-resolved aliases accept rows when they remain specific.
 
@@ -2182,6 +2206,7 @@ def organization_match_target_variants(name: str, ein: str = "") -> list[str]:
         include_compact_legal_suffixes=True,
         include_leading_article_variants=True,
         include_broad_query_prefixes=False,
+        include_institutional_reductions=False,
     )
     for alias in known_names_for_ein(ein):
         if compatible_ein_alias_for_name(name, alias):
@@ -2194,6 +2219,7 @@ def organization_match_target_variants(name: str, ein: str = "") -> list[str]:
                 include_compact_legal_suffixes=True,
                 include_leading_article_variants=True,
                 include_broad_query_prefixes=False,
+                include_institutional_reductions=False,
             ))
     return variants or [name]
 
@@ -2213,10 +2239,33 @@ def result_registry_name_is_safe(result, original_name: str, ein: str = "") -> b
     registry_name = clean_registry_name(getattr(result, "matched_registry_name", "") or "")
     if not registry_name:
         return False
+    return registry_name_is_safe_for_org(registry_name, original_name, ein)
+
+
+def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: str = "") -> bool:
+    registry_name = clean_registry_name(registry_name or "")
+    if not registry_name:
+        return False
     safe_targets = organization_match_target_variants(original_name, ein)
     if target_name_score(registry_name, safe_targets) >= 450:
         return True
+    if incompatible_institutional_prefix_expansion(original_name, registry_name):
+        return False
     return compatible_ein_alias_for_name(original_name, registry_name)
+
+
+def incompatible_institutional_prefix_expansion(original_name: str, registry_name: str) -> bool:
+    reduced = institutional_tail_reduction(original_name)
+    if not reduced or reduced.lower() == (original_name or "").strip().lower():
+        return False
+    reduced_norm = normalized_match_name(reduced)
+    original_norm = normalized_match_name(original_name)
+    registry_norm = normalized_match_name(registry_name)
+    if not reduced_norm or not original_norm or not registry_norm:
+        return False
+    if registry_norm == reduced_norm:
+        return False
+    return registry_norm.startswith(f"{reduced_norm} ") and not original_norm.startswith(registry_norm)
 
 
 def copy_name_fallback_result(original_org, result):
@@ -2318,22 +2367,7 @@ def search_with_name_variants(
                 prioritized.append(cleaned)
         variants = prioritized or variants
     if prioritize_institution_reductions:
-        institutional_reductions = []
-        for variant in variants:
-            reduced = re.sub(
-                r"\b(?:national\s+)?(?:medical\s+center|hospital\s+center|hospital)\b\.?\s*$",
-                "",
-                variant or "",
-                flags=re.I,
-            ).strip(" ,;-")
-            if reduced and reduced.lower() != (variant or "").strip().lower():
-                institutional_reductions.append(reduced)
-        reordered = []
-        for variant in [*institutional_reductions, *variants]:
-            cleaned = re.sub(r"\s+", " ", (variant or "").strip())
-            if cleaned and cleaned.lower() not in {existing.lower() for existing in reordered}:
-                reordered.append(cleaned)
-        variants = reordered or variants
+        variants = prioritized_institutional_variants(variants)
     safe_match_targets = organization_match_target_variants(original_name, org.ein)
     if max_variants:
         variants = variants[:max_variants]
@@ -2737,10 +2771,7 @@ def search_bundled_extension_state(page, org, state: str):
             candidate_name = clean_registry_name(registry_name or or_registry_name_from_detail())
             if not candidate_name:
                 return False
-            safe_targets = organization_match_target_variants(org.organization_name, org.ein)
-            if target_name_score(candidate_name, safe_targets) >= 450:
-                return False
-            return not compatible_ein_alias_for_name(org.organization_name, candidate_name)
+            return not registry_name_is_safe_for_org(candidate_name, org.organization_name, org.ein)
 
         def best_or_registry_name_from_page() -> str:
             try:
@@ -2774,6 +2805,7 @@ def search_bundled_extension_state(page, org, state: str):
             include_compact_legal_suffixes=True,
             include_leading_article_variants=True,
         )
+        variants = prioritized_institutional_variants(variants)
         expanded = []
         for variant in variants:
             if variant not in expanded:
@@ -6882,6 +6914,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                         include_name_segments=True,
                         include_compact_legal_suffixes=False,
                         include_leading_article_variants=True,
+                        prioritize_institution_reductions=True,
                     )
             elif state == "OR":
                 result = search_bundled_extension_state(page, org, "OR")
