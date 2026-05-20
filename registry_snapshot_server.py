@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.19.3"
+APP_VERSION = "2026.05.19.4"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -93,8 +93,8 @@ NAME_SEARCH_VARIANT_MAX_SECONDS = max(20.0, float(os.environ.get("CE_NAME_SEARCH
 SC_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_SC_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
 NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
 ME_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_LOOKUP_MIN_INTERVAL_SECONDS", "1.0"))), 20.0)
-ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(2.0, float(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "12.0"))), 30.0)
-ME_CONFIRM_NOT_REGISTERED = os.environ.get("CE_ME_CONFIRM_NOT_REGISTERED", "0").strip().lower() in {"1", "true", "yes"}
+ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "1.0"))), 30.0)
+ME_CONFIRM_NOT_REGISTERED = os.environ.get("CE_ME_CONFIRM_NOT_REGISTERED", "1").strip().lower() in {"1", "true", "yes"}
 MI_ENABLE_NAME_FALLBACK = os.environ.get("CE_MI_ENABLE_NAME_FALLBACK", "1").strip().lower() in {"1", "true", "yes"}
 ENABLE_CROSS_STATE_NAME_RETRY = os.environ.get("CE_ENABLE_CROSS_STATE_NAME_RETRY", "0").strip().lower() in {"1", "true", "yes"}
 NAME_SEARCH_PREFLIGHT_URLS = {
@@ -2077,6 +2077,19 @@ def compatible_ein_alias_for_name(original_name: str, alias_name: str) -> bool:
     if not original_words or not alias_words:
         return False
 
+    def acronym_from_words(words: list[str]) -> str:
+        ignored = {"the", "a", "an", "of", "for", "and", "to", "in", "on", "at", "by", "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited"}
+        return "".join(word[0] for word in words if word and word not in ignored)
+
+    original_compact = re.sub(r"[^a-z0-9]+", "", original)
+    alias_compact = re.sub(r"[^a-z0-9]+", "", alias)
+    alias_acronym = acronym_from_words(alias_words)
+    original_acronym = acronym_from_words(original_words)
+    if 2 <= len(original_compact) <= 8 and original_compact == alias_acronym:
+        return True
+    if 2 <= len(alias_compact) <= 8 and alias_compact == original_acronym:
+        return True
+
     governance_words = {"trustees", "curators", "regents", "board"}
     if original_words[0] in governance_words and alias_words[0] != original_words[0]:
         return False
@@ -2457,7 +2470,7 @@ def patch_mi_module_for_fast_lookups(module) -> None:
         return
 
     def wait_for_search_form_fast(page) -> bool:
-        deadline = time.time() + 8
+        deadline = time.time() + 6
         while time.time() < deadline:
             try:
                 locator = page.locator("#ctl00_MainContent_txtEIN")
@@ -2469,8 +2482,8 @@ def patch_mi_module_for_fast_lookups(module) -> None:
         return False
 
     def open_search_form_fast(page) -> bool:
-        for _ in range(2):
-            page.goto(module.MI_DISCLAIMER_URL, wait_until="domcontentloaded", timeout=25000)
+        for _ in range(1):
+            page.goto(module.MI_DISCLAIMER_URL, wait_until="domcontentloaded", timeout=18000)
             if wait_for_search_form_fast(page):
                 return True
 
@@ -2488,7 +2501,7 @@ def patch_mi_module_for_fast_lookups(module) -> None:
                     return True
 
             try:
-                page.goto(module.MI_SEARCH_URL, wait_until="domcontentloaded", timeout=20000)
+                page.goto(module.MI_SEARCH_URL, wait_until="domcontentloaded", timeout=12000)
                 if wait_for_search_form_fast(page):
                     return True
             except Exception:
@@ -2547,7 +2560,7 @@ def patch_mi_module_for_fast_lookups(module) -> None:
                 page.wait_for_load_state("domcontentloaded", timeout=5000)
             except Exception:
                 pass
-            time.sleep(8)
+            time.sleep(4)
 
             results_frame = find_results_frame_fast(page)
             if not results_frame:
@@ -2789,8 +2802,8 @@ def search_mi_name_fallback(page, org):
         result.success = True
         result.error = ""
         return result
-    for variant in variants[:8]:
-        if time.perf_counter() - started > 45:
+    for variant in variants[:5]:
+        if time.perf_counter() - started > 25:
             result.status = checker.STATUS_NOT_REGISTERED
             result.raw_status_text = "No matching organization record"
             result.source_note = "Michigan EIN search returned no exact result, and the bounded organization-name fallback found no matching record before the safe retry limit."
@@ -4497,7 +4510,50 @@ def wi_search_names_for_org(org) -> list[str]:
             include_leading_article_variants=True,
             include_broad_query_prefixes=False,
         ))
-    return names
+    expanded_names: list[str] = []
+    for value in names:
+        cleaned = re.sub(r"\s+", " ", (value or "").strip())
+        if cleaned and cleaned not in expanded_names:
+            expanded_names.append(cleaned)
+        structural = cleaned
+        structural = re.sub(r"^(?:the|a|an)\s+", "", structural, flags=re.I).strip()
+        structural = re.sub(r",\s*(?:the|a|an)\s*$", "", structural, flags=re.I).strip()
+        structural = re.sub(r",\s*(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\s*$", "", structural, flags=re.I).strip()
+        structural = re.sub(r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\s*$", "", structural, flags=re.I).strip()
+        no_punct = re.sub(r"[^\w\s]", " ", structural)
+        no_punct = re.sub(r"\s+", " ", no_punct).strip()
+        substantive = [
+            word for word in re.findall(r"[A-Za-z0-9]+", no_punct)
+            if word.lower() not in {"the", "a", "an", "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited"}
+        ]
+        if len(substantive) >= 2 and no_punct and no_punct.lower() != cleaned.lower() and no_punct not in expanded_names:
+            expanded_names.append(no_punct)
+
+    def priority(value: str) -> tuple[int, int, str]:
+        cleaned = re.sub(r"\s+", " ", (value or "").strip())
+        if not cleaned:
+            return (99, 99, "")
+        if re.fullmatch(r"(?i)(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited|the|a|an)", cleaned):
+            return (90, 99, cleaned.lower())
+        has_punctuation = bool(re.search(r"[-,/]", cleaned))
+        has_legal_suffix = bool(re.search(r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\b", cleaned, re.I))
+        starts_article = bool(re.match(r"^(?:the|a|an)\s+", cleaned, re.I))
+        return (
+            1 if not (has_punctuation or has_legal_suffix or starts_article) else 2,
+            len(cleaned.split()),
+            cleaned.lower(),
+        )
+
+    filtered_names = []
+    for value in expanded_names:
+        substantive = [
+            word for word in re.findall(r"[A-Za-z0-9]+", value or "")
+            if word.lower() not in {"the", "a", "an", "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited"}
+        ]
+        if len(substantive) >= 2 and value not in filtered_names:
+            filtered_names.append(value)
+    filtered_names.sort(key=priority)
+    return filtered_names
 
 
 def wi_contains_full_target_name(registry_name: str, target_names: list[str]) -> bool:
