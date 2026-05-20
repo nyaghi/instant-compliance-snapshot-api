@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.19.7"
+APP_VERSION = "2026.05.20.3"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -1310,9 +1310,11 @@ def filing_due_date_options(state: str, report_year: int, fiscal_end: tuple[int,
         extended_due = md_automatic_extension_due_date(fy_end)
     else:
         extended_due = add_months_preserving_end_of_month(base_due, 6) if state in EXTENSION_SCENARIO_STATES else None
-    effective_due = base_due
+    effective_due = extended_due if state == "MA" and extended_due else base_due
     if state == "MD":
         rule_note = "Maryland has an automatic extension process; CE Status is based on the base due date"
+    elif state == "MA" and extended_due:
+        rule_note = "Massachusetts allows a six-month Form PC extension; CE Status uses the extended due date when the extension window is available"
     elif extended_due:
         rule_note = "CE Status is based on the base due date; extension impact is shown as a scenario"
     else:
@@ -1859,7 +1861,9 @@ def organization_name_variants(
 
     seed_names = [name]
     if ein and include_ein_aliases:
-        seed_names.extend(known_names_for_ein(ein))
+        for alias in known_names_for_ein(ein):
+            if compatible_ein_alias_for_name(name, alias):
+                seed_names.append(alias)
 
     if include_name_segments:
         segmented_seeds = []
@@ -1962,6 +1966,18 @@ def organization_name_variants(
             base,
             flags=re.I,
         ).strip()
+        cancer_research_center = re.sub(
+            r"\bCancer\s+Center\b",
+            "Cancer Research Center",
+            base,
+            flags=re.I,
+        ).strip()
+        cancer_center = re.sub(
+            r"\bCancer\s+Research\s+Center\b",
+            "Cancer Center",
+            base,
+            flags=re.I,
+        ).strip()
         of_america_removed = re.sub(r"\bof\s+(?:america|the\s+united\s+states|united\s+states)\b\.?\s*$", "", base, flags=re.I).strip(" ,;-")
         of_connector_removed = re.sub(r"\bof\s+(America|United\s+States)\b", r"\1", base, flags=re.I).strip()
         ms_expanded = re.sub(r"\bMS\s+Society\b", "Multiple Sclerosis Society", base, flags=re.I).strip()
@@ -2039,6 +2055,8 @@ def organization_name_variants(
             saint_expanded,
             saint_abbreviated,
             childrens_hospital,
+            cancer_research_center,
+            cancer_center,
             of_america_removed,
             of_connector_removed,
             title_hyphen_base,
@@ -2169,6 +2187,22 @@ def org_with_name(org, name: str):
     if hasattr(org, "evidence_mode"):
         clone.evidence_mode = getattr(org, "evidence_mode")
     return clone
+
+
+def result_registry_name_is_safe(result, original_name: str, ein: str = "") -> bool:
+    registry_name = clean_registry_name(getattr(result, "matched_registry_name", "") or "")
+    if not registry_name:
+        return False
+    safe_targets = organization_match_target_variants(original_name, ein)
+    if target_name_score(registry_name, safe_targets) >= 450:
+        return True
+    return compatible_ein_alias_for_name(original_name, registry_name)
+
+
+def copy_name_fallback_result(original_org, result):
+    result.organization_name = original_org.organization_name
+    result.ein = original_org.ein
+    return result
 
 
 def quick_registry_preflight(url: str, timeout_seconds: float) -> tuple[bool, str]:
@@ -2658,7 +2692,11 @@ def search_bundled_extension_state(page, org, state: str):
     elif state == "OH":
         external_result = module.search_oh(page, bundle_org, ARTIFACTS_DIR / "OH", True)
     elif state == "OR":
-        def or_detail_ein_mismatches() -> bool:
+        def or_detail_ein_mismatches(registry_name: str = "") -> bool:
+            if registry_name:
+                safe_targets = organization_match_target_variants(org.organization_name, org.ein)
+                if target_name_score(registry_name, safe_targets) >= 450:
+                    return False
             body_text = registry_page_body(page)
             registry_ein = checker.extract_labeled_value_from_text(body_text, ["Federal EIN", "EIN"])
             registry_digits = re.sub(r"\D", "", registry_ein or "")
@@ -2674,6 +2712,15 @@ def search_bundled_extension_state(page, org, state: str):
                 if cleaned and not re.search(r"Search Oregon Charities|Charitable Organizations Registered|Download Charity database", cleaned, re.I):
                     return cleaned
             return ""
+
+        def or_detail_name_mismatches(registry_name: str = "") -> bool:
+            candidate_name = clean_registry_name(registry_name or or_registry_name_from_detail())
+            if not candidate_name:
+                return False
+            safe_targets = organization_match_target_variants(org.organization_name, org.ein)
+            if target_name_score(candidate_name, safe_targets) >= 450:
+                return False
+            return not compatible_ein_alias_for_name(org.organization_name, candidate_name)
 
         def best_or_registry_name_from_page() -> str:
             try:
@@ -2729,7 +2776,8 @@ def search_bundled_extension_state(page, org, state: str):
             if public_status(result) == "Site Not Reachable":
                 return result
             if not result_is_retryable_name_miss(result):
-                if or_detail_ein_mismatches():
+                registry_name = or_registry_name_from_detail() or best_or_registry_name_from_page() or variant
+                if or_detail_ein_mismatches(registry_name):
                     best_result = checker.StateResult(
                         org.organization_name,
                         org.ein,
@@ -2741,8 +2789,20 @@ def search_bundled_extension_state(page, org, state: str):
                         success=True,
                     )
                     continue
+                if registry_name and or_detail_name_mismatches(registry_name):
+                    best_result = checker.StateResult(
+                        org.organization_name,
+                        org.ein,
+                        "OR",
+                        checker.STATUS_NOT_REGISTERED,
+                        getattr(external_result, "source_url", "") or "",
+                        raw_status_text="Oregon detail name did not safely match the requested organization",
+                        source_note="Oregon returned an EIN/name detail record, but the registry name did not safely match the requested organization or a compatible public alias.",
+                        success=True,
+                    )
+                    continue
                 if not result.matched_registry_name:
-                    result.matched_registry_name = or_registry_name_from_detail() or best_or_registry_name_from_page()
+                    result.matched_registry_name = registry_name
                 return result
             best_candidate_name = best_or_registry_name_from_page()
             if best_candidate_name:
@@ -2753,7 +2813,7 @@ def search_bundled_extension_state(page, org, state: str):
                 result = copy_external_result(org, "OR", external_result)
                 if not result.matched_registry_name:
                     result.matched_registry_name = or_registry_name_from_detail() or best_candidate_name
-                if or_detail_ein_mismatches():
+                if or_detail_ein_mismatches(result.matched_registry_name or best_candidate_name):
                     best_result = checker.StateResult(
                         org.organization_name,
                         org.ein,
@@ -2762,6 +2822,18 @@ def search_bundled_extension_state(page, org, state: str):
                         getattr(external_result, "source_url", "") or "",
                         raw_status_text="Oregon detail EIN did not match the requested EIN",
                         source_note="Oregon returned a same/similar-name detail record, but its Federal EIN did not match the requested organization.",
+                        success=True,
+                    )
+                    continue
+                if (result.matched_registry_name or best_candidate_name) and or_detail_name_mismatches(result.matched_registry_name or best_candidate_name):
+                    best_result = checker.StateResult(
+                        org.organization_name,
+                        org.ein,
+                        "OR",
+                        checker.STATUS_NOT_REGISTERED,
+                        getattr(external_result, "source_url", "") or "",
+                        raw_status_text="Oregon detail name did not safely match the requested organization",
+                        source_note="Oregon returned an EIN/name detail record, but the registry name did not safely match the requested organization or a compatible public alias.",
                         success=True,
                     )
                     continue
@@ -2774,6 +2846,34 @@ def search_bundled_extension_state(page, org, state: str):
     else:
         raise ValueError(f"Unsupported bundled extension state: {state}")
     return copy_external_result(org, state, external_result)
+
+
+def search_co_with_name_fallback(page, org):
+    result = checker.search_co(page, org)
+    if public_status(result) != "Not Registered":
+        return result
+    for variant in organization_name_variants(
+        org.organization_name,
+        org.ein,
+        include_ein_aliases=True,
+        include_name_segments=True,
+        include_compact_legal_suffixes=True,
+        include_leading_article_variants=True,
+        include_broad_query_prefixes=False,
+    )[:8]:
+        variant_org = SimpleNamespace(organization_name=variant, ein="")
+        fallback = checker.search_co(page, variant_org)
+        if public_status(fallback) == "Site Not Reachable":
+            return copy_name_fallback_result(org, fallback)
+        if public_status(fallback) == "Not Registered":
+            continue
+        if result_registry_name_is_safe(fallback, org.organization_name, org.ein):
+            fallback.source_note = (
+                (fallback.source_note or "Colorado public search found a matching organization-name record.")
+                + " CharityClarity used a name fallback after the EIN search returned no matching record."
+            )
+            return copy_name_fallback_result(org, fallback)
+    return result
 
 
 def search_mi_name_fallback(page, org):
@@ -3316,6 +3416,30 @@ def search_fl(page, org):
                 return True
         return False
 
+    def florida_nested_unrelated_entity_mismatch(row_name: str) -> bool:
+        row_norm = normalized_match_name(row_name)
+        target_norms = [normalized_match_name(target) for target in safe_targets]
+        if not row_norm or not target_norms:
+            return False
+        generic = {
+            "the", "a", "an", "of", "for", "and", "to", "in", "on", "at", "by",
+            "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited",
+            "foundation", "fund", "charity", "charities", "association", "society",
+            "center", "centre", "institute", "organization", "university",
+        }
+        row_words = set(row_norm.split())
+        for target_norm in target_norms:
+            if not target_norm or target_norm == row_norm:
+                return False
+            if row_norm.startswith(target_norm + " "):
+                return False
+            if target_norm in row_norm:
+                target_words = set(target_norm.split())
+                extra_words = row_words - target_words - generic
+                if len(extra_words) >= 2:
+                    return True
+        return False
+
     def load_fl_search_page():
         last_error = None
         for attempt in range(2):
@@ -3414,6 +3538,8 @@ def search_fl(page, org):
                 if florida_local_chapter_mismatch(row_name):
                     continue
                 if florida_related_entity_mismatch(row_name):
+                    continue
+                if florida_nested_unrelated_entity_mismatch(row_name):
                     continue
                 score = name_score
                 if re.search(r"\bCH\d+\b", row_text, re.I):
@@ -3907,6 +4033,47 @@ def find_ak_print_link_relaxed(page, org):
     )
 
 
+def fill_ak_search_form_name_only(page, org, year: int, variant: str) -> None:
+    submission = page.locator("#Dq-8")
+    if submission.count() == 0:
+        submission = page.get_by_label(re.compile(r"Submission", re.I)).first
+    try:
+        submission.select_option(label=re.compile("Charitable Organization", re.I))
+    except Exception:
+        try:
+            submission.select_option(index=0)
+        except Exception:
+            pass
+    year_select = page.locator("#Dq-9")
+    if year_select.count() == 0:
+        year_select = page.get_by_label(re.compile(r"Year", re.I)).first
+    try:
+        year_select.select_option(label=str(year))
+    except Exception:
+        try:
+            year_select.select_option(value=str(year))
+        except Exception:
+            pass
+    name_input = page.locator("#Dq-a")
+    if name_input.count() == 0:
+        name_input = page.get_by_label(re.compile(r"^Name$", re.I)).first
+    name_input.wait_for(state="visible", timeout=8000)
+    name_input.fill("")
+    name_input.fill(variant)
+    fein_input = page.locator("#Dq-b")
+    if fein_input.count() == 0:
+        fein_input = page.get_by_label(re.compile(r"FEIN", re.I)).first
+    try:
+        fein_input.fill("")
+    except Exception:
+        pass
+    search_button = page.locator("#Dq-c")
+    if search_button.count() == 0:
+        search_button = page.get_by_role("button", name=re.compile(r"^Search$", re.I)).first
+    search_button.click(timeout=10000, force=True)
+    time.sleep(2)
+
+
 def fetch_ak_registration_pdf(page, context, print_link: dict, org_name: str) -> tuple[str, str]:
     popup = None
     pdf_url = ""
@@ -4387,6 +4554,12 @@ def search_hi_precise(page, org):
             checker.extract_labeled_value(page, ["Organization Name", "Charity Name", "Legal Name", "Name"])
             or checker.extract_labeled_value_from_text(detail_text, ["Organization Name", "Charity Name", "Legal Name", "Name"])
         )
+        if not result_registry_name_is_safe(result, org.organization_name, org.ein):
+            result.raw_status_text = "No matching organization record"
+            result.status = checker.STATUS_NOT_REGISTERED
+            result.source_note = "Hawaii search found a row, but the registry name did not safely match the requested organization."
+            result.success = True
+            return result
         result.raw_status_text = status_text
         result.status = status_text if status_text else checker.STATUS_UNKNOWN
         result.source_note = "Registration status and filings from Hawaii detail page."
@@ -5249,6 +5422,125 @@ def search_nj_direct(page, org):
         return result
 
 
+def search_nj_with_name_fallback(page, org):
+    result = search_nj_direct(page, org)
+    if public_status(result) != "Not Registered":
+        return result
+    for variant in organization_name_variants(
+        org.organization_name,
+        org.ein,
+        include_ein_aliases=True,
+        include_name_segments=True,
+        include_compact_legal_suffixes=True,
+        include_leading_article_variants=True,
+        include_broad_query_prefixes=False,
+    )[:8]:
+        fallback_org = SimpleNamespace(organization_name=variant, ein="")
+        fallback = search_nj_direct(page, fallback_org)
+        if public_status(fallback) == "Site Not Reachable":
+            return copy_name_fallback_result(org, fallback)
+        if public_status(fallback) == "Not Registered":
+            continue
+        if result_registry_name_is_safe(fallback, org.organization_name, org.ein):
+            fallback.source_note = (
+                (fallback.source_note or "New Jersey public search found a matching organization-name record.")
+                + " CharityClarity used a name fallback after the EIN search returned no matching record."
+            )
+            return copy_name_fallback_result(org, fallback)
+    return result
+
+
+def search_pa_with_name_fallback(page, org):
+    result = checker.search_pa(page, org)
+    if public_status(result) != "Not Registered":
+        return result
+    url = "https://www.charities.pa.gov/#/page/searchCharities"
+    safe_targets = organization_match_target_variants(org.organization_name, org.ein)
+    for variant in organization_name_variants(
+        org.organization_name,
+        org.ein,
+        include_ein_aliases=True,
+        include_name_segments=True,
+        include_compact_legal_suffixes=True,
+        include_leading_article_variants=True,
+        include_broad_query_prefixes=False,
+    )[:8]:
+        fallback = checker.StateResult(org.organization_name, org.ein, "PA", checker.STATUS_UNKNOWN, url)
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            checker.safe_wait_for_network_idle(page, timeout=5000)
+            time.sleep(1)
+            name_input = checker.find_visible_input(page, [
+                'input[name*="CharityName" i]',
+                'input[ng-model*="name" i]',
+                'input[placeholder*="Name" i]',
+                'input[name*="name" i]',
+                'input[id*="name" i]',
+                'input[type="text"]',
+            ])
+            if not name_input:
+                continue
+            name_input.fill("")
+            name_input.fill(variant)
+            if not checker.click_pa_search_button(page):
+                continue
+            checker.safe_wait_for_network_idle(page, timeout=15000)
+            time.sleep(2)
+            candidates = []
+            for selector in ["tbody tr", "tr", "[role='row']"]:
+                try:
+                    rows = page.locator(selector)
+                    for index in range(min(rows.count(), 100)):
+                        row = rows.nth(index)
+                        try:
+                            if not row.is_visible(timeout=750):
+                                continue
+                            row_text = re.sub(r"\s+", " ", row.inner_text(timeout=1500)).strip()
+                            if not row_text:
+                                continue
+                            cells = row.locator("td")
+                            row_name = ""
+                            expiration_raw = ""
+                            if cells.count() >= 5:
+                                row_name = cells.nth(0).inner_text(timeout=1500).strip()
+                                expiration_raw = cells.nth(4).inner_text(timeout=1500).strip()
+                            if not row_name:
+                                row_name = clean_registry_name(re.split(r"\bEIN\b|\bExpiration\b|\bStatus\b", row_text, maxsplit=1, flags=re.I)[0])
+                            score = target_name_score(row_name, safe_targets)
+                            if score < 450 and not compatible_ein_alias_for_name(org.organization_name, row_name):
+                                continue
+                            if not expiration_raw:
+                                expiration_raw = checker.extract_labeled_value_from_text(row_text, ["Expiration Date", "Expiration"]) if hasattr(checker, "extract_labeled_value_from_text") else ""
+                            candidates.append((score, row_name, row_text, expiration_raw))
+                        except Exception:
+                            continue
+                except Exception:
+                    continue
+            if not candidates:
+                continue
+            candidates.sort(key=lambda item: item[0], reverse=True)
+            _, row_name, row_text, expiration_raw = candidates[0]
+            fallback.matched_registry_name = clean_registry_name(row_name)
+            expiration_date = parse_due_date(expiration_raw)
+            if re.search(r"\bexempt\b", row_text or "", re.I):
+                fallback.raw_status_text = "Exempt"
+                fallback.status = "Exempt"
+            elif expiration_date:
+                fallback.raw_status_text = expiration_raw
+                fallback.status = status_from_calendar_date(expiration_date)
+            else:
+                status_text = checker.extract_labeled_value_from_text(row_text, ["Status", "Registration Status"]) if hasattr(checker, "extract_labeled_value_from_text") else ""
+                fallback.raw_status_text = status_text or "Pennsylvania name result found"
+                fallback.status = status_text or checker.STATUS_UNKNOWN
+            fallback.source_note = "Pennsylvania name search found a matching row after the EIN search returned no matching record."
+            fallback.success = True
+            return fallback
+        except Exception as exc:
+            fallback.error = f"PA name fallback error: {exc}"
+            continue
+    return result
+
+
 def md_filing_context(result, body: str) -> dict:
     return filing_context(result, body)
 
@@ -6071,10 +6363,11 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
                     extension_sentence = f" If Maryland's automatic extension applies, the due date becomes {format_date(extended_due)} and the status becomes {extended_status}."
                 elif state in EXTENSION_SCENARIO_STATES:
                     extension_sentence = f" If a six-month extension was applied for and approved, the due date becomes {format_date(extended_due)} and the status becomes {extended_status}."
+            due_label = "extended due date" if state == "MA" and context.get("uses_extension_scenario") else "initial due date"
             return (
                 f"{context['represented_year']} appears to be the most recent {state} {filing_label} year identified in the CharityClarity check. "
-                f"Based on a {context['fiscal_end'][0]}/{context['fiscal_end'][1]} fiscal year end, the {context['next_report_year']} {filing_label} initial due date is {format_date(context['due_date'])}. "
-                f"CE Status is Current based on the initial due date.{extension_sentence}"
+                f"Based on a {context['fiscal_end'][0]}/{context['fiscal_end'][1]} fiscal year end, the {context['next_report_year']} {filing_label} due date used by CharityClarity is {format_date(context['due_date'])}. "
+                f"CE Status is Current based on the {due_label}.{extension_sentence}"
             )
         return (
             f"The {state} public registry shows a {context['represented_year']} {filing_label} on record. "
@@ -6219,6 +6512,7 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
 
 def append_registry_match_comment(result, comment: str, public_facing_status: str) -> str:
     match_name = useful_registry_name(getattr(result, "matched_registry_name", ""))
+    match_identifier = (getattr(result, "matched_registry_identifier", "") or "").strip()
     if not match_name:
         return comment
     if public_facing_status.lower() in {"not registered", "site not reachable"}:
@@ -6226,7 +6520,8 @@ def append_registry_match_comment(result, comment: str, public_facing_status: st
     if re.search(r"\bRegistry\s+match\s*:", comment or "", re.I):
         return comment
     spacer = "" if (comment or "").endswith((" ", "\n")) else " "
-    return f"{comment}{spacer}Registry match: {match_name}."
+    id_text = f" (ID: {match_identifier})" if match_identifier else ""
+    return f"{comment}{spacer}Registry match: {match_name}{id_text}."
 
 
 def comments_for_result(result, body: str, public_facing_status: str) -> str:
