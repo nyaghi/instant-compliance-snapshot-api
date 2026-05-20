@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.19.4"
+APP_VERSION = "2026.05.19.5"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -4533,6 +4533,9 @@ def wi_search_names_for_org(org) -> list[str]:
         cleaned = re.sub(r"\s+", " ", (value or "").strip())
         if not cleaned:
             return (99, 99, "")
+        compact = re.sub(r"[^A-Za-z0-9]+", "", cleaned)
+        if 2 <= len(compact) <= 8 and compact.upper() == compact:
+            return (0, len(cleaned.split()), cleaned.lower())
         if re.fullmatch(r"(?i)(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited|the|a|an)", cleaned):
             return (90, 99, cleaned.lower())
         has_punctuation = bool(re.search(r"[-,/]", cleaned))
@@ -4550,7 +4553,9 @@ def wi_search_names_for_org(org) -> list[str]:
             word for word in re.findall(r"[A-Za-z0-9]+", value or "")
             if word.lower() not in {"the", "a", "an", "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited"}
         ]
-        if len(substantive) >= 2 and value not in filtered_names:
+        compact = re.sub(r"[^A-Za-z0-9]+", "", value or "")
+        is_short_acronym = 2 <= len(compact) <= 8 and compact.upper() == compact
+        if (len(substantive) >= 2 or is_short_acronym) and value not in filtered_names:
             filtered_names.append(value)
     filtered_names.sort(key=priority)
     return filtered_names
