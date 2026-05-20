@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.19.5"
+APP_VERSION = "2026.05.19.6"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -2802,8 +2802,8 @@ def search_mi_name_fallback(page, org):
         result.success = True
         result.error = ""
         return result
-    for variant in variants[:5]:
-        if time.perf_counter() - started > 25:
+    for variant in variants[:3]:
+        if time.perf_counter() - started > 12:
             result.status = checker.STATUS_NOT_REGISTERED
             result.raw_status_text = "No matching organization record"
             result.source_note = "Michigan EIN search returned no exact result, and the bounded organization-name fallback found no matching record before the safe retry limit."
@@ -6413,8 +6413,10 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 if public_status(result) != "Not Registered":
                     body = hi_detail_body(page)
             elif state == "MI":
+                mi_started = time.perf_counter()
                 result = search_bundled_extension_state(page, org, "MI")
-                if MI_ENABLE_NAME_FALLBACK and public_status(result) == "Not Registered":
+                mi_elapsed = time.perf_counter() - mi_started
+                if MI_ENABLE_NAME_FALLBACK and public_status(result) == "Not Registered" and mi_elapsed < 35:
                     fallback_result = search_mi_name_fallback(page, org)
                     if public_status(fallback_result) != "Not Registered":
                         result = fallback_result
