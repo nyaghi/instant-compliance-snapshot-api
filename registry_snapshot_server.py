@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.20.7"
+APP_VERSION = "2026.05.20.8"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -1248,9 +1248,9 @@ def filing_due_date(state: str, report_year: int, fiscal_end: tuple[int, int]) -
     if state == "MA":
         base_due = fifteenth_day_after_fiscal_year_end(fy_end, 5)
         extended_due = add_months(base_due, 6)
-        return extended_due, (
+        return base_due, (
             f"Massachusetts Form PC base due date is {format_date(base_due)}; "
-            "registered charities in compliance receive an automatic 6-month extension"
+            f"if an extension applies, the extended due date is {format_date(extended_due)}"
         )
     if state == "NY":
         base_due = fifteenth_day_after_fiscal_year_end(fy_end, 5)
@@ -1314,11 +1314,11 @@ def filing_due_date_options(state: str, report_year: int, fiscal_end: tuple[int,
         extended_due = md_automatic_extension_due_date(fy_end)
     else:
         extended_due = add_months_preserving_end_of_month(base_due, 6) if state in EXTENSION_SCENARIO_STATES else None
-    effective_due = extended_due if state == "MA" and extended_due else base_due
+    effective_due = base_due
     if state == "MD":
         rule_note = "Maryland has an automatic extension process; CE Status is based on the base due date"
     elif state == "MA" and extended_due:
-        rule_note = "Massachusetts allows a six-month Form PC extension; CE Status uses the extended due date when the extension window is available"
+        rule_note = "Massachusetts allows a six-month Form PC extension; CE Status is based on the base due date and the extension impact is shown as a scenario"
     elif extended_due:
         rule_note = "CE Status is based on the base due date; extension impact is shown as a scenario"
     else:
@@ -1892,6 +1892,15 @@ def organization_name_variants(
         seed_names = [seed_names[0], *segmented_seeds, *seed_names[1:]]
         if segmented_seeds:
             add(seed_names[0])
+            for disease_seed in [seed_names[0]]:
+                if re.search(r"\bTuberculosis\b", disease_seed or "", re.I):
+                    abbreviated = re.sub(r"\bTuberculosis\b", "TB", disease_seed, flags=re.I).strip()
+                    abbreviated = re.sub(r"^(?:the|a|an)\s+", "", abbreviated, flags=re.I).strip()
+                    abbreviated_ampersand = re.sub(r"\s+and\s+", " & ", abbreviated, flags=re.I).strip()
+                    abbreviated_no_punctuation = re.sub(r"[^\w\s]", " ", abbreviated_ampersand).strip()
+                    abbreviated_no_punctuation = re.sub(r"\s+", " ", abbreviated_no_punctuation)
+                    add(abbreviated_ampersand)
+                    add(abbreviated_no_punctuation)
             for segmented_seed in segmented_seeds:
                 add(segmented_seed)
 
@@ -1985,6 +1994,10 @@ def organization_name_variants(
         of_america_removed = re.sub(r"\bof\s+(?:america|the\s+united\s+states|united\s+states)\b\.?\s*$", "", base, flags=re.I).strip(" ,;-")
         of_connector_removed = re.sub(r"\bof\s+(America|United\s+States)\b", r"\1", base, flags=re.I).strip()
         ms_expanded = re.sub(r"\bMS\s+Society\b", "Multiple Sclerosis Society", base, flags=re.I).strip()
+        disease_abbreviated = re.sub(r"\bTuberculosis\b", "TB", base, flags=re.I).strip()
+        disease_abbreviated_ampersand = re.sub(r"\s+and\s+", " & ", disease_abbreviated, flags=re.I).strip()
+        disease_abbreviated_no_punctuation = re.sub(r"[^\w\s]", " ", disease_abbreviated_ampersand).strip()
+        disease_abbreviated_no_punctuation = re.sub(r"\s+", " ", disease_abbreviated_no_punctuation)
         institution_descriptor_removed = re.sub(
             r"\b(?:national\s+)?(?:medical\s+center|hospital\s+center|hospital)\b\.?\s*$",
             "",
@@ -2042,6 +2055,9 @@ def organization_name_variants(
             without_comma_suffix,
             without_suffix,
             no_comma,
+            disease_abbreviated,
+            disease_abbreviated_ampersand,
+            disease_abbreviated_no_punctuation,
             *hyphenated_word_pairs,
             *us_word_variants,
             no_punctuation,
