@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.20.3"
+APP_VERSION = "2026.05.20.4"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -78,9 +78,9 @@ SUPPORTED_STATES = [
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
 
-REQUESTED_PARALLEL_LOOKUPS = max(1, int(os.environ.get("CE_MAX_PARALLEL_LOOKUPS", "3")))
+REQUESTED_PARALLEL_LOOKUPS = max(1, int(os.environ.get("CE_MAX_PARALLEL_LOOKUPS", "6")))
 ALLOW_PARALLEL_BROWSER_LOOKUPS = os.environ.get("CE_ALLOW_PARALLEL_BROWSER_LOOKUPS", "1").strip().lower() in {"1", "true", "yes"}
-MAX_BROWSER_LOOKUPS = max(1, int(os.environ.get("CE_MAX_BROWSER_LOOKUPS", "3")))
+MAX_BROWSER_LOOKUPS = max(1, int(os.environ.get("CE_MAX_BROWSER_LOOKUPS", "6")))
 MAX_PARALLEL_LOOKUPS = min(REQUESTED_PARALLEL_LOOKUPS, MAX_BROWSER_LOOKUPS) if ALLOW_PARALLEL_BROWSER_LOOKUPS else 1
 BROWSER_LOOKUP_SEMAPHORE = threading.BoundedSemaphore(MAX_BROWSER_LOOKUPS)
 BLOCK_HEAVY_BROWSER_RESOURCES = os.environ.get("CE_BLOCK_HEAVY_BROWSER_RESOURCES", "1").strip().lower() not in {"0", "false", "no"}
@@ -88,8 +88,9 @@ EAGER_EVIDENCE_PDF = os.environ.get("CE_EAGER_EVIDENCE_PDF", "0").strip().lower(
 CAPTURE_EVIDENCE_SCREENSHOTS = os.environ.get("CE_CAPTURE_EVIDENCE_SCREENSHOTS", "0").strip().lower() in {"1", "true", "yes"}
 CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT = os.environ.get("CE_CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT", "0").strip().lower() in {"1", "true", "yes"}
 ON_DEMAND_EVIDENCE_SCREENSHOT = os.environ.get("CE_ON_DEMAND_EVIDENCE_SCREENSHOT", "1").strip().lower() not in {"0", "false", "no"}
-SC_NAME_VARIANT_MAX_SECONDS = max(15.0, float(os.environ.get("CE_SC_NAME_VARIANT_MAX_SECONDS", "35")))
-NAME_SEARCH_VARIANT_MAX_SECONDS = max(20.0, float(os.environ.get("CE_NAME_SEARCH_VARIANT_MAX_SECONDS", "55")))
+LOOKUP_SOFT_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_LOOKUP_SOFT_MAX_SECONDS", "59"))), 59.0)
+SC_NAME_VARIANT_MAX_SECONDS = max(12.0, float(os.environ.get("CE_SC_NAME_VARIANT_MAX_SECONDS", "25")))
+NAME_SEARCH_VARIANT_MAX_SECONDS = max(18.0, float(os.environ.get("CE_NAME_SEARCH_VARIANT_MAX_SECONDS", "35")))
 SC_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_SC_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
 NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
 ME_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_LOOKUP_MIN_INTERVAL_SECONDS", "1.0"))), 20.0)
@@ -2390,8 +2391,8 @@ def search_me_serialized(page, org):
                 page,
                 org,
                 checker.search_me,
-                max_variants=10,
-                max_elapsed_seconds=min(max(NAME_SEARCH_VARIANT_MAX_SECONDS, 40.0), 50.0),
+                max_variants=6,
+                max_elapsed_seconds=min(max(NAME_SEARCH_VARIANT_MAX_SECONDS, 25.0), 35.0),
                 include_ein_aliases=True,
                 include_name_segments=True,
                 include_compact_legal_suffixes=False,
@@ -4462,10 +4463,12 @@ def search_hi_precise(page, org):
                     attempts.append(("", ein_value))
         for variant in organization_name_variants(org.organization_name, org.ein):
             if variant:
-                for ein_value in ([checker.format_ein_with_dash(org.ein), ein_digits] if ein_digits else [""]):
+                for ein_value in ([checker.format_ein_with_dash(org.ein), ein_digits, ""] if ein_digits else [""]):
                     if (variant, ein_value) not in attempts:
                         attempts.append((variant, ein_value))
-        for variant, ein_value in attempts[:5]:
+        clicked_result_name = ""
+        clicked_result_identifier = ""
+        for variant, ein_value in attempts[:4]:
             name_input.fill("")
             name_input.fill(variant)
             fein_input.fill("")
@@ -4514,6 +4517,10 @@ def search_hi_precise(page, org):
                             if not ein_digits and not name_match:
                                 continue
                             links = row.locator("a[href]")
+                            clicked_result_identifier = ein_digits if ein_digits and ein_digits in row_digits else ""
+                            candidate_name = re.sub(r"^\s*\d{9}\s+", "", row_text).strip()
+                            candidate_name = re.split(r"\s+\d{2,6}\s+", candidate_name, maxsplit=1)[0].strip()
+                            clicked_result_name = clean_registry_name(candidate_name)
                             if selector == "a[href]":
                                 row.click(timeout=5000)
                             elif links.count():
@@ -4550,17 +4557,23 @@ def search_hi_precise(page, org):
         if ein_digits and detail_ein and re.sub(r"\D", "", detail_ein) != ein_digits:
             return checker.reject_wrong_ein_result(result, "Hawaii")
         status_text = checker.extract_labeled_value(page, ["Registration Status", "Status"]) or checker.extract_labeled_value_from_text(detail_text, ["Registration Status", "Status"])
+        registration_type = checker.extract_labeled_value(page, ["Registration Type"]) or checker.extract_labeled_value_from_text(detail_text, ["Registration Type"])
         result.matched_registry_name = useful_registry_name(
-            checker.extract_labeled_value(page, ["Organization Name", "Charity Name", "Legal Name", "Name"])
-            or checker.extract_labeled_value_from_text(detail_text, ["Organization Name", "Charity Name", "Legal Name", "Name"])
+            checker.extract_labeled_value(page, ["Primary Name", "Organization Name", "Charity Name", "Legal Name"])
+            or checker.extract_labeled_value_from_text(detail_text, ["Primary Name", "Organization Name", "Charity Name", "Legal Name"])
+            or clicked_result_name
         )
+        result.matched_registry_identifier = detail_ein or clicked_result_identifier
         if not result_registry_name_is_safe(result, org.organization_name, org.ein):
             result.raw_status_text = "No matching organization record"
             result.status = checker.STATUS_NOT_REGISTERED
             result.source_note = "Hawaii search found a row, but the registry name did not safely match the requested organization."
             result.success = True
             return result
-        result.raw_status_text = status_text
+        result.raw_status_text = " | ".join(part for part in [
+            f"Registration Status: {status_text}" if status_text else "",
+            f"Registration Type: {registration_type}" if registration_type else "",
+        ]) or status_text
         result.status = status_text if status_text else checker.STATUS_UNKNOWN
         result.source_note = "Registration status and filings from Hawaii detail page."
         result.success = True
@@ -6667,7 +6680,13 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 result = search_fl(page, org)
                 body = registry_page_body(page)
             elif state == "NY":
-                result = search_with_name_variants(page, org, checker.search_ny, max_variants=25)
+                result = search_with_name_variants(
+                    page,
+                    org,
+                    checker.search_ny,
+                    max_variants=10,
+                    max_elapsed_seconds=min(NAME_SEARCH_VARIANT_MAX_SECONDS, 30.0),
+                )
             elif state == "NJ":
                 result = search_nj_direct(page, org)
                 if public_status(result) != "Not Registered":
@@ -6701,7 +6720,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                         page,
                         org,
                         checker.search_sc,
-                        max_variants=16,
+                        max_variants=10,
                         max_elapsed_seconds=SC_NAME_VARIANT_MAX_SECONDS,
                         include_ein_aliases=True,
                         include_name_segments=True,
