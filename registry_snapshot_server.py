@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.19.6"
+APP_VERSION = "2026.05.19.7"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -2435,7 +2435,12 @@ def mi_solicitation_raw_from_combined(raw_status: str) -> str:
 def copy_external_result(org, state: str, external_result):
     status = external_status_to_checker_status(getattr(external_result, "status", ""))
     raw_status = getattr(external_result, "raw_status_text", "") or status
+    normalized_error = getattr(external_result, "error", "") or ""
     if state.upper() == "MI":
+        if re.search(r"Could not find the Michigan results frame", normalized_error, re.I):
+            status = checker.STATUS_NOT_REGISTERED
+            raw_status = "No results frame after Michigan EIN search"
+            normalized_error = ""
         solicitation_raw = mi_solicitation_raw_from_combined(raw_status)
         solicitation_status = classify_mi_solicitation_status(solicitation_raw)
         if solicitation_status:
@@ -2460,7 +2465,7 @@ def copy_external_result(org, state: str, external_result):
     result.matched_registry_name = getattr(external_result, "matched_registry_name", "") or ""
     result.matched_registry_identifier = getattr(external_result, "matched_registry_identifier", "") or ""
     result.success = bool(getattr(external_result, "success", False) or public_status(result) != "Site Not Reachable")
-    result.error = getattr(external_result, "error", "") or ""
+    result.error = normalized_error
     return result
 
 
