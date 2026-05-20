@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.20.6"
+APP_VERSION = "2026.05.20.7"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -123,6 +123,9 @@ WI_READER_TIMEOUT_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_READER_TIME
 WI_HTTP_TIMEOUT_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_HTTP_TIMEOUT_SECONDS", "10"))), 20.0)
 WI_DIRECT_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_WI_DIRECT_VARIANT_LIMIT", "8"))), 12)
 WI_BROWSER_VARIANT_LIMIT = min(max(0, int(os.environ.get("CE_WI_BROWSER_VARIANT_LIMIT", "0"))), 5)
+WI_SIDECAR_URL = os.environ.get("CE_WI_SIDECAR_URL", "").strip()
+WI_LOOKUP_SECRET = os.environ.get("CE_WI_LOOKUP_SECRET", "").strip()
+WI_SIDECAR_TIMEOUT_SECONDS = min(max(10.0, float(os.environ.get("CE_WI_SIDECAR_TIMEOUT_SECONDS", "45"))), 58.0)
 MAX_EXTERNAL_EXEMPT_ORGS = 3
 DOMAIN_LIMIT_DAYS = 7
 ADMIN_PASSCODE = "8977"
@@ -5128,6 +5131,85 @@ def search_wi(page, org):
         return result
 
 
+def search_wi_sidecar(org):
+    result = checker.StateResult(org.organization_name, org.ein, "WI", "Site Not Reachable", WI_SEARCH_URL)
+    if not (WI_SIDECAR_URL and WI_LOOKUP_SECRET):
+        result.raw_status_text = "Wisconsin sidecar is not configured"
+        result.source_note = "Wisconsin DFI sidecar lookup is not configured for this environment."
+        result.success = False
+        return result
+    search_names = wi_search_names_for_org(org) or [org.organization_name]
+    payload = {
+        "organization_name": org.organization_name,
+        "ein": org.ein,
+        "search_names": search_names[:WI_DIRECT_VARIANT_LIMIT],
+        "target_names": organization_match_target_variants(org.organization_name, org.ein),
+        "max_seconds": WI_SIDECAR_TIMEOUT_SECONDS,
+        "app_version": APP_VERSION,
+    }
+    try:
+        request = urllib.request.Request(
+            WI_SIDECAR_URL,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "X-CE-WI-Lookup-Secret": WI_LOOKUP_SECRET,
+                "User-Agent": f"CharityClarity/{APP_VERSION}",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=WI_SIDECAR_TIMEOUT_SECONDS + 5) as response:
+            response_body = response.read().decode("utf-8", errors="replace")
+        data = json.loads(response_body)
+    except Exception as exc:
+        result.raw_status_text = "Wisconsin sidecar lookup failed"
+        result.source_note = "Wisconsin DFI sidecar lookup could not be completed."
+        result.error = str(exc)
+        result.success = False
+        return result
+
+    result.status = data.get("status") or "Site Not Reachable"
+    result.source_url = data.get("source_url") or WI_SEARCH_URL
+    result.raw_status_text = data.get("raw_status_text") or result.status
+    result.source_note = data.get("source_note") or "Wisconsin DFI lookup was performed through the CharityClarity Wisconsin sidecar."
+    result.matched_registry_name = data.get("matched_registry_name") or ""
+    result.matched_registry_identifier = data.get("matched_registry_identifier") or ""
+    result.error = data.get("error") or ""
+    result.success = bool(data.get("success", public_status(result) != "Site Not Reachable"))
+    return result
+
+
+def response_data_for_lookup(result, body: str, org, organization_name: str, ein: str, state: str, lookup_started: float) -> dict:
+    if result is None:
+        result = checker.StateResult(organization_name or f"EIN {format_ein(ein)}", format_ein(ein), state, "Site Not Reachable", "")
+        result.raw_status_text = "Lookup did not produce a registry result"
+        result.source_note = "Public registry lookup could not produce a result."
+        result.error = "No result"
+        result.success = False
+    if public_status(result) != "Not Registered":
+        fill_registry_match_from_text(result, body, org)
+    result.source_note = source_note_for_result(result)
+    data = checker.asdict(result)
+    if organization_name:
+        data["organization_name"] = organization_name
+        result.organization_name = organization_name
+    elif (data.get("matched_registry_name") or "").strip():
+        data["organization_name"] = (data.get("matched_registry_name") or "").strip()
+        result.organization_name = data["organization_name"]
+    elif not (data.get("organization_name") or "").strip():
+        data["organization_name"] = "Organization not identified"
+        result.organization_name = data["organization_name"]
+    data["status"] = true_status_from_body(result, body)
+    data["comments"] = comments_for_result(result, body, data["status"])
+    data["evidence_url"] = ""
+    data["lookup_seconds"] = round(time.perf_counter() - lookup_started, 2)
+    data["checked_at_epoch"] = int(time.time())
+    data["app_version"] = APP_VERSION
+    log_event(f"{state} lookup for {format_ein(ein)} finished in {data['lookup_seconds']}s with status {data.get('status')}")
+    return data
+
+
 def enrich_me_result_from_body(result, body: str) -> None:
     existing_status = " ".join([result.status or "", result.raw_status_text or ""])
     if re.search(r"\bACTIVE\b", existing_status, re.I) and not re.search(r"\b(FAILED\s+TO\s+RENEW|EXPIRED|REVOKED|SUSPENDED|INACTIVE)\b", existing_status, re.I):
@@ -6620,6 +6702,16 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
     body = ""
     proof_url = None
 
+    if state == "WI" and WI_SIDECAR_URL and WI_LOOKUP_SECRET:
+        result = search_wi_sidecar(org)
+        body = " ".join(part for part in [
+            result.raw_status_text or "",
+            result.source_note or "",
+            result.matched_registry_name or "",
+            result.matched_registry_identifier or "",
+        ])
+        return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
+
     result = None
     BROWSER_LOOKUP_SEMAPHORE.acquire()
     with checker.sync_playwright() as p:
@@ -6808,34 +6900,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 browser.close()
             BROWSER_LOOKUP_SEMAPHORE.release()
 
-    if result is None:
-        result = checker.StateResult(organization_name or f"EIN {format_ein(ein)}", format_ein(ein), state, "Site Not Reachable", "")
-        result.raw_status_text = "Browser launch failed"
-        result.source_note = "Public registry lookup could not start because the browser runtime was unavailable."
-        result.error = "Browser launch failed"
-        result.success = False
-
-    if public_status(result) != "Not Registered":
-        fill_registry_match_from_text(result, body, org)
-    result.source_note = source_note_for_result(result)
-    data = checker.asdict(result)
-    if organization_name:
-        data["organization_name"] = organization_name
-        result.organization_name = organization_name
-    elif (data.get("matched_registry_name") or "").strip():
-        data["organization_name"] = (data.get("matched_registry_name") or "").strip()
-        result.organization_name = data["organization_name"]
-    elif not (data.get("organization_name") or "").strip():
-        data["organization_name"] = "Organization not identified"
-        result.organization_name = data["organization_name"]
-    data["status"] = true_status_from_body(result, body)
-    data["comments"] = comments_for_result(result, body, data["status"])
-    data["evidence_url"] = ""
-    data["lookup_seconds"] = round(time.perf_counter() - lookup_started, 2)
-    data["checked_at_epoch"] = int(time.time())
-    data["app_version"] = APP_VERSION
-    log_event(f"{state} lookup for {format_ein(ein)} finished in {data['lookup_seconds']}s with status {data.get('status')}")
-    return data
+    return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
 
 
 def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> list[dict]:
