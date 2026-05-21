@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.21.1"
+APP_VERSION = "2026.05.21.2"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -7269,6 +7269,24 @@ def normalize_organization_requests(payload: dict, privileged: bool) -> list[dic
     return deduped
 
 
+def payload_missing_required_organization_name(payload: dict) -> bool:
+    organization_name = (payload.get("organization_name") or "").strip()
+    raw_organizations = payload.get("organizations")
+    if isinstance(raw_organizations, list):
+        for item in raw_organizations:
+            if not isinstance(item, dict):
+                continue
+            if len(re.sub(r"\D", "", format_ein(item.get("ein") or ""))) != 9:
+                continue
+            item_name = (item.get("organization_name") or organization_name).strip()
+            if not item_name:
+                return True
+        return False
+    if len(re.sub(r"\D", "", format_ein(payload.get("ein") or ""))) == 9:
+        return not organization_name
+    return False
+
+
 class RegistrySnapshotHandler(BaseHTTPRequestHandler):
     def _send_json(self, status_code: int, payload: dict) -> None:
         body = json.dumps(payload).encode("utf-8")
@@ -7452,6 +7470,9 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
                 self._send_json(401, {"error": "Enter the Compliance Express passcode to use internal features."})
                 return
             privileged = is_privileged_request(email, domain)
+            if payload_missing_required_organization_name(payload):
+                self._send_json(400, {"error": "Enter the organization name as registered, if known."})
+                return
             organizations = normalize_organization_requests(payload, privileged)
 
             if isinstance(requested_states, list):
