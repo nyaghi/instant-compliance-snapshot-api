@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.20.11"
+APP_VERSION = "2026.05.20.12"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -4742,6 +4742,8 @@ def wi_search_names_for_org(org) -> list[str]:
     original_name = getattr(org, "organization_name", "")
     add_many([original_name])
     add_many(known_names_for_ein(getattr(org, "ein", "")))
+    seed_names = list(names)
+    seed_has_hyphen = any(re.search(r"[-\u2010-\u2015]", seed or "") for seed in seed_names)
     for seed in list(names):
         add_many(organization_name_variants(
             seed,
@@ -4791,6 +4793,8 @@ def wi_search_names_for_org(org) -> list[str]:
 
     filtered_names = []
     for value in expanded_names:
+        if re.search(r"[-\u2010-\u2015]", value or "") and not seed_has_hyphen:
+            continue
         substantive = [
             word for word in re.findall(r"[A-Za-z0-9]+", value or "")
             if word.lower() not in {"the", "a", "an", "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited"}
