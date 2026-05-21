@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.21.3"
+APP_VERSION = "2026.05.21.4"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -98,6 +98,8 @@ ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get
 ME_CONFIRM_NOT_REGISTERED = os.environ.get("CE_ME_CONFIRM_NOT_REGISTERED", "1").strip().lower() in {"1", "true", "yes"}
 MI_ENABLE_NAME_FALLBACK = os.environ.get("CE_MI_ENABLE_NAME_FALLBACK", "1").strip().lower() in {"1", "true", "yes"}
 ENABLE_CROSS_STATE_NAME_RETRY = os.environ.get("CE_ENABLE_CROSS_STATE_NAME_RETRY", "0").strip().lower() in {"1", "true", "yes"}
+CONFIRM_FRAGILE_BATCH_RESULTS = os.environ.get("CE_CONFIRM_FRAGILE_BATCH_RESULTS", "1").strip().lower() in {"1", "true", "yes"}
+BATCH_CONFIRMATION_WORKERS = min(max(1, int(os.environ.get("CE_BATCH_CONFIRMATION_WORKERS", "1"))), 2)
 NAME_SEARCH_PREFLIGHT_URLS = {
     "CT": "https://www.elicense.ct.gov/lookup/licenselookup.aspx",
     "FL": "https://csapp.fdacs.gov/CSPublicApp/CheckACharity/CheckACharity.aspx",
@@ -2538,6 +2540,13 @@ def classify_mi_solicitation_status(raw_status: str) -> str:
     raw = re.sub(r"\s+", " ", raw_status or "").strip()
     if not raw or raw.upper() == "N/A":
         return ""
+    registered_expiration = re.search(
+        r"\b(?:registered|active)\b[\s\S]{0,220}?\bExpiration\s+Date\s*:?\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})",
+        raw,
+        re.I,
+    )
+    if registered_expiration:
+        return classify_expiration_date(parse_due_date(registered_expiration.group(1)))
     if re.search(r"\bpending\b", raw, re.I):
         return "Pending"
     if re.search(r"\b(exempt)\b", raw, re.I):
@@ -2548,13 +2557,6 @@ def classify_mi_solicitation_status(raw_status: str) -> str:
         return "Closed / Withdrawn / Canceled"
     if re.search(r"\b(delinquent|non\W*compliant|expired)\b", raw, re.I):
         return checker.STATUS_DELINQUENT
-    registered_expiration = re.search(
-        r"\b(?:registered|active)\b[\s\S]{0,180}?\bExpiration\s+Date\s*:?\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})",
-        raw,
-        re.I,
-    )
-    if registered_expiration:
-        return classify_expiration_date(parse_due_date(registered_expiration.group(1)))
     if re.search(r"\b(registered|active|current|compliant)\b", raw, re.I):
         return checker.STATUS_CURRENT
     return checker.STATUS_UNKNOWN
@@ -3622,7 +3624,8 @@ def search_fl(page, org):
         original_name,
         org.ein,
         include_ein_aliases=True,
-        include_name_segments=False,
+        include_name_segments=True,
+        include_and_segments=False,
         include_compact_legal_suffixes=True,
         include_leading_article_variants=True,
         include_broad_query_prefixes=False,
@@ -7175,6 +7178,62 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
     return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
 
 
+def fragile_batch_result_needs_confirmation(result: dict) -> bool:
+    """Identify results that should not be trusted from a busy multi-state batch alone."""
+    state = (result.get("state") or "").upper()
+    status = (result.get("status") or "").strip().lower()
+    if state in {"FL", "ME", "OR"}:
+        return status == "not registered"
+    if state == "MI":
+        return status in {"not registered", "pending"}
+    if state == "WI":
+        return status in {"not registered", "pending", "delinquent"}
+    return False
+
+
+def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
+    if not CONFIRM_FRAGILE_BATCH_RESULTS:
+        return results
+    jobs = [
+        (index, result)
+        for index, result in enumerate(results)
+        if fragile_batch_result_needs_confirmation(result)
+    ]
+    if not jobs:
+        return results
+
+    def run_confirmation(job: tuple[int, dict]) -> tuple[int, dict | None]:
+        index, original = job
+        name = (original.get("organization_name") or "").strip()
+        ein = original.get("ein") or ""
+        state = (original.get("state") or "").upper()
+        if not name or not ein or not state:
+            return index, None
+        try:
+            confirmed = run_state_lookup(name, ein, state)
+        except Exception as exc:
+            log_error(f"{state} batch confirmation for {format_ein(ein)} failed: {exc}")
+            return index, None
+        confirmed["batch_confirmation"] = "isolated_retry"
+        original_status = (original.get("status") or "").strip()
+        confirmed_status = (confirmed.get("status") or "").strip()
+        if confirmed_status and confirmed_status.lower() != "site not reachable" and confirmed_status != original_status:
+            note = (
+                f"Batch reliability note: the initial multi-state result was {original_status or 'blank'}; "
+                f"an isolated confirmation lookup returned {confirmed_status}."
+            )
+            confirmed["comments"] = "\n\n".join(part for part in [confirmed.get("comments") or "", note] if part)
+            return index, confirmed
+        return index, None
+
+    worker_count = min(BATCH_CONFIRMATION_WORKERS, len(jobs))
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        for index, confirmed in executor.map(run_confirmation, jobs):
+            if confirmed is not None:
+                results[index] = confirmed
+    return results
+
+
 def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> list[dict]:
     lookup_requests = [
         (org["organization_name"], org["ein"], st)
@@ -7188,6 +7247,8 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         # executor.map preserves input order, so the table stays predictable.
         results = list(executor.map(lambda args: run_state_lookup(*args), lookup_requests))
+
+    results = confirm_fragile_batch_results(results)
 
     submitted_names_by_ein = {
         re.sub(r"\D", "", ein or ""): (name or "").strip()
