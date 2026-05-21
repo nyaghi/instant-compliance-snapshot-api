@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.21.2"
+APP_VERSION = "2026.05.21.3"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -78,9 +78,9 @@ SUPPORTED_STATES = [
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
 
-REQUESTED_PARALLEL_LOOKUPS = max(1, int(os.environ.get("CE_MAX_PARALLEL_LOOKUPS", "6")))
+REQUESTED_PARALLEL_LOOKUPS = max(1, int(os.environ.get("CE_MAX_PARALLEL_LOOKUPS", "4")))
 ALLOW_PARALLEL_BROWSER_LOOKUPS = os.environ.get("CE_ALLOW_PARALLEL_BROWSER_LOOKUPS", "1").strip().lower() in {"1", "true", "yes"}
-MAX_BROWSER_LOOKUPS = max(1, int(os.environ.get("CE_MAX_BROWSER_LOOKUPS", "6")))
+MAX_BROWSER_LOOKUPS = max(1, int(os.environ.get("CE_MAX_BROWSER_LOOKUPS", "4")))
 MAX_PARALLEL_LOOKUPS = min(REQUESTED_PARALLEL_LOOKUPS, MAX_BROWSER_LOOKUPS) if ALLOW_PARALLEL_BROWSER_LOOKUPS else 1
 BROWSER_LOOKUP_SEMAPHORE = threading.BoundedSemaphore(MAX_BROWSER_LOOKUPS)
 BLOCK_HEAVY_BROWSER_RESOURCES = os.environ.get("CE_BLOCK_HEAVY_BROWSER_RESOURCES", "1").strip().lower() not in {"0", "false", "no"}
@@ -3249,6 +3249,7 @@ def target_name_score(row_name: str, targets: list[str]) -> int:
 def clean_registry_name(value: str) -> str:
     cleaned = re.sub(r"\s+", " ", (value or "").strip())
     cleaned = re.sub(r"\s*/\s*DBA\s*/\s*Nickname\s*:?.*$", "", cleaned, flags=re.I).strip()
+    cleaned = re.sub(r"\s+\b(?:aka|d/?b/?a|f/?k/?a|formerly(?:\s+known\s+as)?)\b\s+.*$", "", cleaned, flags=re.I).strip()
     cleaned = re.sub(r"\b(Credential|License/Registration Number|Status|Expiration Date)\b.*$", "", cleaned, flags=re.I).strip()
     return cleaned.strip(" :-")
 
@@ -3537,6 +3538,13 @@ def search_fl(page, org):
     original_name = org.organization_name
     safe_targets = organization_match_target_variants(original_name, org.ein)
 
+    def clean_fl_registry_name(value: str) -> str:
+        cleaned = clean_registry_name(value)
+        cleaned = re.sub(r"\s+\bAlso\s+Soliciting\s+as\b.*$", "", cleaned, flags=re.I).strip()
+        cleaned = re.sub(r"\s+\bPrint\b\s*$", "", cleaned, flags=re.I).strip()
+        cleaned = re.sub(r",\s*[A-Z][A-Z .'-]+,\s*[A-Z]{2}\s*$", "", cleaned).strip()
+        return cleaned.strip(" ,-")
+
     def florida_local_chapter_mismatch(row_name: str) -> bool:
         row_norm = normalized_match_name(row_name)
         target_norms = [normalized_match_name(target) for target in safe_targets]
@@ -3617,7 +3625,7 @@ def search_fl(page, org):
         include_name_segments=False,
         include_compact_legal_suffixes=True,
         include_leading_article_variants=True,
-        include_broad_query_prefixes=True,
+        include_broad_query_prefixes=False,
     )
     original_has_hyphen = "-" in (original_name or "")
     variants = []
@@ -3678,8 +3686,9 @@ def search_fl(page, org):
                 row_text = re.sub(r"\s+", " ", candidate.get("text") or "").strip()
                 row_name = (
                     text_between_labels(row_text, "Business Name", ["License/Registration Number", "Registration Number", "Expiration Date", "Status"])
-                    or clean_registry_name(re.split(r"\bLicense/Registration Number\b|\bRegistration Number\b|\bExpiration Date\b", row_text, maxsplit=1, flags=re.I)[0])
+                    or clean_fl_registry_name(re.split(r"\bLicense/Registration Number\b|\bRegistration Number\b|\bExpiration Date\b", row_text, maxsplit=1, flags=re.I)[0])
                 )
+                row_name = clean_fl_registry_name(row_name)
                 name_score = target_name_score(row_name, safe_targets)
                 if name_score < 0:
                     continue
@@ -3713,7 +3722,7 @@ def search_fl(page, org):
                     result.status = "Suspended"
                     result.raw_status_text = "Status: Suspended"
                     result.source_note = "FL uses the registration status shown next to the Check-A-Charity registration number."
-                    result.matched_registry_name = clean_registry_name(best_candidate["row_name"])
+                    result.matched_registry_name = clean_fl_registry_name(best_candidate["row_name"])
                     id_match = re.search(r"\bCH\d+\b", row_text, re.I)
                     result.matched_registry_identifier = id_match.group(0).upper() if id_match else ""
                     result.success = True
@@ -3722,7 +3731,7 @@ def search_fl(page, org):
                     result.status = "Revoked"
                     result.raw_status_text = "Status: Revoked"
                     result.source_note = "FL uses the registration status shown next to the Check-A-Charity registration number."
-                    result.matched_registry_name = clean_registry_name(best_candidate["row_name"])
+                    result.matched_registry_name = clean_fl_registry_name(best_candidate["row_name"])
                     id_match = re.search(r"\bCH\d+\b", row_text, re.I)
                     result.matched_registry_identifier = id_match.group(0).upper() if id_match else ""
                     result.success = True
@@ -3739,7 +3748,7 @@ def search_fl(page, org):
                 result.status = classify_expiration_date(exp_date)
                 result.raw_status_text = f"Expiration Date {format_date(exp_date)}"
             result.source_note = "FL uses the expiration date shown by Check-A-Charity."
-            result.matched_registry_name = clean_registry_name(best_candidate["row_name"])
+            result.matched_registry_name = clean_fl_registry_name(best_candidate["row_name"])
             id_match = re.search(r"\bCH\d+\b", row_text, re.I)
             result.matched_registry_identifier = id_match.group(0).upper() if id_match else ""
             result.success = True
@@ -6379,6 +6388,10 @@ def true_status_from_body(result, body: str) -> str:
         return "Exempt"
     if explicit_no_registration_status(result, combined):
         return "Not Registered"
+    if state == "CT":
+        ct_registry_date = explicit_registry_date(result, combined)
+        if ct_registry_date and re.search(r"\bPUBLIC\s+CHARITY\b", result.raw_status_text or "", re.I):
+            return status_from_calendar_date(ct_registry_date)
     adverse_status = explicit_adverse_registry_status(result, combined)
     if adverse_status:
         return adverse_status
@@ -6406,7 +6419,6 @@ def true_status_from_body(result, body: str) -> str:
         return "Failed to Renew"
     if normalized in {"withdrawn", "closed", "closed / withdrawn / canceled"}:
         return "Closed / Withdrawn / Canceled"
-
     context = filing_context(result, body)
     due_date = context["due_date"]
     represented_year = context["represented_year"]
