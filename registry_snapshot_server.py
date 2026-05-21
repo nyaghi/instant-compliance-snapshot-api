@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.20.12"
+APP_VERSION = "2026.05.20.13"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -126,6 +126,7 @@ WI_BROWSER_VARIANT_LIMIT = min(max(0, int(os.environ.get("CE_WI_BROWSER_VARIANT_
 WI_SIDECAR_URL = os.environ.get("CE_WI_SIDECAR_URL", "").strip()
 WI_LOOKUP_SECRET = os.environ.get("CE_WI_LOOKUP_SECRET", "").strip()
 WI_SIDECAR_TIMEOUT_SECONDS = min(max(10.0, float(os.environ.get("CE_WI_SIDECAR_TIMEOUT_SECONDS", "45"))), 58.0)
+WI_SIDECAR_ATTEMPTS = min(max(1, int(os.environ.get("CE_WI_SIDECAR_ATTEMPTS", "3"))), 5)
 MAX_EXTERNAL_EXEMPT_ORGS = 3
 DOMAIN_LIMIT_DAYS = 7
 ADMIN_PASSCODE = "8977"
@@ -5199,25 +5200,40 @@ def search_wi_sidecar(org):
         "max_seconds": WI_SIDECAR_TIMEOUT_SECONDS,
         "app_version": APP_VERSION,
     }
-    try:
-        request = urllib.request.Request(
-            WI_SIDECAR_URL,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "X-CE-WI-Lookup-Secret": WI_LOOKUP_SECRET,
-                "User-Agent": f"CharityClarity/{APP_VERSION}",
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(request, timeout=WI_SIDECAR_TIMEOUT_SECONDS + 5) as response:
-            response_body = response.read().decode("utf-8", errors="replace")
-        data = json.loads(response_body)
-    except Exception as exc:
+    data = None
+    last_exception = None
+    for attempt_index in range(WI_SIDECAR_ATTEMPTS):
+        try:
+            request = urllib.request.Request(
+                WI_SIDECAR_URL,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "X-CE-WI-Lookup-Secret": WI_LOOKUP_SECRET,
+                    "User-Agent": f"CharityClarity/{APP_VERSION}",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=WI_SIDECAR_TIMEOUT_SECONDS + 5) as response:
+                response_body = response.read().decode("utf-8", errors="replace")
+            candidate_data = json.loads(response_body)
+        except Exception as exc:
+            last_exception = exc
+            if attempt_index + 1 < WI_SIDECAR_ATTEMPTS:
+                time.sleep(0.4 * (attempt_index + 1))
+            continue
+
+        data = candidate_data
+        if candidate_data.get("success") or candidate_data.get("status") != "Site Not Reachable":
+            break
+        if attempt_index + 1 < WI_SIDECAR_ATTEMPTS:
+            time.sleep(0.4 * (attempt_index + 1))
+
+    if data is None:
         result.raw_status_text = "Wisconsin sidecar lookup failed"
         result.source_note = "Wisconsin DFI sidecar lookup could not be completed."
-        result.error = str(exc)
+        result.error = str(last_exception or "WI sidecar returned no response")
         result.success = False
         return result
 
