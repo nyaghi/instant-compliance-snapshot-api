@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.20.15"
+APP_VERSION = "2026.05.21.1"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -1865,6 +1865,34 @@ def organization_name_variants(
         if value and value not in variants:
             variants.append(value)
 
+    def final_substantive_number_variants(value: str) -> list[str]:
+        if not re.search(r"\b(?:and|&)\b", value or "", re.I):
+            return []
+        legal_or_generic = {
+            "the", "a", "an", "inc", "inc.", "incorporated", "corp", "corp.",
+            "corporation", "llc", "ltd", "ltd.", "limited", "foundation",
+            "fund", "charity", "charities", "association", "society",
+            "institute", "center", "centre", "organization", "trust",
+        }
+        matches = list(re.finditer(r"[A-Za-z]{4,}", value or ""))
+        for match in reversed(matches):
+            word = match.group(0)
+            if word.lower() in legal_or_generic:
+                continue
+            replacements = []
+            if word.lower().endswith("ies"):
+                replacements.append(f"{word[:-3]}y")
+            elif word.lower().endswith("s") and not word.lower().endswith(("ss", "us")):
+                replacements.append(word[:-1])
+            else:
+                replacements.append(f"{word}s")
+            return [
+                f"{value[:match.start()]}{replacement}{value[match.end():]}"
+                for replacement in replacements
+                if replacement and replacement.lower() != word.lower()
+            ]
+        return []
+
     seed_names = [name]
     if ein and include_ein_aliases:
         for alias in known_names_for_ein(ein):
@@ -1942,6 +1970,7 @@ def organization_name_variants(
         slash_as_space = re.sub(r"\s*(?:/|\\)\s*", " ", base).strip()
         slash_as_space = re.sub(r"\s+", " ", slash_as_space)
         broad_query_prefixes = []
+        broad_query_suffixes = []
         prefix_source = re.sub(r"^the\s+", "", no_punctuation, flags=re.I).strip()
         prefix_words = prefix_source.split()
         if include_broad_query_prefixes and len(prefix_words) >= 5:
@@ -1952,6 +1981,10 @@ def organization_name_variants(
                 " ".join(prefix_words[:4]),
                 " ".join(prefix_words[:3]),
                 " ".join(prefix_words[:2]),
+            ])
+            broad_query_suffixes.extend([
+                " ".join(prefix_words[-3:]),
+                " ".join(prefix_words[-2:]),
             ])
         institute_plural = re.sub(r"\bInstitute\s+of\b", "Institutes of", base, flags=re.I).strip()
         institute_singular = re.sub(r"\bInstitutes\s+of\b", "Institute of", base, flags=re.I).strip()
@@ -1966,6 +1999,10 @@ def organization_name_variants(
                 base,
                 count=1,
             )
+        final_number_variants = []
+        for number_source in [base, without_suffix, no_punctuation]:
+            for number_variant in final_substantive_number_variants(number_source):
+                final_number_variants.append(number_variant)
         ampersand_as_and = re.sub(r"\s*&\s*", " and ", base).strip()
         ampersand_removed = re.sub(r"\s*&\s*", " ", base).strip()
         apostrophe_removed = re.sub(r"[']", "", base).strip()
@@ -1979,6 +2016,12 @@ def organization_name_variants(
             r"\b(Children'?s?)\s+Foundation\b",
             r"\1 Hospital Foundation",
             base,
+            flags=re.I,
+        ).strip()
+        childrens_hospital_no_punctuation = re.sub(
+            r"\b(Children'?s?)\s+Foundation\b",
+            r"\1 Hospital Foundation",
+            no_punctuation,
             flags=re.I,
         ).strip()
         cancer_research_center = re.sub(
@@ -2055,6 +2098,11 @@ def organization_name_variants(
             disease_abbreviated,
             disease_abbreviated_ampersand,
             disease_abbreviated_no_punctuation,
+            *broad_query_prefixes,
+            *broad_query_suffixes,
+            *final_number_variants,
+            childrens_hospital,
+            childrens_hospital_no_punctuation,
             *hyphenated_word_pairs,
             *us_word_variants,
             no_punctuation,
@@ -2071,7 +2119,6 @@ def organization_name_variants(
             possessive_removed,
             saint_expanded,
             saint_abbreviated,
-            childrens_hospital,
             cancer_research_center,
             cancer_center,
             of_america_removed,
@@ -2079,7 +2126,6 @@ def organization_name_variants(
             title_hyphen_base,
             ms_expanded,
             and_no_punctuation,
-            *broad_query_prefixes,
             *broad_variants,
             *us_prefixed_variants,
             leading_article_from_trailing,
@@ -2339,6 +2385,7 @@ def search_with_name_variants(
     reject_va_suspended_from_leading_the_drop: bool = False,
     include_ein_aliases: bool = True,
     include_name_segments: bool = False,
+    include_and_segments: bool = True,
     include_compact_legal_suffixes: bool = True,
     include_leading_article_variants: bool = True,
     prioritize_institution_reductions: bool = False,
@@ -2350,6 +2397,7 @@ def search_with_name_variants(
         org.ein,
         include_ein_aliases=include_ein_aliases,
         include_name_segments=include_name_segments,
+        include_and_segments=include_and_segments,
         include_compact_legal_suffixes=include_compact_legal_suffixes,
         include_leading_article_variants=include_leading_article_variants,
     )
@@ -2960,8 +3008,21 @@ def search_mi_name_fallback(page, org):
         result.success = True
         result.error = ""
         return result
-    for variant in variants[:3]:
-        if time.perf_counter() - started > 12:
+    def mi_variant_priority(value: str) -> tuple[int, int, str]:
+        cleaned = re.sub(r"\s+", " ", value or "").strip()
+        has_legal_suffix = bool(re.search(r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\b", cleaned, re.I))
+        has_comma = "," in cleaned
+        has_generated_punctuation = bool(re.search(r"[-/\\]", cleaned))
+        return (
+            2 if has_legal_suffix or has_comma else (1 if has_generated_punctuation else 0),
+            len(cleaned.split()),
+            cleaned.lower(),
+        )
+
+    variants = sorted(variants, key=mi_variant_priority)
+
+    for variant in variants[:5]:
+        if time.perf_counter() - started > 22:
             result.status = checker.STATUS_NOT_REGISTERED
             result.raw_status_text = "No matching organization record"
             result.source_note = "Michigan EIN search returned no exact result, and the bounded organization-name fallback found no matching record before the safe retry limit."
@@ -3001,6 +3062,26 @@ def search_mi_name_fallback(page, org):
                         clicked_name_score = 450 + checker_score[0]
                 except Exception:
                     pass
+            if clicked_name_score >= 0:
+                row_window_match = re.search(
+                    rf"(?P<id>\b\d{{3,8}}\b)?\s*{re.escape(clicked_name)}[\s\S]{{0,220}}?(?P<date>\d{{1,2}}/\d{{1,2}}/\d{{2,4}})",
+                    results_text,
+                    re.I,
+                )
+                if row_window_match:
+                    expiration_date = parse_due_date(row_window_match.group("date"))
+                    if expiration_date:
+                        result.status = classify_expiration_date(expiration_date)
+                        result.raw_status_text = (
+                            f"License / Registration Expiration: {format_date(expiration_date)} | "
+                            "Matched by organization name after EIN search returned no exact result"
+                        )
+                        result.source_note = "MI tried EIN search first, then used the public organization-name search result row when the EIN field returned no exact result."
+                        result.matched_registry_name = clean_registry_name(clicked_name)
+                        result.matched_registry_identifier = row_window_match.group("id") or ""
+                        result.success = True
+                        result.error = ""
+                        return result
             module.click_result_link(frame, link, href)
             try:
                 page.wait_for_load_state("domcontentloaded", timeout=6000)
@@ -3156,7 +3237,8 @@ def target_name_score(row_name: str, targets: list[str]) -> int:
             best = max(best, 1000)
         elif row_norm.startswith(target_norm) or target_norm.startswith(row_norm):
             shorter = min(len(row_norm.split()), len(target_norm.split()))
-            best = max(best, 700 + shorter)
+            if shorter >= 3:
+                best = max(best, 700 + shorter)
         elif target_norm in row_norm or row_norm in target_norm:
             shorter = min(len(row_norm.split()), len(target_norm.split()))
             if shorter >= 3:
@@ -3191,20 +3273,27 @@ def fill_registry_match_from_text(result, body: str, org) -> None:
         return
     if public_status(result) == "Not Registered":
         return
-    readable = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", body or ""))).strip()
+    text_sources = [
+        body or "",
+        getattr(result, "raw_status_text", "") or "",
+        getattr(result, "source_note", "") or "",
+    ]
+    combined_text = "\n".join(text_sources)
+    readable = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", combined_text or ""))).strip()
     if not readable:
         return
     candidates = []
     for label in ["Organization Name", "Organization name", "Charity Name", "Business Name", "Legal Name", "Entity Name", "Name"]:
         candidate = useful_registry_name(text_between_labels(readable, label, [
             "FEIN", "Federal EIN", "Federal ID", "EIN", "Status", "Registration Status",
-            "Registration Number", "License Number", "Expiration Date", "Address",
+            "Registration Number", "License Number", "License", "Credential",
+            "Expiration Date", "Address", "City", "State",
         ]))
         if candidate:
             candidates.append(candidate)
     ein_digits = re.sub(r"\D", "", getattr(org, "ein", "") or getattr(result, "ein", "") or "")
     if ein_digits:
-        for line in re.split(r"[\r\n]+|\s{2,}", body or ""):
+        for line in re.split(r"[\r\n]+|\s{2,}", combined_text or ""):
             line_text = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", line))).strip()
             if not line_text or ein_digits not in re.sub(r"\D", "", line_text):
                 continue
@@ -3228,6 +3317,12 @@ def fill_registry_match_from_text(result, body: str, org) -> None:
             best_score = score
     if best_name and best_score >= 450:
         result.matched_registry_name = best_name
+    elif (
+        (getattr(result, "state", "") or "").upper() in {"AK", "MA", "MD", "MI", "MN", "PA"}
+        and public_status(result) not in {"Not Registered", "Site Not Reachable"}
+        and (getattr(org, "organization_name", "") or "").strip()
+    ):
+        result.matched_registry_name = re.sub(r"\s+", " ", getattr(org, "organization_name", "")).strip()
 
 
 def text_between_labels(text: str, start_label: str, end_labels: list[str]) -> str:
@@ -3486,6 +3581,8 @@ def search_fl(page, org):
                 return False
             if row_norm.startswith(target_norm + " "):
                 return False
+            if re.search(rf"\b(?:foundation|fund|friends)\s+of\s+(?:the\s+)?{re.escape(target_norm)}$", row_norm):
+                return False
             if target_norm in row_norm:
                 target_words = set(target_norm.split())
                 extra_words = row_words - target_words - generic
@@ -3520,7 +3617,7 @@ def search_fl(page, org):
         include_name_segments=False,
         include_compact_legal_suffixes=True,
         include_leading_article_variants=True,
-        include_broad_query_prefixes=False,
+        include_broad_query_prefixes=True,
     )
     original_has_hyphen = "-" in (original_name or "")
     variants = []
@@ -3534,7 +3631,7 @@ def search_fl(page, org):
         if variant not in variants:
             variants.append(variant)
     best_result = None
-    for variant in variants[:5]:
+    for variant in variants[:8]:
         result = checker.StateResult(original_name, org.ein, "FL", checker.STATUS_UNKNOWN, url)
         try:
             load_fl_search_page()
@@ -4223,6 +4320,11 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                 page_body = registry_page_body(ak_page)
                 if not print_link:
                     continue
+                row_text = re.sub(r"\s+", " ", (print_link.get("rowText") or "")).strip() if isinstance(print_link, dict) else ""
+                if row_text:
+                    row_name = useful_registry_name(re.split(r"\b\d{2}[-\s]?\d{7}\b|\bCharitable\b|\bPrint\b", row_text, maxsplit=1, flags=re.I)[0])
+                    if row_name and registry_name_is_safe_for_org(row_name, org.organization_name, org.ein):
+                        result.matched_registry_name = row_name
                 result.status, result.raw_status_text, result.source_note = checker.classify_ak_registration_year(year, None)
                 result.success = True
                 return result, page_body
@@ -4489,6 +4591,34 @@ def repair_ma_false_not_registered(page, org, result, body: str):
     return result, body
 
 
+def validate_ma_positive_record(org, result, body: str):
+    if public_status(result) in {"Not Registered", "Site Not Reachable"}:
+        return result
+    readable = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", body or ""))).strip()
+    ein_digits = re.sub(r"\D", "", getattr(org, "ein", "") or "")
+    registry_name = useful_registry_name(
+        checker.extract_labeled_value_from_text(readable, ["Organization Name", "Charity Name", "Legal Name", "Name"])
+    )
+    if registry_name and registry_name_is_safe_for_org(registry_name, org.organization_name, org.ein):
+        result.matched_registry_name = registry_name
+        return result
+    has_visible_filing = bool(re.search(r"\bForm[\s-]*PC\b|\b20\d{2}\b", " ".join([result.raw_status_text or "", readable]), re.I))
+    ein_confirmed = bool(ein_digits and ein_digits in re.sub(r"\D", "", readable))
+    if not has_visible_filing and not ein_confirmed and not registry_name:
+        replacement = checker.StateResult(org.organization_name, org.ein, "MA", checker.STATUS_NOT_REGISTERED, getattr(result, "source_url", "") or "")
+        replacement.raw_status_text = "No confirmed Massachusetts charity record"
+        replacement.source_note = "Massachusetts returned a possible record, but CharityClarity could not confirm the requested EIN, a safe registry name, or a visible Form PC filing year."
+        replacement.success = True
+        return replacement
+    if registry_name and not registry_name_is_safe_for_org(registry_name, org.organization_name, org.ein):
+        replacement = checker.StateResult(org.organization_name, org.ein, "MA", checker.STATUS_NOT_REGISTERED, getattr(result, "source_url", "") or "")
+        replacement.raw_status_text = "Massachusetts registry name did not safely match"
+        replacement.source_note = "Massachusetts returned a record, but its registry name did not safely match the requested organization."
+        replacement.success = True
+        return replacement
+    return result
+
+
 def search_hi_precise(page, org):
     url = "https://charity.ehawaii.gov/charity/new-search.html"
     result = checker.StateResult(org.organization_name, org.ein, "HI", checker.STATUS_UNKNOWN, url)
@@ -4745,6 +4875,46 @@ def wi_search_names_for_org(org) -> list[str]:
     add_many(known_names_for_ein(getattr(org, "ein", "")))
     seed_names = list(names)
     seed_has_hyphen = any(re.search(r"[-\u2010-\u2015]", seed or "") for seed in seed_names)
+
+    def generated_hyphen_variant_is_safe(value: str) -> bool:
+        if seed_has_hyphen:
+            return True
+        normalized_value = re.sub(r"\s+", " ", value or "").strip()
+        if not re.search(r"[-\u2010-\u2015]", normalized_value):
+            return True
+        seed_tokens = [
+            re.findall(r"[A-Za-z0-9]+", seed or "")
+            for seed in seed_names
+            if seed
+        ]
+        value_tokens = re.findall(r"[A-Za-z0-9]+", normalized_value)
+        if not value_tokens:
+            return False
+        generic = {
+            "the", "a", "an", "of", "for", "and", "to", "in", "on", "at",
+            "by", "inc", "incorporated", "corp", "corporation", "llc",
+            "ltd", "limited", "foundation", "fund", "association", "society",
+            "center", "centre", "institute", "organization", "charity",
+        }
+        hyphen_pairs = [
+            tuple(part for part in re.split(r"[-\u2010-\u2015]+", token) if part)
+            for token in re.split(r"\s+", normalized_value)
+            if re.search(r"[-\u2010-\u2015]", token)
+        ]
+        for pair in hyphen_pairs:
+            if len(pair) != 2:
+                continue
+            left, right = pair
+            if left.lower() in generic or right.lower() in generic:
+                continue
+            if left.isupper() or right.isupper():
+                continue
+            for tokens in seed_tokens:
+                for index in range(len(tokens) - 1):
+                    if tokens[index].lower() == left.lower() and tokens[index + 1].lower() == right.lower():
+                        return True
+        return False
+
     for seed in list(names):
         add_many(organization_name_variants(
             seed,
@@ -4794,7 +4964,7 @@ def wi_search_names_for_org(org) -> list[str]:
 
     filtered_names = []
     for value in expanded_names:
-        if re.search(r"[-\u2010-\u2015]", value or "") and not seed_has_hyphen:
+        if re.search(r"[-\u2010-\u2015]", value or "") and not generated_hyphen_variant_is_safe(value):
             continue
         substantive = [
             word for word in re.findall(r"[A-Za-z0-9]+", value or "")
@@ -4802,7 +4972,8 @@ def wi_search_names_for_org(org) -> list[str]:
         ]
         compact = re.sub(r"[^A-Za-z0-9]+", "", value or "")
         is_short_acronym = 2 <= len(compact) <= 8 and compact.upper() == compact
-        if (len(substantive) >= 2 or is_short_acronym) and value not in filtered_names:
+        is_compact_alnum_name = bool(re.fullmatch(r"(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9]{4,}", compact or ""))
+        if (len(substantive) >= 2 or is_short_acronym or is_compact_alnum_name) and value not in filtered_names:
             filtered_names.append(value)
     filtered_names.sort(key=priority)
     return filtered_names
@@ -6692,13 +6863,15 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
 def append_registry_match_comment(result, comment: str, public_facing_status: str) -> str:
     match_name = useful_registry_name(getattr(result, "matched_registry_name", ""))
     match_identifier = (getattr(result, "matched_registry_identifier", "") or "").strip()
-    if not match_name:
-        return comment
     if public_facing_status.lower() in {"not registered", "site not reachable"}:
         return comment
     if re.search(r"\bRegistry\s+match\s*:", comment or "", re.I):
         return comment
+    if not match_name and not match_identifier:
+        return comment
     spacer = "" if (comment or "").endswith((" ", "\n")) else " "
+    if not match_name:
+        return f"{comment}{spacer}Registry match ID: {match_identifier}."
     id_text = f" (ID: {match_identifier})" if match_identifier else ""
     return f"{comment}{spacer}Registry match: {match_name}{id_text}."
 
@@ -6821,6 +6994,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 result = checker.search_ma(page, org)
                 body = ma_detail_body(page)
                 result, body = repair_ma_false_not_registered(page, org, result, body)
+                result = validate_ma_positive_record(org, result, body)
             elif state == "MD":
                 result = checker.search_md(page, org)
                 md_body = registry_page_body(page)
@@ -6878,11 +7052,12 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                         page,
                         org,
                         search_va_bounded,
-                        max_variants=3,
+                        max_variants=8,
                         max_elapsed_seconds=NAME_SEARCH_VARIANT_MAX_SECONDS,
                         reject_va_suspended_from_leading_the_drop=False,
                         include_ein_aliases=True,
                         include_name_segments=True,
+                        include_and_segments=False,
                         include_compact_legal_suffixes=False,
                         include_leading_article_variants=True,
                         prioritize_institution_reductions=True,
@@ -6911,7 +7086,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 mi_started = time.perf_counter()
                 result = search_bundled_extension_state(page, org, "MI")
                 mi_elapsed = time.perf_counter() - mi_started
-                if MI_ENABLE_NAME_FALLBACK and public_status(result) == "Not Registered" and mi_elapsed < 35:
+                if MI_ENABLE_NAME_FALLBACK and public_status(result) == "Not Registered" and mi_elapsed < (LOOKUP_SOFT_MAX_SECONDS - 6):
                     fallback_result = search_mi_name_fallback(page, org)
                     if public_status(fallback_result) != "Not Registered":
                         result = fallback_result
