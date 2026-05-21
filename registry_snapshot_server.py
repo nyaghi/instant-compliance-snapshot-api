@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.20.13"
+APP_VERSION = "2026.05.20.14"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -5116,7 +5116,7 @@ def search_wi(page, org):
             return result
 
         detail_status = best_match.get("detail_status", "")
-        if best_match.get("detail_href"):
+        if best_match.get("detail_href") and page is not None:
             try:
                 page.goto(
                     urljoin(WI_SEARCH_URL, best_match["detail_href"]),
@@ -5235,7 +5235,17 @@ def search_wi_sidecar(org):
         result.source_note = "Wisconsin DFI sidecar lookup could not be completed."
         result.error = str(last_exception or "WI sidecar returned no response")
         result.success = False
+        fallback_result = search_wi(None, org)
+        if public_status(fallback_result) != "Site Not Reachable":
+            fallback_result.source_note = "Wisconsin DFI lookup used the backend reader fallback after the sidecar returned no response."
+            return fallback_result
         return result
+
+    if data.get("status") == "Site Not Reachable" and not data.get("success"):
+        fallback_result = search_wi(None, org)
+        if public_status(fallback_result) != "Site Not Reachable":
+            fallback_result.source_note = "Wisconsin DFI lookup used the backend reader fallback after the sidecar could not reach the registry."
+            return fallback_result
 
     result.status = data.get("status") or "Site Not Reachable"
     result.source_url = data.get("source_url") or WI_SEARCH_URL
