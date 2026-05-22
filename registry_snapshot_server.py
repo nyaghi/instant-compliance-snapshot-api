@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.21.5"
+APP_VERSION = "2026.05.21.6"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -91,6 +91,7 @@ ON_DEMAND_EVIDENCE_SCREENSHOT = os.environ.get("CE_ON_DEMAND_EVIDENCE_SCREENSHOT
 LOOKUP_SOFT_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_LOOKUP_SOFT_MAX_SECONDS", "59"))), 59.0)
 SC_NAME_VARIANT_MAX_SECONDS = max(12.0, float(os.environ.get("CE_SC_NAME_VARIANT_MAX_SECONDS", "25")))
 NAME_SEARCH_VARIANT_MAX_SECONDS = max(18.0, float(os.environ.get("CE_NAME_SEARCH_VARIANT_MAX_SECONDS", "35")))
+FL_LOOKUP_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_FL_LOOKUP_MAX_SECONDS", "45"))), 59.0)
 SC_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_SC_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
 NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
 ME_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_LOOKUP_MIN_INTERVAL_SECONDS", "1.0"))), 20.0)
@@ -2201,6 +2202,22 @@ def compatible_ein_alias_for_name(original_name: str, alias_name: str) -> bool:
         return True
     if 2 <= len(alias_compact) <= 8 and alias_compact == original_acronym:
         return True
+    for index, word in enumerate(original_words):
+        if not (2 <= len(word) <= 6 and word.isalpha()):
+            continue
+        for start in range(len(alias_words)):
+            for end in range(start + 2, min(len(alias_words), start + 5) + 1):
+                if acronym_from_words(alias_words[start:end]) != word:
+                    continue
+                expanded = original_words[:index] + alias_words[start:end] + original_words[index + 1:]
+                if expanded == alias_words:
+                    return True
+                if (
+                    len(expanded) == len(alias_words)
+                    and expanded[:index] == alias_words[:index]
+                    and expanded[index + (end - start):] == alias_words[end:]
+                ):
+                    return True
 
     governance_words = {"trustees", "curators", "regents", "board"}
     if original_words[0] in governance_words and alias_words[0] != original_words[0]:
@@ -2404,6 +2421,17 @@ def search_with_name_variants(
         include_compact_legal_suffixes=include_compact_legal_suffixes,
         include_leading_article_variants=include_leading_article_variants,
     )
+    if include_ein_aliases:
+        alias_priority = [
+            alias for alias in known_names_for_ein(org.ein)
+            if compatible_ein_alias_for_name(original_name, alias)
+        ]
+        prioritized = []
+        for variant in [variants[0] if variants else original_name, *alias_priority, *variants[1:]]:
+            cleaned = re.sub(r"\s+", " ", (variant or "").strip())
+            if cleaned and cleaned.lower() not in {existing.lower() for existing in prioritized}:
+                prioritized.append(cleaned)
+        variants = prioritized or variants
     if include_leading_article_variants and re.match(r"^(?:the|a|an)\s+", original_name or "", re.I):
         article_drop = re.sub(r"^(?:the|a|an)\s+", "", original_name or "", flags=re.I).strip()
         article_drop_no_suffix = re.sub(
@@ -3548,6 +3576,20 @@ def search_fl(page, org):
     url = "https://csapp.fdacs.gov/CSPublicApp/CheckACharity/CheckACharity.aspx"
     original_name = org.organization_name
     safe_targets = organization_match_target_variants(original_name, org.ein)
+    lookup_started = time.monotonic()
+    deadline = lookup_started + FL_LOOKUP_MAX_SECONDS
+
+    def remaining_seconds() -> float:
+        return max(0.0, deadline - time.monotonic())
+
+    def remaining_ms(default_ms: int, minimum_ms: int = 1000) -> int:
+        remaining = int(remaining_seconds() * 1000)
+        if remaining <= minimum_ms:
+            return minimum_ms
+        return min(default_ms, remaining)
+
+    def deadline_expired() -> bool:
+        return time.monotonic() >= deadline
 
     def clean_fl_registry_name(value: str) -> str:
         cleaned = clean_registry_name(value)
@@ -3609,11 +3651,31 @@ def search_fl(page, org):
                     return True
         return False
 
+    def useful_fl_search_variant(variant: str) -> bool:
+        norm = normalized_match_name(variant)
+        if not norm:
+            return False
+        generic = {
+            "the", "a", "an", "of", "for", "and", "to", "in", "on", "at", "by",
+            "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited",
+            "co", "company", "foundation", "fund", "charity", "charities",
+            "association", "society", "center", "centre", "institute",
+            "organization",
+        }
+        meaningful = [word for word in norm.split() if word not in generic]
+        if not meaningful:
+            return False
+        if len(meaningful) == 1 and len(meaningful[0]) < 4:
+            return False
+        return True
+
     def load_fl_search_page():
         last_error = None
         for attempt in range(2):
+            if deadline_expired():
+                raise TimeoutError("FL lookup exceeded its bounded search window")
             try:
-                page.goto(url, wait_until="commit", timeout=25000)
+                page.goto(url, wait_until="commit", timeout=remaining_ms(12000))
                 return
             except Exception as exc:
                 last_error = exc
@@ -3622,11 +3684,11 @@ def search_fl(page, org):
                 except Exception:
                     pass
                 try:
-                    page.goto("about:blank", wait_until="commit", timeout=5000)
+                    page.goto("about:blank", wait_until="commit", timeout=remaining_ms(3000))
                 except Exception:
                     pass
                 if attempt == 0:
-                    time.sleep(1)
+                    time.sleep(min(1, remaining_seconds()))
         raise last_error
 
     generated_variants = organization_name_variants(
@@ -3641,6 +3703,7 @@ def search_fl(page, org):
     )
     original_has_hyphen = "-" in (original_name or "")
     variants = []
+    variant_keys = set()
     for variant in generated_variants:
         # Florida's partial-name search is slow and sometimes stalls when hit
         # repeatedly. Avoid synthetic hyphen probes unless the source name
@@ -3648,17 +3711,32 @@ def search_fl(page, org):
         # the useful coverage without multiplying no-match page loads.
         if not original_has_hyphen and "-" in variant:
             continue
-        if variant not in variants:
+        if not useful_fl_search_variant(variant):
+            continue
+        variant_key = (
+            normalized_match_name(variant),
+            bool(re.search(r"\b(?:inc|incorporated|corp|corporation|ltd|limited|llc)\.?\b", variant, re.I)),
+        )
+        if variant_key not in variant_keys:
+            variant_keys.add(variant_key)
             variants.append(variant)
     best_result = None
+    last_error = None
     for variant in variants[:8]:
+        if deadline_expired():
+            break
         result = checker.StateResult(original_name, org.ein, "FL", checker.STATUS_UNKNOWN, url)
         try:
+            try:
+                page.set_default_timeout(remaining_ms(8000))
+                page.set_default_navigation_timeout(remaining_ms(12000))
+            except Exception:
+                pass
             load_fl_search_page()
             try:
-                page.locator('input[name*="BusinessName" i], input[id*="BusinessName" i], input[type="text"]').first.wait_for(state="visible", timeout=12000)
+                page.locator('input[name*="BusinessName" i], input[id*="BusinessName" i], input[type="text"]').first.wait_for(state="visible", timeout=remaining_ms(6000))
             except Exception:
-                checker.safe_wait_for_network_idle(page, timeout=5000)
+                checker.safe_wait_for_network_idle(page, timeout=remaining_ms(3000))
             input_box = checker.find_visible_input(page, [
                 'input[name*="BusinessName" i]',
                 'input[id*="BusinessName" i]',
@@ -3668,14 +3746,14 @@ def search_fl(page, org):
             if not input_box:
                 result.error = "FL: Could not find Business Name input"
                 return result
-            input_box.fill("")
-            input_box.fill(variant)
+            input_box.fill("", timeout=remaining_ms(4000))
+            input_box.fill(variant, timeout=remaining_ms(4000))
             try:
-                page.get_by_role("button", name=re.compile("search", re.I)).click(timeout=5000)
+                page.get_by_role("button", name=re.compile("search", re.I)).click(timeout=remaining_ms(4000), no_wait_after=True)
             except Exception:
                 page.keyboard.press("Enter")
-            checker.safe_wait_for_network_idle(page, timeout=10000)
-            time.sleep(1)
+            checker.safe_wait_for_network_idle(page, timeout=remaining_ms(5000))
+            time.sleep(min(0.5, remaining_seconds()))
             text = readable_page_text(page)
             if no_registry_results_seen(text):
                 result.status = checker.STATUS_NOT_REGISTERED
@@ -3766,9 +3844,33 @@ def search_fl(page, org):
             result.success = True
             return result
         except Exception as exc:
+            last_error = exc
             result.error = f"FL error: {exc}"
-            return result
-    return best_result or checker.StateResult(original_name, org.ein, "FL", checker.STATUS_NOT_REGISTERED, url, raw_status_text="No matching organization record", source_note="Florida Check-A-Charity returned no matching record for the generated name variants.", success=True)
+            if deadline_expired():
+                break
+            continue
+    if best_result:
+        if deadline_expired():
+            best_result.source_note = " ".join(
+                part for part in [
+                    best_result.source_note,
+                    "Florida Check-A-Charity reached the bounded lookup window before all generated name variants were attempted.",
+                ] if part
+            )
+        return best_result
+    if last_error:
+        return checker.StateResult(
+            original_name,
+            org.ein,
+            "FL",
+            "Site Not Reachable",
+            url,
+            raw_status_text="Lookup could not be completed",
+            source_note="Florida Check-A-Charity did not return a usable search result within the bounded lookup window.",
+            success=False,
+            error=f"FL error: {last_error}",
+        )
+    return checker.StateResult(original_name, org.ein, "FL", checker.STATUS_NOT_REGISTERED, url, raw_status_text="No matching organization record", source_note="Florida Check-A-Charity returned no matching record for the generated name variants.", success=True)
 
 
 def mn_status_from_fiscal_year(year: int | None) -> str:
@@ -7052,7 +7154,12 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 body = registry_page_body(page)
             elif state == "FL":
                 result = search_fl(page, org)
-                body = registry_page_body(page)
+                body = " ".join(part for part in [
+                    result.raw_status_text or "",
+                    result.source_note or "",
+                    result.matched_registry_name or "",
+                    result.matched_registry_identifier or "",
+                ]).strip()
             elif state == "NY":
                 result = search_with_name_variants(
                     page,
@@ -7191,7 +7298,10 @@ def fragile_batch_result_needs_confirmation(result: dict) -> bool:
     """Identify results that should not be trusted from a busy multi-state batch alone."""
     state = (result.get("state") or "").upper()
     status = (result.get("status") or "").strip().lower()
-    if state in {"FL", "ME", "OR"}:
+    name_registry_states = {"CT", "FL", "ME", "ND", "NY", "OR", "SC", "VA", "WI"}
+    if state in name_registry_states and status in {"site not reachable", "error", ""}:
+        return True
+    if state in {"FL", "ME", "ND", "NY", "OR", "SC", "VA"}:
         return status == "not registered"
     if state == "MI":
         return status in {"not registered", "pending"}

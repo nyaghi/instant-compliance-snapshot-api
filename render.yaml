@@ -1,14 +1,50 @@
 services:
   - type: web
-    name: instant-compliance-snapshot-api
+    name: instant-compliance-snapshot-api-staging
     runtime: python
-    plan: starter
-    buildCommand: pip install -r requirements.txt && python -m playwright install chromium
+    plan: standard
+    buildCommand: pip install -r requirements.txt && PLAYWRIGHT_BROWSERS_PATH=0 python -m playwright install chromium
     startCommand: python registry_snapshot_server.py
     envVars:
       - key: HOST
         value: 0.0.0.0
       - key: PUBLIC_BASE_URL
-        sync: false
+        value: https://instant-compliance-snapshot-api-staging.onrender.com
+      - key: CE_STAGING_ACCESS_REQUIRED
+        value: "1"
+      - key: CE_ENABLE_WI_STATE
+        value: "1"
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: "0"
       - key: PYTHONUNBUFFERED
         value: "1"
+      - key: CE_MAX_PARALLEL_LOOKUPS
+        value: "4"
+      - key: CE_MAX_BROWSER_LOOKUPS
+        value: "4"
+      - key: CE_CONFIRM_FRAGILE_BATCH_RESULTS
+        value: "1"
+      - key: CE_BATCH_CONFIRMATION_WORKERS
+        value: "1"
+      - key: CE_ME_LOOKUP_MIN_INTERVAL_SECONDS
+        value: "1"
+      - key: CE_ME_CONFIRM_NOT_REGISTERED
+        value: "1"
+      - key: CE_ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS
+        value: "3"
+      - key: CE_MI_ENABLE_NAME_FALLBACK
+        value: "1"
+      - key: CE_ENABLE_CROSS_STATE_NAME_RETRY
+        value: "0"
+      - key: CE_LOOKUP_SOFT_MAX_SECONDS
+        value: "59"
+      - key: CE_NAME_SEARCH_VARIANT_MAX_SECONDS
+        value: "35"
+      - key: CE_FL_LOOKUP_MAX_SECONDS
+        value: "45"
+      - key: CE_SC_NAME_VARIANT_MAX_SECONDS
+        value: "25"
+      - key: CE_WI_BROWSER_VARIANT_LIMIT
+        value: "0"
+      - key: CE_WI_LOOKUP_MAX_SECONDS
+        value: "55"
