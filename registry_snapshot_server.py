@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.21.12"
+APP_VERSION = "2026.05.21.13"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -103,6 +103,7 @@ ENABLE_CROSS_STATE_NAME_RETRY = os.environ.get("CE_ENABLE_CROSS_STATE_NAME_RETRY
 CONFIRM_FRAGILE_BATCH_RESULTS = os.environ.get("CE_CONFIRM_FRAGILE_BATCH_RESULTS", "1").strip().lower() in {"1", "true", "yes"}
 BATCH_CONFIRMATION_WORKERS = min(max(1, int(os.environ.get("CE_BATCH_CONFIRMATION_WORKERS", "3"))), 3)
 BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS", "8"))), 20.0)
+FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "8"))), 20.0)
 NAME_SEARCH_PREFLIGHT_URLS = {
     "CT": "https://www.elicense.ct.gov/lookup/licenselookup.aspx",
     "FL": "https://csapp.fdacs.gov/CSPublicApp/CheckACharity/CheckACharity.aspx",
@@ -7078,7 +7079,7 @@ def adjudicated_comment_for_status(result, body: str, status: str) -> str:
     return comments_for_result(result, "", status)
 
 
-def run_state_lookup(organization_name: str, ein: str, state: str, capture_source_snapshot: bool = False) -> dict:
+def run_state_lookup(organization_name: str, ein: str, state: str, capture_source_snapshot: bool = False, confirm_single_no_match: bool = True) -> dict:
     lookup_started = time.perf_counter()
     artifact_name = organization_name or f"EIN {format_ein(ein)}"
     lookup_name = organization_name
@@ -7158,6 +7159,19 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 body = registry_page_body(page)
             elif state == "FL":
                 result = search_fl(page, org)
+                if (
+                    confirm_single_no_match
+                    and public_status(result) == "Not Registered"
+                    and FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS > 0
+                ):
+                    time.sleep(FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS)
+                    confirmed_result = search_fl(page, org)
+                    if public_status(confirmed_result) not in {"Not Registered", "Site Not Reachable"}:
+                        confirmed_result.source_note = " ".join(part for part in [
+                            confirmed_result.source_note or "",
+                            "A delayed confirmation lookup replaced an initial Florida no-record response.",
+                        ]).strip()
+                        result = confirmed_result
                 body = " ".join(part for part in [
                     result.raw_status_text or "",
                     result.source_note or "",
@@ -7375,7 +7389,7 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
     worker_count = min(MAX_PARALLEL_LOOKUPS, len(lookup_requests))
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         # executor.map preserves input order, so the table stays predictable.
-        results = list(executor.map(lambda args: run_state_lookup(*args), lookup_requests))
+        results = list(executor.map(lambda args: run_state_lookup(*args, confirm_single_no_match=False), lookup_requests))
 
     results = confirm_fragile_batch_results(results)
 
