@@ -1580,6 +1580,17 @@ def name_match_priority(candidate_name: str, target_name: str) -> int:
         # Substring matches made iDE accept IDEALWARE, 864Pride, and
         # AlumniFidelity in name-only registries.
         return -1
+    terminal_entity_words = {"foundation", "fund"}
+    if (
+        len(candidate_words) == len(target_words) + 1
+        and candidate_words[:len(target_words)] == target_words
+        and target_words[-1] in terminal_entity_words
+        and candidate_words[-1] in terminal_entity_words
+    ):
+        # Avoid accepting a related but separate entity whose legal name only
+        # extends the requested name with another terminal entity word, such as
+        # "Gift Fund Foundation" for a requested "Gift Fund".
+        return -1
     try:
         target_greater_index = target_words.index("greater")
     except ValueError:

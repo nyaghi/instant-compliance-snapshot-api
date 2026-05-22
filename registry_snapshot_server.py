@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.21.10"
+APP_VERSION = "2026.05.21.11"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -102,6 +102,7 @@ MI_ENABLE_NAME_FALLBACK = os.environ.get("CE_MI_ENABLE_NAME_FALLBACK", "1").stri
 ENABLE_CROSS_STATE_NAME_RETRY = os.environ.get("CE_ENABLE_CROSS_STATE_NAME_RETRY", "0").strip().lower() in {"1", "true", "yes"}
 CONFIRM_FRAGILE_BATCH_RESULTS = os.environ.get("CE_CONFIRM_FRAGILE_BATCH_RESULTS", "1").strip().lower() in {"1", "true", "yes"}
 BATCH_CONFIRMATION_WORKERS = min(max(1, int(os.environ.get("CE_BATCH_CONFIRMATION_WORKERS", "3"))), 3)
+BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS", "8"))), 20.0)
 NAME_SEARCH_PREFLIGHT_URLS = {
     "CT": "https://www.elicense.ct.gov/lookup/licenselookup.aspx",
     "FL": "https://csapp.fdacs.gov/CSPublicApp/CheckACharity/CheckACharity.aspx",
@@ -7097,6 +7098,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
 
     result = None
     BROWSER_LOOKUP_SEMAPHORE.acquire()
+    lookup_started = time.perf_counter()
     with checker.sync_playwright() as p:
         browser = None
         context = None
@@ -7329,6 +7331,12 @@ def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
         if not name or not ein or not state:
             return index, None
         try:
+            if (
+                state in {"FL", "ME"}
+                and (original.get("status") or "").strip().lower() == "not registered"
+                and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0
+            ):
+                time.sleep(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS)
             confirmed = run_state_lookup(name, ein, state)
         except Exception as exc:
             log_error(f"{state} batch confirmation for {format_ein(ein)} failed: {exc}")
