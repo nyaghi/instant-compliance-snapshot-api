@@ -19,9 +19,9 @@ services:
       - key: PYTHONUNBUFFERED
         value: "1"
       - key: CE_MAX_PARALLEL_LOOKUPS
-        value: "4"
+        value: "2"
       - key: CE_MAX_BROWSER_LOOKUPS
-        value: "4"
+        value: "2"
       - key: CE_CONFIRM_FRAGILE_BATCH_RESULTS
         value: "1"
       - key: CE_BATCH_CONFIRMATION_WORKERS
