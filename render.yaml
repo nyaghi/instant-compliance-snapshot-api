@@ -19,13 +19,13 @@ services:
       - key: PYTHONUNBUFFERED
         value: "1"
       - key: CE_MAX_PARALLEL_LOOKUPS
-        value: "2"
+        value: "3"
       - key: CE_MAX_BROWSER_LOOKUPS
-        value: "2"
+        value: "3"
       - key: CE_CONFIRM_FRAGILE_BATCH_RESULTS
         value: "1"
       - key: CE_BATCH_CONFIRMATION_WORKERS
-        value: "1"
+        value: "2"
       - key: CE_ME_LOOKUP_MIN_INTERVAL_SECONDS
         value: "1"
       - key: CE_ME_CONFIRM_NOT_REGISTERED
