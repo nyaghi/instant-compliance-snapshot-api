@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.21.11"
+APP_VERSION = "2026.05.21.12"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -6504,6 +6504,8 @@ def true_status_from_body(result, body: str) -> str:
     if explicit_no_registration_status(result, combined):
         return "Not Registered"
     if state == "CT":
+        if re.search(r"\b(inactive|closed|withdrawn|cancel(?:ed|led))\b", " ".join([result.raw_status_text or "", result.source_note or ""]), re.I):
+            return "Closed / Withdrawn / Canceled"
         ct_registry_date = explicit_registry_date(result, combined)
         if ct_registry_date and re.search(r"\bPUBLIC\s+CHARITY\b", result.raw_status_text or "", re.I):
             return status_from_calendar_date(ct_registry_date)
