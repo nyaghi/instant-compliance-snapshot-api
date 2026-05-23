@@ -3244,7 +3244,12 @@ def search_me(page, org: Organization) -> StateResult:
                 result.source_note = "Maine uses the Status shown on the matched public registry result."
             result.success = True
             return result
-        if direct_attempts and direct_errors == 0 and (direct_no_record_responses or direct_result_responses):
+        if (
+            direct_attempts
+            and direct_errors == 0
+            and (direct_no_record_responses or direct_result_responses)
+            and os.environ.get("CE_ME_BROWSER_CONFIRM_DIRECT_NO_MATCH", "1").strip().lower() not in {"1", "true", "yes"}
+        ):
             result.raw_status_text = "No matching organization result"
             result.status = STATUS_NOT_REGISTERED
             result.source_note = (
@@ -3253,9 +3258,9 @@ def search_me(page, org: Organization) -> StateResult:
             )
             result.success = True
             return result
-        # Use the browser path only when the lightweight HTTP path was ambiguous
-        # or unreachable. Clean HTTP no-match responses are final to avoid slow
-        # dropdown failures during bulk runs.
+        # Render can receive a readable Maine no-match page for names that the
+        # browser path later finds. Confirm direct no-matches through the
+        # browser path by default rather than treating them as final.
 
         def run_me_search(query: str) -> str:
             page.goto(url, wait_until="domcontentloaded", timeout=20000)

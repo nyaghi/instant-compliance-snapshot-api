@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.23.2"
+APP_VERSION = "2026.05.23.3"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -2412,6 +2412,7 @@ def search_with_name_variants(
     include_leading_article_variants: bool = True,
     prioritize_institution_reductions: bool = False,
     require_safe_registry_name: bool = False,
+    preferred_variants: list[str] | None = None,
 ):
     best_result = None
     original_name = org.organization_name
@@ -2451,6 +2452,13 @@ def search_with_name_variants(
         variants = prioritized or variants
     if prioritize_institution_reductions:
         variants = prioritized_institutional_variants(variants)
+    if preferred_variants:
+        prioritized = []
+        for variant in [*preferred_variants, *variants]:
+            cleaned = re.sub(r"\s+", " ", (variant or "").strip())
+            if cleaned and cleaned.lower() not in {existing.lower() for existing in prioritized}:
+                prioritized.append(cleaned)
+        variants = prioritized or variants
     safe_match_targets = organization_match_target_variants(original_name, org.ein)
     if max_variants:
         variants = variants[:max_variants]
@@ -2541,6 +2549,19 @@ def search_me_serialized(page, org):
             time.sleep(ME_LOOKUP_MIN_INTERVAL_SECONDS - elapsed)
 
         def run_lookup():
+            preferred_variants = []
+            if re.search(r"\bTuberculosis\b", org.organization_name or "", re.I):
+                preferred_variants = [
+                    variant for variant in organization_name_variants(
+                        org.organization_name,
+                        org.ein,
+                        include_ein_aliases=True,
+                        include_name_segments=True,
+                        include_compact_legal_suffixes=False,
+                        include_leading_article_variants=True,
+                    )
+                    if re.search(r"\bTB\b", variant or "", re.I)
+                ][:3]
             return search_with_name_variants(
                 page,
                 org,
@@ -2552,6 +2573,7 @@ def search_me_serialized(page, org):
                 include_compact_legal_suffixes=False,
                 include_leading_article_variants=True,
                 require_safe_registry_name=True,
+                preferred_variants=preferred_variants,
             )
 
         result = run_lookup()
