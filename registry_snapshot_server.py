@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.23.4"
+APP_VERSION = "2026.05.23.5"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -103,6 +103,7 @@ ENABLE_CROSS_STATE_NAME_RETRY = os.environ.get("CE_ENABLE_CROSS_STATE_NAME_RETRY
 CONFIRM_FRAGILE_BATCH_RESULTS = os.environ.get("CE_CONFIRM_FRAGILE_BATCH_RESULTS", "1").strip().lower() in {"1", "true", "yes"}
 BATCH_CONFIRMATION_WORKERS = min(max(1, int(os.environ.get("CE_BATCH_CONFIRMATION_WORKERS", "3"))), 3)
 BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS", "8"))), 20.0)
+BATCH_TRUST_SLOW_NO_MATCH_SECONDS = min(max(15.0, float(os.environ.get("CE_BATCH_TRUST_SLOW_NO_MATCH_SECONDS", "35"))), 90.0)
 FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "8"))), 20.0)
 NAME_SEARCH_PREFLIGHT_URLS = {
     "CT": "https://www.elicense.ct.gov/lookup/licenselookup.aspx",
@@ -7413,6 +7414,8 @@ def fragile_batch_result_needs_confirmation(result: dict) -> bool:
     name_registry_states = {"CO", "CT", "FL", "ME", "MI", "ND", "NY", "OR", "SC", "VA", "WI"}
     if state in name_registry_states and status in {"site not reachable", "error", ""}:
         return True
+    if status == "not registered" and slow_explicit_no_match_result(result):
+        return False
     if state in {"CO", "FL", "ME", "ND", "NY", "OR", "SC", "VA"}:
         return status == "not registered"
     if state == "MI":
@@ -7420,6 +7423,29 @@ def fragile_batch_result_needs_confirmation(result: dict) -> bool:
     if state == "WI":
         return status in {"not registered", "pending", "delinquent"}
     return False
+
+
+def slow_explicit_no_match_result(result: dict) -> bool:
+    """Trust a thorough explicit no-record result instead of adding another batch retry."""
+    try:
+        lookup_seconds = float(result.get("lookup_seconds") or 0)
+    except (TypeError, ValueError):
+        lookup_seconds = 0.0
+    if lookup_seconds < BATCH_TRUST_SLOW_NO_MATCH_SECONDS:
+        return False
+    no_record_text = " ".join([
+        result.get("status") or "",
+        result.get("raw_status_text") or "",
+        result.get("comments") or "",
+        result.get("source_note") or "",
+    ])
+    return bool(re.search(
+        r"no\s+(?:matching\s+)?(?:organization\s+)?(?:registration\s+)?(?:record|result)s?\b|"
+        r"no\s+matching\s+(?:ein|organization|wisconsin|charitable)|"
+        r"no\s+results?\s+found|0\s+(?:records|results)",
+        no_record_text,
+        re.I,
+    ))
 
 
 def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
