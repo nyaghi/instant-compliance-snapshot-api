@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.21.17"
+APP_VERSION = "2026.05.23.1"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -96,7 +96,7 @@ SC_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_SC_PREFLIGH
 NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
 ME_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_LOOKUP_MIN_INTERVAL_SECONDS", "1.0"))), 20.0)
 ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "1.0"))), 30.0)
-ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS = min(max(1, int(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS", "1"))), 4)
+ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS = min(max(1, int(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS", "2"))), 4)
 ME_CONFIRM_NOT_REGISTERED = os.environ.get("CE_ME_CONFIRM_NOT_REGISTERED", "1").strip().lower() in {"1", "true", "yes"}
 MI_ENABLE_NAME_FALLBACK = os.environ.get("CE_MI_ENABLE_NAME_FALLBACK", "1").strip().lower() in {"1", "true", "yes"}
 ENABLE_CROSS_STATE_NAME_RETRY = os.environ.get("CE_ENABLE_CROSS_STATE_NAME_RETRY", "0").strip().lower() in {"1", "true", "yes"}
@@ -2579,6 +2579,8 @@ def classify_mi_solicitation_status(raw_status: str) -> str:
     raw = re.sub(r"\s+", " ", raw_status or "").strip()
     if not raw or raw.upper() == "N/A":
         return ""
+    if re.search(r"\bpending\b", raw, re.I):
+        return "Pending"
     registered_expiration = re.search(
         r"\b(?:registered|active)\b[\s\S]{0,220}?\bExpiration\s+Date\s*:?\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})",
         raw,
@@ -2586,8 +2588,6 @@ def classify_mi_solicitation_status(raw_status: str) -> str:
     )
     if registered_expiration:
         return classify_expiration_date(parse_due_date(registered_expiration.group(1)))
-    if re.search(r"\bpending\b", raw, re.I):
-        return "Pending"
     if re.search(r"\b(exempt)\b", raw, re.I):
         return "Exempt"
     if re.search(r"\b(revoked|suspended)\b", raw, re.I):
@@ -2896,14 +2896,32 @@ def search_bundled_extension_state(page, org, state: str):
             include_leading_article_variants=True,
         )
         variants = prioritized_institutional_variants(variants)
+
+        def or_variant_priority(value: str) -> tuple[int, int, str]:
+            cleaned = re.sub(r"\s+", " ", value or "").strip()
+            if cleaned == (org.organization_name or "").strip():
+                return (0, 0, cleaned.lower())
+            words = re.findall(r"[A-Za-z0-9]+", cleaned)
+            has_separator_source = bool(re.search(r"[/\\]", org.organization_name or ""))
+            has_legal_suffix = bool(re.search(r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\b", cleaned, re.I))
+            has_article = bool(re.search(r"^(?:the|a|an)\s+", cleaned, re.I) or re.search(r",\s*(?:the|a|an)$", cleaned, re.I))
+            if has_separator_source and len(words) >= 3 and not re.search(r"[/\\]", cleaned):
+                return (1 + (1 if has_legal_suffix else 0) + (1 if has_article else 0), -len(words), cleaned.lower())
+            if len(words) <= 1:
+                return (3, len(words), cleaned.lower())
+            return (4 + (1 if has_legal_suffix else 0) + (1 if has_article else 0), -len(words), cleaned.lower())
+
+        variants = sorted(variants, key=or_variant_priority)
         expanded = []
+        trailing_articles = []
         for variant in variants:
             if variant not in expanded:
                 expanded.append(variant)
             for article in ("The", "A"):
                 trailing = f"{variant}, {article}"
-                if not re.search(rf",\s*{article}$", variant, re.I) and trailing not in expanded:
-                    expanded.append(trailing)
+                if not re.search(rf",\s*{article}$", variant, re.I) and trailing not in trailing_articles:
+                    trailing_articles.append(trailing)
+        expanded.extend(item for item in trailing_articles if item not in expanded)
         best_result = None
         started = time.perf_counter()
         for variant in expanded[:20]:
@@ -7254,6 +7272,25 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     fallback_result = search_mi_name_fallback(page, org)
                     if public_status(fallback_result) != "Not Registered":
                         result = fallback_result
+                if (
+                    confirm_single_no_match
+                    and public_status(result) in {"Not Registered", "Site Not Reachable"}
+                    and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0
+                    and re.search(r"No results frame|Could not find the Michigan results frame|Could not load the Michigan detail page", " ".join([result.raw_status_text or "", result.source_note or "", result.error or ""]), re.I)
+                ):
+                    time.sleep(min(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS, 5.0))
+                    confirmed_result = search_bundled_extension_state(page, org, "MI")
+                    if public_status(confirmed_result) not in {"Not Registered", "Site Not Reachable"}:
+                        confirmed_result.source_note = " ".join(part for part in [
+                            confirmed_result.source_note or "",
+                            "A delayed confirmation lookup replaced an initial Michigan incomplete-results response.",
+                        ]).strip()
+                        result = confirmed_result
+                    elif re.search(r"No results frame|Could not find the Michigan results frame|Could not load the Michigan detail page", " ".join([confirmed_result.raw_status_text or "", confirmed_result.source_note or "", confirmed_result.error or ""]), re.I):
+                        result.status = "Site Not Reachable"
+                        result.raw_status_text = "Michigan results frame did not load after confirmation"
+                        result.source_note = "Michigan's registry search page loaded, but the results/detail frame did not load on two attempts."
+                        result.success = False
                 body = registry_page_body(page)
             elif state == "MN":
                 result = search_mn(page, org)
@@ -7331,13 +7368,13 @@ def fragile_batch_result_needs_confirmation(result: dict) -> bool:
     """Identify results that should not be trusted from a busy multi-state batch alone."""
     state = (result.get("state") or "").upper()
     status = (result.get("status") or "").strip().lower()
-    name_registry_states = {"CT", "FL", "ME", "ND", "NY", "OR", "SC", "VA", "WI"}
+    name_registry_states = {"CO", "CT", "FL", "ME", "MI", "ND", "NY", "OR", "SC", "VA", "WI"}
     if state in name_registry_states and status in {"site not reachable", "error", ""}:
         return True
-    if state in {"FL", "ME", "ND", "NY", "OR", "SC", "VA"}:
+    if state in {"CO", "FL", "ME", "ND", "NY", "OR", "SC", "VA"}:
         return status == "not registered"
     if state == "MI":
-        return status in {"not registered", "pending"}
+        return status == "not registered"
     if state == "WI":
         return status in {"not registered", "pending", "delinquent"}
     return False
@@ -7365,11 +7402,11 @@ def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
             original_status_lower = (original.get("status") or "").strip().lower()
             original_is_no_match = original_status_lower == "not registered"
             original_is_unreachable = original_status_lower == "site not reachable"
-            if state in {"FL", "ME", "WI"} and (original_is_no_match or original_is_unreachable) and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0:
+            if state in {"CO", "FL", "ME", "MI", "WI"} and (original_is_no_match or original_is_unreachable) and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0:
                 time.sleep(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS)
             confirmed = run_state_lookup(name, ein, state)
             if (
-                state in {"FL", "ME", "WI"}
+                state in {"CO", "FL", "ME", "MI", "WI"}
                 and (original_is_no_match or original_is_unreachable)
                 and (confirmed.get("status") or "").strip().lower() in {"not registered", "site not reachable"}
                 and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0
