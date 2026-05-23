@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.21.14"
+APP_VERSION = "2026.05.21.15"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -7380,11 +7380,24 @@ def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
             return index, confirmed
         return index, None
 
-    worker_count = min(BATCH_CONFIRMATION_WORKERS, len(jobs))
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        for index, confirmed in executor.map(run_confirmation, jobs):
-            if confirmed is not None:
-                results[index] = confirmed
+    calm_no_match_states = {"FL", "ME", "WI"}
+    serial_jobs = [
+        job for job in jobs
+        if (job[1].get("state") or "").upper() in calm_no_match_states
+        and (job[1].get("status") or "").strip().lower() == "not registered"
+    ]
+    parallel_jobs = [job for job in jobs if job not in serial_jobs]
+
+    for index, confirmed in map(run_confirmation, serial_jobs):
+        if confirmed is not None:
+            results[index] = confirmed
+
+    if parallel_jobs:
+        worker_count = min(BATCH_CONFIRMATION_WORKERS, len(parallel_jobs))
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            for index, confirmed in executor.map(run_confirmation, parallel_jobs):
+                if confirmed is not None:
+                    results[index] = confirmed
     return results
 
 
