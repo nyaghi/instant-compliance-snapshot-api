@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.23.3"
+APP_VERSION = "2026.05.23.4"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -2541,7 +2541,7 @@ def search_va_bounded(page, org):
             checker.search_name_query_variants = original_variant_builder
 
 
-def search_me_serialized(page, org):
+def search_me_serialized(page, org, confirm_no_match: bool = True):
     global ME_LAST_LOOKUP_FINISHED
     with ME_LOOKUP_LOCK:
         elapsed = time.perf_counter() - ME_LAST_LOOKUP_FINISHED
@@ -2577,7 +2577,7 @@ def search_me_serialized(page, org):
             )
 
         result = run_lookup()
-        if ME_CONFIRM_NOT_REGISTERED and public_status(result) == "Not Registered":
+        if confirm_no_match and ME_CONFIRM_NOT_REGISTERED and public_status(result) == "Not Registered":
             confirmations = 1
             for _ in range(max(0, ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS - 1)):
                 time.sleep(ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS)
@@ -7344,7 +7344,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 result = search_wi(page, org)
                 body = registry_page_body(page)
             elif state == "ME":
-                result = search_me_serialized(page, org)
+                result = search_me_serialized(page, org, confirm_no_match=confirm_single_no_match)
                 me_status_source = " ".join([result.raw_status_text or "", result.source_note or ""])
                 if public_status(result) == "Site Not Reachable":
                     body = ""
@@ -7446,7 +7446,7 @@ def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
             original_is_unreachable = original_status_lower == "site not reachable"
             if state in {"CO", "FL", "ME", "MI", "WI"} and (original_is_no_match or original_is_unreachable) and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0:
                 time.sleep(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS)
-            confirmed = run_state_lookup(name, ein, state)
+            confirmed = run_state_lookup(name, ein, state, confirm_single_no_match=False)
             if (
                 state in {"CO", "FL", "ME", "MI", "WI"}
                 and (original_is_no_match or original_is_unreachable)
@@ -7454,7 +7454,7 @@ def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
                 and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0
             ):
                 time.sleep(min(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS, 5.0))
-                second_confirmed = run_state_lookup(name, ein, state)
+                second_confirmed = run_state_lookup(name, ein, state, confirm_single_no_match=False)
                 if (second_confirmed.get("status") or "").strip().lower() not in {"not registered", "site not reachable"}:
                     confirmed = second_confirmed
         except Exception as exc:
