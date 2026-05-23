@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.23.5"
+APP_VERSION = "2026.05.23.6"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -7373,6 +7373,15 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     )
             elif state == "OR":
                 result = search_bundled_extension_state(page, org, "OR")
+                if confirm_single_no_match and public_status(result) == "Not Registered" and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0:
+                    time.sleep(min(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS, 5.0))
+                    confirmed_result = search_bundled_extension_state(page, org, "OR")
+                    if public_status(confirmed_result) != "Not Registered":
+                        confirmed_result.source_note = " ".join(part for part in [
+                            confirmed_result.source_note or "",
+                            "A delayed confirmation lookup replaced an initial Oregon no-record response.",
+                        ]).strip()
+                        result = confirmed_result
                 body = registry_page_body(page)
             else:
                 raise ValueError(f"Unsupported state: {state}")
@@ -7414,7 +7423,7 @@ def fragile_batch_result_needs_confirmation(result: dict) -> bool:
     name_registry_states = {"CO", "CT", "FL", "ME", "MI", "ND", "NY", "OR", "SC", "VA", "WI"}
     if state in name_registry_states and status in {"site not reachable", "error", ""}:
         return True
-    if status == "not registered" and slow_explicit_no_match_result(result):
+    if status == "not registered" and state not in {"ME", "ND", "OR"} and slow_explicit_no_match_result(result):
         return False
     if state in {"CO", "FL", "ME", "ND", "NY", "OR", "SC", "VA"}:
         return status == "not registered"
