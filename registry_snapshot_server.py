@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.23.6"
+APP_VERSION = "2026.05.23.7"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -7481,7 +7481,7 @@ def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
             original_is_unreachable = original_status_lower == "site not reachable"
             if state in {"CO", "FL", "ME", "MI", "WI"} and (original_is_no_match or original_is_unreachable) and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0:
                 time.sleep(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS)
-            confirmed = run_state_lookup(name, ein, state, confirm_single_no_match=False)
+            confirmed = run_state_lookup(name, ein, state, confirm_single_no_match=(state == "ME"))
             if (
                 state in {"CO", "FL", "ME", "MI", "WI"}
                 and (original_is_no_match or original_is_unreachable)
@@ -7489,7 +7489,7 @@ def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
                 and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0
             ):
                 time.sleep(min(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS, 5.0))
-                second_confirmed = run_state_lookup(name, ein, state, confirm_single_no_match=False)
+                second_confirmed = run_state_lookup(name, ein, state, confirm_single_no_match=(state == "ME"))
                 if (second_confirmed.get("status") or "").strip().lower() not in {"not registered", "site not reachable"}:
                     confirmed = second_confirmed
         except Exception as exc:
