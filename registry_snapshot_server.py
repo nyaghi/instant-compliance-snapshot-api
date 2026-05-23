@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.21.16"
+APP_VERSION = "2026.05.21.17"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -7176,7 +7176,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 result = search_fl(page, org)
                 if (
                     confirm_single_no_match
-                    and public_status(result) == "Not Registered"
+                    and public_status(result) in {"Not Registered", "Site Not Reachable"}
                     and FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS > 0
                 ):
                     time.sleep(FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS)
@@ -7362,19 +7362,21 @@ def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
         if not name or not ein or not state:
             return index, None
         try:
-            original_is_no_match = (original.get("status") or "").strip().lower() == "not registered"
-            if state in {"FL", "ME", "WI"} and original_is_no_match and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0:
+            original_status_lower = (original.get("status") or "").strip().lower()
+            original_is_no_match = original_status_lower == "not registered"
+            original_is_unreachable = original_status_lower == "site not reachable"
+            if state in {"FL", "ME", "WI"} and (original_is_no_match or original_is_unreachable) and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0:
                 time.sleep(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS)
             confirmed = run_state_lookup(name, ein, state)
             if (
-                state in {"ME", "WI"}
-                and original_is_no_match
-                and (confirmed.get("status") or "").strip().lower() == "not registered"
+                state in {"FL", "ME", "WI"}
+                and (original_is_no_match or original_is_unreachable)
+                and (confirmed.get("status") or "").strip().lower() in {"not registered", "site not reachable"}
                 and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0
             ):
                 time.sleep(min(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS, 5.0))
                 second_confirmed = run_state_lookup(name, ein, state)
-                if (second_confirmed.get("status") or "").strip().lower() != "not registered":
+                if (second_confirmed.get("status") or "").strip().lower() not in {"not registered", "site not reachable"}:
                     confirmed = second_confirmed
         except Exception as exc:
             log_error(f"{state} batch confirmation for {format_ein(ein)} failed: {exc}")
@@ -7395,7 +7397,7 @@ def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
     serial_jobs = [
         job for job in jobs
         if (job[1].get("state") or "").upper() in calm_no_match_states
-        and (job[1].get("status") or "").strip().lower() == "not registered"
+        and (job[1].get("status") or "").strip().lower() in {"not registered", "site not reachable"}
     ]
     parallel_jobs = [job for job in jobs if job not in serial_jobs]
 
