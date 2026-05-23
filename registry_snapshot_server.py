@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.21.13"
+APP_VERSION = "2026.05.21.14"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -3565,7 +3565,7 @@ def search_ct(page, org):
                     f"Expiration Date {format_date(exp_date)}" if exp_date else "",
                 ]
             ) or "Connecticut registry record found"
-            result.source_note = "CT uses the selected public-registry detail record, including exemption, inactive/noncompliance, and expiration fields."
+            result.source_note = "CT uses the selected public-registry detail record, including exemption, noncompliance, and expiration fields."
             result.success = True
             return result
         except Exception as exc:
@@ -6505,7 +6505,11 @@ def true_status_from_body(result, body: str) -> str:
     if explicit_no_registration_status(result, combined):
         return "Not Registered"
     if state == "CT":
-        if re.search(r"\b(inactive|closed|withdrawn|cancel(?:ed|led))\b", " ".join([result.raw_status_text or "", result.source_note or ""]), re.I):
+        ct_status_fields = " ".join([
+            result.raw_status_text or "",
+            result.error or "",
+        ])
+        if re.search(r"\b(inactive|closed|withdrawn|cancel(?:ed|led))\b", ct_status_fields, re.I):
             return "Closed / Withdrawn / Canceled"
         ct_registry_date = explicit_registry_date(result, combined)
         if ct_registry_date and re.search(r"\bPUBLIC\s+CHARITY\b", result.raw_status_text or "", re.I):
@@ -7347,13 +7351,20 @@ def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
         if not name or not ein or not state:
             return index, None
         try:
-            if (
-                state in {"FL", "ME"}
-                and (original.get("status") or "").strip().lower() == "not registered"
-                and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0
-            ):
+            original_is_no_match = (original.get("status") or "").strip().lower() == "not registered"
+            if state in {"FL", "ME", "WI"} and original_is_no_match and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0:
                 time.sleep(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS)
             confirmed = run_state_lookup(name, ein, state)
+            if (
+                state in {"ME", "WI"}
+                and original_is_no_match
+                and (confirmed.get("status") or "").strip().lower() == "not registered"
+                and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0
+            ):
+                time.sleep(min(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS, 5.0))
+                second_confirmed = run_state_lookup(name, ein, state)
+                if (second_confirmed.get("status") or "").strip().lower() != "not registered":
+                    confirmed = second_confirmed
         except Exception as exc:
             log_error(f"{state} batch confirmation for {format_ein(ein)} failed: {exc}")
             return index, None
