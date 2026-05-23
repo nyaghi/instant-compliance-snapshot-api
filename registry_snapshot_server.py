@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.23.1"
+APP_VERSION = "2026.05.23.2"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -2411,6 +2411,7 @@ def search_with_name_variants(
     include_compact_legal_suffixes: bool = True,
     include_leading_article_variants: bool = True,
     prioritize_institution_reductions: bool = False,
+    require_safe_registry_name: bool = False,
 ):
     best_result = None
     original_name = org.organization_name
@@ -2472,6 +2473,24 @@ def search_with_name_variants(
             and is_leading_the_drop(original_name, variant)
         ):
             continue
+        if (
+            require_safe_registry_name
+            and public_status(result) not in {"Not Registered", "Site Not Reachable"}
+            and (getattr(result, "matched_registry_name", "") or "").strip()
+            and not result_registry_name_is_safe(result, original_name, org.ein)
+        ):
+            replacement = checker.StateResult(
+                original_name,
+                org.ein,
+                getattr(result, "state", "") or "",
+                checker.STATUS_NOT_REGISTERED,
+                getattr(result, "source_url", "") or "",
+                raw_status_text="Registry name did not safely match the requested organization",
+                source_note="The public registry returned a row, but CharityClarity rejected it because the registry name did not safely match the requested organization.",
+                success=True,
+            )
+            best_result = replacement
+            continue
         if not result_is_retryable_name_miss(result):
             return result
         best_result = result
@@ -2532,6 +2551,7 @@ def search_me_serialized(page, org):
                 include_name_segments=True,
                 include_compact_legal_suffixes=False,
                 include_leading_article_variants=True,
+                require_safe_registry_name=True,
             )
 
         result = run_lookup()
