@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.23.7"
+APP_VERSION = "2026.05.23.8"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -5030,6 +5030,18 @@ def wi_status_from_detail_status(detail_status: str) -> str:
     return ""
 
 
+def wi_status_severity(detail_status: str) -> int:
+    status = wi_status_from_detail_status(detail_status)
+    return {
+        "Closed / Withdrawn / Canceled": 50,
+        "Revoked": 50,
+        "Suspended": 45,
+        "Delinquent": 30,
+        "Upcoming Filing": 20,
+        "Current": 10,
+    }.get(status, 0)
+
+
 def wi_expiration_suffix(expiration_date: date | None) -> str:
     return f"; License current through {format_date(expiration_date)}" if expiration_date else ""
 
@@ -5240,6 +5252,11 @@ def wi_better_candidate(candidate: dict, best_match: dict | None) -> bool:
         return True
     if candidate["score"] > best_match["score"]:
         return True
+    if candidate["score"] == best_match["score"]:
+        candidate_severity = wi_status_severity(candidate.get("detail_status", ""))
+        best_severity = wi_status_severity(best_match.get("detail_status", ""))
+        if candidate_severity != best_severity:
+            return candidate_severity > best_severity
     return (
         candidate["score"] == best_match["score"]
         and (candidate["expiration_date"] or date.min) > (best_match["expiration_date"] or date.min)
@@ -5286,8 +5303,6 @@ def wi_reader_search_best_match(search_names: list[str], target_names: list[str]
         if re.search(r"Organization Search Results|Search Parameters|Total Search Results", result_text or "", re.I):
             reader_reached = True
         best_match = wi_best_match_from_markdown(result_text, target_names, best_match)
-        if best_match and best_match["score"] >= 5:
-            break
     return best_match, reader_reached
 
 
@@ -5311,8 +5326,6 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str], 
                 result_html = response.read().decode("utf-8", errors="replace")
             http_reached = True
             best_match = wi_best_match_from_html(result_html, target_names, best_match)
-            if best_match and best_match["score"] >= 5:
-                break
         except Exception:
             pass
 
@@ -5341,8 +5354,6 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str], 
             continue
 
         best_match = wi_best_match_from_html(result_html, target_names, best_match)
-        if best_match and best_match["score"] >= 5:
-            break
     return best_match, http_reached
 
 
@@ -5436,15 +5447,9 @@ def search_wi(page, org):
                     }
                     if (
                         not best_match
-                        or candidate["score"] > best_match["score"]
-                        or (
-                            candidate["score"] == best_match["score"]
-                            and (candidate["expiration_date"] or date.min) > (best_match["expiration_date"] or date.min)
-                        )
+                        or wi_better_candidate(candidate, best_match)
                     ):
                         best_match = candidate
-                if best_match and best_match["score"] >= 5:
-                    break
 
         if not best_match and time.perf_counter() < deadline and not (wi_reader_reached or wi_http_reached):
             best_match, reached = wi_reader_search_best_match(direct_names, target_names, deadline)
@@ -5499,10 +5504,16 @@ def search_wi(page, org):
             except Exception:
                 pass
 
-        if re.search(r"\bvoluntar(?:y|ily)\s+surrender(?:ed)?\b", detail_status, re.I):
+        detail_status_result = wi_status_from_detail_status(detail_status)
+        if detail_status_result in {"Revoked", "Suspended", "Closed / Withdrawn / Canceled"}:
             result.status = "Closed / Withdrawn / Canceled"
+            if detail_status_result != "Closed / Withdrawn / Canceled":
+                result.status = detail_status_result
             result.raw_status_text = f"{detail_status}{wi_expiration_suffix(best_match.get('expiration_date'))}"
-            result.source_note = "Wisconsin DFI credential detail page shows a voluntary surrender, which CharityClarity treats as Closed / Withdrawn / Canceled."
+            result.source_note = (
+                "Wisconsin DFI credential detail page shows an adverse credential status, "
+                "which CharityClarity gives priority over expiration-date timing."
+            )
             result.matched_registry_name = best_match["registry_name"]
             result.matched_registry_identifier = best_match["license_number"]
             result.success = True
@@ -5510,7 +5521,6 @@ def search_wi(page, org):
 
         expiration_date = best_match.get("expiration_date")
         if not expiration_date:
-            detail_status_result = wi_status_from_detail_status(detail_status)
             result.status = detail_status_result or checker.STATUS_UNKNOWN
             result.raw_status_text = detail_status or "Wisconsin credential matched without a parseable expiration date"
             result.source_note = "Wisconsin DFI public registry returned a matching Charitable Organization credential, but no parseable expiration date was available."
@@ -7430,7 +7440,7 @@ def fragile_batch_result_needs_confirmation(result: dict) -> bool:
     if state == "MI":
         return status == "not registered"
     if state == "WI":
-        return status in {"not registered", "pending", "delinquent"}
+        return status in {"not registered", "pending", "delinquent", "upcoming filing"}
     return False
 
 
@@ -7492,6 +7502,16 @@ def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
                 second_confirmed = run_state_lookup(name, ein, state, confirm_single_no_match=(state == "ME"))
                 if (second_confirmed.get("status") or "").strip().lower() not in {"not registered", "site not reachable"}:
                     confirmed = second_confirmed
+            if (
+                state == "ME"
+                and (original_is_no_match or original_is_unreachable)
+                and (confirmed.get("status") or "").strip().lower() in {"not registered", "site not reachable"}
+                and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0
+            ):
+                time.sleep(min(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS, 5.0))
+                third_confirmed = run_state_lookup(name, ein, state, confirm_single_no_match=True)
+                if (third_confirmed.get("status") or "").strip().lower() not in {"not registered", "site not reachable"}:
+                    confirmed = third_confirmed
         except Exception as exc:
             log_error(f"{state} batch confirmation for {format_ein(ein)} failed: {exc}")
             return index, None
@@ -7507,7 +7527,7 @@ def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
             return index, confirmed
         return index, None
 
-    calm_no_match_states = {"FL", "ME", "WI"}
+    calm_no_match_states = {"FL", "ME", "WI", "ND", "OR", "MD", "SC"}
     serial_jobs = [
         job for job in jobs
         if (job[1].get("state") or "").upper() in calm_no_match_states
