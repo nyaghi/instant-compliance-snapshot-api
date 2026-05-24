@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.23.10"
+APP_VERSION = "2026.05.23.11"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -7440,6 +7440,8 @@ def fragile_batch_result_needs_confirmation(result: dict) -> bool:
     state = (result.get("state") or "").upper()
     status = (result.get("status") or "").strip().lower()
     name_registry_states = {"CO", "CT", "FL", "ME", "MI", "ND", "NY", "OR", "SC", "VA", "WI"}
+    if state == "ME":
+        return False
     if state in name_registry_states and status in {"site not reachable", "error", ""}:
         return True
     if status == "not registered" and state not in {"ME", "ND", "OR"} and slow_explicit_no_match_result(result):
@@ -7536,7 +7538,7 @@ def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
             return index, confirmed
         return index, None
 
-    calm_no_match_states = {"FL", "ME", "WI", "ND", "OR", "MD", "SC"}
+    calm_no_match_states = {"WI"}
     serial_jobs = [
         job for job in jobs
         if (job[1].get("state") or "").upper() in calm_no_match_states
@@ -7566,10 +7568,26 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
     if len(lookup_requests) <= 1:
         return [run_state_lookup(*lookup_requests[0])]
 
-    worker_count = min(MAX_PARALLEL_LOOKUPS, len(lookup_requests))
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        # executor.map preserves input order, so the table stays predictable.
-        results = list(executor.map(lambda args: run_state_lookup(*args, confirm_single_no_match=False), lookup_requests))
+    indexed_requests = list(enumerate(lookup_requests))
+    main_requests = [(index, args) for index, args in indexed_requests if args[2] != "ME"]
+    maine_requests = [(index, args) for index, args in indexed_requests if args[2] == "ME"]
+    results_by_index: dict[int, dict] = {}
+
+    if main_requests:
+        worker_count = min(MAX_PARALLEL_LOOKUPS, len(main_requests))
+
+        def run_main_request(item: tuple[int, tuple[str, str, str]]) -> tuple[int, dict]:
+            index, args = item
+            return index, run_state_lookup(*args, confirm_single_no_match=False)
+
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            for index, result in executor.map(run_main_request, main_requests):
+                results_by_index[index] = result
+
+    for index, args in maine_requests:
+        results_by_index[index] = run_state_lookup(*args, confirm_single_no_match=True)
+
+    results = [results_by_index[index] for index in range(len(lookup_requests))]
 
     results = confirm_fragile_batch_results(results)
 
