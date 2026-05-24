@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.23.9"
+APP_VERSION = "2026.05.23.10"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -5255,6 +5255,13 @@ def wi_better_candidate(candidate: dict, best_match: dict | None) -> bool:
     if candidate["score"] > best_match["score"]:
         return True
     if candidate["score"] == best_match["score"]:
+        candidate_name = normalized_match_name(candidate.get("registry_name", ""))
+        best_name = normalized_match_name(best_match.get("registry_name", ""))
+        if candidate_name and candidate_name == best_name:
+            candidate_date = candidate.get("expiration_date") or date.min
+            best_date = best_match.get("expiration_date") or date.min
+            if candidate_date != best_date:
+                return candidate_date > best_date
         candidate_severity = wi_status_severity(candidate.get("detail_status", ""))
         best_severity = wi_status_severity(best_match.get("detail_status", ""))
         if candidate_severity != best_severity:
