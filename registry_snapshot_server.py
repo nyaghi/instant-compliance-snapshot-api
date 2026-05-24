@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.23.11"
+APP_VERSION = "2026.05.23.12"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -7529,6 +7529,9 @@ def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
         confirmed["batch_confirmation"] = "isolated_retry"
         original_status = (original.get("status") or "").strip()
         confirmed_status = (confirmed.get("status") or "").strip()
+        confirmed_is_no_match = confirmed_status.lower() in {"not registered", "site not reachable"}
+        if not (original_is_no_match or original_is_unreachable) and confirmed_is_no_match:
+            return index, None
         if confirmed_status and confirmed_status.lower() != "site not reachable" and confirmed_status != original_status:
             note = (
                 f"Batch reliability note: the initial multi-state result was {original_status or 'blank'}; "
