@@ -29,9 +29,11 @@ services:
       - key: CE_PUBLIC_RESERVED_BROWSER_LOOKUPS
         value: "1"
       - key: CE_BATCH_MAX_PARALLEL_LOOKUPS
-        value: "2"
+        value: "3"
       - key: CE_BATCH_ISOLATED_STATES
         value: "ME,OR,FL,WI,VA,SC,ND"
+      - key: CE_BATCH_ISOLATED_MAX_PARALLEL_LOOKUPS
+        value: "3"
       - key: CE_BATCH_STATE_LOOKUP_TIMEOUT_SECONDS
         value: "90"
       - key: CE_BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS

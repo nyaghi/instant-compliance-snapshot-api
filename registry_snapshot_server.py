@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.23.15"
+APP_VERSION = "2026.05.23.16"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -88,7 +88,7 @@ PUBLIC_RESERVED_BROWSER_LOOKUPS = min(
 )
 BATCH_MAX_PARALLEL_LOOKUPS = max(1, min(
     MAX_PARALLEL_LOOKUPS,
-    int(os.environ.get("CE_BATCH_MAX_PARALLEL_LOOKUPS", str(max(1, MAX_BROWSER_LOOKUPS - PUBLIC_RESERVED_BROWSER_LOOKUPS)))),
+    int(os.environ.get("CE_BATCH_MAX_PARALLEL_LOOKUPS", str(MAX_BROWSER_LOOKUPS))),
 ))
 BROWSER_LOOKUP_SEMAPHORE = threading.BoundedSemaphore(MAX_BROWSER_LOOKUPS)
 BLOCK_HEAVY_BROWSER_RESOURCES = os.environ.get("CE_BLOCK_HEAVY_BROWSER_RESOURCES", "1").strip().lower() not in {"0", "false", "no"}
@@ -118,6 +118,10 @@ BATCH_ISOLATED_STATE_ORDER = [
     if state.strip()
 ]
 BATCH_ISOLATED_STATES = set(BATCH_ISOLATED_STATE_ORDER)
+BATCH_ISOLATED_MAX_PARALLEL_LOOKUPS = max(1, min(
+    BATCH_MAX_PARALLEL_LOOKUPS,
+    int(os.environ.get("CE_BATCH_ISOLATED_MAX_PARALLEL_LOOKUPS", str(BATCH_MAX_PARALLEL_LOOKUPS))),
+))
 BATCH_STATE_LOOKUP_TIMEOUT_SECONDS = min(
     max(45.0, float(os.environ.get("CE_BATCH_STATE_LOOKUP_TIMEOUT_SECONDS", "90"))),
     150.0,
@@ -7662,8 +7666,16 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
     )
     results_by_index: dict[int, dict] = {}
 
-    for index, args in isolated_requests:
-        results_by_index[index] = run_state_lookup_for_batch(*args, confirm_single_no_match=True)
+    if isolated_requests:
+        worker_count = min(BATCH_ISOLATED_MAX_PARALLEL_LOOKUPS, len(isolated_requests))
+
+        def run_isolated_request(item: tuple[int, tuple[str, str, str]]) -> tuple[int, dict]:
+            index, args = item
+            return index, run_state_lookup_for_batch(*args, confirm_single_no_match=True)
+
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            for index, result in executor.map(run_isolated_request, isolated_requests):
+                results_by_index[index] = result
 
     if main_requests:
         worker_count = min(BATCH_MAX_PARALLEL_LOOKUPS, len(main_requests))
