@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.23.18"
+APP_VERSION = "2026.05.23.19"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -7403,18 +7403,30 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 if not reachable:
                     result = preflight_result
                 else:
-                    result = search_with_name_variants(
-                        page,
-                        org,
-                        checker.search_nd,
-                        max_variants=18,
-                        max_elapsed_seconds=NAME_SEARCH_VARIANT_MAX_SECONDS,
-                        include_ein_aliases=True,
-                        include_name_segments=True,
-                        include_compact_legal_suffixes=False,
-                        include_leading_article_variants=True,
-                        prioritize_institution_reductions=True,
-                    )
+                    def run_nd_lookup():
+                        return search_with_name_variants(
+                            page,
+                            org,
+                            checker.search_nd,
+                            max_variants=18,
+                            max_elapsed_seconds=NAME_SEARCH_VARIANT_MAX_SECONDS,
+                            include_ein_aliases=True,
+                            include_name_segments=True,
+                            include_compact_legal_suffixes=False,
+                            include_leading_article_variants=True,
+                            prioritize_institution_reductions=True,
+                        )
+
+                    result = run_nd_lookup()
+                    if state_result_has_weak_terminal_name_match(result, org):
+                        time.sleep(min(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS, 5.0))
+                        confirmed_result = run_nd_lookup()
+                        if state_result_should_replace_weak_match(result, confirmed_result, org):
+                            confirmed_result.source_note = " ".join(part for part in [
+                                confirmed_result.source_note or "",
+                                "A delayed confirmation lookup replaced an initial weaker North Dakota registry-name match.",
+                            ]).strip()
+                            result = confirmed_result
             elif state == "OR":
                 result = search_bundled_extension_state(page, org, "OR")
                 elapsed_before_confirmation = time.perf_counter() - lookup_started
@@ -7516,6 +7528,30 @@ def weak_terminal_name_match_result(result: dict) -> bool:
     if not matched_name or not submitted_name:
         return False
     return target_name_score(matched_name, organization_match_target_variants(submitted_name, result.get("ein") or "")) < 1000
+
+
+def state_result_has_weak_terminal_name_match(result, org) -> bool:
+    """Detect a terminal state result selected from a weaker-than-exact registry row."""
+    status = public_status(result).strip().lower()
+    if status not in {"closed / withdrawn / canceled", "closed/withdrawn/canceled", "inactive", "revoked", "suspended"}:
+        return False
+    matched_name = (getattr(result, "matched_registry_name", "") or "").strip()
+    if not matched_name:
+        return False
+    targets = organization_match_target_variants(getattr(org, "organization_name", ""), getattr(org, "ein", ""))
+    return target_name_score(matched_name, targets) < 1000
+
+
+def state_result_should_replace_weak_match(original, confirmed, org) -> bool:
+    """Use a confirmation result when it is a stronger found match than the first result."""
+    confirmed_status = public_status(confirmed).strip().lower()
+    if confirmed_status in {"site not reachable", "error", "not registered", ""}:
+        return False
+    original_status = public_status(original).strip()
+    targets = organization_match_target_variants(getattr(org, "organization_name", ""), getattr(org, "ein", ""))
+    original_score = target_name_score(getattr(original, "matched_registry_name", "") or "", targets)
+    confirmed_score = target_name_score(getattr(confirmed, "matched_registry_name", "") or "", targets)
+    return confirmed_score > original_score or confirmed_status != original_status.lower()
 
 
 def confirmed_result_is_better_registry_match(original: dict, confirmed: dict) -> bool:
