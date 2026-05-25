@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.23.12"
+APP_VERSION = "2026.05.23.13"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -104,6 +104,11 @@ CONFIRM_FRAGILE_BATCH_RESULTS = os.environ.get("CE_CONFIRM_FRAGILE_BATCH_RESULTS
 BATCH_CONFIRMATION_WORKERS = min(max(1, int(os.environ.get("CE_BATCH_CONFIRMATION_WORKERS", "3"))), 3)
 BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS", "8"))), 20.0)
 BATCH_TRUST_SLOW_NO_MATCH_SECONDS = min(max(15.0, float(os.environ.get("CE_BATCH_TRUST_SLOW_NO_MATCH_SECONDS", "35"))), 90.0)
+BATCH_ISOLATED_STATES = {
+    state.strip().upper()
+    for state in os.environ.get("CE_BATCH_ISOLATED_STATES", "ME,OR,FL,WI").split(",")
+    if state.strip()
+}
 FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "8"))), 20.0)
 NAME_SEARCH_PREFLIGHT_URLS = {
     "CT": "https://www.elicense.ct.gov/lookup/licenselookup.aspx",
@@ -7440,7 +7445,7 @@ def fragile_batch_result_needs_confirmation(result: dict) -> bool:
     state = (result.get("state") or "").upper()
     status = (result.get("status") or "").strip().lower()
     name_registry_states = {"CO", "CT", "FL", "ME", "MI", "ND", "NY", "OR", "SC", "VA", "WI"}
-    if state == "ME":
+    if state in BATCH_ISOLATED_STATES and status in {"not registered", "site not reachable", "error", ""}:
         return False
     if state in name_registry_states and status in {"site not reachable", "error", ""}:
         return True
@@ -7572,8 +7577,16 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
         return [run_state_lookup(*lookup_requests[0])]
 
     indexed_requests = list(enumerate(lookup_requests))
-    main_requests = [(index, args) for index, args in indexed_requests if args[2] != "ME"]
-    maine_requests = [(index, args) for index, args in indexed_requests if args[2] == "ME"]
+    main_requests = [
+        (index, args)
+        for index, args in indexed_requests
+        if (args[2] or "").upper() not in BATCH_ISOLATED_STATES
+    ]
+    isolated_requests = [
+        (index, args)
+        for index, args in indexed_requests
+        if (args[2] or "").upper() in BATCH_ISOLATED_STATES
+    ]
     results_by_index: dict[int, dict] = {}
 
     if main_requests:
@@ -7587,7 +7600,7 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
             for index, result in executor.map(run_main_request, main_requests):
                 results_by_index[index] = result
 
-    for index, args in maine_requests:
+    for index, args in isolated_requests:
         results_by_index[index] = run_state_lookup(*args, confirm_single_no_match=True)
 
     results = [results_by_index[index] for index in range(len(lookup_requests))]
