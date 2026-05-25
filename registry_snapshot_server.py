@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.23.16"
+APP_VERSION = "2026.05.23.17"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -112,6 +112,10 @@ CONFIRM_FRAGILE_BATCH_RESULTS = os.environ.get("CE_CONFIRM_FRAGILE_BATCH_RESULTS
 BATCH_CONFIRMATION_WORKERS = min(max(1, int(os.environ.get("CE_BATCH_CONFIRMATION_WORKERS", "3"))), 3)
 BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS", "8"))), 20.0)
 BATCH_TRUST_SLOW_NO_MATCH_SECONDS = min(max(15.0, float(os.environ.get("CE_BATCH_TRUST_SLOW_NO_MATCH_SECONDS", "35"))), 90.0)
+SINGLE_TRUST_SLOW_CLEAN_NO_MATCH_SECONDS = min(
+    max(20.0, float(os.environ.get("CE_SINGLE_TRUST_SLOW_CLEAN_NO_MATCH_SECONDS", "35"))),
+    55.0,
+)
 BATCH_ISOLATED_STATE_ORDER = [
     state.strip().upper()
     for state in os.environ.get("CE_BATCH_ISOLATED_STATES", "ME,OR,FL,WI,VA,SC,ND").split(",")
@@ -7415,7 +7419,26 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     )
             elif state == "OR":
                 result = search_bundled_extension_state(page, org, "OR")
-                if confirm_single_no_match and public_status(result) == "Not Registered" and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0:
+                elapsed_before_confirmation = time.perf_counter() - lookup_started
+                clean_no_match_text = " ".join([
+                    result.raw_status_text or "",
+                    result.source_note or "",
+                    registry_page_body(page),
+                ])
+                has_clean_no_match = bool(re.search(
+                    r"no\s+(?:matching\s+)?(?:records?|results?)\s+found|no\s+matching\s+organization|0\s+results",
+                    clean_no_match_text,
+                    re.I,
+                ))
+                if (
+                    confirm_single_no_match
+                    and public_status(result) == "Not Registered"
+                    and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0
+                    and not (
+                        has_clean_no_match
+                        and elapsed_before_confirmation >= SINGLE_TRUST_SLOW_CLEAN_NO_MATCH_SECONDS
+                    )
+                ):
                     time.sleep(min(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS, 5.0))
                     confirmed_result = search_bundled_extension_state(page, org, "OR")
                     if public_status(confirmed_result) != "Not Registered":
