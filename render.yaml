@@ -32,6 +32,8 @@ services:
         value: "2"
       - key: CE_BATCH_ISOLATED_STATES
         value: "ME,OR,FL,WI,VA,SC,ND"
+      - key: CE_BATCH_STATE_LOOKUP_TIMEOUT_SECONDS
+        value: "90"
       - key: CE_BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS
         value: "8"
       - key: CE_ME_LOOKUP_MIN_INTERVAL_SECONDS

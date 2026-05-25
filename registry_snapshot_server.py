@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 import traceback
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import date, datetime, timedelta
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.23.14"
+APP_VERSION = "2026.05.23.15"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -118,6 +118,10 @@ BATCH_ISOLATED_STATE_ORDER = [
     if state.strip()
 ]
 BATCH_ISOLATED_STATES = set(BATCH_ISOLATED_STATE_ORDER)
+BATCH_STATE_LOOKUP_TIMEOUT_SECONDS = min(
+    max(45.0, float(os.environ.get("CE_BATCH_STATE_LOOKUP_TIMEOUT_SECONDS", "90"))),
+    150.0,
+)
 PUBLIC_SINGLE_STATE_ONLY = os.environ.get("CE_PUBLIC_SINGLE_STATE_ONLY", "0").strip().lower() in {"1", "true", "yes"}
 FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "8"))), 20.0)
 NAME_SEARCH_PREFLIGHT_URLS = {
@@ -7450,6 +7454,57 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
     return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
 
 
+def batch_timeout_lookup_result(organization_name: str, ein: str, state: str) -> dict:
+    org = checker.Organization(organization_name=organization_name, ein=ein)
+    started = time.perf_counter() - BATCH_STATE_LOOKUP_TIMEOUT_SECONDS
+    result = checker.StateResult(
+        organization_name or f"EIN {format_ein(ein)}",
+        format_ein(ein),
+        state,
+        "Site Not Reachable",
+        "",
+    )
+    result.raw_status_text = "Batch lookup timed out"
+    result.source_note = (
+        f"The {state} public registry lookup did not finish within the batch timeout. "
+        "Please rerun this state individually."
+    )
+    result.success = False
+    return response_data_for_lookup(result, result.raw_status_text, org, organization_name, ein, state, started)
+
+
+def run_state_lookup_for_batch(
+    organization_name: str,
+    ein: str,
+    state: str,
+    confirm_single_no_match: bool,
+) -> dict:
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(
+        run_state_lookup,
+        organization_name,
+        ein,
+        state,
+        False,
+        confirm_single_no_match,
+    )
+    try:
+        result = future.result(timeout=BATCH_STATE_LOOKUP_TIMEOUT_SECONDS)
+    except FuturesTimeoutError:
+        log_error(
+            f"{state} batch lookup for {format_ein(ein)} exceeded "
+            f"{BATCH_STATE_LOOKUP_TIMEOUT_SECONDS}s; returning Site Not Reachable."
+        )
+        executor.shutdown(wait=False, cancel_futures=True)
+        return batch_timeout_lookup_result(organization_name, ein, state)
+    except Exception as exc:
+        log_error(f"{state} batch lookup for {format_ein(ein)} failed: {exc}")
+        executor.shutdown(wait=False, cancel_futures=True)
+        return batch_timeout_lookup_result(organization_name, ein, state)
+    executor.shutdown(wait=False)
+    return result
+
+
 def fragile_batch_result_needs_confirmation(result: dict) -> bool:
     """Identify results that should not be trusted from a busy multi-state batch alone."""
     state = (result.get("state") or "").upper()
@@ -7608,14 +7663,14 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
     results_by_index: dict[int, dict] = {}
 
     for index, args in isolated_requests:
-        results_by_index[index] = run_state_lookup(*args, confirm_single_no_match=True)
+        results_by_index[index] = run_state_lookup_for_batch(*args, confirm_single_no_match=True)
 
     if main_requests:
         worker_count = min(BATCH_MAX_PARALLEL_LOOKUPS, len(main_requests))
 
         def run_main_request(item: tuple[int, tuple[str, str, str]]) -> tuple[int, dict]:
             index, args = item
-            return index, run_state_lookup(*args, confirm_single_no_match=False)
+            return index, run_state_lookup_for_batch(*args, confirm_single_no_match=False)
 
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
             for index, result in executor.map(run_main_request, main_requests):
