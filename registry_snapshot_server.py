@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 import traceback
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import date, datetime, timedelta
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.23.19"
+APP_VERSION = "2026.05.23.20"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -111,6 +111,10 @@ BATCH_ISOLATED_STATE_ORDER = [
 ]
 BATCH_ISOLATED_STATES = set(BATCH_ISOLATED_STATE_ORDER)
 BATCH_ISOLATED_WORKERS = min(max(1, int(os.environ.get("CE_BATCH_ISOLATED_WORKERS", "2"))), 3)
+BATCH_STATE_LOOKUP_TIMEOUT_SECONDS = min(
+    max(55.0, float(os.environ.get("CE_BATCH_STATE_LOOKUP_TIMEOUT_SECONDS", "68"))),
+    68.0,
+)
 SINGLE_TRUST_SLOW_CLEAN_NO_MATCH_SECONDS = min(
     max(20.0, float(os.environ.get("CE_SINGLE_TRUST_SLOW_CLEAN_NO_MATCH_SECONDS", "35"))),
     55.0,
@@ -7591,6 +7595,55 @@ def slow_explicit_no_match_result(result: dict) -> bool:
     ))
 
 
+def batch_timeout_lookup_result(organization_name: str, ein: str, state: str) -> dict:
+    org = checker.Organization(organization_name=organization_name, ein=ein)
+    started = time.perf_counter() - BATCH_STATE_LOOKUP_TIMEOUT_SECONDS
+    result = checker.StateResult(
+        organization_name or f"EIN {format_ein(ein)}",
+        format_ein(ein),
+        state,
+        "Site Not Reachable",
+        "",
+    )
+    result.raw_status_text = "Batch lookup exceeded the internal state time limit"
+    result.source_note = (
+        f"The {state} public registry lookup did not finish within the internal batch time limit. "
+        "Please rerun this state individually before relying on the batch result."
+    )
+    result.success = False
+    return response_data_for_lookup(result, result.raw_status_text, org, organization_name, ein, state, started)
+
+
+def run_state_lookup_for_batch(
+    organization_name: str,
+    ein: str,
+    state: str,
+    confirm_single_no_match: bool,
+) -> dict:
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(
+        run_state_lookup,
+        organization_name,
+        ein,
+        state,
+        False,
+        confirm_single_no_match,
+    )
+    try:
+        return future.result(timeout=BATCH_STATE_LOOKUP_TIMEOUT_SECONDS)
+    except FuturesTimeoutError:
+        log_error(
+            f"{state} batch lookup for {format_ein(ein)} exceeded "
+            f"{BATCH_STATE_LOOKUP_TIMEOUT_SECONDS}s; returning Site Not Reachable."
+        )
+        return batch_timeout_lookup_result(organization_name, ein, state)
+    except Exception as exc:
+        log_error(f"{state} batch lookup for {format_ein(ein)} failed: {exc}")
+        return batch_timeout_lookup_result(organization_name, ein, state)
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
 def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
     if not CONFIRM_FRAGILE_BATCH_RESULTS:
         return results
@@ -7713,7 +7766,7 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
 
         def run_isolated_request(item: tuple[int, tuple[str, str, str]]) -> tuple[int, dict]:
             index, args = item
-            return index, run_state_lookup(*args, confirm_single_no_match=True)
+            return index, run_state_lookup_for_batch(*args, confirm_single_no_match=True)
 
         with ThreadPoolExecutor(max_workers=isolated_worker_count) as executor:
             for index, result in executor.map(run_isolated_request, isolated_requests):
@@ -7724,7 +7777,7 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
 
         def run_main_request(item: tuple[int, tuple[str, str, str]]) -> tuple[int, dict]:
             index, args = item
-            return index, run_state_lookup(*args, confirm_single_no_match=False)
+            return index, run_state_lookup_for_batch(*args, confirm_single_no_match=False)
 
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
             for index, result in executor.map(run_main_request, main_requests):
