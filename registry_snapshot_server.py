@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 import traceback
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.23.17"
+APP_VERSION = "2026.05.23.18"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -82,14 +82,6 @@ REQUESTED_PARALLEL_LOOKUPS = max(1, int(os.environ.get("CE_MAX_PARALLEL_LOOKUPS"
 ALLOW_PARALLEL_BROWSER_LOOKUPS = os.environ.get("CE_ALLOW_PARALLEL_BROWSER_LOOKUPS", "1").strip().lower() in {"1", "true", "yes"}
 MAX_BROWSER_LOOKUPS = max(1, int(os.environ.get("CE_MAX_BROWSER_LOOKUPS", "4")))
 MAX_PARALLEL_LOOKUPS = min(REQUESTED_PARALLEL_LOOKUPS, MAX_BROWSER_LOOKUPS) if ALLOW_PARALLEL_BROWSER_LOOKUPS else 1
-PUBLIC_RESERVED_BROWSER_LOOKUPS = min(
-    max(0, int(os.environ.get("CE_PUBLIC_RESERVED_BROWSER_LOOKUPS", "1"))),
-    max(0, MAX_BROWSER_LOOKUPS - 1),
-)
-BATCH_MAX_PARALLEL_LOOKUPS = max(1, min(
-    MAX_PARALLEL_LOOKUPS,
-    int(os.environ.get("CE_BATCH_MAX_PARALLEL_LOOKUPS", str(MAX_BROWSER_LOOKUPS))),
-))
 BROWSER_LOOKUP_SEMAPHORE = threading.BoundedSemaphore(MAX_BROWSER_LOOKUPS)
 BLOCK_HEAVY_BROWSER_RESOURCES = os.environ.get("CE_BLOCK_HEAVY_BROWSER_RESOURCES", "1").strip().lower() not in {"0", "false", "no"}
 EAGER_EVIDENCE_PDF = os.environ.get("CE_EAGER_EVIDENCE_PDF", "0").strip().lower() in {"1", "true", "yes"}
@@ -112,23 +104,16 @@ CONFIRM_FRAGILE_BATCH_RESULTS = os.environ.get("CE_CONFIRM_FRAGILE_BATCH_RESULTS
 BATCH_CONFIRMATION_WORKERS = min(max(1, int(os.environ.get("CE_BATCH_CONFIRMATION_WORKERS", "3"))), 3)
 BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS", "8"))), 20.0)
 BATCH_TRUST_SLOW_NO_MATCH_SECONDS = min(max(15.0, float(os.environ.get("CE_BATCH_TRUST_SLOW_NO_MATCH_SECONDS", "35"))), 90.0)
-SINGLE_TRUST_SLOW_CLEAN_NO_MATCH_SECONDS = min(
-    max(20.0, float(os.environ.get("CE_SINGLE_TRUST_SLOW_CLEAN_NO_MATCH_SECONDS", "35"))),
-    55.0,
-)
 BATCH_ISOLATED_STATE_ORDER = [
     state.strip().upper()
     for state in os.environ.get("CE_BATCH_ISOLATED_STATES", "ME,OR,FL,WI,VA,SC,ND").split(",")
     if state.strip()
 ]
 BATCH_ISOLATED_STATES = set(BATCH_ISOLATED_STATE_ORDER)
-BATCH_ISOLATED_MAX_PARALLEL_LOOKUPS = max(1, min(
-    BATCH_MAX_PARALLEL_LOOKUPS,
-    int(os.environ.get("CE_BATCH_ISOLATED_MAX_PARALLEL_LOOKUPS", str(BATCH_MAX_PARALLEL_LOOKUPS))),
-))
-BATCH_STATE_LOOKUP_TIMEOUT_SECONDS = min(
-    max(45.0, float(os.environ.get("CE_BATCH_STATE_LOOKUP_TIMEOUT_SECONDS", "90"))),
-    150.0,
+BATCH_ISOLATED_WORKERS = min(max(1, int(os.environ.get("CE_BATCH_ISOLATED_WORKERS", "2"))), 3)
+SINGLE_TRUST_SLOW_CLEAN_NO_MATCH_SECONDS = min(
+    max(20.0, float(os.environ.get("CE_SINGLE_TRUST_SLOW_CLEAN_NO_MATCH_SECONDS", "35"))),
+    55.0,
 )
 PUBLIC_SINGLE_STATE_ONLY = os.environ.get("CE_PUBLIC_SINGLE_STATE_ONLY", "0").strip().lower() in {"1", "true", "yes"}
 FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "8"))), 20.0)
@@ -2345,12 +2330,25 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
     registry_name = clean_registry_name(registry_name or "")
     if not registry_name:
         return False
+    if related_affiliate_or_chapter_mismatch(original_name, registry_name):
+        return False
     safe_targets = organization_match_target_variants(original_name, ein)
     if target_name_score(registry_name, safe_targets) >= 450:
         return True
     if incompatible_institutional_prefix_expansion(original_name, registry_name):
         return False
     return compatible_ein_alias_for_name(original_name, registry_name)
+
+
+def related_affiliate_or_chapter_mismatch(original_name: str, registry_name: str) -> bool:
+    original_norm = normalized_match_name(original_name)
+    registry_norm = normalized_match_name(registry_name)
+    if not original_norm or not registry_norm:
+        return False
+    related_terms = {"affiliate", "chapter"}
+    original_terms = set(original_norm.split())
+    registry_terms = set(registry_norm.split())
+    return any(term in registry_terms and term not in original_terms for term in related_terms)
 
 
 def incompatible_institutional_prefix_expansion(original_name: str, registry_name: str) -> bool:
@@ -7481,79 +7479,57 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
     return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
 
 
-def batch_timeout_lookup_result(organization_name: str, ein: str, state: str) -> dict:
-    org = checker.Organization(organization_name=organization_name, ein=ein)
-    started = time.perf_counter() - BATCH_STATE_LOOKUP_TIMEOUT_SECONDS
-    result = checker.StateResult(
-        organization_name or f"EIN {format_ein(ein)}",
-        format_ein(ein),
-        state,
-        "Site Not Reachable",
-        "",
-    )
-    result.raw_status_text = "Batch lookup timed out"
-    result.source_note = (
-        f"The {state} public registry lookup did not finish within the batch timeout. "
-        "Please rerun this state individually."
-    )
-    result.success = False
-    return response_data_for_lookup(result, result.raw_status_text, org, organization_name, ein, state, started)
-
-
-def run_state_lookup_for_batch(
-    organization_name: str,
-    ein: str,
-    state: str,
-    confirm_single_no_match: bool,
-) -> dict:
-    executor = ThreadPoolExecutor(max_workers=1)
-    future = executor.submit(
-        run_state_lookup,
-        organization_name,
-        ein,
-        state,
-        False,
-        confirm_single_no_match,
-    )
-    try:
-        result = future.result(timeout=BATCH_STATE_LOOKUP_TIMEOUT_SECONDS)
-    except FuturesTimeoutError:
-        log_error(
-            f"{state} batch lookup for {format_ein(ein)} exceeded "
-            f"{BATCH_STATE_LOOKUP_TIMEOUT_SECONDS}s; returning Site Not Reachable."
-        )
-        executor.shutdown(wait=False, cancel_futures=True)
-        return batch_timeout_lookup_result(organization_name, ein, state)
-    except Exception as exc:
-        log_error(f"{state} batch lookup for {format_ein(ein)} failed: {exc}")
-        executor.shutdown(wait=False, cancel_futures=True)
-        return batch_timeout_lookup_result(organization_name, ein, state)
-    executor.shutdown(wait=False)
-    return result
-
-
 def fragile_batch_result_needs_confirmation(result: dict) -> bool:
     """Identify results that should not be trusted from a busy multi-state batch alone."""
     state = (result.get("state") or "").upper()
     status = (result.get("status") or "").strip().lower()
-    registry_match = (result.get("matched_registry_name") or "").strip()
-    raw_status = (result.get("raw_status_text") or "").strip()
     name_registry_states = {"CO", "CT", "FL", "ME", "MI", "ND", "NY", "OR", "SC", "VA", "WI"}
+    if state in BATCH_ISOLATED_STATES and status in {"not registered", "site not reachable", "error", ""}:
+        return state in {"ND", "SC", "VA"}
+    if weak_terminal_name_match_result(result):
+        return True
+    if state in BATCH_ISOLATED_STATES and status in {"not registered", "site not reachable", "error", ""}:
+        return False
     if state in name_registry_states and status in {"site not reachable", "error", ""}:
-        return True
-    if state in BATCH_ISOLATED_STATES and status in {"not registered", "unknown", ""}:
-        return True
-    if state in BATCH_ISOLATED_STATES and status not in {"not registered", "site not reachable", "error", ""} and not registry_match and not raw_status:
         return True
     if status == "not registered" and state not in {"ME", "ND", "OR"} and slow_explicit_no_match_result(result):
         return False
     if state in {"CO", "FL", "ME", "ND", "NY", "OR", "SC", "VA"}:
         return status == "not registered"
     if state == "MI":
-        return status in {"not registered", "pending"}
+        return status == "not registered"
     if state == "WI":
         return status in {"not registered", "pending", "delinquent", "upcoming filing"}
     return False
+
+
+def weak_terminal_name_match_result(result: dict) -> bool:
+    """Confirm terminal statuses when the selected registry row is not an exact name match."""
+    status = (result.get("status") or "").strip().lower()
+    if status not in {"closed / withdrawn / canceled", "closed/withdrawn/canceled", "inactive", "revoked", "suspended"}:
+        return False
+    state = (result.get("state") or "").upper()
+    if state not in {"CT", "FL", "ME", "ND", "OR", "SC", "VA", "WI"}:
+        return False
+    matched_name = (result.get("matched_registry_name") or "").strip()
+    submitted_name = (result.get("organization_name") or "").strip()
+    if not matched_name or not submitted_name:
+        return False
+    return target_name_score(matched_name, organization_match_target_variants(submitted_name, result.get("ein") or "")) < 1000
+
+
+def confirmed_result_is_better_registry_match(original: dict, confirmed: dict) -> bool:
+    """Prefer an isolated confirmation that found a stronger registry-name match."""
+    name = (original.get("organization_name") or confirmed.get("organization_name") or "").strip()
+    if not name:
+        return False
+    targets = organization_match_target_variants(name, original.get("ein") or confirmed.get("ein") or "")
+    original_score = target_name_score(original.get("matched_registry_name") or "", targets)
+    confirmed_score = target_name_score(confirmed.get("matched_registry_name") or "", targets)
+    if confirmed_score <= original_score:
+        return False
+    confirmed_status = (confirmed.get("status") or "").strip().lower()
+    return confirmed_status not in {"site not reachable", "error", ""}
 
 
 def slow_explicit_no_match_result(result: dict) -> bool:
@@ -7601,7 +7577,7 @@ def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
             original_status_lower = (original.get("status") or "").strip().lower()
             original_is_no_match = original_status_lower == "not registered"
             original_is_unreachable = original_status_lower == "site not reachable"
-            if state in {"CO", "FL", "ME", "MI", "WI"} and (original_is_no_match or original_is_unreachable) and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0:
+            if state in {"CO", "FL", "ME", "MI", "ND", "SC", "VA", "WI"} and (original_is_no_match or original_is_unreachable) and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0:
                 time.sleep(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS)
             confirmed = run_state_lookup(name, ein, state, confirm_single_no_match=(state == "ME"))
             if (
@@ -7637,6 +7613,13 @@ def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
             note = (
                 f"Batch reliability note: the initial multi-state result was {original_status or 'blank'}; "
                 f"an isolated confirmation lookup returned {confirmed_status}."
+            )
+            confirmed["comments"] = "\n\n".join(part for part in [confirmed.get("comments") or "", note] if part)
+            return index, confirmed
+        if confirmed_result_is_better_registry_match(original, confirmed):
+            note = (
+                "Batch reliability note: an isolated confirmation lookup returned a stronger "
+                "registry-name match for the same submitted organization."
             )
             confirmed["comments"] = "\n\n".join(part for part in [confirmed.get("comments") or "", note] if part)
             return index, confirmed
@@ -7685,27 +7668,27 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
             for index, args in indexed_requests
             if (args[2] or "").upper() in BATCH_ISOLATED_STATES
         ],
-        key=lambda item: (isolated_rank.get((item[1][2] or "").upper(), 999), item[0]),
+        key=lambda item: (item[0] // max(1, len(states)), isolated_rank.get((item[1][2] or "").upper(), 999), item[0]),
     )
     results_by_index: dict[int, dict] = {}
 
     if isolated_requests:
-        worker_count = min(BATCH_ISOLATED_MAX_PARALLEL_LOOKUPS, len(isolated_requests))
+        isolated_worker_count = min(BATCH_ISOLATED_WORKERS, len(isolated_requests))
 
         def run_isolated_request(item: tuple[int, tuple[str, str, str]]) -> tuple[int, dict]:
             index, args = item
-            return index, run_state_lookup_for_batch(*args, confirm_single_no_match=True)
+            return index, run_state_lookup(*args, confirm_single_no_match=True)
 
-        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        with ThreadPoolExecutor(max_workers=isolated_worker_count) as executor:
             for index, result in executor.map(run_isolated_request, isolated_requests):
                 results_by_index[index] = result
 
     if main_requests:
-        worker_count = min(BATCH_MAX_PARALLEL_LOOKUPS, len(main_requests))
+        worker_count = min(MAX_PARALLEL_LOOKUPS, len(main_requests))
 
         def run_main_request(item: tuple[int, tuple[str, str, str]]) -> tuple[int, dict]:
             index, args = item
-            return index, run_state_lookup_for_batch(*args, confirm_single_no_match=False)
+            return index, run_state_lookup(*args, confirm_single_no_match=False)
 
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
             for index, result in executor.map(run_main_request, main_requests):
