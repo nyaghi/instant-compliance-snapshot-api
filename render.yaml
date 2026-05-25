@@ -26,6 +26,12 @@ services:
         value: "1"
       - key: CE_BATCH_CONFIRMATION_WORKERS
         value: "3"
+      - key: CE_PUBLIC_RESERVED_BROWSER_LOOKUPS
+        value: "1"
+      - key: CE_BATCH_MAX_PARALLEL_LOOKUPS
+        value: "2"
+      - key: CE_BATCH_ISOLATED_STATES
+        value: "ME,OR,FL,WI,VA,SC,ND"
       - key: CE_BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS
         value: "8"
       - key: CE_ME_LOOKUP_MIN_INTERVAL_SECONDS

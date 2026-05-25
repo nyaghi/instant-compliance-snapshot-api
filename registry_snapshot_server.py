@@ -70,7 +70,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.23.13"
+APP_VERSION = "2026.05.23.14"
 SUPPORTED_STATES = [
     "AK", "CA", "CO", "CT", "FL", "HI", "MA", "MD", "ME", "MI",
     "MN", "ND", "NJ", "NY", "OH", "OR", "PA", "SC", "VA", "WI",
@@ -82,6 +82,14 @@ REQUESTED_PARALLEL_LOOKUPS = max(1, int(os.environ.get("CE_MAX_PARALLEL_LOOKUPS"
 ALLOW_PARALLEL_BROWSER_LOOKUPS = os.environ.get("CE_ALLOW_PARALLEL_BROWSER_LOOKUPS", "1").strip().lower() in {"1", "true", "yes"}
 MAX_BROWSER_LOOKUPS = max(1, int(os.environ.get("CE_MAX_BROWSER_LOOKUPS", "4")))
 MAX_PARALLEL_LOOKUPS = min(REQUESTED_PARALLEL_LOOKUPS, MAX_BROWSER_LOOKUPS) if ALLOW_PARALLEL_BROWSER_LOOKUPS else 1
+PUBLIC_RESERVED_BROWSER_LOOKUPS = min(
+    max(0, int(os.environ.get("CE_PUBLIC_RESERVED_BROWSER_LOOKUPS", "1"))),
+    max(0, MAX_BROWSER_LOOKUPS - 1),
+)
+BATCH_MAX_PARALLEL_LOOKUPS = max(1, min(
+    MAX_PARALLEL_LOOKUPS,
+    int(os.environ.get("CE_BATCH_MAX_PARALLEL_LOOKUPS", str(max(1, MAX_BROWSER_LOOKUPS - PUBLIC_RESERVED_BROWSER_LOOKUPS)))),
+))
 BROWSER_LOOKUP_SEMAPHORE = threading.BoundedSemaphore(MAX_BROWSER_LOOKUPS)
 BLOCK_HEAVY_BROWSER_RESOURCES = os.environ.get("CE_BLOCK_HEAVY_BROWSER_RESOURCES", "1").strip().lower() not in {"0", "false", "no"}
 EAGER_EVIDENCE_PDF = os.environ.get("CE_EAGER_EVIDENCE_PDF", "0").strip().lower() in {"1", "true", "yes"}
@@ -104,11 +112,13 @@ CONFIRM_FRAGILE_BATCH_RESULTS = os.environ.get("CE_CONFIRM_FRAGILE_BATCH_RESULTS
 BATCH_CONFIRMATION_WORKERS = min(max(1, int(os.environ.get("CE_BATCH_CONFIRMATION_WORKERS", "3"))), 3)
 BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS", "8"))), 20.0)
 BATCH_TRUST_SLOW_NO_MATCH_SECONDS = min(max(15.0, float(os.environ.get("CE_BATCH_TRUST_SLOW_NO_MATCH_SECONDS", "35"))), 90.0)
-BATCH_ISOLATED_STATES = {
+BATCH_ISOLATED_STATE_ORDER = [
     state.strip().upper()
-    for state in os.environ.get("CE_BATCH_ISOLATED_STATES", "ME,OR,FL,WI").split(",")
+    for state in os.environ.get("CE_BATCH_ISOLATED_STATES", "ME,OR,FL,WI,VA,SC,ND").split(",")
     if state.strip()
-}
+]
+BATCH_ISOLATED_STATES = set(BATCH_ISOLATED_STATE_ORDER)
+PUBLIC_SINGLE_STATE_ONLY = os.environ.get("CE_PUBLIC_SINGLE_STATE_ONLY", "0").strip().lower() in {"1", "true", "yes"}
 FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "8"))), 20.0)
 NAME_SEARCH_PREFLIGHT_URLS = {
     "CT": "https://www.elicense.ct.gov/lookup/licenselookup.aspx",
@@ -7444,17 +7454,21 @@ def fragile_batch_result_needs_confirmation(result: dict) -> bool:
     """Identify results that should not be trusted from a busy multi-state batch alone."""
     state = (result.get("state") or "").upper()
     status = (result.get("status") or "").strip().lower()
+    registry_match = (result.get("matched_registry_name") or "").strip()
+    raw_status = (result.get("raw_status_text") or "").strip()
     name_registry_states = {"CO", "CT", "FL", "ME", "MI", "ND", "NY", "OR", "SC", "VA", "WI"}
-    if state in BATCH_ISOLATED_STATES and status in {"not registered", "site not reachable", "error", ""}:
-        return False
     if state in name_registry_states and status in {"site not reachable", "error", ""}:
+        return True
+    if state in BATCH_ISOLATED_STATES and status in {"not registered", "unknown", ""}:
+        return True
+    if state in BATCH_ISOLATED_STATES and status not in {"not registered", "site not reachable", "error", ""} and not registry_match and not raw_status:
         return True
     if status == "not registered" and state not in {"ME", "ND", "OR"} and slow_explicit_no_match_result(result):
         return False
     if state in {"CO", "FL", "ME", "ND", "NY", "OR", "SC", "VA"}:
         return status == "not registered"
     if state == "MI":
-        return status == "not registered"
+        return status in {"not registered", "pending"}
     if state == "WI":
         return status in {"not registered", "pending", "delinquent", "upcoming filing"}
     return False
@@ -7582,15 +7596,22 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
         for index, args in indexed_requests
         if (args[2] or "").upper() not in BATCH_ISOLATED_STATES
     ]
-    isolated_requests = [
-        (index, args)
-        for index, args in indexed_requests
-        if (args[2] or "").upper() in BATCH_ISOLATED_STATES
-    ]
+    isolated_rank = {state: rank for rank, state in enumerate(BATCH_ISOLATED_STATE_ORDER)}
+    isolated_requests = sorted(
+        [
+            (index, args)
+            for index, args in indexed_requests
+            if (args[2] or "").upper() in BATCH_ISOLATED_STATES
+        ],
+        key=lambda item: (isolated_rank.get((item[1][2] or "").upper(), 999), item[0]),
+    )
     results_by_index: dict[int, dict] = {}
 
+    for index, args in isolated_requests:
+        results_by_index[index] = run_state_lookup(*args, confirm_single_no_match=True)
+
     if main_requests:
-        worker_count = min(MAX_PARALLEL_LOOKUPS, len(main_requests))
+        worker_count = min(BATCH_MAX_PARALLEL_LOOKUPS, len(main_requests))
 
         def run_main_request(item: tuple[int, tuple[str, str, str]]) -> tuple[int, dict]:
             index, args = item
@@ -7599,9 +7620,6 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
             for index, result in executor.map(run_main_request, main_requests):
                 results_by_index[index] = result
-
-    for index, args in isolated_requests:
-        results_by_index[index] = run_state_lookup(*args, confirm_single_no_match=True)
 
     results = [results_by_index[index] for index in range(len(lookup_requests))]
 
@@ -7917,6 +7935,10 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
 
             if not organizations or not states or any(st not in set(SUPPORTED_STATES) for st in states):
                 self._send_json(400, {"error": "Enter a valid 9-digit EIN and select one supported state."})
+                return
+
+            if PUBLIC_SINGLE_STATE_ONLY and (len(states) > 1 or len(organizations) > 1):
+                self._send_json(400, {"error": "Select one state."})
                 return
 
             state_limit = state_limit_for_request(domain)
