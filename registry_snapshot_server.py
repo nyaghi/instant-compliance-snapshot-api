@@ -88,7 +88,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.26.5-staging"
+APP_VERSION = "2026.05.26.6-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -8139,22 +8139,39 @@ def run_fanout_state_lookup_for_batch(organization_name: str, ein: str, state: s
         "page_url": "https://staging.compliance-express.com",
         "client_user_agent": f"CharityClarity batch fanout/{APP_VERSION}",
     }
-    request = urllib.request.Request(
-        BATCH_FANOUT_API_URL,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Origin": "https://staging.compliance-express.com",
-            "User-Agent": f"CharityClarity batch fanout/{APP_VERSION}",
-        },
-        method="POST",
-    )
-    try:
+
+    def request_once() -> dict | None:
+        request = urllib.request.Request(
+            BATCH_FANOUT_API_URL,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Origin": "https://staging.compliance-express.com",
+                "User-Agent": f"CharityClarity batch fanout/{APP_VERSION}",
+            },
+            method="POST",
+        )
         with urllib.request.urlopen(request, timeout=BATCH_FANOUT_STATE_TIMEOUT_SECONDS) as response:
             data = json.loads(response.read().decode("utf-8"))
         result = (data.get("results") or [None])[0]
+        return result if isinstance(result, dict) else None
+
+    try:
+        result = request_once()
         if isinstance(result, dict):
             result["batch_fanout"] = "single_state_http"
+            fast_unreachable = (
+                (result.get("status") or "").strip().lower() == "site not reachable"
+                and float(result.get("lookup_seconds") or 0) < 20
+            )
+            if fast_unreachable:
+                time.sleep(1)
+                retry_result = request_once()
+                if isinstance(retry_result, dict):
+                    retry_result["batch_fanout"] = "single_state_http_retry"
+                    if (retry_result.get("status") or "").strip().lower() != "site not reachable":
+                        return retry_result
+                    result = retry_result
             return result
     except Exception as exc:
         log_error(f"{state} batch fanout lookup for {format_ein(ein)} failed: {exc}")
