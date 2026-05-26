@@ -19,21 +19,21 @@ services:
       - key: PYTHONUNBUFFERED
         value: "1"
       - key: CE_MAX_PARALLEL_LOOKUPS
-        value: "3"
+        value: "6"
       - key: CE_MAX_BROWSER_LOOKUPS
-        value: "3"
+        value: "6"
       - key: CE_CONFIRM_FRAGILE_BATCH_RESULTS
         value: "1"
       - key: CE_BATCH_CONFIRMATION_WORKERS
-        value: "3"
+        value: "4"
       - key: CE_BATCH_ISOLATED_STATES
-        value: "ME,OR,FL,WI,VA,SC,ND"
+        value: "ME,OR,FL,WI,VA,SC,ND,WA,NM,MS,OK,WV"
       - key: CE_BATCH_ISOLATED_WORKERS
-        value: "2"
+        value: "3"
       - key: CE_BATCH_STATE_LOOKUP_TIMEOUT_SECONDS
-        value: "68"
+        value: "90"
       - key: CE_BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS
-        value: "8"
+        value: "4"
       - key: CE_ME_LOOKUP_MIN_INTERVAL_SECONDS
         value: "1"
       - key: CE_ME_CONFIRM_NOT_REGISTERED
