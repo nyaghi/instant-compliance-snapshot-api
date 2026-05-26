@@ -17,7 +17,7 @@ import sys
 import threading
 import time
 import traceback
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 from datetime import date, datetime, timedelta
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -88,7 +88,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.26.2-staging"
+APP_VERSION = "2026.05.26.3-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -120,7 +120,7 @@ ME_CONFIRM_NOT_REGISTERED = os.environ.get("CE_ME_CONFIRM_NOT_REGISTERED", "1").
 MI_ENABLE_NAME_FALLBACK = os.environ.get("CE_MI_ENABLE_NAME_FALLBACK", "1").strip().lower() in {"1", "true", "yes"}
 ENABLE_CROSS_STATE_NAME_RETRY = os.environ.get("CE_ENABLE_CROSS_STATE_NAME_RETRY", "0").strip().lower() in {"1", "true", "yes"}
 CONFIRM_FRAGILE_BATCH_RESULTS = os.environ.get("CE_CONFIRM_FRAGILE_BATCH_RESULTS", "1").strip().lower() in {"1", "true", "yes"}
-BATCH_CONFIRMATION_WORKERS = min(max(1, int(os.environ.get("CE_BATCH_CONFIRMATION_WORKERS", "3"))), 6)
+BATCH_CONFIRMATION_WORKERS = min(max(1, int(os.environ.get("CE_BATCH_CONFIRMATION_WORKERS", "3"))), 12)
 BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS", "8"))), 20.0)
 BATCH_TRUST_SLOW_NO_MATCH_SECONDS = min(max(15.0, float(os.environ.get("CE_BATCH_TRUST_SLOW_NO_MATCH_SECONDS", "35"))), 90.0)
 BATCH_ISOLATED_STATE_ORDER = [
@@ -129,7 +129,7 @@ BATCH_ISOLATED_STATE_ORDER = [
     if state.strip()
 ]
 BATCH_ISOLATED_STATES = set(BATCH_ISOLATED_STATE_ORDER)
-BATCH_ISOLATED_WORKERS = min(max(1, int(os.environ.get("CE_BATCH_ISOLATED_WORKERS", "2"))), 4)
+BATCH_ISOLATED_WORKERS = min(max(1, int(os.environ.get("CE_BATCH_ISOLATED_WORKERS", "2"))), 12)
 BATCH_STATE_LOOKUP_TIMEOUT_SECONDS = min(
     max(55.0, float(os.environ.get("CE_BATCH_STATE_LOOKUP_TIMEOUT_SECONDS", "68"))),
     90.0,
@@ -8237,27 +8237,35 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
     )
     results_by_index: dict[int, dict] = {}
 
-    if isolated_requests:
-        isolated_worker_count = min(BATCH_ISOLATED_WORKERS, len(isolated_requests))
+    def run_isolated_request(item: tuple[int, tuple[str, str, str]]) -> tuple[int, dict]:
+        index, args = item
+        return index, run_state_lookup_for_batch(*args, confirm_single_no_match=True)
 
-        def run_isolated_request(item: tuple[int, tuple[str, str, str]]) -> tuple[int, dict]:
-            index, args = item
-            return index, run_state_lookup_for_batch(*args, confirm_single_no_match=True)
+    def run_main_request(item: tuple[int, tuple[str, str, str]]) -> tuple[int, dict]:
+        index, args = item
+        return index, run_state_lookup_for_batch(*args, confirm_single_no_match=False)
 
-        with ThreadPoolExecutor(max_workers=isolated_worker_count) as executor:
-            for index, result in executor.map(run_isolated_request, isolated_requests):
-                results_by_index[index] = result
+    executors: list[ThreadPoolExecutor] = []
+    futures = []
+    try:
+        if isolated_requests:
+            isolated_worker_count = min(BATCH_ISOLATED_WORKERS, len(isolated_requests))
+            isolated_executor = ThreadPoolExecutor(max_workers=isolated_worker_count)
+            executors.append(isolated_executor)
+            futures.extend(isolated_executor.submit(run_isolated_request, item) for item in isolated_requests)
 
-    if main_requests:
-        worker_count = min(MAX_PARALLEL_LOOKUPS, len(main_requests))
+        if main_requests:
+            worker_count = min(MAX_PARALLEL_LOOKUPS, len(main_requests))
+            main_executor = ThreadPoolExecutor(max_workers=worker_count)
+            executors.append(main_executor)
+            futures.extend(main_executor.submit(run_main_request, item) for item in main_requests)
 
-        def run_main_request(item: tuple[int, tuple[str, str, str]]) -> tuple[int, dict]:
-            index, args = item
-            return index, run_state_lookup_for_batch(*args, confirm_single_no_match=False)
-
-        with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            for index, result in executor.map(run_main_request, main_requests):
-                results_by_index[index] = result
+        for future in as_completed(futures):
+            index, result = future.result()
+            results_by_index[index] = result
+    finally:
+        for executor in executors:
+            executor.shutdown(wait=True, cancel_futures=False)
 
     results = [results_by_index[index] for index in range(len(lookup_requests))]
 
