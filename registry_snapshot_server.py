@@ -88,7 +88,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.26.4-staging"
+APP_VERSION = "2026.05.26.5-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -132,6 +132,13 @@ BATCH_ISOLATED_STATES = set(BATCH_ISOLATED_STATE_ORDER)
 BATCH_ISOLATED_WORKERS = min(max(1, int(os.environ.get("CE_BATCH_ISOLATED_WORKERS", "2"))), 12)
 BATCH_STATE_LOOKUP_TIMEOUT_SECONDS = min(
     max(55.0, float(os.environ.get("CE_BATCH_STATE_LOOKUP_TIMEOUT_SECONDS", "68"))),
+    90.0,
+)
+BATCH_FANOUT_SINGLE_STATE_LOOKUPS = os.environ.get("CE_BATCH_FANOUT_SINGLE_STATE_LOOKUPS", "0").strip().lower() in {"1", "true", "yes"}
+BATCH_FANOUT_API_URL = os.environ.get("CE_BATCH_FANOUT_API_URL", f"{PUBLIC_BASE_URL}/api/check").strip()
+BATCH_FANOUT_MAX_WORKERS = min(max(1, int(os.environ.get("CE_BATCH_FANOUT_MAX_WORKERS", "30"))), 40)
+BATCH_FANOUT_STATE_TIMEOUT_SECONDS = min(
+    max(30.0, float(os.environ.get("CE_BATCH_FANOUT_STATE_TIMEOUT_SECONDS", str(BATCH_STATE_LOOKUP_TIMEOUT_SECONDS)))),
     90.0,
 )
 SINGLE_TRUST_SLOW_CLEAN_NO_MATCH_SECONDS = min(
@@ -8120,6 +8127,40 @@ def run_state_lookup_for_batch(
         executor.shutdown(wait=False, cancel_futures=True)
 
 
+def run_fanout_state_lookup_for_batch(organization_name: str, ein: str, state: str) -> dict:
+    payload = {
+        "organization_name": organization_name,
+        "ein": ein,
+        "states": [state],
+        "email": "smoke@compliance-express.com",
+        "admin_passcode": ADMIN_PASSCODE,
+        "environment": "staging-batch-fanout",
+        "origin": "https://staging.compliance-express.com",
+        "page_url": "https://staging.compliance-express.com",
+        "client_user_agent": f"CharityClarity batch fanout/{APP_VERSION}",
+    }
+    request = urllib.request.Request(
+        BATCH_FANOUT_API_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Origin": "https://staging.compliance-express.com",
+            "User-Agent": f"CharityClarity batch fanout/{APP_VERSION}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=BATCH_FANOUT_STATE_TIMEOUT_SECONDS) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        result = (data.get("results") or [None])[0]
+        if isinstance(result, dict):
+            result["batch_fanout"] = "single_state_http"
+            return result
+    except Exception as exc:
+        log_error(f"{state} batch fanout lookup for {format_ein(ein)} failed: {exc}")
+    return batch_timeout_lookup_result(organization_name, ein, state)
+
+
 def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
     if not CONFIRM_FRAGILE_BATCH_RESULTS:
         return results
@@ -8219,6 +8260,21 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
     ]
     if len(lookup_requests) <= 1:
         return [run_state_lookup(*lookup_requests[0])]
+
+    if BATCH_FANOUT_SINGLE_STATE_LOOKUPS and BATCH_FANOUT_API_URL:
+        results_by_index: dict[int, dict] = {}
+
+        def run_fanout_request(item: tuple[int, tuple[str, str, str]]) -> tuple[int, dict]:
+            index, args = item
+            return index, run_fanout_state_lookup_for_batch(*args)
+
+        worker_count = min(BATCH_FANOUT_MAX_WORKERS, len(lookup_requests))
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = [executor.submit(run_fanout_request, item) for item in enumerate(lookup_requests)]
+            for future in as_completed(futures):
+                index, result = future.result()
+                results_by_index[index] = result
+        return [results_by_index[index] for index in range(len(lookup_requests))]
 
     indexed_requests = list(enumerate(lookup_requests))
     main_requests = [

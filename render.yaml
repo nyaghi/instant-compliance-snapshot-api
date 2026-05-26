@@ -32,8 +32,14 @@ services:
         value: "8"
       - key: CE_BATCH_STATE_LOOKUP_TIMEOUT_SECONDS
         value: "85"
+      - key: CE_BATCH_FANOUT_SINGLE_STATE_LOOKUPS
+        value: "1"
+      - key: CE_BATCH_FANOUT_MAX_WORKERS
+        value: "30"
+      - key: CE_BATCH_FANOUT_STATE_TIMEOUT_SECONDS
+        value: "85"
       - key: CE_BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS
-        value: "4"
+        value: "1"
       - key: CE_ME_LOOKUP_MIN_INTERVAL_SECONDS
         value: "1"
       - key: CE_ME_CONFIRM_NOT_REGISTERED
