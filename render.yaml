@@ -34,6 +34,8 @@ services:
         value: "87"
       - key: CE_BATCH_FANOUT_SINGLE_STATE_LOOKUPS
         value: "1"
+      - key: CE_BATCH_FANOUT_API_URL
+        value: https://instant-compliance-snapshot-api-staging-8dnk.onrender.com/api/check
       - key: CE_BATCH_FANOUT_MAX_WORKERS
         value: "30"
       - key: CE_BATCH_FANOUT_STATE_TIMEOUT_SECONDS
