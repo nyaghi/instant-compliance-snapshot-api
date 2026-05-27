@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.26.19-staging"
+APP_VERSION = "2026.05.26.20-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -7778,13 +7778,162 @@ def _search_snapshot_or_embedded_state_once(org, state: str):
     return copy_external_result(org, state, external_result)
 
 
+def search_ms_fast(page, org):
+    """Master-level Mississippi path with bounded waits around the embedded checker logic."""
+    modules = state_batch_modules(["MS"])
+    module = modules[load_state_batch_bundle().STATE_TO_MODULE["MS"]]
+    result = module.SearchResult(
+        organization_name=org.organization_name,
+        status=module.STATUS_UNKNOWN,
+        raw_status_text="",
+    )
+    try:
+        page.goto(module.MS_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
+        safe_wait_for_network_idle(page, timeout=1500)
+
+        input_box = module.find_visible_input(page, [
+            'input[aria-label*="Charity Name" i]',
+            'input[name*="CharityName" i]',
+            'input[id*="CharityName" i]',
+            'input[name*="Name" i]',
+            'input[id*="Name" i]',
+            'input[type="text"]',
+        ])
+        if not input_box:
+            result.error = "Could not find the Mississippi Charity Name input."
+            return result
+
+        input_box.click(timeout=3000)
+        input_box.fill("")
+        input_box.fill(org.organization_name)
+        page.wait_for_timeout(200)
+
+        clicked = False
+        for candidate in [
+            page.get_by_role("button", name=re.compile(r"^Search$", re.I)),
+            page.locator('input[type="submit"][value*="Search" i]').first,
+            page.locator('button:has-text("Search")').first,
+        ]:
+            try:
+                candidate.click(timeout=3000)
+                clicked = True
+                break
+            except Exception:
+                continue
+        if not clicked:
+            result.error = "Could not click the Mississippi Search button."
+            return result
+
+        safe_wait_for_network_idle(page, timeout=2500)
+
+        table = None
+        page_text = ""
+        deadline = time.perf_counter() + 18.0
+        while time.perf_counter() < deadline:
+            page.wait_for_timeout(500)
+            page_text = page.locator("body").inner_text(timeout=8000)
+            if re.search(r"no results found|no records found|no matching|0 results", page_text, re.I):
+                break
+            table = module.find_results_table(page)
+            if table:
+                break
+
+        if re.search(r"no results found|no records found|no matching|0 results", page_text, re.I):
+            result.status = module.STATUS_NOT_FOUND
+            result.raw_status_text = "No results found"
+            result.success = True
+            result.source_note = "Mississippi search returned no matching result row."
+            return result
+
+        if not table:
+            fallback_result = module.search_ms(page, org)
+            fallback_result.source_note = " ".join(part for part in [
+                fallback_result.source_note or "",
+                "The master fast Mississippi path could not see the result table quickly enough, so the embedded reliable path completed the lookup.",
+            ]).strip()
+            return fallback_result
+
+        name_index, status_index = module.detect_header_indexes(table)
+        row = module.choose_matching_row(table, org.organization_name, name_index)
+        if not row:
+            result.status = module.STATUS_NOT_FOUND
+            result.raw_status_text = "No matching organization row"
+            result.success = True
+            result.source_note = "Mississippi results table did not contain a matching organization row."
+            return result
+
+        status_text = module.extract_status_from_row(row, status_index)
+        if not status_text:
+            result.status = module.STATUS_UNKNOWN
+            result.raw_status_text = "Status not visible in results table"
+            result.success = True
+            result.source_note = "Mississippi results table row was found, but the status cell could not be extracted."
+            return result
+
+        clicked_detail = False
+        try:
+            links = row.locator("a")
+            link_count = min(links.count(), 5)
+            for i in range(link_count):
+                link = links.nth(i)
+                try:
+                    link_text = re.sub(r"\s+", " ", link.inner_text(timeout=750)).strip()
+                except Exception:
+                    link_text = ""
+                if link_text and module.normalize_name(link_text) == module.normalize_name(org.organization_name):
+                    link.click(timeout=3000)
+                    clicked_detail = True
+                    break
+            if not clicked_detail and link_count > 0:
+                links.first.click(timeout=3000)
+                clicked_detail = True
+        except Exception:
+            clicked_detail = False
+
+        detail_text = ""
+        if clicked_detail:
+            safe_wait_for_network_idle(page, timeout=2500)
+            page.wait_for_timeout(500)
+            detail_text = module.body_text(page)
+
+        filing_status = module.extract_labeled_value_from_text(detail_text, ["Filing Status"])
+        expiration_raw = module.extract_labeled_value_from_text(detail_text, ["Expiration Date"])
+        expiration_date = module.parse_mmddyyyy_date(expiration_raw)
+        if expiration_raw and not expiration_date:
+            expiration_raw = ""
+        if not filing_status:
+            filing_status = status_text
+        if not expiration_date:
+            fallback_expiration_raw = module.extract_labeled_value_from_text(detail_text, ["Expire Date"])
+            expiration_date = module.parse_mmddyyyy_date(fallback_expiration_raw)
+            if expiration_date and not expiration_raw:
+                expiration_raw = fallback_expiration_raw
+
+        display_filing_status = module.normalize_ms_filing_status(filing_status)
+        result.raw_status_text = (
+            f"{display_filing_status} | Expiration Date: {expiration_raw}"
+            if expiration_raw
+            else display_filing_status
+        )
+        result.status = module.classify_ms_registration(filing_status, expiration_date)
+        result.source_note = (
+            "Mississippi uses Filing Status and Expiration Date from the matched record; "
+            "the master checker uses bounded waits around the public result/detail pages."
+        )
+        result.success = True
+        return result
+    except Exception as exc:
+        result.error = f"MS error: {exc}"
+        return result
+
+
 def search_batch_browser_state(page, org, state: str):
     state = (state or "").upper()
     modules = state_batch_modules([state])
     module = modules[load_state_batch_bundle().STATE_TO_MODULE[state]]
     module_org = module.Organization(organization_name=org.organization_name)
     if state == "MS":
-        external_result = module.search_ms(page, module_org)
+        external_result = search_ms_fast(page, module_org)
     elif state == "OK":
         external_result = module.search_ok(page, module_org)
     else:
