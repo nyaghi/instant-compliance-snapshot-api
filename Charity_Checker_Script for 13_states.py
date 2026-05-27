@@ -3249,7 +3249,7 @@ def search_me(page, org: Organization) -> StateResult:
             direct_attempts
             and direct_errors == 0
             and (direct_no_record_responses or direct_result_responses)
-            and os.environ.get("CE_ME_BROWSER_CONFIRM_DIRECT_NO_MATCH", "1").strip().lower() not in {"1", "true", "yes"}
+            and os.environ.get("CE_ME_BROWSER_CONFIRM_DIRECT_NO_MATCH", "0").strip().lower() not in {"1", "true", "yes"}
         ):
             result.raw_status_text = "No matching organization result"
             result.status = STATUS_NOT_REGISTERED
