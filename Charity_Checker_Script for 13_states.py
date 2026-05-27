@@ -1350,15 +1350,15 @@ def find_pa_ein_input(page):
 
 def click_pa_search_button(page) -> bool:
     for attempt in range(2):
-        safe_wait_for_network_idle(page, timeout=10000)
-        fast_sleep(1 + attempt)
+        safe_wait_for_network_idle(page, timeout=4000)
+        fast_sleep(0.5 + attempt * 0.5)
 
         for label in ["Search", "Find", "Submit"]:
             try:
                 btn = page.get_by_role("button", name=re.compile(label, re.I)).first
-                btn.wait_for(state="visible", timeout=5000)
-                btn.scroll_into_view_if_needed(timeout=2000)
-                btn.click(timeout=5000)
+                btn.wait_for(state="visible", timeout=2500)
+                btn.scroll_into_view_if_needed(timeout=1500)
+                btn.click(timeout=3000)
                 return True
             except Exception:
                 pass
@@ -1380,9 +1380,9 @@ def click_pa_search_button(page) -> bool:
                             text = (btn.get_attribute("value") or btn.get_attribute("aria-label") or "").strip()
                         if not re.search(r"search|find|submit", text, re.I):
                             continue
-                        btn.scroll_into_view_if_needed(timeout=2000)
+                        btn.scroll_into_view_if_needed(timeout=1500)
                         try:
-                            btn.click(timeout=5000)
+                            btn.click(timeout=3000)
                         except Exception:
                             if attempt == 1:
                                 btn.evaluate("el => el.click()")
@@ -1396,13 +1396,13 @@ def click_pa_search_button(page) -> bool:
     return False
 
 def extract_pa_result_expiration(page, ein: str, organization_name: str = ""):
-    safe_wait_for_network_idle(page, timeout=15000)
-    fast_sleep(2)
+    safe_wait_for_network_idle(page, timeout=8000)
+    fast_sleep(0.75)
     try:
         page.locator("body").evaluate("window.scrollTo(0, document.body.scrollHeight)")
     except Exception:
         pass
-    fast_sleep(1)
+    fast_sleep(0.25)
 
     target_name = normalize_name(organization_name)
     candidates = []

@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.26.16-staging"
+APP_VERSION = "2026.05.26.17-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -126,6 +126,8 @@ SC_NAME_VARIANT_MAX_SECONDS = max(12.0, float(os.environ.get("CE_SC_NAME_VARIANT
 NAME_SEARCH_VARIANT_MAX_SECONDS = max(18.0, float(os.environ.get("CE_NAME_SEARCH_VARIANT_MAX_SECONDS", "35")))
 CT_NAME_VARIANT_MAX_SECONDS = min(max(12.0, float(os.environ.get("CE_CT_NAME_VARIANT_MAX_SECONDS", "28"))), 45.0)
 CT_NAME_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_CT_NAME_VARIANT_LIMIT", "8"))), 14)
+MN_NAME_FALLBACK_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_MN_NAME_FALLBACK_MAX_SECONDS", "18"))), 30.0)
+MN_NAME_FALLBACK_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_MN_NAME_FALLBACK_MAX_VARIANTS", "4"))), 10)
 FL_LOOKUP_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_FL_LOOKUP_MAX_SECONDS", "45"))), 59.0)
 SC_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_SC_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
 NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
@@ -2603,11 +2605,13 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
         return False
     if related_affiliate_or_chapter_mismatch(original_name, registry_name):
         return False
+    if broad_governance_name_mismatch(original_name, registry_name):
+        return False
+    if incompatible_institutional_prefix_expansion(original_name, registry_name):
+        return False
     safe_targets = organization_match_target_variants(original_name, ein)
     if target_name_score(registry_name, safe_targets) >= 450:
         return True
-    if incompatible_institutional_prefix_expansion(original_name, registry_name):
-        return False
     return compatible_ein_alias_for_name(original_name, registry_name)
 
 
@@ -2620,6 +2624,26 @@ def related_affiliate_or_chapter_mismatch(original_name: str, registry_name: str
     original_terms = set(original_norm.split())
     registry_terms = set(registry_norm.split())
     return any(term in registry_terms and term not in original_terms for term in related_terms)
+
+
+def broad_governance_name_mismatch(original_name: str, registry_name: str) -> bool:
+    original_norm = normalized_match_name(original_name)
+    registry_norm = normalized_match_name(registry_name)
+    if not original_norm or not registry_norm:
+        return False
+    original_words = original_norm.split()
+    registry_words = registry_norm.split()
+    governance_words = {"trustees", "curators", "regents", "board"}
+    if not any(word in governance_words for word in original_words[:2]):
+        return False
+    if any(word in governance_words for word in registry_words):
+        return False
+    registry_terms = set(registry_words)
+    original_terms = set(original_words)
+    if registry_terms <= original_terms and len(original_words) - len(registry_words) >= 3:
+        return True
+    affiliate_terms = {"alumni", "booster", "chapter", "affiliate", "auxiliary"}
+    return bool(registry_terms & affiliate_terms)
 
 
 def incompatible_institutional_prefix_expansion(original_name: str, registry_name: str) -> bool:
@@ -4443,17 +4467,20 @@ def search_mn(page, org):
             result.success = True
             return result
         safe_targets = organization_match_target_variants(org.organization_name, org.ein)
-        for variant in organization_name_variants(
+        name_fallback_started = time.perf_counter()
+        for index, variant in enumerate(organization_name_variants(
             org.organization_name,
             org.ein,
             include_ein_aliases=True,
-            include_name_segments=True,
+            include_name_segments=False,
             include_compact_legal_suffixes=True,
             include_leading_article_variants=True,
             include_broad_query_prefixes=False,
-        )[:10]:
+        )[:MN_NAME_FALLBACK_MAX_VARIANTS]):
+            if index > 0 and (time.perf_counter() - name_fallback_started) >= MN_NAME_FALLBACK_MAX_SECONDS:
+                break
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            checker.safe_wait_for_network_idle(page, timeout=8000)
+            checker.safe_wait_for_network_idle(page, timeout=5000)
             org_box = checker.find_visible_input(page, ["#txtOrg", 'input[name="txtOrg"]'])
             if not org_box:
                 break
@@ -4463,8 +4490,8 @@ def search_mn(page, org):
                 page.locator('input[name="cmdSearch"], input[type="submit"]').last.click(timeout=5000)
             except Exception:
                 page.keyboard.press("Enter")
-            checker.safe_wait_for_network_idle(page, timeout=10000)
-            time.sleep(1)
+            checker.safe_wait_for_network_idle(page, timeout=7000)
+            time.sleep(0.5)
             text = readable_page_text(page)
             if no_registry_results_seen(text):
                 continue
@@ -4512,8 +4539,8 @@ def search_mn(page, org):
                 link = page.locator("a[href*='CHR_GeneralInfo']").first
             try:
                 link.click(timeout=5000)
-                checker.safe_wait_for_network_idle(page, timeout=10000)
-                time.sleep(1)
+                checker.safe_wait_for_network_idle(page, timeout=7000)
+                time.sleep(0.5)
             except Exception:
                 continue
             detail_text = readable_page_text(page)
@@ -7696,14 +7723,17 @@ def adjudicated_comment_for_status(result, body: str, status: str) -> str:
 def search_snapshot_or_embedded_state(org, state: str):
     state = (state or "").upper()
     original_name = org.organization_name
-    variants = organization_name_variants(
-        original_name,
-        org.ein,
-        include_ein_aliases=True,
-        include_name_segments=True,
-        include_compact_legal_suffixes=True,
-        include_leading_article_variants=True,
-    )[:8]
+    if state in {"KY", "NH"}:
+        variants = organization_match_target_variants(original_name, org.ein)[:8]
+    else:
+        variants = organization_name_variants(
+            original_name,
+            org.ein,
+            include_ein_aliases=True,
+            include_name_segments=True,
+            include_compact_legal_suffixes=True,
+            include_leading_article_variants=True,
+        )[:8]
     if original_name and original_name not in variants:
         variants.insert(0, original_name)
     best_result = None
