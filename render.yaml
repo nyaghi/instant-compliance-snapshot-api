@@ -65,7 +65,7 @@ services:
       - key: CE_SINGLE_STATE_SEMANTIC_RETRY_DELAY_SECONDS
         value: "1"
       - key: CE_SINGLE_STATE_SEMANTIC_RETRY_STATES
-        value: "AR,CT,MI,OK,VA"
+        value: "AR,CT,MI,NJ,OK,VA"
       - key: CE_SINGLE_STATE_MAX_CONCURRENT
         value: "20"
       - key: CE_SINGLE_STATE_QUEUE_TIMEOUT_SECONDS

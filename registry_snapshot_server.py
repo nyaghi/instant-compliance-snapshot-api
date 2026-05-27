@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.26.14-staging"
+APP_VERSION = "2026.05.26.15-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -176,7 +176,7 @@ SINGLE_STATE_SEMANTIC_RETRY_DELAY_SECONDS = min(
 )
 SINGLE_STATE_SEMANTIC_RETRY_STATES = {
     state.strip().upper()
-    for state in os.environ.get("CE_SINGLE_STATE_SEMANTIC_RETRY_STATES", "AR,CT,MI,OK,VA").split(",")
+    for state in os.environ.get("CE_SINGLE_STATE_SEMANTIC_RETRY_STATES", "AR,CT,MI,NJ,OK,VA").split(",")
     if state.strip()
 }
 PUBLIC_SINGLE_STATE_ONLY = os.environ.get("CE_PUBLIC_SINGLE_STATE_ONLY", "0").strip().lower() in {"1", "true", "yes"}
