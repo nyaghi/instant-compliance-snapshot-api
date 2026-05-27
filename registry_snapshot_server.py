@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.26.23-staging"
+APP_VERSION = "2026.05.26.24-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -8104,10 +8104,246 @@ def search_batch_browser_state(page, org, state: str):
     if state == "MS":
         external_result = search_ms_fast(page, module_org)
     elif state == "OK":
-        external_result = module.search_ok(page, module_org)
+        external_result = search_ok_precise(page, org, module)
     else:
         raise ValueError(f"Unsupported browser batch state adapter: {state}")
     return copy_external_result(org, state, external_result)
+
+
+def ok_choose_safe_result_row(page, org, module):
+    safe_targets = getattr(org, "match_target_names", None) or organization_match_target_variants(
+        getattr(org, "organization_name", ""),
+        getattr(org, "ein", ""),
+    )
+    best = None
+    best_score = -10000
+    try:
+        rows = page.locator("tr")
+        row_count = min(rows.count(), 100)
+    except Exception:
+        row_count = 0
+
+    for index in range(row_count):
+        row = rows.nth(index)
+        try:
+            row_text = re.sub(r"\s+", " ", row.inner_text(timeout=1500)).strip()
+        except Exception:
+            continue
+        if not row_text:
+            continue
+        try:
+            links = row.locator("a")
+            link_count = min(links.count(), 10)
+        except Exception:
+            continue
+
+        filing_link = None
+        filing_number = ""
+        registry_name = ""
+        for link_index in range(link_count):
+            link = links.nth(link_index)
+            try:
+                link_text = re.sub(r"\s+", " ", link.inner_text(timeout=1000)).strip()
+            except Exception:
+                continue
+            if not link_text:
+                continue
+            if re.fullmatch(r"\d+", link_text):
+                filing_link = link
+                filing_number = link_text
+            elif not registry_name:
+                registry_name = useful_registry_name(link_text)
+
+        if not filing_link:
+            continue
+        if not registry_name:
+            try:
+                cells = row.locator("td")
+                cell_count = min(cells.count(), 8)
+            except Exception:
+                cell_count = 0
+            for cell_index in range(cell_count):
+                try:
+                    cell_text = useful_registry_name(cells.nth(cell_index).inner_text(timeout=750))
+                except Exception:
+                    continue
+                if cell_text and not re.fullmatch(r"\d+", cell_text):
+                    registry_name = cell_text
+                    break
+        if not registry_name:
+            continue
+
+        score = target_name_score(registry_name, safe_targets)
+        if score > best_score:
+            best_score = score
+            best = (row, filing_link, registry_name, filing_number)
+
+    if not best or best_score < 450:
+        return None
+    if not registry_name_is_safe_for_org(best[2], getattr(org, "organization_name", ""), getattr(org, "ein", "")):
+        return None
+    return best
+
+
+def search_ok_precise(page, org, module):
+    result = module.SearchResult(
+        organization_name=org.organization_name,
+        status=module.STATUS_UNKNOWN,
+        raw_status_text="",
+        source_url=module.OK_SEARCH_URL,
+        source_note=(
+            "Oklahoma uses the latest filing-history entry to classify the annual registration cycle. "
+            "CharityClarity searches by organization-name/DBA variants because the public page does not expose EIN search, "
+            "then accepts only a safe registry-name match."
+        ),
+    )
+    try:
+        page.goto(module.OK_SEARCH_URL, wait_until="domcontentloaded", timeout=45000)
+        module.safe_wait_for_network_idle(page, timeout=20000)
+        page.wait_for_timeout(2500)
+
+        try:
+            page.locator("#ctl00_DefaultContent_CharityNameSearch1_RadioButtonList1_0").click(timeout=5000)
+        except Exception:
+            try:
+                page.get_by_label(re.compile("Search by Name", re.I)).click(timeout=5000)
+            except Exception:
+                result.error = "Could not select Oklahoma Search by Name."
+                return result
+
+        try:
+            page.locator("#ctl00_DefaultContent_CharityNameSearch1_buttonOk").click(timeout=5000)
+        except Exception:
+            try:
+                page.get_by_role("button", name=re.compile(r"^Ok$", re.I)).click(timeout=5000)
+            except Exception:
+                result.error = "Could not click the Oklahoma Ok button."
+                return result
+
+        page.wait_for_timeout(1500)
+        name_input = module.find_visible_input(page, [
+            "#ctl00_DefaultContent_CharityNameSearch1__singlename",
+            'input[name="ctl00$DefaultContent$CharityNameSearch1$_singlename"]',
+            'input[name*="singlename" i]',
+            'input[id*="singlename" i]',
+            'input[type="text"]',
+        ])
+        if not name_input:
+            result.error = "Could not find the Oklahoma Entity Name input."
+            return result
+
+        name_input.click(timeout=5000)
+        name_input.fill("")
+        name_input.type(org.organization_name, delay=40)
+        page.wait_for_timeout(500)
+
+        clicked = False
+        for candidate in [
+            page.locator("#ctl00_DefaultContent_CharityNameSearch1_SearchNameButton").first,
+            page.get_by_role("button", name=re.compile(r"^Search$", re.I)),
+            page.locator('input[type="submit"][value="Search"]').first,
+        ]:
+            try:
+                candidate.click(timeout=5000)
+                clicked = True
+                break
+            except Exception:
+                continue
+        if not clicked:
+            result.error = "Could not click the Oklahoma Search button."
+            return result
+
+        module.safe_wait_for_network_idle(page, timeout=20000)
+        page.wait_for_timeout(2500)
+
+        text = module.body_text(page)
+        if re.search(r"no records found|no matching|no result", text, re.I):
+            result.status = module.STATUS_NOT_FOUND
+            result.raw_status_text = "No results found"
+            result.success = True
+            result.source_note = "Oklahoma search returned no matching entity result."
+            return result
+
+        selected = ok_choose_safe_result_row(page, org, module)
+        if selected is None:
+            result.status = module.STATUS_NOT_FOUND
+            result.raw_status_text = "No safely matching filing number link"
+            result.success = True
+            result.source_note = "Oklahoma results did not contain a safe matching organization row."
+            return result
+
+        _, selected_filing_link, matched_name, filing_number = selected
+        selected_filing_link.click(timeout=5000)
+        module.safe_wait_for_network_idle(page, timeout=20000)
+        page.wait_for_timeout(2500)
+
+        detail_text = module.body_text(page, timeout=15000)
+        status_text = module.extract_labeled_value_from_text(detail_text, ["Status"])
+        if not status_text:
+            result.status = module.STATUS_UNKNOWN
+            result.raw_status_text = "Status not found on detail page"
+            result.success = True
+            result.source_note = "Oklahoma detail page was reached, but entity status was not found."
+            return result
+
+        history_match = re.search(
+            r"FILING HISTORY\s*:?\s*Document Number\s+Filing Type\s+Filing Date\s+Page Count\s+([0-9A-Za-z].*?)(?:Visit Ok\.gov|Accessibility|Disclaimer|$)",
+            detail_text,
+            re.I | re.S,
+        )
+        latest_filing = ""
+        if history_match:
+            lines = [re.sub(r"\s+", " ", line).strip() for line in history_match.group(1).splitlines() if line.strip()]
+            if lines:
+                latest_filing = lines[-1]
+        if not latest_filing:
+            rows = page.locator("tr")
+            row_count = min(rows.count(), 200)
+            filing_rows: list[str] = []
+            for index in range(row_count):
+                try:
+                    row_text = re.sub(r"\s+", " ", rows.nth(index).inner_text(timeout=1000)).strip()
+                except Exception:
+                    continue
+                if re.match(r"^\d+\s+", row_text):
+                    filing_rows.append(row_text)
+            if filing_rows:
+                latest_filing = filing_rows[-1]
+
+        result.matched_registry_name = matched_name
+        result.matched_registry_identifier = filing_number
+        if not latest_filing:
+            result.status = status_text
+            result.raw_status_text = status_text
+            result.success = True
+            result.source_note = (
+                "Oklahoma detail page status was found, but filing history could not be parsed. "
+                "The accepted row safely matched the requested organization."
+            )
+            return result
+
+        latest_filing_date = module.parse_ok_filing_date(latest_filing)
+        if latest_filing_date:
+            assumed_due_date = date(latest_filing_date.year + 1, 11, 15)
+            result.status = module.classify_due_date(assumed_due_date)
+            result.source_note = (
+                "Oklahoma annual registration is tied to the Form 990 filing deadline; "
+                "the checker uses the most recent filing-history date and the next annual extension deadline "
+                f"({assumed_due_date.isoformat()}) to classify status. "
+                "The accepted row safely matched the requested organization."
+            )
+        else:
+            result.status = status_text
+            result.source_note = (
+                "Oklahoma detail page status was found, but the latest filing date could not be parsed for classification. "
+                "The accepted row safely matched the requested organization."
+            )
+        result.raw_status_text = latest_filing
+        result.success = True
+        return result
+    except Exception as exc:
+        result.error = f"OK error: {exc}"
+        return result
 
 
 def search_bundled_name_state(page, org, state: str):
