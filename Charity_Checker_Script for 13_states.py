@@ -38,7 +38,8 @@ STATUS_DELINQUENT = "Delinquent/Non-compliant"
 STATUS_UNKNOWN = "Unknown"
 
 AK_SEARCH_URL = "https://online-registrations-law.alaska.gov/TLP/WebDoc/?link=PubQry"
-AK_YEARS_TO_TRY = list(range(date.today().year, date.today().year - 8, -1))
+AK_YEARS_TO_TRY_COUNT = max(2, min(int(os.environ.get("CE_AK_YEARS_TO_TRY_COUNT", "6")), 8))
+AK_YEARS_TO_TRY = list(range(date.today().year, date.today().year - AK_YEARS_TO_TRY_COUNT, -1))
 FAST_WAIT_MAX_MS = max(750, min(int(os.environ.get("CE_FAST_WAIT_MAX_MS", "1500")), 2000))
 FULL_PAGE_ARTIFACTS = os.environ.get("CE_FULL_PAGE_ARTIFACTS", "0").strip().lower() in {"1", "true", "yes"}
 ARTIFACT_SCREENSHOT_TIMEOUT_MS = max(1000, int(os.environ.get("CE_ARTIFACT_SCREENSHOT_TIMEOUT_MS", "10000")))

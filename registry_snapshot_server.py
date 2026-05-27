@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.26.17-staging"
+APP_VERSION = "2026.05.26.18-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -141,6 +141,7 @@ ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get
 ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS = min(max(1, int(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS", "2"))), 4)
 ME_CONFIRM_NOT_REGISTERED = os.environ.get("CE_ME_CONFIRM_NOT_REGISTERED", "1").strip().lower() in {"1", "true", "yes"}
 MI_ENABLE_NAME_FALLBACK = os.environ.get("CE_MI_ENABLE_NAME_FALLBACK", "1").strip().lower() in {"1", "true", "yes"}
+MI_CONFIRM_NO_RESULTS_FRAME = os.environ.get("CE_MI_CONFIRM_NO_RESULTS_FRAME", "0").strip().lower() in {"1", "true", "yes"}
 ENABLE_CROSS_STATE_NAME_RETRY = os.environ.get("CE_ENABLE_CROSS_STATE_NAME_RETRY", "0").strip().lower() in {"1", "true", "yes"}
 CONFIRM_FRAGILE_BATCH_RESULTS = os.environ.get("CE_CONFIRM_FRAGILE_BATCH_RESULTS", "1").strip().lower() in {"1", "true", "yes"}
 BATCH_CONFIRMATION_WORKERS = min(max(1, int(os.environ.get("CE_BATCH_CONFIRMATION_WORKERS", "3"))), 12)
@@ -8255,6 +8256,8 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     if public_status(fallback_result) != "Not Registered":
                         result = fallback_result
                 if (
+                    MI_CONFIRM_NO_RESULTS_FRAME
+                    and
                     confirm_single_no_match
                     and public_status(result) in {"Not Registered", "Site Not Reachable"}
                     and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0
