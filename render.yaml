@@ -66,6 +66,12 @@ services:
         value: "1"
       - key: CE_SINGLE_STATE_SEMANTIC_RETRY_STATES
         value: "AR,CT,MI,OK,VA"
+      - key: CE_SINGLE_STATE_MAX_CONCURRENT
+        value: "20"
+      - key: CE_SINGLE_STATE_QUEUE_TIMEOUT_SECONDS
+        value: "60"
+      - key: CE_SINGLE_STATE_RETRY_AFTER_SECONDS
+        value: "8"
       - key: CE_FL_LOOKUP_MAX_SECONDS
         value: "45"
       - key: CE_SC_NAME_VARIANT_MAX_SECONDS
