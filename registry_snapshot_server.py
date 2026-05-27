@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.26.22-staging"
+APP_VERSION = "2026.05.26.23-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -1482,6 +1482,61 @@ def organization_name_for_ein(ein: str) -> str:
             if re.sub(r"\D", "", row[4]) == target:
                 return (row[6] or "").strip().strip('"')
     return ""
+
+
+def or_snapshot_row_for_ein(ein: str) -> list[str] | None:
+    target = re.sub(r"\D", "", ein or "")
+    if len(target) != 9 or not CHARITY_OR_PATH.exists():
+        return None
+    with CHARITY_OR_PATH.open("r", encoding="utf-8", errors="ignore", newline="") as f:
+        reader = csv.reader(f, delimiter="\t")
+        for row in reader:
+            if len(row) >= 16 and re.sub(r"\D", "", row[4]) == target:
+                return row
+    return None
+
+
+def or_next_due_from_period_end(period_end: date | None) -> date | None:
+    if not period_end:
+        return None
+    next_period_end = add_months_preserving_end_of_month(period_end, 12)
+    return fifteenth_day_after_fiscal_year_end(next_period_end, 5)
+
+
+def or_snapshot_result_for_ein(org):
+    row = or_snapshot_row_for_ein(org.ein)
+    if not row:
+        return None
+    registry_name = (row[6] or "").strip().strip('"')
+    period_start = parse_ce_date(row[14]) if len(row) > 14 else None
+    period_end = parse_ce_date(row[15]) if len(row) > 15 else None
+    next_due = or_next_due_from_period_end(period_end)
+    status = status_from_calendar_date(next_due) if next_due else "Current"
+    result = checker.StateResult(
+        org.organization_name,
+        org.ein,
+        "OR",
+        status,
+        "https://justice.oregon.gov/charities",
+    )
+    raw_parts = ["Status: Registered"]
+    if period_end:
+        raw_parts.append(f"Latest Report Year: {period_end.year}")
+        raw_parts.append(f"Fiscal Year End: {format_date(period_end)}")
+    if period_start:
+        raw_parts.append(f"Fiscal Year Start: {format_date(period_start)}")
+    if next_due:
+        raw_parts.append(f"Next Due: {format_date(next_due)}")
+    result.raw_status_text = " | ".join(raw_parts)
+    result.source_note = (
+        "Oregon weekly downloadable charity database matched the requested EIN exactly; "
+        "CharityClarity used that EIN match as the primary lookup before any name search."
+    )
+    result.matched_registry_name = registry_name
+    result.matched_registry_identifier = format_ein(org.ein)
+    result.success = True
+    result.error = ""
+    return result
 
 
 def public_profile_for_ein(ein: str) -> dict:
@@ -8359,6 +8414,18 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
         finally:
             BROWSER_LOOKUP_SEMAPHORE.release()
         return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
+
+    if state == "OR":
+        lookup_started = time.perf_counter()
+        result = or_snapshot_result_for_ein(org)
+        if result:
+            body = " ".join(part for part in [
+                result.raw_status_text or "",
+                result.source_note or "",
+                result.matched_registry_name or "",
+                result.matched_registry_identifier or "",
+            ]).strip()
+            return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
 
     result = None
     BROWSER_LOOKUP_SEMAPHORE.acquire()
