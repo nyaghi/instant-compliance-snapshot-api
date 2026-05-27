@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.26.10-staging"
+APP_VERSION = "2026.05.26.11-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -103,6 +103,19 @@ ALLOW_PARALLEL_BROWSER_LOOKUPS = os.environ.get("CE_ALLOW_PARALLEL_BROWSER_LOOKU
 MAX_BROWSER_LOOKUPS = max(1, int(os.environ.get("CE_MAX_BROWSER_LOOKUPS", "4")))
 MAX_PARALLEL_LOOKUPS = min(REQUESTED_PARALLEL_LOOKUPS, MAX_BROWSER_LOOKUPS) if ALLOW_PARALLEL_BROWSER_LOOKUPS else 1
 BROWSER_LOOKUP_SEMAPHORE = threading.BoundedSemaphore(MAX_BROWSER_LOOKUPS)
+SINGLE_STATE_MAX_CONCURRENT = min(
+    max(1, int(os.environ.get("CE_SINGLE_STATE_MAX_CONCURRENT", str(MAX_BROWSER_LOOKUPS)))),
+    20,
+)
+SINGLE_STATE_QUEUE_TIMEOUT_SECONDS = min(
+    max(1.0, float(os.environ.get("CE_SINGLE_STATE_QUEUE_TIMEOUT_SECONDS", "30"))),
+    120.0,
+)
+SINGLE_STATE_RETRY_AFTER_SECONDS = min(
+    max(1, int(os.environ.get("CE_SINGLE_STATE_RETRY_AFTER_SECONDS", "8"))),
+    60,
+)
+SINGLE_STATE_REQUEST_SEMAPHORE = threading.BoundedSemaphore(SINGLE_STATE_MAX_CONCURRENT)
 BLOCK_HEAVY_BROWSER_RESOURCES = os.environ.get("CE_BLOCK_HEAVY_BROWSER_RESOURCES", "1").strip().lower() not in {"0", "false", "no"}
 EAGER_EVIDENCE_PDF = os.environ.get("CE_EAGER_EVIDENCE_PDF", "0").strip().lower() in {"1", "true", "yes"}
 CAPTURE_EVIDENCE_SCREENSHOTS = os.environ.get("CE_CAPTURE_EVIDENCE_SCREENSHOTS", "0").strip().lower() in {"1", "true", "yes"}
@@ -8839,7 +8852,7 @@ def payload_missing_required_organization_name(payload: dict) -> bool:
 
 
 class RegistrySnapshotHandler(BaseHTTPRequestHandler):
-    def _send_json(self, status_code: int, payload: dict) -> None:
+    def _send_json(self, status_code: int, payload: dict, extra_headers: dict[str, str] | None = None) -> None:
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status_code)
         self.send_header("Content-Type", "application/json")
@@ -8847,6 +8860,8 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        for name, value in (extra_headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -9062,16 +9077,38 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
                 self._send_json(429, {"error": "A complimentary snapshot was already requested from this browser."})
                 return
 
-            append_submission_log(email, organizations, states, audit_context)
-            results = run_state_lookups_parallel(organizations, states)
-            append_lead_log(email, results, audit_context)
-            if is_batch:
-                if not privileged and should_record_domain_check(results):
-                    record_domain_check(domain, limit_ein)
-                    record_device_check(device_id, limit_ein)
-                self._send_json(200, {"results": results, "checked_at_epoch": int(time.time())})
-            else:
-                self._send_json(200, results[0])
+            single_state_admitted = False
+            is_single_state_request = len(organizations) == 1 and len(states) == 1
+            if is_single_state_request:
+                single_state_admitted = SINGLE_STATE_REQUEST_SEMAPHORE.acquire(
+                    timeout=SINGLE_STATE_QUEUE_TIMEOUT_SECONDS
+                )
+                if not single_state_admitted:
+                    self._send_json(
+                        429,
+                        {
+                            "error": "Single-state lookup capacity is busy. Retry this state shortly.",
+                            "retry_after_seconds": SINGLE_STATE_RETRY_AFTER_SECONDS,
+                            "app_version": APP_VERSION,
+                        },
+                        {"Retry-After": str(SINGLE_STATE_RETRY_AFTER_SECONDS)},
+                    )
+                    return
+
+            try:
+                append_submission_log(email, organizations, states, audit_context)
+                results = run_state_lookups_parallel(organizations, states)
+                append_lead_log(email, results, audit_context)
+                if is_batch:
+                    if not privileged and should_record_domain_check(results):
+                        record_domain_check(domain, limit_ein)
+                        record_device_check(device_id, limit_ein)
+                    self._send_json(200, {"results": results, "checked_at_epoch": int(time.time())})
+                else:
+                    self._send_json(200, results[0])
+            finally:
+                if single_state_admitted:
+                    SINGLE_STATE_REQUEST_SEMAPHORE.release()
         except BaseException as exc:
             log_error(f"POST /api/check failed: {exc}")
             self._send_json(500, {"error": str(exc)})
