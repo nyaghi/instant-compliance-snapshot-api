@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.26.20-staging"
+APP_VERSION = "2026.05.26.21-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -298,6 +298,116 @@ CONFIRMED_FEEDBACK_CORRECTIONS = {
         "status": "Revoked",
         "matched_name": "Give2Asia",
         "raw": "Wisconsin registry review confirmed revoked status.",
+    },
+    ("AR", "770646756"): {
+        "status": "Current",
+        "matched_name": "Cair-Foundation, Inc.",
+        "raw": "Arkansas registry review confirmed current registration status.",
+    },
+    ("AR", "231727133"): {
+        "status": "Current",
+        "matched_name": "Resources For Human Development, Inc.",
+        "raw": "Arkansas registry review confirmed current registration status.",
+    },
+    ("MS", "770646756"): {
+        "status": "Upcoming Filing",
+        "matched_name": "Cair-Foundation, Inc.",
+        "raw": "Mississippi registry review confirmed upcoming filing status.",
+    },
+    ("NM", "131623892"): {
+        "status": "Current",
+        "matched_name": "American Institute Of Chemical Engineers",
+        "raw": "New Mexico registry review confirmed current registration status.",
+    },
+    ("NM", "363203648"): {
+        "status": "Delinquent",
+        "matched_name": "Northern Illinois Food Bank",
+        "raw": "New Mexico registry review confirmed delinquent status.",
+    },
+    ("NM", "770646756"): {
+        "status": "Current",
+        "matched_name": "Cair-Foundation, Inc.",
+        "raw": "New Mexico registry review confirmed current registration status.",
+    },
+    ("NM", "231727133"): {
+        "status": "Delinquent",
+        "matched_name": "Resources For Human Development, Inc.",
+        "raw": "New Mexico registry review confirmed delinquent status.",
+    },
+    ("NM", "135564934"): {
+        "status": "Upcoming Filing",
+        "matched_name": "Beth Israel Medical Center",
+        "raw": "New Mexico registry review confirmed upcoming filing status.",
+    },
+    ("NM", "110303001"): {
+        "status": "Delinquent",
+        "matched_name": "Fidelity Investments Charitable Gift Fund",
+        "raw": "New Mexico registry review confirmed delinquent status.",
+    },
+    ("NM", "845024713"): {
+        "status": "Upcoming Filing",
+        "matched_name": "Climate Imperative Foundation",
+        "raw": "New Mexico registry review confirmed upcoming filing status.",
+    },
+    ("OK", "823015119"): {
+        "status": "Delinquent",
+        "matched_name": "Trucking Cares Foundation",
+        "raw": "Oklahoma registry review confirmed delinquent status.",
+    },
+    ("OK", "131623892"): {
+        "status": "Current",
+        "matched_name": "American Institute Of Chemical Engineers",
+        "raw": "Oklahoma registry review confirmed current registration status.",
+    },
+    ("OK", "363203648"): {
+        "status": "Delinquent",
+        "matched_name": "Northern Illinois Food Bank",
+        "raw": "Oklahoma registry review confirmed delinquent status.",
+    },
+    ("OK", "770646756"): {
+        "status": "Current",
+        "matched_name": "Cair-Foundation, Inc.",
+        "raw": "Oklahoma registry review confirmed current registration status.",
+    },
+    ("OK", "231727133"): {
+        "status": "Upcoming Filing",
+        "matched_name": "Resources For Human Development, Inc.",
+        "raw": "Oklahoma registry review confirmed upcoming filing status.",
+    },
+    ("OK", "135564934"): {
+        "status": "Current",
+        "matched_name": "Beth Israel Medical Center",
+        "raw": "Oklahoma registry review confirmed current registration status.",
+    },
+    ("OK", "110303001"): {
+        "status": "Upcoming Filing",
+        "matched_name": "Fidelity Investments Charitable Gift Fund",
+        "raw": "Oklahoma registry review confirmed upcoming filing status.",
+    },
+    ("WA", "823015119"): {
+        "status": "Closed / Withdrawn / Canceled",
+        "matched_name": "Trucking Cares Foundation",
+        "raw": "Washington registry review confirmed closed/withdrawn/canceled status.",
+    },
+    ("WA", "845024713"): {
+        "status": "Closed / Withdrawn / Canceled",
+        "matched_name": "Climate Imperative Foundation",
+        "raw": "Washington registry review confirmed closed/withdrawn/canceled status.",
+    },
+    ("WI", "131623892"): {
+        "status": "Upcoming Filing",
+        "matched_name": "American Institute Of Chemical Engineers",
+        "raw": "Wisconsin registry review confirmed upcoming filing status.",
+    },
+    ("WI", "231727133"): {
+        "status": "Revoked",
+        "matched_name": "Resources For Human Development, Inc.",
+        "raw": "Wisconsin registry review confirmed revoked status.",
+    },
+    ("WI", "110303001"): {
+        "status": "Delinquent",
+        "matched_name": "Fidelity Investments Charitable Gift Fund",
+        "raw": "Wisconsin registry review confirmed delinquent status.",
     },
 }
 ME_LOOKUP_LOCK = threading.Lock()
