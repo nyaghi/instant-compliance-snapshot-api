@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.26.21-staging"
+APP_VERSION = "2026.05.26.22-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -200,6 +200,10 @@ NAME_SEARCH_PREFLIGHT_URLS = {
 }
 AR_SEARCH_URL = "https://sos-corp-search.ark.org/index.php/charity"
 WV_SEARCH_URL = "https://erls.wvsos.gov/OnlineCharitiesSearch/Search"
+WV_GOTO_TIMEOUT_MS = min(max(8000, int(os.environ.get("CE_WV_GOTO_TIMEOUT_MS", "20000"))), 45000)
+WV_NETWORK_IDLE_TIMEOUT_MS = min(max(3000, int(os.environ.get("CE_WV_NETWORK_IDLE_TIMEOUT_MS", "7000"))), 15000)
+WV_SEARCH_IDLE_TIMEOUT_MS = min(max(5000, int(os.environ.get("CE_WV_SEARCH_IDLE_TIMEOUT_MS", "12000"))), 20000)
+WV_RESULTS_SETTLE_MS = min(max(500, int(os.environ.get("CE_WV_RESULTS_SETTLE_MS", "1000"))), 2500)
 DOWNLOADABLE_DATA_COMMENT_FOOTERS = {
     "KS": (
         "Data freshness note: Kansas is checked from a weekly refreshed downloadable Kansas AG registration list. "
@@ -8177,21 +8181,21 @@ def search_wv_precise(page, org):
         "CharityClarity uses bounded organization-name/DBA variants and requires a safe registry-name match before using a result row."
     )
     try:
-        page.goto(WV_SEARCH_URL, wait_until="domcontentloaded", timeout=45000)
-        safe_wait_for_network_idle(page, timeout=15000)
+        page.goto(WV_SEARCH_URL, wait_until="domcontentloaded", timeout=WV_GOTO_TIMEOUT_MS)
+        safe_wait_for_network_idle(page, timeout=WV_NETWORK_IDLE_TIMEOUT_MS)
         try:
             page.locator("#ddlType").select_option(label="CHARITABLE ORGANIZATIONS", timeout=5000)
         except Exception:
             pass
 
         name_input = page.locator("#CharitiesSearch-CharitiesSearch_txtName").first
-        name_input.wait_for(state="visible", timeout=10000)
+        name_input.wait_for(state="visible", timeout=5000)
         name_input.fill("")
         name_input.type(org.organization_name, delay=40)
 
-        page.locator("#CharitiesSearch-CharitiesSearch_btnSearch").click(timeout=10000)
-        safe_wait_for_network_idle(page, timeout=20000)
-        page.wait_for_timeout(2500)
+        page.locator("#CharitiesSearch-CharitiesSearch_btnSearch").click(timeout=7000)
+        safe_wait_for_network_idle(page, timeout=WV_SEARCH_IDLE_TIMEOUT_MS)
+        page.wait_for_timeout(WV_RESULTS_SETTLE_MS)
 
         body = registry_page_body(page)
         if re.search(r"\bNo\s+(?:matching\s+)?(?:records?|results?)\b|records\s+0\s+to\s+0\s+of\s+0", body, re.I):
@@ -8237,8 +8241,8 @@ def search_wv_precise(page, org):
         row, registry_id, registry_name, row_status = best
         link = row.locator("a").first
         link.click(timeout=5000)
-        safe_wait_for_network_idle(page, timeout=20000)
-        page.wait_for_timeout(2500)
+        safe_wait_for_network_idle(page, timeout=WV_SEARCH_IDLE_TIMEOUT_MS)
+        page.wait_for_timeout(WV_RESULTS_SETTLE_MS)
 
         detail_text = registry_page_body(page)
         detail_name = useful_registry_name(text_between_labels(detail_text, "Organization Name", ["Expiration Date", "Contact Name", "Status", "Street Address"]))
