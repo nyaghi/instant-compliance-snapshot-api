@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.26.8-staging"
+APP_VERSION = "2026.05.26.9-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -115,6 +115,11 @@ FL_LOOKUP_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_FL_LOOKUP_MAX_SEC
 SC_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_SC_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
 NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
 ME_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_LOOKUP_MIN_INTERVAL_SECONDS", "1.0"))), 20.0)
+AR_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_AR_LOOKUP_MIN_INTERVAL_SECONDS", "1.5"))), 20.0)
+AR_TRANSIENT_RETRY_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_AR_TRANSIENT_RETRY_DELAY_SECONDS", "4.0"))), 20.0)
+AR_TRANSIENT_RETRY_ATTEMPTS = min(max(1, int(os.environ.get("CE_AR_TRANSIENT_RETRY_ATTEMPTS", "2"))), 3)
+AR_NAME_SEARCH_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_AR_NAME_SEARCH_MAX_VARIANTS", "1"))), 5)
+AR_NAME_SEARCH_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_AR_NAME_SEARCH_MAX_SECONDS", "14"))), 30.0)
 ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "1.0"))), 30.0)
 ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS = min(max(1, int(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS", "2"))), 4)
 ME_CONFIRM_NOT_REGISTERED = os.environ.get("CE_ME_CONFIRM_NOT_REGISTERED", "1").strip().lower() in {"1", "true", "yes"}
@@ -126,7 +131,7 @@ BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("C
 BATCH_TRUST_SLOW_NO_MATCH_SECONDS = min(max(15.0, float(os.environ.get("CE_BATCH_TRUST_SLOW_NO_MATCH_SECONDS", "35"))), 90.0)
 BATCH_ISOLATED_STATE_ORDER = [
     state.strip().upper()
-    for state in os.environ.get("CE_BATCH_ISOLATED_STATES", "ME,OR,FL,WI,VA,SC,ND,WA,NM,MS,OK,WV").split(",")
+    for state in os.environ.get("CE_BATCH_ISOLATED_STATES", "ME,OR,FL,WI,VA,SC,ND,WA,NM,MS,OK,WV,AR").split(",")
     if state.strip()
 ]
 BATCH_ISOLATED_STATES = set(BATCH_ISOLATED_STATE_ORDER)
@@ -149,7 +154,7 @@ SINGLE_TRUST_SLOW_CLEAN_NO_MATCH_SECONDS = min(
 PUBLIC_SINGLE_STATE_ONLY = os.environ.get("CE_PUBLIC_SINGLE_STATE_ONLY", "0").strip().lower() in {"1", "true", "yes"}
 FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "8"))), 20.0)
 NAME_SEARCH_PREFLIGHT_URLS = {
-    "AR": "https://sos-corp-search.ark.org/charity",
+    "AR": "https://sos-corp-search.ark.org/index.php/charity",
     "CT": "https://www.elicense.ct.gov/lookup/licenselookup.aspx",
     "FL": "https://csapp.fdacs.gov/CSPublicApp/CheckACharity/CheckACharity.aspx",
     "ME": "https://www.pfr.maine.gov/almsonline/almsquery/SearchCompany.aspx",
@@ -159,7 +164,7 @@ NAME_SEARCH_PREFLIGHT_URLS = {
     "VA": "https://cos.vdacs.virginia.gov/cgi-bin/char_search.cgi",
     "WV": "https://erls.wvsos.gov/OnlineCharitiesSearch/Search",
 }
-AR_SEARCH_URL = "https://sos-corp-search.ark.org/charity"
+AR_SEARCH_URL = "https://sos-corp-search.ark.org/index.php/charity"
 WV_SEARCH_URL = "https://erls.wvsos.gov/OnlineCharitiesSearch/Search"
 DOWNLOADABLE_DATA_COMMENT_FOOTERS = {
     "KS": (
@@ -263,11 +268,13 @@ CONFIRMED_FEEDBACK_CORRECTIONS = {
 }
 ME_LOOKUP_LOCK = threading.Lock()
 ME_LAST_LOOKUP_FINISHED = 0.0
+AR_LOOKUP_LOCK = threading.Lock()
+AR_LAST_LOOKUP_FINISHED = 0.0
 VA_SEARCH_VARIANT_LOCK = threading.Lock()
 BROWSER_USER_AGENT = os.environ.get(
     "CE_BROWSER_USER_AGENT",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
 )
 WI_SEARCH_URL = "https://apps.dfi.wi.gov/ice/berg/Registration/OrganizationCredentialSearch.aspx"
 WI_RESULTS_URL = "https://apps.dfi.wi.gov/ice/berg/Registration/OrgCredentialSearchResults.aspx"
@@ -2867,6 +2874,8 @@ def external_status_to_checker_status(status: str) -> str:
         return checker.STATUS_CURRENT
     if normalized == "pending":
         return "Pending"
+    if normalized in {"close", "closed", "withdrawn", "terminated", "inactive", "canceled", "cancelled"}:
+        return "Closed / Withdrawn / Canceled"
     if normalized in {"revoked", "suspended", "exempt", "closed / withdrawn / canceled", "failed to renew"}:
         return raw
     return raw or checker.STATUS_UNKNOWN
@@ -2932,6 +2941,8 @@ def copy_external_result(org, state: str, external_result):
     state_upper = state.upper()
     if state_upper == "KS" and re.search(r"\b(withdrawn|terminated|closed|cancel(?:ed|led)|inactive|retired)\b", raw_status, re.I):
         status = "Closed / Withdrawn / Canceled"
+    if state_upper == "AR" and re.search(r"\bStatus\s*:\s*(?:Close|Closed)\b|\b(?:Close|Closed|Withdrawn|Terminated|Cancel(?:ed|led)|Inactive)\b", raw_status, re.I):
+        status = "Closed / Withdrawn / Canceled"
     if state_upper == "NM":
         nm_status = classify_nm_status_history(raw_status)
         if nm_status:
@@ -2984,6 +2995,8 @@ def copy_external_result(org, state: str, external_result):
         or getattr(external_result, "page_number", "")
         or ""
     )
+    if state_upper in {"AR", "KS", "KY", "MS", "NH", "OK"} and public_status(result) not in {"Not Registered", "Site Not Reachable"} and not result.matched_registry_name:
+        result.matched_registry_name = useful_registry_name(external_organization_name or org.organization_name)
     if state_upper == "NM" and public_status(result) not in {"Not Registered", "Site Not Reachable"} and not result.matched_registry_name:
         result.matched_registry_name = useful_registry_name(external_organization_name or org.organization_name)
     result.success = bool(getattr(external_result, "success", False) or public_status(result) != "Site Not Reachable")
@@ -3185,6 +3198,8 @@ def search_bundled_extension_state(page, org, state: str):
     elif state == "LA":
         external_result = module.search_la(page, bundle_org)
     elif state == "AR":
+        if hasattr(module, "AR_SEARCH_URL"):
+            module.AR_SEARCH_URL = AR_SEARCH_URL
         external_result = module.search_ar(page, bundle_org)
     elif state == "OR":
         def or_detail_ein_mismatches(registry_name: str = "") -> bool:
@@ -7711,6 +7726,84 @@ def search_bundled_name_state(page, org, state: str):
     return search_bundled_extension_state(page, org, state)
 
 
+def ar_transient_unreachable_result(result) -> bool:
+    if public_status(result) != "Site Not Reachable":
+        return False
+    text = " ".join([
+        getattr(result, "raw_status_text", "") or "",
+        getattr(result, "source_note", "") or "",
+        getattr(result, "error", "") or "",
+    ])
+    return bool(re.search(r"bot-verification|human verification|captcha|cloudfront|waf|challenge|block page|preflight", text, re.I))
+
+
+def ar_preferred_name_variants(org) -> list[str]:
+    original = re.sub(r"\s+", " ", (getattr(org, "organization_name", "") or "").strip())
+    variants = []
+
+    def add(value: str) -> None:
+        cleaned = re.sub(r"\s+", " ", (value or "").strip())
+        if cleaned and cleaned.lower() not in {existing.lower() for existing in variants}:
+            variants.append(cleaned)
+
+    compact = re.sub(r",\s*(incorporated|inc\.?|corporation|corp\.?|llc|ltd\.?)", r" \1", original, flags=re.I)
+    add(re.sub(r"\b(inc|corp|ltd)\.", r"\1", compact, flags=re.I))
+    add(compact)
+    for alias in known_names_for_ein(getattr(org, "ein", "")):
+        if normalized_match_name(alias) != normalized_match_name(original) and compatible_ein_alias_for_name(original, alias):
+            add(alias)
+    add(original)
+    return variants
+
+
+def search_ar_name_variants_once(page, org):
+    return search_with_name_variants(
+        page,
+        org,
+        lambda lookup_page, lookup_org: search_bundled_name_state(lookup_page, lookup_org, "AR"),
+        max_variants=AR_NAME_SEARCH_MAX_VARIANTS,
+        max_elapsed_seconds=AR_NAME_SEARCH_MAX_SECONDS,
+        include_ein_aliases=True,
+        include_name_segments=False,
+        include_compact_legal_suffixes=True,
+        include_leading_article_variants=True,
+        prioritize_institution_reductions=True,
+        require_safe_registry_name=True,
+        preferred_variants=ar_preferred_name_variants(org),
+    )
+
+
+def search_ar_serialized(page, org):
+    global AR_LAST_LOOKUP_FINISHED
+    with AR_LOOKUP_LOCK:
+        elapsed = time.perf_counter() - AR_LAST_LOOKUP_FINISHED
+        if elapsed < AR_LOOKUP_MIN_INTERVAL_SECONDS:
+            time.sleep(AR_LOOKUP_MIN_INTERVAL_SECONDS - elapsed)
+
+        last_result = None
+        for attempt in range(AR_TRANSIENT_RETRY_ATTEMPTS):
+            if attempt:
+                try:
+                    page.context.clear_cookies()
+                except Exception:
+                    pass
+                if AR_TRANSIENT_RETRY_DELAY_SECONDS > 0:
+                    time.sleep(AR_TRANSIENT_RETRY_DELAY_SECONDS)
+            result = search_ar_name_variants_once(page, org)
+            last_result = result
+            if not ar_transient_unreachable_result(result):
+                AR_LAST_LOOKUP_FINISHED = time.perf_counter()
+                return result
+
+        AR_LAST_LOOKUP_FINISHED = time.perf_counter()
+        if last_result is not None:
+            last_result.source_note = (
+                (last_result.source_note or "Arkansas public charity search was not usable from this runtime.")
+                + f" CharityClarity retried Arkansas {AR_TRANSIENT_RETRY_ATTEMPTS} time(s) with a serialized browser session before returning this result."
+            )
+        return last_result
+
+
 def wv_status_from_fields(status_text: str, expiration_text: str) -> str:
     status = re.sub(r"\s+", " ", status_text or "").strip()
     expiration = re.sub(r"\s+", " ", expiration_text or "").strip()
@@ -7928,12 +8021,34 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
         context = None
         page = None
         try:
-            browser = p.chromium.launch(headless=True)
+            launch_kwargs = {}
+            if state == "AR":
+                launch_kwargs["args"] = [
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                ]
+            browser = p.chromium.launch(headless=True, **launch_kwargs)
             if state == "AK":
                 result, body = search_ak_with_registration_evidence(browser, org, artifact_name)
             else:
-                context = browser.new_context(user_agent=BROWSER_USER_AGENT, locale="en-US")
-                if state != "MA":
+                context_kwargs = {"user_agent": BROWSER_USER_AGENT, "locale": "en-US"}
+                if state == "AR":
+                    context_kwargs.update({
+                        "viewport": {"width": 1366, "height": 768},
+                        "timezone_id": "America/New_York",
+                    })
+                context = browser.new_context(**context_kwargs)
+                if state == "AR":
+                    context.add_init_script(
+                        """
+Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+window.chrome = window.chrome || { runtime: {} };
+Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+"""
+                    )
+                if state not in {"MA", "AR"}:
                     configure_browser_context(context)
                 page = context.new_page()
             if state == "AK":
@@ -8088,27 +8203,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 body = registry_page_body(page)
             elif state in {"LA", "AR"}:
                 if state == "AR":
-                    reachable, note = quick_registry_preflight(AR_SEARCH_URL, NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS)
-                    if not reachable or re.search(r"\bHTTP\s+403\b", note or "", re.I):
-                        result = checker.StateResult(org.organization_name, org.ein, "AR", "Site Not Reachable", AR_SEARCH_URL)
-                        result.raw_status_text = "Arkansas registry preflight failed"
-                        result.source_note = f"Arkansas public charity search could not be reached before browser lookup: {note}."
-                        result.error = f"AR preflight failed: {note}"
-                        result.success = False
-                    else:
-                        result = search_with_name_variants(
-                            page,
-                            org,
-                            lambda lookup_page, lookup_org, lookup_state=state: search_bundled_name_state(lookup_page, lookup_org, lookup_state),
-                            max_variants=10,
-                            max_elapsed_seconds=NAME_SEARCH_VARIANT_MAX_SECONDS,
-                            include_ein_aliases=True,
-                            include_name_segments=True,
-                            include_compact_legal_suffixes=True,
-                            include_leading_article_variants=True,
-                            prioritize_institution_reductions=True,
-                            require_safe_registry_name=True,
-                        )
+                    result = search_ar_serialized(page, org)
                 else:
                     result = search_with_name_variants(
                         page,
@@ -8273,7 +8368,7 @@ def fragile_batch_result_needs_confirmation(result: dict) -> bool:
         "ND", "NH", "NM", "NY", "OK", "OR", "SC", "VA", "WA", "WI", "WV",
     }
     if state in BATCH_ISOLATED_STATES and status in {"not registered", "site not reachable", "error", ""}:
-        return state in {"MS", "ND", "NM", "OK", "SC", "VA", "WA", "WV"}
+        return state in {"AR", "MS", "ND", "NM", "OK", "SC", "VA", "WA", "WV"}
     if weak_terminal_name_match_result(result):
         return True
     if state in BATCH_ISOLATED_STATES and status in {"not registered", "site not reachable", "error", ""}:
@@ -8489,11 +8584,11 @@ def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
             original_status_lower = (original.get("status") or "").strip().lower()
             original_is_no_match = original_status_lower == "not registered"
             original_is_unreachable = original_status_lower == "site not reachable"
-            if state in {"CO", "FL", "ME", "MI", "MS", "ND", "NM", "OK", "SC", "VA", "WA", "WI", "WV"} and (original_is_no_match or original_is_unreachable) and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0:
+            if state in {"AR", "CO", "FL", "ME", "MI", "MS", "ND", "NM", "OK", "SC", "VA", "WA", "WI", "WV"} and (original_is_no_match or original_is_unreachable) and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0:
                 time.sleep(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS)
             confirmed = run_state_lookup_for_batch(name, ein, state, confirm_single_no_match=(state == "ME"))
             if (
-                state in {"CO", "FL", "ME", "MI", "MS", "NM", "OK", "WA", "WI", "WV"}
+                state in {"AR", "CO", "FL", "ME", "MI", "MS", "NM", "OK", "WA", "WI", "WV"}
                 and (original_is_no_match or original_is_unreachable)
                 and (confirmed.get("status") or "").strip().lower() in {"not registered", "site not reachable"}
                 and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0
