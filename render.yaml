@@ -56,6 +56,16 @@ services:
         value: "59"
       - key: CE_NAME_SEARCH_VARIANT_MAX_SECONDS
         value: "35"
+      - key: CE_CT_NAME_VARIANT_MAX_SECONDS
+        value: "28"
+      - key: CE_CT_NAME_VARIANT_LIMIT
+        value: "8"
+      - key: CE_SINGLE_STATE_SEMANTIC_RETRY_ATTEMPTS
+        value: "2"
+      - key: CE_SINGLE_STATE_SEMANTIC_RETRY_DELAY_SECONDS
+        value: "1"
+      - key: CE_SINGLE_STATE_SEMANTIC_RETRY_STATES
+        value: "AR,CT,MI,OK,VA"
       - key: CE_FL_LOOKUP_MAX_SECONDS
         value: "45"
       - key: CE_SC_NAME_VARIANT_MAX_SECONDS

@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.26.11-staging"
+APP_VERSION = "2026.05.26.12-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -124,6 +124,8 @@ ON_DEMAND_EVIDENCE_SCREENSHOT = os.environ.get("CE_ON_DEMAND_EVIDENCE_SCREENSHOT
 LOOKUP_SOFT_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_LOOKUP_SOFT_MAX_SECONDS", "59"))), 59.0)
 SC_NAME_VARIANT_MAX_SECONDS = max(12.0, float(os.environ.get("CE_SC_NAME_VARIANT_MAX_SECONDS", "25")))
 NAME_SEARCH_VARIANT_MAX_SECONDS = max(18.0, float(os.environ.get("CE_NAME_SEARCH_VARIANT_MAX_SECONDS", "35")))
+CT_NAME_VARIANT_MAX_SECONDS = min(max(12.0, float(os.environ.get("CE_CT_NAME_VARIANT_MAX_SECONDS", "28"))), 45.0)
+CT_NAME_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_CT_NAME_VARIANT_LIMIT", "8"))), 14)
 FL_LOOKUP_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_FL_LOOKUP_MAX_SECONDS", "45"))), 59.0)
 SC_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_SC_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
 NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
@@ -164,6 +166,19 @@ SINGLE_TRUST_SLOW_CLEAN_NO_MATCH_SECONDS = min(
     max(20.0, float(os.environ.get("CE_SINGLE_TRUST_SLOW_CLEAN_NO_MATCH_SECONDS", "35"))),
     55.0,
 )
+SINGLE_STATE_SEMANTIC_RETRY_ATTEMPTS = min(
+    max(1, int(os.environ.get("CE_SINGLE_STATE_SEMANTIC_RETRY_ATTEMPTS", "2"))),
+    3,
+)
+SINGLE_STATE_SEMANTIC_RETRY_DELAY_SECONDS = min(
+    max(0.0, float(os.environ.get("CE_SINGLE_STATE_SEMANTIC_RETRY_DELAY_SECONDS", "1"))),
+    10.0,
+)
+SINGLE_STATE_SEMANTIC_RETRY_STATES = {
+    state.strip().upper()
+    for state in os.environ.get("CE_SINGLE_STATE_SEMANTIC_RETRY_STATES", "AR,CT,MI,OK,VA").split(",")
+    if state.strip()
+}
 PUBLIC_SINGLE_STATE_ONLY = os.environ.get("CE_PUBLIC_SINGLE_STATE_ONLY", "0").strip().lower() in {"1", "true", "yes"}
 FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "8"))), 20.0)
 NAME_SEARCH_PREFLIGHT_URLS = {
@@ -3846,6 +3861,7 @@ def click_nth_details_control(page, index: int) -> bool:
 def search_ct(page, org):
     url = "https://www.elicense.ct.gov/lookup/licenselookup.aspx"
     original_name = org.organization_name
+    started = time.perf_counter()
     safe_targets = organization_match_target_variants(original_name, org.ein)
     for target in list(safe_targets):
         if not re.search(r"^\s*(the|a)\s+", target, re.I):
@@ -3853,14 +3869,18 @@ def search_ct(page, org):
                 if suffix not in safe_targets:
                     safe_targets.append(suffix)
     best_result = None
-    for variant in organization_name_variants(
+    variants = organization_name_variants(
         original_name,
         org.ein,
         include_ein_aliases=True,
         include_name_segments=True,
         include_compact_legal_suffixes=True,
         include_leading_article_variants=True,
-    )[:14]:
+    )[:CT_NAME_VARIANT_LIMIT]
+    last_error = ""
+    for variant in variants:
+        if best_result is not None and (time.perf_counter() - started) >= CT_NAME_VARIANT_MAX_SECONDS:
+            return best_result
         result = checker.StateResult(original_name, org.ein, "CT", checker.STATUS_UNKNOWN, url)
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
@@ -4006,9 +4026,20 @@ def search_ct(page, org):
             result.success = True
             return result
         except Exception as exc:
-            result.error = f"CT error: {exc}"
-            return result
-    return best_result or checker.StateResult(original_name, org.ein, "CT", checker.STATUS_NOT_REGISTERED, url, raw_status_text="No matching organization record", source_note="Connecticut public registry returned no matching record for the generated name variants.", success=True)
+            last_error = f"CT error: {exc}"
+            if best_result is not None:
+                return best_result
+            continue
+    if best_result:
+        return best_result
+    if last_error:
+        result = checker.StateResult(original_name, org.ein, "CT", "Site Not Reachable", url)
+        result.raw_status_text = "Connecticut lookup could not be completed"
+        result.source_note = "Connecticut public registry lookup could not be completed after retrying generated name variants."
+        result.error = last_error
+        result.success = False
+        return result
+    return checker.StateResult(original_name, org.ein, "CT", checker.STATUS_NOT_REGISTERED, url, raw_status_text="No matching organization record", source_note="Connecticut public registry returned no matching record for the generated name variants.", success=True)
 
 
 def search_fl(page, org):
@@ -8142,24 +8173,20 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
             elif state == "PA":
                 result = checker.search_pa(page, org)
             elif state == "VA":
-                reachable, _, preflight_result = preflight_name_search_registry(org, "VA")
-                if not reachable:
-                    result = preflight_result
-                else:
-                    result = search_with_name_variants(
-                        page,
-                        org,
-                        search_va_bounded,
-                        max_variants=8,
-                        max_elapsed_seconds=NAME_SEARCH_VARIANT_MAX_SECONDS,
-                        reject_va_suspended_from_leading_the_drop=False,
-                        include_ein_aliases=True,
-                        include_name_segments=True,
-                        include_and_segments=False,
-                        include_compact_legal_suffixes=False,
-                        include_leading_article_variants=True,
-                        prioritize_institution_reductions=True,
-                    )
+                result = search_with_name_variants(
+                    page,
+                    org,
+                    search_va_bounded,
+                    max_variants=8,
+                    max_elapsed_seconds=NAME_SEARCH_VARIANT_MAX_SECONDS,
+                    reject_va_suspended_from_leading_the_drop=False,
+                    include_ein_aliases=True,
+                    include_name_segments=True,
+                    include_and_segments=False,
+                    include_compact_legal_suffixes=False,
+                    include_leading_article_variants=True,
+                    prioritize_institution_reductions=True,
+                )
             elif state == "SC":
                 reachable, _, preflight_result = preflight_name_search_registry(org, "SC")
                 if not reachable:
@@ -8666,6 +8693,20 @@ def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
     return results
 
 
+def run_single_state_lookup_reliably(organization_name: str, ein: str, state: str) -> dict:
+    state = (state or "").upper()
+    attempts = SINGLE_STATE_SEMANTIC_RETRY_ATTEMPTS if state in SINGLE_STATE_SEMANTIC_RETRY_STATES else 1
+    result: dict | None = None
+    for attempt in range(1, attempts + 1):
+        result = run_state_lookup(organization_name, ein, state)
+        result["semantic_attempts"] = attempt
+        if (result.get("status") or "").strip().lower() != "site not reachable":
+            return result
+        if attempt < attempts and SINGLE_STATE_SEMANTIC_RETRY_DELAY_SECONDS > 0:
+            time.sleep(SINGLE_STATE_SEMANTIC_RETRY_DELAY_SECONDS)
+    return result or run_state_lookup(organization_name, ein, state)
+
+
 def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> list[dict]:
     lookup_requests = [
         (org["organization_name"], org["ein"], st)
@@ -8673,7 +8714,7 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
         for st in states
     ]
     if len(lookup_requests) <= 1:
-        return [run_state_lookup(*lookup_requests[0])]
+        return [run_single_state_lookup_reliably(*lookup_requests[0])]
 
     if BATCH_FANOUT_SINGLE_STATE_LOOKUPS and BATCH_FANOUT_API_URL:
         results_by_index: dict[int, dict] = {}
