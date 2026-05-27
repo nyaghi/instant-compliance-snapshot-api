@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.26.7-staging"
+APP_VERSION = "2026.05.26.8-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -7510,7 +7510,9 @@ def ky_strict_name_score(registry_name: str, target_norms: set[str], original_na
             best = max(best, 800)
     if best >= 800:
         return best
-    if compatible_ein_alias_for_name(original_name, registry_name):
+    original_word_count = len(normalized_match_name(original_name).split())
+    registry_word_count = len(registry_norm.split())
+    if min(original_word_count, registry_word_count) >= 3 and compatible_ein_alias_for_name(original_name, registry_name):
         return 700
     return best
 
