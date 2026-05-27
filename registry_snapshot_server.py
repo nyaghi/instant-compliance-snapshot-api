@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.26.12-staging"
+APP_VERSION = "2026.05.26.13-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -2525,10 +2525,16 @@ def compatible_ein_alias_for_name(original_name: str, alias_name: str) -> bool:
     generic_words = {
         "the", "and", "of", "for", "to", "in", "on", "at", "by", "inc", "incorporated",
         "corp", "corporation", "llc", "ltd", "foundation", "fund", "charity", "charities",
-        "association", "society", "center", "centre", "institute", "organization",
+        "association", "society", "center", "centre", "institute", "organization", "org",
+        "university", "college", "school", "saint", "st",
     }
-    shared_distinctive = (set(original_words) & set(alias_words)) - generic_words
-    if len(shared_distinctive) >= 2:
+    original_essential = {word for word in original_words if word not in generic_words}
+    alias_essential = {word for word in alias_words if word not in generic_words}
+    if original_essential and original_essential == alias_essential:
+        return True
+    shared_distinctive = original_essential & alias_essential
+    union_distinctive = original_essential | alias_essential
+    if len(shared_distinctive) >= 3 and union_distinctive and (len(shared_distinctive) / len(union_distinctive)) >= 0.8:
         return True
 
     return False
@@ -7571,7 +7577,7 @@ def ky_strict_name_score(registry_name: str, target_norms: set[str], original_na
         return best
     original_word_count = len(normalized_match_name(original_name).split())
     registry_word_count = len(registry_norm.split())
-    if min(original_word_count, registry_word_count) >= 3 and compatible_ein_alias_for_name(original_name, registry_name):
+    if min(original_word_count, registry_word_count) >= 2 and compatible_ein_alias_for_name(original_name, registry_name):
         return 700
     return best
 
