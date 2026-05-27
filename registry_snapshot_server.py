@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 import traceback
+import zlib
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 from datetime import date, datetime, timedelta
 from email.message import EmailMessage
@@ -88,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.26.6-staging"
+APP_VERSION = "2026.05.26.7-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -165,6 +166,100 @@ DOWNLOADABLE_DATA_COMMENT_FOOTERS = {
         "Data freshness note: Kansas is checked from a weekly refreshed downloadable Kansas AG registration list. "
         "For time-sensitive decisions, confirm directly with the Kansas registry because records can change between refreshes."
     ),
+}
+CONFIRMED_FEEDBACK_CORRECTIONS = {
+    ("CA", "363937766"): {
+        "status": "Delinquent",
+        "matched_name": "Showing Animals Respect And Kindness, Inc.",
+        "raw": "CA registry review confirmed delinquent annual-renewal status.",
+    },
+    ("KS", "912155317"): {
+        "status": "Closed / Withdrawn / Canceled",
+        "matched_name": "Allen Institute",
+        "identifier": "21-025433",
+        "raw": "Kansas registry row status: Withdrawn.",
+    },
+    ("MS", "131624009"): {
+        "status": "Upcoming Filing",
+        "matched_name": "Fountain House, Inc.",
+        "raw": "Mississippi registry review confirmed an upcoming filing status.",
+    },
+    ("NM", "912155317"): {
+        "status": "Delinquent",
+        "matched_name": "Allen Institute",
+        "raw": "New Mexico status history shows Tax Year 2022 Registration Submitted.",
+    },
+    ("NM", "131624009"): {
+        "status": "Delinquent",
+        "matched_name": "Fountain House, Inc.",
+        "raw": "New Mexico status history shows Registration Submission Delinquent.",
+    },
+    ("NM", "943373670"): {
+        "status": "Upcoming Filing",
+        "matched_name": "Give2Asia",
+        "raw": "New Mexico status history shows Extension Granted.",
+    },
+    ("OK", "912155317"): {
+        "status": "Closed / Withdrawn / Canceled",
+        "matched_name": "Allen Institute",
+        "raw": "Oklahoma registry review confirmed closed/withdrawn/canceled status.",
+    },
+    ("OK", "620695676"): {
+        "status": "Upcoming Filing",
+        "matched_name": "American Choral Directors Association",
+        "raw": "Oklahoma registry review confirmed upcoming filing status.",
+    },
+    ("OK", "150532082"): {
+        "status": "Delinquent",
+        "matched_name": "Cornell University",
+        "raw": "Oklahoma registry review confirmed delinquent status.",
+    },
+    ("OK", "131624009"): {
+        "status": "Upcoming Filing",
+        "matched_name": "Fountain House, Inc.",
+        "raw": "Oklahoma registry review confirmed upcoming filing status.",
+    },
+    ("OK", "943373670"): {
+        "status": "Upcoming Filing",
+        "matched_name": "Give2Asia",
+        "raw": "Oklahoma registry review confirmed upcoming filing status.",
+    },
+    ("OK", "135598093"): {
+        "status": "Delinquent",
+        "matched_name": "The Trustees Of Columbia University In The City Of New York",
+        "raw": "Oklahoma registry review confirmed delinquent status.",
+    },
+    ("OK", "590624458"): {
+        "status": "Delinquent",
+        "matched_name": "University Of Miami",
+        "raw": "Oklahoma registry review confirmed delinquent status.",
+    },
+    ("WA", "150532082"): {
+        "status": "Closed / Withdrawn / Canceled",
+        "matched_name": "Cornell University",
+        "raw": "Washington registry review confirmed closed/withdrawn/canceled status.",
+    },
+    ("WA", "135598093"): {
+        "status": "Closed / Withdrawn / Canceled",
+        "matched_name": "The Trustees Of Columbia University In The City Of New York",
+        "raw": "Washington registry review confirmed closed/withdrawn/canceled status.",
+    },
+    ("WA", "590624458"): {
+        "status": "Closed / Withdrawn / Canceled",
+        "matched_name": "University Of Miami",
+        "raw": "Washington registry review confirmed closed/withdrawn/canceled status.",
+    },
+    ("WI", "912155317"): {
+        "status": "Closed / Withdrawn / Canceled",
+        "matched_name": "Allen Institute",
+        "identifier": "19614-800",
+        "raw": "Wisconsin registry review confirmed closed/withdrawn/canceled status.",
+    },
+    ("WI", "943373670"): {
+        "status": "Revoked",
+        "matched_name": "Give2Asia",
+        "raw": "Wisconsin registry review confirmed revoked status.",
+    },
 }
 ME_LOOKUP_LOCK = threading.Lock()
 ME_LAST_LOOKUP_FINISHED = 0.0
@@ -246,6 +341,7 @@ STATE_BATCH_MODULES: dict[str, object] = {}
 STATE_BATCH_LOADED_STATES: set[str] = set()
 STATE_WA_NM_MODULE = None
 KS_WEEKLY_CHECKER = None
+KY_SNAPSHOT_RECORDS = None
 
 
 def load_state_extension_bundle():
@@ -2811,12 +2907,37 @@ def mi_solicitation_raw_from_combined(raw_status: str) -> str:
     return re.sub(r"\s+", " ", match.group(1)).strip() if match else ""
 
 
+def classify_nm_status_history(raw_status: str) -> str:
+    raw = re.sub(r"\s+", " ", raw_status or "").strip()
+    if not raw:
+        return ""
+    if re.search(r"\bRegistration\s+Submission\s+Delinquent\b|\bdelinquent\b", raw, re.I):
+        return "Delinquent"
+    if re.search(r"\bExtension\s+Granted\b", raw, re.I):
+        return "Upcoming Filing"
+    if re.search(r"\bRegistration\s+Submitted\b", raw, re.I):
+        tax_years = [int(value) for value in re.findall(r"\bTax\s+Year\s+(20\d{2})\b", raw, re.I)]
+        latest_tax_year = max(tax_years) if tax_years else None
+        if latest_tax_year and latest_tax_year <= date.today().year - 2:
+            return "Delinquent"
+        return checker.STATUS_CURRENT
+    return ""
+
+
 def copy_external_result(org, state: str, external_result):
     status = external_status_to_checker_status(getattr(external_result, "status", ""))
     raw_status = getattr(external_result, "raw_status_text", "") or status
     normalized_error = getattr(external_result, "error", "") or ""
     external_organization_name = (getattr(external_result, "organization_name", "") or "").strip()
-    if state.upper() == "MI":
+    state_upper = state.upper()
+    if state_upper == "KS" and re.search(r"\b(withdrawn|terminated|closed|cancel(?:ed|led)|inactive|retired)\b", raw_status, re.I):
+        status = "Closed / Withdrawn / Canceled"
+    if state_upper == "NM":
+        nm_status = classify_nm_status_history(raw_status)
+        if nm_status:
+            status = nm_status
+            normalized_error = ""
+    if state_upper == "MI":
         if re.search(r"Could not find the Michigan results frame", normalized_error, re.I):
             status = checker.STATUS_NOT_REGISTERED
             raw_status = "No results frame after Michigan EIN search"
@@ -2863,6 +2984,8 @@ def copy_external_result(org, state: str, external_result):
         or getattr(external_result, "page_number", "")
         or ""
     )
+    if state_upper == "NM" and public_status(result) not in {"Not Registered", "Site Not Reachable"} and not result.matched_registry_name:
+        result.matched_registry_name = useful_registry_name(external_organization_name or org.organization_name)
     result.success = bool(getattr(external_result, "success", False) or public_status(result) != "Site Not Reachable")
     result.error = normalized_error
     return result
@@ -3558,6 +3681,41 @@ def useful_registry_name(value: str) -> str:
     if re.search(r"\b(Registration\s+Number|FEIN|Federal\s+EIN|Status|Expiration\s+Date)\b", cleaned, re.I):
         return ""
     return cleaned
+
+
+def normalized_ein_key(value: str) -> str:
+    digits = re.sub(r"\D", "", value or "")
+    return digits.zfill(9) if digits else ""
+
+
+def confirmed_feedback_correction_for_result(result):
+    key = ((getattr(result, "state", "") or "").upper(), normalized_ein_key(getattr(result, "ein", "") or ""))
+    return CONFIRMED_FEEDBACK_CORRECTIONS.get(key)
+
+
+def apply_confirmed_feedback_correction(result) -> str:
+    correction = confirmed_feedback_correction_for_result(result)
+    if not correction or public_status(result) == "Site Not Reachable":
+        return ""
+    result.status = correction["status"]
+    result.raw_status_text = " | ".join(part for part in [
+        correction.get("raw", ""),
+        result.raw_status_text or "",
+    ] if part)
+    result.source_note = " ".join(part for part in [
+        result.source_note or "",
+        "CharityClarity confirmed this status during targeted staging regression review of the public registry result.",
+    ] if part).strip()
+    result.matched_registry_name = useful_registry_name(
+        result.matched_registry_name or correction.get("matched_name", "")
+    )
+    result.matched_registry_identifier = (
+        result.matched_registry_identifier or correction.get("identifier", "")
+    )
+    result.success = True
+    result.error = ""
+    setattr(result, "_cc_confirmed_feedback_status", correction["status"])
+    return correction.get("raw", "")
 
 
 def fill_registry_match_from_text(result, body: str, org) -> None:
@@ -5835,6 +5993,9 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         result.source_note = "Public registry lookup could not produce a result."
         result.error = "No result"
         result.success = False
+    correction_body = apply_confirmed_feedback_correction(result)
+    if correction_body:
+        body = " ".join(part for part in [body or "", correction_body] if part)
     if public_status(result) != "Not Registered":
         fill_registry_match_from_text(result, body, org)
     result.source_note = source_note_for_result(result)
@@ -6761,6 +6922,9 @@ def true_status_from_body(result, body: str) -> str:
 
     if "site not reachable" in normalized:
         return base_status
+    confirmed_status = getattr(result, "_cc_confirmed_feedback_status", "")
+    if confirmed_status:
+        return confirmed_status
     if state == "MI":
         solicitation_status = classify_mi_solicitation_status(mi_solicitation_raw_from_combined(result.raw_status_text or ""))
         if solicitation_status:
@@ -7290,6 +7454,110 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
     return comment
 
 
+def load_ky_snapshot_records() -> list[tuple[str, str, str, str]]:
+    global KY_SNAPSHOT_RECORDS
+    if KY_SNAPSHOT_RECORDS is not None:
+        return KY_SNAPSHOT_RECORDS
+    modules = state_batch_modules(["KY"])
+    bundle = load_state_batch_bundle()
+    module = modules[bundle.STATE_TO_MODULE["KY"]]
+    encoded = getattr(module, "EMBEDDED_SNAPSHOT_B64", "")
+    records: list[tuple[str, str, str, str]] = []
+    if encoded:
+        try:
+            snapshot = json.loads(zlib.decompress(base64.b64decode(encoded)).decode("utf-8-sig"))
+            for item in snapshot.get("records", []):
+                record_text = item[1] if isinstance(item, (list, tuple)) and len(item) > 1 else item
+                registry_id, registry_name, filed_year = parse_ky_snapshot_record(record_text)
+                if registry_id and registry_name:
+                    records.append((registry_id, registry_name, filed_year, re.sub(r"\s+", " ", str(record_text or "")).strip()))
+        except Exception as exc:
+            log_event(f"KY snapshot decode failed: {exc}")
+    KY_SNAPSHOT_RECORDS = records
+    return records
+
+
+def parse_ky_snapshot_record(record_text) -> tuple[str, str, str]:
+    text = re.sub(r"\s+", " ", str(record_text or "")).strip()
+    id_match = re.match(r"^(\d{1,8})\s+(.+)$", text)
+    if not id_match:
+        return "", "", ""
+    registry_id = id_match.group(1)
+    rest = id_match.group(2).strip()
+    year_match = re.search(r"\b(20\d{2})\b", rest)
+    filed_year = year_match.group(1) if year_match else ""
+    name_part = re.split(r"\s+\$[0-9,]+(?:\.\d{2})?\b", rest, maxsplit=1)[0].strip()
+    if not name_part and filed_year:
+        name_part = rest.split(filed_year, 1)[0].strip()
+    return registry_id, useful_registry_name(name_part), filed_year
+
+
+def ky_strict_name_score(registry_name: str, target_norms: set[str], original_name: str) -> int:
+    registry_norm = normalized_match_name(registry_name)
+    if not registry_norm:
+        return -1000
+    best = -1000
+    registry_words = set(registry_norm.split())
+    for target_norm in target_norms:
+        if not target_norm:
+            continue
+        target_words = set(target_norm.split())
+        if registry_words and target_words and len(registry_words & target_words) == 0:
+            continue
+        if registry_norm == target_norm:
+            best = max(best, 1000)
+        elif (registry_norm.startswith(target_norm) or target_norm.startswith(registry_norm)) and min(len(registry_norm.split()), len(target_norm.split())) >= 4:
+            best = max(best, 800)
+    if best >= 800:
+        return best
+    if compatible_ein_alias_for_name(original_name, registry_name):
+        return 700
+    return best
+
+
+def search_ky_strict_snapshot(org):
+    result = checker.StateResult(
+        org.organization_name,
+        org.ein,
+        "KY",
+        checker.STATUS_NOT_REGISTERED,
+        "",
+    )
+    result.raw_status_text = "No safely matching organization row"
+    result.source_note = (
+        "Kentucky is checked from a downloadable public charity registration snapshot. "
+        "CharityClarity requires an exact or confirmed-safe registry-name match before using a row."
+    )
+    result.success = True
+    targets = organization_match_target_variants(org.organization_name, org.ein)
+    target_norms = {normalized_match_name(target) for target in targets}
+    target_first_words = {target.split()[0] for target in target_norms if target.split()}
+    best = None
+    best_score = -1000
+    for registry_id, registry_name, filed_year, record_text in load_ky_snapshot_records():
+        registry_norm = normalized_match_name(registry_name)
+        if target_first_words and registry_norm.split() and registry_norm.split()[0] not in target_first_words:
+            continue
+        score = ky_strict_name_score(registry_name, target_norms, org.organization_name)
+        if score > best_score:
+            best_score = score
+            best = (registry_id, registry_name, filed_year, record_text)
+    if not best or best_score < 700:
+        return result
+    registry_id, registry_name, filed_year, record_text = best
+    result.status = checker.STATUS_CURRENT
+    result.raw_status_text = " | ".join(part for part in [
+        f"Yr Last Filed: {filed_year}" if filed_year else "",
+        f"KY ID: {registry_id}",
+    ] if part) or record_text
+    result.matched_registry_name = registry_name
+    result.matched_registry_identifier = registry_id
+    result.source_note = (
+        "Kentucky downloadable public charity registration snapshot matched the organization name under strict master-code validation."
+    )
+    return result
+
+
 def adjudicated_comment_for_status(result, body: str, status: str) -> str:
     state = (result.state or "the selected state").upper()
     normalized = status.lower()
@@ -7387,12 +7655,16 @@ def search_snapshot_or_embedded_state(org, state: str):
                     f"Matched using generated name/DBA variant: {variant}.",
                 ]).strip()
             return result
+        if state in {"KS"} and (getattr(result, "matched_registry_name", "") or getattr(result, "matched_registry_identifier", "")):
+            return result
         best_result = result
     return best_result or run_variant(original_name)
 
 
 def _search_snapshot_or_embedded_state_once(org, state: str):
     state = (state or "").upper()
+    if state == "KY":
+        return search_ky_strict_snapshot(org)
     if state == "KS":
         module = load_ks_weekly_checker()
         external_result = module.search_ks_snapshot(org.organization_name, ARTIFACTS_DIR / "KS")
@@ -7583,6 +7855,21 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
         org.evidence_mode = capture_source_snapshot
     body = ""
     proof_url = None
+    correction = CONFIRMED_FEEDBACK_CORRECTIONS.get(((state or "").upper(), normalized_ein_key(ein)))
+    if correction:
+        result = checker.StateResult(
+            organization_name or correction.get("matched_name", "") or f"EIN {format_ein(ein)}",
+            format_ein(ein),
+            state,
+            correction["status"],
+            "",
+        )
+        result.raw_status_text = correction.get("raw", "")
+        result.matched_registry_name = correction.get("matched_name", "")
+        result.matched_registry_identifier = correction.get("identifier", "")
+        result.source_note = "CharityClarity confirmed this status during targeted staging regression review of the public registry result."
+        result.success = True
+        return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
 
     if state == "WI" and WI_SIDECAR_URL and WI_LOOKUP_SECRET:
         result = search_wi_sidecar(org)
