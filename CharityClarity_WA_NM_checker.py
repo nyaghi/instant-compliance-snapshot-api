@@ -589,8 +589,13 @@ def search_nm(org: Organization, show_process: bool = False) -> SearchResult:
 
             rows = nm_parse_history_rows(page)
             if not rows:
-                result.status = STATUS_NOT_REGISTERED
-                result.raw_status_text = "No matching organization row"
+                result.status = STATUS_UPCOMING
+                result.raw_status_text = "NM detail page reached, but status-history rows were not parsed"
+                result.source_note = (
+                    "New Mexico detail lookup did not show the explicit unknown-registration message, "
+                    "but the hosted parser could not read status-history rows. CharityClarity treats this as a found record "
+                    "pending filing review instead of a no-record result."
+                )
                 result.success = True
                 return result
 

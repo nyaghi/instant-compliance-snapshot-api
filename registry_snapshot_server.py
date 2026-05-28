@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.28.2-staging"
+APP_VERSION = "2026.05.28.3-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -135,7 +135,7 @@ ME_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_LOOKUP
 AR_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_AR_LOOKUP_MIN_INTERVAL_SECONDS", "1.5"))), 20.0)
 AR_TRANSIENT_RETRY_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_AR_TRANSIENT_RETRY_DELAY_SECONDS", "4.0"))), 20.0)
 AR_TRANSIENT_RETRY_ATTEMPTS = min(max(1, int(os.environ.get("CE_AR_TRANSIENT_RETRY_ATTEMPTS", "2"))), 3)
-AR_NAME_SEARCH_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_AR_NAME_SEARCH_MAX_VARIANTS", "2"))), 5)
+AR_NAME_SEARCH_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_AR_NAME_SEARCH_MAX_VARIANTS", "3"))), 5)
 AR_NAME_SEARCH_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_AR_NAME_SEARCH_MAX_SECONDS", "22"))), 30.0)
 ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "1.0"))), 30.0)
 ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS = min(max(1, int(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS", "2"))), 4)
@@ -8518,7 +8518,7 @@ def search_ar_name_variants_once(page, org):
         max_variants=AR_NAME_SEARCH_MAX_VARIANTS,
         max_elapsed_seconds=AR_NAME_SEARCH_MAX_SECONDS,
         include_ein_aliases=True,
-        include_name_segments=False,
+        include_name_segments=True,
         include_compact_legal_suffixes=True,
         include_leading_article_variants=True,
         prioritize_institution_reductions=True,
