@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.28.5-staging"
+APP_VERSION = "2026.05.28.6-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -4100,6 +4100,11 @@ def normalize_registry_match_fields(result, org) -> None:
     matched_name = useful_registry_name(getattr(result, "matched_registry_name", "") or "")
     matched_identifier = (getattr(result, "matched_registry_identifier", "") or "").strip()
     submitted_name = re.sub(r"\s+", " ", (getattr(org, "organization_name", "") or getattr(result, "organization_name", "") or "").strip())
+
+    if public_status(result) == "Not Registered":
+        result.matched_registry_name = ""
+        result.matched_registry_identifier = ""
+        return
 
     if matched_name and registry_name_is_identifier_only(matched_name, matched_identifier):
         if not matched_identifier:
