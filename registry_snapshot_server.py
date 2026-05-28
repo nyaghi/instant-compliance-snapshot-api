@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.28.4-staging"
+APP_VERSION = "2026.05.28.5-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -4096,6 +4096,23 @@ def fill_registry_match_from_text(result, body: str, org) -> None:
         result.matched_registry_name = re.sub(r"\s+", " ", getattr(org, "organization_name", "")).strip()
 
 
+def normalize_registry_match_fields(result, org) -> None:
+    matched_name = useful_registry_name(getattr(result, "matched_registry_name", "") or "")
+    matched_identifier = (getattr(result, "matched_registry_identifier", "") or "").strip()
+    submitted_name = re.sub(r"\s+", " ", (getattr(org, "organization_name", "") or getattr(result, "organization_name", "") or "").strip())
+
+    if matched_name and registry_name_is_identifier_only(matched_name, matched_identifier):
+        if not matched_identifier:
+            matched_identifier = matched_name
+        matched_name = ""
+
+    if not matched_name and public_status(result) not in {"Not Registered", "Site Not Reachable"} and submitted_name:
+        matched_name = submitted_name
+
+    result.matched_registry_name = matched_name
+    result.matched_registry_identifier = matched_identifier
+
+
 def text_between_labels(text: str, start_label: str, end_labels: list[str]) -> str:
     compact = re.sub(r"\s+", " ", text or "").strip()
     if not compact:
@@ -6337,6 +6354,7 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         body = " ".join(part for part in [body or "", correction_body] if part)
     if public_status(result) != "Not Registered":
         fill_registry_match_from_text(result, body, org)
+    normalize_registry_match_fields(result, org)
     result.source_note = source_note_for_result(result)
     data = checker.asdict(result)
     if organization_name:
