@@ -599,7 +599,7 @@ def search_nm(org: Organization, show_process: bool = False) -> SearchResult:
                 else:
                     result.source_note = (
                         "New Mexico detail lookup did not expose status-history tax-year rows for this FEIN. "
-                        "CharityClarity does not treat an ambiguous registry response as Not Registered."
+                        "CharityClarity treats that registry response as ambiguous rather than as a confirmed no-record result."
                     )
                 result.success = True
                 return result
