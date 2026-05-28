@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.26.24-staging"
+APP_VERSION = "2026.05.28.1-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -135,8 +135,8 @@ ME_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_LOOKUP
 AR_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_AR_LOOKUP_MIN_INTERVAL_SECONDS", "1.5"))), 20.0)
 AR_TRANSIENT_RETRY_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_AR_TRANSIENT_RETRY_DELAY_SECONDS", "4.0"))), 20.0)
 AR_TRANSIENT_RETRY_ATTEMPTS = min(max(1, int(os.environ.get("CE_AR_TRANSIENT_RETRY_ATTEMPTS", "2"))), 3)
-AR_NAME_SEARCH_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_AR_NAME_SEARCH_MAX_VARIANTS", "1"))), 5)
-AR_NAME_SEARCH_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_AR_NAME_SEARCH_MAX_SECONDS", "14"))), 30.0)
+AR_NAME_SEARCH_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_AR_NAME_SEARCH_MAX_VARIANTS", "2"))), 5)
+AR_NAME_SEARCH_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_AR_NAME_SEARCH_MAX_SECONDS", "22"))), 30.0)
 ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "1.0"))), 30.0)
 ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS = min(max(1, int(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS", "2"))), 4)
 ME_CONFIRM_NOT_REGISTERED = os.environ.get("CE_ME_CONFIRM_NOT_REGISTERED", "1").strip().lower() in {"1", "true", "yes"}
@@ -208,6 +208,22 @@ DOWNLOADABLE_DATA_COMMENT_FOOTERS = {
     "KS": (
         "Data freshness note: Kansas is checked from a weekly refreshed downloadable Kansas AG registration list. "
         "For time-sensitive decisions, confirm directly with the Kansas registry because records can change between refreshes."
+    ),
+    "NH": (
+        "Data freshness note: New Hampshire is checked from a refreshed downloadable registry snapshot. "
+        "For time-sensitive decisions, confirm directly with the New Hampshire registry because records can change between refreshes."
+    ),
+    "KY": (
+        "Data freshness note: Kentucky is checked from a refreshed downloadable registry snapshot. "
+        "For time-sensitive decisions, confirm directly with the Kentucky registry because records can change between refreshes."
+    ),
+    "MS": (
+        "Data freshness note: Mississippi is checked from a refreshed downloadable registry snapshot. "
+        "For time-sensitive decisions, confirm directly with the Mississippi registry because records can change between refreshes."
+    ),
+    "OR": (
+        "Data freshness note: Oregon is checked from a weekly refreshed downloadable charity database. "
+        "For time-sensitive decisions, confirm directly with the Oregon registry because records can change between refreshes."
     ),
 }
 CONFIRMED_FEEDBACK_CORRECTIONS = {
@@ -1631,8 +1647,15 @@ def resolved_organization_name(ein: str, supplied_name: str = "") -> str:
     return supplied_name or profile_name or reference_name or (known_names[0] if known_names else "")
 
 
-def format_ein(value: str) -> str:
+def canonical_ein_digits(value: str) -> str:
     digits = re.sub(r"\D", "", value or "")
+    if len(digits) == 8:
+        return f"0{digits}"
+    return digits
+
+
+def format_ein(value: str) -> str:
+    digits = canonical_ein_digits(value)
     if len(digits) == 9:
         return f"{digits[:2]}-{digits[2:]}"
     return (value or "").strip()
@@ -2035,10 +2058,26 @@ def md_represented_year_from_text(body: str, ein: str = "", organization_name: s
 
 def filing_context(result, body: str) -> dict:
     state = (result.state or "").upper()
+    registry_text = " ".join([result.raw_status_text or "", body or ""])
+    registry_latest_year = None
+    registry_year_patterns = [
+        r"\bYr\s+Last\s+Filed\s*:\s*(20\d{2})\b",
+        r"\bLatest\s+Report\s+Year\s*:\s*(20\d{2})\b",
+        r"\bTax\s+Year\s+(20\d{2})\b",
+        r"\bRegistration\s+Submitted\s+(20\d{2})\b",
+        r"\bRegistration\s+Accepted\s+(20\d{2})\b",
+        r"\bRenewal\s+Registration\s+[A-Za-z]+\s+\d{1,2},\s+(20\d{2})\b",
+        r"\bExtension\s+Granted\s+[A-Za-z]+\s+\d{1,2},\s+(20\d{2})\b",
+        r"\bRegistration\s+Issued\s+[A-Za-z]+\s+\d{1,2},\s+(20\d{2})\b",
+    ]
+    for pattern in registry_year_patterns:
+        years = [int(match.group(1)) for match in re.finditer(pattern, registry_text, re.I)]
+        if years:
+            registry_latest_year = max(years) if registry_latest_year is None else max(registry_latest_year, max(years))
     if state == "MD":
         latest_year = md_represented_year_from_text(body, result.ein, result.organization_name)
     else:
-        latest_year = latest_year_from_text(body, result.state)
+        latest_year = registry_latest_year or latest_year_from_text(body, result.state)
     if state == "PA":
         latest_year = None
     if latest_year is None and state in {"MA", "CA", "HI", "NJ"}:
@@ -3217,15 +3256,18 @@ def copy_external_result(org, state: str, external_result):
         and normalized_match_name(external_organization_name) != normalized_match_name(getattr(org, "organization_name", "") or "")
     ):
         matched_registry_name = external_organization_name
-    result.matched_registry_name = matched_registry_name
     result.matched_registry_identifier = (
         getattr(external_result, "matched_registry_identifier", "")
         or getattr(external_result, "contact_number", "")
         or getattr(external_result, "registration_number", "")
         or getattr(external_result, "record_id", "")
         or getattr(external_result, "page_number", "")
+        or registry_identifier_from_raw(raw_status, state_upper)
         or ""
     )
+    if registry_name_is_identifier_only(matched_registry_name, result.matched_registry_identifier):
+        matched_registry_name = ""
+    result.matched_registry_name = matched_registry_name
     if state_upper in {"AR", "KS", "KY", "MS", "NH", "OK"} and public_status(result) not in {"Not Registered", "Site Not Reachable"} and not result.matched_registry_name:
         result.matched_registry_name = useful_registry_name(external_organization_name or org.organization_name)
     if state_upper == "NM" and public_status(result) not in {"Not Registered", "Site Not Reachable"} and not result.matched_registry_name:
@@ -3929,8 +3971,31 @@ def useful_registry_name(value: str) -> str:
     return cleaned
 
 
+def registry_identifier_from_raw(raw_status: str, state: str) -> str:
+    patterns = [
+        r"\b(?:KY|NH|KS|MS|OK|WV|AR)\s+ID\s*:\s*([A-Za-z0-9-]+)\b",
+        r"\bRegistration\s+(?:Number|No\.?|#)\s*:\s*([A-Za-z0-9-]+)\b",
+        r"\bCredential\s+(?:Number|No\.?|#)\s*:\s*([A-Za-z0-9-]+)\b",
+        r"\bFiling\s+(?:Number|No\.?|#)\s*:\s*([A-Za-z0-9-]+)\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, raw_status or "", re.I)
+        if match:
+            return match.group(1).strip()
+    return ""
+
+
+def registry_name_is_identifier_only(name: str, identifier: str = "") -> bool:
+    cleaned = re.sub(r"\s+", " ", (name or "").strip())
+    if not cleaned:
+        return False
+    if identifier and cleaned.lower() == identifier.strip().lower():
+        return True
+    return bool(re.fullmatch(r"(?:id\s*[:#]?\s*)?[A-Za-z]?\d{3,}(?:-\d+)?", cleaned, re.I))
+
+
 def normalized_ein_key(value: str) -> str:
-    digits = re.sub(r"\D", "", value or "")
+    digits = canonical_ein_digits(value)
     return digits.zfill(9) if digits else ""
 
 
@@ -6903,8 +6968,8 @@ def status_from_calendar_date(value: date) -> str:
 def labeled_due_dates_from_text(text: str) -> list[date]:
     dates = []
     due_patterns = [
-        r"(?:due date|renewal due|filing due|annual report due|registration expires|registration expiration|expiration date|expires on|expired on|expires|expired)\s*:?\s*([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
-        r"(?:due date|renewal due|filing due|annual report due|registration expires|registration expiration|expiration date|expires on|expired on|expires|expired)\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})",
+        r"(?:due date|report due|renewal due|filing due|annual report due|registration expires|registration expiration|expiration date|expires on|expired on|expires|expired)\s*:?\s*([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+        r"(?:due date|report due|renewal due|filing due|annual report due|registration expires|registration expiration|expiration date|expires on|expired on|expires|expired)\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})",
     ]
     for pattern in due_patterns:
         for match in re.finditer(pattern, text or "", re.I):
@@ -7201,6 +7266,12 @@ def true_status_from_body(result, body: str) -> str:
         return "Exempt"
     if explicit_no_registration_status(result, combined):
         return "Not Registered"
+    if state == "NH":
+        report_due_match = re.search(r"\bReport\s+Due\s*:\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})", combined, re.I)
+        if report_due_match and re.search(r"\b(G|Good\s+Standing)\b", result.raw_status_text or "", re.I):
+            report_due = parse_due_date(report_due_match.group(1))
+            if report_due:
+                return status_from_calendar_date(report_due)
     if state == "CT":
         ct_status_fields = " ".join([
             result.raw_status_text or "",
@@ -8185,6 +8256,34 @@ def ok_choose_safe_result_row(page, org, module):
     return best
 
 
+def ok_latest_filing_from_candidates(candidates: list[str], module) -> str:
+    dated: list[tuple[date, str]] = []
+    undated: list[str] = []
+    for candidate in candidates:
+        cleaned = re.sub(r"\s+", " ", candidate or "").strip()
+        if not cleaned:
+            continue
+        parsed = module.parse_ok_filing_date(cleaned)
+        if parsed:
+            dated.append((parsed, cleaned))
+        else:
+            undated.append(cleaned)
+    if dated:
+        return max(dated, key=lambda item: item[0])[1]
+    return undated[0] if undated else ""
+
+
+def ok_terminal_closed_text(*texts: str) -> bool:
+    combined = " ".join(text for text in texts if text)
+    return bool(
+        re.search(
+            r"\b(?:notice\s+of\s+cancell?ation|cancell?ed|closed|withdrawn|terminated|inactive|dissolved|revoked)\b",
+            combined,
+            re.I,
+        )
+    )
+
+
 def search_ok_precise(page, org, module):
     result = module.SearchResult(
         organization_name=org.organization_name,
@@ -8292,26 +8391,34 @@ def search_ok_precise(page, org, module):
             re.I | re.S,
         )
         latest_filing = ""
+        filing_candidates: list[str] = []
         if history_match:
             lines = [re.sub(r"\s+", " ", line).strip() for line in history_match.group(1).splitlines() if line.strip()]
-            if lines:
-                latest_filing = lines[-1]
+            filing_candidates.extend(lines)
         if not latest_filing:
             rows = page.locator("tr")
             row_count = min(rows.count(), 200)
-            filing_rows: list[str] = []
             for index in range(row_count):
                 try:
                     row_text = re.sub(r"\s+", " ", rows.nth(index).inner_text(timeout=1000)).strip()
                 except Exception:
                     continue
                 if re.match(r"^\d+\s+", row_text):
-                    filing_rows.append(row_text)
-            if filing_rows:
-                latest_filing = filing_rows[-1]
+                    filing_candidates.append(row_text)
+            latest_filing = ok_latest_filing_from_candidates(filing_candidates, module)
 
         result.matched_registry_name = matched_name
         result.matched_registry_identifier = filing_number
+        if ok_terminal_closed_text(status_text, latest_filing, detail_text):
+            result.status = "Closed / Withdrawn / Canceled"
+            result.raw_status_text = latest_filing or status_text
+            result.success = True
+            result.source_note = (
+                "Oklahoma detail page or filing history shows a terminal closed/canceled status. "
+                "CharityClarity uses that registry status instead of calculating status from annual filing dates. "
+                "The accepted row safely matched the requested organization."
+            )
+            return result
         if not latest_filing:
             result.status = status_text
             result.raw_status_text = status_text

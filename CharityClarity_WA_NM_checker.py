@@ -1,0 +1,675 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import re
+import subprocess
+import sys
+import tempfile
+import time
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import Optional
+
+try:
+    from playwright.sync_api import sync_playwright
+except Exception:
+    print("Install Playwright first: py -m pip install playwright && py -m playwright install", file=sys.stderr)
+    raise
+
+
+WA_SEARCH_URL = "https://ccfs.sos.wa.gov/#/cftSearch"
+NM_SEARCH_URL = "https://secure.nmdoj.gov/CharitySearch/"
+BUNDLED_PDF_PYTHON = (
+    Path.home()
+    / ".cache"
+    / "codex-runtimes"
+    / "codex-primary-runtime"
+    / "dependencies"
+    / "python"
+    / "python.exe"
+)
+
+STATUS_UNKNOWN = "Unknown"
+STATUS_NOT_REGISTERED = "Not registered"
+STATUS_CURRENT = "Current"
+STATUS_UPCOMING = "Upcoming Filing"
+STATUS_DELINQUENT = "Delinquent"
+STATUS_PENDING = "Pending"
+STATUS_CLOSED = "Closed / Withdrawn / Canceled"
+
+
+@dataclass
+class Organization:
+    organization_name: str
+    ein: str
+
+
+@dataclass
+class SearchResult:
+    organization_name: str
+    ein: str
+    state: str
+    status: str
+    raw_status_text: str
+    source_url: str
+    source_note: str
+    success: bool = False
+    error: str = ""
+
+
+def digits_only(value: str) -> str:
+    return re.sub(r"\D+", "", value or "")
+
+
+def format_ein(value: str) -> str:
+    digits = digits_only(value)
+    if len(digits) == 8:
+        digits = f"0{digits}"
+    if len(digits) == 9:
+        return f"{digits[:2]}-{digits[2:]}"
+    return (value or "").strip()
+
+
+def normalize_name(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9]+", " ", value or "").strip().upper()
+    return re.sub(r"\s+", " ", cleaned)
+
+
+def normalize_spaces(value: str) -> str:
+    return re.sub(r"\s+", " ", value or "").strip()
+
+
+def parse_date(value: str) -> Optional[date]:
+    value = (value or "").strip()
+    for fmt in ("%m/%d/%Y", "%m/%d/%y", "%m-%d-%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(value, fmt).date()
+        except Exception:
+            continue
+    return None
+
+
+def add_months(d: date, months: int) -> date:
+    year = d.year + (d.month - 1 + months) // 12
+    month = (d.month - 1 + months) % 12 + 1
+    mdays = [
+        31,
+        29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28,
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ]
+    day = min(d.day, mdays[month - 1])
+    return date(year, month, day)
+
+
+def safe_wait_for_network_idle(page, timeout: int = 25000) -> None:
+    try:
+        page.wait_for_load_state("networkidle", timeout=timeout)
+    except Exception:
+        pass
+
+
+def print_result(result: SearchResult) -> None:
+    print(f"Organization: {result.organization_name}")
+    print(f"EIN: {result.ein}")
+    print(f"State: {result.state}")
+    print(f"Status: {result.status}")
+    print(f"Raw Status: {result.raw_status_text}")
+    print(f"Source URL: {result.source_url}")
+    print(f"Source Note: {result.source_note}")
+    if result.error:
+        print(f"Error: {result.error}")
+
+
+def launch_context(playwright, show_process: bool):
+    browser = playwright.chromium.launch(
+        headless=not show_process,
+        slow_mo=500 if show_process else 0,
+        args=[
+            "--disable-blink-features=AutomationControlled",
+            "--disable-dev-shm-usage",
+        ],
+    )
+    context = browser.new_context(
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/136.0.0.0 Safari/537.36"
+        ),
+        viewport={"width": 1440, "height": 1100},
+        locale="en-US",
+        accept_downloads=True,
+    )
+    context.add_init_script(
+        """
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+        Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+        """
+    )
+    return browser, context
+
+
+def extract_label(text: str, label: str) -> str:
+    patterns = [
+        rf"{re.escape(label)}\s*[:\-]\s*([^\n\r|]+)",
+        rf"{re.escape(label)}\s*\n\s*([^\n\r]+)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, re.I)
+        if match:
+            return normalize_spaces(match.group(1))
+    return ""
+
+
+def terminal_closed_status_text(text: str) -> str:
+    match = re.search(
+        r"\b(Involuntarily\s+Closed|Administratively\s+Closed|Closed|Withdrawn|Terminated|Dissolved|Revoked|Cancel(?:ed|led))\b",
+        text or "",
+        re.I,
+    )
+    return normalize_spaces(match.group(1)) if match else ""
+
+
+def classify_by_renewal(renewal: Optional[date], raw_status: str, detail_text: str = "") -> str:
+    normalized = " ".join([raw_status or "", detail_text or ""]).strip().lower()
+    if terminal_closed_status_text(normalized):
+        return STATUS_CLOSED
+    if "pending" in normalized:
+        return STATUS_PENDING
+    if not renewal:
+        return STATUS_UNKNOWN
+    today = date.today()
+    six_months = today + timedelta(days=183)
+    if renewal < today:
+        return STATUS_DELINQUENT
+    if renewal <= six_months:
+        return STATUS_UPCOMING
+    return STATUS_CURRENT
+
+
+def switch_to_fein_mode(page) -> None:
+    for candidate in [
+        page.get_by_text("FEIN Number", exact=True),
+        page.locator("input[value='FEINNo']").first,
+        page.locator("label").filter(has_text=re.compile(r"FEIN Number", re.I)).first,
+    ]:
+        try:
+            candidate.click(timeout=5000, force=True)
+            time.sleep(1)
+            return
+        except Exception:
+            continue
+
+    page.evaluate(
+        """
+        () => {
+          const feinRadio = document.querySelector("input[value='FEINNo']");
+          if (feinRadio) {
+            feinRadio.checked = true;
+            feinRadio.dispatchEvent(new Event('click', { bubbles: true }));
+            feinRadio.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        }
+        """
+    )
+    time.sleep(1)
+
+
+def fill_fein_and_search(page, ein: str) -> bool:
+    try:
+        page.locator("#txtKeywordSearch").first.fill("")
+    except Exception:
+        pass
+
+    fein_box = page.locator("#FEINNoSearchField").first
+    fein_box.wait_for(state="visible", timeout=10000)
+    fein_box.click(timeout=5000, force=True)
+    time.sleep(1)
+    fein_box.fill("")
+    fein_box.type(digits_only(ein), delay=50)
+    page.evaluate(
+        """
+        () => {
+          const feinBox = document.querySelector('#FEINNoSearchField');
+          if (feinBox) {
+            feinBox.dispatchEvent(new Event('input', { bubbles: true }));
+            feinBox.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        }
+        """
+    )
+    time.sleep(1)
+
+    for candidate in [
+        page.get_by_role("button", name=re.compile(r"^Search$", re.I)),
+        page.locator("button").filter(has_text=re.compile(r"^Search$", re.I)).first,
+        page.locator("input[value='Search']").first,
+    ]:
+        try:
+            candidate.click(timeout=5000, force=True)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def scroll_to_results(page) -> None:
+    for _ in range(3):
+        try:
+            page.locator("text=SEARCH RESULTS").first.scroll_into_view_if_needed(timeout=3000)
+            time.sleep(1)
+            return
+        except Exception:
+            try:
+                page.mouse.wheel(0, 1200)
+            except Exception:
+                pass
+            time.sleep(1)
+
+
+def find_result_link(page, org_name: str):
+    target = normalize_name(org_name)
+    candidates = []
+    locator_sets = ["table a", "tbody a", "a"]
+
+    for locator_selector in locator_sets:
+        try:
+            links = page.locator(locator_selector)
+            count = min(links.count(), 150)
+        except Exception:
+            continue
+
+        for i in range(count):
+            link = links.nth(i)
+            try:
+                if not link.is_visible(timeout=500):
+                    continue
+            except Exception:
+                continue
+            try:
+                role = (link.get_attribute("role") or "").strip().lower()
+                href = (link.get_attribute("href") or "").strip()
+                text = normalize_spaces(link.inner_text(timeout=1000))
+            except Exception:
+                continue
+            if not text:
+                continue
+            upper = text.upper()
+            if role == "menuitem":
+                continue
+            if "RETURN TO HOME" in upper or upper in {"SEARCH", "CLEAR"}:
+                continue
+            if href.startswith("javascript:__doPostBack") or href == "" or locator_selector != "a":
+                priority = 0
+                normalized = normalize_name(text)
+                if target:
+                    if normalized == target:
+                        priority = 3
+                    elif normalized and (target in normalized or normalized in target):
+                        priority = 2
+                if priority == 0:
+                    priority = 1
+                candidates.append((priority, i, link))
+
+        if candidates:
+            break
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (-item[0], item[1]))
+    return candidates[0][2]
+
+
+def wait_for_result_link_or_no_value(page, org_name: str, timeout_seconds: int = 45):
+    deadline = time.time() + timeout_seconds
+    no_value_seen = False
+    while time.time() < deadline:
+        scroll_to_results(page)
+        link = find_result_link(page, org_name)
+        if link:
+            return link
+        try:
+            body = page.locator("body").inner_text(timeout=8000)
+        except Exception:
+            body = ""
+        if re.search(r"No Value Found|No records found|No results found|records 0 to 0 of 0", body, re.I):
+            no_value_seen = True
+        time.sleep(2)
+    return "NO_VALUE" if no_value_seen else None
+
+
+def search_wa(org: Organization, show_process: bool = False) -> SearchResult:
+    result = SearchResult(
+        organization_name=org.organization_name,
+        ein=org.ein,
+        state="WA",
+        status=STATUS_UNKNOWN,
+        raw_status_text="",
+        source_url=WA_SEARCH_URL,
+        source_note=(
+            "Washington uses the detail page reached from a FEIN search result. "
+            "Top-level status is classified from the Renewal Date."
+        ),
+    )
+    with sync_playwright() as p:
+        browser, context = launch_context(p, show_process)
+        page = context.new_page()
+        try:
+            page.goto(WA_SEARCH_URL, wait_until="domcontentloaded", timeout=45000)
+            safe_wait_for_network_idle(page)
+            time.sleep(4)
+
+            switch_to_fein_mode(page)
+            time.sleep(1)
+
+            if not fill_fein_and_search(page, org.ein):
+                result.error = "Could not click the Washington Search button."
+                return result
+
+            safe_wait_for_network_idle(page)
+            time.sleep(4)
+
+            found = wait_for_result_link_or_no_value(page, org.organization_name, timeout_seconds=50)
+            if found == "NO_VALUE":
+                result.status = STATUS_NOT_REGISTERED
+                result.raw_status_text = "No Value Found."
+                result.source_note = "Washington FEIN search returned zero visible result rows."
+                result.success = True
+                return result
+            if not found:
+                result.error = "Could not locate the Washington organization result link."
+                return result
+
+            try:
+                result.matched_registry_name = normalize_spaces(found.inner_text(timeout=1500))
+            except Exception:
+                result.matched_registry_name = ""
+            try:
+                found.scroll_into_view_if_needed(timeout=5000)
+                time.sleep(1)
+            except Exception:
+                pass
+            found.click(timeout=5000, force=True)
+
+            safe_wait_for_network_idle(page)
+            time.sleep(4)
+
+            detail_text = page.locator("body").inner_text(timeout=15000)
+            status_text = extract_label(detail_text, "Status")
+            renewal_text = (
+                extract_label(detail_text, "Renewal Date")
+                or extract_label(detail_text, "Renewal Due Date")
+                or extract_label(detail_text, "Renewal")
+            )
+
+            renewal_date = parse_date(renewal_text)
+            terminal_status = terminal_closed_status_text(detail_text)
+            result.status = classify_by_renewal(renewal_date, status_text, detail_text)
+            raw_parts = []
+            if terminal_status:
+                raw_parts.append(f"Registry Status: {terminal_status}")
+            if status_text:
+                raw_parts.append(f"Status: {status_text}")
+            if renewal_text:
+                raw_parts.append(f"Renewal Date: {renewal_text}")
+            result.raw_status_text = " | ".join(raw_parts) if raw_parts else normalize_spaces(detail_text)[:500]
+            result.success = True
+            return result
+        except Exception as exc:
+            result.error = f"WA error: {exc}"
+            return result
+        finally:
+            context.close()
+            browser.close()
+
+
+def find_visible(page, selectors: list[str], timeout: int = 5000):
+    for selector in selectors:
+        try:
+            loc = page.locator(selector).first
+            loc.wait_for(state="visible", timeout=timeout)
+            return loc
+        except Exception:
+            continue
+    return None
+
+
+def nm_parse_history_rows(page) -> list[tuple[int, str, str]]:
+    history_table = None
+    tables = page.locator("table")
+    for i in range(min(tables.count(), 40)):
+        table = tables.nth(i)
+        try:
+            text = normalize_spaces(table.inner_text(timeout=1500))
+        except Exception:
+            continue
+        if "Tax Year" in text and "Registration Details" in text and "Status Date" in text:
+            history_table = table
+            break
+    if history_table is None:
+        return []
+
+    rows = []
+    tr_list = history_table.locator("tr")
+    for i in range(min(tr_list.count(), 500)):
+        tr = tr_list.nth(i)
+        try:
+            cells = tr.locator("td")
+            if cells.count() < 3:
+                continue
+            year_text = normalize_spaces(cells.nth(0).inner_text(timeout=800))
+            detail_text = normalize_spaces(cells.nth(1).inner_text(timeout=800))
+            status_date = normalize_spaces(cells.nth(2).inner_text(timeout=800))
+        except Exception:
+            continue
+        if not year_text or not re.fullmatch(r"\d{4}", year_text):
+            continue
+        rows.append((int(year_text), detail_text, status_date))
+    return rows
+
+
+def nm_latest_submitted(rows: list[tuple[int, str, str]]):
+    submitted = []
+    for year, detail, status_date in rows:
+        match = re.match(r"^Registration Submitted\s+(\d{10,})$", detail)
+        if match:
+            submitted.append((year, match.group(1), status_date))
+    if not submitted:
+        return None
+    return max(submitted, key=lambda item: item[0])
+
+
+def nm_extract_fye(context, reg_number: str) -> tuple[str, str]:
+    if not reg_number:
+        return "", ""
+    helper_code = f"""
+from playwright.sync_api import sync_playwright
+from pathlib import Path
+import tempfile, subprocess, os, re
+
+reg_number = {reg_number!r}
+bundled_python = r{str(BUNDLED_PDF_PYTHON)!r}
+temp_dir = tempfile.mkdtemp(prefix='nm_pdf_')
+pdf_path = str(Path(temp_dir) / f'{{reg_number}}.pdf')
+
+try:
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(accept_downloads=True)
+        page = context.new_page()
+        with page.expect_download(timeout=45000) as info:
+            try:
+                page.goto(
+                    f'https://secure.nmdoj.gov/coros/getregdoc.aspx?RegNumber={{reg_number}}',
+                    wait_until='commit',
+                    timeout=45000,
+                )
+            except Exception as exc:
+                if 'Download is starting' not in str(exc):
+                    raise
+        download = info.value
+        download.save_as(pdf_path)
+        browser.close()
+
+    parse_code = (
+        "import re\\n"
+        "from pypdf import PdfReader\\n"
+        f"pdf = PdfReader(r'''{{pdf_path}}''')\\n"
+        "text='\\\\n'.join((pg.extract_text() or '') for pg in pdf.pages[:5])\\n"
+        "m = re.search(r'Tax Year\\\\s+\\\\d{{4}}\\\\s+-\\\\s+fiscal period beginning\\\\s+(\\\\d{{1,2}}/\\\\d{{1,2}}/\\\\d{{2,4}})\\\\s+and ending\\\\s+(\\\\d{{1,2}}/\\\\d{{1,2}}/\\\\d{{2,4}})', text, re.I)\\n"
+        "if m:\\n"
+        "    print('BEGIN=' + m.group(1))\\n"
+        "    print('END=' + m.group(2))\\n"
+        "else:\\n"
+        "    m2 = re.search(r'ending\\\\s+(\\\\d{{1,2}}/\\\\d{{1,2}}/\\\\d{{2,4}})', text, re.I)\\n"
+        "    print('BEGIN=')\\n"
+        "    print('END=' + (m2.group(1) if m2 else ''))\\n"
+    )
+    result = subprocess.run([bundled_python, '-c', parse_code], capture_output=True, text=True)
+    print(result.stdout, end='')
+finally:
+    try:
+        if os.path.exists(pdf_path):
+            os.remove(pdf_path)
+        if os.path.isdir(temp_dir):
+            os.rmdir(temp_dir)
+    except Exception:
+        pass
+"""
+    result = subprocess.run([sys.executable, "-c", helper_code], capture_output=True, text=True)
+    begin = ""
+    end = ""
+    for line in (result.stdout or "").splitlines():
+        if line.startswith("BEGIN="):
+            begin = line.split("=", 1)[1].strip()
+        elif line.startswith("END="):
+            end = line.split("=", 1)[1].strip()
+    return begin, end
+
+
+def search_nm(org: Organization, show_process: bool = False) -> SearchResult:
+    result = SearchResult(
+        organization_name=org.organization_name,
+        ein=org.ein,
+        state="NM",
+        status=STATUS_UNKNOWN,
+        raw_status_text="",
+        source_url=NM_SEARCH_URL,
+        source_note=(
+            "New Mexico uses the latest open tax year from Status History, "
+            "plus the FYE month/day read from the latest submitted registration PDF."
+        ),
+    )
+
+    with sync_playwright() as p:
+        browser, context = launch_context(p, show_process)
+        page = context.new_page()
+        try:
+            page.goto(f"https://secure.nmdoj.gov/CharitySearch/CharityDetail.aspx?FEIN={format_ein(org.ein)}", wait_until="domcontentloaded", timeout=45000)
+            safe_wait_for_network_idle(page, timeout=15000)
+            time.sleep(2)
+
+            body = page.locator("body").inner_text(timeout=15000)
+            if "Charity Registration Status is unknown." in body and "Tax Year" not in body:
+                result.status = STATUS_NOT_REGISTERED
+                result.raw_status_text = "Charity Registration Status is unknown."
+                result.success = True
+                return result
+
+            rows = nm_parse_history_rows(page)
+            if not rows:
+                result.status = STATUS_NOT_REGISTERED
+                result.raw_status_text = "No matching organization row"
+                result.success = True
+                return result
+
+            latest_tax_year = max(year for year, _, _ in rows)
+            latest_year_rows = [(year, detail, status_date) for year, detail, status_date in rows if year == latest_tax_year]
+            latest_detail = re.sub(r"\s+\d{10,}$", "", latest_year_rows[0][1]).strip()
+
+            latest_submitted = nm_latest_submitted(rows)
+            if not latest_submitted:
+                result.status = STATUS_UNKNOWN
+                result.raw_status_text = f"Tax Year {latest_tax_year} | {latest_detail}"
+                return result
+
+            submitted_year, reg_number, _ = latest_submitted
+            _, fye_text = nm_extract_fye(context, reg_number)
+            if not fye_text:
+                result.status = STATUS_UNKNOWN
+                result.raw_status_text = f"Tax Year {latest_tax_year} | {latest_detail}"
+                return result
+
+            fye_date = parse_date(fye_text)
+            if not fye_date:
+                result.status = STATUS_UNKNOWN
+                result.raw_status_text = f"Tax Year {latest_tax_year} | {latest_detail}"
+                return result
+
+            cycle_fye = date(latest_tax_year, fye_date.month, fye_date.day)
+            due_date = add_months(cycle_fye, 6)
+            if any(detail.startswith("Extension Granted") for _, detail, _ in latest_year_rows):
+                due_date = add_months(due_date, 6)
+
+            today = date.today()
+            six_months = today + timedelta(days=183)
+            if any(
+                detail.startswith("Registration Submitted")
+                or detail.startswith("Registration Accepted")
+                or detail.startswith("Registration Approved")
+                or detail == "Reinstatement Issued"
+                for _, detail, _ in latest_year_rows
+            ):
+                result.status = STATUS_CURRENT
+            elif due_date < today:
+                result.status = STATUS_DELINQUENT
+            elif due_date <= six_months:
+                result.status = STATUS_UPCOMING
+            else:
+                result.status = STATUS_CURRENT
+
+            result.raw_status_text = (
+                f"Tax Year {latest_tax_year} | {latest_detail} | "
+                f"FYE: {cycle_fye.strftime('%m/%d/%Y')} | Due: {due_date.strftime('%m/%d/%Y')}"
+            )
+            result.success = True
+            return result
+        except Exception as exc:
+            result.error = f"NM error: {exc}"
+            return result
+        finally:
+            context.close()
+            browser.close()
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Washington and New Mexico charity checker.")
+    parser.add_argument("--state", required=True, choices=["WA", "NM"], help="State to check")
+    parser.add_argument("--name", required=True, help="Organization name")
+    parser.add_argument("--ein", required=True, help="EIN / FEIN")
+    parser.add_argument("--show-process", action="store_true", help="Show browser while running")
+    args = parser.parse_args()
+
+    org = Organization(organization_name=args.name, ein=args.ein)
+    if args.state == "WA":
+        result = search_wa(org, show_process=args.show_process)
+    else:
+        result = search_nm(org, show_process=args.show_process)
+
+    print_result(result)
+    return 0 if result.success else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
