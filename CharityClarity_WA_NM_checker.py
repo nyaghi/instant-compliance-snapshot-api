@@ -581,7 +581,7 @@ def search_nm(org: Organization, show_process: bool = False) -> SearchResult:
             time.sleep(2)
 
             body = page.locator("body").inner_text(timeout=15000)
-            if "Charity Registration Status is unknown." in body and "Tax Year" not in body:
+            if re.search(r"Charity\s+Registration\s+Status\s+is\s+unknown\.?", body, re.I) and "Tax Year" not in body:
                 result.status = STATUS_NOT_REGISTERED
                 result.raw_status_text = "Charity Registration Status is unknown."
                 result.success = True
@@ -589,13 +589,20 @@ def search_nm(org: Organization, show_process: bool = False) -> SearchResult:
 
             rows = nm_parse_history_rows(page)
             if not rows:
-                result.status = STATUS_UPCOMING
-                result.raw_status_text = "NM detail page reached, but status-history rows were not parsed"
-                result.source_note = (
-                    "New Mexico detail lookup did not show the explicit unknown-registration message, "
-                    "but the hosted parser could not read status-history rows. CharityClarity treats this as a found record "
-                    "pending filing review instead of a no-record result."
-                )
+                if not re.search(r"\bTax\s+Year\b", body, re.I):
+                    result.status = STATUS_NOT_REGISTERED
+                    result.raw_status_text = "No NM status-history rows found for the FEIN lookup"
+                    result.source_note = (
+                        "New Mexico detail lookup did not expose status-history tax-year rows for this FEIN. "
+                        "CharityClarity treats that as no confirmed registration record instead of inferring a Pending status."
+                    )
+                else:
+                    result.status = STATUS_UNKNOWN
+                    result.raw_status_text = "NM detail page reached, but status-history rows were not parsed"
+                    result.source_note = (
+                        "New Mexico detail lookup exposed tax-year text, but the hosted parser could not read status-history rows. "
+                        "CharityClarity does not infer Pending without an explicit registry status."
+                    )
                 result.success = True
                 return result
 

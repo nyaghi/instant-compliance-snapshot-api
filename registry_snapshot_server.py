@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.28.6-staging"
+APP_VERSION = "2026.05.28.7-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -7031,6 +7031,29 @@ def explicit_registry_date(result, body: str) -> date | None:
     return None
 
 
+def nh_effective_report_due_date(result, body: str) -> tuple[date | None, date | None]:
+    """Return NH base/effective report due dates for Good Standing snapshot rows."""
+    if (getattr(result, "state", "") or "").upper() != "NH":
+        return None, None
+    text = combined_result_text(result, body)
+    raw = " ".join([result.raw_status_text or "", result.source_note or ""])
+    report_due_match = re.search(r"\bReport\s+Due\s*:\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})", text, re.I)
+    good_standing = bool(re.search(r"^\s*G\s*\|", raw, re.I)) or (
+        bool(re.search(r"\bGood\s+Standing\b", raw, re.I))
+        and not bool(re.search(r"\bNot\s+in\s+Good\s+Standing\b", raw, re.I))
+    )
+    if not report_due_match or not good_standing:
+        return None, None
+    base_due = parse_due_date(report_due_match.group(1))
+    if not base_due:
+        return None, None
+    today = date.today()
+    effective_due = base_due
+    if base_due < today and (today - base_due).days <= 210:
+        effective_due = add_months(base_due, 6)
+    return base_due, effective_due
+
+
 NO_ORGANIZATION_RECORD_PATTERN = (
     r"no matching|no match|no record found|no records found|no records|not found|"
     r"no results found|0 records|0 results|showing 0 to 0 of 0 entries|"
@@ -7154,7 +7177,7 @@ def explicit_adverse_registry_status(result, body: str) -> str:
         state == "NJ"
         and re.search(r"\b(active|current|compliant|good\s+standing)\b", primary_status_fields, re.I)
         and not re.search(
-            r"\b(non\W*compliant|revoked|suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist|pending|failed\s+to\s+renew|withdrawn|retired|terminated|cancelled|canceled|voluntar(?:y|ily)\s+deactivat(?:ed|ion)|closed|inactive)\b",
+            r"\b(non\W*compliant|not\s+current|revoked|suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist|pending|failed\s+to\s+renew|withdrawn|retired|terminated|cancelled|canceled|voluntar(?:y|ily)\s+deactivat(?:ed|ion)|closed|inactive)\b",
             primary_status_fields,
             re.I,
         )
@@ -7165,7 +7188,7 @@ def explicit_adverse_registry_status(result, body: str) -> str:
         and
         re.search(r"\b(active|current|compliant|good\s+standing)\b", primary_status_fields, re.I)
         and not re.search(
-            r"\b(revoked|suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist|pending|failed\s+to\s+renew|withdrawn|retired|terminated|cancelled|canceled|voluntar(?:y|ily)\s+deactivat(?:ed|ion)|closed|inactive)\b",
+            r"\b(not\s+current|revoked|suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist|pending|failed\s+to\s+renew|withdrawn|retired|terminated|cancelled|canceled|voluntar(?:y|ily)\s+deactivat(?:ed|ion)|closed|inactive)\b",
             primary_status_fields,
             re.I,
         )
@@ -7210,7 +7233,7 @@ def explicit_adverse_registry_status(result, body: str) -> str:
             return "Closed / Withdrawn / Canceled"
     confirmed = organization_record_confirmed(result, text) or md_detail_page_matched(result, text)
     expired_pattern = r"\bexpired\b"
-    if not confirmed and not re.search(r"\b(revoked|suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist|pending)\b|" + terminal_pattern + "|" + failed_to_renew_pattern + "|" + expired_pattern, status_evidence, re.I):
+    if not confirmed and not re.search(r"\b(not\s+current|revoked|suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist|pending)\b|" + terminal_pattern + "|" + failed_to_renew_pattern + "|" + expired_pattern, status_evidence, re.I):
         return ""
     if state == "NJ":
         def nj_status_confirmed(pattern: str) -> bool:
@@ -7247,7 +7270,7 @@ def explicit_adverse_registry_status(result, body: str) -> str:
         return "Closed / Withdrawn / Canceled"
     if re.search(failed_to_renew_pattern, status_evidence, re.I):
         return "Failed to Renew"
-    if re.search(expired_pattern, status_evidence, re.I):
+    if re.search(r"\bnot\s+current\b", status_evidence, re.I) or re.search(expired_pattern, status_evidence, re.I):
         return "Delinquent"
     return ""
 
@@ -7299,11 +7322,12 @@ def true_status_from_body(result, body: str) -> str:
     if explicit_no_registration_status(result, combined):
         return "Not Registered"
     if state == "NH":
-        report_due_match = re.search(r"\bReport\s+Due\s*:\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})", combined, re.I)
-        if report_due_match and re.search(r"\b(G|Good\s+Standing)\b", result.raw_status_text or "", re.I):
-            report_due = parse_due_date(report_due_match.group(1))
-            if report_due:
-                return status_from_calendar_date(report_due)
+        _, effective_report_due = nh_effective_report_due_date(result, body)
+        if effective_report_due:
+            return status_from_calendar_date(effective_report_due)
+    if state == "SC" and re.search(r"^\s*Registered\b", " ".join([result.status or "", result.raw_status_text or ""]), re.I):
+        registry_date = explicit_registry_date(result, combined)
+        return status_from_calendar_date(registry_date) if registry_date else "Current"
     if state == "CT":
         ct_status_fields = " ".join([
             result.raw_status_text or "",
@@ -7522,6 +7546,27 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
             f"The {state} public registry shows the organization registration status as Failed to Renew. "
             "CharityClarity uses that registry status instead of calculating status from annual filing records."
         )
+    if state == "KY" and normalized_status in {"current", "upcoming filing", "delinquent"} and useful_registry_name(result.matched_registry_name or ""):
+        identifier = f" (ID: {result.matched_registry_identifier})" if result.matched_registry_identifier else ""
+        filed_year = context.get("represented_year")
+        filed_text = f" The most recent filing year identified in that row is {filed_year}." if filed_year else ""
+        return (
+            f"The KY downloadable registry snapshot includes a strict name match for {result.matched_registry_name}{identifier}. "
+            "The Kentucky source does not expose EIN in the downloaded public list, so CharityClarity accepts only exact or confirmed-safe name matches for KY."
+            f"{filed_text}"
+        )
+    if state == "NH" and normalized_status in {"current", "upcoming filing", "delinquent"}:
+        base_due, effective_due = nh_effective_report_due_date(result, body)
+        if base_due and effective_due:
+            timing = "within 6 months" if normalized_status == "upcoming filing" else ("overdue" if normalized_status == "delinquent" else "not within the next 6 months")
+            if effective_due != base_due:
+                return (
+                    f"The NH public registry shows Good Standing with base report due date {format_date(base_due)}. "
+                    f"CharityClarity applies the six-month extension window and uses {format_date(effective_due)}, which is {timing}."
+                )
+            return f"The NH public registry shows Good Standing with report due date {format_date(base_due)}, which is {timing}."
+    if state == "SC" and normalized_status == "current" and re.search(r"^\s*Registered\b", " ".join([result.status or "", result.raw_status_text or ""]), re.I):
+        return "The SC public registry shows the organization registration status as Registered. CharityClarity treats that as Current."
     if state == "MD" and normalized_status == "current" and not context.get("represented_year"):
         return (
             "The MD public registry shows Registration Status: Current. CharityClarity did not identify a Maryland filing-year value "
@@ -7997,7 +8042,8 @@ def search_snapshot_or_embedded_state(org, state: str):
     state = (state or "").upper()
     original_name = org.organization_name
     if state in {"KY", "NH"}:
-        variants = organization_match_target_variants(original_name, org.ein)[:8]
+        variant_limit = 14 if state == "NH" else 8
+        variants = organization_match_target_variants(original_name, org.ein)[:variant_limit]
     else:
         variants = organization_name_variants(
             original_name,
@@ -8006,7 +8052,7 @@ def search_snapshot_or_embedded_state(org, state: str):
             include_name_segments=True,
             include_compact_legal_suffixes=True,
             include_leading_article_variants=True,
-        )[:8]
+        )[:24 if state == "KS" else 8]
     if original_name and original_name not in variants:
         variants.insert(0, original_name)
     best_result = None
