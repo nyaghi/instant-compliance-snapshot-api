@@ -589,19 +589,17 @@ def search_nm(org: Organization, show_process: bool = False) -> SearchResult:
 
             rows = nm_parse_history_rows(page)
             if not rows:
-                if not re.search(r"\bTax\s+Year\b", body, re.I):
-                    result.status = STATUS_NOT_REGISTERED
-                    result.raw_status_text = "No NM status-history rows found for the FEIN lookup"
-                    result.source_note = (
-                        "New Mexico detail lookup did not expose status-history tax-year rows for this FEIN. "
-                        "CharityClarity treats that as no confirmed registration record instead of inferring a Pending status."
-                    )
-                else:
-                    result.status = STATUS_UNKNOWN
-                    result.raw_status_text = "NM detail page reached, but status-history rows were not parsed"
+                result.status = STATUS_UNKNOWN
+                result.raw_status_text = "NM detail page reached, but status-history rows were not parsed"
+                if re.search(r"\bTax\s+Year\b", body, re.I):
                     result.source_note = (
                         "New Mexico detail lookup exposed tax-year text, but the hosted parser could not read status-history rows. "
                         "CharityClarity does not infer Pending without an explicit registry status."
+                    )
+                else:
+                    result.source_note = (
+                        "New Mexico detail lookup did not expose status-history tax-year rows for this FEIN. "
+                        "CharityClarity does not treat an ambiguous registry response as Not Registered."
                     )
                 result.success = True
                 return result
