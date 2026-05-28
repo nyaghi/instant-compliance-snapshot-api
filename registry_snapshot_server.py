@@ -68,7 +68,7 @@ STATE_BATCH_BUNDLE_PATH = (
 STATE_WA_NM_PATH = (
     Path(os.environ["CE_STATE_WA_NM_PATH"])
     if os.environ.get("CE_STATE_WA_NM_PATH")
-    else None
+    else (BASE_DIR / "CharityClarity_WA_NM_checker.py" if (BASE_DIR / "CharityClarity_WA_NM_checker.py").exists() else None)
 )
 KS_WEEKLY_CHECKER_PATH = (
     Path(os.environ["CE_KS_WEEKLY_CHECKER_PATH"])
@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.28.1-staging"
+APP_VERSION = "2026.05.28.2-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -8284,6 +8284,14 @@ def ok_terminal_closed_text(*texts: str) -> bool:
     )
 
 
+def ok_search_name_for_org(org) -> str:
+    name = re.sub(r"\s+", " ", getattr(org, "organization_name", "") or "").strip()
+    without_article = re.sub(r"^the\s+", "", name, flags=re.I).strip()
+    if without_article and without_article.lower() != name.lower():
+        return without_article
+    return name
+
+
 def search_ok_precise(page, org, module):
     result = module.SearchResult(
         organization_name=org.organization_name,
@@ -8331,9 +8339,10 @@ def search_ok_precise(page, org, module):
             result.error = "Could not find the Oklahoma Entity Name input."
             return result
 
+        search_name = ok_search_name_for_org(org)
         name_input.click(timeout=5000)
         name_input.fill("")
-        name_input.type(org.organization_name, delay=40)
+        name_input.type(search_name, delay=40)
         page.wait_for_timeout(500)
 
         clicked = False

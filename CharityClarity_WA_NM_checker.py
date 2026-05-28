@@ -600,15 +600,23 @@ def search_nm(org: Organization, show_process: bool = False) -> SearchResult:
 
             latest_submitted = nm_latest_submitted(rows)
             if not latest_submitted:
-                result.status = STATUS_UNKNOWN
+                if latest_detail.startswith("Tax Year Registration Open"):
+                    result.status = STATUS_UPCOMING if latest_tax_year >= date.today().year - 1 else STATUS_DELINQUENT
+                else:
+                    result.status = STATUS_UNKNOWN
                 result.raw_status_text = f"Tax Year {latest_tax_year} | {latest_detail}"
+                result.success = True
                 return result
 
             submitted_year, reg_number, _ = latest_submitted
             _, fye_text = nm_extract_fye(context, reg_number)
             if not fye_text:
-                result.status = STATUS_UNKNOWN
+                if latest_detail.startswith("Tax Year Registration Open"):
+                    result.status = STATUS_UPCOMING if latest_tax_year >= date.today().year - 1 else STATUS_DELINQUENT
+                else:
+                    result.status = STATUS_UNKNOWN
                 result.raw_status_text = f"Tax Year {latest_tax_year} | {latest_detail}"
+                result.success = True
                 return result
 
             fye_date = parse_date(fye_text)
