@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.28.3-staging"
+APP_VERSION = "2026.05.28.4-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -114,6 +114,15 @@ SINGLE_STATE_QUEUE_TIMEOUT_SECONDS = min(
 SINGLE_STATE_RETRY_AFTER_SECONDS = min(
     max(1, int(os.environ.get("CE_SINGLE_STATE_RETRY_AFTER_SECONDS", "8"))),
     60,
+)
+SINGLE_STATE_OVERFLOW_API_URL = os.environ.get("CE_SINGLE_STATE_OVERFLOW_API_URL", "").strip()
+SINGLE_STATE_OVERFLOW_TIMEOUT_SECONDS = min(
+    max(20.0, float(os.environ.get("CE_SINGLE_STATE_OVERFLOW_TIMEOUT_SECONDS", "88"))),
+    89.0,
+)
+SINGLE_STATE_LOCAL_ADMIT_TIMEOUT_SECONDS = min(
+    max(0.0, float(os.environ.get("CE_SINGLE_STATE_LOCAL_ADMIT_TIMEOUT_SECONDS", "1"))),
+    SINGLE_STATE_QUEUE_TIMEOUT_SECONDS,
 )
 SINGLE_STATE_REQUEST_SEMAPHORE = threading.BoundedSemaphore(SINGLE_STATE_MAX_CONCURRENT)
 BLOCK_HEAVY_BROWSER_RESOURCES = os.environ.get("CE_BLOCK_HEAVY_BROWSER_RESOURCES", "1").strip().lower() not in {"0", "false", "no"}
@@ -9567,6 +9576,46 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
     return results
 
 
+def proxy_single_state_request_to_overflow(payload: dict) -> tuple[int, dict, dict[str, str]] | None:
+    if not SINGLE_STATE_OVERFLOW_API_URL:
+        return None
+    request_payload = dict(payload)
+    request_payload["client_user_agent"] = " ".join(part for part in [
+        str(payload.get("client_user_agent") or "").strip(),
+        f"CharityClarity overflow/{APP_VERSION}",
+    ] if part)
+    request = urllib.request.Request(
+        SINGLE_STATE_OVERFLOW_API_URL,
+        data=json.dumps(request_payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Origin": "https://staging.compliance-express.com",
+            "User-Agent": f"CharityClarity overflow/{APP_VERSION}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=SINGLE_STATE_OVERFLOW_TIMEOUT_SECONDS) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        if isinstance(data, dict):
+            data["single_state_lane"] = "overflow"
+            return response.status, data, {}
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        try:
+            data = json.loads(body)
+        except Exception:
+            data = {"error": body or str(exc)}
+        headers = {}
+        retry_after = exc.headers.get("Retry-After")
+        if retry_after:
+            headers["Retry-After"] = retry_after
+        return exc.code, data, headers
+    except Exception as exc:
+        log_error(f"Single-state overflow proxy failed: {exc}")
+    return None
+
+
 def normalize_organization_requests(payload: dict, privileged: bool) -> list[dict]:
     organization_name = (payload.get("organization_name") or "").strip()
     raw_organizations = payload.get("organizations")
@@ -9846,8 +9895,21 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
             is_single_state_request = len(organizations) == 1 and len(states) == 1
             if is_single_state_request:
                 single_state_admitted = SINGLE_STATE_REQUEST_SEMAPHORE.acquire(
-                    timeout=SINGLE_STATE_QUEUE_TIMEOUT_SECONDS
+                    timeout=(
+                        SINGLE_STATE_LOCAL_ADMIT_TIMEOUT_SECONDS
+                        if SINGLE_STATE_OVERFLOW_API_URL and not PUBLIC_SINGLE_STATE_ONLY
+                        else SINGLE_STATE_QUEUE_TIMEOUT_SECONDS
+                    )
                 )
+                if not single_state_admitted and SINGLE_STATE_OVERFLOW_API_URL and not PUBLIC_SINGLE_STATE_ONLY:
+                    overflow_response = proxy_single_state_request_to_overflow(payload)
+                    if overflow_response is not None:
+                        status_code, overflow_payload, overflow_headers = overflow_response
+                        self._send_json(status_code, overflow_payload, overflow_headers)
+                        return
+                    single_state_admitted = SINGLE_STATE_REQUEST_SEMAPHORE.acquire(
+                        timeout=SINGLE_STATE_QUEUE_TIMEOUT_SECONDS
+                    )
                 if not single_state_admitted:
                     self._send_json(
                         429,

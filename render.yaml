@@ -72,6 +72,12 @@ services:
         value: "35"
       - key: CE_SINGLE_STATE_RETRY_AFTER_SECONDS
         value: "3"
+      - key: CE_SINGLE_STATE_OVERFLOW_API_URL
+        value: https://instant-compliance-snapshot-api-staging-8dnk.onrender.com/api/check
+      - key: CE_SINGLE_STATE_OVERFLOW_TIMEOUT_SECONDS
+        value: "88"
+      - key: CE_SINGLE_STATE_LOCAL_ADMIT_TIMEOUT_SECONDS
+        value: "1"
       - key: CE_FL_LOOKUP_MAX_SECONDS
         value: "45"
       - key: CE_SC_NAME_VARIANT_MAX_SECONDS
