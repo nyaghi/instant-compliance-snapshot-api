@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.1-staging"
+APP_VERSION = "2026.05.29.2-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -461,6 +461,20 @@ WI_SIDECAR_URL = os.environ.get("CE_WI_SIDECAR_URL", "").strip()
 WI_LOOKUP_SECRET = os.environ.get("CE_WI_LOOKUP_SECRET", "").strip()
 WI_SIDECAR_TIMEOUT_SECONDS = min(max(10.0, float(os.environ.get("CE_WI_SIDECAR_TIMEOUT_SECONDS", "45"))), 58.0)
 WI_SIDECAR_ATTEMPTS = min(max(1, int(os.environ.get("CE_WI_SIDECAR_ATTEMPTS", "3"))), 5)
+NH_LIVE_PDF_URL = os.environ.get(
+    "CE_NH_LIVE_PDF_URL",
+    "https://mm.nh.gov/files/uploads/doj/remote-docs/registered-charities.pdf",
+).strip()
+NH_LIVE_PDF_LOCAL_PATH = (
+    Path(os.environ["CE_NH_LIVE_PDF_LOCAL_PATH"])
+    if os.environ.get("CE_NH_LIVE_PDF_LOCAL_PATH")
+    else BASE_DIR / "registered-charities.pdf"
+)
+NH_LIVE_PDF_MAX_AGE_SECONDS = min(max(3600, int(os.environ.get("CE_NH_LIVE_PDF_MAX_AGE_SECONDS", "604800"))), 1209600)
+NH_LIVE_PDF_RECORDS = None
+NH_LIVE_PDF_LOADED_AT = 0.0
+NH_LIVE_PDF_UPDATED_LABEL = ""
+NH_LIVE_PDF_LOCK = threading.Lock()
 MAX_EXTERNAL_EXEMPT_ORGS = 3
 DOMAIN_LIMIT_DAYS = 7
 ADMIN_PASSCODE = "8977"
@@ -1760,6 +1774,8 @@ def filing_due_date(state: str, report_year: int, fiscal_end: tuple[int, int]) -
         return add_months(fy_end, 5) + timedelta(days=15), "based on Colorado's annual reporting cycle"
     if state == "HI":
         return add_months(fy_end, 4) + timedelta(days=15), "based on Hawaii's 4.5-month annual filing cycle"
+    if state == "KY":
+        return fifteenth_day_after_fiscal_year_end(fy_end, 5), "based on Kentucky's annual charitable organization filing cycle"
     if state == "ME":
         return add_months(fy_end, 5), "based on Maine's annual filing cycle"
     if state == "ND":
@@ -1776,7 +1792,7 @@ def filing_due_date_options(state: str, report_year: int, fiscal_end: tuple[int,
         base_due = date(report_year, 12, 31) if fiscal_end == (6, 30) else fifteenth_day_after_fiscal_year_end(fy_end, 5)
     elif state == "MD":
         base_due = add_months_preserving_end_of_month(fy_end, 6)
-    elif state in {"MA", "NY", "HI", "SC"}:
+    elif state in {"MA", "NY", "HI", "SC", "KY"}:
         base_due = fifteenth_day_after_fiscal_year_end(fy_end, 5)
     elif state == "PA":
         base_due = add_months(fy_end, 11)
@@ -2801,6 +2817,7 @@ def organization_match_target_variants(name: str, ein: str = "") -> list[str]:
 
 def org_with_name(org, name: str):
     clone = SimpleNamespace(organization_name=name, ein=org.ein)
+    clone.original_organization_name = getattr(org, "original_organization_name", getattr(org, "organization_name", ""))
     if hasattr(org, "match_target_names"):
         clone.match_target_names = getattr(org, "match_target_names")
     else:
@@ -2815,6 +2832,21 @@ def result_registry_name_is_safe(result, original_name: str, ein: str = "") -> b
     if not registry_name:
         return False
     return registry_name_is_safe_for_org(registry_name, original_name, ein)
+
+
+def registry_name_is_safe_against_targets(registry_name: str, targets: list[str], original_name: str, ein: str = "") -> bool:
+    registry_name = clean_registry_name(registry_name or "")
+    if not registry_name:
+        return False
+    if registry_name_is_safe_for_org(registry_name, original_name, ein):
+        return True
+    if target_name_score(registry_name, targets) >= 700:
+        return not (
+            related_affiliate_or_chapter_mismatch(original_name, registry_name)
+            or broad_governance_name_mismatch(original_name, registry_name)
+            or incompatible_institutional_prefix_expansion(original_name, registry_name)
+        )
+    return False
 
 
 def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: str = "") -> bool:
@@ -3940,6 +3972,8 @@ def target_name_score(row_name: str, targets: list[str]) -> int:
         target_norm = normalized_match_name(target)
         if not target_norm:
             continue
+        if saint_university_canonical(row_norm) and saint_university_canonical(row_norm) == saint_university_canonical(target_norm):
+            best = max(best, 1000)
         if row_norm == target_norm:
             best = max(best, 1000)
         elif row_norm.startswith(target_norm) or target_norm.startswith(row_norm):
@@ -6278,7 +6312,7 @@ def search_wi_sidecar(org):
     payload = {
         "organization_name": org.organization_name,
         "ein": org.ein,
-        "search_names": search_names[:WI_DIRECT_VARIANT_LIMIT],
+        "search_names": search_names[:max(WI_DIRECT_VARIANT_LIMIT, 12)],
         "target_names": organization_match_target_variants(org.organization_name, org.ein),
         "max_seconds": WI_SIDECAR_TIMEOUT_SECONDS,
         "app_version": APP_VERSION,
@@ -7049,7 +7083,7 @@ def nh_effective_report_due_date(result, body: str) -> tuple[date | None, date |
         return None, None
     today = date.today()
     effective_due = base_due
-    if base_due < today and (today - base_due).days <= 210:
+    if re.search(r"\bextension\b", raw, re.I) and base_due < today and (today - base_due).days <= 210:
         effective_due = add_months(base_due, 6)
     return base_due, effective_due
 
@@ -7919,8 +7953,12 @@ def ky_strict_name_score(registry_name: str, target_norms: set[str], original_na
             continue
         if registry_norm == target_norm:
             best = max(best, 1000)
-        elif (registry_norm.startswith(target_norm) or target_norm.startswith(registry_norm)) and min(len(registry_norm.split()), len(target_norm.split())) >= 4:
-            best = max(best, 800)
+        elif registry_norm.startswith(target_norm) and min(len(registry_norm.split()), len(target_norm.split())) >= 4:
+            best = max(best, 800 + min(50, len(target_norm.split())))
+        elif target_norm.startswith(registry_norm) and min(len(registry_norm.split()), len(target_norm.split())) >= 4:
+            coverage = len(registry_norm.split()) / max(1, len(target_norm.split()))
+            if coverage >= 0.8:
+                best = max(best, 760 + min(40, len(registry_norm.split())))
     if best >= 800:
         return best
     original_word_count = len(normalized_match_name(original_name).split())
@@ -7928,6 +7966,23 @@ def ky_strict_name_score(registry_name: str, target_norms: set[str], original_na
     if min(original_word_count, registry_word_count) >= 2 and compatible_ein_alias_for_name(original_name, registry_name):
         return 700
     return best
+
+
+def saint_university_canonical(value: str) -> tuple[str, ...]:
+    tokens = normalized_match_name(value).split()
+    if not tokens:
+        return ()
+    tokens = ["saint" if token == "st" else token for token in tokens]
+    tokens = [token[:-1] if token.endswith("s") and len(token) > 3 else token for token in tokens]
+    if len(tokens) >= 4 and tokens[0] == "university" and tokens[1] == "of":
+        tokens = [tokens[0], *tokens[2:]]
+    if len(tokens) >= 3 and tokens[-1] == "university" and tokens[-2].endswith("s"):
+        tokens = [*tokens[:-2], tokens[-2][:-1], tokens[-1]]
+    if len(tokens) >= 3 and tokens[0] == "saint" and tokens[-1] == "university":
+        return ("university", "saint", *tokens[1:-1])
+    if len(tokens) >= 3 and tokens[0] == "university" and tokens[1] == "saint":
+        return ("university", "saint", *tokens[2:])
+    return ()
 
 
 def search_ky_strict_snapshot(org):
@@ -7948,16 +8003,18 @@ def search_ky_strict_snapshot(org):
     target_norms = {normalized_match_name(target) for target in targets}
     target_first_words = {target.split()[0] for target in target_norms if target.split()}
     best = None
-    best_score = -1000
+    best_score = (-1000, -1000, 0)
     for registry_id, registry_name, filed_year, record_text in load_ky_snapshot_records():
         registry_norm = normalized_match_name(registry_name)
         if target_first_words and registry_norm.split() and registry_norm.split()[0] not in target_first_words:
             continue
         score = ky_strict_name_score(registry_name, target_norms, org.organization_name)
-        if score > best_score:
-            best_score = score
+        match_score = target_name_score(registry_name, targets)
+        composite_score = (score, match_score, len(registry_norm.split()))
+        if composite_score > best_score:
+            best_score = composite_score
             best = (registry_id, registry_name, filed_year, record_text)
-    if not best or best_score < 700:
+    if not best or best_score[0] < 700:
         return result
     registry_id, registry_name, filed_year, record_text = best
     result.status = checker.STATUS_CURRENT
@@ -7969,6 +8026,169 @@ def search_ky_strict_snapshot(org):
     result.matched_registry_identifier = registry_id
     result.source_note = (
         "Kentucky downloadable public charity registration snapshot matched the organization name under strict master-code validation."
+    )
+    return result
+
+
+def nh_download_live_pdf_records() -> tuple[list[dict], str]:
+    if PdfReader is None:
+        return [], ""
+    pdf_source = NH_LIVE_PDF_URL
+    try:
+        request = urllib.request.Request(
+            NH_LIVE_PDF_URL,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    f"AppleWebKit/537.36 (KHTML, like Gecko) CharityClarity/{APP_VERSION}"
+                ),
+                "Accept": "application/pdf,*/*",
+                "Referer": "https://www.doj.nh.gov/bureaus/charitable-trusts/registered-charities",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            pdf_bytes = response.read()
+    except Exception:
+        if not NH_LIVE_PDF_LOCAL_PATH.exists():
+            raise
+        pdf_bytes = NH_LIVE_PDF_LOCAL_PATH.read_bytes()
+        pdf_source = str(NH_LIVE_PDF_LOCAL_PATH)
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    text_parts = []
+    for page in reader.pages:
+        try:
+            text_parts.append(page.extract_text() or "")
+        except Exception:
+            continue
+    text = "\n".join(text_parts)
+    updated_match = re.search(r"\bUpdated:\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})", text, re.I)
+    updated_label = updated_match.group(1) if updated_match else ""
+    record_pattern = re.compile(
+        r"(?P<reg>\d{3,6})\s+(?P<body>[\s\S]*?)\s+(?P<status>[GXS])\s+(?P<due>\d{1,2}/\d{1,2}/\d{4})(?=\s+\d{3,6}\s+[A-Z]|\s+Updated:|$)",
+        re.I,
+    )
+    records = []
+    for match in record_pattern.finditer(text):
+        body = re.sub(r"\s+", " ", match.group("body") or "").strip()
+        due_date = parse_due_date(match.group("due"))
+        if not body or not due_date:
+            continue
+        registry_name = nh_registry_name_from_live_body(body)
+        registry_norm = normalized_match_name(registry_name)
+        records.append({
+            "registry_id": match.group("reg"),
+            "body": body,
+            "registry_name": registry_name,
+            "registry_words": set(registry_norm.split()),
+            "status_code": match.group("status").upper(),
+            "due_raw": match.group("due"),
+            "due_date": due_date,
+        })
+    if pdf_source != NH_LIVE_PDF_URL and updated_label:
+        updated_label = f"{updated_label} from bundled NH PDF"
+    return records, updated_label
+
+
+def nh_live_pdf_records() -> tuple[list[dict], str]:
+    global NH_LIVE_PDF_RECORDS, NH_LIVE_PDF_LOADED_AT, NH_LIVE_PDF_UPDATED_LABEL
+    now = time.time()
+    if NH_LIVE_PDF_RECORDS is not None and now - NH_LIVE_PDF_LOADED_AT < NH_LIVE_PDF_MAX_AGE_SECONDS:
+        return NH_LIVE_PDF_RECORDS, NH_LIVE_PDF_UPDATED_LABEL
+    with NH_LIVE_PDF_LOCK:
+        now = time.time()
+        if NH_LIVE_PDF_RECORDS is not None and now - NH_LIVE_PDF_LOADED_AT < NH_LIVE_PDF_MAX_AGE_SECONDS:
+            return NH_LIVE_PDF_RECORDS, NH_LIVE_PDF_UPDATED_LABEL
+        records, updated_label = nh_download_live_pdf_records()
+        if records:
+            NH_LIVE_PDF_RECORDS = records
+            NH_LIVE_PDF_LOADED_AT = now
+            NH_LIVE_PDF_UPDATED_LABEL = updated_label
+    return NH_LIVE_PDF_RECORDS or [], NH_LIVE_PDF_UPDATED_LABEL
+
+
+def nh_registry_name_from_live_body(body: str) -> str:
+    cleaned = re.sub(r"\s+", " ", body or "").strip()
+    cleaned = re.split(
+        r"\s+(?:P\.?\s*O\.?\s+Box|PO\s+Box|C/O|c/o|\d{1,6}\s+[A-Za-z][A-Za-z0-9.'#-]*(?:\s|$))",
+        cleaned,
+        maxsplit=1,
+    )[0].strip()
+    return useful_registry_name(cleaned)
+
+
+def search_nh_live_pdf(org):
+    result = checker.StateResult(
+        org.organization_name,
+        org.ein,
+        "NH",
+        checker.STATUS_NOT_REGISTERED,
+        NH_LIVE_PDF_URL,
+    )
+    result.raw_status_text = "No safely matching New Hampshire charity row in the current downloadable PDF"
+    result.source_note = (
+        "New Hampshire was checked against the current downloadable registered-charities PDF. "
+        "CharityClarity requires a safe registry-name match before using a row."
+    )
+    result.success = True
+    try:
+        records, updated_label = nh_live_pdf_records()
+    except Exception as exc:
+        result.status = "Site Not Reachable"
+        result.raw_status_text = f"NH live PDF fetch failed: {exc}"
+        result.source_note = "The New Hampshire registered-charities PDF could not be loaded for this lookup."
+        result.success = False
+        result.error = str(exc)
+        return result
+
+    original_name = getattr(org, "original_organization_name", org.organization_name)
+    targets = getattr(org, "match_target_names", None) or organization_match_target_variants(original_name, org.ein)
+    target_word_sets = [set(normalized_match_name(target).split()) for target in targets if normalized_match_name(target)]
+    target_words = set().union(*target_word_sets) if target_word_sets else set()
+    minimum_overlap = 1 if len(target_words) <= 2 else 2
+    best = None
+    best_score = (-1000, -1000)
+    for record in records:
+        registry_name = record.get("registry_name") or nh_registry_name_from_live_body(record.get("body", ""))
+        if not registry_name:
+            continue
+        registry_words = record.get("registry_words") or set(normalized_match_name(registry_name).split())
+        if target_words and len(registry_words & target_words) < minimum_overlap:
+            continue
+        score = target_name_score(registry_name, targets)
+        if score < 450:
+            continue
+        if not registry_name_is_safe_against_targets(registry_name, targets, original_name, org.ein):
+            continue
+        composite = (score, len(normalized_match_name(registry_name).split()))
+        if composite > best_score:
+            best_score = composite
+            best = (record, registry_name)
+    if not best:
+        return result
+
+    record, registry_name = best
+    code = record["status_code"]
+    due_date = record["due_date"]
+    if code == "S":
+        status = "Suspended"
+        status_label = "Suspended"
+    elif code == "X":
+        status = "Delinquent"
+        status_label = "Not in Good Standing"
+    else:
+        status = status_from_calendar_date(due_date)
+        status_label = "Good Standing"
+    result.status = status
+    result.raw_status_text = " | ".join(part for part in [
+        f"{code} | {status_label}",
+        f"Report Due: {record['due_raw']}",
+        f"PDF updated: {updated_label}" if updated_label else "",
+    ] if part)
+    result.matched_registry_name = registry_name
+    result.matched_registry_identifier = record["registry_id"]
+    result.source_note = (
+        "New Hampshire was checked against the current downloadable registered-charities PDF. "
+        "The report due date shown in the PDF controls the CharityClarity status."
     )
     return result
 
@@ -8044,6 +8264,8 @@ def search_snapshot_or_embedded_state(org, state: str):
     if state in {"KY", "NH"}:
         variant_limit = 14 if state == "NH" else 8
         variants = organization_match_target_variants(original_name, org.ein)[:variant_limit]
+    elif state == "KS":
+        variants = organization_match_target_variants(original_name, org.ein)[:12]
     else:
         variants = organization_name_variants(
             original_name,
@@ -8084,10 +8306,28 @@ def _search_snapshot_or_embedded_state_once(org, state: str):
     state = (state or "").upper()
     if state == "KY":
         return search_ky_strict_snapshot(org)
+    if state == "NH":
+        live_result = search_nh_live_pdf(org)
+        if public_status(live_result) not in {"Not Registered", "Site Not Reachable"}:
+            return live_result
     if state == "KS":
         module = load_ks_weekly_checker()
         external_result = module.search_ks_snapshot(org.organization_name, ARTIFACTS_DIR / "KS")
-        return copy_external_result(org, state, external_result)
+        result = copy_external_result(org, state, external_result)
+        if public_status(result) not in {"Not Registered", "Site Not Reachable"}:
+            original_name = getattr(org, "original_organization_name", org.organization_name)
+            targets = getattr(org, "match_target_names", None) or organization_match_target_variants(original_name, org.ein)
+            matched_name = getattr(result, "matched_registry_name", "") or ""
+            if not registry_name_is_safe_against_targets(matched_name, targets, original_name, org.ein):
+                rejected = checker.StateResult(org.organization_name, org.ein, "KS", checker.STATUS_NOT_REGISTERED, getattr(result, "source_url", "") or "")
+                rejected.raw_status_text = "Kansas registry row did not safely match the requested organization"
+                rejected.source_note = (
+                    "Kansas is checked from weekly downloadable data. CharityClarity rejected the closest row "
+                    "because the registry name was too broad or too different from the requested organization."
+                )
+                rejected.success = True
+                return rejected
+        return result
 
     bundle = load_state_batch_bundle()
     modules = state_batch_modules([state])
@@ -8180,6 +8420,16 @@ def search_ms_fast(page, org):
             result.source_note = "Mississippi results table did not contain a matching organization row."
             return result
 
+        row_registry_name = ""
+        try:
+            cells = row.locator("td")
+            if name_index >= 0 and cells.count() > name_index:
+                row_registry_name = useful_registry_name(cells.nth(name_index).inner_text(timeout=1000))
+        except Exception:
+            row_registry_name = ""
+        if row_registry_name:
+            result.matched_registry_name = row_registry_name
+
         status_text = module.extract_status_from_row(row, status_index)
         if not status_text:
             result.status = module.STATUS_UNKNOWN
@@ -8198,6 +8448,8 @@ def search_ms_fast(page, org):
                     link_text = re.sub(r"\s+", " ", link.inner_text(timeout=750)).strip()
                 except Exception:
                     link_text = ""
+                if link_text and not row_registry_name:
+                    result.matched_registry_name = useful_registry_name(link_text)
                 if link_text and module.normalize_name(link_text) == module.normalize_name(org.organization_name):
                     link.click(timeout=3000)
                     clicked_detail = True
@@ -8249,10 +8501,42 @@ def search_batch_browser_state(page, org, state: str):
     state = (state or "").upper()
     modules = state_batch_modules([state])
     module = modules[load_state_batch_bundle().STATE_TO_MODULE[state]]
-    module_org = module.Organization(organization_name=org.organization_name)
     if state == "MS":
-        external_result = search_ms_fast(page, module_org)
+        variants = organization_name_variants(
+            org.organization_name,
+            org.ein,
+            include_ein_aliases=True,
+            include_name_segments=False,
+            include_compact_legal_suffixes=True,
+            include_leading_article_variants=True,
+        )[:6]
+        if org.organization_name and org.organization_name not in variants:
+            variants.insert(0, org.organization_name)
+        best_external = None
+        for variant_name in variants or [org.organization_name]:
+            module_org = module.Organization(organization_name=variant_name)
+            module_org.ein = org.ein
+            external_result = search_ms_fast(page, module_org)
+            best_external = best_external or external_result
+            status = external_status_to_checker_status(getattr(external_result, "status", ""))
+            if status == "Site Not Reachable":
+                best_external = external_result
+                break
+            if status == "Not Registered":
+                continue
+            matched_name = getattr(external_result, "matched_registry_name", "") or getattr(external_result, "organization_name", "")
+            if matched_name and not registry_name_is_safe_for_org(matched_name, org.organization_name, org.ein):
+                continue
+            if variant_name != org.organization_name:
+                external_result.source_note = " ".join(part for part in [
+                    getattr(external_result, "source_note", "") or "",
+                    f"Matched using generated name/DBA variant: {variant_name}.",
+                ]).strip()
+            best_external = external_result
+            break
+        external_result = best_external
     elif state == "OK":
+        module_org = module.Organization(organization_name=org.organization_name)
         external_result = search_ok_precise(page, org, module)
     else:
         raise ValueError(f"Unsupported browser batch state adapter: {state}")

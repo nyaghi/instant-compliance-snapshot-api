@@ -743,7 +743,7 @@ def search_nm(org: Organization, show_process: bool = False) -> SearchResult:
         result.matched_registry_name = nm_registry_name_from_html(detail_html)
         if re.search(r"Charity\s+Registration\s+Status\s+is\s+unknown\.?", body_text, re.I) and "Tax Year" not in body_text:
             result.status = STATUS_NOT_REGISTERED
-            result.raw_status_text = "Charity Registration Status is unknown."
+            result.raw_status_text = "No New Mexico charity registration status-history rows found for this FEIN."
             result.success = True
             return result
 
@@ -774,7 +774,7 @@ def search_nm(org: Organization, show_process: bool = False) -> SearchResult:
             body = page.locator("body").inner_text(timeout=15000)
             if re.search(r"Charity\s+Registration\s+Status\s+is\s+unknown\.?", body, re.I) and "Tax Year" not in body:
                 result.status = STATUS_NOT_REGISTERED
-                result.raw_status_text = "Charity Registration Status is unknown."
+                result.raw_status_text = "No New Mexico charity registration status-history rows found for this FEIN."
                 result.success = True
                 return result
 
