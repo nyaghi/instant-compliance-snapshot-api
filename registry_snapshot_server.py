@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.7-staging"
+APP_VERSION = "2026.05.29.8-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -5126,21 +5126,15 @@ def find_ak_print_link_relaxed(page, org):
     formatted_ein = checker.format_ein_with_dash(org.ein)
     ein_digits = re.sub(r"\D", "", org.ein or "")
     variants = organization_name_variants(org.organization_name, org.ein)
-    for variant in variants:
-        try:
-            found = checker.find_ak_print_link(page, org_with_name(org, variant))
-            if found:
-                return found
-        except Exception:
-            pass
-    return page.evaluate(
+    found = page.evaluate(
         """
         ({ formattedEin, einDigits, names }) => {
             const normalize = (value) => (value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
             const normalizedNames = (names || []).map(normalize).filter(Boolean);
-            const rows = Array.from(document.querySelectorAll('table.DocTable tbody tr, table tbody tr'));
+                const rows = Array.from(document.querySelectorAll('table.DocTable tbody tr, table tbody tr'));
             for (const row of rows) {
                 const rowText = (row.innerText || row.textContent || '').trim().replace(/\\s+/g, ' ');
+                const cells = Array.from(row.querySelectorAll('td')).map((cell) => (cell.innerText || cell.textContent || '').trim().replace(/\\s+/g, ' ')).filter(Boolean);
                 const rowDigits = rowText.replace(/\\D/g, '');
                 const rowNorm = normalize(rowText);
                 const einSeen = (formattedEin && rowText.includes(formattedEin)) || (einDigits && rowDigits.includes(einDigits));
@@ -5153,7 +5147,7 @@ def find_ak_print_link_relaxed(page, org):
                     const style = window.getComputedStyle(link);
                     const visible = !!(rect.width && rect.height) && style.display !== 'none' && style.visibility !== 'hidden';
                     if (/^Print$/i.test(text) && visible) {
-                        return { found: true, rowText, x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+                        return { found: true, rowText, cells, x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
                     }
                 }
             }
@@ -5162,35 +5156,65 @@ def find_ak_print_link_relaxed(page, org):
         """,
         {"formattedEin": formatted_ein, "einDigits": ein_digits, "names": variants},
     )
+    if found:
+        return found
+    for variant in variants:
+        try:
+            found = checker.find_ak_print_link(page, org_with_name(org, variant))
+            if found:
+                return found
+        except Exception:
+            pass
+    return None
 
 
 def fill_ak_search_form_name_only(page, org, year: int, variant: str) -> None:
     submission = page.locator("#Dq-8")
     if submission.count() == 0:
-        submission = page.get_by_label(re.compile(r"Submission", re.I)).first
+        submission = page.get_by_label(re.compile(r"Submission\s+type", re.I)).first
+    submission.wait_for(state="visible", timeout=10000)
+    submission.select_option(label="Charitable Organization")
     try:
-        submission.select_option(label=re.compile("Charitable Organization", re.I))
+        submission.dispatch_event("change")
     except Exception:
-        try:
-            submission.select_option(index=0)
-        except Exception:
-            pass
+        pass
+    time.sleep(0.5)
     year_select = page.locator("#Dq-9")
     if year_select.count() == 0:
         year_select = page.get_by_label(re.compile(r"Year", re.I)).first
+    year_select.wait_for(state="visible", timeout=8000)
+    selected_year = False
     try:
         year_select.select_option(label=str(year))
+        selected_year = True
     except Exception:
         try:
             year_select.select_option(value=str(year))
+            selected_year = True
         except Exception:
             pass
+    if not selected_year:
+        try:
+            year_select.select_option(index=0)
+        except Exception:
+            pass
+    try:
+        year_select.dispatch_event("change")
+    except Exception:
+        pass
+    time.sleep(0.5)
     name_input = page.locator("#Dq-a")
     if name_input.count() == 0:
         name_input = page.get_by_label(re.compile(r"^Name$", re.I)).first
     name_input.wait_for(state="visible", timeout=8000)
     name_input.fill("")
-    name_input.fill(variant)
+    name_input.type(variant, delay=25)
+    try:
+        name_input.dispatch_event("input")
+        name_input.dispatch_event("change")
+    except Exception:
+        pass
+    time.sleep(0.5)
     fein_input = page.locator("#Dq-b")
     if fein_input.count() == 0:
         fein_input = page.get_by_label(re.compile(r"FEIN", re.I)).first
@@ -5203,6 +5227,75 @@ def fill_ak_search_form_name_only(page, org, year: int, variant: str) -> None:
         search_button = page.get_by_role("button", name=re.compile(r"^Search$", re.I)).first
     search_button.click(timeout=10000, force=True)
     time.sleep(2)
+
+
+def ak_name_fallback_variants(original_name: str, ein: str = "") -> list[str]:
+    variants: list[str] = []
+
+    def add(value: str) -> None:
+        cleaned = re.sub(r"\s+", " ", (value or "").strip(" ,;-"))
+        if not cleaned:
+            return
+        normalized = normalized_match_name(cleaned)
+        if len(normalized.split()) <= 1 and len(normalized) <= 4:
+            return
+        if cleaned.lower() not in {existing.lower() for existing in variants}:
+            variants.append(cleaned)
+
+    add(original_name)
+    for alias in known_names_for_ein(ein):
+        if compatible_ein_alias_for_name(original_name, alias):
+            add(alias)
+    for variant in organization_name_variants(
+        original_name,
+        ein,
+        include_ein_aliases=False,
+        include_name_segments=False,
+        include_compact_legal_suffixes=True,
+        include_leading_article_variants=True,
+        include_broad_query_prefixes=False,
+        include_institutional_reductions=False,
+    ):
+        add(variant)
+        if len(variants) >= 4:
+            break
+    return variants[:4]
+
+
+def ak_row_has_wrong_ein(row_text: str, expected_ein: str) -> bool:
+    expected_digits = re.sub(r"\D", "", expected_ein or "")
+    if len(expected_digits) != 9:
+        return False
+    # Alaska row text also contains street/ZIP digits; only dashed FEIN-shaped
+    # values should be treated as registry EINs here.
+    seen = re.findall(r"\b\d{2}-\d{7}\b", row_text or "")
+    for value in seen:
+        if re.sub(r"\D", "", value) != expected_digits:
+            return True
+    return False
+
+
+def ak_registry_name_from_print_row(print_link: dict, row_text: str, original_name: str, ein: str = "") -> str:
+    skip_pattern = re.compile(r"^(?:print|\d{4}|\d{2}[-\s]?\d{7})$", re.I)
+    cells = print_link.get("cells") if isinstance(print_link, dict) else None
+    if isinstance(cells, list):
+        for cell in cells:
+            candidate = useful_registry_name(str(cell))
+            if not candidate or skip_pattern.match(candidate):
+                continue
+            if re.match(r"^\d+\s+", candidate):
+                continue
+            if registry_name_is_safe_for_org(candidate, original_name, ein):
+                return candidate
+    ein_match = re.search(r"\b\d{2}[-\s]?\d{7}\b", row_text or "")
+    if ein_match:
+        tail = row_text[ein_match.end():]
+        tail = re.split(r"\bPrint\b", tail, maxsplit=1, flags=re.I)[0]
+        candidate = re.split(r"\s+\d{1,6}\s+[A-Za-z0-9]", tail, maxsplit=1)[0]
+        candidate = useful_registry_name(candidate)
+        if candidate and registry_name_is_safe_for_org(candidate, original_name, ein):
+            return candidate
+    return ""
 
 
 def fetch_ak_registration_pdf(page, context, print_link: dict, org_name: str) -> tuple[str, str]:
@@ -5316,8 +5409,10 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                     if not print_link:
                         continue
                     row_text = re.sub(r"\s+", " ", (print_link.get("rowText") or "")).strip() if isinstance(print_link, dict) else ""
+                    if ak_row_has_wrong_ein(row_text, org.ein):
+                        continue
                     if row_text:
-                        row_name = useful_registry_name(re.split(r"\b\d{2}[-\s]?\d{7}\b|\bCharitable\b|\bPrint\b", row_text, maxsplit=1, flags=re.I)[0])
+                        row_name = ak_registry_name_from_print_row(print_link, row_text, original_name, org.ein)
                         if row_name and registry_name_is_safe_for_org(row_name, original_name, org.ein):
                             result.matched_registry_name = row_name
                         elif row_name:
@@ -5325,11 +5420,47 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                     if search_name != original_name:
                         result.source_note = f"Matched using EIN-resolved compatible name variant: {search_name}."
                     result.status, result.raw_status_text, base_note = checker.classify_ak_registration_year(year, None)
-                    result.source_note = " ".join(part for part in [result.source_note, base_note] if part).strip()
+                    result.source_note = " ".join(part for part in [getattr(result, "source_note", "") or "", base_note] if part).strip()
                     result.success = True
                     return result, page_body
                 except Exception as e:
                     result.error = f"AK error: {e}"
+                    try:
+                        checker.open_ak_public_search(ak_page)
+                    except Exception:
+                        pass
+                    continue
+        name_deadline = time.perf_counter() + 42.0
+        for search_name in ak_name_fallback_variants(original_name, org.ein):
+            lookup_org = org_with_name(org, search_name)
+            for year in years_to_try:
+                if time.perf_counter() >= name_deadline:
+                    break
+                page_body = ""
+                try:
+                    fill_ak_search_form_name_only(ak_page, lookup_org, year, search_name)
+                    print_link = find_ak_print_link_relaxed(ak_page, lookup_org)
+                    page_body = registry_page_body(ak_page)
+                    if not print_link:
+                        continue
+                    row_text = re.sub(r"\s+", " ", (print_link.get("rowText") or "")).strip() if isinstance(print_link, dict) else ""
+                    if ak_row_has_wrong_ein(row_text, org.ein):
+                        continue
+                    row_name = ""
+                    if row_text:
+                        row_name = ak_registry_name_from_print_row(print_link, row_text, original_name, org.ein)
+                        if row_name and not registry_name_is_safe_for_org(row_name, original_name, org.ein):
+                            continue
+                    result.matched_registry_name = row_name or search_name
+                    result.status, result.raw_status_text, base_note = checker.classify_ak_registration_year(year, None)
+                    result.source_note = " ".join(part for part in [
+                        f"Matched using Alaska name fallback after EIN search returned no rows: {search_name}.",
+                        base_note,
+                    ] if part).strip()
+                    result.success = True
+                    return result, page_body
+                except Exception as e:
+                    result.error = f"AK name fallback error: {e}"
                     try:
                         checker.open_ak_public_search(ak_page)
                     except Exception:
@@ -8049,6 +8180,15 @@ def load_ky_live_pdf_records() -> list[tuple[str, str, str, str]]:
                 elif len(body_lines) >= 2 and re.fullmatch(r"\d{1,6}", body_lines[0]) and re.search(r"[A-Za-z]", body_lines[1]):
                     registry_id = body_lines[0]
                     body_lines = body_lines[1:]
+                else:
+                    joined_body = " ".join(body_lines)
+                    embedded_ids = list(re.finditer(r"\b(\d{3,6})\s+([A-Za-z][A-Za-z0-9&',()./\-\s]{4,})$", joined_body))
+                    for embedded in reversed(embedded_ids):
+                        candidate_name = useful_registry_name(embedded.group(2))
+                        if candidate_name and len(normalized_match_name(candidate_name).split()) >= 2:
+                            registry_id = embedded.group(1)
+                            body_lines = [candidate_name]
+                            break
                 registry_name = useful_registry_name(" ".join(body_lines))
                 if not registry_name or re.search(r"^\d+$", registry_name):
                     continue
@@ -8489,12 +8629,54 @@ def ms_search_variant_too_broad(value: str) -> bool:
     return False
 
 
+def ms_words_for_match(value: str) -> list[str]:
+    return [
+        word.lower()
+        for word in re.findall(r"[A-Za-z0-9]+", value or "")
+        if word.lower() not in {
+            "the",
+            "a",
+            "an",
+            "inc",
+            "incorporated",
+            "corp",
+            "corporation",
+            "llc",
+            "ltd",
+            "limited",
+            "foundation",
+        }
+    ]
+
+
+def ms_short_prefix_name_mismatch(original_name: str, candidate_name: str) -> bool:
+    original_words = ms_words_for_match(normalized_match_name(original_name))
+    candidate_words = ms_words_for_match(normalized_match_name(candidate_name))
+    if len(original_words) < 5 or not candidate_words:
+        return False
+    if len(candidate_words) <= 3 and original_words[: len(candidate_words)] == candidate_words:
+        return True
+    missing = [word for word in original_words if word not in set(candidate_words)]
+    return len(candidate_words) <= 3 and len(missing) >= 2 and original_words[: len(candidate_words)] == candidate_words
+
+
+def ms_registry_name_is_safe(candidate_name: str, original_name: str, ein: str = "") -> bool:
+    if ms_short_prefix_name_mismatch(original_name, candidate_name):
+        return False
+    return registry_name_is_safe_for_org(candidate_name, original_name, ein)
+
+
 def ms_preferred_search_variants(name: str, ein: str = "") -> list[str]:
     variants = []
 
     def add(value: str) -> None:
         cleaned = re.sub(r"\s+", " ", (value or "").strip(" ,;-"))
-        if cleaned and not ms_search_variant_too_broad(cleaned) and cleaned.lower() not in {item.lower() for item in variants}:
+        if (
+            cleaned
+            and not ms_search_variant_too_broad(cleaned)
+            and not ms_short_prefix_name_mismatch(name, cleaned)
+            and cleaned.lower() not in {item.lower() for item in variants}
+        ):
             variants.append(cleaned)
 
     seeds = [name]
@@ -8547,7 +8729,7 @@ def ms_registry_name_from_row(row, original_name: str, ein: str = "") -> str:
         candidate = useful_registry_name(cell)
         if not candidate or skip_pattern.search(candidate):
             continue
-        if registry_name_is_safe_for_org(candidate, original_name, ein):
+        if ms_registry_name_is_safe(candidate, original_name, ein):
             return candidate
     try:
         row_text = re.sub(r"\s+", " ", row.inner_text(timeout=1000)).strip()
@@ -8557,7 +8739,7 @@ def ms_registry_name_from_row(row, original_name: str, ein: str = "") -> str:
         candidate = useful_registry_name(part)
         if not candidate or skip_pattern.search(candidate):
             continue
-        if registry_name_is_safe_for_org(candidate, original_name, ein):
+        if ms_registry_name_is_safe(candidate, original_name, ein):
             return candidate
     return ""
 
@@ -8776,7 +8958,7 @@ def search_batch_browser_state(page, org, state: str):
         )
         variants = ms_preferred_search_variants(org.organization_name, org.ein)
         for variant in generated_variants:
-            if ms_search_variant_too_broad(variant):
+            if ms_search_variant_too_broad(variant) or ms_short_prefix_name_mismatch(org.organization_name, variant):
                 continue
             if variant.lower() not in {existing.lower() for existing in variants}:
                 variants.append(variant)
@@ -8805,7 +8987,7 @@ def search_batch_browser_state(page, org, state: str):
             if status == "Not Registered" or re.search(r"\b(no matching organization row|no results found)\b", raw_text, re.I):
                 continue
             matched_name = getattr(external_result, "matched_registry_name", "") or getattr(external_result, "organization_name", "")
-            if matched_name and not registry_name_is_safe_for_org(matched_name, org.organization_name, org.ein):
+            if matched_name and not ms_registry_name_is_safe(matched_name, org.organization_name, org.ein):
                 continue
             if variant_name != org.organization_name:
                 external_result.source_note = " ".join(part for part in [
@@ -9748,7 +9930,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     include_name_segments=True,
                     include_compact_legal_suffixes=True,
                     include_leading_article_variants=True,
-                    prioritize_institution_reductions=True,
+                    prioritize_institution_reductions=False,
                     require_safe_registry_name=True,
                 )
                 body = registry_page_body(page)
