@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.18-staging"
+APP_VERSION = "2026.05.29.19-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -6246,7 +6246,7 @@ def wi_is_decisive_candidate(candidate: dict | None) -> bool:
         return False
     if int(candidate.get("score") or 0) < 5:
         return False
-    return bool(candidate.get("expiration_date") or wi_status_from_detail_status(candidate.get("detail_status", "")))
+    return bool(wi_status_from_detail_status(candidate.get("detail_status", "")))
 
 
 def wi_best_match_from_html(result_html: str, target_names: list[str], best_match: dict | None = None) -> dict | None:
