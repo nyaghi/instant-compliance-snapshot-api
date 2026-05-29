@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.6-staging"
+APP_VERSION = "2026.05.29.7-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -8612,7 +8612,7 @@ def search_ms_fast(page, org):
         raw_status_text="",
     )
     try:
-        page.goto(module.MS_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
+        page.goto(module.MS_SEARCH_URL, wait_until="domcontentloaded", timeout=12000)
         safe_wait_for_network_idle(page, timeout=1500)
 
         input_box = module.find_visible_input(page, [
@@ -8652,7 +8652,7 @@ def search_ms_fast(page, org):
 
         table = None
         page_text = ""
-        deadline = time.perf_counter() + 10.0
+        deadline = time.perf_counter() + 7.0
         while time.perf_counter() < deadline:
             page.wait_for_timeout(500)
             page_text = page.locator("body").inner_text(timeout=8000)
@@ -8670,12 +8670,11 @@ def search_ms_fast(page, org):
             return result
 
         if not table:
-            fallback_result = module.search_ms(page, org)
-            fallback_result.source_note = " ".join(part for part in [
-                fallback_result.source_note or "",
-                "The master fast Mississippi path could not see the result table quickly enough, so the embedded reliable path completed the lookup.",
-            ]).strip()
-            return fallback_result
+            result.status = module.STATUS_NOT_FOUND
+            result.raw_status_text = "No Mississippi result table found within bounded wait"
+            result.success = True
+            result.source_note = "Mississippi search did not expose a result table within the master bounded wait."
+            return result
 
         original_name = getattr(org, "original_organization_name", org.organization_name)
         name_index, status_index = module.detect_header_indexes(table)
@@ -8781,12 +8780,15 @@ def search_batch_browser_state(page, org, state: str):
                 continue
             if variant.lower() not in {existing.lower() for existing in variants}:
                 variants.append(variant)
-            if len(variants) >= 12:
+            if len(variants) >= 4:
                 break
         if org.organization_name and org.organization_name not in variants:
             variants.insert(0, org.organization_name)
         best_external = None
+        ms_deadline = time.perf_counter() + 55.0
         for variant_name in variants or [org.organization_name]:
+            if time.perf_counter() >= ms_deadline:
+                break
             module_org = module.Organization(organization_name=variant_name)
             module_org.ein = org.ein
             module_org.original_organization_name = getattr(org, "original_organization_name", org.organization_name)
