@@ -6,6 +6,7 @@ import csv
 import gzip
 import hashlib
 import importlib.util
+import http.cookiejar
 import html
 import io
 import json
@@ -89,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.16-staging"
+APP_VERSION = "2026.05.29.17-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -6286,9 +6287,10 @@ def wi_reader_search_best_match(search_names: list[str], target_names: list[str]
 def wi_http_search_best_match(search_names: list[str], target_names: list[str], deadline: float | None = None) -> tuple[dict | None, bool]:
     best_match = None
     http_reached = False
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
     try:
         base_request = urllib.request.Request(WI_SEARCH_URL, headers=wi_request_headers())
-        with urllib.request.urlopen(base_request, timeout=WI_HTTP_TIMEOUT_SECONDS) as response:
+        with opener.open(base_request, timeout=WI_HTTP_TIMEOUT_SECONDS) as response:
             base_html = response.read().decode("utf-8", errors="replace")
     except Exception:
         return None, http_reached
@@ -6299,7 +6301,7 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str], 
         try:
             direct_url = f"{WI_RESULTS_URL}?{urlencode({'CredentialType': '800', 'LicenseNumber': '', 'FirmName': search_name})}"
             request = urllib.request.Request(direct_url, headers=wi_request_headers())
-            with urllib.request.urlopen(request, timeout=WI_HTTP_TIMEOUT_SECONDS) as response:
+            with opener.open(request, timeout=WI_HTTP_TIMEOUT_SECONDS) as response:
                 result_html = response.read().decode("utf-8", errors="replace")
             http_reached = True
             best_match = wi_best_match_from_html(result_html, target_names, best_match)
@@ -6323,7 +6325,7 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str], 
                 },
                 method="POST",
             )
-            with urllib.request.urlopen(request, timeout=WI_HTTP_TIMEOUT_SECONDS) as response:
+            with opener.open(request, timeout=WI_HTTP_TIMEOUT_SECONDS) as response:
                 result_html = response.read().decode("utf-8", errors="replace")
             http_reached = True
         except Exception:
