@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.21-staging"
+APP_VERSION = "2026.05.29.22-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -5249,10 +5249,15 @@ def ak_name_fallback_variants(original_name: str, ein: str = "") -> list[str]:
         if cleaned.lower() not in {existing.lower() for existing in variants}:
             variants.append(cleaned)
 
-    add(original_name)
     for alias in known_names_for_ein(ein):
         if compatible_ein_alias_for_name(original_name, alias):
+            alias_words = normalized_match_name(alias).split()
+            if len(alias_words) >= 3 and 2 <= len(alias_words[0]) <= 5:
+                rest = " ".join(alias_words[1:]).title()
+                add(f"{alias_words[0].upper()}: {rest}")
+                add(rest)
             add(alias)
+    add(original_name)
     for variant in organization_name_variants(
         original_name,
         ein,
@@ -5303,6 +5308,17 @@ def ak_registry_name_from_print_row(print_link: dict, row_text: str, original_na
         if candidate and registry_name_is_safe_for_org(candidate, original_name, ein):
             return candidate
     return ""
+
+
+def ak_registry_identifier_from_print_row(print_link: dict, row_text: str) -> str:
+    cells = print_link.get("cells") if isinstance(print_link, dict) else None
+    if isinstance(cells, list):
+        for cell in cells:
+            match = re.search(r"\b\d{2}[-\s]?\d{7}\b", str(cell) or "")
+            if match:
+                return format_ein(match.group(0))
+    match = re.search(r"\b\d{2}[-\s]?\d{7}\b", row_text or "")
+    return format_ein(match.group(0)) if match else ""
 
 
 def fetch_ak_registration_pdf(page, context, print_link: dict, org_name: str) -> tuple[str, str]:
@@ -5422,6 +5438,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                         row_name = ak_registry_name_from_print_row(print_link, row_text, original_name, org.ein)
                         if row_name and registry_name_is_safe_for_org(row_name, original_name, org.ein):
                             result.matched_registry_name = row_name
+                            result.matched_registry_identifier = ak_registry_identifier_from_print_row(print_link, row_text)
                         elif row_name:
                             continue
                     if search_name != original_name:
@@ -5451,17 +5468,26 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                     if not print_link:
                         continue
                     row_text = re.sub(r"\s+", " ", (print_link.get("rowText") or "")).strip() if isinstance(print_link, dict) else ""
-                    if ak_row_has_wrong_ein(row_text, org.ein):
-                        continue
                     row_name = ""
                     if row_text:
                         row_name = ak_registry_name_from_print_row(print_link, row_text, original_name, org.ein)
                         if row_name and not registry_name_is_safe_for_org(row_name, original_name, org.ein):
                             continue
+                    wrong_ein = ak_row_has_wrong_ein(row_text, org.ein)
+                    alias_name_match = bool(
+                        row_name
+                        and search_name != original_name
+                        and registry_name_is_safe_for_org(row_name, search_name, org.ein)
+                        and registry_name_is_safe_for_org(row_name, original_name, org.ein)
+                    )
+                    if wrong_ein and not alias_name_match:
+                        continue
                     result.matched_registry_name = row_name or search_name
+                    result.matched_registry_identifier = ak_registry_identifier_from_print_row(print_link, row_text)
                     result.status, result.raw_status_text, base_note = checker.classify_ak_registration_year(year, None)
                     result.source_note = " ".join(part for part in [
                         f"Matched using Alaska name fallback after EIN search returned no rows: {search_name}.",
+                        "Registry EIN differs from supplied EIN; accepted because the registry name safely matches a compatible public alias." if wrong_ein else "",
                         base_note,
                     ] if part).strip()
                     result.success = True
