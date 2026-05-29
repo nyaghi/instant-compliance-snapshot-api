@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.9-staging"
+APP_VERSION = "2026.05.29.10-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -461,6 +461,9 @@ WI_SIDECAR_URL = os.environ.get("CE_WI_SIDECAR_URL", "").strip()
 WI_LOOKUP_SECRET = os.environ.get("CE_WI_LOOKUP_SECRET", "").strip()
 WI_SIDECAR_TIMEOUT_SECONDS = min(max(10.0, float(os.environ.get("CE_WI_SIDECAR_TIMEOUT_SECONDS", "45"))), 58.0)
 WI_SIDECAR_ATTEMPTS = min(max(1, int(os.environ.get("CE_WI_SIDECAR_ATTEMPTS", "3"))), 5)
+WI_BACKEND_BROWSER_LANES = min(max(1, int(os.environ.get("CE_WI_BACKEND_BROWSER_LANES", "2"))), 4)
+WI_BACKEND_BROWSER_ACQUIRE_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_BACKEND_BROWSER_ACQUIRE_SECONDS", "35"))), 75.0)
+WI_BACKEND_BROWSER_SEMAPHORE = threading.BoundedSemaphore(WI_BACKEND_BROWSER_LANES)
 NH_LIVE_PDF_URL = os.environ.get(
     "CE_NH_LIVE_PDF_URL",
     "https://mm.nh.gov/files/uploads/doj/remote-docs/registered-charities.pdf",
@@ -6544,6 +6547,9 @@ def search_wi_sidecar(org):
             continue
 
         data = candidate_data
+        if candidate_data.get("status") == "Not Registered" and attempt_index + 1 < WI_SIDECAR_ATTEMPTS:
+            time.sleep(0.4 * (attempt_index + 1))
+            continue
         if candidate_data.get("success") or candidate_data.get("status") != "Site Not Reachable":
             break
         if attempt_index + 1 < WI_SIDECAR_ATTEMPTS:
@@ -6584,6 +6590,13 @@ def search_wi_sidecar(org):
 
 
 def search_wi_backend_browser_fallback(org):
+    acquired = WI_BACKEND_BROWSER_SEMAPHORE.acquire(timeout=WI_BACKEND_BROWSER_ACQUIRE_SECONDS)
+    if not acquired:
+        result = checker.StateResult(org.organization_name, org.ein, "WI", "Site Not Reachable", WI_SEARCH_URL)
+        result.raw_status_text = "Wisconsin backend fallback lanes were busy"
+        result.source_note = "Wisconsin DFI backend fallback could not start before the lane-acquire timeout."
+        result.success = False
+        return result
     with checker.sync_playwright() as p:
         browser = None
         context = None
@@ -6611,6 +6624,7 @@ def search_wi_backend_browser_fallback(org):
                     browser.close()
                 except Exception:
                     pass
+            WI_BACKEND_BROWSER_SEMAPHORE.release()
 
 
 def response_data_for_lookup(result, body: str, org, organization_name: str, ein: str, state: str, lookup_started: float) -> dict:
@@ -8722,6 +8736,13 @@ def ms_preferred_search_variants(name: str, ein: str = "") -> list[str]:
     for seed in seeds:
         base = re.sub(r"\s+", " ", (seed or "").strip())
         add(base)
+        comma_legal_suffix = re.sub(
+            r"\s+(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\s*$",
+            lambda match: f", {match.group(1)}",
+            base,
+            flags=re.I,
+        ).strip()
+        add(comma_legal_suffix)
         us_reduced = re.sub(r"^(?:the\s+)?(?:u\.?\s*s\.?|us|united\s+states)\s+", "", base, flags=re.I).strip()
         add(us_reduced)
         no_article = re.sub(r"^(?:the|a|an)\s+", "", base, flags=re.I).strip()
