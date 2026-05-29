@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.5-staging"
+APP_VERSION = "2026.05.29.6-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -5294,21 +5294,10 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
         if cleaned and cleaned.lower() not in {existing.lower() for existing in search_names}:
             search_names.append(cleaned)
 
+    # Alaska's public form is driven by FEIN. Repeating the same FEIN search
+    # under aliases only slows down no-record cases; aliases are still used by
+    # find_ak_print_link_relaxed once result rows are present.
     add_search_name(original_name)
-    for alias in known_names_for_ein(getattr(org, "ein", "")):
-        if compatible_ein_alias_for_name(original_name, alias):
-            add_search_name(alias)
-    for variant in organization_name_variants(
-        original_name,
-        getattr(org, "ein", ""),
-        include_ein_aliases=True,
-        include_name_segments=False,
-        include_compact_legal_suffixes=True,
-        include_leading_article_variants=True,
-        include_broad_query_prefixes=False,
-    ):
-        add_search_name(variant)
-    search_names = search_names[:5]
     ak_context = browser.new_context(viewport={"width": 1365, "height": 900}, accept_downloads=False)
     configure_browser_context(ak_context)
     ak_page = ak_context.new_page()
