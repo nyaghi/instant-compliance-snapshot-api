@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.17-staging"
+APP_VERSION = "2026.05.29.18-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -6241,6 +6241,14 @@ def wi_better_candidate(candidate: dict, best_match: dict | None) -> bool:
     )
 
 
+def wi_is_decisive_candidate(candidate: dict | None) -> bool:
+    if not candidate:
+        return False
+    if int(candidate.get("score") or 0) < 5:
+        return False
+    return bool(candidate.get("expiration_date") or wi_status_from_detail_status(candidate.get("detail_status", "")))
+
+
 def wi_best_match_from_html(result_html: str, target_names: list[str], best_match: dict | None = None) -> dict | None:
     table_match = re.search(
         r"<table[^>]+id=[\"']ctl00_cphMainContent_OrgCredentialSearch_gvCredentialSearchResults[\"'][^>]*>([\s\S]*?)</table>",
@@ -6281,6 +6289,8 @@ def wi_reader_search_best_match(search_names: list[str], target_names: list[str]
         if re.search(r"Organization Search Results|Search Parameters|Total Search Results", result_text or "", re.I):
             reader_reached = True
         best_match = wi_best_match_from_markdown(result_text, target_names, best_match)
+        if wi_is_decisive_candidate(best_match):
+            return best_match, reader_reached
     return best_match, reader_reached
 
 
@@ -6305,6 +6315,8 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str], 
                 result_html = response.read().decode("utf-8", errors="replace")
             http_reached = True
             best_match = wi_best_match_from_html(result_html, target_names, best_match)
+            if wi_is_decisive_candidate(best_match):
+                return best_match, http_reached
         except Exception:
             pass
 
@@ -6332,6 +6344,8 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str], 
             continue
 
         best_match = wi_best_match_from_html(result_html, target_names, best_match)
+        if wi_is_decisive_candidate(best_match):
+            return best_match, http_reached
     return best_match, http_reached
 
 
