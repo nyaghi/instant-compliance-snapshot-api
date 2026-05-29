@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.10-staging"
+APP_VERSION = "2026.05.29.11-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -5912,6 +5912,25 @@ def html_input_value(source: str, name: str) -> str:
     return html.unescape(match.group(1)) if match else ""
 
 
+def html_hidden_inputs(source: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for match in re.finditer(r"<input\b[^>]*>", source or "", re.I):
+        tag = match.group(0)
+        type_match = re.search(r"\btype=[\"']?([^\"'\s>]+)", tag, re.I)
+        if type_match and type_match.group(1).lower() != "hidden":
+            continue
+        name_match = re.search(r"\bname=[\"']([^\"']+)[\"']", tag, re.I)
+        if not name_match:
+            name_match = re.search(r"\bname=([^\"'\s>]+)", tag, re.I)
+        if not name_match:
+            continue
+        value_match = re.search(r"\bvalue=[\"']([^\"']*)[\"']", tag, re.I)
+        if not value_match:
+            value_match = re.search(r"\bvalue=([^\"'\s>]*)", tag, re.I)
+        values[html.unescape(name_match.group(1))] = html.unescape(value_match.group(1)) if value_match else ""
+    return values
+
+
 def html_table_cells(row_html: str) -> list[str]:
     values = []
     for cell_match in re.finditer(r"<t[dh][^>]*>([\s\S]*?)</t[dh]>", row_html or "", re.I):
@@ -6285,8 +6304,7 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str], 
             pass
 
         form_data = {
-            "__VIEWSTATE": html_input_value(base_html, "__VIEWSTATE"),
-            "__VIEWSTATEGENERATOR": html_input_value(base_html, "__VIEWSTATEGENERATOR"),
+            **html_hidden_inputs(base_html),
             "ctl00$cphMainContent$ddlProfesionalList": "800",
             "ctl00$cphMainContent$txtFirmName": search_name,
             "ctl00$cphMainContent$btnSearch": "Search",
