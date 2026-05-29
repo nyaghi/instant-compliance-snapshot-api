@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.3-staging"
+APP_VERSION = "2026.05.29.4-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -9056,6 +9056,126 @@ def search_bundled_name_state(page, org, state: str):
     return search_bundled_extension_state(page, org, state)
 
 
+def ar_status_from_text(status_text: str) -> str:
+    status = re.sub(r"\s+", " ", status_text or "").strip()
+    if re.search(r"\bnot\s+current\b|\b(delinquent|expired|past\s+due|non[-\s]?compliant)\b", status, re.I):
+        return checker.STATUS_DELINQUENT
+    if re.search(r"\b(closed|withdrawn|cancel(?:ed|led)|terminated|inactive|revoked)\b", status, re.I):
+        return "Closed / Withdrawn / Canceled"
+    if re.search(r"\b(current|active|registered)\b", status, re.I):
+        return checker.STATUS_CURRENT
+    return status or checker.STATUS_UNKNOWN
+
+
+def ar_status_priority(status_text: str) -> int:
+    mapped = ar_status_from_text(status_text)
+    return {
+        "Closed / Withdrawn / Canceled": 50,
+        checker.STATUS_DELINQUENT: 40,
+        checker.STATUS_UPCOMING: 30,
+        checker.STATUS_CURRENT: 10,
+    }.get(mapped, 0)
+
+
+def ar_result_rows(page) -> list[dict]:
+    rows = []
+    try:
+        locator = page.locator("table tbody tr")
+        for index in range(min(locator.count(), 100)):
+            row = locator.nth(index)
+            try:
+                cells = row.locator("td")
+                if cells.count() < 4:
+                    continue
+                row_values = [
+                    re.sub(r"\s+", " ", cells.nth(cell_index).inner_text(timeout=1000)).strip()
+                    for cell_index in range(4)
+                ]
+            except Exception:
+                continue
+            if row_values and not re.search(r"\bNo\s+Results\s+Found\b", " ".join(row_values), re.I):
+                rows.append({
+                    "name": useful_registry_name(row_values[0]),
+                    "type": row_values[1],
+                    "status": row_values[2],
+                    "registration_date": row_values[3],
+                })
+    except Exception:
+        pass
+    return rows
+
+
+def search_ar_precise(page, org):
+    result = checker.StateResult(org.organization_name, org.ein, "AR", checker.STATUS_UNKNOWN, AR_SEARCH_URL)
+    original_name = getattr(org, "organization_name", "") or ""
+    variants = ar_preferred_name_variants(org)
+    for variant in organization_name_variants(
+        original_name,
+        getattr(org, "ein", ""),
+        include_ein_aliases=True,
+        include_name_segments=True,
+        include_compact_legal_suffixes=True,
+        include_leading_article_variants=True,
+        include_broad_query_prefixes=False,
+    ):
+        cleaned = re.sub(r"\s+", " ", (variant or "").strip())
+        if cleaned and cleaned.lower() not in {existing.lower() for existing in variants}:
+            variants.append(cleaned)
+
+    best = None
+    best_score = -10000
+    reached = False
+    for variant in variants[:max(AR_NAME_SEARCH_MAX_VARIANTS, 8)]:
+        try:
+            page.goto(AR_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(500)
+            body = registry_page_body(page)
+            if re.search(r"403\s+ERROR|request could not be satisfied|cloudfront|human verification|verify you are human|captcha", body, re.I):
+                result.status = "Site Not Reachable"
+                result.raw_status_text = "Arkansas public charity search returned a bot-verification or block page"
+                result.source_note = "Arkansas public charity search could not be reached from this runtime; no no-record determination was made."
+                result.error = "AR registry returned bot-verification or block page"
+                result.success = False
+                return result
+            page.locator('input[name="name"]').fill("")
+            page.locator('input[name="name"]').fill(variant)
+            page.get_by_role("button", name=re.compile("search", re.I)).click(timeout=10000)
+            page.wait_for_load_state("domcontentloaded", timeout=30000)
+            safe_wait_for_network_idle(page, timeout=5000)
+            page.wait_for_timeout(1200)
+            body = registry_page_body(page)
+            if re.search(r"Back\s+to\s+Search\s+Form|Registration\s+Date|No\s+Results\s+Found", body, re.I):
+                reached = True
+            for row in ar_result_rows(page):
+                row_name = row.get("name", "")
+                if not row_name or not registry_name_is_safe_for_org(row_name, original_name, getattr(org, "ein", "")):
+                    continue
+                name_score = checker.name_match_priority_for_targets(row_name, organization_match_target_variants(original_name, getattr(org, "ein", "")))
+                score = (name_score * 100) + ar_status_priority(row.get("status", ""))
+                if score > best_score:
+                    best_score = score
+                    best = row
+            if best and best_score >= 300:
+                break
+        except Exception as exc:
+            result.error = f"AR error: {exc}"
+            continue
+
+    if not best:
+        result.status = checker.STATUS_NOT_REGISTERED
+        result.raw_status_text = "No matching organization row" if reached else "Arkansas search did not return usable results"
+        result.source_note = "Arkansas search did not contain a usable charity row after master-code safe-name filtering."
+        result.success = True
+        return result
+
+    result.matched_registry_name = best.get("name", "")
+    result.raw_status_text = f"Type: {best.get('type', '')} | Status: {best.get('status', '')} | Registration Date: {best.get('registration_date', '')}"
+    result.status = ar_status_from_text(best.get("status", ""))
+    result.source_note = "Arkansas public charity search matched a safe registry name; CharityClarity maps Not Current to Delinquent."
+    result.success = True
+    return result
+
+
 def ar_transient_unreachable_result(result) -> bool:
     if public_status(result) != "Site Not Reachable":
         return False
@@ -9079,28 +9199,17 @@ def ar_preferred_name_variants(org) -> list[str]:
     compact = re.sub(r",\s*(incorporated|inc\.?|corporation|corp\.?|llc|ltd\.?)", r" \1", original, flags=re.I)
     add(re.sub(r"\b(inc|corp|ltd)\.", r"\1", compact, flags=re.I))
     add(compact)
+    add(re.sub(r"\b(?:local|chapter|affiliate)\b\.?\s*$", "", compact, flags=re.I))
     for alias in known_names_for_ein(getattr(org, "ein", "")):
         if normalized_match_name(alias) != normalized_match_name(original) and compatible_ein_alias_for_name(original, alias):
             add(alias)
+            add(re.sub(r"^(?:chc|cfc)\s+", "", alias, flags=re.I))
     add(original)
     return variants
 
 
 def search_ar_name_variants_once(page, org):
-    return search_with_name_variants(
-        page,
-        org,
-        lambda lookup_page, lookup_org: search_bundled_name_state(lookup_page, lookup_org, "AR"),
-        max_variants=AR_NAME_SEARCH_MAX_VARIANTS,
-        max_elapsed_seconds=AR_NAME_SEARCH_MAX_SECONDS,
-        include_ein_aliases=True,
-        include_name_segments=True,
-        include_compact_legal_suffixes=True,
-        include_leading_article_variants=True,
-        prioritize_institution_reductions=True,
-        require_safe_registry_name=True,
-        preferred_variants=ar_preferred_name_variants(org),
-    )
+    return search_ar_precise(page, org)
 
 
 def search_ar_serialized(page, org):
