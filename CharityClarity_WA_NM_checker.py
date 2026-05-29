@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import html
 import re
 import subprocess
 import sys
@@ -17,6 +18,11 @@ try:
 except Exception:
     print("Install Playwright first: py -m pip install playwright && py -m playwright install", file=sys.stderr)
     raise
+
+try:
+    from curl_cffi import requests as curl_requests
+except Exception:
+    curl_requests = None
 
 
 WA_SEARCH_URL = "https://ccfs.sos.wa.gov/#/cftSearch"
@@ -57,6 +63,8 @@ class SearchResult:
     source_note: str
     success: bool = False
     error: str = ""
+    matched_registry_name: str = ""
+    matched_registry_identifier: str = ""
 
 
 def digits_only(value: str) -> str:
@@ -479,6 +487,66 @@ def nm_parse_history_rows(page) -> list[tuple[int, str, str]]:
     return rows
 
 
+def strip_html(value: str) -> str:
+    return normalize_spaces(html.unescape(re.sub(r"<[^>]+>", " ", value or "")))
+
+
+def nm_parse_history_rows_from_html(page_html: str) -> list[tuple[int, str, str]]:
+    match = re.search(
+        r'<table[^>]+id=["\']MainContent_GridViewStatuses["\'][^>]*>(.*?)</table>',
+        page_html or "",
+        re.I | re.S,
+    )
+    if not match:
+        return []
+
+    rows: list[tuple[int, str, str]] = []
+    for row_html in re.findall(r"<tr\b[^>]*>(.*?)</tr>", match.group(1), re.I | re.S):
+        cells = re.findall(r"<t[dh]\b[^>]*>(.*?)</t[dh]>", row_html, re.I | re.S)
+        if len(cells) < 3:
+            continue
+        year_text = strip_html(cells[0])
+        detail_text = strip_html(cells[1])
+        status_date = strip_html(cells[2])
+        if not re.fullmatch(r"\d{4}", year_text or ""):
+            continue
+        detail_text = re.sub(r"\s+(\d{10,})\s*$", r" \1", detail_text).strip()
+        rows.append((int(year_text), detail_text, status_date))
+    return rows
+
+
+def nm_registry_name_from_html(page_html: str) -> str:
+    match = re.search(
+        r'id=["\']MainContent_FormViewCharityDetail_LabelCharityName["\'][^>]*>(.*?)</span>',
+        page_html or "",
+        re.I | re.S,
+    )
+    if not match:
+        return ""
+    name = strip_html(match.group(1))
+    name = re.sub(r"\s*\(\d{2}-\d{7}\)\s*$", "", name).strip()
+    return name
+
+
+def nm_extract_fye_from_html(page_html: str, preferred_year: int | None = None) -> str:
+    text = strip_html(page_html)
+    candidates = []
+    for match in re.finditer(
+        r"\b(20\d{2})\s+(\d{1,2}/\d{1,2}/\d{2,4})\s*-\s*(\d{1,2}/\d{1,2}/\d{2,4})",
+        text,
+        re.I,
+    ):
+        year = int(match.group(1))
+        candidates.append((year, match.group(3)))
+    if not candidates:
+        return ""
+    if preferred_year is not None:
+        for year, end_date in candidates:
+            if year == preferred_year:
+                return end_date
+    return max(candidates, key=lambda item: item[0])[1]
+
+
 def nm_latest_submitted(rows: list[tuple[int, str, str]]):
     submitted = []
     for year, detail, status_date in rows:
@@ -558,6 +626,103 @@ finally:
     return begin, end
 
 
+def nm_fetch_detail_html(ein: str) -> tuple[str, str]:
+    if curl_requests is None:
+        return "", "curl_cffi is not installed"
+    url = f"https://secure.nmdoj.gov/CharitySearch/CharityDetail.aspx?FEIN={format_ein(ein)}"
+    try:
+        response = curl_requests.get(
+            url,
+            impersonate="chrome136",
+            timeout=35,
+            headers={
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+        )
+    except Exception as exc:
+        return "", f"NM curl detail fetch failed: {exc}"
+    if response.status_code != 200:
+        return "", f"NM curl detail fetch returned HTTP {response.status_code}"
+    text = response.text or ""
+    if re.search(r"\b(?:cloudflare|you have been blocked|just a moment)\b", text, re.I):
+        return "", "NM curl detail fetch received a Cloudflare challenge/block page"
+    return text, ""
+
+
+def apply_nm_rows_to_result(
+    result: SearchResult,
+    rows: list[tuple[int, str, str]],
+    fye_text: str = "",
+    context=None,
+) -> SearchResult:
+    latest_tax_year = max(year for year, _, _ in rows)
+    latest_year_rows = [(year, detail, status_date) for year, detail, status_date in rows if year == latest_tax_year]
+    latest_detail = re.sub(r"\s+\d{10,}$", "", latest_year_rows[0][1]).strip()
+
+    latest_submitted = nm_latest_submitted(rows)
+    if not latest_submitted:
+        if latest_detail.startswith("Tax Year Registration Open"):
+            result.status = STATUS_UPCOMING if latest_tax_year >= date.today().year - 1 else STATUS_DELINQUENT
+        elif re.search(r"\bdelinquent\b", latest_detail, re.I):
+            result.status = STATUS_DELINQUENT
+        else:
+            result.status = STATUS_UNKNOWN
+        result.raw_status_text = f"Tax Year {latest_tax_year} | {latest_detail}"
+        result.success = True
+        return result
+
+    _, reg_number, _ = latest_submitted
+    if not fye_text and context is not None:
+        _, fye_text = nm_extract_fye(context, reg_number)
+    if not fye_text:
+        if latest_detail.startswith("Tax Year Registration Open"):
+            result.status = STATUS_UPCOMING if latest_tax_year >= date.today().year - 1 else STATUS_DELINQUENT
+        elif re.search(r"\bdelinquent\b", latest_detail, re.I):
+            result.status = STATUS_DELINQUENT
+        else:
+            result.status = STATUS_UNKNOWN
+        result.raw_status_text = f"Tax Year {latest_tax_year} | {latest_detail}"
+        result.success = True
+        return result
+
+    fye_date = parse_date(fye_text)
+    if not fye_date:
+        result.status = STATUS_UNKNOWN
+        result.raw_status_text = f"Tax Year {latest_tax_year} | {latest_detail}"
+        result.success = True
+        return result
+
+    cycle_fye = date(latest_tax_year, fye_date.month, fye_date.day)
+    due_date = add_months(cycle_fye, 6)
+    if any(detail.startswith("Extension Granted") for _, detail, _ in latest_year_rows):
+        due_date = add_months(due_date, 6)
+
+    today = date.today()
+    six_months = today + timedelta(days=183)
+    if any(
+        detail.startswith("Registration Submitted")
+        or detail.startswith("Registration Accepted")
+        or detail.startswith("Registration Approved")
+        or detail == "Reinstatement Issued"
+        for _, detail, _ in latest_year_rows
+    ):
+        result.status = STATUS_CURRENT
+    elif due_date < today:
+        result.status = STATUS_DELINQUENT
+    elif due_date <= six_months:
+        result.status = STATUS_UPCOMING
+    else:
+        result.status = STATUS_CURRENT
+
+    result.raw_status_text = (
+        f"Tax Year {latest_tax_year} | {latest_detail} | "
+        f"FYE: {cycle_fye.strftime('%m/%d/%Y')} | Due: {due_date.strftime('%m/%d/%Y')}"
+    )
+    result.success = True
+    return result
+
+
 def search_nm(org: Organization, show_process: bool = False) -> SearchResult:
     result = SearchResult(
         organization_name=org.organization_name,
@@ -571,6 +736,32 @@ def search_nm(org: Organization, show_process: bool = False) -> SearchResult:
             "plus the FYE month/day read from the latest submitted registration PDF."
         ),
     )
+
+    detail_html, fetch_error = nm_fetch_detail_html(org.ein)
+    if detail_html:
+        body_text = strip_html(detail_html)
+        result.matched_registry_name = nm_registry_name_from_html(detail_html)
+        if re.search(r"Charity\s+Registration\s+Status\s+is\s+unknown\.?", body_text, re.I) and "Tax Year" not in body_text:
+            result.status = STATUS_NOT_REGISTERED
+            result.raw_status_text = "Charity Registration Status is unknown."
+            result.success = True
+            return result
+
+        rows = nm_parse_history_rows_from_html(detail_html)
+        if rows:
+            latest_submitted = nm_latest_submitted(rows)
+            fye_text = nm_extract_fye_from_html(
+                detail_html,
+                preferred_year=latest_submitted[0] if latest_submitted else None,
+            )
+            return apply_nm_rows_to_result(result, rows, fye_text=fye_text)
+
+        result.source_note = (
+            "New Mexico official detail HTML was retrieved, but status-history rows were not parsed from the HTML. "
+            "Playwright fallback was attempted."
+        )
+    elif fetch_error:
+        result.source_note = f"{result.source_note} Official HTML fast path unavailable: {fetch_error}."
 
     with sync_playwright() as p:
         browser, context = launch_context(p, show_process)
@@ -604,65 +795,7 @@ def search_nm(org: Organization, show_process: bool = False) -> SearchResult:
                 result.success = True
                 return result
 
-            latest_tax_year = max(year for year, _, _ in rows)
-            latest_year_rows = [(year, detail, status_date) for year, detail, status_date in rows if year == latest_tax_year]
-            latest_detail = re.sub(r"\s+\d{10,}$", "", latest_year_rows[0][1]).strip()
-
-            latest_submitted = nm_latest_submitted(rows)
-            if not latest_submitted:
-                if latest_detail.startswith("Tax Year Registration Open"):
-                    result.status = STATUS_UPCOMING if latest_tax_year >= date.today().year - 1 else STATUS_DELINQUENT
-                else:
-                    result.status = STATUS_UNKNOWN
-                result.raw_status_text = f"Tax Year {latest_tax_year} | {latest_detail}"
-                result.success = True
-                return result
-
-            submitted_year, reg_number, _ = latest_submitted
-            _, fye_text = nm_extract_fye(context, reg_number)
-            if not fye_text:
-                if latest_detail.startswith("Tax Year Registration Open"):
-                    result.status = STATUS_UPCOMING if latest_tax_year >= date.today().year - 1 else STATUS_DELINQUENT
-                else:
-                    result.status = STATUS_UNKNOWN
-                result.raw_status_text = f"Tax Year {latest_tax_year} | {latest_detail}"
-                result.success = True
-                return result
-
-            fye_date = parse_date(fye_text)
-            if not fye_date:
-                result.status = STATUS_UNKNOWN
-                result.raw_status_text = f"Tax Year {latest_tax_year} | {latest_detail}"
-                return result
-
-            cycle_fye = date(latest_tax_year, fye_date.month, fye_date.day)
-            due_date = add_months(cycle_fye, 6)
-            if any(detail.startswith("Extension Granted") for _, detail, _ in latest_year_rows):
-                due_date = add_months(due_date, 6)
-
-            today = date.today()
-            six_months = today + timedelta(days=183)
-            if any(
-                detail.startswith("Registration Submitted")
-                or detail.startswith("Registration Accepted")
-                or detail.startswith("Registration Approved")
-                or detail == "Reinstatement Issued"
-                for _, detail, _ in latest_year_rows
-            ):
-                result.status = STATUS_CURRENT
-            elif due_date < today:
-                result.status = STATUS_DELINQUENT
-            elif due_date <= six_months:
-                result.status = STATUS_UPCOMING
-            else:
-                result.status = STATUS_CURRENT
-
-            result.raw_status_text = (
-                f"Tax Year {latest_tax_year} | {latest_detail} | "
-                f"FYE: {cycle_fye.strftime('%m/%d/%Y')} | Due: {due_date.strftime('%m/%d/%Y')}"
-            )
-            result.success = True
-            return result
+            return apply_nm_rows_to_result(result, rows, context=context)
         except Exception as exc:
             result.error = f"NM error: {exc}"
             return result
