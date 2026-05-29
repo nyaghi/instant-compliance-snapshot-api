@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.22-staging"
+APP_VERSION = "2026.05.29.23-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -5175,6 +5175,68 @@ def find_ak_print_link_relaxed(page, org):
     return None
 
 
+def wait_ak_search_results(page, timeout: float = 3.5) -> None:
+    deadline = time.perf_counter() + timeout
+    while time.perf_counter() < deadline:
+        try:
+            text = page.locator("#Dv-l").inner_text(timeout=600)
+            if re.search(r"\bPrint\b|There are no charitable organizations", text or "", re.I):
+                return
+        except Exception:
+            pass
+        time.sleep(0.2)
+
+
+def fill_ak_search_form_ein_fast(page, org, year: int) -> None:
+    submission = page.locator("#Dq-8")
+    if submission.count() == 0:
+        submission = page.get_by_label(re.compile(r"Submission\s+type", re.I)).first
+    submission.wait_for(state="visible", timeout=10000)
+    submission.select_option(label="Charitable Organization")
+    try:
+        submission.dispatch_event("change")
+    except Exception:
+        pass
+    time.sleep(0.25)
+    year_select = page.locator("#Dq-9")
+    if year_select.count() == 0:
+        year_select = page.get_by_label(re.compile(r"Year", re.I)).first
+    year_select.wait_for(state="visible", timeout=8000)
+    try:
+        year_select.select_option(label=str(year))
+    except Exception:
+        year_select.select_option(value=str(year))
+    try:
+        year_select.dispatch_event("change")
+    except Exception:
+        pass
+    time.sleep(0.25)
+    name_input = page.locator("#Dq-a")
+    if name_input.count() == 0:
+        name_input = page.get_by_label(re.compile(r"^Name$", re.I)).first
+    try:
+        name_input.fill("")
+    except Exception:
+        pass
+    fein_input = page.locator("#Dq-b")
+    if fein_input.count() == 0:
+        fein_input = page.get_by_label(re.compile(r"FEIN", re.I)).first
+    fein_input.wait_for(state="visible", timeout=8000)
+    fein_input.fill("")
+    fein_input.type(checker.format_ein_with_dash(org.ein), delay=20)
+    try:
+        fein_input.dispatch_event("input")
+        fein_input.dispatch_event("change")
+    except Exception:
+        pass
+    time.sleep(0.2)
+    search_button = page.locator("#Dq-c")
+    if search_button.count() == 0:
+        search_button = page.get_by_role("button", name=re.compile(r"^Search$", re.I)).first
+    search_button.click(timeout=10000, force=True)
+    wait_ak_search_results(page)
+
+
 def fill_ak_search_form_name_only(page, org, year: int, variant: str) -> None:
     submission = page.locator("#Dq-8")
     if submission.count() == 0:
@@ -5233,7 +5295,7 @@ def fill_ak_search_form_name_only(page, org, year: int, variant: str) -> None:
     if search_button.count() == 0:
         search_button = page.get_by_role("button", name=re.compile(r"^Search$", re.I)).first
     search_button.click(timeout=10000, force=True)
-    time.sleep(2)
+    wait_ak_search_results(page)
 
 
 def ak_name_fallback_variants(original_name: str, ein: str = "") -> list[str]:
@@ -5401,7 +5463,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
     if len(re.sub(r"\D", "", org.ein or "")) != 9:
         result.error = "AK search requires 9-digit EIN"
         return result, ""
-    years_to_try = list(getattr(checker, "AK_YEARS_TO_TRY", [date.today().year, date.today().year - 1]))
+    years_to_try = list(range(date.today().year, 2018, -1))
     original_name = getattr(org, "organization_name", "") or ""
     search_names = []
 
@@ -5426,7 +5488,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
             for year in years_to_try:
                 page_body = ""
                 try:
-                    checker.fill_ak_search_form(ak_page, lookup_org, year)
+                    fill_ak_search_form_ein_fast(ak_page, lookup_org, year)
                     print_link = find_ak_print_link_relaxed(ak_page, lookup_org)
                     page_body = registry_page_body(ak_page)
                     if not print_link:
