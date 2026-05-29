@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.2-staging"
+APP_VERSION = "2026.05.29.3-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -144,7 +144,7 @@ ME_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_LOOKUP
 AR_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_AR_LOOKUP_MIN_INTERVAL_SECONDS", "1.5"))), 20.0)
 AR_TRANSIENT_RETRY_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_AR_TRANSIENT_RETRY_DELAY_SECONDS", "4.0"))), 20.0)
 AR_TRANSIENT_RETRY_ATTEMPTS = min(max(1, int(os.environ.get("CE_AR_TRANSIENT_RETRY_ATTEMPTS", "2"))), 3)
-AR_NAME_SEARCH_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_AR_NAME_SEARCH_MAX_VARIANTS", "3"))), 5)
+AR_NAME_SEARCH_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_AR_NAME_SEARCH_MAX_VARIANTS", "5"))), 5)
 AR_NAME_SEARCH_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_AR_NAME_SEARCH_MAX_SECONDS", "22"))), 30.0)
 ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "1.0"))), 30.0)
 ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS = min(max(1, int(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS", "2"))), 4)
@@ -2720,6 +2720,50 @@ def compatible_ein_alias_for_name(original_name: str, alias_name: str) -> bool:
         return True
     if 2 <= len(alias_compact) <= 8 and alias_compact == original_acronym:
         return True
+
+    def loose_word_stem(word: str) -> str:
+        word = re.sub(r"[^a-z0-9]", "", word or "")
+        if word.endswith("ies") and len(word) > 4:
+            word = f"{word[:-3]}y"
+        elif word.endswith("ier") and len(word) > 5:
+            word = f"{word[:-3]}y"
+        elif word.endswith("ing") and len(word) > 6:
+            word = word[:-3]
+        elif word.endswith("s") and len(word) > 4 and not word.endswith(("ss", "us")):
+            word = word[:-1]
+        return word
+
+    def loose_word_overlap(left_words: list[str], right_words: list[str]) -> int:
+        ignored = {
+            "the", "a", "an", "of", "for", "and", "to", "in", "on", "at", "by",
+            "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited",
+            "local", "national",
+        }
+        left = [loose_word_stem(word) for word in left_words if word not in ignored]
+        right = [loose_word_stem(word) for word in right_words if word not in ignored]
+        count = 0
+        matched_right: set[int] = set()
+        for left_word in left:
+            if len(left_word) < 4:
+                continue
+            for index, right_word in enumerate(right):
+                if index in matched_right or len(right_word) < 4:
+                    continue
+                if left_word == right_word or left_word.startswith(right_word) or right_word.startswith(left_word):
+                    matched_right.add(index)
+                    count += 1
+                    break
+        return count
+
+    alias_leading_token = alias_words[0] if alias_words else ""
+    if (
+        2 <= len(alias_leading_token) <= 6
+        and alias_leading_token.isalpha()
+        and original_acronym.startswith(alias_leading_token)
+        and len(alias_words) >= 3
+        and loose_word_overlap(original_words, alias_words[1:]) >= 2
+    ):
+        return True
     for index, word in enumerate(original_words):
         if not (2 <= len(word) <= 6 and word.isalpha()):
             continue
@@ -5234,6 +5278,29 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
         result.error = "AK search requires 9-digit EIN"
         return result, ""
     years_to_try = list(getattr(checker, "AK_YEARS_TO_TRY", [date.today().year, date.today().year - 1]))
+    original_name = getattr(org, "organization_name", "") or ""
+    search_names = []
+
+    def add_search_name(value: str) -> None:
+        cleaned = re.sub(r"\s+", " ", (value or "").strip())
+        if cleaned and cleaned.lower() not in {existing.lower() for existing in search_names}:
+            search_names.append(cleaned)
+
+    add_search_name(original_name)
+    for alias in known_names_for_ein(getattr(org, "ein", "")):
+        if compatible_ein_alias_for_name(original_name, alias):
+            add_search_name(alias)
+    for variant in organization_name_variants(
+        original_name,
+        getattr(org, "ein", ""),
+        include_ein_aliases=True,
+        include_name_segments=False,
+        include_compact_legal_suffixes=True,
+        include_leading_article_variants=True,
+        include_broad_query_prefixes=False,
+    ):
+        add_search_name(variant)
+    search_names = search_names[:5]
     ak_context = browser.new_context(viewport={"width": 1365, "height": 900}, accept_downloads=False)
     configure_browser_context(ak_context)
     ak_page = ak_context.new_page()
@@ -5241,29 +5308,36 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
         if not checker.open_ak_public_search(ak_page):
             result.error = "Could not open Alaska Public Search form"
             return result, ""
-        for year in years_to_try:
-            page_body = ""
-            try:
-                checker.fill_ak_search_form(ak_page, org, year)
-                print_link = find_ak_print_link_relaxed(ak_page, org)
-                page_body = registry_page_body(ak_page)
-                if not print_link:
-                    continue
-                row_text = re.sub(r"\s+", " ", (print_link.get("rowText") or "")).strip() if isinstance(print_link, dict) else ""
-                if row_text:
-                    row_name = useful_registry_name(re.split(r"\b\d{2}[-\s]?\d{7}\b|\bCharitable\b|\bPrint\b", row_text, maxsplit=1, flags=re.I)[0])
-                    if row_name and registry_name_is_safe_for_org(row_name, org.organization_name, org.ein):
-                        result.matched_registry_name = row_name
-                result.status, result.raw_status_text, result.source_note = checker.classify_ak_registration_year(year, None)
-                result.success = True
-                return result, page_body
-            except Exception as e:
-                result.error = f"AK error: {e}"
+        for search_name in search_names or [original_name]:
+            lookup_org = org_with_name(org, search_name)
+            for year in years_to_try:
+                page_body = ""
                 try:
-                    checker.open_ak_public_search(ak_page)
-                except Exception:
-                    pass
-                continue
+                    checker.fill_ak_search_form(ak_page, lookup_org, year)
+                    print_link = find_ak_print_link_relaxed(ak_page, lookup_org)
+                    page_body = registry_page_body(ak_page)
+                    if not print_link:
+                        continue
+                    row_text = re.sub(r"\s+", " ", (print_link.get("rowText") or "")).strip() if isinstance(print_link, dict) else ""
+                    if row_text:
+                        row_name = useful_registry_name(re.split(r"\b\d{2}[-\s]?\d{7}\b|\bCharitable\b|\bPrint\b", row_text, maxsplit=1, flags=re.I)[0])
+                        if row_name and registry_name_is_safe_for_org(row_name, original_name, org.ein):
+                            result.matched_registry_name = row_name
+                        elif row_name:
+                            continue
+                    if search_name != original_name:
+                        result.source_note = f"Matched using EIN-resolved compatible name variant: {search_name}."
+                    result.status, result.raw_status_text, base_note = checker.classify_ak_registration_year(year, None)
+                    result.source_note = " ".join(part for part in [result.source_note, base_note] if part).strip()
+                    result.success = True
+                    return result, page_body
+                except Exception as e:
+                    result.error = f"AK error: {e}"
+                    try:
+                        checker.open_ak_public_search(ak_page)
+                    except Exception:
+                        pass
+                    continue
     finally:
         ak_context.close()
     checked_years = ", ".join(str(year) for year in years_to_try)
@@ -5996,6 +6070,10 @@ def wi_better_candidate(candidate: dict, best_match: dict | None) -> bool:
     if candidate["score"] > best_match["score"]:
         return True
     if candidate["score"] == best_match["score"]:
+        candidate_severity = wi_status_severity(candidate.get("detail_status", ""))
+        best_severity = wi_status_severity(best_match.get("detail_status", ""))
+        if candidate_severity != best_severity:
+            return candidate_severity > best_severity
         candidate_name = normalized_match_name(candidate.get("registry_name", ""))
         best_name = normalized_match_name(best_match.get("registry_name", ""))
         if candidate_name and candidate_name == best_name:
@@ -6003,10 +6081,6 @@ def wi_better_candidate(candidate: dict, best_match: dict | None) -> bool:
             best_date = best_match.get("expiration_date") or date.min
             if candidate_date != best_date:
                 return candidate_date > best_date
-        candidate_severity = wi_status_severity(candidate.get("detail_status", ""))
-        best_severity = wi_status_severity(best_match.get("detail_status", ""))
-        if candidate_severity != best_severity:
-            return candidate_severity > best_severity
     return (
         candidate["score"] == best_match["score"]
         and (candidate["expiration_date"] or date.min) > (best_match["expiration_date"] or date.min)
@@ -8336,6 +8410,134 @@ def _search_snapshot_or_embedded_state_once(org, state: str):
     return copy_external_result(org, state, external_result)
 
 
+def ms_search_variant_too_broad(value: str) -> bool:
+    words = [
+        word.lower()
+        for word in re.findall(r"[A-Za-z0-9]+", value or "")
+        if word.lower() not in {"the", "a", "an", "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited"}
+    ]
+    if not words:
+        return True
+    if len(words) == 1 and len(words[0]) <= 3:
+        return True
+    if len(words) <= 2 and all(len(word) <= 2 for word in words):
+        return True
+    return False
+
+
+def ms_preferred_search_variants(name: str, ein: str = "") -> list[str]:
+    variants = []
+
+    def add(value: str) -> None:
+        cleaned = re.sub(r"\s+", " ", (value or "").strip(" ,;-"))
+        if cleaned and not ms_search_variant_too_broad(cleaned) and cleaned.lower() not in {item.lower() for item in variants}:
+            variants.append(cleaned)
+
+    seeds = [name]
+    for alias in known_names_for_ein(ein):
+        if compatible_ein_alias_for_name(name, alias):
+            seeds.append(alias)
+    for seed in seeds:
+        base = re.sub(r"\s+", " ", (seed or "").strip())
+        add(base)
+        us_reduced = re.sub(r"^(?:the\s+)?(?:u\.?\s*s\.?|us|united\s+states)\s+", "", base, flags=re.I).strip()
+        add(us_reduced)
+        no_article = re.sub(r"^(?:the|a|an)\s+", "", base, flags=re.I).strip()
+        add(no_article)
+        trailing_the = re.match(r"^(.*?),\s*the\s*$", base, re.I)
+        if trailing_the:
+            add(f"The {trailing_the.group(1).strip()}")
+            add(trailing_the.group(1).strip())
+        children_hospital = re.sub(
+            r"\b(Children'?s?)\s+Foundation\b",
+            r"\1 Hospital Foundation",
+            base,
+            flags=re.I,
+        ).strip()
+        add(children_hospital)
+    return variants
+
+
+def ms_result_row_cells(row) -> list[str]:
+    cells = []
+    try:
+        locator = row.locator("td")
+        for index in range(min(locator.count(), 12)):
+            try:
+                text = re.sub(r"\s+", " ", locator.nth(index).inner_text(timeout=1000)).strip()
+                if text:
+                    cells.append(text)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return cells
+
+
+def ms_registry_name_from_row(row, original_name: str, ein: str = "") -> str:
+    skip_pattern = re.compile(
+        r"^(?:details?|view|select|file\s*#?\s*\d+|\d{4,}|current|closed|expired|registered|not\s+registered|delinquent|pending)\b",
+        re.I,
+    )
+    for cell in ms_result_row_cells(row):
+        candidate = useful_registry_name(cell)
+        if not candidate or skip_pattern.search(candidate):
+            continue
+        if registry_name_is_safe_for_org(candidate, original_name, ein):
+            return candidate
+    try:
+        row_text = re.sub(r"\s+", " ", row.inner_text(timeout=1000)).strip()
+    except Exception:
+        row_text = ""
+    for part in re.split(r"\s{2,}|\t|\|", row_text):
+        candidate = useful_registry_name(part)
+        if not candidate or skip_pattern.search(candidate):
+            continue
+        if registry_name_is_safe_for_org(candidate, original_name, ein):
+            return candidate
+    return ""
+
+
+def ms_status_from_row_cells(row) -> str:
+    for cell in ms_result_row_cells(row):
+        text = re.sub(r"\s+", " ", cell or "").strip()
+        if not text:
+            continue
+        if re.search(r"\b(current|registered|closed|expired|delinquent|pending|not\s+current|revoked|withdrawn|cancel(?:ed|led))\b", text, re.I):
+            if not re.search(r"^(?:details?|view|select)$", text, re.I):
+                return text
+    return ""
+
+
+def ms_choose_safe_row_from_table(table, original_name: str, ein: str = ""):
+    try:
+        rows = table.locator("tbody tr")
+        row_count = rows.count()
+        if row_count == 0:
+            rows = table.locator("tr")
+            row_count = rows.count()
+    except Exception:
+        return None
+    for index in range(min(row_count, 80)):
+        row = rows.nth(index)
+        try:
+            row_text = re.sub(r"\s+", " ", row.inner_text(timeout=1000)).strip()
+        except Exception:
+            continue
+        if not row_text or re.search(r"charity\s+name|filing\s+status|details?", row_text, re.I) and not re.search(r"\b(current|registered|closed|expired|delinquent)\b", row_text, re.I):
+            continue
+        if ms_registry_name_from_row(row, original_name, ein):
+            return row
+    return None
+
+
+def ms_status_from_filing_status(filing_status: str, expiration_date: date | None, classifier) -> str:
+    text = filing_status or ""
+    if re.search(r"\b(closed|withdrawn|cancel(?:ed|led)|terminated|dissolved)\b", text, re.I):
+        return "Closed / Withdrawn / Canceled"
+    return classifier(filing_status, expiration_date)
+
+
 def search_ms_fast(page, org):
     """Master-level Mississippi path with bounded waits around the embedded checker logic."""
     modules = state_batch_modules(["MS"])
@@ -8386,7 +8588,7 @@ def search_ms_fast(page, org):
 
         table = None
         page_text = ""
-        deadline = time.perf_counter() + 18.0
+        deadline = time.perf_counter() + 10.0
         while time.perf_counter() < deadline:
             page.wait_for_timeout(500)
             page_text = page.locator("body").inner_text(timeout=8000)
@@ -8411,8 +8613,11 @@ def search_ms_fast(page, org):
             ]).strip()
             return fallback_result
 
+        original_name = getattr(org, "original_organization_name", org.organization_name)
         name_index, status_index = module.detect_header_indexes(table)
         row = module.choose_matching_row(table, org.organization_name, name_index)
+        if not row:
+            row = ms_choose_safe_row_from_table(table, original_name, getattr(org, "ein", ""))
         if not row:
             result.status = module.STATUS_NOT_FOUND
             result.raw_status_text = "No matching organization row"
@@ -8420,17 +8625,11 @@ def search_ms_fast(page, org):
             result.source_note = "Mississippi results table did not contain a matching organization row."
             return result
 
-        row_registry_name = ""
-        try:
-            cells = row.locator("td")
-            if name_index >= 0 and cells.count() > name_index:
-                row_registry_name = useful_registry_name(cells.nth(name_index).inner_text(timeout=1000))
-        except Exception:
-            row_registry_name = ""
+        row_registry_name = ms_registry_name_from_row(row, original_name, getattr(org, "ein", ""))
         if row_registry_name:
             result.matched_registry_name = row_registry_name
 
-        status_text = module.extract_status_from_row(row, status_index)
+        status_text = module.extract_status_from_row(row, status_index) or ms_status_from_row_cells(row)
         if not status_text:
             result.status = module.STATUS_UNKNOWN
             result.raw_status_text = "Status not visible in results table"
@@ -8449,7 +8648,9 @@ def search_ms_fast(page, org):
                 except Exception:
                     link_text = ""
                 if link_text and not row_registry_name:
-                    result.matched_registry_name = useful_registry_name(link_text)
+                    candidate_name = useful_registry_name(link_text)
+                    if candidate_name and registry_name_is_safe_for_org(candidate_name, original_name, getattr(org, "ein", "")):
+                        result.matched_registry_name = candidate_name
                 if link_text and module.normalize_name(link_text) == module.normalize_name(org.organization_name):
                     link.click(timeout=3000)
                     clicked_detail = True
@@ -8485,7 +8686,7 @@ def search_ms_fast(page, org):
             if expiration_raw
             else display_filing_status
         )
-        result.status = module.classify_ms_registration(filing_status, expiration_date)
+        result.status = ms_status_from_filing_status(filing_status, expiration_date, module.classify_ms_registration)
         result.source_note = (
             "Mississippi uses Filing Status and Expiration Date from the matched record; "
             "the master checker uses bounded waits around the public result/detail pages."
@@ -8502,27 +8703,40 @@ def search_batch_browser_state(page, org, state: str):
     modules = state_batch_modules([state])
     module = modules[load_state_batch_bundle().STATE_TO_MODULE[state]]
     if state == "MS":
-        variants = organization_name_variants(
+        generated_variants = organization_name_variants(
             org.organization_name,
             org.ein,
             include_ein_aliases=True,
             include_name_segments=False,
             include_compact_legal_suffixes=True,
             include_leading_article_variants=True,
-        )[:6]
+        )
+        variants = ms_preferred_search_variants(org.organization_name, org.ein)
+        for variant in generated_variants:
+            if ms_search_variant_too_broad(variant):
+                continue
+            if variant.lower() not in {existing.lower() for existing in variants}:
+                variants.append(variant)
+            if len(variants) >= 12:
+                break
         if org.organization_name and org.organization_name not in variants:
             variants.insert(0, org.organization_name)
         best_external = None
         for variant_name in variants or [org.organization_name]:
             module_org = module.Organization(organization_name=variant_name)
             module_org.ein = org.ein
+            module_org.original_organization_name = getattr(org, "original_organization_name", org.organization_name)
             external_result = search_ms_fast(page, module_org)
             best_external = best_external or external_result
             status = external_status_to_checker_status(getattr(external_result, "status", ""))
+            raw_text = " ".join([
+                getattr(external_result, "raw_status_text", "") or "",
+                getattr(external_result, "source_note", "") or "",
+            ])
             if status == "Site Not Reachable":
                 best_external = external_result
                 break
-            if status == "Not Registered":
+            if status == "Not Registered" or re.search(r"\b(no matching organization row|no results found)\b", raw_text, re.I):
                 continue
             matched_name = getattr(external_result, "matched_registry_name", "") or getattr(external_result, "organization_name", "")
             if matched_name and not registry_name_is_safe_for_org(matched_name, org.organization_name, org.ein):
@@ -9345,7 +9559,10 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                         require_safe_registry_name=True,
                     )
                 body = registry_page_body(page)
-            elif state in {"MS", "OK"}:
+            elif state == "MS":
+                result = search_batch_browser_state(page, org, state)
+                body = registry_page_body(page)
+            elif state == "OK":
                 result = search_with_name_variants(
                     page,
                     org,
