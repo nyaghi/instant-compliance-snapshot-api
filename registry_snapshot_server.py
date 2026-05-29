@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.4-staging"
+APP_VERSION = "2026.05.29.5-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -536,6 +536,14 @@ STATE_BATCH_LOADED_STATES: set[str] = set()
 STATE_WA_NM_MODULE = None
 KS_WEEKLY_CHECKER = None
 KY_SNAPSHOT_RECORDS = None
+KY_LIVE_PDF_URL = os.environ.get(
+    "CE_KY_LIVE_PDF_URL",
+    "https://www.ag.ky.gov/Resources/Consumer-Resources/charity/Documents/charity.pdf",
+)
+KY_LIVE_PDF_RECORDS = None
+KY_LIVE_PDF_LOADED_AT = 0.0
+KY_LIVE_PDF_MAX_AGE_SECONDS = min(max(3600, int(os.environ.get("CE_KY_LIVE_PDF_MAX_AGE_SECONDS", "86400"))), 604800)
+KY_LIVE_PDF_LOCK = threading.Lock()
 
 
 def load_state_extension_bundle():
@@ -7979,11 +7987,15 @@ def load_ky_snapshot_records() -> list[tuple[str, str, str, str]]:
     global KY_SNAPSHOT_RECORDS
     if KY_SNAPSHOT_RECORDS is not None:
         return KY_SNAPSHOT_RECORDS
+    records = load_ky_live_pdf_records()
+    if records:
+        KY_SNAPSHOT_RECORDS = records
+        return KY_SNAPSHOT_RECORDS
     modules = state_batch_modules(["KY"])
     bundle = load_state_batch_bundle()
     module = modules[bundle.STATE_TO_MODULE["KY"]]
     encoded = getattr(module, "EMBEDDED_SNAPSHOT_B64", "")
-    records: list[tuple[str, str, str, str]] = []
+    records = []
     if encoded:
         try:
             snapshot = json.loads(zlib.decompress(base64.b64decode(encoded)).decode("utf-8-sig"))
@@ -7996,6 +8008,69 @@ def load_ky_snapshot_records() -> list[tuple[str, str, str, str]]:
             log_event(f"KY snapshot decode failed: {exc}")
     KY_SNAPSHOT_RECORDS = records
     return records
+
+
+def load_ky_live_pdf_records() -> list[tuple[str, str, str, str]]:
+    global KY_LIVE_PDF_RECORDS, KY_LIVE_PDF_LOADED_AT
+    now = time.time()
+    if KY_LIVE_PDF_RECORDS is not None and now - KY_LIVE_PDF_LOADED_AT < KY_LIVE_PDF_MAX_AGE_SECONDS:
+        return KY_LIVE_PDF_RECORDS
+    if PdfReader is None:
+        return []
+    with KY_LIVE_PDF_LOCK:
+        now = time.time()
+        if KY_LIVE_PDF_RECORDS is not None and now - KY_LIVE_PDF_LOADED_AT < KY_LIVE_PDF_MAX_AGE_SECONDS:
+            return KY_LIVE_PDF_RECORDS
+        records: list[tuple[str, str, str, str]] = []
+        try:
+            request = urllib.request.Request(
+                KY_LIVE_PDF_URL,
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        f"AppleWebKit/537.36 (KHTML, like Gecko) CharityClarity/{APP_VERSION}"
+                    ),
+                    "Accept": "application/pdf,*/*",
+                    "Referer": "https://www.ag.ky.gov/Resources/Consumer-Resources/charity/Pages/registered-charities.aspx",
+                },
+            )
+            with urllib.request.urlopen(request, timeout=45) as response:
+                pdf_bytes = response.read()
+            reader = PdfReader(io.BytesIO(pdf_bytes))
+            text = "\n".join(page.extract_text() or "" for page in reader.pages)
+            record_pattern = re.compile(
+                r"(?:^|\n)\s*(?P<id>\d{1,6})\s*\n(?P<body>[\s\S]{3,700}?)\n\s*"
+                r"\$[\d,]+(?:\.\d{2})?\s*\n\s*\$[\d,]+(?:\.\d{2})?\s*\n\s*(?P<year>20\d{2})\b",
+                re.I,
+            )
+            for match in record_pattern.finditer(text):
+                registry_id = match.group("id")
+                filed_year = match.group("year")
+                body_lines = [
+                    re.sub(r"\s+", " ", line).strip()
+                    for line in (match.group("body") or "").splitlines()
+                    if re.sub(r"\s+", " ", line).strip()
+                ]
+                if not body_lines:
+                    continue
+                shifted_id = re.match(r"^(\d{1,6})\s+([A-Za-z].*)$", body_lines[0])
+                if shifted_id:
+                    registry_id = shifted_id.group(1)
+                    body_lines[0] = shifted_id.group(2).strip()
+                elif len(body_lines) >= 2 and re.fullmatch(r"\d{1,6}", body_lines[0]) and re.search(r"[A-Za-z]", body_lines[1]):
+                    registry_id = body_lines[0]
+                    body_lines = body_lines[1:]
+                registry_name = useful_registry_name(" ".join(body_lines))
+                if not registry_name or re.search(r"^\d+$", registry_name):
+                    continue
+                record_text = f"{registry_id} {registry_name} Yr Last Filed {filed_year}"
+                records.append((registry_id, registry_name, filed_year, record_text))
+        except Exception as exc:
+            log_event(f"KY live PDF load failed: {exc}")
+            records = []
+        KY_LIVE_PDF_RECORDS = records
+        KY_LIVE_PDF_LOADED_AT = time.time()
+        return records
 
 
 def parse_ky_snapshot_record(record_text) -> tuple[str, str, str]:
