@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.20-staging"
+APP_VERSION = "2026.05.29.21-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -10442,7 +10442,11 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
     for attempt in range(1, attempts + 1):
         result = run_state_lookup(organization_name, ein, state)
         result["semantic_attempts"] = attempt
-        if (result.get("status") or "").strip().lower() != "site not reachable":
+        status = (result.get("status") or "").strip().lower()
+        retryable_statuses = {"site not reachable"}
+        if state == "WI":
+            retryable_statuses.add("not registered")
+        if status not in retryable_statuses:
             return result
         if attempt < attempts and SINGLE_STATE_SEMANTIC_RETRY_DELAY_SECONDS > 0:
             time.sleep(SINGLE_STATE_SEMANTIC_RETRY_DELAY_SECONDS)
