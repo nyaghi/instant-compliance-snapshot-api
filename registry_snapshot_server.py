@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.8-staging"
+APP_VERSION = "2026.05.29.9-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -456,7 +456,7 @@ WI_LOOKUP_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_WI_LOOKUP_MAX_SEC
 WI_READER_TIMEOUT_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_READER_TIMEOUT_SECONDS", "12"))), 20.0)
 WI_HTTP_TIMEOUT_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_HTTP_TIMEOUT_SECONDS", "10"))), 20.0)
 WI_DIRECT_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_WI_DIRECT_VARIANT_LIMIT", "8"))), 12)
-WI_BROWSER_VARIANT_LIMIT = min(max(0, int(os.environ.get("CE_WI_BROWSER_VARIANT_LIMIT", "0"))), 5)
+WI_BROWSER_VARIANT_LIMIT = min(max(0, int(os.environ.get("CE_WI_BROWSER_VARIANT_LIMIT", "3"))), 5)
 WI_SIDECAR_URL = os.environ.get("CE_WI_SIDECAR_URL", "").strip()
 WI_LOOKUP_SECRET = os.environ.get("CE_WI_LOOKUP_SECRET", "").strip()
 WI_SIDECAR_TIMEOUT_SECONDS = min(max(10.0, float(os.environ.get("CE_WI_SIDECAR_TIMEOUT_SECONDS", "45"))), 58.0)
@@ -6554,22 +6554,22 @@ def search_wi_sidecar(org):
         result.source_note = "Wisconsin DFI sidecar lookup could not be completed."
         result.error = str(last_exception or "WI sidecar returned no response")
         result.success = False
-        fallback_result = search_wi(None, org)
+        fallback_result = search_wi_backend_browser_fallback(org)
         if public_status(fallback_result) != "Site Not Reachable":
-            fallback_result.source_note = "Wisconsin DFI lookup used the backend reader fallback after the sidecar returned no response."
+            fallback_result.source_note = "Wisconsin DFI lookup used the backend browser fallback after the sidecar returned no response."
             return fallback_result
         return result
 
     if data.get("status") == "Site Not Reachable" and not data.get("success"):
-        fallback_result = search_wi(None, org)
+        fallback_result = search_wi_backend_browser_fallback(org)
         if public_status(fallback_result) != "Site Not Reachable":
-            fallback_result.source_note = "Wisconsin DFI lookup used the backend reader fallback after the sidecar could not reach the registry."
+            fallback_result.source_note = "Wisconsin DFI lookup used the backend browser fallback after the sidecar could not reach the registry."
             return fallback_result
 
     if data.get("status") == "Not Registered":
-        fallback_result = search_wi(None, org)
+        fallback_result = search_wi_backend_browser_fallback(org)
         if public_status(fallback_result) != "Site Not Reachable":
-            fallback_result.source_note = "Wisconsin DFI lookup used the backend reader fallback to confirm the sidecar no-match result."
+            fallback_result.source_note = "Wisconsin DFI lookup used the backend browser fallback to confirm the sidecar no-match result."
             return fallback_result
 
     result.status = data.get("status") or "Site Not Reachable"
@@ -6581,6 +6581,36 @@ def search_wi_sidecar(org):
     result.error = data.get("error") or ""
     result.success = bool(data.get("success", public_status(result) != "Site Not Reachable"))
     return result
+
+
+def search_wi_backend_browser_fallback(org):
+    with checker.sync_playwright() as p:
+        browser = None
+        context = None
+        try:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(user_agent=BROWSER_USER_AGENT, locale="en-US")
+            configure_browser_context(context)
+            page = context.new_page()
+            return search_wi(page, org)
+        except Exception as exc:
+            result = checker.StateResult(org.organization_name, org.ein, "WI", "Site Not Reachable", WI_SEARCH_URL)
+            result.raw_status_text = "Wisconsin backend fallback failed"
+            result.source_note = "Wisconsin DFI backend fallback could not be completed."
+            result.error = str(exc)
+            result.success = False
+            return result
+        finally:
+            if context:
+                try:
+                    context.close()
+                except Exception:
+                    pass
+            if browser:
+                try:
+                    browser.close()
+                except Exception:
+                    pass
 
 
 def response_data_for_lookup(result, body: str, org, organization_name: str, ein: str, state: str, lookup_started: float) -> dict:
@@ -8654,8 +8684,14 @@ def ms_short_prefix_name_mismatch(original_name: str, candidate_name: str) -> bo
     candidate_words = ms_words_for_match(normalized_match_name(candidate_name))
     if len(original_words) < 5 or not candidate_words:
         return False
+    if candidate_words[0] in {"of", "for", "and", "or", "to", "in", "on", "at", "by"}:
+        return True
     if len(candidate_words) <= 3 and original_words[: len(candidate_words)] == candidate_words:
         return True
+    if len(candidate_words) <= 3 and len(original_words) - len(candidate_words) >= 2:
+        for start in range(1, len(original_words) - len(candidate_words) + 1):
+            if original_words[start : start + len(candidate_words)] == candidate_words:
+                return True
     missing = [word for word in original_words if word not in set(candidate_words)]
     return len(candidate_words) <= 3 and len(missing) >= 2 and original_words[: len(candidate_words)] == candidate_words
 
