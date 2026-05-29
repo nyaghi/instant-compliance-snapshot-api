@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.19-staging"
+APP_VERSION = "2026.05.29.20-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -6584,9 +6584,8 @@ def search_wi_sidecar(org):
             continue
 
         data = candidate_data
-        if candidate_data.get("status") == "Not Registered" and attempt_index + 1 < WI_SIDECAR_ATTEMPTS:
-            time.sleep(0.4 * (attempt_index + 1))
-            continue
+        if candidate_data.get("status") == "Not Registered":
+            break
         if candidate_data.get("success") or candidate_data.get("status") != "Site Not Reachable":
             break
         if attempt_index + 1 < WI_SIDECAR_ATTEMPTS:
@@ -9749,17 +9748,6 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
 
     if state == "WI" and WI_SIDECAR_URL and WI_LOOKUP_SECRET:
         result = search_wi_sidecar(org)
-        if confirm_single_no_match and public_status(result) == "Not Registered" and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0:
-            for _ in range(2):
-                time.sleep(min(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS, 5.0))
-                confirmed_result = search_wi_sidecar(org)
-                if public_status(confirmed_result) != "Not Registered":
-                    confirmed_result.source_note = " ".join(part for part in [
-                        confirmed_result.source_note or "",
-                        "A delayed confirmation lookup replaced an initial Wisconsin no-record response.",
-                    ]).strip()
-                    result = confirmed_result
-                    break
         body = " ".join(part for part in [
             result.raw_status_text or "",
             result.source_note or "",
