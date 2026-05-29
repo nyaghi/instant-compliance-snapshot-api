@@ -89,7 +89,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.15-staging"
+APP_VERSION = "2026.05.29.16-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -456,7 +456,7 @@ WI_LOOKUP_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_WI_LOOKUP_MAX_SEC
 WI_READER_TIMEOUT_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_READER_TIMEOUT_SECONDS", "12"))), 20.0)
 WI_HTTP_TIMEOUT_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_HTTP_TIMEOUT_SECONDS", "10"))), 20.0)
 WI_DIRECT_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_WI_DIRECT_VARIANT_LIMIT", "8"))), 12)
-WI_BROWSER_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_WI_BROWSER_VARIANT_LIMIT", "3"))), 5)
+WI_BROWSER_VARIANT_LIMIT = min(max(0, int(os.environ.get("CE_WI_BROWSER_VARIANT_LIMIT", "0"))), 5)
 WI_SIDECAR_URL = os.environ.get("CE_WI_SIDECAR_URL", "").strip()
 WI_LOOKUP_SECRET = os.environ.get("CE_WI_LOOKUP_SECRET", "").strip()
 WI_SIDECAR_TIMEOUT_SECONDS = min(max(10.0, float(os.environ.get("CE_WI_SIDECAR_TIMEOUT_SECONDS", "45"))), 58.0)
@@ -6581,22 +6581,22 @@ def search_wi_sidecar(org):
         result.source_note = "Wisconsin DFI sidecar lookup could not be completed."
         result.error = str(last_exception or "WI sidecar returned no response")
         result.success = False
-        fallback_result = search_wi_backend_browser_fallback(org)
+        fallback_result = search_wi(None, org)
         if public_status(fallback_result) != "Site Not Reachable":
-            fallback_result.source_note = "Wisconsin DFI lookup used the backend browser fallback after the sidecar returned no response."
+            fallback_result.source_note = "Wisconsin DFI lookup used the backend reader fallback after the sidecar returned no response."
             return fallback_result
         return result
 
     if data.get("status") == "Site Not Reachable" and not data.get("success"):
-        fallback_result = search_wi_backend_browser_fallback(org)
+        fallback_result = search_wi(None, org)
         if public_status(fallback_result) != "Site Not Reachable":
-            fallback_result.source_note = "Wisconsin DFI lookup used the backend browser fallback after the sidecar could not reach the registry."
+            fallback_result.source_note = "Wisconsin DFI lookup used the backend reader fallback after the sidecar could not reach the registry."
             return fallback_result
 
     if data.get("status") == "Not Registered":
-        fallback_result = search_wi_backend_browser_fallback(org)
+        fallback_result = search_wi(None, org)
         if public_status(fallback_result) != "Site Not Reachable":
-            fallback_result.source_note = "Wisconsin DFI lookup used the backend browser fallback to confirm the sidecar no-match result."
+            fallback_result.source_note = "Wisconsin DFI lookup used the backend reader fallback to confirm the sidecar no-match result."
             return fallback_result
 
     result.status = data.get("status") or "Site Not Reachable"
@@ -9732,27 +9732,18 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
         return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
 
     if state == "WI" and WI_SIDECAR_URL and WI_LOOKUP_SECRET:
-        result = search_wi_backend_browser_fallback(org)
-        if public_status(result) in {"Not Registered", "Site Not Reachable"}:
-            acquired = WI_SIDECAR_SEMAPHORE.acquire(timeout=min(WI_SIDECAR_ACQUIRE_SECONDS, 25.0))
-            if acquired:
-                try:
-                    sidecar_result = search_wi_sidecar(org)
-                    if public_status(sidecar_result) not in {"Not Registered", "Site Not Reachable"}:
-                        sidecar_result.source_note = " ".join(part for part in [
-                            sidecar_result.source_note or "",
-                            "Wisconsin sidecar lookup replaced an initial backend browser no-record response.",
-                        ]).strip()
-                        result = sidecar_result
-                    elif public_status(result) == "Site Not Reachable" and public_status(sidecar_result) == "Not Registered":
-                        result = sidecar_result
-                    elif public_status(result) == "Not Registered" and public_status(sidecar_result) == "Site Not Reachable":
-                        result.source_note = " ".join(part for part in [
-                            result.source_note or "",
-                            "Wisconsin sidecar could not complete a secondary confirmation lookup.",
-                        ]).strip()
-                finally:
-                    WI_SIDECAR_SEMAPHORE.release()
+        result = search_wi_sidecar(org)
+        if confirm_single_no_match and public_status(result) == "Not Registered" and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0:
+            for _ in range(2):
+                time.sleep(min(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS, 5.0))
+                confirmed_result = search_wi_sidecar(org)
+                if public_status(confirmed_result) != "Not Registered":
+                    confirmed_result.source_note = " ".join(part for part in [
+                        confirmed_result.source_note or "",
+                        "A delayed confirmation lookup replaced an initial Wisconsin no-record response.",
+                    ]).strip()
+                    result = confirmed_result
+                    break
         body = " ".join(part for part in [
             result.raw_status_text or "",
             result.source_note or "",
