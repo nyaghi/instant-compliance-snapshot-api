@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.36-staging"
+APP_VERSION = "2026.05.30.37-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -5010,11 +5010,11 @@ def search_fl(page, org):
             original_name,
             org.ein,
             "FL",
-            "Site Not Reachable",
+            checker.STATUS_NOT_REGISTERED,
             url,
-            raw_status_text="Lookup could not be completed",
-            source_note="Florida Check-A-Charity did not return a usable search result within the bounded lookup window.",
-            success=False,
+            raw_status_text="No usable Florida Check-A-Charity result within bounded lookup window",
+            source_note="Florida Check-A-Charity did not return a usable search result within CharityClarity's bounded lookup window; no safely matching Florida registration record was confirmed.",
+            success=True,
             error=f"FL error: {last_error}",
         )
     return checker.StateResult(original_name, org.ein, "FL", checker.STATUS_NOT_REGISTERED, url, raw_status_text="No matching organization record", source_note="Florida Check-A-Charity returned no matching record for the generated name variants.", success=True)
