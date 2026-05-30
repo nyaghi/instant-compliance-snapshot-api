@@ -48,6 +48,8 @@ services:
         value: "1"
       - key: CE_ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS
         value: "1"
+      - key: CE_ME_FAST_DIRECT_CONFIRMATION_MAX_VARIANTS
+        value: "5"
       - key: CE_MI_ENABLE_NAME_FALLBACK
         value: "1"
       - key: CE_ENABLE_CROSS_STATE_NAME_RETRY
