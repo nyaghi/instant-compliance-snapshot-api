@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.39-staging"
+APP_VERSION = "2026.05.30.40-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -3707,10 +3707,10 @@ def patch_mi_module_for_fast_lookups(module) -> None:
         return False
 
     def find_results_frame_fast(page):
-        deadline = time.time() + 6
+        deadline = time.time() + 24
         while time.time() < deadline:
             for frame in reversed(page.frames):
-                text = re.sub(r"\s+", " ", module.body_text(frame, timeout=1800)).strip()
+                text = re.sub(r"\s+", " ", module.body_text(frame, timeout=2500)).strip()
                 if not text:
                     continue
                 if "Results for the following input" in text or "record(s) found" in text or "No records found" in text:
@@ -3719,7 +3719,7 @@ def patch_mi_module_for_fast_lookups(module) -> None:
         return None
 
     def find_detail_frame_fast(page):
-        deadline = time.time() + 6
+        deadline = time.time() + 22
         while time.time() < deadline:
             for frame in reversed(page.frames):
                 try:
@@ -3727,7 +3727,7 @@ def patch_mi_module_for_fast_lookups(module) -> None:
                         return frame
                 except Exception:
                     pass
-                text = re.sub(r"\s+", " ", module.body_text(frame, timeout=1800)).strip()
+                text = re.sub(r"\s+", " ", module.body_text(frame, timeout=2500)).strip()
                 if "Solicitation Registration Status" in text and "Charitable Trust Registration Status" in text:
                     return frame
             time.sleep(0.25)
@@ -3758,7 +3758,7 @@ def patch_mi_module_for_fast_lookups(module) -> None:
                 page.wait_for_load_state("domcontentloaded", timeout=3500)
             except Exception:
                 pass
-            time.sleep(1)
+            time.sleep(4)
 
             results_frame = find_results_frame_fast(page)
             if not results_frame:
@@ -3787,7 +3787,7 @@ def patch_mi_module_for_fast_lookups(module) -> None:
                 page.wait_for_load_state("domcontentloaded", timeout=3500)
             except Exception:
                 pass
-            time.sleep(1)
+            time.sleep(4)
 
             detail_frame = find_detail_frame_fast(page)
             if not detail_frame:
