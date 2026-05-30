@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.34-staging"
+APP_VERSION = "2026.05.30.35-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -10384,7 +10384,17 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 mi_started = time.perf_counter()
                 result = search_bundled_extension_state(page, org, "MI")
                 mi_elapsed = time.perf_counter() - mi_started
-                if MI_ENABLE_NAME_FALLBACK and public_status(result) == "Not Registered" and mi_elapsed < (LOOKUP_SOFT_MAX_SECONDS - 6):
+                mi_incomplete_frame = bool(re.search(
+                    r"No results frame|Could not find the Michigan results frame|Could not load the Michigan detail page",
+                    " ".join([result.raw_status_text or "", result.source_note or "", result.error or ""]),
+                    re.I,
+                ))
+                if (
+                    MI_ENABLE_NAME_FALLBACK
+                    and public_status(result) == "Not Registered"
+                    and not mi_incomplete_frame
+                    and mi_elapsed < (LOOKUP_SOFT_MAX_SECONDS - 6)
+                ):
                     fallback_result = search_mi_name_fallback(page, org)
                     if public_status(fallback_result) != "Not Registered":
                         result = fallback_result
