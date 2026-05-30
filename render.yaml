@@ -80,9 +80,13 @@ services:
         value: "1"
       - key: CE_FL_LOOKUP_MAX_SECONDS
         value: "45"
+      - key: CE_FL_LOOKUP_LANES
+        value: "2"
+      - key: CE_FL_LOOKUP_ACQUIRE_SECONDS
+        value: "85"
       - key: CE_SC_NAME_VARIANT_MAX_SECONDS
         value: "25"
       - key: CE_WI_BROWSER_VARIANT_LIMIT
-        value: "0"
+        value: "3"
       - key: CE_WI_LOOKUP_MAX_SECONDS
         value: "55"

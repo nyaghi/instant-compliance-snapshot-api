@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.40-staging"
+APP_VERSION = "2026.05.30.41-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -138,7 +138,10 @@ CT_NAME_VARIANT_MAX_SECONDS = min(max(12.0, float(os.environ.get("CE_CT_NAME_VAR
 CT_NAME_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_CT_NAME_VARIANT_LIMIT", "8"))), 14)
 MN_NAME_FALLBACK_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_MN_NAME_FALLBACK_MAX_SECONDS", "18"))), 30.0)
 MN_NAME_FALLBACK_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_MN_NAME_FALLBACK_MAX_VARIANTS", "4"))), 10)
-FL_LOOKUP_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_FL_LOOKUP_MAX_SECONDS", "32"))), 45.0)
+FL_LOOKUP_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_FL_LOOKUP_MAX_SECONDS", "45"))), 59.0)
+FL_LOOKUP_LANES = min(max(1, int(os.environ.get("CE_FL_LOOKUP_LANES", "2"))), 4)
+FL_LOOKUP_ACQUIRE_SECONDS = min(max(10.0, float(os.environ.get("CE_FL_LOOKUP_ACQUIRE_SECONDS", "85"))), 100.0)
+FL_LOOKUP_SEMAPHORE = threading.BoundedSemaphore(FL_LOOKUP_LANES)
 SC_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_SC_PREFLIGHT_TIMEOUT_SECONDS", "12"))), 20.0)
 NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
 ME_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_LOOKUP_MIN_INTERVAL_SECONDS", "1.0"))), 20.0)
@@ -4869,7 +4872,7 @@ def search_fl(page, org):
             variants.append(variant)
     best_result = None
     last_error = None
-    search_variants = list(variants[:5])
+    search_variants = list(variants[:8])
     final_exact_retry_added = False
     for variant in search_variants:
         if deadline_expired():
@@ -7037,22 +7040,22 @@ def search_wi_sidecar(org):
         result.source_note = "Wisconsin DFI sidecar lookup could not be completed."
         result.error = str(last_exception or "WI sidecar returned no response")
         result.success = False
-        fallback_result = search_wi(None, org)
+        fallback_result = search_wi_backend_browser_fallback(org)
         if public_status(fallback_result) != "Site Not Reachable":
-            fallback_result.source_note = "Wisconsin DFI lookup used the backend reader fallback after the sidecar returned no response."
+            fallback_result.source_note = "Wisconsin DFI lookup used the backend browser fallback after the sidecar returned no response."
             return fallback_result
         return result
 
     if data.get("status") == "Site Not Reachable" and not data.get("success"):
-        fallback_result = search_wi(None, org)
+        fallback_result = search_wi_backend_browser_fallback(org)
         if public_status(fallback_result) != "Site Not Reachable":
-            fallback_result.source_note = "Wisconsin DFI lookup used the backend reader fallback after the sidecar could not reach the registry."
+            fallback_result.source_note = "Wisconsin DFI lookup used the backend browser fallback after the sidecar could not reach the registry."
             return fallback_result
 
     if data.get("status") == "Not Registered":
-        fallback_result = search_wi(None, org)
+        fallback_result = search_wi_backend_browser_fallback(org)
         if public_status(fallback_result) != "Site Not Reachable":
-            fallback_result.source_note = "Wisconsin DFI lookup used the backend reader fallback to confirm the sidecar no-match result."
+            fallback_result.source_note = "Wisconsin DFI lookup used the backend browser fallback to confirm the sidecar no-match result."
             return fallback_result
 
     result.status = data.get("status") or "Site Not Reachable"
@@ -7082,7 +7085,13 @@ def search_wi_backend_browser_fallback(org):
             context = browser.new_context(user_agent=BROWSER_USER_AGENT, locale="en-US")
             configure_browser_context(context)
             page = context.new_page()
-            return search_wi(page, org)
+            global WI_BROWSER_VARIANT_LIMIT
+            previous_browser_variant_limit = WI_BROWSER_VARIANT_LIMIT
+            WI_BROWSER_VARIANT_LIMIT = max(previous_browser_variant_limit, 3)
+            try:
+                return search_wi(page, org)
+            finally:
+                WI_BROWSER_VARIANT_LIMIT = previous_browser_variant_limit
         except Exception as exc:
             result = checker.StateResult(org.organization_name, org.ein, "WI", "Site Not Reachable", WI_SEARCH_URL)
             result.raw_status_text = "Wisconsin backend fallback failed"
@@ -10326,22 +10335,32 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 result = search_ct(page, org)
                 body = registry_page_body(page)
             elif state == "FL":
-                result = search_fl(page, org)
-                elapsed_before_confirmation = time.perf_counter() - lookup_started
-                if (
-                    confirm_single_no_match
-                    and public_status(result) in {"Not Registered", "Site Not Reachable"}
-                    and FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS > 0
-                    and elapsed_before_confirmation < 20.0
-                ):
-                    time.sleep(FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS)
-                    confirmed_result = search_fl(page, org)
-                    if public_status(confirmed_result) not in {"Not Registered", "Site Not Reachable"}:
-                        confirmed_result.source_note = " ".join(part for part in [
-                            confirmed_result.source_note or "",
-                            "A delayed confirmation lookup replaced an initial Florida no-record response.",
-                        ]).strip()
-                        result = confirmed_result
+                acquired_fl_lane = FL_LOOKUP_SEMAPHORE.acquire(timeout=FL_LOOKUP_ACQUIRE_SECONDS)
+                if not acquired_fl_lane:
+                    result = checker.StateResult(organization_name or f"EIN {format_ein(ein)}", format_ein(ein), "FL", "Site Not Reachable", "")
+                    result.raw_status_text = "Florida lookup lanes were busy"
+                    result.source_note = "Florida Check-A-Charity lookup could not start before the lane-acquire timeout."
+                    result.success = False
+                else:
+                    try:
+                        result = search_fl(page, org)
+                        elapsed_before_confirmation = time.perf_counter() - lookup_started
+                        if (
+                            confirm_single_no_match
+                            and public_status(result) in {"Not Registered", "Site Not Reachable"}
+                            and FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS > 0
+                            and elapsed_before_confirmation < 20.0
+                        ):
+                            time.sleep(FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS)
+                            confirmed_result = search_fl(page, org)
+                            if public_status(confirmed_result) not in {"Not Registered", "Site Not Reachable"}:
+                                confirmed_result.source_note = " ".join(part for part in [
+                                    confirmed_result.source_note or "",
+                                    "A delayed confirmation lookup replaced an initial Florida no-record response.",
+                                ]).strip()
+                                result = confirmed_result
+                    finally:
+                        FL_LOOKUP_SEMAPHORE.release()
                 body = " ".join(part for part in [
                     result.raw_status_text or "",
                     result.source_note or "",
@@ -10903,6 +10922,15 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
         retryable_statuses = {"site not reachable"}
         if state == "WI":
             retryable_statuses.add("not registered")
+        if state == "FL" and status == "not registered":
+            fl_retry_text = " ".join([
+                result.get("raw_status_text") or "",
+                result.get("source_note") or "",
+                result.get("comments") or "",
+                result.get("error") or "",
+            ])
+            if re.search(r"bounded\s+lookup\s+window|no\s+usable|could\s+not\s+be\s+completed|could\s+not\s+find\s+business\s+name", fl_retry_text, re.I):
+                retryable_statuses.add("not registered")
         if status not in retryable_statuses:
             return result
         if attempt < attempts and SINGLE_STATE_SEMANTIC_RETRY_DELAY_SECONDS > 0:
