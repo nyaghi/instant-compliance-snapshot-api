@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.50-staging"
+APP_VERSION = "2026.05.30.51-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -11100,14 +11100,18 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
         retryable_statuses = {"site not reachable"}
         if state == "WI":
             retryable_statuses.add("not registered")
+        retry_text = " ".join([
+            result.get("raw_status_text") or "",
+            result.get("source_note") or "",
+            result.get("comments") or "",
+            result.get("error") or "",
+        ])
+        if state == "WA" and status == "not registered" and re.search(r"No\s+Value\s+Found|zero\s+visible\s+result", retry_text, re.I):
+            retryable_statuses.add("not registered")
+        if state == "NM" and status == "unknown" and re.search(r"status-history\s+rows\s+were\s+not\s+parsed", retry_text, re.I):
+            retryable_statuses.add("unknown")
         if state == "FL" and status == "not registered":
-            fl_retry_text = " ".join([
-                result.get("raw_status_text") or "",
-                result.get("source_note") or "",
-                result.get("comments") or "",
-                result.get("error") or "",
-            ])
-            if re.search(r"bounded\s+lookup\s+window|no\s+usable|could\s+not\s+be\s+completed|could\s+not\s+find\s+business\s+name", fl_retry_text, re.I):
+            if re.search(r"bounded\s+lookup\s+window|no\s+usable|could\s+not\s+be\s+completed|could\s+not\s+find\s+business\s+name", retry_text, re.I):
                 retryable_statuses.add("not registered")
         if status not in retryable_statuses:
             return result

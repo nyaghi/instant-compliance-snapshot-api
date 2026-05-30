@@ -375,6 +375,8 @@ def wait_for_result_link_or_no_value(page, org_name: str, timeout_seconds: int =
         except Exception:
             body = ""
         if re.search(r"No Value Found|No records found|No results found|records 0 to 0 of 0", body, re.I):
+            if not no_value_seen:
+                deadline = min(deadline, time.time() + 8)
             no_value_seen = True
         time.sleep(2)
     return "NO_VALUE" if no_value_seen else None
