@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.51-staging"
+APP_VERSION = "2026.05.30.52-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -2109,6 +2109,7 @@ def filing_context(result, body: str) -> dict:
     registry_text = " ".join([result.raw_status_text or "", body or ""])
     registry_latest_year = None
     registry_year_patterns = [
+        r"\bLast\s+Year\s+(?:on\s+)?Record\s*:?\s*(20\d{2})\b",
         r"\bYr\s+Last\s+Filed\s*:\s*(20\d{2})\b",
         r"\bLatest\s+Report\s+Year\s*:\s*(20\d{2})\b",
         r"\bTax\s+Year\s+(20\d{2})\b",
@@ -11093,10 +11094,13 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
     state = (state or "").upper()
     attempts = SINGLE_STATE_SEMANTIC_RETRY_ATTEMPTS if state in SINGLE_STATE_SEMANTIC_RETRY_STATES else 1
     result: dict | None = None
+    best_reachable_result: dict | None = None
     for attempt in range(1, attempts + 1):
         result = run_state_lookup(organization_name, ein, state)
         result["semantic_attempts"] = attempt
         status = (result.get("status") or "").strip().lower()
+        if status != "site not reachable":
+            best_reachable_result = dict(result)
         retryable_statuses = {"site not reachable"}
         if state == "WI":
             retryable_statuses.add("not registered")
@@ -11117,6 +11121,15 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
             return result
         if attempt < attempts and SINGLE_STATE_SEMANTIC_RETRY_DELAY_SECONDS > 0:
             time.sleep(SINGLE_STATE_SEMANTIC_RETRY_DELAY_SECONDS)
+    if (
+        state == "WA"
+        and result
+        and (result.get("status") or "").strip().lower() == "site not reachable"
+        and best_reachable_result
+    ):
+        best_reachable_result["semantic_attempts"] = result.get("semantic_attempts", best_reachable_result.get("semantic_attempts"))
+        best_reachable_result["wa_retry_fallback"] = "kept reachable result after later retry timed out"
+        return best_reachable_result
     return result or run_state_lookup(organization_name, ein, state)
 
 
