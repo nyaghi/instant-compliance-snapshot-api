@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.29-staging"
+APP_VERSION = "2026.05.29.30-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -3197,6 +3197,7 @@ def search_va_bounded(page, org):
     # while keeping the normal candidate matching and detail parsing.
     with VA_SEARCH_VARIANT_LOCK:
         original_variant_builder = checker.search_name_query_variants
+        original_click_search_button = checker.click_va_search_button
 
         def bounded_variants(name: str, max_words: int = 5):
             generated = original_variant_builder(name, max_words=max_words)
@@ -3216,11 +3217,46 @@ def search_va_bounded(page, org):
                     break
             return bounded or generated[:2]
 
+        def robust_click_va_search_button(inner_page) -> bool:
+            if original_click_search_button(inner_page):
+                return True
+            for sel in [
+                'input[type="submit"][value="SEARCH"]',
+                'input[name="submit"]',
+                'input[type="submit"]',
+            ]:
+                try:
+                    btn = inner_page.locator(sel).first
+                    if btn.count():
+                        btn.click(timeout=3000, force=True, no_wait_after=True)
+                        return True
+                except Exception:
+                    continue
+            try:
+                inner_page.locator("#id_orgname").press("Enter", timeout=2000)
+                return True
+            except Exception:
+                pass
+            try:
+                submitted = inner_page.evaluate(
+                    """() => {
+                        const form = document.querySelector('form');
+                        if (!form) return false;
+                        form.submit();
+                        return true;
+                    }"""
+                )
+                return bool(submitted)
+            except Exception:
+                return False
+
         checker.search_name_query_variants = bounded_variants
+        checker.click_va_search_button = robust_click_va_search_button
         try:
             return checker.search_va(page, org)
         finally:
             checker.search_name_query_variants = original_variant_builder
+            checker.click_va_search_button = original_click_search_button
 
 
 def search_me_serialized(page, org, confirm_no_match: bool = True):
