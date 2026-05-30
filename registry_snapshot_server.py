@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.23-staging"
+APP_VERSION = "2026.05.29.24-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -139,7 +139,7 @@ CT_NAME_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_CT_NAME_VARIANT_LIMIT"
 MN_NAME_FALLBACK_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_MN_NAME_FALLBACK_MAX_SECONDS", "18"))), 30.0)
 MN_NAME_FALLBACK_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_MN_NAME_FALLBACK_MAX_VARIANTS", "4"))), 10)
 FL_LOOKUP_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_FL_LOOKUP_MAX_SECONDS", "45"))), 59.0)
-SC_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_SC_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
+SC_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_SC_PREFLIGHT_TIMEOUT_SECONDS", "12"))), 20.0)
 NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
 ME_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_LOOKUP_MIN_INTERVAL_SECONDS", "1.0"))), 20.0)
 AR_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_AR_LOOKUP_MIN_INTERVAL_SECONDS", "1.5"))), 20.0)
@@ -3006,6 +3006,24 @@ def preflight_name_search_registry(org, state: str) -> tuple[bool, str, object |
     result.error = f"{state} preflight failed: {note}"
     result.success = False
     return False, note, result
+
+
+def search_sc_resilient(page, org):
+    reachable, _, preflight_result = preflight_name_search_registry(org, "SC")
+    result = search_with_name_variants(
+        page,
+        org,
+        checker.search_sc,
+        max_variants=10,
+        max_elapsed_seconds=SC_NAME_VARIANT_MAX_SECONDS,
+        include_ein_aliases=True,
+        include_name_segments=True,
+        include_compact_legal_suffixes=True,
+        include_leading_article_variants=True,
+    )
+    if not reachable and public_status(result) in {"Site Not Reachable", "Unknown", ""}:
+        return preflight_result
+    return result
 
 
 def result_is_retryable_name_miss(result) -> bool:
@@ -10013,21 +10031,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     prioritize_institution_reductions=True,
                 )
             elif state == "SC":
-                reachable, _, preflight_result = preflight_name_search_registry(org, "SC")
-                if not reachable:
-                    result = preflight_result
-                else:
-                    result = search_with_name_variants(
-                        page,
-                        org,
-                        checker.search_sc,
-                        max_variants=10,
-                        max_elapsed_seconds=SC_NAME_VARIANT_MAX_SECONDS,
-                        include_ein_aliases=True,
-                        include_name_segments=True,
-                        include_compact_legal_suffixes=True,
-                        include_leading_article_variants=True,
-                    )
+                result = search_sc_resilient(page, org)
             elif state == "HI":
                 result = search_hi_precise(page, org)
                 if public_status(result) != "Not Registered":
