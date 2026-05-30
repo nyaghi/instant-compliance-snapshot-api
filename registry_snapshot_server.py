@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.32-staging"
+APP_VERSION = "2026.05.29.33-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -3948,8 +3948,8 @@ def search_bundled_extension_state(page, org, state: str):
         expanded.extend(item for item in trailing_articles if item not in expanded)
         best_result = None
         started = time.perf_counter()
-        for variant in expanded[:20]:
-            if best_result is not None and (time.perf_counter() - started) >= min(NAME_SEARCH_VARIANT_MAX_SECONDS, 45.0):
+        for variant in expanded[:10]:
+            if best_result is not None and (time.perf_counter() - started) >= min(NAME_SEARCH_VARIANT_MAX_SECONDS, 30.0):
                 return best_result
             active_org = org_with_name(org, variant)
             external_result = module.search_or(
@@ -7319,7 +7319,7 @@ def search_nj_direct(page, org):
         input_box.fill(ein_digits or org.organization_name)
         page.keyboard.press("Enter")
         body = ""
-        deadline = time.time() + 22
+        deadline = time.time() + 12
         while time.time() < deadline:
             body = page.locator("body").inner_text(timeout=5000)
             body_digits = re.sub(r"\D", "", body)
@@ -7330,6 +7330,12 @@ def search_nj_direct(page, org):
             result.raw_status_text = "No record found"
             result.status = checker.STATUS_NOT_REGISTERED
             result.source_note = "New Jersey search returned no matching record."
+            result.success = True
+            return result
+        if ein_digits and ein_digits not in re.sub(r"\D", "", body or ""):
+            result.raw_status_text = "Requested EIN not found in New Jersey public search results"
+            result.status = checker.STATUS_NOT_REGISTERED
+            result.source_note = "New Jersey public search did not return the requested EIN within CharityClarity's bounded lookup window."
             result.success = True
             return result
 
@@ -10524,6 +10530,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     confirm_single_no_match
                     and public_status(result) == "Not Registered"
                     and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0
+                    and elapsed_before_confirmation < 20.0
                     and not (
                         has_clean_no_match
                         and elapsed_before_confirmation >= SINGLE_TRUST_SLOW_CLEAN_NO_MATCH_SECONDS
