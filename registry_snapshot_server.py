@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.38-staging"
+APP_VERSION = "2026.05.30.39-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -4869,7 +4869,9 @@ def search_fl(page, org):
             variants.append(variant)
     best_result = None
     last_error = None
-    for variant in variants[:5]:
+    search_variants = list(variants[:5])
+    final_exact_retry_added = False
+    for variant in search_variants:
         if deadline_expired():
             break
         result = checker.StateResult(original_name, org.ein, "FL", checker.STATUS_UNKNOWN, url)
@@ -4993,6 +4995,13 @@ def search_fl(page, org):
         except Exception as exc:
             last_error = exc
             result.error = f"FL error: {exc}"
+            if (
+                not final_exact_retry_added
+                and normalized_match_name(original_name) != normalized_match_name(variant)
+                and remaining_seconds() > 4
+            ):
+                search_variants.append(original_name)
+                final_exact_retry_added = True
             if deadline_expired():
                 break
             continue
@@ -10394,7 +10403,6 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 if (
                     MI_ENABLE_NAME_FALLBACK
                     and public_status(result) == "Not Registered"
-                    and not mi_incomplete_frame
                     and mi_elapsed < (LOOKUP_SOFT_MAX_SECONDS - 6)
                 ):
                     fallback_result = search_mi_name_fallback(page, org)
