@@ -286,8 +286,18 @@ def scroll_to_results(page) -> None:
             time.sleep(1)
 
 
+def latest_date_ordinal_from_text(value: str) -> int:
+    dates = []
+    for match in re.findall(r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b", value or ""):
+        parsed = parse_date(match)
+        if parsed:
+            dates.append(parsed.toordinal())
+    return max(dates) if dates else 0
+
+
 def find_result_link(page, org_name: str):
     target = normalize_name(org_name)
+    target_words = target.split()
     candidates = []
     locator_sets = ["table a", "tbody a", "a"]
 
@@ -321,22 +331,35 @@ def find_result_link(page, org_name: str):
             if href.startswith("javascript:__doPostBack") or href == "" or locator_selector != "a":
                 priority = 0
                 normalized = normalize_name(text)
+                row_text = text
+                try:
+                    row = link.locator("xpath=ancestor::tr[1]")
+                    if row.count():
+                        row_text = normalize_spaces(row.first.inner_text(timeout=1000))
+                except Exception:
+                    row_text = text
+                row_normalized = normalize_name(row_text)
                 if target:
-                    if normalized == target:
+                    if normalized == target or row_normalized == target:
+                        priority = 3
+                    elif len(target_words) >= 3 and (
+                        normalized.startswith(f"{target} ")
+                        or row_normalized.startswith(f"{target} ")
+                    ):
                         priority = 3
                     elif normalized and (target in normalized or normalized in target):
                         priority = 2
                 if priority == 0:
                     priority = 1
-                candidates.append((priority, i, link))
+                candidates.append((priority, latest_date_ordinal_from_text(row_text), i, link))
 
         if candidates:
             break
 
     if not candidates:
         return None
-    candidates.sort(key=lambda item: (-item[0], item[1]))
-    return candidates[0][2]
+    candidates.sort(key=lambda item: (-item[0], -item[1], item[2]))
+    return candidates[0][3]
 
 
 def wait_for_result_link_or_no_value(page, org_name: str, timeout_seconds: int = 45):
@@ -666,6 +689,8 @@ def apply_nm_rows_to_result(
             result.status = STATUS_UPCOMING if latest_tax_year >= date.today().year - 1 else STATUS_DELINQUENT
         elif re.search(r"\bdelinquent\b", latest_detail, re.I):
             result.status = STATUS_DELINQUENT
+        elif latest_tax_year <= date.today().year - 2:
+            result.status = STATUS_DELINQUENT
         else:
             result.status = STATUS_UNKNOWN
         result.raw_status_text = f"Tax Year {latest_tax_year} | {latest_detail}"
@@ -679,6 +704,8 @@ def apply_nm_rows_to_result(
         if latest_detail.startswith("Tax Year Registration Open"):
             result.status = STATUS_UPCOMING if latest_tax_year >= date.today().year - 1 else STATUS_DELINQUENT
         elif re.search(r"\bdelinquent\b", latest_detail, re.I):
+            result.status = STATUS_DELINQUENT
+        elif latest_tax_year <= date.today().year - 2:
             result.status = STATUS_DELINQUENT
         else:
             result.status = STATUS_UNKNOWN
@@ -700,15 +727,7 @@ def apply_nm_rows_to_result(
 
     today = date.today()
     six_months = today + timedelta(days=183)
-    if any(
-        detail.startswith("Registration Submitted")
-        or detail.startswith("Registration Accepted")
-        or detail.startswith("Registration Approved")
-        or detail == "Reinstatement Issued"
-        for _, detail, _ in latest_year_rows
-    ):
-        result.status = STATUS_CURRENT
-    elif due_date < today:
+    if due_date < today:
         result.status = STATUS_DELINQUENT
     elif due_date <= six_months:
         result.status = STATUS_UPCOMING

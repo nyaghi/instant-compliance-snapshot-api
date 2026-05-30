@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.47-staging"
+APP_VERSION = "2026.05.30.48-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -1583,8 +1583,8 @@ def or_snapshot_result_for_ein(org):
     )
     raw_parts = ["Status: Registered"]
     if period_end:
-        raw_parts.append(f"Latest Report Year: {period_end.year}")
-        raw_parts.append(f"Fiscal Year End: {format_date(period_end)}")
+        raw_parts.append(f"Latest Fiscal Period End Year: {period_end.year}")
+        raw_parts.append(f"Fiscal Period End: {format_date(period_end)}")
     if period_start:
         raw_parts.append(f"Fiscal Year Start: {format_date(period_start)}")
     if next_due:
@@ -3583,15 +3583,25 @@ def classify_nm_status_history(raw_status: str) -> str:
     raw = re.sub(r"\s+", " ", raw_status or "").strip()
     if not raw:
         return ""
+    tax_years = [int(value) for value in re.findall(r"\bTax\s+Year\s+(20\d{2})\b", raw, re.I)]
+    latest_tax_year = max(tax_years) if tax_years else None
+    due_dates = [
+        parsed
+        for parsed in (
+            parse_due_date(value)
+            for value in re.findall(r"\bDue(?:\s+Date)?\s*:\s*([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", raw, re.I)
+        )
+        if parsed
+    ]
+    if due_dates:
+        return status_from_calendar_date(max(due_dates))
     if re.search(r"\bRegistration\s+Submission\s+Delinquent\b|\bdelinquent\b", raw, re.I):
+        return "Delinquent"
+    if latest_tax_year and latest_tax_year <= date.today().year - 2:
         return "Delinquent"
     if re.search(r"\bExtension\s+Granted\b", raw, re.I):
         return "Upcoming Filing"
     if re.search(r"\bRegistration\s+Submitted\b", raw, re.I):
-        tax_years = [int(value) for value in re.findall(r"\bTax\s+Year\s+(20\d{2})\b", raw, re.I)]
-        latest_tax_year = max(tax_years) if tax_years else None
-        if latest_tax_year and latest_tax_year <= date.today().year - 2:
-            return "Delinquent"
         return checker.STATUS_CURRENT
     return ""
 
@@ -5685,6 +5695,22 @@ def ak_registry_identifier_from_print_row(print_link: dict, row_text: str) -> st
     return format_ein(match.group(0)) if match else ""
 
 
+def ak_last_year_from_print_row(print_link: dict, row_text: str) -> int | None:
+    cells = print_link.get("cells") if isinstance(print_link, dict) else None
+    candidates = []
+    if isinstance(cells, list):
+        candidates.extend(str(cell or "") for cell in cells[:2])
+    candidates.append(row_text or "")
+    for value in candidates:
+        match = re.match(r"\s*(20\d{2})\b", value or "")
+        if match:
+            try:
+                return int(match.group(1))
+            except Exception:
+                pass
+    return None
+
+
 def ak_newer_year_result_from_retry(page, lookup_org, original_org, original_name: str, found_year: int, name_fallback: bool = False) -> tuple[int | None, str, str, str]:
     current_year = date.today().year
     if found_year >= current_year:
@@ -5699,6 +5725,9 @@ def ak_newer_year_result_from_retry(page, lookup_org, original_org, original_nam
             if not print_link:
                 continue
             row_text = re.sub(r"\s+", " ", (print_link.get("rowText") or "")).strip() if isinstance(print_link, dict) else ""
+            row_year = ak_last_year_from_print_row(print_link, row_text)
+            if row_year and row_year != newer_year:
+                continue
             if ak_row_has_wrong_ein(row_text, original_org.ein):
                 continue
             row_name = ak_registry_name_from_print_row(print_link, row_text, original_name, original_org.ein) if row_text else ""
@@ -5719,8 +5748,8 @@ def fetch_ak_registration_pdf(page, context, print_link: dict, org_name: str) ->
     try:
         print_locator = page.locator("a[data-linkid^='Dq-t']").first
         try:
-            with page.expect_download(timeout=12000) as download_info:
-                print_locator.click(timeout=5000, force=True)
+            with page.expect_download(timeout=8000) as download_info:
+                print_locator.click(timeout=3000, force=True)
                 page.keyboard.press("Enter")
             download = download_info.value
             path = ak_registration_pdf_path(org_name)
@@ -5734,39 +5763,39 @@ def fetch_ak_registration_pdf(page, context, print_link: dict, org_name: str) ->
         except Exception:
             pass
         try:
-            with page.expect_popup(timeout=15000) as popup_info:
+            with page.expect_popup(timeout=8000) as popup_info:
                 try:
-                    print_locator.click(timeout=5000, force=True)
+                    print_locator.click(timeout=3000, force=True)
                     page.keyboard.press("Enter")
                 except Exception:
                     page.mouse.click(print_link["x"], print_link["y"])
                     page.keyboard.press("Enter")
             popup = popup_info.value
-            popup.wait_for_load_state("domcontentloaded", timeout=20000)
+            popup.wait_for_load_state("domcontentloaded", timeout=10000)
             pdf_url = popup.url
             try:
                 popup.keyboard.press("End")
-                time.sleep(2)
+                time.sleep(0.5)
                 popup.mouse.wheel(0, 8000)
-                time.sleep(2)
+                time.sleep(0.5)
                 popup.screenshot(path=str(evidence_png_path("AK", org_name)), full_page=False)
             except Exception:
                 pass
         except Exception:
             page.mouse.click(print_link["x"], print_link["y"])
-            time.sleep(5)
+            time.sleep(1)
             pdf_url = page.url
             try:
                 page.keyboard.press("End")
-                time.sleep(2)
+                time.sleep(0.5)
                 page.mouse.wheel(0, 8000)
-                time.sleep(2)
+                time.sleep(0.5)
                 page.screenshot(path=str(evidence_png_path("AK", org_name)), full_page=False)
             except Exception:
                 pass
         if not pdf_url:
             return "", ""
-        response = context.request.get(pdf_url, timeout=60000)
+        response = context.request.get(pdf_url, timeout=15000)
         pdf_bytes = response.body()
         if not pdf_bytes.startswith(b"%PDF"):
             return "", pdf_url
@@ -5788,6 +5817,65 @@ def fetch_ak_registration_pdf(page, context, print_link: dict, org_name: str) ->
                 pass
 
 
+def ak_last_year_on_record_from_pdf_text(pdf_text: str) -> int | None:
+    try:
+        extracted = checker.extract_ak_accounting_end_year(pdf_text)
+        if extracted:
+            return extracted
+    except Exception:
+        pass
+    for pattern in [
+        r"\bLast\s+Year\s+(?:on\s+)?Record\s*:?\s*(20\d{2})\b",
+        r"\bLatest\s+(?:Report|Filing|Accounting)\s+Year\s*:?\s*(20\d{2})\b",
+    ]:
+        match = re.search(pattern, pdf_text or "", re.I)
+        if match:
+            try:
+                return int(match.group(1))
+            except Exception:
+                pass
+    return None
+
+
+def apply_ak_registration_status_from_best_evidence(
+    result,
+    page,
+    context,
+    print_link: dict,
+    org_name: str,
+    registration_year: int,
+    source_note_prefix: str = "",
+    last_year_on_record: int | None = None,
+) -> str:
+    pdf_text = ""
+    pdf_url = ""
+    last_year = last_year_on_record
+    if not last_year:
+        try:
+            pdf_text, pdf_url = fetch_ak_registration_pdf(page, context, print_link, org_name)
+        except Exception:
+            pdf_text, pdf_url = "", ""
+        last_year = ak_last_year_on_record_from_pdf_text(pdf_text)
+    if last_year:
+        due_date = date(last_year + 1, 9, 1)
+        result.status = status_from_calendar_date(due_date)
+        result.raw_status_text = " | ".join(part for part in [
+            f"Last Year on Record: {last_year}",
+            f"Annual Registration Due: {format_date(due_date)}",
+            f"Registration Year Searched: {registration_year}",
+            f"PDF: {pdf_url}" if pdf_url else "",
+        ] if part)
+        evidence_note = (
+            "Alaska registry evidence includes the last year on record; "
+            "CharityClarity uses that year to determine the next September 1 annual registration cycle."
+        )
+    else:
+        result.status, result.raw_status_text, evidence_note = checker.classify_ak_registration_year(registration_year, None)
+    result.source_note = " ".join(part for part in [source_note_prefix, evidence_note] if part).strip()
+    result.success = True
+    return result.raw_status_text
+
+
 def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tuple[object, str]:
     result = checker.StateResult(org.organization_name, org.ein, "AK", checker.STATUS_UNKNOWN, checker.AK_SEARCH_URL)
     if len(re.sub(r"\D", "", org.ein or "")) != 9:
@@ -5806,7 +5894,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
     # under aliases only slows down no-record cases; aliases are still used by
     # find_ak_print_link_relaxed once result rows are present.
     add_search_name(original_name)
-    ak_context = browser.new_context(viewport={"width": 1365, "height": 900}, accept_downloads=False)
+    ak_context = browser.new_context(viewport={"width": 1365, "height": 900}, accept_downloads=True)
     configure_browser_context(ak_context)
     ak_page = ak_context.new_page()
     try:
@@ -5824,6 +5912,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                     if not print_link:
                         continue
                     row_text = re.sub(r"\s+", " ", (print_link.get("rowText") or "")).strip() if isinstance(print_link, dict) else ""
+                    last_year_on_record = ak_last_year_from_print_row(print_link, row_text)
                     if ak_row_has_wrong_ein(row_text, org.ein):
                         continue
                     if row_text:
@@ -5849,9 +5938,21 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                             result.matched_registry_name = newer_name
                         if newer_identifier:
                             result.matched_registry_identifier = newer_identifier
-                    result.status, result.raw_status_text, base_note = checker.classify_ak_registration_year(year, None)
-                    result.source_note = " ".join(part for part in [getattr(result, "source_note", "") or "", base_note] if part).strip()
-                    result.success = True
+                        refreshed_print_link = find_ak_print_link_relaxed(ak_page, lookup_org)
+                        if refreshed_print_link:
+                            print_link = refreshed_print_link
+                            row_text = re.sub(r"\s+", " ", (print_link.get("rowText") or "")).strip() if isinstance(print_link, dict) else ""
+                            last_year_on_record = ak_last_year_from_print_row(print_link, row_text)
+                    apply_ak_registration_status_from_best_evidence(
+                        result,
+                        ak_page,
+                        ak_context,
+                        print_link,
+                        original_name,
+                        year,
+                        getattr(result, "source_note", "") or "",
+                        last_year_on_record or year,
+                    )
                     return result, page_body
                 except Exception as e:
                     result.error = f"AK error: {e}"
@@ -5875,6 +5976,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                     if not print_link:
                         continue
                     row_text = re.sub(r"\s+", " ", (print_link.get("rowText") or "")).strip() if isinstance(print_link, dict) else ""
+                    last_year_on_record = ak_last_year_from_print_row(print_link, row_text)
                     row_name = ""
                     if row_text:
                         row_name = ak_registry_name_from_print_row(print_link, row_text, original_name, org.ein)
@@ -5904,16 +6006,27 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                             row_name = newer_name
                         if newer_identifier:
                             result.matched_registry_identifier = newer_identifier
+                        refreshed_print_link = find_ak_print_link_relaxed(ak_page, lookup_org)
+                        if refreshed_print_link:
+                            print_link = refreshed_print_link
+                            row_text = re.sub(r"\s+", " ", (print_link.get("rowText") or "")).strip() if isinstance(print_link, dict) else ""
+                            last_year_on_record = ak_last_year_from_print_row(print_link, row_text)
                     result.matched_registry_name = row_name or search_name
                     if not result.matched_registry_identifier:
                         result.matched_registry_identifier = ak_registry_identifier_from_print_row(print_link, row_text)
-                    result.status, result.raw_status_text, base_note = checker.classify_ak_registration_year(year, None)
-                    result.source_note = " ".join(part for part in [
-                        f"Matched using Alaska name fallback after EIN search returned no rows: {search_name}.",
-                        "Registry EIN differs from supplied EIN; accepted because the registry name safely matches a compatible public alias." if wrong_ein else "",
-                        base_note,
-                    ] if part).strip()
-                    result.success = True
+                    apply_ak_registration_status_from_best_evidence(
+                        result,
+                        ak_page,
+                        ak_context,
+                        print_link,
+                        original_name,
+                        year,
+                        " ".join(part for part in [
+                            f"Matched using Alaska name fallback after EIN search returned no rows: {search_name}.",
+                            "Registry EIN differs from supplied EIN; accepted because the registry name safely matches a compatible public alias." if wrong_ein else "",
+                        ] if part),
+                        last_year_on_record or year,
+                    )
                     return result, page_body
                 except Exception as e:
                     result.error = f"AK name fallback error: {e}"
@@ -6681,10 +6794,6 @@ def wi_better_candidate(candidate: dict, best_match: dict | None) -> bool:
     if candidate["score"] > best_match["score"]:
         return True
     if candidate["score"] == best_match["score"]:
-        candidate_severity = wi_status_severity(candidate.get("detail_status", ""))
-        best_severity = wi_status_severity(best_match.get("detail_status", ""))
-        if candidate_severity != best_severity:
-            return candidate_severity > best_severity
         candidate_name = normalized_match_name(candidate.get("registry_name", ""))
         best_name = normalized_match_name(best_match.get("registry_name", ""))
         if candidate_name and candidate_name == best_name:
@@ -6692,6 +6801,10 @@ def wi_better_candidate(candidate: dict, best_match: dict | None) -> bool:
             best_date = best_match.get("expiration_date") or date.min
             if candidate_date != best_date:
                 return candidate_date > best_date
+        candidate_severity = wi_status_severity(candidate.get("detail_status", ""))
+        best_severity = wi_status_severity(best_match.get("detail_status", ""))
+        if candidate_severity != best_severity:
+            return candidate_severity > best_severity
     return (
         candidate["score"] == best_match["score"]
         and (candidate["expiration_date"] or date.min) > (best_match["expiration_date"] or date.min)
@@ -9248,8 +9361,21 @@ def ms_preferred_search_variants(name: str, ein: str = "") -> list[str]:
     for seed in seeds:
         base = re.sub(r"\s+", " ", (seed or "").strip())
         add(base)
+        without_comma_suffix = re.sub(
+            r",\s*(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\s*$",
+            "",
+            base,
+            flags=re.I,
+        ).strip()
+        without_suffix = re.sub(
+            r"\s+\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\b\.?\s*$",
+            "",
+            without_comma_suffix,
+            flags=re.I,
+        ).strip()
+        add(without_suffix)
         comma_legal_suffix = re.sub(
-            r"\s+(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\s*$",
+            r"\s*,?\s*(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\s*$",
             lambda match: f", {match.group(1)}",
             base,
             flags=re.I,
