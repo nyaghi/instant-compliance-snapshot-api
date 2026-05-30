@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import html
+import json
 import re
 import subprocess
 import sys
@@ -26,6 +27,7 @@ except Exception:
 
 
 WA_SEARCH_URL = "https://ccfs.sos.wa.gov/#/cftSearch"
+WA_SEARCH_API_FRAGMENT = "CFTPublicSearch/GetCFPublicSearchList"
 NM_SEARCH_URL = "https://secure.nmdoj.gov/CharitySearch/"
 BUNDLED_PDF_PYTHON = (
     Path.home()
@@ -295,6 +297,123 @@ def latest_date_ordinal_from_text(value: str) -> int:
     return max(dates) if dates else 0
 
 
+def wa_row_status_priority(value: str) -> int:
+    text = normalize_spaces(value).upper()
+    if re.search(r"\b(ACTIVE|CURRENT|YES)\b", text):
+        return 4
+    if re.search(r"\b(PENDING|MERGED)\b", text):
+        return 3
+    if re.search(r"\bDELINQUENT\b", text):
+        return 2
+    if re.search(r"\b(INVOLUNTARILY\s+CLOSED|CLOSED|WITHDRAWN|TERMINATED|DISSOLVED|REVOKED|CANCEL(?:ED|LED)|NO)\b", text):
+        return 1
+    return 0
+
+
+def install_wa_search_tracker(page) -> None:
+    page.evaluate(
+        f"""
+        () => {{
+          if (window.__ceWaSearchTrackerInstalled) return;
+          window.__ceWaSearchTrackerInstalled = true;
+          window.__ceWaSearch = {{
+            pending: 0,
+            started: 0,
+            completed: 0,
+            failed: 0,
+            lastStatus: 0,
+            lastText: "",
+            lastError: "",
+            lastFinishedAt: 0
+          }};
+          const fragment = {WA_SEARCH_API_FRAGMENT!r};
+          const matches = (url) => String(url || "").indexOf(fragment) !== -1;
+          const originalOpen = XMLHttpRequest.prototype.open;
+          const originalSend = XMLHttpRequest.prototype.send;
+          XMLHttpRequest.prototype.open = function(method, url) {{
+            this.__ceWaUrl = String(url || "");
+            return originalOpen.apply(this, arguments);
+          }};
+          XMLHttpRequest.prototype.send = function(body) {{
+            const isWaSearch = matches(this.__ceWaUrl);
+            if (isWaSearch) {{
+              const tracker = window.__ceWaSearch;
+              tracker.pending += 1;
+              tracker.started += 1;
+              this.addEventListener("loadend", function() {{
+                tracker.pending = Math.max(0, tracker.pending - 1);
+                tracker.completed += 1;
+                tracker.lastStatus = this.status || 0;
+                tracker.lastText = String(this.responseText || "").slice(0, 200000);
+                tracker.lastFinishedAt = Date.now();
+              }}, {{ once: true }});
+              this.addEventListener("error", function() {{
+                tracker.failed += 1;
+                tracker.lastError = "xhr error";
+              }}, {{ once: true }});
+              this.addEventListener("timeout", function() {{
+                tracker.failed += 1;
+                tracker.lastError = "xhr timeout";
+              }}, {{ once: true }});
+              this.addEventListener("abort", function() {{
+                tracker.failed += 1;
+                tracker.lastError = "xhr abort";
+              }}, {{ once: true }});
+            }}
+            return originalSend.apply(this, arguments);
+          }};
+        }}
+        """
+    )
+
+
+def wa_search_tracker_state(page) -> dict:
+    try:
+        state = page.evaluate(
+            """
+            () => {
+              const tracker = window.__ceWaSearch || {};
+              return {
+                pending: tracker.pending || 0,
+                started: tracker.started || 0,
+                completed: tracker.completed || 0,
+                failed: tracker.failed || 0,
+                lastStatus: tracker.lastStatus || 0,
+                lastText: tracker.lastText || "",
+                lastError: tracker.lastError || "",
+                lastFinishedAt: tracker.lastFinishedAt || 0
+              };
+            }
+            """
+        )
+        return state if isinstance(state, dict) else {}
+    except Exception:
+        return {}
+
+
+def wa_search_response_is_empty(value: str) -> bool:
+    text = (value or "").strip()
+    if not text:
+        return False
+    try:
+        payload = json.loads(text)
+    except Exception:
+        return bool(re.search(r"No\s+Value\s+Found|records\s+0\s+to\s+0\s+of\s+0|TotalRowCount[\"']?\s*[:=]\s*0", text, re.I))
+    if isinstance(payload, list):
+        if not payload:
+            return True
+        for item in payload:
+            if isinstance(item, dict):
+                criteria = item.get("Criteria") or {}
+                try:
+                    if int(criteria.get("TotalRowCount", -1)) > 0:
+                        return False
+                except Exception:
+                    pass
+        return False
+    return False
+
+
 def find_result_link(page, org_name: str):
     target = normalize_name(org_name)
     target_words = target.split()
@@ -351,18 +470,18 @@ def find_result_link(page, org_name: str):
                         priority = 2
                 if priority == 0:
                     priority = 1
-                candidates.append((priority, latest_date_ordinal_from_text(row_text), i, link))
+                candidates.append((priority, wa_row_status_priority(row_text), latest_date_ordinal_from_text(row_text), i, link))
 
         if candidates:
             break
 
     if not candidates:
         return None
-    candidates.sort(key=lambda item: (-item[0], -item[1], item[2]))
-    return candidates[0][3]
+    candidates.sort(key=lambda item: (-item[0], -item[1], -item[2], item[3]))
+    return candidates[0][4]
 
 
-def wait_for_result_link_or_no_value(page, org_name: str, timeout_seconds: int = 45):
+def wait_for_result_link_or_no_value(page, org_name: str, timeout_seconds: int = 45, require_search_response: bool = False):
     deadline = time.time() + timeout_seconds
     no_value_seen = False
     while time.time() < deadline:
@@ -375,6 +494,16 @@ def wait_for_result_link_or_no_value(page, org_name: str, timeout_seconds: int =
         except Exception:
             body = ""
         if re.search(r"No Value Found|No records found|No results found|records 0 to 0 of 0", body, re.I):
+            if require_search_response:
+                tracker = wa_search_tracker_state(page)
+                if tracker.get("completed") and not tracker.get("pending"):
+                    status = int(tracker.get("lastStatus") or 0)
+                    if 200 <= status < 300 and wa_search_response_is_empty(tracker.get("lastText") or ""):
+                        return "NO_VALUE"
+                    if status >= 400 or tracker.get("failed"):
+                        return None
+                time.sleep(2)
+                continue
             if not no_value_seen:
                 deadline = min(deadline, time.time() + 8)
             no_value_seen = True
@@ -402,6 +531,7 @@ def search_wa(org: Organization, show_process: bool = False) -> SearchResult:
             page.goto(WA_SEARCH_URL, wait_until="domcontentloaded", timeout=45000)
             safe_wait_for_network_idle(page)
             time.sleep(4)
+            install_wa_search_tracker(page)
 
             switch_to_fein_mode(page)
             time.sleep(1)
@@ -413,15 +543,22 @@ def search_wa(org: Organization, show_process: bool = False) -> SearchResult:
             safe_wait_for_network_idle(page)
             time.sleep(4)
 
-            found = wait_for_result_link_or_no_value(page, org.organization_name, timeout_seconds=50)
+            found = wait_for_result_link_or_no_value(page, org.organization_name, timeout_seconds=55, require_search_response=True)
             if found == "NO_VALUE":
                 result.status = STATUS_NOT_REGISTERED
                 result.raw_status_text = "No Value Found."
-                result.source_note = "Washington FEIN search returned zero visible result rows."
+                result.source_note = "Washington FEIN search completed and returned zero result rows."
                 result.success = True
                 return result
             if not found:
-                result.error = "Could not locate the Washington organization result link."
+                tracker = wa_search_tracker_state(page)
+                status = int(tracker.get("lastStatus") or 0)
+                if tracker.get("pending"):
+                    result.error = "Washington search request did not complete before timeout."
+                elif status >= 400:
+                    result.error = f"Washington search request failed with HTTP {status}."
+                else:
+                    result.error = "Could not locate the Washington organization result link after the search completed."
                 return result
 
             try:
