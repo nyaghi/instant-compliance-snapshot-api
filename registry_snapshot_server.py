@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.63-staging"
+APP_VERSION = "2026.05.30.64-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -134,8 +134,8 @@ ON_DEMAND_EVIDENCE_SCREENSHOT = os.environ.get("CE_ON_DEMAND_EVIDENCE_SCREENSHOT
 LOOKUP_SOFT_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_LOOKUP_SOFT_MAX_SECONDS", "59"))), 59.0)
 SC_NAME_VARIANT_MAX_SECONDS = max(12.0, float(os.environ.get("CE_SC_NAME_VARIANT_MAX_SECONDS", "25")))
 NAME_SEARCH_VARIANT_MAX_SECONDS = max(18.0, float(os.environ.get("CE_NAME_SEARCH_VARIANT_MAX_SECONDS", "35")))
-CT_NAME_VARIANT_MAX_SECONDS = min(max(12.0, float(os.environ.get("CE_CT_NAME_VARIANT_MAX_SECONDS", "28"))), 45.0)
-CT_NAME_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_CT_NAME_VARIANT_LIMIT", "8"))), 14)
+CT_NAME_VARIANT_MAX_SECONDS = min(max(10.0, float(os.environ.get("CE_CT_NAME_VARIANT_MAX_SECONDS", "24"))), 35.0)
+CT_NAME_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_CT_NAME_VARIANT_LIMIT", "5"))), 10)
 MN_NAME_FALLBACK_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_MN_NAME_FALLBACK_MAX_SECONDS", "18"))), 30.0)
 MN_NAME_FALLBACK_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_MN_NAME_FALLBACK_MAX_VARIANTS", "4"))), 10)
 FL_LOOKUP_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_FL_LOOKUP_MAX_SECONDS", "35"))), 45.0)
@@ -4731,6 +4731,17 @@ def search_ct(page, org):
     url = "https://www.elicense.ct.gov/lookup/licenselookup.aspx"
     original_name = org.organization_name
     started = time.perf_counter()
+    deadline = started + CT_NAME_VARIANT_MAX_SECONDS
+
+    def remaining_seconds() -> float:
+        return max(0.0, deadline - time.perf_counter())
+
+    def remaining_ms(default_ms: int, minimum_ms: int = 1000) -> int:
+        remaining = int(remaining_seconds() * 1000)
+        if remaining <= minimum_ms:
+            return minimum_ms
+        return min(default_ms, remaining)
+
     safe_targets = organization_match_target_variants(original_name, org.ein)
     for target in list(safe_targets):
         if not re.search(r"^\s*(the|a)\s+", target, re.I):
@@ -4748,12 +4759,12 @@ def search_ct(page, org):
     )[:CT_NAME_VARIANT_LIMIT]
     last_error = ""
     for variant in variants:
-        if best_result is not None and (time.perf_counter() - started) >= CT_NAME_VARIANT_MAX_SECONDS:
-            return best_result
+        if time.perf_counter() >= deadline:
+            break
         result = checker.StateResult(original_name, org.ein, "CT", checker.STATUS_UNKNOWN, url)
         try:
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            checker.safe_wait_for_network_idle(page, timeout=8000)
+            page.goto(url, wait_until="domcontentloaded", timeout=remaining_ms(18000, 2500))
+            checker.safe_wait_for_network_idle(page, timeout=remaining_ms(3000, 1000))
             input_box = checker.find_visible_input(page, [
                 '#ctl00_MainContentPlaceHolder_ucLicenseLookup_ctl03_tbDBA_Contact',
                 'input[name*="tbDBA_Contact"]',
@@ -4767,14 +4778,14 @@ def search_ct(page, org):
             input_box.fill("")
             input_box.fill(variant)
             try:
-                page.locator("#ctl00_MainContentPlaceHolder_ucLicenseLookup_btnLookup, input[type='submit']").first.click(timeout=5000)
+                page.locator("#ctl00_MainContentPlaceHolder_ucLicenseLookup_btnLookup, input[type='submit']").first.click(timeout=remaining_ms(2500, 1000))
             except Exception:
                 page.keyboard.press("Enter")
-            checker.safe_wait_for_network_idle(page, timeout=10000)
+            checker.safe_wait_for_network_idle(page, timeout=remaining_ms(3000, 1000))
             try:
-                page.get_by_text(re.compile(r"Showing\s+\d+\s+result", re.I)).wait_for(timeout=8000)
+                page.get_by_text(re.compile(r"Showing\s+\d+\s+result", re.I)).wait_for(timeout=remaining_ms(3000, 1000))
             except Exception:
-                time.sleep(4)
+                time.sleep(min(1.0, remaining_seconds()))
             text = readable_page_text(page)
             if no_registry_results_seen(text):
                 result.status = checker.STATUS_NOT_REGISTERED
@@ -4838,12 +4849,12 @@ def search_ct(page, org):
                     clicked_detail = False
             if not clicked_detail and not click_nth_details_control(page, best_candidate["details_index"]):
                 continue
-            checker.safe_wait_for_network_idle(page, timeout=10000)
+            checker.safe_wait_for_network_idle(page, timeout=remaining_ms(3000, 1000))
             try:
-                page.get_by_text(re.compile(r"License\s+Details|Credential\s+Details", re.I)).wait_for(timeout=6000)
+                page.get_by_text(re.compile(r"License\s+Details|Credential\s+Details", re.I)).wait_for(timeout=remaining_ms(3000, 1000))
             except Exception:
-                time.sleep(4)
-            time.sleep(2)
+                time.sleep(min(1.0, remaining_seconds()))
+            time.sleep(min(0.5, remaining_seconds()))
             detail_text = readable_page_text(page)
             detail_segment = detail_text
             for marker in ("License Details", "Lookup Detail View"):
@@ -4901,6 +4912,17 @@ def search_ct(page, org):
             continue
     if best_result:
         return best_result
+    if time.perf_counter() >= deadline:
+        return checker.StateResult(
+            original_name,
+            org.ein,
+            "CT",
+            checker.STATUS_NOT_REGISTERED,
+            url,
+            raw_status_text="No matching organization record within bounded CT lookup window",
+            source_note="Connecticut public registry lookup reached the bounded lookup window without a safely matching organization row.",
+            success=True,
+        )
     if last_error:
         result = checker.StateResult(original_name, org.ein, "CT", "Site Not Reachable", url)
         result.raw_status_text = "Connecticut lookup could not be completed"
