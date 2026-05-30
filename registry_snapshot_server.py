@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.28-staging"
+APP_VERSION = "2026.05.29.29-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -2918,10 +2918,28 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
         return False
     if incompatible_institutional_prefix_expansion(original_name, registry_name):
         return False
+    if missing_distinctive_prefix_mismatch(original_name, registry_name):
+        return False
     safe_targets = organization_match_target_variants(original_name, ein)
     if target_name_score(registry_name, safe_targets) >= 450:
         return True
     return compatible_ein_alias_for_name(original_name, registry_name)
+
+
+def missing_distinctive_prefix_mismatch(original_name: str, registry_name: str) -> bool:
+    original_norm = normalized_match_name(original_name)
+    registry_norm = normalized_match_name(registry_name)
+    if not original_norm or not registry_norm or original_norm == registry_norm:
+        return False
+    if not original_norm.endswith(registry_norm):
+        return False
+    original_words = original_norm.split()
+    registry_words = registry_norm.split()
+    if len(original_words) <= len(registry_words):
+        return False
+    prefix_words = original_words[: len(original_words) - len(registry_words)]
+    generic_prefix_words = {"the", "a", "an", "of", "for", "to", "and", "dba", "aka"}
+    return any(word not in generic_prefix_words for word in prefix_words)
 
 
 def related_affiliate_or_chapter_mismatch(original_name: str, registry_name: str) -> bool:
