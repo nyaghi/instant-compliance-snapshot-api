@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.27-staging"
+APP_VERSION = "2026.05.29.28-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -10085,6 +10085,21 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     max_variants=10,
                     max_elapsed_seconds=min(NAME_SEARCH_VARIANT_MAX_SECONDS, 30.0),
                 )
+                if public_status(result) == "Not Registered":
+                    time.sleep(1.0)
+                    confirmed_result = search_with_name_variants(
+                        page,
+                        org,
+                        checker.search_ny,
+                        max_variants=10,
+                        max_elapsed_seconds=min(NAME_SEARCH_VARIANT_MAX_SECONDS, 24.0),
+                    )
+                    if public_status(confirmed_result) != "Not Registered":
+                        confirmed_result.source_note = " ".join(part for part in [
+                            confirmed_result.source_note or "",
+                            "Confirmed on a second NY public-registry pass after the first pass returned no record.",
+                        ]).strip()
+                        result = confirmed_result
             elif state == "NJ":
                 result = search_nj_direct(page, org)
                 if public_status(result) != "Not Registered":
