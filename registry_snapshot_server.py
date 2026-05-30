@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.41-staging"
+APP_VERSION = "2026.05.30.42-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -140,7 +140,7 @@ MN_NAME_FALLBACK_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_MN_NAME_FAL
 MN_NAME_FALLBACK_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_MN_NAME_FALLBACK_MAX_VARIANTS", "4"))), 10)
 FL_LOOKUP_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_FL_LOOKUP_MAX_SECONDS", "45"))), 59.0)
 FL_LOOKUP_LANES = min(max(1, int(os.environ.get("CE_FL_LOOKUP_LANES", "2"))), 4)
-FL_LOOKUP_ACQUIRE_SECONDS = min(max(10.0, float(os.environ.get("CE_FL_LOOKUP_ACQUIRE_SECONDS", "85"))), 100.0)
+FL_LOOKUP_ACQUIRE_SECONDS = min(max(1.0, float(os.environ.get("CE_FL_LOOKUP_ACQUIRE_SECONDS", "12"))), 30.0)
 FL_LOOKUP_SEMAPHORE = threading.BoundedSemaphore(FL_LOOKUP_LANES)
 SC_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_SC_PREFLIGHT_TIMEOUT_SECONDS", "12"))), 20.0)
 NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
@@ -456,15 +456,16 @@ BROWSER_USER_AGENT = os.environ.get(
 WI_SEARCH_URL = "https://apps.dfi.wi.gov/ice/berg/Registration/OrganizationCredentialSearch.aspx"
 WI_RESULTS_URL = "https://apps.dfi.wi.gov/ice/berg/Registration/OrgCredentialSearchResults.aspx"
 WI_READER_BASE_URL = os.environ.get("CE_WI_READER_BASE_URL", "https://r.jina.ai/http://")
-WI_LOOKUP_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_WI_LOOKUP_MAX_SECONDS", "55"))), 90.0)
+WI_LOOKUP_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_WI_LOOKUP_MAX_SECONDS", "42"))), 90.0)
 WI_READER_TIMEOUT_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_READER_TIMEOUT_SECONDS", "12"))), 20.0)
 WI_HTTP_TIMEOUT_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_HTTP_TIMEOUT_SECONDS", "10"))), 20.0)
 WI_DIRECT_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_WI_DIRECT_VARIANT_LIMIT", "8"))), 12)
 WI_BROWSER_VARIANT_LIMIT = min(max(0, int(os.environ.get("CE_WI_BROWSER_VARIANT_LIMIT", "0"))), 5)
 WI_SIDECAR_URL = os.environ.get("CE_WI_SIDECAR_URL", "").strip()
 WI_LOOKUP_SECRET = os.environ.get("CE_WI_LOOKUP_SECRET", "").strip()
-WI_SIDECAR_TIMEOUT_SECONDS = min(max(10.0, float(os.environ.get("CE_WI_SIDECAR_TIMEOUT_SECONDS", "45"))), 58.0)
-WI_SIDECAR_ATTEMPTS = min(max(1, int(os.environ.get("CE_WI_SIDECAR_ATTEMPTS", "3"))), 5)
+WI_SIDECAR_TIMEOUT_SECONDS = min(max(10.0, float(os.environ.get("CE_WI_SIDECAR_TIMEOUT_SECONDS", "35"))), 58.0)
+WI_SIDECAR_ATTEMPTS = min(max(1, int(os.environ.get("CE_WI_SIDECAR_ATTEMPTS", "1"))), 5)
+WI_CONFIRM_SIDECAR_NO_MATCH = os.environ.get("CE_WI_CONFIRM_SIDECAR_NO_MATCH", "0").strip().lower() in {"1", "true", "yes"}
 WI_SIDECAR_LANES = min(max(1, int(os.environ.get("CE_WI_SIDECAR_LANES", "1"))), 3)
 WI_SIDECAR_ACQUIRE_SECONDS = min(max(10.0, float(os.environ.get("CE_WI_SIDECAR_ACQUIRE_SECONDS", "85"))), 100.0)
 WI_SIDECAR_SEMAPHORE = threading.BoundedSemaphore(WI_SIDECAR_LANES)
@@ -7052,7 +7053,7 @@ def search_wi_sidecar(org):
             fallback_result.source_note = "Wisconsin DFI lookup used the backend browser fallback after the sidecar could not reach the registry."
             return fallback_result
 
-    if data.get("status") == "Not Registered":
+    if data.get("status") == "Not Registered" and WI_CONFIRM_SIDECAR_NO_MATCH:
         fallback_result = search_wi_backend_browser_fallback(org)
         if public_status(fallback_result) != "Site Not Reachable":
             fallback_result.source_note = "Wisconsin DFI lookup used the backend browser fallback to confirm the sidecar no-match result."
