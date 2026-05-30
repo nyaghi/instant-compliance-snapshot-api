@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.33-staging"
+APP_VERSION = "2026.05.29.34-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -3668,7 +3668,7 @@ def patch_mi_module_for_fast_lookups(module) -> None:
         return
 
     def wait_for_search_form_fast(page) -> bool:
-        deadline = time.time() + 6
+        deadline = time.time() + 4
         while time.time() < deadline:
             try:
                 locator = page.locator("#ctl00_MainContent_txtEIN")
@@ -3681,13 +3681,13 @@ def patch_mi_module_for_fast_lookups(module) -> None:
 
     def open_search_form_fast(page) -> bool:
         for _ in range(1):
-            page.goto(module.MI_DISCLAIMER_URL, wait_until="domcontentloaded", timeout=18000)
+            page.goto(module.MI_DISCLAIMER_URL, wait_until="domcontentloaded", timeout=12000)
             if wait_for_search_form_fast(page):
                 return True
 
             actions = [
                 lambda: page.evaluate("__doPostBack('ctl00$MainContent$lblYes','')"),
-                lambda: page.locator("#ctl00_MainContent_lblYes").click(timeout=5000, no_wait_after=True),
+                lambda: page.locator("#ctl00_MainContent_lblYes").click(timeout=3500, no_wait_after=True),
                 lambda: page.locator("#ctl00_MainContent_lblYes").evaluate("el => el.click()"),
             ]
             for action in actions:
@@ -3699,7 +3699,7 @@ def patch_mi_module_for_fast_lookups(module) -> None:
                     return True
 
             try:
-                page.goto(module.MI_SEARCH_URL, wait_until="domcontentloaded", timeout=12000)
+                page.goto(module.MI_SEARCH_URL, wait_until="domcontentloaded", timeout=8000)
                 if wait_for_search_form_fast(page):
                     return True
             except Exception:
@@ -3707,10 +3707,10 @@ def patch_mi_module_for_fast_lookups(module) -> None:
         return False
 
     def find_results_frame_fast(page):
-        deadline = time.time() + 10
+        deadline = time.time() + 6
         while time.time() < deadline:
             for frame in reversed(page.frames):
-                text = re.sub(r"\s+", " ", module.body_text(frame, timeout=2500)).strip()
+                text = re.sub(r"\s+", " ", module.body_text(frame, timeout=1800)).strip()
                 if not text:
                     continue
                 if "Results for the following input" in text or "record(s) found" in text or "No records found" in text:
@@ -3719,7 +3719,7 @@ def patch_mi_module_for_fast_lookups(module) -> None:
         return None
 
     def find_detail_frame_fast(page):
-        deadline = time.time() + 10
+        deadline = time.time() + 6
         while time.time() < deadline:
             for frame in reversed(page.frames):
                 try:
@@ -3727,7 +3727,7 @@ def patch_mi_module_for_fast_lookups(module) -> None:
                         return frame
                 except Exception:
                     pass
-                text = re.sub(r"\s+", " ", module.body_text(frame, timeout=2500)).strip()
+                text = re.sub(r"\s+", " ", module.body_text(frame, timeout=1800)).strip()
                 if "Solicitation Registration Status" in text and "Charitable Trust Registration Status" in text:
                     return frame
             time.sleep(0.25)
@@ -3755,17 +3755,17 @@ def patch_mi_module_for_fast_lookups(module) -> None:
             page.locator("#ctl00_MainContent_txtEIN").fill(formatted_ein)
             page.locator("#ctl00_MainContent_btnTextSearch").click(timeout=8000, no_wait_after=True)
             try:
-                page.wait_for_load_state("domcontentloaded", timeout=5000)
+                page.wait_for_load_state("domcontentloaded", timeout=3500)
             except Exception:
                 pass
-            time.sleep(2)
+            time.sleep(1)
 
             results_frame = find_results_frame_fast(page)
             if not results_frame:
                 result.error = "Could not find the Michigan results frame."
                 return result
 
-            results_text = re.sub(r"\s+", " ", module.body_text(results_frame, timeout=5000)).strip()
+            results_text = re.sub(r"\s+", " ", module.body_text(results_frame, timeout=3500)).strip()
             if re.search(r"\b0 record\(s\) found\b|no records found|no results found|not found", results_text, re.I):
                 result.status = module.STATUS_NOT_REGISTERED
                 result.raw_status_text = "No results found"
@@ -3784,10 +3784,10 @@ def patch_mi_module_for_fast_lookups(module) -> None:
             _, clicked_name, link, href = chosen
             module.click_result_link(results_frame, link, href)
             try:
-                page.wait_for_load_state("domcontentloaded", timeout=5000)
+                page.wait_for_load_state("domcontentloaded", timeout=3500)
             except Exception:
                 pass
-            time.sleep(2)
+            time.sleep(1)
 
             detail_frame = find_detail_frame_fast(page)
             if not detail_frame:
@@ -4104,8 +4104,8 @@ def search_mi_name_fallback(page, org):
 
     variants = sorted(variants, key=mi_variant_priority)
 
-    for variant in variants[:3]:
-        if time.perf_counter() - started > 14:
+    for variant in variants[:2]:
+        if time.perf_counter() - started > 8:
             result.status = checker.STATUS_NOT_REGISTERED
             result.raw_status_text = "No matching organization record"
             result.source_note = "Michigan EIN search returned no exact result, and the bounded organization-name fallback found no matching record before the safe retry limit."
@@ -4119,16 +4119,16 @@ def search_mi_name_fallback(page, org):
             page.locator("#ctl00_MainContent_txtName").fill("")
             page.locator("#ctl00_MainContent_txtName").fill(variant)
             page.locator("#ctl00_MainContent_txtEIN").fill("")
-            page.locator("#ctl00_MainContent_btnTextSearch").click(timeout=8000, no_wait_after=True)
+            page.locator("#ctl00_MainContent_btnTextSearch").click(timeout=5000, no_wait_after=True)
             try:
-                page.wait_for_load_state("domcontentloaded", timeout=6000)
+                page.wait_for_load_state("domcontentloaded", timeout=3500)
             except Exception:
                 pass
-            time.sleep(2)
+            time.sleep(1)
             frame = module.find_results_frame(page)
             if not frame:
                 continue
-            results_text = re.sub(r"\s+", " ", module.body_text(frame, timeout=8000)).strip()
+            results_text = re.sub(r"\s+", " ", module.body_text(frame, timeout=3500)).strip()
             if no_registry_results_seen(results_text):
                 continue
             chosen = module.choose_result_link(frame, variant) or module.choose_result_link(frame, "")
@@ -4167,14 +4167,14 @@ def search_mi_name_fallback(page, org):
                         return result
             module.click_result_link(frame, link, href)
             try:
-                page.wait_for_load_state("domcontentloaded", timeout=6000)
+                page.wait_for_load_state("domcontentloaded", timeout=3500)
             except Exception:
                 pass
-            time.sleep(2)
+            time.sleep(1)
             detail_frame = module.find_detail_frame(page)
             if not detail_frame:
                 continue
-            detail_text = re.sub(r"\s+", " ", module.body_text(detail_frame, timeout=8000)).strip()
+            detail_text = re.sub(r"\s+", " ", module.body_text(detail_frame, timeout=3500)).strip()
             site_name = module.extract_legal_name(detail_frame) or clicked_name or org.organization_name
             ein_digits = re.sub(r"\D", "", org.ein or "")
             ein_confirmed = bool(ein_digits and ein_digits in re.sub(r"\D", "", detail_text))
