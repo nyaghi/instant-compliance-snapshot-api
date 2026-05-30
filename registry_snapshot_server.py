@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.26-staging"
+APP_VERSION = "2026.05.29.27-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -5415,6 +5415,34 @@ def ak_registry_identifier_from_print_row(print_link: dict, row_text: str) -> st
     return format_ein(match.group(0)) if match else ""
 
 
+def ak_newer_year_result_from_retry(page, lookup_org, original_org, original_name: str, found_year: int, name_fallback: bool = False) -> tuple[int | None, str, str, str]:
+    current_year = date.today().year
+    if found_year >= current_year:
+        return None, "", "", ""
+    for newer_year in range(current_year, found_year, -1):
+        try:
+            if name_fallback:
+                fill_ak_search_form_name_only(page, lookup_org, newer_year, lookup_org.organization_name)
+            else:
+                fill_ak_search_form_ein_fast(page, lookup_org, newer_year)
+            print_link = find_ak_print_link_relaxed(page, lookup_org)
+            if not print_link:
+                continue
+            row_text = re.sub(r"\s+", " ", (print_link.get("rowText") or "")).strip() if isinstance(print_link, dict) else ""
+            if ak_row_has_wrong_ein(row_text, original_org.ein):
+                continue
+            row_name = ak_registry_name_from_print_row(print_link, row_text, original_name, original_org.ein) if row_text else ""
+            if row_name and not registry_name_is_safe_for_org(row_name, original_name, original_org.ein):
+                continue
+            return newer_year, row_name, ak_registry_identifier_from_print_row(print_link, row_text), registry_page_body(page)
+        except Exception:
+            try:
+                checker.open_ak_public_search(page)
+            except Exception:
+                pass
+    return None, "", "", ""
+
+
 def fetch_ak_registration_pdf(page, context, print_link: dict, org_name: str) -> tuple[str, str]:
     popup = None
     pdf_url = ""
@@ -5537,6 +5565,20 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                             continue
                     if search_name != original_name:
                         result.source_note = f"Matched using EIN-resolved compatible name variant: {search_name}."
+                    newer_year, newer_name, newer_identifier, newer_body = ak_newer_year_result_from_retry(
+                        ak_page,
+                        lookup_org,
+                        org,
+                        original_name,
+                        year,
+                    )
+                    if newer_year:
+                        year = newer_year
+                        page_body = newer_body or page_body
+                        if newer_name:
+                            result.matched_registry_name = newer_name
+                        if newer_identifier:
+                            result.matched_registry_identifier = newer_identifier
                     result.status, result.raw_status_text, base_note = checker.classify_ak_registration_year(year, None)
                     result.source_note = " ".join(part for part in [getattr(result, "source_note", "") or "", base_note] if part).strip()
                     result.success = True
@@ -5576,8 +5618,24 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                     )
                     if wrong_ein and not alias_name_match:
                         continue
+                    newer_year, newer_name, newer_identifier, newer_body = ak_newer_year_result_from_retry(
+                        ak_page,
+                        lookup_org,
+                        org,
+                        original_name,
+                        year,
+                        name_fallback=True,
+                    )
+                    if newer_year:
+                        year = newer_year
+                        page_body = newer_body or page_body
+                        if newer_name:
+                            row_name = newer_name
+                        if newer_identifier:
+                            result.matched_registry_identifier = newer_identifier
                     result.matched_registry_name = row_name or search_name
-                    result.matched_registry_identifier = ak_registry_identifier_from_print_row(print_link, row_text)
+                    if not result.matched_registry_identifier:
+                        result.matched_registry_identifier = ak_registry_identifier_from_print_row(print_link, row_text)
                     result.status, result.raw_status_text, base_note = checker.classify_ak_registration_year(year, None)
                     result.source_note = " ".join(part for part in [
                         f"Matched using Alaska name fallback after EIN search returned no rows: {search_name}.",
@@ -9525,7 +9583,7 @@ def ar_status_from_text(status_text: str) -> str:
     status = re.sub(r"\s+", " ", status_text or "").strip()
     if re.search(r"\bnot\s+current\b|\b(delinquent|expired|past\s+due|non[-\s]?compliant)\b", status, re.I):
         return "Delinquent"
-    if re.search(r"\b(closed|withdrawn|cancel(?:ed|led)|terminated|inactive|revoked)\b", status, re.I):
+    if re.search(r"\b(close|closed|withdrawn|cancel(?:ed|led)|terminated|inactive|revoked)\b", status, re.I):
         return "Closed / Withdrawn / Canceled"
     if re.search(r"\b(current|active|registered)\b", status, re.I):
         return checker.STATUS_CURRENT
