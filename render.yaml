@@ -91,7 +91,7 @@ services:
       - key: CE_WI_LOOKUP_MAX_SECONDS
         value: "42"
       - key: CE_WI_SIDECAR_ATTEMPTS
-        value: "1"
+        value: "2"
       - key: CE_WI_SIDECAR_TIMEOUT_SECONDS
         value: "35"
       - key: CE_WI_CONFIRM_SIDECAR_NO_MATCH
