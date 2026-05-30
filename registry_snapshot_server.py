@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.59-staging"
+APP_VERSION = "2026.05.30.60-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -485,11 +485,9 @@ NH_LIVE_PDF_URL = os.environ.get(
     "CE_NH_LIVE_PDF_URL",
     "https://mm.nh.gov/files/uploads/doj/remote-docs/registered-charities.pdf",
 ).strip()
-NH_LIVE_PDF_LOCAL_PATH = (
-    Path(os.environ["CE_NH_LIVE_PDF_LOCAL_PATH"])
-    if os.environ.get("CE_NH_LIVE_PDF_LOCAL_PATH")
-    else BASE_DIR / "registered-charities.pdf"
-)
+NH_BUNDLED_PDF_PATH = BASE_DIR / "registered-charities.pdf"
+NH_ENV_PDF_PATH = Path(os.environ["CE_NH_LIVE_PDF_LOCAL_PATH"]) if os.environ.get("CE_NH_LIVE_PDF_LOCAL_PATH") else None
+NH_PREFER_ENV_PDF = os.environ.get("CE_NH_PREFER_ENV_PDF", "0").strip().lower() in {"1", "true", "yes"}
 NH_LIVE_PDF_MAX_AGE_SECONDS = min(max(3600, int(os.environ.get("CE_NH_LIVE_PDF_MAX_AGE_SECONDS", "604800"))), 1209600)
 NH_LIVE_PDF_RECORDS = None
 NH_LIVE_PDF_LOADED_AT = 0.0
@@ -8988,9 +8986,16 @@ def nh_download_live_pdf_records() -> tuple[list[dict], str]:
         return [], ""
     pdf_source = NH_LIVE_PDF_URL
     try:
-        if NH_LIVE_PDF_LOCAL_PATH.exists():
-            pdf_bytes = NH_LIVE_PDF_LOCAL_PATH.read_bytes()
-            pdf_source = str(NH_LIVE_PDF_LOCAL_PATH)
+        local_candidates = []
+        if NH_PREFER_ENV_PDF and NH_ENV_PDF_PATH is not None:
+            local_candidates.append(NH_ENV_PDF_PATH)
+        local_candidates.append(NH_BUNDLED_PDF_PATH)
+        if not NH_PREFER_ENV_PDF and NH_ENV_PDF_PATH is not None:
+            local_candidates.append(NH_ENV_PDF_PATH)
+        local_path = next((path for path in local_candidates if path.exists()), None)
+        if local_path is not None:
+            pdf_bytes = local_path.read_bytes()
+            pdf_source = str(local_path)
         else:
             request = urllib.request.Request(
                 NH_LIVE_PDF_URL,
@@ -9006,10 +9011,10 @@ def nh_download_live_pdf_records() -> tuple[list[dict], str]:
             with urllib.request.urlopen(request, timeout=30) as response:
                 pdf_bytes = response.read()
     except Exception:
-        if not NH_LIVE_PDF_LOCAL_PATH.exists():
+        if not NH_BUNDLED_PDF_PATH.exists():
             raise
-        pdf_bytes = NH_LIVE_PDF_LOCAL_PATH.read_bytes()
-        pdf_source = str(NH_LIVE_PDF_LOCAL_PATH)
+        pdf_bytes = NH_BUNDLED_PDF_PATH.read_bytes()
+        pdf_source = str(NH_BUNDLED_PDF_PATH)
     reader = PdfReader(io.BytesIO(pdf_bytes))
     text_parts = []
     for page in reader.pages:
