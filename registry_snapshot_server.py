@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.45-staging"
+APP_VERSION = "2026.05.30.46-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -10073,6 +10073,39 @@ def wv_status_from_fields(status_text: str, expiration_text: str) -> str:
     return status or checker.STATUS_UNKNOWN
 
 
+def wv_preferred_query_variants(name: str) -> list[str]:
+    """Search suffix-light WV names first while keeping row acceptance strict."""
+    preferred = []
+
+    def add(value: str) -> None:
+        cleaned = re.sub(r"\s+", " ", (value or "").strip(" ,;-"))
+        if cleaned and cleaned.lower() not in {existing.lower() for existing in preferred}:
+            preferred.append(cleaned)
+
+    base = re.sub(r"\s+", " ", (name or "").strip())
+    without_comma_suffix = re.sub(
+        r",\s*(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\s*$",
+        "",
+        base,
+        flags=re.I,
+    ).strip()
+    without_suffix = re.sub(
+        r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\s*$",
+        "",
+        without_comma_suffix,
+        flags=re.I,
+    ).strip()
+    no_punctuation_without_suffix = re.sub(r"[^\w\s]", " ", without_suffix).strip()
+    no_punctuation_without_suffix = re.sub(r"\s+", " ", no_punctuation_without_suffix)
+
+    if without_suffix and without_suffix.lower() != base.lower():
+        add(without_suffix)
+    if no_punctuation_without_suffix and no_punctuation_without_suffix.lower() != without_suffix.lower():
+        add(no_punctuation_without_suffix)
+    add(base)
+    return preferred
+
+
 def search_wv_precise(page, org):
     result = checker.StateResult(
         org.organization_name,
@@ -10520,6 +10553,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                         include_leading_article_variants=True,
                         prioritize_institution_reductions=True,
                         require_safe_registry_name=True,
+                        preferred_variants=wv_preferred_query_variants(org.organization_name),
                     )
                 body = registry_page_body(page)
             elif state == "WI":
