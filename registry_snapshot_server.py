@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.55-staging"
+APP_VERSION = "2026.05.30.56-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -9364,6 +9364,16 @@ def ms_preferred_search_variants(name: str, ein: str = "") -> list[str]:
     for seed in seeds:
         base = re.sub(r"\s+", " ", (seed or "").strip())
         add(base)
+        for part in re.split(
+            r"\s*(?:/|\\|\bd/?b/?a\b|\bdoing\s+business\s+as\b|\balso\s+soliciting\s+as\b|\bsoliciting\s+as\b|\balso\s+known\s+as\b|\baka\b|\bfka\b|\bformerly\b)\s*",
+            base,
+            flags=re.I,
+        ):
+            part = re.sub(r"\s+", " ", part.strip(" ,;-"))
+            if re.fullmatch(r"(?i)(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)", part):
+                continue
+            if (len(part.split()) >= 2) or len(part) >= 4:
+                add(part)
         without_comma_suffix = re.sub(
             r",\s*(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\s*$",
             "",
@@ -9650,7 +9660,7 @@ def search_batch_browser_state(page, org, state: str):
             org.organization_name,
             org.ein,
             include_ein_aliases=True,
-            include_name_segments=False,
+            include_name_segments=True,
             include_compact_legal_suffixes=True,
             include_leading_article_variants=True,
         )
