@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.42-staging"
+APP_VERSION = "2026.05.30.43-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -465,7 +465,7 @@ WI_SIDECAR_URL = os.environ.get("CE_WI_SIDECAR_URL", "").strip()
 WI_LOOKUP_SECRET = os.environ.get("CE_WI_LOOKUP_SECRET", "").strip()
 WI_SIDECAR_TIMEOUT_SECONDS = min(max(10.0, float(os.environ.get("CE_WI_SIDECAR_TIMEOUT_SECONDS", "35"))), 58.0)
 WI_SIDECAR_ATTEMPTS = min(max(1, int(os.environ.get("CE_WI_SIDECAR_ATTEMPTS", "1"))), 5)
-WI_CONFIRM_SIDECAR_NO_MATCH = os.environ.get("CE_WI_CONFIRM_SIDECAR_NO_MATCH", "0").strip().lower() in {"1", "true", "yes"}
+WI_CONFIRM_SIDECAR_NO_MATCH = os.environ.get("CE_WI_CONFIRM_SIDECAR_NO_MATCH", "1").strip().lower() in {"1", "true", "yes"}
 WI_SIDECAR_LANES = min(max(1, int(os.environ.get("CE_WI_SIDECAR_LANES", "1"))), 3)
 WI_SIDECAR_ACQUIRE_SECONDS = min(max(10.0, float(os.environ.get("CE_WI_SIDECAR_ACQUIRE_SECONDS", "85"))), 100.0)
 WI_SIDECAR_SEMAPHORE = threading.BoundedSemaphore(WI_SIDECAR_LANES)
@@ -6811,7 +6811,7 @@ def search_wi(page, org):
         if not best_match:
             best_match, wi_http_reached = wi_http_search_best_match(direct_names, target_names, deadline)
 
-        if not best_match and time.perf_counter() < deadline and WI_BROWSER_VARIANT_LIMIT > 0:
+        if not best_match and page is not None and time.perf_counter() < deadline and WI_BROWSER_VARIANT_LIMIT > 0:
             for search_name in searched_names[:WI_BROWSER_VARIANT_LIMIT]:
                 if time.perf_counter() >= deadline:
                     break
@@ -7041,22 +7041,22 @@ def search_wi_sidecar(org):
         result.source_note = "Wisconsin DFI sidecar lookup could not be completed."
         result.error = str(last_exception or "WI sidecar returned no response")
         result.success = False
-        fallback_result = search_wi_backend_browser_fallback(org)
+        fallback_result = search_wi(None, org)
         if public_status(fallback_result) != "Site Not Reachable":
-            fallback_result.source_note = "Wisconsin DFI lookup used the backend browser fallback after the sidecar returned no response."
+            fallback_result.source_note = "Wisconsin DFI lookup used the backend direct fallback after the sidecar returned no response."
             return fallback_result
         return result
 
     if data.get("status") == "Site Not Reachable" and not data.get("success"):
-        fallback_result = search_wi_backend_browser_fallback(org)
+        fallback_result = search_wi(None, org)
         if public_status(fallback_result) != "Site Not Reachable":
-            fallback_result.source_note = "Wisconsin DFI lookup used the backend browser fallback after the sidecar could not reach the registry."
+            fallback_result.source_note = "Wisconsin DFI lookup used the backend direct fallback after the sidecar could not reach the registry."
             return fallback_result
 
     if data.get("status") == "Not Registered" and WI_CONFIRM_SIDECAR_NO_MATCH:
-        fallback_result = search_wi_backend_browser_fallback(org)
+        fallback_result = search_wi(None, org)
         if public_status(fallback_result) != "Site Not Reachable":
-            fallback_result.source_note = "Wisconsin DFI lookup used the backend browser fallback to confirm the sidecar no-match result."
+            fallback_result.source_note = "Wisconsin DFI lookup used the backend direct fallback to confirm the sidecar no-match result."
             return fallback_result
 
     result.status = data.get("status") or "Site Not Reachable"

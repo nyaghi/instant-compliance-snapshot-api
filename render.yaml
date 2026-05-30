@@ -95,4 +95,4 @@ services:
       - key: CE_WI_SIDECAR_TIMEOUT_SECONDS
         value: "35"
       - key: CE_WI_CONFIRM_SIDECAR_NO_MATCH
-        value: "0"
+        value: "1"
