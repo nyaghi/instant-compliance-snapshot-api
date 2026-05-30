@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.58-staging"
+APP_VERSION = "2026.05.30.59-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -9020,28 +9020,72 @@ def nh_download_live_pdf_records() -> tuple[list[dict], str]:
     text = "\n".join(text_parts)
     updated_match = re.search(r"\bUpdated:\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})", text, re.I)
     updated_label = updated_match.group(1) if updated_match else ""
-    record_pattern = re.compile(
-        r"^\s*(?P<reg>\d{3,6})\s+(?P<body>[\s\S]*?)\s+(?P<status>[GXS])\s+"
-        r"(?P<due>\d{1,2}/\d{1,2}/\d{4})(?=\s*(?:\n\s*\d{3,6}\s+[A-Z]|\n\s*Updated:|\Z))",
-        re.I | re.M,
-    )
     records = []
-    for match in record_pattern.finditer(text):
-        body = re.sub(r"\s+", " ", match.group("body") or "").strip()
-        due_date = parse_due_date(match.group("due"))
+    seen_record_keys = set()
+
+    def add_nh_record(registry_id: str, body_text: str, status_code: str, due_raw: str) -> None:
+        body = re.sub(r"\s+", " ", body_text or "").strip()
+        due_date = parse_due_date(due_raw)
         if not body or not due_date:
-            continue
+            return
         registry_name = nh_registry_name_from_live_body(body)
         registry_norm = normalized_match_name(registry_name)
+        key = (registry_id, registry_name, status_code.upper(), due_raw)
+        if key in seen_record_keys:
+            return
+        seen_record_keys.add(key)
         records.append({
-            "registry_id": match.group("reg"),
+            "registry_id": registry_id,
             "body": body,
             "registry_name": registry_name,
             "registry_words": set(registry_norm.split()),
-            "status_code": match.group("status").upper(),
-            "due_raw": match.group("due"),
+            "status_code": status_code.upper(),
+            "due_raw": due_raw,
             "due_date": due_date,
         })
+
+    row_pattern = re.compile(
+        r"^\s*(?P<reg>\d{3,6})\s+(?P<body>.*?)\s+(?P<status>[GXS])\s+"
+        r"(?P<due>\d{1,2}/\d{1,2}/\d{4})\s*$",
+        re.I,
+    )
+    pending_row = ""
+    for raw_line in text.splitlines():
+        line = re.sub(r"\s+", " ", raw_line or "").strip()
+        if not line:
+            continue
+        if re.search(r"\b(?:Updated:|Registered Charities List|Good Standing|Charitable Trusts Unit|Reg\. No\.)\b", line, re.I):
+            continue
+        starts_record = bool(re.match(r"^\d{3,6}\s+\S", line))
+        if starts_record:
+            pending_row = line
+        elif pending_row:
+            pending_row = f"{pending_row} {line}"
+        else:
+            continue
+        row_match = row_pattern.match(pending_row)
+        if row_match:
+            add_nh_record(
+                row_match.group("reg"),
+                row_match.group("body"),
+                row_match.group("status"),
+                row_match.group("due"),
+            )
+            pending_row = ""
+
+    if not records:
+        record_pattern = re.compile(
+            r"^\s*(?P<reg>\d{3,6})\s+(?P<body>[\s\S]*?)\s+(?P<status>[GXS])\s+"
+            r"(?P<due>\d{1,2}/\d{1,2}/\d{4})(?=\s*(?:\n\s*\d{3,6}\s+[A-Z]|\n\s*Updated:|\Z))",
+            re.I | re.M,
+        )
+        for match in record_pattern.finditer(text):
+            add_nh_record(
+                match.group("reg"),
+                match.group("body"),
+                match.group("status"),
+                match.group("due"),
+            )
     if pdf_source != NH_LIVE_PDF_URL and updated_label:
         updated_label = f"{updated_label} from bundled NH PDF"
     return records, updated_label
