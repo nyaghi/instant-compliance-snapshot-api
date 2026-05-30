@@ -543,7 +543,7 @@ def search_wa(org: Organization, show_process: bool = False) -> SearchResult:
             safe_wait_for_network_idle(page)
             time.sleep(4)
 
-            found = wait_for_result_link_or_no_value(page, org.organization_name, timeout_seconds=55, require_search_response=True)
+            found = wait_for_result_link_or_no_value(page, org.organization_name, timeout_seconds=35, require_search_response=True)
             if found == "NO_VALUE":
                 result.status = STATUS_NOT_REGISTERED
                 result.raw_status_text = "No Value Found."
