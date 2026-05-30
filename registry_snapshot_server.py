@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.25-staging"
+APP_VERSION = "2026.05.29.26-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -9524,7 +9524,7 @@ def search_bundled_name_state(page, org, state: str):
 def ar_status_from_text(status_text: str) -> str:
     status = re.sub(r"\s+", " ", status_text or "").strip()
     if re.search(r"\bnot\s+current\b|\b(delinquent|expired|past\s+due|non[-\s]?compliant)\b", status, re.I):
-        return checker.STATUS_DELINQUENT
+        return "Delinquent"
     if re.search(r"\b(closed|withdrawn|cancel(?:ed|led)|terminated|inactive|revoked)\b", status, re.I):
         return "Closed / Withdrawn / Canceled"
     if re.search(r"\b(current|active|registered)\b", status, re.I):
