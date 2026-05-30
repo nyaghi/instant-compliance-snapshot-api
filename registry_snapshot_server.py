@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.46-staging"
+APP_VERSION = "2026.05.30.47-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -138,7 +138,7 @@ CT_NAME_VARIANT_MAX_SECONDS = min(max(12.0, float(os.environ.get("CE_CT_NAME_VAR
 CT_NAME_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_CT_NAME_VARIANT_LIMIT", "8"))), 14)
 MN_NAME_FALLBACK_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_MN_NAME_FALLBACK_MAX_SECONDS", "18"))), 30.0)
 MN_NAME_FALLBACK_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_MN_NAME_FALLBACK_MAX_VARIANTS", "4"))), 10)
-FL_LOOKUP_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_FL_LOOKUP_MAX_SECONDS", "45"))), 59.0)
+FL_LOOKUP_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_FL_LOOKUP_MAX_SECONDS", "35"))), 45.0)
 FL_LOOKUP_LANES = min(max(1, int(os.environ.get("CE_FL_LOOKUP_LANES", "2"))), 4)
 FL_LOOKUP_ACQUIRE_SECONDS = min(max(1.0, float(os.environ.get("CE_FL_LOOKUP_ACQUIRE_SECONDS", "12"))), 30.0)
 FL_LOOKUP_SEMAPHORE = threading.BoundedSemaphore(FL_LOOKUP_LANES)
@@ -199,7 +199,11 @@ SINGLE_STATE_SEMANTIC_RETRY_STATES = {
     if state.strip()
 }
 PUBLIC_SINGLE_STATE_ONLY = os.environ.get("CE_PUBLIC_SINGLE_STATE_ONLY", "0").strip().lower() in {"1", "true", "yes"}
-FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "8"))), 20.0)
+FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "2"))), 10.0)
+FL_NOT_REGISTERED_CONFIRMATION_MAX_FIRST_SECONDS = min(
+    max(6.0, float(os.environ.get("CE_FL_NOT_REGISTERED_CONFIRMATION_MAX_FIRST_SECONDS", "14"))),
+    25.0,
+)
 NAME_SEARCH_PREFLIGHT_URLS = {
     "AR": "https://sos-corp-search.ark.org/index.php/charity",
     "CT": "https://www.elicense.ct.gov/lookup/licenselookup.aspx",
@@ -10394,7 +10398,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                             confirm_single_no_match
                             and public_status(result) in {"Not Registered", "Site Not Reachable"}
                             and FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS > 0
-                            and elapsed_before_confirmation < 20.0
+                            and elapsed_before_confirmation < FL_NOT_REGISTERED_CONFIRMATION_MAX_FIRST_SECONDS
                         ):
                             time.sleep(FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS)
                             confirmed_result = search_fl(page, org)
