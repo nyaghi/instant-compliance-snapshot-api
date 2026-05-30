@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.30-staging"
+APP_VERSION = "2026.05.29.31-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -3257,6 +3257,205 @@ def search_va_bounded(page, org):
         finally:
             checker.search_name_query_variants = original_variant_builder
             checker.click_va_search_button = original_click_search_button
+
+
+def va_html_to_text(value: str) -> str:
+    text = re.sub(r"(?i)<\s*br\s*/?\s*>", "\n", value or "")
+    text = re.sub(r"(?i)</\s*(?:p|div|tr|li|h[1-6]|td|th)\s*>", "\n", text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html.unescape(text)
+    lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
+    return "\n".join(line for line in lines if line)
+
+
+def va_labeled_value(text: str, label: str) -> str:
+    pattern = rf"{re.escape(label)}\s*:?\s*(.*?)(?=\s+(?:Primary Name|Other Names|Current Registration Expires|Registration Extended Until|Registration Filing Status|Address)\s*:|$)"
+    match = re.search(pattern, text or "", re.I | re.S)
+    if not match:
+        return ""
+    return re.sub(r"\s+", " ", match.group(1)).strip()
+
+
+def va_direct_request(url: str, data: dict[str, str] | None = None, timeout_seconds: float = 16.0) -> str:
+    encoded = urlencode(data).encode("utf-8") if data is not None else None
+    headers = {
+        "User-Agent": BROWSER_USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Origin": "https://cos.vdacs.virginia.gov",
+        "Referer": NAME_SEARCH_PREFLIGHT_URLS["VA"],
+    }
+    last_error = None
+    for attempt in range(2):
+        try:
+            request = urllib.request.Request(url, data=encoded, headers=headers, method="POST" if data is not None else "GET")
+            with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+                charset = response.headers.get_content_charset() or "utf-8"
+                return response.read().decode(charset, errors="replace")
+        except Exception as exc:
+            last_error = exc
+            if attempt == 0:
+                time.sleep(0.8)
+    raise last_error
+
+
+def va_result_links(search_html: str) -> list[tuple[str, str, str]]:
+    links = []
+    for match in re.finditer(r"<a\s+[^>]*href=(?:\"([^\"]+)\"|'([^']+)'|([^>\s]+))[^>]*>(.*?)</a>", search_html or "", re.I | re.S):
+        href = html.unescape((match.group(1) or match.group(2) or match.group(3) or "").strip())
+        if "act=2" not in href or "sysorgno=" not in href:
+            continue
+        link_text = re.sub(r"<[^>]+>", " ", match.group(4) or "")
+        link_text = re.sub(r"\s+", " ", html.unescape(link_text)).strip()
+        parsed = urlparse(urljoin(NAME_SEARCH_PREFLIGHT_URLS["VA"], href))
+        identifier = (parse_qs(parsed.query).get("sysorgno") or [""])[0].strip()
+        links.append((href, link_text, identifier))
+    return links
+
+
+def va_registry_status_from_detail(detail_text: str) -> str:
+    filing_status = va_labeled_value(detail_text, "Registration Filing Status")
+    combined = " ".join([detail_text or "", filing_status])
+    if re.search(r"\bnot\s+authorized\s+to\s+solicit|cease\s+and\s+desist|suspended\b", combined, re.I):
+        return "Suspended"
+    if re.search(r"\b(?:withdrawn|closed|cancel(?:ed|led)|terminated|inactive)\b", combined, re.I):
+        return "Closed / Withdrawn / Canceled"
+    if re.search(r"\bpending|in\s+process\b", filing_status, re.I):
+        return "Pending"
+
+    extended_until = va_labeled_value(detail_text, "Registration Extended Until")
+    expires = va_labeled_value(detail_text, "Current Registration Expires")
+    extension_date = parse_due_date(extended_until) if not re.fullmatch(r"N/?A|None|Not Applicable", extended_until or "", re.I) else None
+    expiration_date = parse_due_date(expires)
+    effective_date = extension_date or expiration_date
+    if effective_date:
+        return status_from_calendar_date(effective_date)
+    if re.search(r"\bfinancial\s+data\s+available|registers\s+annually|registered\b", filing_status, re.I):
+        return "Current"
+    return checker.STATUS_UNKNOWN
+
+
+def search_va_direct(org):
+    url = NAME_SEARCH_PREFLIGHT_URLS["VA"]
+    variants = []
+
+    def add_variant(value: str) -> None:
+        value = re.sub(r"\s+", " ", (value or "").strip())
+        if value and value not in variants:
+            variants.append(value)
+
+    def add_va_core_forms(value: str) -> None:
+        add_variant(value)
+        stripped = re.sub(
+            r"\s*,?\s+\b(?:inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\b\.?\s*$",
+            "",
+            value or "",
+            flags=re.I,
+        ).strip()
+        add_variant(stripped)
+        add_variant(re.sub(r"^(?:the|a|an)\s+", "", value or "", flags=re.I).strip())
+        if stripped:
+            add_variant(re.sub(r"^(?:the|a|an)\s+", "", stripped, flags=re.I).strip())
+
+    add_va_core_forms(org.organization_name)
+    for alias in known_names_for_ein(org.ein):
+        if compatible_ein_alias_for_name(org.organization_name, alias):
+            add_va_core_forms(alias)
+    generated_variants = organization_name_variants(
+        org.organization_name,
+        org.ein,
+        include_ein_aliases=True,
+        include_name_segments=True,
+        include_and_segments=False,
+        include_compact_legal_suffixes=False,
+        include_leading_article_variants=True,
+        include_institutional_reductions=True,
+    )
+    for generated in generated_variants:
+        if len(variants) >= 4:
+            break
+        add_variant(generated)
+    variants = variants[:4]
+    targets = organization_match_target_variants(org.organization_name, org.ein)
+    best_rejected_name = ""
+    last_error = ""
+
+    for variant in variants:
+        try:
+            search_html = va_direct_request(url, {"act": "1", "orgname": variant, "submit": "SEARCH"})
+        except Exception as exc:
+            last_error = str(exc)
+            continue
+
+        links = va_result_links(search_html)
+        if not links:
+            if re.search(r"No\s+record\s+found|No\s+records?\s+found|No\s+matching", search_html or "", re.I):
+                continue
+            continue
+
+        safe_links = []
+        for href, link_text, identifier in links:
+            if registry_name_is_safe_for_org(link_text, org.organization_name, org.ein):
+                safe_links.append((target_name_score(link_text, targets), href, link_text, identifier))
+            elif not best_rejected_name:
+                best_rejected_name = link_text
+
+        if not safe_links:
+            continue
+
+        _, href, link_text, identifier = sorted(safe_links, key=lambda item: item[0], reverse=True)[0]
+        detail_url = urljoin(url, href)
+        try:
+            detail_html = va_direct_request(detail_url, timeout_seconds=16.0)
+        except Exception as exc:
+            result = checker.StateResult(org.organization_name, org.ein, "VA", "Site Not Reachable", detail_url)
+            result.error = str(exc)
+            result.raw_status_text = f"Virginia detail lookup failed after matching {link_text}"
+            result.matched_registry_name = link_text
+            result.matched_registry_identifier = identifier
+            return result
+
+        detail_text = va_html_to_text(detail_html)
+        primary_name = va_labeled_value(detail_text, "Primary Name") or link_text
+        if primary_name and not registry_name_is_safe_for_org(primary_name, org.organization_name, org.ein):
+            best_rejected_name = primary_name
+            continue
+
+        raw_status = " | ".join(
+            part for part in [
+                f"Primary Name: {primary_name}" if primary_name else "",
+                f"Other Names: {va_labeled_value(detail_text, 'Other Names')}" if va_labeled_value(detail_text, "Other Names") else "",
+                f"Current Registration Expires: {va_labeled_value(detail_text, 'Current Registration Expires')}" if va_labeled_value(detail_text, "Current Registration Expires") else "",
+                f"Registration Extended Until: {va_labeled_value(detail_text, 'Registration Extended Until')}" if va_labeled_value(detail_text, "Registration Extended Until") else "",
+                f"Registration Filing Status: {va_labeled_value(detail_text, 'Registration Filing Status')}" if va_labeled_value(detail_text, "Registration Filing Status") else "",
+            ]
+            if part
+        ) or detail_text[:1000]
+        result = checker.StateResult(org.organization_name, org.ein, "VA", va_registry_status_from_detail(detail_text), detail_url)
+        result.raw_status_text = raw_status
+        result.source_note = "Virginia public registry was searched directly by name; the matched detail page supplied the registration fields."
+        result.matched_registry_name = primary_name or link_text
+        result.matched_registry_identifier = identifier
+        result.success = True
+        return result
+
+    result = checker.StateResult(
+        org.organization_name,
+        org.ein,
+        "VA",
+        checker.STATUS_NOT_REGISTERED,
+        url,
+        raw_status_text=(
+            "No matching Virginia organization record"
+            if not best_rejected_name
+            else f"Virginia returned rows, but none safely matched. First rejected row: {best_rejected_name}"
+        ),
+        source_note="Virginia public charity search returned no safely matching organization record for the generated name variants.",
+        success=True,
+    )
+    if last_error:
+        result.source_note += f" Last transient lookup error before no-match fallback: {last_error[:160]}"
+    return result
 
 
 def search_me_serialized(page, org, confirm_no_match: bool = True):
@@ -10161,20 +10360,13 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
             elif state == "PA":
                 result = checker.search_pa(page, org)
             elif state == "VA":
-                result = search_with_name_variants(
-                    page,
-                    org,
-                    search_va_bounded,
-                    max_variants=8,
-                    max_elapsed_seconds=NAME_SEARCH_VARIANT_MAX_SECONDS,
-                    reject_va_suspended_from_leading_the_drop=False,
-                    include_ein_aliases=True,
-                    include_name_segments=True,
-                    include_and_segments=False,
-                    include_compact_legal_suffixes=False,
-                    include_leading_article_variants=True,
-                    prioritize_institution_reductions=True,
-                )
+                result = search_va_direct(org)
+                body = " ".join(part for part in [
+                    result.raw_status_text or "",
+                    result.source_note or "",
+                    result.matched_registry_name or "",
+                    result.matched_registry_identifier or "",
+                ]).strip()
             elif state == "SC":
                 result = search_sc_resilient(page, org)
             elif state == "HI":
