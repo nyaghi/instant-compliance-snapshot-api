@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.62-staging"
+APP_VERSION = "2026.05.30.63-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -153,6 +153,10 @@ AR_NAME_SEARCH_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_AR_NAME_SEARC
 ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "1.0"))), 30.0)
 ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS = min(max(1, int(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS", "2"))), 4)
 ME_CONFIRM_NOT_REGISTERED = os.environ.get("CE_ME_CONFIRM_NOT_REGISTERED", "1").strip().lower() in {"1", "true", "yes"}
+ME_FAST_DIRECT_CONFIRMATION_MAX_VARIANTS = min(max(3, int(os.environ.get("CE_ME_FAST_DIRECT_CONFIRMATION_MAX_VARIANTS", "8"))), 12)
+ME_FAST_DIRECT_GET_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_ME_FAST_DIRECT_GET_TIMEOUT_SECONDS", "8"))), 15.0)
+ME_FAST_DIRECT_POST_TIMEOUT_SECONDS = min(max(4.0, float(os.environ.get("CE_ME_FAST_DIRECT_POST_TIMEOUT_SECONDS", "10"))), 18.0)
+ME_FAST_DIRECT_DETAIL_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_ME_FAST_DIRECT_DETAIL_TIMEOUT_SECONDS", "8"))), 15.0)
 MI_ENABLE_NAME_FALLBACK = os.environ.get("CE_MI_ENABLE_NAME_FALLBACK", "1").strip().lower() in {"1", "true", "yes"}
 MI_CONFIRM_NO_RESULTS_FRAME = os.environ.get("CE_MI_CONFIRM_NO_RESULTS_FRAME", "0").strip().lower() in {"1", "true", "yes"}
 ENABLE_CROSS_STATE_NAME_RETRY = os.environ.get("CE_ENABLE_CROSS_STATE_NAME_RETRY", "0").strip().lower() in {"1", "true", "yes"}
@@ -3470,6 +3474,163 @@ def search_va_direct(org):
     return result
 
 
+def me_fast_direct_query_variants(org) -> list[str]:
+    variants: list[str] = []
+
+    def add(value: str) -> None:
+        cleaned = re.sub(r"\s+", " ", (value or "").strip())
+        if cleaned and cleaned.lower() not in {existing.lower() for existing in variants}:
+            variants.append(cleaned)
+
+    for variant in organization_name_variants(
+        org.organization_name,
+        org.ein,
+        include_ein_aliases=True,
+        include_name_segments=True,
+        include_compact_legal_suffixes=True,
+        include_leading_article_variants=True,
+    ):
+        add(variant)
+
+    for alias in known_names_for_ein(getattr(org, "ein", "")):
+        if not compatible_ein_alias_for_name(getattr(org, "organization_name", ""), alias):
+            continue
+        for variant in organization_name_variants(
+            alias,
+            "",
+            include_ein_aliases=False,
+            include_name_segments=True,
+            include_compact_legal_suffixes=True,
+            include_leading_article_variants=True,
+        ):
+            add(variant)
+    return variants[:ME_FAST_DIRECT_CONFIRMATION_MAX_VARIANTS]
+
+
+def me_fast_direct_search_rows(query: str) -> tuple[list[dict[str, str]], urllib.request.OpenerDirector]:
+    url = NAME_SEARCH_PREFLIGHT_URLS["ME"]
+    cookie_jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+    opener.addheaders = [
+        ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
+        ("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+        ("Accept-Language", "en-US,en;q=0.9"),
+        ("Upgrade-Insecure-Requests", "1"),
+    ]
+    response = opener.open(url, timeout=ME_FAST_DIRECT_GET_TIMEOUT_SECONDS)
+    html_text = response.read().decode("utf-8", "replace")
+    fields: dict[str, str] = {}
+    for hidden in re.finditer(r'<input[^>]+type="hidden"[^>]*>', html_text, re.I):
+        tag = hidden.group(0)
+        name_match = re.search(r'name="([^"]+)"', tag, re.I)
+        value_match = re.search(r'value="([^"]*)"', tag, re.I)
+        if name_match:
+            fields[html.unescape(name_match.group(1))] = html.unescape(value_match.group(1) if value_match else "")
+    fields.update({
+        "ctl00$ctl00$mainContent$mainContent$scRegulator": "4076",
+        "ctl00$ctl00$mainContent$mainContent$scCompanyName": query or "",
+        "ctl00$ctl00$mainContent$mainContent$ctl24": "BW",
+        "ctl00$ctl00$mainContent$mainContent$btnSearch": "Search",
+    })
+    request = urllib.request.Request(
+        f"{url}?AspxAutoDetectCookieSupport=1",
+        data=urlencode(fields).encode("utf-8"),
+        method="POST",
+    )
+    request.add_header("Content-Type", "application/x-www-form-urlencoded")
+    request.add_header("Origin", "https://www.pfr.maine.gov")
+    request.add_header("Referer", url)
+    posted = opener.open(request, timeout=ME_FAST_DIRECT_POST_TIMEOUT_SECONDS)
+    result_html = posted.read().decode("utf-8", "replace")
+    rows: list[dict[str, str]] = []
+    for match in re.finditer(
+        r'<tr[^>]*>\s*<td[^>]*>\s*<a\s+href="(?P<href>ShowDetail\.aspx[^"]+)"[^>]*>(?P<name>.*?)</a>\s*</td>\s*'
+        r'<td[^>]*>(?P<number>.*?)</td>\s*<td[^>]*>(?P<location>.*?)</td>\s*'
+        r'<td[^>]*>(?P<profession>.*?)</td>\s*<td[^>]*>(?P<status>.*?)</td>',
+        result_html,
+        re.I | re.S,
+    ):
+        rows.append({
+            "href": html.unescape(match.group("href")),
+            "name": re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", match.group("name")))).strip(),
+            "number": re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", match.group("number")))).strip(),
+            "location": re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", match.group("location")))).strip(),
+            "profession": re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", match.group("profession")))).strip(),
+            "status": re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", match.group("status")))).strip(),
+        })
+    return rows, opener
+
+
+def me_fast_direct_confirmation_result(org):
+    target_names = organization_match_target_variants(getattr(org, "organization_name", ""), getattr(org, "ein", ""))
+    best_row = None
+    best_opener = None
+    best_score = (-999, -999)
+    last_error = ""
+
+    for query in me_fast_direct_query_variants(org):
+        try:
+            rows, opener = me_fast_direct_search_rows(query)
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {str(exc)[:120]}"
+            continue
+        for row in rows:
+            row_text = " ".join(row.get(key, "") for key in ["name", "number", "location", "profession", "status"])
+            row_score = checker.candidate_selection_score_for_targets(row.get("name", ""), target_names, row_text)
+            if row_score[0] < 0:
+                continue
+            if not registry_name_is_safe_for_org(row.get("name", ""), getattr(org, "organization_name", ""), getattr(org, "ein", "")):
+                continue
+            if row_score > best_score:
+                best_score = row_score
+                best_row = row
+                best_opener = opener
+        if best_row and best_opener:
+            break
+
+    if not best_row or not best_opener:
+        return None
+
+    detail_url = urljoin("https://www.pfr.maine.gov/ALMSOnline/ALMSQuery/", best_row.get("href", ""))
+    detail_text = ""
+    try:
+        detail_response = best_opener.open(detail_url, timeout=ME_FAST_DIRECT_DETAIL_TIMEOUT_SECONDS)
+        detail_html = detail_response.read().decode("utf-8", "replace")
+        detail_text = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", detail_html))).strip()
+    except Exception as exc:
+        last_error = f"{type(exc).__name__}: {str(exc)[:120]}"
+
+    status_text = ""
+    expiration_text = ""
+    if detail_text:
+        status_match = re.search(r"\bStatus:\s*(.+?)\s+Expiration\s+Date:", detail_text, re.I)
+        expiration_match = re.search(r"\bExpiration\s+Date:\s*(\d{1,2}/\d{1,2}/\d{4})", detail_text, re.I)
+        status_text = (status_match.group(1).strip() if status_match else "") or checker.extract_labeled_value_from_text(detail_text, ["Status"])
+        expiration_text = (expiration_match.group(1).strip() if expiration_match else "") or checker.extract_labeled_value_from_text(detail_text, ["Expiration Date", "Expiration"])
+    if not status_text:
+        status_text = best_row.get("status", "") or checker.STATUS_UNKNOWN
+
+    result = checker.StateResult(
+        getattr(org, "organization_name", ""),
+        getattr(org, "ein", ""),
+        "ME",
+        status_text,
+        detail_url or NAME_SEARCH_PREFLIGHT_URLS["ME"],
+    )
+    result.matched_registry_name = best_row.get("name", "")
+    result.matched_registry_identifier = best_row.get("number", "")
+    result.raw_status_text = "; ".join(
+        part for part in [status_text, f"Expiration Date: {expiration_text}" if expiration_text else ""] if part
+    )
+    result.source_note = "Maine fast direct public registry confirmation found a safe matching row after an initial no-match response."
+    if last_error:
+        result.source_note += f" Last non-fatal direct-confirmation detail error: {last_error}"
+    result.success = True
+    result.error = ""
+    setattr(result, "_cc_detail_body", " ".join(part for part in [detail_text, " ".join(best_row.values())] if part))
+    return result
+
+
 def search_me_serialized(page, org, confirm_no_match: bool = True):
     global ME_LAST_LOOKUP_FINISHED
     with ME_LOOKUP_LOCK:
@@ -3507,6 +3668,15 @@ def search_me_serialized(page, org, confirm_no_match: bool = True):
 
         result = run_lookup()
         if confirm_no_match and ME_CONFIRM_NOT_REGISTERED and public_status(result) == "Not Registered":
+            direct_confirmation = me_fast_direct_confirmation_result(org)
+            if direct_confirmation and public_status(direct_confirmation) != "Not Registered":
+                result = direct_confirmation
+                result.source_note = (
+                    (result.source_note or "Maine public registry record found.")
+                    + " CharityClarity did not accept the earlier no-match response because a fresh direct registry confirmation found this record."
+                )
+                ME_LAST_LOOKUP_FINISHED = time.perf_counter()
+                return result
             confirmations = 1
             for _ in range(max(0, ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS - 1)):
                 time.sleep(ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS)
@@ -10789,7 +10959,11 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
             elif state == "ME":
                 result = search_me_serialized(page, org, confirm_no_match=confirm_single_no_match)
                 me_status_source = " ".join([result.raw_status_text or "", result.source_note or ""])
-                if public_status(result) == "Site Not Reachable":
+                direct_detail_body = getattr(result, "_cc_detail_body", "")
+                if direct_detail_body:
+                    body = direct_detail_body
+                    enrich_me_result_from_body(result, body)
+                elif public_status(result) == "Site Not Reachable":
                     body = ""
                 elif re.search(r"Maine uses the Status shown|No matching organization|No record found|no matching", me_status_source, re.I):
                     body = registry_page_body(page)
