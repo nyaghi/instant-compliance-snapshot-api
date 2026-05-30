@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.49-staging"
+APP_VERSION = "2026.05.30.50-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -9015,7 +9015,7 @@ def nh_download_live_pdf_records() -> tuple[list[dict], str]:
     updated_match = re.search(r"\bUpdated:\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})", text, re.I)
     updated_label = updated_match.group(1) if updated_match else ""
     record_pattern = re.compile(
-        r"(?P<reg>\d{3,6})\s+(?P<body>[\s\S]*?)\s+(?P<status>[GXS])\s+(?P<due>\d{1,2}/\d{1,2}/\d{4})(?=\s+\d{3,6}\s+[A-Z]|\s+Updated:|$)",
+        r"(?P<reg>\d{3,6})\s+(?P<body>[\s\S]*?)\s+(?P<status>[GXS])\s+(?P<due>\d{1,2}/\d{1,2}/\d{4})(?=\s*\d{3,6}\s+[A-Z]|\s*Updated:|$)",
         re.I,
     )
     records = []

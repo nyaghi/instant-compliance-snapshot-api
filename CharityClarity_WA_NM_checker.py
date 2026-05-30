@@ -538,6 +538,28 @@ def nm_parse_history_rows_from_html(page_html: str) -> list[tuple[int, str, str]
     return rows
 
 
+def nm_parse_history_rows_from_text(body_text: str) -> list[tuple[int, str, str]]:
+    match = re.search(
+        r"Status\s+History.*?Tax\s+Year\s+Registration\s+Details\s+Status\s+Date\s+(.*)",
+        body_text or "",
+        re.I | re.S,
+    )
+    if not match:
+        return []
+    section = match.group(1)
+    rows: list[tuple[int, str, str]] = []
+    for row in re.finditer(
+        r"\b(20\d{2})\s+(.+?)\s+(\d{1,2}/\d{1,2}/\d{4})(?=\s+20\d{2}\s+|$)",
+        section,
+        re.I | re.S,
+    ):
+        detail_text = normalize_spaces(row.group(2))
+        if not detail_text:
+            continue
+        rows.append((int(row.group(1)), detail_text, row.group(3)))
+    return rows
+
+
 def nm_registry_name_from_html(page_html: str) -> str:
     match = re.search(
         r'id=["\']MainContent_FormViewCharityDetail_LabelCharityName["\'][^>]*>(.*?)</span>',
@@ -579,6 +601,18 @@ def nm_latest_submitted(rows: list[tuple[int, str, str]]):
     if not submitted:
         return None
     return max(submitted, key=lambda item: item[0])
+
+
+def nm_fye_from_tax_year_open(rows: list[tuple[int, str, str]], tax_year: int) -> str:
+    for year, detail, status_date in rows:
+        if year != tax_year or not detail.startswith("Tax Year Registration Open"):
+            continue
+        opened = parse_date(status_date)
+        if not opened:
+            continue
+        fye = opened - timedelta(days=1)
+        return date(tax_year, fye.month, fye.day).strftime("%m/%d/%Y")
+    return ""
 
 
 def nm_extract_fye(context, reg_number: str) -> tuple[str, str]:
@@ -698,6 +732,8 @@ def apply_nm_rows_to_result(
         return result
 
     _, reg_number, _ = latest_submitted
+    if not fye_text:
+        fye_text = nm_fye_from_tax_year_open(rows, latest_tax_year)
     if not fye_text and context is not None:
         _, fye_text = nm_extract_fye(context, reg_number)
     if not fye_text:
@@ -767,6 +803,8 @@ def search_nm(org: Organization, show_process: bool = False) -> SearchResult:
             return result
 
         rows = nm_parse_history_rows_from_html(detail_html)
+        if not rows:
+            rows = nm_parse_history_rows_from_text(body_text)
         if rows:
             latest_submitted = nm_latest_submitted(rows)
             fye_text = nm_extract_fye_from_html(
@@ -798,6 +836,8 @@ def search_nm(org: Organization, show_process: bool = False) -> SearchResult:
                 return result
 
             rows = nm_parse_history_rows(page)
+            if not rows:
+                rows = nm_parse_history_rows_from_text(body)
             if not rows:
                 result.status = STATUS_UNKNOWN
                 result.raw_status_text = "NM detail page reached, but status-history rows were not parsed"
