@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.48-staging"
+APP_VERSION = "2026.05.30.49-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -8982,19 +8982,23 @@ def nh_download_live_pdf_records() -> tuple[list[dict], str]:
         return [], ""
     pdf_source = NH_LIVE_PDF_URL
     try:
-        request = urllib.request.Request(
-            NH_LIVE_PDF_URL,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    f"AppleWebKit/537.36 (KHTML, like Gecko) CharityClarity/{APP_VERSION}"
-                ),
-                "Accept": "application/pdf,*/*",
-                "Referer": "https://www.doj.nh.gov/bureaus/charitable-trusts/registered-charities",
-            },
-        )
-        with urllib.request.urlopen(request, timeout=30) as response:
-            pdf_bytes = response.read()
+        if NH_LIVE_PDF_LOCAL_PATH.exists():
+            pdf_bytes = NH_LIVE_PDF_LOCAL_PATH.read_bytes()
+            pdf_source = str(NH_LIVE_PDF_LOCAL_PATH)
+        else:
+            request = urllib.request.Request(
+                NH_LIVE_PDF_URL,
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        f"AppleWebKit/537.36 (KHTML, like Gecko) CharityClarity/{APP_VERSION}"
+                    ),
+                    "Accept": "application/pdf,*/*",
+                    "Referer": "https://www.doj.nh.gov/bureaus/charitable-trusts/registered-charities",
+                },
+            )
+            with urllib.request.urlopen(request, timeout=30) as response:
+                pdf_bytes = response.read()
     except Exception:
         if not NH_LIVE_PDF_LOCAL_PATH.exists():
             raise
@@ -9254,9 +9258,7 @@ def _search_snapshot_or_embedded_state_once(org, state: str):
     if state == "KY":
         return search_ky_strict_snapshot(org)
     if state == "NH":
-        live_result = search_nh_live_pdf(org)
-        if public_status(live_result) not in {"Not Registered", "Site Not Reachable"}:
-            return live_result
+        return search_nh_live_pdf(org)
     if state == "KS":
         module = load_ks_weekly_checker()
         external_result = module.search_ks_snapshot(org.organization_name, ARTIFACTS_DIR / "KS")
