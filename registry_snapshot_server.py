@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.44-staging"
+APP_VERSION = "2026.05.30.45-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -6557,6 +6557,14 @@ def wi_search_names_for_org(org) -> list[str]:
         ]
         if len(substantive) >= 2 and no_punct and no_punct.lower() != cleaned.lower() and no_punct not in expanded_names:
             expanded_names.append(no_punct)
+        national_prefix_removed = re.sub(
+            r"^(?:the\s+)?(?:u\.?\s*s\.?|us|united\s+states)\s+",
+            "",
+            cleaned,
+            flags=re.I,
+        ).strip()
+        if len(national_prefix_removed.split()) >= 2 and national_prefix_removed.lower() != cleaned.lower() and national_prefix_removed not in expanded_names:
+            expanded_names.append(national_prefix_removed)
 
     def priority(value: str) -> tuple[int, int, str]:
         cleaned = re.sub(r"\s+", " ", (value or "").strip())
