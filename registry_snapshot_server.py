@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.61-staging"
+APP_VERSION = "2026.05.30.62-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -7133,6 +7133,33 @@ def search_wi_sidecar(org):
         "max_seconds": WI_SIDECAR_TIMEOUT_SECONDS,
         "app_version": APP_VERSION,
     }
+
+    def direct_then_browser_fallback(note: str, site_result=None):
+        direct_result = search_wi(None, org)
+        direct_status = public_status(direct_result)
+        if direct_status not in {"Site Not Reachable", checker.STATUS_NOT_REGISTERED}:
+            direct_result.source_note = note
+            return direct_result
+
+        browser_result = search_wi_backend_browser_fallback(org)
+        browser_status = public_status(browser_result)
+        if browser_status not in {"Site Not Reachable", checker.STATUS_NOT_REGISTERED}:
+            browser_result.source_note = (
+                f"{note} The backend browser fallback found the matching Wisconsin credential "
+                "after the direct fallback did not return a match."
+            )
+            return browser_result
+        if browser_status == checker.STATUS_NOT_REGISTERED and direct_status == "Site Not Reachable":
+            browser_result.source_note = (
+                f"{note} The backend browser fallback reached Wisconsin DFI and returned no matching "
+                "Charitable Organization credential."
+            )
+            return browser_result
+        if direct_status != "Site Not Reachable":
+            direct_result.source_note = note
+            return direct_result
+        return site_result or direct_result
+
     data = None
     last_exception = None
     for attempt_index in range(WI_SIDECAR_ATTEMPTS):
@@ -7173,22 +7200,23 @@ def search_wi_sidecar(org):
         result.source_note = "Wisconsin DFI sidecar lookup could not be completed."
         result.error = str(last_exception or "WI sidecar returned no response")
         result.success = False
-        fallback_result = search_wi(None, org)
-        if public_status(fallback_result) != "Site Not Reachable":
-            fallback_result.source_note = "Wisconsin DFI lookup used the backend direct fallback after the sidecar returned no response."
-            return fallback_result
-        return result
+        return direct_then_browser_fallback(
+            "Wisconsin DFI lookup used backend fallbacks after the sidecar returned no response.",
+            result,
+        )
 
     if data.get("status") == "Site Not Reachable" and not data.get("success"):
-        fallback_result = search_wi(None, org)
+        fallback_result = direct_then_browser_fallback(
+            "Wisconsin DFI lookup used backend fallbacks after the sidecar could not reach the registry."
+        )
         if public_status(fallback_result) != "Site Not Reachable":
-            fallback_result.source_note = "Wisconsin DFI lookup used the backend direct fallback after the sidecar could not reach the registry."
             return fallback_result
 
     if data.get("status") == "Not Registered" and WI_CONFIRM_SIDECAR_NO_MATCH:
-        fallback_result = search_wi(None, org)
+        fallback_result = direct_then_browser_fallback(
+            "Wisconsin DFI lookup used backend fallbacks to confirm the sidecar no-match result."
+        )
         if public_status(fallback_result) != "Site Not Reachable":
-            fallback_result.source_note = "Wisconsin DFI lookup used the backend direct fallback to confirm the sidecar no-match result."
             return fallback_result
 
     result.status = data.get("status") or "Site Not Reachable"
