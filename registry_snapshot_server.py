@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.31-staging"
+APP_VERSION = "2026.05.29.32-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -3758,7 +3758,7 @@ def patch_mi_module_for_fast_lookups(module) -> None:
                 page.wait_for_load_state("domcontentloaded", timeout=5000)
             except Exception:
                 pass
-            time.sleep(4)
+            time.sleep(2)
 
             results_frame = find_results_frame_fast(page)
             if not results_frame:
@@ -4104,8 +4104,8 @@ def search_mi_name_fallback(page, org):
 
     variants = sorted(variants, key=mi_variant_priority)
 
-    for variant in variants[:5]:
-        if time.perf_counter() - started > 22:
+    for variant in variants[:3]:
+        if time.perf_counter() - started > 14:
             result.status = checker.STATUS_NOT_REGISTERED
             result.raw_status_text = "No matching organization record"
             result.source_note = "Michigan EIN search returned no exact result, and the bounded organization-name fallback found no matching record before the safe retry limit."
@@ -4119,7 +4119,7 @@ def search_mi_name_fallback(page, org):
             page.locator("#ctl00_MainContent_txtName").fill("")
             page.locator("#ctl00_MainContent_txtName").fill(variant)
             page.locator("#ctl00_MainContent_txtEIN").fill("")
-            page.locator("#ctl00_MainContent_btnTextSearch").click(timeout=10000, no_wait_after=True)
+            page.locator("#ctl00_MainContent_btnTextSearch").click(timeout=8000, no_wait_after=True)
             try:
                 page.wait_for_load_state("domcontentloaded", timeout=6000)
             except Exception:
@@ -4128,7 +4128,7 @@ def search_mi_name_fallback(page, org):
             frame = module.find_results_frame(page)
             if not frame:
                 continue
-            results_text = re.sub(r"\s+", " ", module.body_text(frame, timeout=15000)).strip()
+            results_text = re.sub(r"\s+", " ", module.body_text(frame, timeout=8000)).strip()
             if no_registry_results_seen(results_text):
                 continue
             chosen = module.choose_result_link(frame, variant) or module.choose_result_link(frame, "")
@@ -4174,7 +4174,7 @@ def search_mi_name_fallback(page, org):
             detail_frame = module.find_detail_frame(page)
             if not detail_frame:
                 continue
-            detail_text = re.sub(r"\s+", " ", module.body_text(detail_frame, timeout=15000)).strip()
+            detail_text = re.sub(r"\s+", " ", module.body_text(detail_frame, timeout=8000)).strip()
             site_name = module.extract_legal_name(detail_frame) or clicked_name or org.organization_name
             ein_digits = re.sub(r"\D", "", org.ein or "")
             ein_confirmed = bool(ein_digits and ein_digits in re.sub(r"\D", "", detail_text))
@@ -5843,10 +5843,11 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                     except Exception:
                         pass
                     continue
-        name_deadline = time.perf_counter() + 42.0
+        name_deadline = time.perf_counter() + 26.0
+        name_fallback_years = list(range(date.today().year, max(2018, date.today().year - 5), -1))
         for search_name in ak_name_fallback_variants(original_name, org.ein):
             lookup_org = org_with_name(org, search_name)
-            for year in years_to_try:
+            for year in name_fallback_years:
                 if time.perf_counter() >= name_deadline:
                     break
                 page_body = ""
