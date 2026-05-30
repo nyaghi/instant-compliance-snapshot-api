@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.53-staging"
+APP_VERSION = "2026.05.30.54-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -11093,6 +11093,8 @@ def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
 def run_single_state_lookup_reliably(organization_name: str, ein: str, state: str) -> dict:
     state = (state or "").upper()
     attempts = SINGLE_STATE_SEMANTIC_RETRY_ATTEMPTS if state in SINGLE_STATE_SEMANTIC_RETRY_STATES else 1
+    if state == "WA":
+        attempts = 1
     result: dict | None = None
     best_reachable_result: dict | None = None
     for attempt in range(1, attempts + 1):
