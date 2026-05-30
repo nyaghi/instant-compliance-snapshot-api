@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.29.24-staging"
+APP_VERSION = "2026.05.29.25-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -3006,6 +3006,20 @@ def preflight_name_search_registry(org, state: str) -> tuple[bool, str, object |
     result.error = f"{state} preflight failed: {note}"
     result.success = False
     return False, note, result
+
+
+def explicit_ar_registry_status(result) -> str:
+    if (getattr(result, "state", "") or "").upper() != "AR":
+        return ""
+    text = " | ".join([
+        getattr(result, "status", "") or "",
+        getattr(result, "raw_status_text", "") or "",
+        getattr(result, "source_note", "") or "",
+    ])
+    match = re.search(r"\bStatus\s*:\s*([^|;\n\r]+)", text, re.I)
+    status_text = match.group(1) if match else text
+    mapped = ar_status_from_text(status_text)
+    return mapped if mapped != checker.STATUS_UNKNOWN else ""
 
 
 def search_sc_resilient(page, org):
@@ -7743,6 +7757,10 @@ def true_status_from_body(result, body: str) -> str:
         return "Exempt"
     if explicit_no_registration_status(result, combined):
         return "Not Registered"
+    if state == "AR":
+        ar_status = explicit_ar_registry_status(result)
+        if ar_status:
+            return ar_status
     if state == "NH":
         _, effective_report_due = nh_effective_report_due_date(result, body)
         if effective_report_due:
