@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.79-staging"
+APP_VERSION = "2026.05.30.80-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -11280,18 +11280,6 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
     if state == "OR":
         lookup_started = time.perf_counter()
         result = or_snapshot_result_for_ein(org)
-        if result:
-            body = " ".join(part for part in [
-                result.raw_status_text or "",
-                result.source_note or "",
-                result.matched_registry_name or "",
-                result.matched_registry_identifier or "",
-            ]).strip()
-            return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
-
-    if state == "MD":
-        lookup_started = time.perf_counter()
-        result = md_direct_ein_no_record_result(org)
         if result:
             body = " ".join(part for part in [
                 result.raw_status_text or "",
