@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.31.102-staging"
+APP_VERSION = "2026.05.31.103-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -2683,7 +2683,8 @@ def organization_name_variants(
         ampersand_as_and = re.sub(r"\s*&\s*", " and ", base).strip()
         ampersand_removed = re.sub(r"\s*&\s*", " ", base).strip()
         apostrophe_removed = re.sub(r"[']", "", base).strip()
-        possessive_removed = re.sub(r"\b([A-Za-z]+)'s\b", r"\1s", base).strip()
+        possessive_removed = re.sub(r"\b([A-Za-z]+)'[sS]\b", r"\1s", base).strip()
+        possessive_s_removed = re.sub(r"\b([A-Za-z]+)'[sS]\b", r"\1", base).strip()
         compact_alnum_token = re.sub(r"\b([A-Za-z]\d)\s+([A-Za-z])\b", r"\1\2", base).strip()
         compact_alnum_token = re.sub(r"\b([A-Za-z]+)\s+(\d+)\s+([A-Za-z]+)\b", r"\1\2\3", compact_alnum_token).strip()
         spaced_alnum_token = re.sub(r"\b([A-Za-z]+)(\d+)([A-Za-z]+)\b", r"\1 \2 \3", base).strip()
@@ -2794,6 +2795,7 @@ def organization_name_variants(
             ampersand_removed,
             apostrophe_removed,
             possessive_removed,
+            possessive_s_removed,
             saint_expanded,
             saint_abbreviated,
             cancer_research_center,
