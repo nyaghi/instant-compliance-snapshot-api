@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.31.94-staging"
+APP_VERSION = "2026.05.31.95-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -7484,6 +7484,14 @@ def wi_search_names_for_org(org) -> list[str]:
         us_compacted = re.sub(r"\s+", " ", us_compacted)
         if len(us_compacted.split()) >= 2 and us_compacted.lower() != cleaned.lower() and us_compacted not in expanded_names:
             expanded_names.append(us_compacted)
+        aids_tb_variant = re.sub(
+            r"\b(AIDS?)\s+Tuberculosis\s+(?:And|&)\s+Malaria\b",
+            r"\1, Tuberculosis & Malaria",
+            cleaned,
+            flags=re.I,
+        )
+        if aids_tb_variant.lower() != cleaned.lower() and aids_tb_variant not in expanded_names:
+            expanded_names.append(aids_tb_variant)
 
     seed_key_names = {re.sub(r"\s+", " ", (seed or "").strip()).lower() for seed in seed_names if seed}
     original_substantive_count = len([
@@ -7508,6 +7516,8 @@ def wi_search_names_for_org(org) -> list[str]:
         if 2 <= len(compact) <= 8 and compact.upper() == compact:
             if original_substantive_count > 3 and not exact_seed:
                 return (5, word_rank, cleaned.lower())
+            return (0, word_rank, cleaned.lower())
+        if re.search(r"\bAIDS?,\s+Tuberculosis\s+&\s+Malaria\b", cleaned, re.I):
             return (0, word_rank, cleaned.lower())
         if re.match(r"^(?:u\.?\s*s\.?|us)\s+", cleaned, re.I):
             noisy_us_query = bool(re.search(r"[-,/]", cleaned)) or bool(re.match(r"^u\.", cleaned, re.I))
