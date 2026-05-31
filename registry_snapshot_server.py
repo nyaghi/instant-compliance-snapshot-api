@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.82-staging"
+APP_VERSION = "2026.05.30.83-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -487,10 +487,10 @@ WI_DIRECT_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_WI_DIRECT_VARIANT_LI
 WI_BROWSER_VARIANT_LIMIT = min(max(0, int(os.environ.get("CE_WI_BROWSER_VARIANT_LIMIT", "0"))), 5)
 WI_SIDECAR_URL = os.environ.get("CE_WI_SIDECAR_URL", "").strip()
 WI_LOOKUP_SECRET = os.environ.get("CE_WI_LOOKUP_SECRET", "").strip()
-WI_SIDECAR_TIMEOUT_SECONDS = min(max(10.0, float(os.environ.get("CE_WI_SIDECAR_TIMEOUT_SECONDS", "35"))), 58.0)
-WI_SIDECAR_ATTEMPTS = min(max(1, int(os.environ.get("CE_WI_SIDECAR_ATTEMPTS", "2"))), 5)
+WI_SIDECAR_TIMEOUT_SECONDS = min(max(10.0, float(os.environ.get("CE_WI_SIDECAR_TIMEOUT_SECONDS", "28"))), 58.0)
+WI_SIDECAR_ATTEMPTS = min(max(1, int(os.environ.get("CE_WI_SIDECAR_ATTEMPTS", "1"))), 5)
 WI_CONFIRM_SIDECAR_NO_MATCH = os.environ.get("CE_WI_CONFIRM_SIDECAR_NO_MATCH", "1").strip().lower() in {"1", "true", "yes"}
-WI_NO_MATCH_CONFIRMATION_ATTEMPTS = min(max(0, int(os.environ.get("CE_WI_NO_MATCH_CONFIRMATION_ATTEMPTS", "2"))), 3)
+WI_NO_MATCH_CONFIRMATION_ATTEMPTS = min(max(0, int(os.environ.get("CE_WI_NO_MATCH_CONFIRMATION_ATTEMPTS", "1"))), 3)
 WI_NO_MATCH_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_WI_NO_MATCH_CONFIRMATION_DELAY_SECONDS", "1.0"))), 5.0)
 WI_SIDECAR_LANES = min(max(1, int(os.environ.get("CE_WI_SIDECAR_LANES", "1"))), 3)
 WI_SIDECAR_ACQUIRE_SECONDS = min(max(10.0, float(os.environ.get("CE_WI_SIDECAR_ACQUIRE_SECONDS", "85"))), 100.0)
@@ -7646,8 +7646,6 @@ def wi_reader_search_best_match(search_names: list[str], target_names: list[str]
         if re.search(r"Organization Search Results|Search Parameters|Total Search Results", result_text or "", re.I):
             reader_reached = True
         best_match = wi_best_match_from_markdown(result_text, target_names, best_match)
-        if wi_is_decisive_candidate(best_match):
-            return best_match, reader_reached
     return best_match, reader_reached
 
 
@@ -7674,8 +7672,6 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str], 
                 continue
             http_reached = True
             best_match = wi_best_match_from_html(result_html, target_names, best_match)
-            if wi_is_decisive_candidate(best_match):
-                return best_match, http_reached
         except Exception:
             pass
 
@@ -7705,8 +7701,6 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str], 
             continue
 
         best_match = wi_best_match_from_html(result_html, target_names, best_match)
-        if wi_is_decisive_candidate(best_match):
-            return best_match, http_reached
     return best_match, http_reached
 
 
@@ -7922,11 +7916,39 @@ def search_wi_sidecar(org):
     }
 
     def direct_then_browser_fallback(note: str, site_result=None):
+        sidecar_status = public_status(site_result) if site_result is not None else str((data or {}).get("status") or "")
+        sidecar_confirmed_no_match = sidecar_status == checker.STATUS_NOT_REGISTERED
         direct_result = search_wi(None, org)
         direct_status = public_status(direct_result)
         if direct_status not in {"Site Not Reachable", checker.STATUS_NOT_REGISTERED}:
             direct_result.source_note = note
             return direct_result
+        if direct_status == checker.STATUS_NOT_REGISTERED:
+            if sidecar_confirmed_no_match:
+                direct_result.source_note = (
+                    f"{note} Wisconsin DFI returned no matching credential after sidecar "
+                    "and backend-direct confirmation."
+                )
+                return direct_result
+            best_terminal = direct_result
+            for attempt_index in range(WI_NO_MATCH_CONFIRMATION_ATTEMPTS):
+                if WI_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0:
+                    time.sleep(min(WI_NO_MATCH_CONFIRMATION_DELAY_SECONDS * (attempt_index + 1), 5.0))
+                confirmed_result = search_wi(None, org)
+                confirmed_status = public_status(confirmed_result)
+                if confirmed_status not in {"Site Not Reachable", checker.STATUS_NOT_REGISTERED}:
+                    confirmed_result.source_note = (
+                        f"{note} A delayed Wisconsin confirmation lookup replaced an initial "
+                        "backend no-record response."
+                    )
+                    return confirmed_result
+                if confirmed_status == checker.STATUS_NOT_REGISTERED:
+                    best_terminal = confirmed_result
+                    best_terminal.source_note = (
+                        f"{note} Wisconsin DFI returned no matching credential after "
+                        "backend-direct confirmation."
+                    )
+                    return best_terminal
 
         browser_result = search_wi_backend_browser_fallback(org)
         browser_status = public_status(browser_result)
@@ -7937,7 +7959,7 @@ def search_wi_sidecar(org):
             )
             return browser_result
         best_terminal = browser_result if browser_status == checker.STATUS_NOT_REGISTERED else direct_result
-        if checker.STATUS_NOT_REGISTERED in {direct_status, browser_status}:
+        if browser_status == checker.STATUS_NOT_REGISTERED:
             for attempt_index in range(WI_NO_MATCH_CONFIRMATION_ATTEMPTS):
                 if WI_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0:
                     time.sleep(min(WI_NO_MATCH_CONFIRMATION_DELAY_SECONDS * (attempt_index + 1), 5.0))
