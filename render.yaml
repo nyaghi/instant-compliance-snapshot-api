@@ -19,9 +19,9 @@ services:
       - key: PYTHONUNBUFFERED
         value: "1"
       - key: CE_MAX_PARALLEL_LOOKUPS
-        value: "12"
+        value: "16"
       - key: CE_MAX_BROWSER_LOOKUPS
-        value: "12"
+        value: "16"
       - key: CE_CONFIRM_FRAGILE_BATCH_RESULTS
         value: "0"
       - key: CE_BATCH_CONFIRMATION_WORKERS
@@ -69,7 +69,7 @@ services:
       - key: CE_SINGLE_STATE_SEMANTIC_RETRY_STATES
         value: "AK,AR,CA,CO,CT,FL,HI,KS,KY,LA,MA,MD,ME,MI,MN,MS,ND,NH,NJ,NM,NY,OH,OK,OR,PA,SC,VA,WA,WI,WV"
       - key: CE_SINGLE_STATE_MAX_CONCURRENT
-        value: "12"
+        value: "20"
       - key: CE_SINGLE_STATE_QUEUE_TIMEOUT_SECONDS
         value: "35"
       - key: CE_SINGLE_STATE_RETRY_AFTER_SECONDS
@@ -83,7 +83,7 @@ services:
       - key: CE_FL_LOOKUP_MAX_SECONDS
         value: "45"
       - key: CE_FL_LOOKUP_LANES
-        value: "2"
+        value: "3"
       - key: CE_FL_LOOKUP_ACQUIRE_SECONDS
         value: "12"
       - key: CE_SC_NAME_VARIANT_MAX_SECONDS
