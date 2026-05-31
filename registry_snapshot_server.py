@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.31.96-staging"
+APP_VERSION = "2026.05.31.97-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -2958,7 +2958,16 @@ def compatible_ein_alias_for_name(original_name: str, alias_name: str) -> bool:
         and original_words[-1] == alias_words[-1]
         and original_words[-1] in entity_words
     ):
-        return True
+        generic_middle_words = {
+            "the", "and", "of", "for", "to", "in", "on", "at", "by", "inc", "incorporated",
+            "corp", "corporation", "llc", "ltd", "foundation", "fund", "charity", "charities",
+            "association", "society", "center", "centre", "institute", "organization", "org",
+            "university", "college", "school", "saint", "st",
+        }
+        original_middle = {word for word in original_words[2:-1] if word not in generic_middle_words}
+        alias_middle = {word for word in alias_words[2:-1] if word not in generic_middle_words}
+        if original_middle & alias_middle:
+            return True
 
     generic_words = {
         "the", "and", "of", "for", "to", "in", "on", "at", "by", "inc", "incorporated",
