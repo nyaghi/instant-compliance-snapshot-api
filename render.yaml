@@ -115,7 +115,7 @@ services:
       - key: CE_WI_REQUIRE_COMPLETE_SNAPSHOT
         value: "1"
       - key: CE_WI_CONFIRM_SIDECAR_NO_MATCH
-        value: "1"
+        value: "0"
       - key: CE_WI_NO_MATCH_CONFIRMATION_ATTEMPTS
         value: "1"
       - key: CE_WI_USE_BACKEND_BROWSER_FALLBACK
