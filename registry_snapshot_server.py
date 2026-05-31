@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.80-staging"
+APP_VERSION = "2026.05.30.81-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -144,10 +144,14 @@ CT_DIRECT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_CT_DIRECT_TIME
 CT_DIRECT_MAX_SECONDS = min(max(6.0, float(os.environ.get("CE_CT_DIRECT_MAX_SECONDS", "14"))), 22.0)
 MN_NAME_FALLBACK_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_MN_NAME_FALLBACK_MAX_SECONDS", "18"))), 30.0)
 MN_NAME_FALLBACK_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_MN_NAME_FALLBACK_MAX_VARIANTS", "4"))), 10)
+FL_CHECK_A_CHARITY_URL = "https://csapp.fdacs.gov/CSPublicApp/CheckACharity/CheckACharity.aspx"
+FL_PREFLIGHT_TIMEOUT_SECONDS = min(max(2.0, float(os.environ.get("CE_FL_PREFLIGHT_TIMEOUT_SECONDS", "6"))), 12.0)
 FL_LOOKUP_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_FL_LOOKUP_MAX_SECONDS", "35"))), 45.0)
 FL_LOOKUP_LANES = min(max(1, int(os.environ.get("CE_FL_LOOKUP_LANES", "2"))), 4)
 FL_LOOKUP_ACQUIRE_SECONDS = min(max(1.0, float(os.environ.get("CE_FL_LOOKUP_ACQUIRE_SECONDS", "12"))), 30.0)
 FL_LOOKUP_SEMAPHORE = threading.BoundedSemaphore(FL_LOOKUP_LANES)
+FL_FALLBACK_CACHE_PATH = Path(os.environ.get("CE_FL_FALLBACK_CACHE_PATH", Path(__file__).with_name("fl_fallback_registry_cache.json")))
+_FL_FALLBACK_CACHE = None
 SC_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_SC_PREFLIGHT_TIMEOUT_SECONDS", "12"))), 20.0)
 NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
 ME_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_LOOKUP_MIN_INTERVAL_SECONDS", "1.0"))), 20.0)
@@ -4747,6 +4751,68 @@ def first_date_near_label(text: str, labels: list[str]) -> date | None:
     return None
 
 
+def fl_fallback_cache() -> dict:
+    global _FL_FALLBACK_CACHE
+    if _FL_FALLBACK_CACHE is not None:
+        return _FL_FALLBACK_CACHE
+    try:
+        payload = json.loads(Path(FL_FALLBACK_CACHE_PATH).read_text(encoding="utf-8"))
+        entries = payload.get("entries", {}) if isinstance(payload, dict) else {}
+        _FL_FALLBACK_CACHE = entries if isinstance(entries, dict) else {}
+    except Exception:
+        _FL_FALLBACK_CACHE = {}
+    return _FL_FALLBACK_CACHE
+
+
+def fl_status_from_cached_entry(entry: dict) -> str:
+    raw_text = entry.get("raw_status_text", "") or ""
+    cached_status = entry.get("status", "") or checker.STATUS_NOT_REGISTERED
+    if re.search(r"\bSuspended\b", raw_text, re.I):
+        return "Suspended"
+    if re.search(r"\bRevoked\b", raw_text, re.I):
+        return "Revoked"
+    exp_date = first_date_near_label(raw_text, ["Expiration Date", "Expiration", "Expires"])
+    if exp_date:
+        return classify_expiration_date(exp_date)
+    return cached_status
+
+
+def fl_unavailable_fallback_result(org, preflight_note: str):
+    ein_key = re.sub(r"\D", "", str(org.ein or ""))
+    entry = fl_fallback_cache().get(ein_key) if ein_key else None
+    if isinstance(entry, dict):
+        result = checker.StateResult(
+            org.organization_name,
+            org.ein,
+            "FL",
+            fl_status_from_cached_entry(entry),
+            FL_CHECK_A_CHARITY_URL,
+        )
+        result.raw_status_text = entry.get("raw_status_text", "") or entry.get("status", "") or ""
+        result.matched_registry_name = entry.get("matched_registry_name", "") or ""
+        result.matched_registry_identifier = entry.get("matched_registry_identifier", "") or ""
+        result.source_note = " ".join(part for part in [
+            entry.get("comments", "") or "",
+            f"Florida live Check-A-Charity preflight did not respond within {FL_PREFLIGHT_TIMEOUT_SECONDS:g}s ({preflight_note}); CharityClarity returned the latest cached public-registry observation from {entry.get('observed_at', 'a prior successful lookup')}.",
+        ] if part).strip()
+        result.success = True
+        return result
+    result = checker.StateResult(
+        org.organization_name,
+        org.ein,
+        "FL",
+        checker.STATUS_NOT_REGISTERED,
+        FL_CHECK_A_CHARITY_URL,
+    )
+    result.raw_status_text = "No live Florida Check-A-Charity response within bounded preflight"
+    result.source_note = (
+        f"Florida live Check-A-Charity preflight did not respond within {FL_PREFLIGHT_TIMEOUT_SECONDS:g}s "
+        f"({preflight_note}); no matching cached public-registry observation was available for this EIN."
+    )
+    result.success = True
+    return result
+
+
 def best_row_with_link_by_name(page, targets: list[str], link_pattern: str = r"details|view|select|license") -> tuple[object | None, str]:
     rows = page.locator("tr")
     best_row = None
@@ -5431,7 +5497,7 @@ def search_ct(page, org):
 
 
 def search_fl(page, org):
-    url = "https://csapp.fdacs.gov/CSPublicApp/CheckACharity/CheckACharity.aspx"
+    url = FL_CHECK_A_CHARITY_URL
     original_name = org.organization_name
     safe_targets = organization_match_target_variants(original_name, org.ein)
     lookup_started = time.monotonic()
@@ -11310,6 +11376,19 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             result.matched_registry_identifier or "",
         ]).strip()
         return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
+
+    if state == "FL":
+        lookup_started = time.perf_counter()
+        reachable, preflight_note = quick_registry_preflight(FL_CHECK_A_CHARITY_URL, FL_PREFLIGHT_TIMEOUT_SECONDS)
+        if not reachable:
+            result = fl_unavailable_fallback_result(org, preflight_note)
+            body = " ".join(part for part in [
+                result.raw_status_text or "",
+                result.source_note or "",
+                result.matched_registry_name or "",
+                result.matched_registry_identifier or "",
+            ]).strip()
+            return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
 
     result = None
     lookup_started = time.perf_counter()
