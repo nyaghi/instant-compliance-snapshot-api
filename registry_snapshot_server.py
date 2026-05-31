@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.31.91-staging"
+APP_VERSION = "2026.05.31.92-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -1614,7 +1614,7 @@ def or_snapshot_result_for_ein(org):
         raw_parts.append(f"Next Due: {format_date(next_due)}")
     result.raw_status_text = " | ".join(raw_parts)
     result.source_note = (
-        "Oregon weekly downloadable charity database matched the requested EIN exactly; "
+        "Oregon public charity database export matched the requested EIN exactly; "
         "CharityClarity used that EIN match as the primary lookup before any name search."
     )
     result.matched_registry_name = registry_name
@@ -4543,7 +4543,7 @@ def co_result_from_snapshot_row(org, row: dict[str, str]) -> object:
         f"DBAs: {row.get('dbas', '')}".strip() if row.get("dbas") else "",
     ] if part and not part.endswith(":"))
     result.source_note = (
-        f"{status_note} CharityClarity used Colorado's official downloadable charities extract with EIN-first matching; "
+        f"{status_note} CharityClarity used Colorado's official public registry data extract, fetched on demand, with EIN-first matching; "
         "when multiple rows match, the most recent registry row is selected."
     )
     result.success = True
@@ -4570,14 +4570,14 @@ def search_co_snapshot(page, org):
             return result
         result = checker.StateResult(getattr(org, "organization_name", ""), getattr(org, "ein", ""), "CO", checker.STATUS_NOT_REGISTERED, CO_CHARITIES_EXTRACT_URL)
         result.raw_status_text = "No matching Colorado extract row"
-        result.source_note = "Colorado's official downloadable charities extract was reachable, but no strict EIN or safe organization-name/DBA match was found."
+        result.source_note = "Colorado's official public registry data extract was reachable, but no strict EIN or safe organization-name/DBA match was found."
         result.success = True
         result.error = ""
         return result
     if page is None:
         result = checker.StateResult(getattr(org, "organization_name", ""), getattr(org, "ein", ""), "CO", "Site Not Reachable", CO_CHARITIES_EXTRACT_URL)
         result.raw_status_text = "Colorado extract could not be loaded"
-        result.source_note = f"Colorado's official downloadable charities extract was not reachable: {load_error}"
+        result.source_note = f"Colorado's official public registry data extract was not reachable: {load_error}"
         result.error = load_error or "Colorado extract unavailable"
         result.success = False
         return result
