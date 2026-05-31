@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.86-staging"
+APP_VERSION = "2026.05.31.87-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -163,7 +163,7 @@ AR_NAME_SEARCH_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_AR_NAME_SEARC
 ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "1.0"))), 30.0)
 ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS = min(max(1, int(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS", "2"))), 4)
 ME_CONFIRM_NOT_REGISTERED = os.environ.get("CE_ME_CONFIRM_NOT_REGISTERED", "1").strip().lower() in {"1", "true", "yes"}
-ME_FAST_DIRECT_CONFIRMATION_MAX_VARIANTS = min(max(3, int(os.environ.get("CE_ME_FAST_DIRECT_CONFIRMATION_MAX_VARIANTS", "3"))), 12)
+ME_FAST_DIRECT_CONFIRMATION_MAX_VARIANTS = min(max(3, int(os.environ.get("CE_ME_FAST_DIRECT_CONFIRMATION_MAX_VARIANTS", "6"))), 12)
 ME_FAST_DIRECT_GET_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_ME_FAST_DIRECT_GET_TIMEOUT_SECONDS", "8"))), 15.0)
 ME_FAST_DIRECT_POST_TIMEOUT_SECONDS = min(max(4.0, float(os.environ.get("CE_ME_FAST_DIRECT_POST_TIMEOUT_SECONDS", "10"))), 18.0)
 ME_FAST_DIRECT_DETAIL_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_ME_FAST_DIRECT_DETAIL_TIMEOUT_SECONDS", "8"))), 15.0)
@@ -3557,26 +3557,39 @@ def me_fast_direct_query_variants(org) -> list[str]:
         if cleaned and cleaned.lower() not in {existing.lower() for existing in variants}:
             variants.append(cleaned)
 
+    original_name = getattr(org, "organization_name", "")
+    add(original_name)
+    leading_article_removed = re.sub(r"^(?:the|a|an)\s+", "", original_name or "", flags=re.I).strip()
+    add(leading_article_removed)
+    for alias in known_names_for_ein(getattr(org, "ein", "")):
+        if compatible_ein_alias_for_name(original_name, alias):
+            add(alias)
+            add(re.sub(r"^(?:the|a|an)\s+", "", alias or "", flags=re.I).strip())
+
     for variant in organization_name_variants(
-        org.organization_name,
-        org.ein,
+        original_name,
+        getattr(org, "ein", ""),
         include_ein_aliases=True,
         include_name_segments=True,
+        include_and_segments=False,
         include_compact_legal_suffixes=True,
         include_leading_article_variants=True,
+        include_broad_query_prefixes=False,
     ):
         add(variant)
 
     for alias in known_names_for_ein(getattr(org, "ein", "")):
-        if not compatible_ein_alias_for_name(getattr(org, "organization_name", ""), alias):
+        if not compatible_ein_alias_for_name(original_name, alias):
             continue
         for variant in organization_name_variants(
             alias,
             "",
             include_ein_aliases=False,
             include_name_segments=True,
+            include_and_segments=False,
             include_compact_legal_suffixes=True,
             include_leading_article_variants=True,
+            include_broad_query_prefixes=False,
         ):
             add(variant)
     return variants[:ME_FAST_DIRECT_CONFIRMATION_MAX_VARIANTS]
@@ -10021,10 +10034,20 @@ def nh_live_pdf_records() -> tuple[list[dict], str]:
 
 def nh_registry_name_from_live_body(body: str) -> str:
     cleaned = re.sub(r"\s+", " ", body or "").strip()
+    word_number_street = (
+        r"(?:One|Two|Three|Four|Five|Six|Seven|Eight|Nine|Ten|Eleven|Twelve|"
+        r"Thirteen|Fourteen|Fifteen|Sixteen|Seventeen|Eighteen|Nineteen|"
+        r"Twenty|Thirty|Forty|Fifty|Sixty|Seventy|Eighty|Ninety)"
+        r"\s+[A-Za-z][A-Za-z.'-]*(?:\s+[A-Za-z]\.?)?(?:\s+[A-Za-z][A-Za-z.'-]*){0,3}"
+        r"\s+(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Drive|Dr\.?|Lane|Ln\.?|"
+        r"Boulevard|Blvd\.?|Way|Place|Pl\.?|Court|Ct\.?|Circle|Cir\.?|"
+        r"Parkway|Pkwy\.?|Highway|Hwy\.?|Plaza|Square|Sq\.?)(?=\s|[A-Z]|$)"
+    )
     cleaned = re.split(
-        r"\s+(?:P\.?\s*O\.?\s+Box|PO\s+Box|C/O|c/o|\d{1,6}\s+[A-Za-z][A-Za-z0-9.'#-]*(?:\s|$))",
+        rf"\s+(?:P\.?\s*O\.?\s+Box|PO\s+Box|C/O|c/o|{word_number_street}|\d{{1,6}}\s+[A-Za-z][A-Za-z0-9.'#-]*(?:\s|$))",
         cleaned,
         maxsplit=1,
+        flags=re.I,
     )[0].strip()
     return useful_registry_name(cleaned)
 
