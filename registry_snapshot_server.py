@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.73-staging"
+APP_VERSION = "2026.05.30.74-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -104,6 +104,10 @@ ALLOW_PARALLEL_BROWSER_LOOKUPS = os.environ.get("CE_ALLOW_PARALLEL_BROWSER_LOOKU
 MAX_BROWSER_LOOKUPS = max(1, int(os.environ.get("CE_MAX_BROWSER_LOOKUPS", "4")))
 MAX_PARALLEL_LOOKUPS = min(REQUESTED_PARALLEL_LOOKUPS, MAX_BROWSER_LOOKUPS) if ALLOW_PARALLEL_BROWSER_LOOKUPS else 1
 BROWSER_LOOKUP_SEMAPHORE = threading.BoundedSemaphore(MAX_BROWSER_LOOKUPS)
+BROWSER_LOOKUP_ACQUIRE_SECONDS = min(
+    max(2.0, float(os.environ.get("CE_BROWSER_LOOKUP_ACQUIRE_SECONDS", "12"))),
+    45.0,
+)
 SINGLE_STATE_MAX_CONCURRENT = min(
     max(1, int(os.environ.get("CE_SINGLE_STATE_MAX_CONCURRENT", str(MAX_BROWSER_LOOKUPS)))),
     20,
@@ -10784,6 +10788,23 @@ def search_wa_nm_state(org, state: str):
     return copy_external_result(org, state, external_result)
 
 
+def browser_capacity_busy_result(organization_name: str, ein: str, state: str, url: str = ""):
+    result = checker.StateResult(
+        organization_name or f"EIN {format_ein(ein)}",
+        format_ein(ein),
+        state,
+        "Site Not Reachable",
+        url,
+    )
+    result.raw_status_text = "Browser lookup capacity busy"
+    result.source_note = (
+        "CharityClarity could not start this public-registry browser lookup before "
+        "the capacity guard expired; retrying the state can use another staging lane."
+    )
+    result.success = False
+    return result
+
+
 def run_state_lookup(organization_name: str, ein: str, state: str, capture_source_snapshot: bool = False, confirm_single_no_match: bool = True) -> dict:
     lookup_started = time.perf_counter()
     artifact_name = organization_name or f"EIN {format_ein(ein)}"
@@ -10821,8 +10842,11 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
 
     if state in {"NH", "KS", "KY", "WA", "NM"}:
         result = None
-        BROWSER_LOOKUP_SEMAPHORE.acquire()
         lookup_started = time.perf_counter()
+        browser_admitted = BROWSER_LOOKUP_SEMAPHORE.acquire(timeout=BROWSER_LOOKUP_ACQUIRE_SECONDS)
+        if not browser_admitted:
+            result = browser_capacity_busy_result(organization_name, ein, state)
+            return response_data_for_lookup(result, result.raw_status_text, org, organization_name, ein, state, lookup_started)
         try:
             if state in {"WA", "NM"}:
                 result = search_wa_nm_state(org, state)
@@ -10842,7 +10866,8 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             result.error = str(exc)
             result.success = False
         finally:
-            BROWSER_LOOKUP_SEMAPHORE.release()
+            if browser_admitted:
+                BROWSER_LOOKUP_SEMAPHORE.release()
         return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
 
     if state == "OR":
@@ -10870,8 +10895,11 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
 
     result = None
-    BROWSER_LOOKUP_SEMAPHORE.acquire()
     lookup_started = time.perf_counter()
+    browser_admitted = BROWSER_LOOKUP_SEMAPHORE.acquire(timeout=BROWSER_LOOKUP_ACQUIRE_SECONDS)
+    if not browser_admitted:
+        result = browser_capacity_busy_result(organization_name, ein, state)
+        return response_data_for_lookup(result, result.raw_status_text, org, organization_name, ein, state, lookup_started)
     with checker.sync_playwright() as p:
         browser = None
         context = None
@@ -11232,7 +11260,8 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 context.close()
             if browser:
                 browser.close()
-            BROWSER_LOOKUP_SEMAPHORE.release()
+            if browser_admitted:
+                BROWSER_LOOKUP_SEMAPHORE.release()
 
     return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
 
