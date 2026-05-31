@@ -90,7 +90,41 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.31.95-staging"
+APP_VERSION = "2026.05.31.96-staging"
+
+
+def parse_api_url_list(*raw_values: str | None) -> list[str]:
+    urls: list[str] = []
+    seen: set[str] = set()
+    for raw_value in raw_values:
+        for part in str(raw_value or "").replace("\n", ",").split(","):
+            url = part.strip()
+            if not url:
+                continue
+            key = url.rstrip("/")
+            if key in seen:
+                continue
+            seen.add(key)
+            urls.append(url)
+    return urls
+
+
+def own_service_url(url: str) -> bool:
+    try:
+        return urlparse(url or "").netloc.lower() == urlparse(PUBLIC_BASE_URL).netloc.lower()
+    except Exception:
+        return (url or "").rstrip("/").lower().startswith(PUBLIC_BASE_URL.lower())
+
+
+def preferred_lane_index(state: str, ein: str, lane_count: int) -> int:
+    if lane_count <= 1:
+        return 0
+    try:
+        state_index = SUPPORTED_STATES.index((state or "").upper())
+    except Exception:
+        state_index = sum(ord(char) for char in (state or ""))
+    ein_tail = int((re.sub(r"\D", "", ein or "") or "0")[-2:] or "0")
+    return (state_index + ein_tail) % lane_count
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -108,9 +142,13 @@ BROWSER_LOOKUP_ACQUIRE_SECONDS = min(
     max(2.0, float(os.environ.get("CE_BROWSER_LOOKUP_ACQUIRE_SECONDS", "12"))),
     45.0,
 )
+SINGLE_STATE_MAX_CONCURRENT_CAP = min(
+    max(20, int(os.environ.get("CE_SINGLE_STATE_MAX_CONCURRENT_CAP", "40"))),
+    80,
+)
 SINGLE_STATE_MAX_CONCURRENT = min(
     max(1, int(os.environ.get("CE_SINGLE_STATE_MAX_CONCURRENT", str(MAX_BROWSER_LOOKUPS)))),
-    20,
+    SINGLE_STATE_MAX_CONCURRENT_CAP,
 )
 SINGLE_STATE_QUEUE_TIMEOUT_SECONDS = min(
     max(1.0, float(os.environ.get("CE_SINGLE_STATE_QUEUE_TIMEOUT_SECONDS", "30"))),
@@ -120,7 +158,11 @@ SINGLE_STATE_RETRY_AFTER_SECONDS = min(
     max(1, int(os.environ.get("CE_SINGLE_STATE_RETRY_AFTER_SECONDS", "8"))),
     60,
 )
-SINGLE_STATE_OVERFLOW_API_URL = os.environ.get("CE_SINGLE_STATE_OVERFLOW_API_URL", "").strip()
+SINGLE_STATE_OVERFLOW_API_URLS = parse_api_url_list(
+    os.environ.get("CE_SINGLE_STATE_OVERFLOW_API_URLS"),
+    os.environ.get("CE_SINGLE_STATE_OVERFLOW_API_URL"),
+)
+SINGLE_STATE_OVERFLOW_API_URL = SINGLE_STATE_OVERFLOW_API_URLS[0] if SINGLE_STATE_OVERFLOW_API_URLS else ""
 SINGLE_STATE_OVERFLOW_TIMEOUT_SECONDS = min(
     max(20.0, float(os.environ.get("CE_SINGLE_STATE_OVERFLOW_TIMEOUT_SECONDS", "88"))),
     89.0,
@@ -187,7 +229,12 @@ BATCH_STATE_LOOKUP_TIMEOUT_SECONDS = min(
     90.0,
 )
 BATCH_FANOUT_SINGLE_STATE_LOOKUPS = os.environ.get("CE_BATCH_FANOUT_SINGLE_STATE_LOOKUPS", "0").strip().lower() in {"1", "true", "yes"}
-BATCH_FANOUT_API_URL = os.environ.get("CE_BATCH_FANOUT_API_URL", f"{PUBLIC_BASE_URL}/api/check").strip()
+BATCH_FANOUT_API_URLS = parse_api_url_list(
+    os.environ.get("CE_BATCH_FANOUT_API_URLS"),
+    os.environ.get("CE_BATCH_FANOUT_API_URL"),
+    f"{PUBLIC_BASE_URL}/api/check",
+)
+BATCH_FANOUT_API_URL = BATCH_FANOUT_API_URLS[0] if BATCH_FANOUT_API_URLS else ""
 BATCH_FANOUT_MAX_WORKERS = min(max(1, int(os.environ.get("CE_BATCH_FANOUT_MAX_WORKERS", "30"))), 40)
 BATCH_FANOUT_STATE_TIMEOUT_SECONDS = min(
     max(30.0, float(os.environ.get("CE_BATCH_FANOUT_STATE_TIMEOUT_SECONDS", str(BATCH_STATE_LOOKUP_TIMEOUT_SECONDS)))),
@@ -12265,9 +12312,12 @@ def run_fanout_state_lookup_for_batch(organization_name: str, ein: str, state: s
         "client_user_agent": f"CharityClarity batch fanout/{APP_VERSION}",
     }
 
-    def request_once() -> dict | None:
+    fanout_urls = BATCH_FANOUT_API_URLS or [BATCH_FANOUT_API_URL]
+    lane_start = preferred_lane_index(state, ein, len(fanout_urls))
+
+    def request_once(api_url: str) -> dict | None:
         request = urllib.request.Request(
-            BATCH_FANOUT_API_URL,
+            api_url,
             data=json.dumps(payload).encode("utf-8"),
             headers={
                 "Content-Type": "application/json",
@@ -12282,16 +12332,17 @@ def run_fanout_state_lookup_for_batch(organization_name: str, ein: str, state: s
         return result if isinstance(result, dict) else None
 
     try:
-        result = request_once()
+        result = request_once(fanout_urls[lane_start])
         if isinstance(result, dict):
             result["batch_fanout"] = "single_state_http"
             fast_unreachable = (
                 (result.get("status") or "").strip().lower() == "site not reachable"
                 and float(result.get("lookup_seconds") or 0) < 20
             )
-            if fast_unreachable:
+            if fast_unreachable and len(fanout_urls) > 1:
                 time.sleep(1)
-                retry_result = request_once()
+                retry_url = fanout_urls[(lane_start + 1) % len(fanout_urls)]
+                retry_result = request_once(retry_url)
                 if isinstance(retry_result, dict):
                     retry_result["batch_fanout"] = "single_state_http_retry"
                     if (retry_result.get("status") or "").strip().lower() != "site not reachable":
@@ -12448,7 +12499,7 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
     if len(lookup_requests) <= 1:
         return [run_single_state_lookup_reliably(*lookup_requests[0])]
 
-    if BATCH_FANOUT_SINGLE_STATE_LOOKUPS and BATCH_FANOUT_API_URL:
+    if BATCH_FANOUT_SINGLE_STATE_LOOKUPS and BATCH_FANOUT_API_URLS:
         results_by_index: dict[int, dict] = {}
 
         def run_fanout_request(item: tuple[int, tuple[str, str, str]]) -> tuple[int, dict]:
@@ -12576,15 +12627,30 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
 
 
 def proxy_single_state_request_to_overflow(payload: dict) -> tuple[int, dict, dict[str, str]] | None:
-    if not SINGLE_STATE_OVERFLOW_API_URL:
+    try:
+        overflow_hops = int(payload.get("_single_state_overflow_hops") or 0)
+    except Exception:
+        overflow_hops = 0
+    if overflow_hops >= 1:
         return None
+    overflow_urls = [url for url in SINGLE_STATE_OVERFLOW_API_URLS if not own_service_url(url)]
+    if not overflow_urls:
+        return None
+    states = payload.get("states") if isinstance(payload.get("states"), list) else [payload.get("state")]
+    state = (states[0] if states else "") or ""
+    organizations = payload.get("organizations") if isinstance(payload.get("organizations"), list) else []
+    ein = payload.get("ein") or ""
+    if organizations and isinstance(organizations[0], dict):
+        ein = organizations[0].get("ein") or ein
+    overflow_url = overflow_urls[preferred_lane_index(state, str(ein), len(overflow_urls))]
     request_payload = dict(payload)
+    request_payload["_single_state_overflow_hops"] = overflow_hops + 1
     request_payload["client_user_agent"] = " ".join(part for part in [
         str(payload.get("client_user_agent") or "").strip(),
         f"CharityClarity overflow/{APP_VERSION}",
     ] if part)
     request = urllib.request.Request(
-        SINGLE_STATE_OVERFLOW_API_URL,
+        overflow_url,
         data=json.dumps(request_payload).encode("utf-8"),
         headers={
             "Content-Type": "application/json",
@@ -12598,6 +12664,7 @@ def proxy_single_state_request_to_overflow(payload: dict) -> tuple[int, dict, di
             data = json.loads(response.read().decode("utf-8"))
         if isinstance(data, dict):
             data["single_state_lane"] = "overflow"
+            data["single_state_overflow_url"] = overflow_url
             return response.status, data, {}
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
