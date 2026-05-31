@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.77-staging"
+APP_VERSION = "2026.05.30.78-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -140,8 +140,8 @@ SC_NAME_VARIANT_MAX_SECONDS = max(12.0, float(os.environ.get("CE_SC_NAME_VARIANT
 NAME_SEARCH_VARIANT_MAX_SECONDS = max(18.0, float(os.environ.get("CE_NAME_SEARCH_VARIANT_MAX_SECONDS", "35")))
 CT_NAME_VARIANT_MAX_SECONDS = min(max(10.0, float(os.environ.get("CE_CT_NAME_VARIANT_MAX_SECONDS", "24"))), 35.0)
 CT_NAME_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_CT_NAME_VARIANT_LIMIT", "5"))), 10)
-CT_DIRECT_TIMEOUT_SECONDS = min(max(4.0, float(os.environ.get("CE_CT_DIRECT_TIMEOUT_SECONDS", "12"))), 25.0)
-CT_DIRECT_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_CT_DIRECT_MAX_SECONDS", "22"))), 35.0)
+CT_DIRECT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_CT_DIRECT_TIMEOUT_SECONDS", "6"))), 12.0)
+CT_DIRECT_MAX_SECONDS = min(max(6.0, float(os.environ.get("CE_CT_DIRECT_MAX_SECONDS", "14"))), 22.0)
 MN_NAME_FALLBACK_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_MN_NAME_FALLBACK_MAX_SECONDS", "18"))), 30.0)
 MN_NAME_FALLBACK_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_MN_NAME_FALLBACK_MAX_VARIANTS", "4"))), 10)
 FL_LOOKUP_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_FL_LOOKUP_MAX_SECONDS", "35"))), 45.0)
@@ -4871,33 +4871,8 @@ def ct_direct_query(search_name: str, timeout_seconds: float | None = None) -> s
         )
         response.raise_for_status()
         return response.text
-    except Exception:
-        pass
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
-    with opener.open(urllib.request.Request(url, headers=headers), timeout=timeout) as response:
-        page_html = response.read().decode("utf-8", errors="replace")
-    fields = ct_direct_form_fields(page_html)
-    fields["ctl00$MainContentPlaceHolder$ucLicenseLookup$ctl03$tbDBA_Contact"] = search_name
-    fields["__EVENTTARGET"] = "ctl00$MainContentPlaceHolder$ucLicenseLookup$UpdtPanelGridLookup"
-    fields["__EVENTARGUMENT"] = "3"
-    fields["ctl00$ScriptManager1"] = (
-        "ctl00$MainContentPlaceHolder$ucLicenseLookup$UpdtPanelGridLookup|"
-        "ctl00$MainContentPlaceHolder$ucLicenseLookup$UpdtPanelGridLookup"
-    )
-    fields["__ASYNCPOST"] = "true"
-    request = urllib.request.Request(
-        url,
-        data=urlencode(fields).encode("utf-8"),
-        headers={
-            **headers,
-            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-            "X-MicrosoftAjax": "Delta=true",
-            "X-Requested-With": "XMLHttpRequest",
-        },
-        method="POST",
-    )
-    with opener.open(request, timeout=timeout) as response:
-        return response.read().decode("utf-8", errors="replace")
+    except Exception as exc:
+        raise RuntimeError(f"Connecticut direct HTTP query failed: {exc}") from exc
 
 
 def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: str):
