@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.72-staging"
+APP_VERSION = "2026.05.30.73-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -473,13 +473,15 @@ WI_READER_BASE_URL = os.environ.get("CE_WI_READER_BASE_URL", "https://r.jina.ai/
 WI_LOOKUP_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_WI_LOOKUP_MAX_SECONDS", "42"))), 90.0)
 WI_READER_TIMEOUT_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_READER_TIMEOUT_SECONDS", "12"))), 20.0)
 WI_HTTP_TIMEOUT_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_HTTP_TIMEOUT_SECONDS", "10"))), 20.0)
-WI_DIRECT_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_WI_DIRECT_VARIANT_LIMIT", "8"))), 12)
+WI_DIRECT_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_WI_DIRECT_VARIANT_LIMIT", "10"))), 12)
 WI_BROWSER_VARIANT_LIMIT = min(max(0, int(os.environ.get("CE_WI_BROWSER_VARIANT_LIMIT", "0"))), 5)
 WI_SIDECAR_URL = os.environ.get("CE_WI_SIDECAR_URL", "").strip()
 WI_LOOKUP_SECRET = os.environ.get("CE_WI_LOOKUP_SECRET", "").strip()
 WI_SIDECAR_TIMEOUT_SECONDS = min(max(10.0, float(os.environ.get("CE_WI_SIDECAR_TIMEOUT_SECONDS", "35"))), 58.0)
 WI_SIDECAR_ATTEMPTS = min(max(1, int(os.environ.get("CE_WI_SIDECAR_ATTEMPTS", "2"))), 5)
 WI_CONFIRM_SIDECAR_NO_MATCH = os.environ.get("CE_WI_CONFIRM_SIDECAR_NO_MATCH", "1").strip().lower() in {"1", "true", "yes"}
+WI_NO_MATCH_CONFIRMATION_ATTEMPTS = min(max(0, int(os.environ.get("CE_WI_NO_MATCH_CONFIRMATION_ATTEMPTS", "2"))), 3)
+WI_NO_MATCH_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_WI_NO_MATCH_CONFIRMATION_DELAY_SECONDS", "1.0"))), 5.0)
 WI_SIDECAR_LANES = min(max(1, int(os.environ.get("CE_WI_SIDECAR_LANES", "1"))), 3)
 WI_SIDECAR_ACQUIRE_SECONDS = min(max(10.0, float(os.environ.get("CE_WI_SIDECAR_ACQUIRE_SECONDS", "85"))), 100.0)
 WI_SIDECAR_SEMAPHORE = threading.BoundedSemaphore(WI_SIDECAR_LANES)
@@ -6872,6 +6874,11 @@ def wi_request_headers(referer: str = WI_SEARCH_URL) -> dict[str, str]:
     }
 
 
+def wi_result_html_requires_verification(source: str) -> bool:
+    text = html_to_text(source or "")
+    return bool(re.search(r"Verification\s+Type\s+the\s+characters\s+you\s+see", text, re.I))
+
+
 def wi_search_names_for_org(org) -> list[str]:
     names: list[str] = []
 
@@ -6906,6 +6913,7 @@ def wi_search_names_for_org(org) -> list[str]:
             "by", "inc", "incorporated", "corp", "corporation", "llc",
             "ltd", "limited", "foundation", "fund", "association", "society",
             "center", "centre", "institute", "organization", "charity",
+            "charitable", "trust",
         }
         hyphen_pairs = [
             tuple(part for part in re.split(r"[-\u2010-\u2015]+", token) if part)
@@ -6962,6 +6970,15 @@ def wi_search_names_for_org(org) -> list[str]:
         ).strip()
         if len(national_prefix_removed.split()) >= 2 and national_prefix_removed.lower() != cleaned.lower() and national_prefix_removed not in expanded_names:
             expanded_names.append(national_prefix_removed)
+        us_compacted = re.sub(
+            r"^(?:the\s+)?(?:u\.?\s*s\.?|us)\s+",
+            "US ",
+            cleaned,
+            flags=re.I,
+        ).strip()
+        us_compacted = re.sub(r"\s+", " ", us_compacted)
+        if len(us_compacted.split()) >= 2 and us_compacted.lower() != cleaned.lower() and us_compacted not in expanded_names:
+            expanded_names.append(us_compacted)
 
     def priority(value: str) -> tuple[int, int, str]:
         cleaned = re.sub(r"\s+", " ", (value or "").strip())
@@ -6972,6 +6989,9 @@ def wi_search_names_for_org(org) -> list[str]:
         compact = re.sub(r"[^A-Za-z0-9]+", "", cleaned)
         if 2 <= len(compact) <= 8 and compact.upper() == compact:
             return (0, len(cleaned.split()), cleaned.lower())
+        if re.match(r"^(?:u\.?\s*s\.?|us)\s+", cleaned, re.I):
+            noisy_us_query = bool(re.search(r"[-,/]", cleaned)) or bool(re.match(r"^u\.", cleaned, re.I))
+            return (0 if not noisy_us_query else 1, len(cleaned.split()), cleaned.lower())
         if re.fullmatch(r"(?i)(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited|the|a|an)", cleaned):
             return (90, 99, cleaned.lower())
         has_punctuation = bool(re.search(r"[-,/]", cleaned))
@@ -7165,6 +7185,8 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str], 
             request = urllib.request.Request(direct_url, headers=wi_request_headers())
             with opener.open(request, timeout=WI_HTTP_TIMEOUT_SECONDS) as response:
                 result_html = response.read().decode("utf-8", errors="replace")
+            if wi_result_html_requires_verification(result_html):
+                continue
             http_reached = True
             best_match = wi_best_match_from_html(result_html, target_names, best_match)
             if wi_is_decisive_candidate(best_match):
@@ -7191,6 +7213,8 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str], 
             )
             with opener.open(request, timeout=WI_HTTP_TIMEOUT_SECONDS) as response:
                 result_html = response.read().decode("utf-8", errors="replace")
+            if wi_result_html_requires_verification(result_html):
+                continue
             http_reached = True
         except Exception:
             continue
@@ -7315,10 +7339,10 @@ def search_wi(page, org):
                 result.source_note = "Wisconsin DFI blocked or denied the registry result page during lookup."
                 result.success = False
                 return result
-            result.raw_status_text = "No matching Wisconsin charitable organization credential"
-            result.status = checker.STATUS_NOT_REGISTERED
-            result.source_note = "Wisconsin DFI returned no matching Charitable Organization credential for the organization name searched."
-            result.success = True
+            result.raw_status_text = "Wisconsin registry did not return a usable result page"
+            result.status = "Site Not Reachable"
+            result.source_note = "Wisconsin DFI did not return a usable registry result page, so CharityClarity did not treat the transient response as a clean no-record finding."
+            result.success = False
             return result
 
         detail_status = best_match.get("detail_status", "")
@@ -7427,6 +7451,27 @@ def search_wi_sidecar(org):
                 "after the direct fallback did not return a match."
             )
             return browser_result
+        best_terminal = browser_result if browser_status == checker.STATUS_NOT_REGISTERED else direct_result
+        if checker.STATUS_NOT_REGISTERED in {direct_status, browser_status}:
+            for attempt_index in range(WI_NO_MATCH_CONFIRMATION_ATTEMPTS):
+                if WI_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0:
+                    time.sleep(min(WI_NO_MATCH_CONFIRMATION_DELAY_SECONDS * (attempt_index + 1), 5.0))
+                confirmed_result = search_wi(None, org)
+                confirmed_status = public_status(confirmed_result)
+                if confirmed_status not in {"Site Not Reachable", checker.STATUS_NOT_REGISTERED}:
+                    confirmed_result.source_note = (
+                        f"{note} A delayed Wisconsin confirmation lookup replaced an initial "
+                        "backend no-record response."
+                    )
+                    return confirmed_result
+                if confirmed_status == checker.STATUS_NOT_REGISTERED:
+                    best_terminal = confirmed_result
+            if public_status(best_terminal) == checker.STATUS_NOT_REGISTERED:
+                best_terminal.source_note = (
+                    f"{note} Wisconsin DFI returned no matching credential after direct, "
+                    "backend-browser, and delayed confirmation attempts."
+                )
+                return best_terminal
         if browser_status == checker.STATUS_NOT_REGISTERED and direct_status == "Site Not Reachable":
             browser_result.source_note = (
                 f"{note} The backend browser fallback reached Wisconsin DFI and returned no matching "
