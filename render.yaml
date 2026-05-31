@@ -91,15 +91,21 @@ services:
       - key: CE_WI_BROWSER_VARIANT_LIMIT
         value: "0"
       - key: CE_WI_LOOKUP_MAX_SECONDS
-        value: "18"
+        value: "32"
       - key: CE_WI_SIDECAR_ATTEMPTS
-        value: "1"
+        value: "3"
       - key: CE_WI_SIDECAR_LANES
-        value: "1"
+        value: "2"
       - key: CE_WI_SIDECAR_ACQUIRE_SECONDS
         value: "70"
       - key: CE_WI_SIDECAR_TIMEOUT_SECONDS
-        value: "18"
+        value: "32"
+      - key: CE_WI_READER_TIMEOUT_SECONDS
+        value: "16"
+      - key: CE_WI_USE_SNAPSHOT
+        value: "1"
+      - key: CE_WI_REQUIRE_COMPLETE_SNAPSHOT
+        value: "1"
       - key: CE_WI_CONFIRM_SIDECAR_NO_MATCH
         value: "1"
       - key: CE_WI_NO_MATCH_CONFIRMATION_ATTEMPTS

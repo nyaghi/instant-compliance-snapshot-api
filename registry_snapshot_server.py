@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.31.90-staging"
+APP_VERSION = "2026.05.31.91-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -249,13 +249,9 @@ DOWNLOADABLE_DATA_COMMENT_FOOTERS = {
         "Data freshness note: Kentucky is checked from a refreshed downloadable registry snapshot. "
         "For time-sensitive decisions, confirm directly with the Kentucky registry because records can change between refreshes."
     ),
-    "MS": (
-        "Data freshness note: Mississippi is checked from a refreshed downloadable registry snapshot. "
-        "For time-sensitive decisions, confirm directly with the Mississippi registry because records can change between refreshes."
-    ),
-    "OR": (
-        "Data freshness note: Oregon is checked from a weekly refreshed downloadable charity database. "
-        "For time-sensitive decisions, confirm directly with the Oregon registry because records can change between refreshes."
+    "WI": (
+        "Data freshness note: Wisconsin is checked from a Sunday-refreshed CharityClarity snapshot built from official Wisconsin DFI public credential pages. "
+        "For time-sensitive decisions, confirm directly with the Wisconsin registry because records can change between refreshes."
     ),
 }
 CONFIRMED_FEEDBACK_CORRECTIONS = {
@@ -480,25 +476,31 @@ BROWSER_USER_AGENT = os.environ.get(
 WI_SEARCH_URL = "https://apps.dfi.wi.gov/ice/berg/Registration/OrganizationCredentialSearch.aspx"
 WI_RESULTS_URL = "https://apps.dfi.wi.gov/ice/berg/Registration/OrgCredentialSearchResults.aspx"
 WI_READER_BASE_URL = os.environ.get("CE_WI_READER_BASE_URL", "https://r.jina.ai/http://")
-WI_LOOKUP_MAX_SECONDS = min(max(12.0, float(os.environ.get("CE_WI_LOOKUP_MAX_SECONDS", "18"))), 90.0)
+WI_LOOKUP_MAX_SECONDS = min(max(12.0, float(os.environ.get("CE_WI_LOOKUP_MAX_SECONDS", "32"))), 90.0)
 WI_READER_TIMEOUT_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_READER_TIMEOUT_SECONDS", "12"))), 20.0)
 WI_HTTP_TIMEOUT_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_HTTP_TIMEOUT_SECONDS", "10"))), 20.0)
 WI_DIRECT_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_WI_DIRECT_VARIANT_LIMIT", "10"))), 12)
 WI_BROWSER_VARIANT_LIMIT = min(max(0, int(os.environ.get("CE_WI_BROWSER_VARIANT_LIMIT", "0"))), 5)
 WI_SIDECAR_URL = os.environ.get("CE_WI_SIDECAR_URL", "").strip()
 WI_LOOKUP_SECRET = os.environ.get("CE_WI_LOOKUP_SECRET", "").strip()
-WI_SIDECAR_TIMEOUT_SECONDS = min(max(8.0, float(os.environ.get("CE_WI_SIDECAR_TIMEOUT_SECONDS", "18"))), 58.0)
+WI_SIDECAR_TIMEOUT_SECONDS = min(max(8.0, float(os.environ.get("CE_WI_SIDECAR_TIMEOUT_SECONDS", "32"))), 58.0)
 WI_SIDECAR_ATTEMPTS = min(max(1, int(os.environ.get("CE_WI_SIDECAR_ATTEMPTS", "3"))), 5)
 WI_CONFIRM_SIDECAR_NO_MATCH = os.environ.get("CE_WI_CONFIRM_SIDECAR_NO_MATCH", "1").strip().lower() in {"1", "true", "yes"}
 WI_NO_MATCH_CONFIRMATION_ATTEMPTS = min(max(0, int(os.environ.get("CE_WI_NO_MATCH_CONFIRMATION_ATTEMPTS", "1"))), 3)
 WI_NO_MATCH_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_WI_NO_MATCH_CONFIRMATION_DELAY_SECONDS", "1.0"))), 5.0)
-WI_SIDECAR_LANES = min(max(1, int(os.environ.get("CE_WI_SIDECAR_LANES", "1"))), 3)
+WI_SIDECAR_LANES = min(max(1, int(os.environ.get("CE_WI_SIDECAR_LANES", "2"))), 3)
 WI_SIDECAR_ACQUIRE_SECONDS = min(max(10.0, float(os.environ.get("CE_WI_SIDECAR_ACQUIRE_SECONDS", "85"))), 100.0)
 WI_SIDECAR_SEMAPHORE = threading.BoundedSemaphore(WI_SIDECAR_LANES)
 WI_BACKEND_BROWSER_LANES = min(max(1, int(os.environ.get("CE_WI_BACKEND_BROWSER_LANES", "3"))), 4)
 WI_BACKEND_BROWSER_ACQUIRE_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_BACKEND_BROWSER_ACQUIRE_SECONDS", "35"))), 75.0)
 WI_BACKEND_BROWSER_SEMAPHORE = threading.BoundedSemaphore(WI_BACKEND_BROWSER_LANES)
 WI_USE_BACKEND_BROWSER_FALLBACK = os.environ.get("CE_WI_USE_BACKEND_BROWSER_FALLBACK", "0").strip().lower() in {"1", "true", "yes"}
+WI_SNAPSHOT_PATH = Path(os.environ.get("CE_WI_SNAPSHOT_PATH", str(BASE_DIR / "wi_charities_snapshot.json")))
+WI_USE_SNAPSHOT = os.environ.get("CE_WI_USE_SNAPSHOT", "1").strip().lower() in {"1", "true", "yes"}
+WI_REQUIRE_COMPLETE_SNAPSHOT = os.environ.get("CE_WI_REQUIRE_COMPLETE_SNAPSHOT", "1").strip().lower() in {"1", "true", "yes"}
+WI_SNAPSHOT_MAX_AGE_SECONDS = min(max(86400, int(os.environ.get("CE_WI_SNAPSHOT_MAX_AGE_SECONDS", str(14 * 86400)))), 45 * 86400)
+WI_SNAPSHOT_CACHE: dict[str, object] = {"loaded_at": 0.0, "mtime": 0.0, "snapshot": None, "name_index": None, "error": ""}
+WI_SNAPSHOT_LOCK = threading.Lock()
 NH_LIVE_PDF_URL = os.environ.get(
     "CE_NH_LIVE_PDF_URL",
     "https://mm.nh.gov/files/uploads/doj/remote-docs/registered-charities.pdf",
@@ -7305,12 +7307,16 @@ def wi_reader_url(source_url: str) -> str:
 
 
 def wi_reader_text(source_url: str) -> str:
-    try:
-        request = urllib.request.Request(wi_reader_url(source_url), headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(request, timeout=WI_READER_TIMEOUT_SECONDS) as response:
-            return response.read().decode("utf-8", errors="replace")
-    except Exception:
-        return ""
+    for attempt in range(3):
+        try:
+            request = urllib.request.Request(wi_reader_url(source_url), headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(request, timeout=WI_READER_TIMEOUT_SECONDS) as response:
+                return response.read().decode("utf-8", errors="replace")
+        except Exception:
+            if attempt < 2:
+                time.sleep(0.35 * (attempt + 1))
+                continue
+            return ""
 
 
 def wi_reader_detail_status(detail_href: str) -> str:
@@ -7483,7 +7489,10 @@ def wi_search_names_for_org(org) -> list[str]:
         cleaned = re.sub(r"\s+", " ", (value or "").strip())
         if not cleaned:
             return (99, 99, "")
-        if cleaned.lower() in {re.sub(r"\s+", " ", (seed or "").strip()).lower() for seed in seed_names if seed}:
+        has_punctuation = bool(re.search(r"[-,/\.]", cleaned))
+        starts_article = bool(re.match(r"^(?:the|a|an)\s+", cleaned, re.I))
+        exact_seed = cleaned.lower() in {re.sub(r"\s+", " ", (seed or "").strip()).lower() for seed in seed_names if seed}
+        if exact_seed and not (has_punctuation or starts_article):
             return (-1, len(cleaned.split()), cleaned.lower())
         compact = re.sub(r"[^A-Za-z0-9]+", "", cleaned)
         if 2 <= len(compact) <= 8 and compact.upper() == compact:
@@ -7493,9 +7502,7 @@ def wi_search_names_for_org(org) -> list[str]:
             return (0 if not noisy_us_query else 1, len(cleaned.split()), cleaned.lower())
         if re.fullmatch(r"(?i)(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited|the|a|an)", cleaned):
             return (90, 99, cleaned.lower())
-        has_punctuation = bool(re.search(r"[-,/]", cleaned))
         has_legal_suffix = bool(re.search(r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\b", cleaned, re.I))
-        starts_article = bool(re.match(r"^(?:the|a|an)\s+", cleaned, re.I))
         return (
             1 if not (has_punctuation or has_legal_suffix or starts_article) else 2,
             len(cleaned.split()),
@@ -7517,6 +7524,217 @@ def wi_search_names_for_org(org) -> list[str]:
             filtered_names.append(value)
     filtered_names.sort(key=priority)
     return filtered_names
+
+
+def wi_snapshot_generated_datetime(snapshot: dict) -> datetime | None:
+    generated_at = str(snapshot.get("generated_at") or "").strip()
+    if not generated_at:
+        return None
+    try:
+        return datetime.fromisoformat(generated_at)
+    except Exception:
+        return None
+
+
+def wi_snapshot_load() -> tuple[dict | None, str]:
+    if not WI_USE_SNAPSHOT:
+        return None, "Wisconsin snapshot use is disabled"
+    try:
+        stat = WI_SNAPSHOT_PATH.stat()
+    except FileNotFoundError:
+        return None, f"Wisconsin snapshot file is missing: {WI_SNAPSHOT_PATH}"
+    except Exception as exc:
+        return None, f"Wisconsin snapshot file could not be inspected: {exc}"
+
+    cached_snapshot = WI_SNAPSHOT_CACHE.get("snapshot")
+    cached_mtime = float(WI_SNAPSHOT_CACHE.get("mtime") or 0.0)
+    if cached_snapshot is not None and cached_mtime == stat.st_mtime:
+        return cached_snapshot, str(WI_SNAPSHOT_CACHE.get("error") or "")
+
+    with WI_SNAPSHOT_LOCK:
+        cached_snapshot = WI_SNAPSHOT_CACHE.get("snapshot")
+        cached_mtime = float(WI_SNAPSHOT_CACHE.get("mtime") or 0.0)
+        if cached_snapshot is not None and cached_mtime == stat.st_mtime:
+            return cached_snapshot, str(WI_SNAPSHOT_CACHE.get("error") or "")
+        try:
+            snapshot = json.loads(WI_SNAPSHOT_PATH.read_text(encoding="utf-8"))
+            if WI_REQUIRE_COMPLETE_SNAPSHOT and not snapshot.get("complete"):
+                error = "Wisconsin snapshot is present but marked incomplete"
+                WI_SNAPSHOT_CACHE.update({"loaded_at": time.time(), "mtime": stat.st_mtime, "snapshot": None, "error": error})
+                return None, error
+            records = snapshot.get("records") or []
+            if not isinstance(records, list) or not records:
+                error = "Wisconsin snapshot contains no records"
+                WI_SNAPSHOT_CACHE.update({"loaded_at": time.time(), "mtime": stat.st_mtime, "snapshot": None, "error": error})
+                return None, error
+            WI_SNAPSHOT_CACHE.update({"loaded_at": time.time(), "mtime": stat.st_mtime, "snapshot": snapshot, "error": ""})
+            return snapshot, ""
+        except Exception as exc:
+            error = f"Wisconsin snapshot could not be loaded: {exc}"
+            WI_SNAPSHOT_CACHE.update({"loaded_at": time.time(), "mtime": stat.st_mtime, "snapshot": None, "error": error})
+            return None, error
+
+
+def wi_snapshot_record_names(record: dict) -> list[str]:
+    names: list[str] = []
+    for key in ("registry_names", "other_names"):
+        values = record.get(key) or []
+        if isinstance(values, str):
+            values = [values]
+        for value in values:
+            value = re.sub(r"\s+", " ", str(value or "").strip())
+            if value and value not in names:
+                names.append(value)
+    for key in ("registry_name", "full_name"):
+        value = re.sub(r"\s+", " ", str(record.get(key) or "").strip())
+        if value and value not in names:
+            names.append(value)
+    return names
+
+
+def wi_snapshot_has_distinctive_leading_prefix(candidate: str, target: str) -> bool:
+    candidate_norm = normalized_match_name(candidate)
+    target_norm = normalized_match_name(target)
+    if not candidate_norm or not target_norm or candidate_norm == target_norm or target_norm not in candidate_norm:
+        return False
+    before = candidate_norm.split(target_norm, 1)[0].strip()
+    if not before:
+        return False
+    generic_prefix_words = {
+        "the", "a", "an", "of", "for", "to", "and", "dba", "aka", "also", "as",
+        "soliciting", "doing", "business",
+    }
+    return any(word not in generic_prefix_words for word in before.split())
+
+
+def wi_snapshot_name_is_safe(candidate: str, targets: list[str], original_name: str, ein: str) -> bool:
+    for target in targets or []:
+        if wi_snapshot_has_distinctive_leading_prefix(candidate, target):
+            return False
+    if registry_name_is_safe_against_targets(candidate, targets, original_name, ein):
+        return True
+    return wi_contains_full_target_name(candidate, targets)
+
+
+def wi_snapshot_record_match(record: dict, org, targets: list[str]) -> tuple[int, int, str] | None:
+    original_name = getattr(org, "original_organization_name", org.organization_name)
+    best: tuple[int, int, str] | None = None
+    for registry_name in wi_snapshot_record_names(record):
+        if not wi_snapshot_name_is_safe(registry_name, targets, original_name, getattr(org, "ein", "")):
+            continue
+        priority = checker.name_match_priority_for_targets(registry_name, targets)
+        full_target = wi_contains_full_target_name(registry_name, targets)
+        if priority < 4 and not full_target:
+            continue
+        score = target_name_score(registry_name, targets)
+        composite = (priority, score, registry_name)
+        if best is None or composite[:2] > best[:2]:
+            best = composite
+    return best
+
+
+def wi_snapshot_better_candidate(candidate: dict, best: dict | None) -> bool:
+    if not best:
+        return True
+    if candidate["priority"] != best["priority"]:
+        return candidate["priority"] > best["priority"]
+    if candidate["score"] != best["score"]:
+        return candidate["score"] > best["score"]
+    candidate_name = normalized_match_name(candidate.get("matched_name", ""))
+    best_name = normalized_match_name(best.get("matched_name", ""))
+    if candidate_name and best_name and candidate_name == best_name:
+        candidate_date = candidate.get("expiration_date") or date.min
+        best_date = best.get("expiration_date") or date.min
+        if candidate_date != best_date:
+            return candidate_date > best_date
+    candidate_severity = wi_status_severity(str(candidate["record"].get("detail_status") or ""))
+    best_severity = wi_status_severity(str(best["record"].get("detail_status") or ""))
+    if candidate_severity != best_severity:
+        return candidate_severity > best_severity
+    return (candidate.get("expiration_date") or date.min) > (best.get("expiration_date") or date.min)
+
+
+def wi_snapshot_note(snapshot: dict) -> str:
+    generated_at = str(snapshot.get("generated_at") or "").strip()
+    scan = snapshot.get("scan") or {}
+    record_count = scan.get("record_count") or len(snapshot.get("records") or [])
+    note = (
+        "Wisconsin is checked from CharityClarity's Sunday-refreshed local snapshot built from official Wisconsin DFI "
+        f"Charitable Organization credential pages. Snapshot generated: {generated_at or 'unknown'}; records: {record_count}."
+    )
+    generated_dt = wi_snapshot_generated_datetime(snapshot)
+    if generated_dt:
+        age_seconds = max(0.0, time.time() - generated_dt.timestamp())
+        if age_seconds > WI_SNAPSHOT_MAX_AGE_SECONDS:
+            note += " Snapshot is older than the preferred freshness window, but CharityClarity used it instead of live WI scraping to avoid transient verification blocks."
+    return note
+
+
+def wi_snapshot_result_from_candidate(org, snapshot: dict, candidate: dict):
+    record = candidate["record"]
+    expiration_date = candidate.get("expiration_date")
+    detail_status = str(record.get("detail_status") or "")
+    detail_status_result = wi_status_from_detail_status(detail_status)
+    if detail_status_result in {"Revoked", "Suspended", "Closed / Withdrawn / Canceled"}:
+        status = detail_status_result
+    elif expiration_date:
+        status = status_from_calendar_date(expiration_date)
+    else:
+        status = detail_status_result or checker.STATUS_UNKNOWN
+    result = checker.StateResult(
+        org.organization_name,
+        org.ein,
+        "WI",
+        status,
+        str(record.get("detail_url") or WI_SEARCH_URL),
+    )
+    expiration_text = str(record.get("expiration_date") or "")
+    result.raw_status_text = " | ".join(part for part in [
+        detail_status,
+        f"Expiration Date: {expiration_text}" if expiration_text else "",
+        f"WI License: {record.get('license_number') or ''}" if record.get("license_number") else "",
+    ] if part)
+    result.source_note = wi_snapshot_note(snapshot)
+    result.matched_registry_name = candidate.get("matched_name", "")
+    result.matched_registry_identifier = str(record.get("license_number") or "")
+    result.success = True
+    result.error = ""
+    return result
+
+
+def search_wi_snapshot(org):
+    snapshot, load_error = wi_snapshot_load()
+    if not snapshot:
+        return None
+    targets = organization_match_target_variants(org.organization_name, org.ein)
+    best: dict | None = None
+    for record in snapshot.get("records") or []:
+        if not isinstance(record, dict):
+            continue
+        match = wi_snapshot_record_match(record, org, targets)
+        if not match:
+            continue
+        priority, score, matched_name = match
+        expiration_date = parse_due_date(str(record.get("expiration_date") or ""))
+        candidate = {
+            "record": record,
+            "priority": priority,
+            "score": score,
+            "matched_name": matched_name,
+            "expiration_date": expiration_date,
+        }
+        if wi_snapshot_better_candidate(candidate, best):
+            best = candidate
+    if best:
+        return wi_snapshot_result_from_candidate(org, snapshot, best)
+    result = checker.StateResult(org.organization_name, org.ein, "WI", checker.STATUS_NOT_REGISTERED, WI_SEARCH_URL)
+    result.raw_status_text = "No matching Wisconsin charitable organization credential in the local snapshot"
+    result.source_note = wi_snapshot_note(snapshot)
+    if load_error:
+        result.source_note += f" Snapshot load note: {load_error}"
+    result.success = True
+    result.error = ""
+    return result
 
 
 def wi_contains_full_target_name(registry_name: str, target_names: list[str]) -> bool:
@@ -8095,8 +8313,7 @@ def _search_wi_sidecar_unlocked(org):
         fallback_result = direct_then_browser_fallback(
             "Wisconsin DFI lookup used backend fallbacks to confirm the sidecar no-match result."
         )
-        if public_status(fallback_result) != "Site Not Reachable":
-            return fallback_result
+        return fallback_result
 
     result.status = data.get("status") or "Site Not Reachable"
     result.source_url = data.get("source_url") or WI_SEARCH_URL
@@ -11394,8 +11611,15 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
         result.success = True
         return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
 
-    if state == "WI" and WI_SIDECAR_URL and WI_LOOKUP_SECRET:
-        result = search_wi_sidecar(org)
+    if state == "WI":
+        result = search_wi_snapshot(org)
+        if result is None and WI_SIDECAR_URL and WI_LOOKUP_SECRET:
+            result = search_wi_sidecar(org)
+        elif result is None:
+            result = checker.StateResult(organization_name or f"EIN {format_ein(ein)}", format_ein(ein), state, "Site Not Reachable", WI_SEARCH_URL)
+            result.raw_status_text = "Wisconsin snapshot is unavailable and no WI fallback is configured"
+            result.source_note = "Wisconsin DFI lookup could not be completed because the local snapshot was unavailable."
+            result.success = False
         body = " ".join(part for part in [
             result.raw_status_text or "",
             result.source_note or "",
