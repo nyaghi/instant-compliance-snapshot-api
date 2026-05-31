@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.71-staging"
+APP_VERSION = "2026.05.30.72-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -6967,6 +6967,8 @@ def wi_search_names_for_org(org) -> list[str]:
         cleaned = re.sub(r"\s+", " ", (value or "").strip())
         if not cleaned:
             return (99, 99, "")
+        if cleaned.lower() in {re.sub(r"\s+", " ", (seed or "").strip()).lower() for seed in seed_names if seed}:
+            return (-1, len(cleaned.split()), cleaned.lower())
         compact = re.sub(r"[^A-Za-z0-9]+", "", cleaned)
         if 2 <= len(compact) <= 8 and compact.upper() == compact:
             return (0, len(cleaned.split()), cleaned.lower())
@@ -8605,6 +8607,15 @@ def true_status_from_body(result, body: str) -> str:
 
     if result_indicates_no_record(result):
         return "Not Registered"
+    if state == "MS" and record_confirmed:
+        ms_status_text = " ".join([result.status or "", result.raw_status_text or "", result.source_note or ""])
+        ms_registry_date = explicit_registry_date(result, body)
+        if re.search(r"\b(closed|withdrawn|cancel(?:ed|led)|revoked|terminated)\b", ms_status_text, re.I):
+            return "Closed / Withdrawn / Canceled"
+        if re.search(r"\b(expired|suspended)\b", ms_status_text, re.I):
+            return "Delinquent"
+        if re.search(r"\bcurrent\s*-\s*registered\b|\bcurrent\b|\bregistered\b", result.raw_status_text or "", re.I):
+            return status_from_calendar_date(ms_registry_date) if ms_registry_date else "Current"
     if state == "CT" and record_confirmed and registry_date and re.search(r"\bPUBLIC\s+CHARITY\b", result.raw_status_text or "", re.I):
         return status_from_calendar_date(registry_date)
     if state == "HI" and record_confirmed and (result_fields_indicate_exempt(result) or hi_indicates_exempt_registration(combined)):
@@ -9747,13 +9758,6 @@ def ms_preferred_search_variants(name: str, ein: str = "") -> list[str]:
             flags=re.I,
         ).strip()
         add(without_suffix)
-        comma_legal_suffix = re.sub(
-            r"\s*,?\s*(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\s*$",
-            lambda match: f", {match.group(1)}",
-            base,
-            flags=re.I,
-        ).strip()
-        add(comma_legal_suffix)
         us_reduced = re.sub(r"^(?:the\s+)?(?:u\.?\s*s\.?|us|united\s+states)\s+", "", base, flags=re.I).strip()
         add(us_reduced)
         no_article = re.sub(r"^(?:the|a|an)\s+", "", base, flags=re.I).strip()
@@ -9769,6 +9773,11 @@ def ms_preferred_search_variants(name: str, ein: str = "") -> list[str]:
             flags=re.I,
         ).strip()
         add(children_hospital)
+        children_hospital_no_apostrophe = re.sub(r"(?i)\bchildren'?s\b", "Childrens", children_hospital)
+        add(children_hospital_no_apostrophe)
+        children_hospital_plain = re.sub(r"[^\w\s]", " ", children_hospital)
+        children_hospital_plain = re.sub(r"\s+", " ", children_hospital_plain).strip()
+        add(children_hospital_plain)
     return variants
 
 
@@ -10041,7 +10050,7 @@ def search_batch_browser_state(page, org, state: str):
             module_org = module.Organization(organization_name=variant_name)
             module_org.ein = org.ein
             module_org.original_organization_name = getattr(org, "original_organization_name", org.organization_name)
-            external_result = search_ms_fast(page, module_org, navigate=(attempt_index == 0))
+            external_result = search_ms_fast(page, module_org, navigate=True)
             best_external = best_external or external_result
             status = external_status_to_checker_status(getattr(external_result, "status", ""))
             raw_text = " ".join([
@@ -10051,6 +10060,8 @@ def search_batch_browser_state(page, org, state: str):
             if status == "Site Not Reachable":
                 best_external = external_result
                 break
+            if status == "Unknown":
+                continue
             if status == "Not Registered" or re.search(r"\b(no matching organization row|no results found)\b", raw_text, re.I):
                 continue
             matched_name = getattr(external_result, "matched_registry_name", "") or getattr(external_result, "organization_name", "")
