@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.68-staging"
+APP_VERSION = "2026.05.30.69-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -3629,6 +3629,7 @@ def me_fast_direct_confirmation_result(org):
     best_opener = None
     best_score = (-999, -999)
     last_error = ""
+    checked_any = False
 
     for query in me_fast_direct_query_variants(org):
         try:
@@ -3636,6 +3637,7 @@ def me_fast_direct_confirmation_result(org):
         except Exception as exc:
             last_error = f"{type(exc).__name__}: {str(exc)[:120]}"
             continue
+        checked_any = True
         for row in rows:
             row_text = " ".join(row.get(key, "") for key in ["name", "number", "location", "profession", "status"])
             row_score = checker.candidate_selection_score_for_targets(row.get("name", ""), target_names, row_text)
@@ -3651,6 +3653,21 @@ def me_fast_direct_confirmation_result(org):
             break
 
     if not best_row or not best_opener:
+        if checked_any:
+            result = checker.StateResult(
+                getattr(org, "organization_name", ""),
+                getattr(org, "ein", ""),
+                "ME",
+                checker.STATUS_NOT_REGISTERED,
+                NAME_SEARCH_PREFLIGHT_URLS["ME"],
+                raw_status_text="No matching organization record",
+                source_note="Maine fast direct public registry search returned no matching organization record for the generated name variants.",
+                success=True,
+            )
+            if last_error:
+                result.source_note += f" Last non-fatal direct-confirmation error: {last_error}"
+            setattr(result, "_cc_detail_body", "0 records found. Maine fast direct public registry search returned no matching organization record.")
+            return result
         return None
 
     detail_url = urljoin("https://www.pfr.maine.gov/ALMSOnline/ALMSQuery/", best_row.get("href", ""))
@@ -3727,6 +3744,11 @@ def search_me_serialized(page, org, confirm_no_match: bool = True):
                 require_safe_registry_name=True,
                 preferred_variants=preferred_variants,
             )
+
+        direct_first = me_fast_direct_confirmation_result(org)
+        if direct_first:
+            ME_LAST_LOOKUP_FINISHED = time.perf_counter()
+            return direct_first
 
         result = run_lookup()
         if confirm_no_match and ME_CONFIRM_NOT_REGISTERED and public_status(result) == "Not Registered":
