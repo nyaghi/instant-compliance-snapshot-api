@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.65-staging"
+APP_VERSION = "2026.05.30.66-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -153,7 +153,7 @@ AR_NAME_SEARCH_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_AR_NAME_SEARC
 ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "1.0"))), 30.0)
 ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS = min(max(1, int(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS", "2"))), 4)
 ME_CONFIRM_NOT_REGISTERED = os.environ.get("CE_ME_CONFIRM_NOT_REGISTERED", "1").strip().lower() in {"1", "true", "yes"}
-ME_FAST_DIRECT_CONFIRMATION_MAX_VARIANTS = min(max(3, int(os.environ.get("CE_ME_FAST_DIRECT_CONFIRMATION_MAX_VARIANTS", "5"))), 12)
+ME_FAST_DIRECT_CONFIRMATION_MAX_VARIANTS = min(max(3, int(os.environ.get("CE_ME_FAST_DIRECT_CONFIRMATION_MAX_VARIANTS", "3"))), 12)
 ME_FAST_DIRECT_GET_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_ME_FAST_DIRECT_GET_TIMEOUT_SECONDS", "8"))), 15.0)
 ME_FAST_DIRECT_POST_TIMEOUT_SECONDS = min(max(4.0, float(os.environ.get("CE_ME_FAST_DIRECT_POST_TIMEOUT_SECONDS", "10"))), 18.0)
 ME_FAST_DIRECT_DETAIL_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_ME_FAST_DIRECT_DETAIL_TIMEOUT_SECONDS", "8"))), 15.0)
