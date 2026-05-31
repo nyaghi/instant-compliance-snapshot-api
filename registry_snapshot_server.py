@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.70-staging"
+APP_VERSION = "2026.05.30.71-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -9852,7 +9852,7 @@ def ms_status_from_filing_status(filing_status: str, expiration_date: date | Non
     return classifier(filing_status, expiration_date)
 
 
-def search_ms_fast(page, org):
+def search_ms_fast(page, org, navigate: bool = True):
     """Master-level Mississippi path with bounded waits around the embedded checker logic."""
     modules = state_batch_modules(["MS"])
     module = modules[load_state_batch_bundle().STATE_TO_MODULE["MS"]]
@@ -9862,8 +9862,9 @@ def search_ms_fast(page, org):
         raw_status_text="",
     )
     try:
-        page.goto(module.MS_SEARCH_URL, wait_until="domcontentloaded", timeout=12000)
-        safe_wait_for_network_idle(page, timeout=1500)
+        if navigate:
+            page.goto(module.MS_SEARCH_URL, wait_until="domcontentloaded", timeout=12000)
+            safe_wait_for_network_idle(page, timeout=1500)
 
         input_box = module.find_visible_input(page, [
             'input[aria-label*="Charity Name" i]',
@@ -9874,8 +9875,20 @@ def search_ms_fast(page, org):
             'input[type="text"]',
         ])
         if not input_box:
-            result.error = "Could not find the Mississippi Charity Name input."
-            return result
+            if not navigate:
+                page.goto(module.MS_SEARCH_URL, wait_until="domcontentloaded", timeout=12000)
+                safe_wait_for_network_idle(page, timeout=1500)
+                input_box = module.find_visible_input(page, [
+                    'input[aria-label*="Charity Name" i]',
+                    'input[name*="CharityName" i]',
+                    'input[id*="CharityName" i]',
+                    'input[name*="Name" i]',
+                    'input[id*="Name" i]',
+                    'input[type="text"]',
+                ])
+            if not input_box:
+                result.error = "Could not find the Mississippi Charity Name input."
+                return result
 
         input_box.click(timeout=3000)
         input_box.fill("")
@@ -10016,33 +10029,19 @@ def search_batch_browser_state(page, org, state: str):
     modules = state_batch_modules([state])
     module = modules[load_state_batch_bundle().STATE_TO_MODULE[state]]
     if state == "MS":
-        generated_variants = organization_name_variants(
-            org.organization_name,
-            org.ein,
-            include_ein_aliases=True,
-            include_name_segments=True,
-            include_compact_legal_suffixes=True,
-            include_leading_article_variants=True,
-        )
         variants = ms_preferred_search_variants(org.organization_name, org.ein)
-        for variant in generated_variants:
-            if ms_search_variant_too_broad(variant) or ms_short_prefix_name_mismatch(org.organization_name, variant):
-                continue
-            if variant.lower() not in {existing.lower() for existing in variants}:
-                variants.append(variant)
-            if len(variants) >= 4:
-                break
         if org.organization_name and org.organization_name not in variants:
             variants.insert(0, org.organization_name)
+        variants = variants[:4]
         best_external = None
-        ms_deadline = time.perf_counter() + 55.0
-        for variant_name in variants or [org.organization_name]:
+        ms_deadline = time.perf_counter() + 42.0
+        for attempt_index, variant_name in enumerate(variants or [org.organization_name]):
             if time.perf_counter() >= ms_deadline:
                 break
             module_org = module.Organization(organization_name=variant_name)
             module_org.ein = org.ein
             module_org.original_organization_name = getattr(org, "original_organization_name", org.organization_name)
-            external_result = search_ms_fast(page, module_org)
+            external_result = search_ms_fast(page, module_org, navigate=(attempt_index == 0))
             best_external = best_external or external_result
             status = external_status_to_checker_status(getattr(external_result, "status", ""))
             raw_text = " ".join([
