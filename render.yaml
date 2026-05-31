@@ -94,6 +94,10 @@ services:
         value: "18"
       - key: CE_WI_SIDECAR_ATTEMPTS
         value: "1"
+      - key: CE_WI_SIDECAR_LANES
+        value: "1"
+      - key: CE_WI_SIDECAR_ACQUIRE_SECONDS
+        value: "70"
       - key: CE_WI_SIDECAR_TIMEOUT_SECONDS
         value: "18"
       - key: CE_WI_CONFIRM_SIDECAR_NO_MATCH

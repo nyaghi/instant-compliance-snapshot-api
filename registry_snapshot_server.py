@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.84-staging"
+APP_VERSION = "2026.05.30.85-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -7900,6 +7900,20 @@ def search_wi(page, org):
 
 
 def search_wi_sidecar(org):
+    acquired = WI_SIDECAR_SEMAPHORE.acquire(timeout=WI_SIDECAR_ACQUIRE_SECONDS)
+    if not acquired:
+        result = checker.StateResult(org.organization_name, org.ein, "WI", "Site Not Reachable", WI_SEARCH_URL)
+        result.raw_status_text = "Wisconsin lookup lanes were busy"
+        result.source_note = "Wisconsin DFI lookup could not start before the lane-acquire timeout."
+        result.success = False
+        return result
+    try:
+        return _search_wi_sidecar_unlocked(org)
+    finally:
+        WI_SIDECAR_SEMAPHORE.release()
+
+
+def _search_wi_sidecar_unlocked(org):
     result = checker.StateResult(org.organization_name, org.ein, "WI", "Site Not Reachable", WI_SEARCH_URL)
     if not (WI_SIDECAR_URL and WI_LOOKUP_SECRET):
         result.raw_status_text = "Wisconsin sidecar is not configured"
