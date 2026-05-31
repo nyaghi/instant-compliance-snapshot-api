@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.31.98-staging"
+APP_VERSION = "2026.05.31.99-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -7550,6 +7550,7 @@ def wi_search_names_for_org(org) -> list[str]:
             expanded_names.append(aids_tb_variant)
 
     seed_key_names = {re.sub(r"\s+", " ", (seed or "").strip()).lower() for seed in seed_names if seed}
+    original_seed_key = re.sub(r"\s+", " ", (original_name or "").strip()).lower()
     original_substantive_count = len([
         word for word in re.findall(r"[A-Za-z0-9]+", original_name or "")
         if word.lower() not in {
@@ -7566,7 +7567,9 @@ def wi_search_names_for_org(org) -> list[str]:
         starts_article = bool(re.match(r"^(?:the|a|an)\s+", cleaned, re.I))
         exact_seed = cleaned.lower() in seed_key_names
         word_rank = -min(len(cleaned.split()), 8)
-        if exact_seed and not (has_punctuation or starts_article):
+        if original_seed_key and cleaned.lower() == original_seed_key:
+            return (-2, word_rank, cleaned.lower())
+        if exact_seed:
             return (-1, word_rank, cleaned.lower())
         compact = re.sub(r"[^A-Za-z0-9]+", "", cleaned)
         if 2 <= len(compact) <= 8 and compact.upper() == compact:
