@@ -2254,17 +2254,6 @@
       "raw_status_text": "Expiration Date 4/12/2026",
       "source_file": "data/staging_v73_posttimeout_run1_full_5x30x3_live_sheets_20260530_235213/sheet_13i2hXn6_gid0_comparison_partial.csv",
       "status": "Delinquent"
-    },
-    "980380092": {
-      "comments": "The FL public registry detail page shows the organization record and the most recent fiscal/filing year identified is 2023. The available CharityClarity check did not provide enough fiscal year-end information to calculate a precise due date, but the filing record appears more than one annual cycle behind.",
-      "ein": "980380092",
-      "matched_registry_identifier": "CH37858",
-      "matched_registry_name": "License/Registration Number:\t\tAdvanced Search",
-      "observed_at": "2026-05-17T14:41:14.250017+00:00",
-      "organization_name": "The Global Fund To Fight Aids, Tuberculosis And Malaria",
-      "raw_status_text": "Expiration Date 1/3/2015",
-      "source_file": "data/local_20260517_8_issue_baseline/results.csv",
-      "status": "Delinquent"
     }
   },
   "generated_at": "2026-05-31T07:35:05.236222+00:00",

@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.81-staging"
+APP_VERSION = "2026.05.30.82-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -4494,6 +4494,8 @@ def co_status_from_snapshot_row(row: dict[str, str]) -> tuple[str, str]:
         return "Closed / Withdrawn / Canceled", f"Colorado extract Current Status is {raw_status}."
     if re.search(r"\b(REVOKED|DENIED)\b", raw_status):
         return "Revoked", f"Colorado extract Current Status is {raw_status}."
+    if re.search(r"\bNOTICE\s*3\b", raw_status):
+        return "Suspended", f"Colorado extract Current Status is {raw_status}."
     if re.search(r"\b(NOTICE|REMINDER|EXPIRED|DELINQUENT)\b", raw_status):
         return "Delinquent", f"Colorado extract Current Status is {raw_status}."
     if re.search(r"\b(PENDING|RENEWAL|AMENDMENT|IN\s+PROCESS)\b", raw_status):
@@ -4780,6 +4782,12 @@ def fl_status_from_cached_entry(entry: dict) -> str:
 def fl_unavailable_fallback_result(org, preflight_note: str):
     ein_key = re.sub(r"\D", "", str(org.ein or ""))
     entry = fl_fallback_cache().get(ein_key) if ein_key else None
+    if isinstance(entry, dict):
+        cached_status = (entry.get("status") or "").strip()
+        cached_name = entry.get("matched_registry_name", "") or ""
+        if cached_status != checker.STATUS_NOT_REGISTERED and not registry_name_is_safe_for_org(cached_name, org.organization_name, org.ein):
+            entry = None
+
     if isinstance(entry, dict):
         result = checker.StateResult(
             org.organization_name,
@@ -5902,7 +5910,7 @@ def search_mn(page, org):
             org.organization_name,
             org.ein,
             include_ein_aliases=True,
-            include_name_segments=False,
+            include_name_segments=True,
             include_compact_legal_suffixes=True,
             include_leading_article_variants=True,
             include_broad_query_prefixes=False,
