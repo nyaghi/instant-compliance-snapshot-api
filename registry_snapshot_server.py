@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.31.103-staging"
+APP_VERSION = "2026.05.31.104-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -4963,6 +4963,34 @@ def normalized_match_name(value: str) -> str:
     return re.sub(r"\s+", " ", normalized).strip()
 
 
+def single_plural_token_variant_match(left: str, right: str) -> bool:
+    left_tokens = (left or "").split()
+    right_tokens = (right or "").split()
+    if len(left_tokens) != len(right_tokens) or len(left_tokens) < 3:
+        return False
+    mismatches = []
+    for left_token, right_token in zip(left_tokens, right_tokens):
+        if left_token == right_token:
+            continue
+        mismatches.append((left_token, right_token))
+        if len(mismatches) > 1:
+            return False
+    if len(mismatches) != 1:
+        return False
+    left_token, right_token = mismatches[0]
+    if min(len(left_token), len(right_token)) < 5:
+        return False
+    if left_token.endswith("ies") and right_token == f"{left_token[:-3]}y":
+        return True
+    if right_token.endswith("ies") and left_token == f"{right_token[:-3]}y":
+        return True
+    if left_token.endswith("s") and not left_token.endswith(("ss", "us")) and left_token[:-1] == right_token:
+        return True
+    if right_token.endswith("s") and not right_token.endswith(("ss", "us")) and right_token[:-1] == left_token:
+        return True
+    return False
+
+
 def target_name_score(row_name: str, targets: list[str]) -> int:
     row_norm = normalized_match_name(row_name)
     if not row_norm:
@@ -4976,6 +5004,8 @@ def target_name_score(row_name: str, targets: list[str]) -> int:
             best = max(best, 1000)
         if row_norm == target_norm:
             best = max(best, 1000)
+        elif single_plural_token_variant_match(row_norm, target_norm):
+            best = max(best, 920)
         elif row_norm.startswith(target_norm) or target_norm.startswith(row_norm):
             shorter = min(len(row_norm.split()), len(target_norm.split()))
             if shorter >= 3:
@@ -7579,6 +7609,8 @@ def wi_search_names_for_org(org) -> list[str]:
                 return (5, word_rank, cleaned.lower())
             return (0, word_rank, cleaned.lower())
         if re.search(r"\bAIDS?,\s+Tuberculosis\s+&\s+Malaria\b", cleaned, re.I):
+            return (0, word_rank, cleaned.lower())
+        if re.search(r"\bChildren['\u2019]s\s+Hospital\s+Foundation\b", cleaned, re.I):
             return (0, word_rank, cleaned.lower())
         if re.match(r"^(?:u\.?\s*s\.?|us)\s+", cleaned, re.I):
             noisy_us_query = bool(re.search(r"[-,/]", cleaned)) or bool(re.match(r"^u\.", cleaned, re.I))
@@ -11102,6 +11134,7 @@ def ok_terminal_closed_text(*texts: str) -> bool:
 
 def ok_search_name_for_org(org) -> str:
     name = re.sub(r"\s+", " ", getattr(org, "organization_name", "") or "").strip()
+    name = re.sub(r"\b(inc|corp|ltd)\.$", r"\1", name, flags=re.I).strip()
     without_article = re.sub(r"^the\s+", "", name, flags=re.I).strip()
     if without_article and without_article.lower() != name.lower():
         return without_article
