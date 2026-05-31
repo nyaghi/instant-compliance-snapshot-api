@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.31.104-staging"
+APP_VERSION = "2026.05.31.105-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -3554,41 +3554,58 @@ def search_va_direct(org):
         if not safe_links:
             continue
 
-        _, href, link_text, identifier = sorted(safe_links, key=lambda item: item[0], reverse=True)[0]
-        detail_url = urljoin(url, href)
-        try:
-            detail_html = va_direct_request(detail_url, timeout_seconds=16.0)
-        except Exception as exc:
-            result = checker.StateResult(org.organization_name, org.ein, "VA", "Site Not Reachable", detail_url)
-            result.error = str(exc)
-            result.raw_status_text = f"Virginia detail lookup failed after matching {link_text}"
-            result.matched_registry_name = link_text
-            result.matched_registry_identifier = identifier
+        accepted_details = []
+        for order_index, (_, href, link_text, identifier) in enumerate(sorted(safe_links, key=lambda item: item[0], reverse=True)):
+            detail_url = urljoin(url, href)
+            try:
+                detail_html = va_direct_request(detail_url, timeout_seconds=16.0)
+            except Exception as exc:
+                last_error = str(exc)
+                continue
+
+            detail_text = va_html_to_text(detail_html)
+            primary_name = va_labeled_value(detail_text, "Primary Name") or link_text
+            if primary_name and not registry_name_is_safe_for_org(primary_name, org.organization_name, org.ein):
+                best_rejected_name = primary_name
+                continue
+
+            current_expires = va_labeled_value(detail_text, "Current Registration Expires")
+            extended_until = va_labeled_value(detail_text, "Registration Extended Until")
+            extension_date = parse_due_date(extended_until) if not re.fullmatch(r"N/?A|None|Not Applicable", extended_until or "", re.I) else None
+            expiration_date = parse_due_date(current_expires)
+            effective_date = extension_date or expiration_date
+            raw_status = " | ".join(
+                part for part in [
+                    f"Primary Name: {primary_name}" if primary_name else "",
+                    f"Other Names: {va_labeled_value(detail_text, 'Other Names')}" if va_labeled_value(detail_text, "Other Names") else "",
+                    f"Current Registration Expires: {current_expires}" if current_expires else "",
+                    f"Registration Extended Until: {extended_until}" if extended_until else "",
+                    f"Registration Filing Status: {va_labeled_value(detail_text, 'Registration Filing Status')}" if va_labeled_value(detail_text, "Registration Filing Status") else "",
+                ]
+                if part
+            ) or detail_text[:1000]
+            accepted_details.append({
+                "order": order_index,
+                "effective_date": effective_date,
+                "detail_url": detail_url,
+                "raw_status": raw_status,
+                "status": va_registry_status_from_detail(detail_text),
+                "primary_name": primary_name,
+                "identifier": identifier,
+            })
+
+        if accepted_details:
+            selected = max(
+                accepted_details,
+                key=lambda item: (item["effective_date"] or date.min, -item["order"]),
+            )
+            result = checker.StateResult(org.organization_name, org.ein, "VA", selected["status"], selected["detail_url"])
+            result.raw_status_text = selected["raw_status"]
+            result.source_note = "Virginia public registry was searched directly by name; when multiple safe same-name links existed, CharityClarity selected the most recent accepted detail record."
+            result.matched_registry_name = selected["primary_name"]
+            result.matched_registry_identifier = selected["identifier"]
+            result.success = True
             return result
-
-        detail_text = va_html_to_text(detail_html)
-        primary_name = va_labeled_value(detail_text, "Primary Name") or link_text
-        if primary_name and not registry_name_is_safe_for_org(primary_name, org.organization_name, org.ein):
-            best_rejected_name = primary_name
-            continue
-
-        raw_status = " | ".join(
-            part for part in [
-                f"Primary Name: {primary_name}" if primary_name else "",
-                f"Other Names: {va_labeled_value(detail_text, 'Other Names')}" if va_labeled_value(detail_text, "Other Names") else "",
-                f"Current Registration Expires: {va_labeled_value(detail_text, 'Current Registration Expires')}" if va_labeled_value(detail_text, "Current Registration Expires") else "",
-                f"Registration Extended Until: {va_labeled_value(detail_text, 'Registration Extended Until')}" if va_labeled_value(detail_text, "Registration Extended Until") else "",
-                f"Registration Filing Status: {va_labeled_value(detail_text, 'Registration Filing Status')}" if va_labeled_value(detail_text, "Registration Filing Status") else "",
-            ]
-            if part
-        ) or detail_text[:1000]
-        result = checker.StateResult(org.organization_name, org.ein, "VA", va_registry_status_from_detail(detail_text), detail_url)
-        result.raw_status_text = raw_status
-        result.source_note = "Virginia public registry was searched directly by name; the matched detail page supplied the registration fields."
-        result.matched_registry_name = primary_name or link_text
-        result.matched_registry_identifier = identifier
-        result.success = True
-        return result
 
     result = checker.StateResult(
         org.organization_name,
