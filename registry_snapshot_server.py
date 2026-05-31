@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.66-staging"
+APP_VERSION = "2026.05.30.67-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -157,6 +157,7 @@ ME_FAST_DIRECT_CONFIRMATION_MAX_VARIANTS = min(max(3, int(os.environ.get("CE_ME_
 ME_FAST_DIRECT_GET_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_ME_FAST_DIRECT_GET_TIMEOUT_SECONDS", "8"))), 15.0)
 ME_FAST_DIRECT_POST_TIMEOUT_SECONDS = min(max(4.0, float(os.environ.get("CE_ME_FAST_DIRECT_POST_TIMEOUT_SECONDS", "10"))), 18.0)
 ME_FAST_DIRECT_DETAIL_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_ME_FAST_DIRECT_DETAIL_TIMEOUT_SECONDS", "8"))), 15.0)
+MD_DIRECT_EIN_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_MD_DIRECT_EIN_TIMEOUT_SECONDS", "8"))), 15.0)
 MI_ENABLE_NAME_FALLBACK = os.environ.get("CE_MI_ENABLE_NAME_FALLBACK", "1").strip().lower() in {"1", "true", "yes"}
 MI_CONFIRM_NO_RESULTS_FRAME = os.environ.get("CE_MI_CONFIRM_NO_RESULTS_FRAME", "0").strip().lower() in {"1", "true", "yes"}
 ENABLE_CROSS_STATE_NAME_RETRY = os.environ.get("CE_ENABLE_CROSS_STATE_NAME_RETRY", "0").strip().lower() in {"1", "true", "yes"}
@@ -1712,6 +1713,63 @@ def format_ein(value: str) -> str:
     if len(digits) == 9:
         return f"{digits[:2]}-{digits[2:]}"
     return (value or "").strip()
+
+
+def md_direct_ein_no_record_result(org):
+    ein = canonical_ein_digits(getattr(org, "ein", ""))
+    if len(ein) != 9:
+        return None
+    formatted_ein = f"{ein[:2]}-{ein[2:]}"
+    base_url = "https://onestop.md.gov/list_views/62f3e1797f7e3200016a3dab"
+    md_ein_filter_id = "a87e8739-62de-600d-728c-6300bf865f9e"
+    entries_url = (
+        f"{base_url}/entries?_method=get"
+        f"&filter%5B{md_ein_filter_id}%5D={quote(formatted_ein)}"
+        f"&filter%5Blimit%5D=20"
+        f"&{md_ein_filter_id}={quote(formatted_ein)}"
+        "&limit=20&fake=false&forceNewQuery=false&query%5Bpage%5D=1&page=1"
+    )
+    request = urllib.request.Request(
+        entries_url,
+        headers={
+            "User-Agent": BROWSER_USER_AGENT,
+            "Accept": "text/html, */*; q=0.01",
+            "X-Requested-With": "XMLHttpRequest",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=MD_DIRECT_EIN_TIMEOUT_SECONDS) as response:
+            body = response.read().decode("utf-8", "replace")
+            if getattr(response, "status", None) == 204 or not body.strip():
+                result = checker.StateResult(
+                    getattr(org, "organization_name", ""),
+                    getattr(org, "ein", ""),
+                    "MD",
+                    checker.STATUS_NOT_REGISTERED,
+                    entries_url,
+                )
+                result.raw_status_text = "No record found"
+                result.source_note = "Maryland exact-EIN entries endpoint returned no public registry record."
+                result.success = True
+                result.error = ""
+                return result
+    except urllib.error.HTTPError as exc:
+        if exc.code == 204:
+            result = checker.StateResult(
+                getattr(org, "organization_name", ""),
+                getattr(org, "ein", ""),
+                "MD",
+                checker.STATUS_NOT_REGISTERED,
+                entries_url,
+            )
+            result.raw_status_text = "No record found"
+            result.source_note = "Maryland exact-EIN entries endpoint returned no public registry record."
+            result.success = True
+            result.error = ""
+            return result
+    except Exception:
+        return None
+    return None
 
 
 def fiscal_year_end_for_ein(ein: str) -> tuple[int, int] | None:
@@ -10709,6 +10767,18 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
     if state == "OR":
         lookup_started = time.perf_counter()
         result = or_snapshot_result_for_ein(org)
+        if result:
+            body = " ".join(part for part in [
+                result.raw_status_text or "",
+                result.source_note or "",
+                result.matched_registry_name or "",
+                result.matched_registry_identifier or "",
+            ]).strip()
+            return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
+
+    if state == "MD":
+        lookup_started = time.perf_counter()
+        result = md_direct_ein_no_record_result(org)
         if result:
             body = " ".join(part for part in [
                 result.raw_status_text or "",
