@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.31.105-staging"
+APP_VERSION = "2026.05.31.106-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -279,9 +279,9 @@ NAME_SEARCH_PREFLIGHT_URLS = {
 }
 AR_SEARCH_URL = "https://sos-corp-search.ark.org/index.php/charity"
 WV_SEARCH_URL = "https://erls.wvsos.gov/OnlineCharitiesSearch/Search"
-WV_GOTO_TIMEOUT_MS = min(max(8000, int(os.environ.get("CE_WV_GOTO_TIMEOUT_MS", "20000"))), 45000)
-WV_NETWORK_IDLE_TIMEOUT_MS = min(max(3000, int(os.environ.get("CE_WV_NETWORK_IDLE_TIMEOUT_MS", "7000"))), 15000)
-WV_SEARCH_IDLE_TIMEOUT_MS = min(max(5000, int(os.environ.get("CE_WV_SEARCH_IDLE_TIMEOUT_MS", "12000"))), 20000)
+WV_GOTO_TIMEOUT_MS = min(max(8000, int(os.environ.get("CE_WV_GOTO_TIMEOUT_MS", "12000"))), 45000)
+WV_NETWORK_IDLE_TIMEOUT_MS = min(max(3000, int(os.environ.get("CE_WV_NETWORK_IDLE_TIMEOUT_MS", "4000"))), 15000)
+WV_SEARCH_IDLE_TIMEOUT_MS = min(max(5000, int(os.environ.get("CE_WV_SEARCH_IDLE_TIMEOUT_MS", "7000"))), 20000)
 WV_RESULTS_SETTLE_MS = min(max(500, int(os.environ.get("CE_WV_RESULTS_SETTLE_MS", "1000"))), 2500)
 DOWNLOADABLE_DATA_COMMENT_FOOTERS = {
     "KS": (
@@ -5294,6 +5294,31 @@ def ct_direct_query(search_name: str, timeout_seconds: float | None = None) -> s
         raise RuntimeError(f"Connecticut direct HTTP query failed: {exc}") from exc
 
 
+def ct_direct_detail_text(row_html: str, timeout_seconds: float | None = None) -> str:
+    match = re.search(r"DisplayLicenceDetail\((?:&#39;|')(.+?)(?:&#39;|')\)", row_html or "", re.I | re.S)
+    if not match:
+        return ""
+    detail_id = html.unescape(match.group(1)).strip()
+    if not detail_id:
+        return ""
+    timeout = max(2.0, min(float(timeout_seconds or CT_DIRECT_TIMEOUT_SECONDS), CT_DIRECT_TIMEOUT_SECONDS))
+    url = "https://www.elicense.ct.gov/lookup/licensedetail.aspx?id=" + quote(detail_id, safe="")
+    try:
+        request = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": BROWSER_USER_AGENT,
+                "Referer": "https://www.elicense.ct.gov/lookup/licenselookup.aspx",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            detail_html = response.read().decode("utf-8", errors="replace")
+        return html_fragment_text(detail_html)
+    except Exception:
+        return ""
+
+
 def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: str):
     row_text = html_fragment_text(row_html)
     name_match = re.search(r"<b[^>]*headline6[^>]*>(.*?)</b>", row_html, re.I | re.S)
@@ -5301,6 +5326,7 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
     name_score = target_name_score(row_name, safe_targets)
     if name_score < 0:
         return None, name_score
+    detail_text = ct_direct_detail_text(row_html, timeout_seconds=3.0)
     pairs: dict[str, str] = {}
     for label_html, value_html in re.findall(r"<b[^>]*>(.*?)</b>\s*<p[^>]*>(.*?)</p>", row_html, re.I | re.S):
         label = html_fragment_text(label_html).strip(": ")
@@ -5311,12 +5337,12 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
     credential_description = pairs.get("Credential Description", "")
     status_text = pairs.get("Status", "")
     status_reason = pairs.get("Status Reason", "")
-    combined = " ".join([row_text, credential, credential_description, status_text, status_reason])
+    combined = " ".join([row_text, detail_text, credential, credential_description, status_text, status_reason])
     result = checker.StateResult(org.organization_name, org.ein, "CT", checker.STATUS_UNKNOWN, url)
     result.matched_registry_name = row_name
     credential_match = re.search(r"\b[A-Z]{2,5}\.[0-9A-Z.-]+", combined)
     result.matched_registry_identifier = credential or (credential_match.group(0) if credential_match else "")
-    exp_date = first_date_near_label(row_text, ["Expiration Date", "Expiration", "Expires", "Expire Date"])
+    exp_date = first_date_near_label(" ".join([row_text, detail_text]), ["Expiration Date", "Expiration", "Expires", "Expire Date"])
     if re.search(r"\bEXEMPT\b", " ".join([credential, credential_description]), re.I):
         result.status = "Exempt"
     elif re.search(r"\b(non\W*compliant|not\s+in\s+compliance)\b", combined, re.I):
@@ -9481,6 +9507,16 @@ def true_status_from_body(result, body: str) -> str:
         return status_from_calendar_date(registry_date) if registry_date else base_status
     if result_explicitly_exempt(result):
         return "Exempt"
+    if (
+        state == "NY"
+        and annual_filings_absent(combined)
+        and (
+            normalized_ein_key(result.ein) in re.sub(r"\D", "", combined)
+            or registry_name_is_safe_for_org(result.matched_registry_name or "", result.organization_name, result.ein)
+        )
+        and not body_indicates_no_organization_record(combined)
+    ):
+        return "Delinquent"
     if explicit_no_registration_status(result, combined):
         return "Not Registered"
     if state == "AR":
@@ -9557,6 +9593,16 @@ def true_status_from_body(result, body: str) -> str:
             return "Current"
 
     record_confirmed = organization_record_confirmed(result, combined) or (state == "MD" and md_detail_page_matched(result, combined))
+    if (
+        state == "NY"
+        and annual_filings_absent(combined)
+        and (
+            normalized_ein_key(result.ein) in re.sub(r"\D", "", combined)
+            or registry_name_is_safe_for_org(result.matched_registry_name or "", result.organization_name, result.ein)
+        )
+        and not body_indicates_no_organization_record(combined)
+    ):
+        return "Delinquent"
 
     if result_indicates_no_record(result):
         return "Not Registered"
@@ -11574,7 +11620,10 @@ def wv_preferred_query_variants(name: str) -> list[str]:
     ).strip()
     no_punctuation_without_suffix = re.sub(r"[^\w\s]", " ", without_suffix).strip()
     no_punctuation_without_suffix = re.sub(r"\s+", " ", no_punctuation_without_suffix)
+    without_leading_article = re.sub(r"^\s*(the|a|an)\s+", "", no_punctuation_without_suffix or without_suffix, flags=re.I).strip()
 
+    if without_leading_article and without_leading_article.lower() != base.lower():
+        add(without_leading_article)
     if without_suffix and without_suffix.lower() != base.lower():
         add(without_suffix)
     if no_punctuation_without_suffix and no_punctuation_without_suffix.lower() != without_suffix.lower():
@@ -11605,8 +11654,9 @@ def search_wv_precise(page, org):
 
         name_input = page.locator("#CharitiesSearch-CharitiesSearch_txtName").first
         name_input.wait_for(state="visible", timeout=5000)
+        query_name = wv_preferred_query_variants(org.organization_name)[0]
         name_input.fill("")
-        name_input.type(org.organization_name, delay=40)
+        name_input.type(query_name, delay=25)
 
         page.locator("#CharitiesSearch-CharitiesSearch_btnSearch").click(timeout=7000)
         safe_wait_for_network_idle(page, timeout=WV_SEARCH_IDLE_TIMEOUT_MS)

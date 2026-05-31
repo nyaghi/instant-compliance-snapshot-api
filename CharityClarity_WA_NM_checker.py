@@ -857,10 +857,13 @@ def apply_nm_rows_to_result(
     latest_detail = re.sub(r"\s+\d{10,}$", "", latest_year_rows[0][1]).strip()
 
     latest_submitted = nm_latest_submitted(rows)
+    if latest_detail.startswith("Tax Year Registration Open"):
+        result.status = STATUS_UPCOMING if latest_tax_year >= date.today().year - 1 else STATUS_DELINQUENT
+        result.raw_status_text = f"Tax Year {latest_tax_year} | {latest_detail}"
+        result.success = True
+        return result
     if not latest_submitted:
-        if latest_detail.startswith("Tax Year Registration Open"):
-            result.status = STATUS_UPCOMING if latest_tax_year >= date.today().year - 1 else STATUS_DELINQUENT
-        elif re.search(r"\bdelinquent\b", latest_detail, re.I):
+        if re.search(r"\bdelinquent\b", latest_detail, re.I):
             result.status = STATUS_DELINQUENT
         elif latest_tax_year <= date.today().year - 2:
             result.status = STATUS_DELINQUENT
@@ -935,6 +938,15 @@ def search_nm(org: Organization, show_process: bool = False) -> SearchResult:
     if detail_html:
         body_text = strip_html(detail_html)
         result.matched_registry_name = nm_registry_name_from_html(detail_html)
+        if not result.matched_registry_name:
+            result.status = STATUS_NOT_REGISTERED
+            result.raw_status_text = "No New Mexico charity registration name found for this FEIN."
+            result.source_note = (
+                "New Mexico returned a FEIN detail shell, but it did not expose a charity name. "
+                "CharityClarity requires the official detail page to identify the charity before treating status-history rows as a registered match."
+            )
+            result.success = True
+            return result
         if re.search(r"Charity\s+Registration\s+Status\s+is\s+unknown\.?", body_text, re.I) and "Tax Year" not in body_text:
             result.status = STATUS_NOT_REGISTERED
             result.raw_status_text = "No New Mexico charity registration status-history rows found for this FEIN."
