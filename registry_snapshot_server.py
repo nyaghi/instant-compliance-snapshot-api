@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.74-staging"
+APP_VERSION = "2026.05.30.75-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -140,6 +140,7 @@ SC_NAME_VARIANT_MAX_SECONDS = max(12.0, float(os.environ.get("CE_SC_NAME_VARIANT
 NAME_SEARCH_VARIANT_MAX_SECONDS = max(18.0, float(os.environ.get("CE_NAME_SEARCH_VARIANT_MAX_SECONDS", "35")))
 CT_NAME_VARIANT_MAX_SECONDS = min(max(10.0, float(os.environ.get("CE_CT_NAME_VARIANT_MAX_SECONDS", "24"))), 35.0)
 CT_NAME_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_CT_NAME_VARIANT_LIMIT", "5"))), 10)
+CT_DIRECT_TIMEOUT_SECONDS = min(max(4.0, float(os.environ.get("CE_CT_DIRECT_TIMEOUT_SECONDS", "12"))), 25.0)
 MN_NAME_FALLBACK_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_MN_NAME_FALLBACK_MAX_SECONDS", "18"))), 30.0)
 MN_NAME_FALLBACK_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_MN_NAME_FALLBACK_MAX_VARIANTS", "4"))), 10)
 FL_LOOKUP_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_FL_LOOKUP_MAX_SECONDS", "35"))), 45.0)
@@ -4815,6 +4816,176 @@ def click_nth_details_control(page, index: int) -> bool:
             return True
         seen += 1
     return False
+
+
+def html_fragment_text(fragment: str) -> str:
+    return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", fragment or ""))).strip()
+
+
+def ct_direct_form_fields(page_html: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for match in re.finditer(r"<(?:input|select)\b[^>]*>", page_html or "", re.I):
+        tag = match.group(0)
+        name_match = re.search(r"\bname=[\"']([^\"']+)", tag, re.I)
+        if not name_match:
+            continue
+        value_match = re.search(r"\bvalue=[\"']([^\"']*)", tag, re.I)
+        fields[html.unescape(name_match.group(1))] = html.unescape(value_match.group(1) if value_match else "")
+    return fields
+
+
+def ct_direct_query(search_name: str) -> str:
+    url = "https://www.elicense.ct.gov/lookup/licenselookup.aspx"
+    headers = {
+        "User-Agent": BROWSER_USER_AGENT,
+        "Referer": url,
+        "Origin": "https://www.elicense.ct.gov",
+    }
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+    with opener.open(urllib.request.Request(url, headers=headers), timeout=CT_DIRECT_TIMEOUT_SECONDS) as response:
+        page_html = response.read().decode("utf-8", errors="replace")
+    fields = ct_direct_form_fields(page_html)
+    fields["ctl00$MainContentPlaceHolder$ucLicenseLookup$ctl03$tbDBA_Contact"] = search_name
+    fields["__EVENTTARGET"] = "ctl00$MainContentPlaceHolder$ucLicenseLookup$UpdtPanelGridLookup"
+    fields["__EVENTARGUMENT"] = "3"
+    fields["ctl00$ScriptManager1"] = (
+        "ctl00$MainContentPlaceHolder$ucLicenseLookup$UpdtPanelGridLookup|"
+        "ctl00$MainContentPlaceHolder$ucLicenseLookup$UpdtPanelGridLookup"
+    )
+    fields["__ASYNCPOST"] = "true"
+    request = urllib.request.Request(
+        url,
+        data=urlencode(fields).encode("utf-8"),
+        headers={
+            **headers,
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "X-MicrosoftAjax": "Delta=true",
+            "X-Requested-With": "XMLHttpRequest",
+        },
+        method="POST",
+    )
+    with opener.open(request, timeout=CT_DIRECT_TIMEOUT_SECONDS) as response:
+        return response.read().decode("utf-8", errors="replace")
+
+
+def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: str):
+    row_text = html_fragment_text(row_html)
+    name_match = re.search(r"<b[^>]*headline6[^>]*>(.*?)</b>", row_html, re.I | re.S)
+    row_name = clean_registry_name(html_fragment_text(name_match.group(1)) if name_match else re.split(r"\bCredential\b|\bStatus\b|\bLicense\b", row_text, maxsplit=1, flags=re.I)[0])
+    name_score = target_name_score(row_name, safe_targets)
+    if name_score < 0:
+        return None, name_score
+    pairs: dict[str, str] = {}
+    for label_html, value_html in re.findall(r"<b[^>]*>(.*?)</b>\s*<p[^>]*>(.*?)</p>", row_html, re.I | re.S):
+        label = html_fragment_text(label_html).strip(": ")
+        value = html_fragment_text(value_html)
+        if label and value:
+            pairs[label] = value
+    credential = pairs.get("Credential", "")
+    credential_description = pairs.get("Credential Description", "")
+    status_text = pairs.get("Status", "")
+    status_reason = pairs.get("Status Reason", "")
+    combined = " ".join([row_text, credential, credential_description, status_text, status_reason])
+    result = checker.StateResult(org.organization_name, org.ein, "CT", checker.STATUS_UNKNOWN, url)
+    result.matched_registry_name = row_name
+    credential_match = re.search(r"\b[A-Z]{2,5}\.[0-9A-Z.-]+", combined)
+    result.matched_registry_identifier = credential or (credential_match.group(0) if credential_match else "")
+    exp_date = first_date_near_label(row_text, ["Expiration Date", "Expiration", "Expires", "Expire Date"])
+    if re.search(r"\bEXEMPT\b", " ".join([credential, credential_description]), re.I):
+        result.status = "Exempt"
+    elif re.search(r"\b(non\W*compliant|not\s+in\s+compliance)\b", combined, re.I):
+        result.status = checker.STATUS_DELINQUENT
+    elif re.search(r"\bINACTIVE\b|\bCLOSED\b|\bWITHDRAWN\b|\bCANCEL(?:ED|LED)\b", " ".join([status_text, status_reason, credential_description]), re.I):
+        result.status = "Closed / Withdrawn / Canceled"
+    elif exp_date:
+        result.status = classify_expiration_date(exp_date)
+    elif re.search(r"\bACTIVE\b", status_text, re.I) and (not status_reason or re.search(r"\bCURRENT\b", status_reason, re.I)):
+        result.status = checker.STATUS_CURRENT
+    elif re.search(r"\bCURRENT\b", combined, re.I):
+        result.status = checker.STATUS_CURRENT
+    result.raw_status_text = " | ".join(
+        item for item in [
+            f"Status: {status_text}" if status_text else "",
+            f"Status Reason: {status_reason}" if status_reason else "",
+            f"Credential Description: {credential_description}" if credential_description else "",
+            f"Expiration Date {format_date(exp_date)}" if exp_date else "",
+        ]
+    ) or row_text[:500]
+    result.source_note = "Connecticut public registry AJAX search result row selected by strict organization-name match."
+    result.success = True
+    score = name_score
+    if re.search(r"\bPUBLIC\s+CHARITY\b|\bCHR\.", combined, re.I):
+        score += 80
+    if re.search(r"\bACTIVE\b", status_text, re.I):
+        score += 80
+    if re.search(r"\bCURRENT\b", status_reason, re.I):
+        score += 80
+    if re.search(r"\bEXEMPT\b", combined, re.I):
+        score += 10
+    if re.search(r"\bINACTIVE\b|\bCLOSED\b|\bWITHDRAWN\b|\bCANCEL(?:ED|LED)\b", combined, re.I):
+        score -= 100
+    return result, score
+
+
+def search_ct_direct(org):
+    url = "https://www.elicense.ct.gov/lookup/licenselookup.aspx"
+    original_name = org.organization_name
+    safe_targets = organization_match_target_variants(original_name, org.ein)
+    for target in list(safe_targets):
+        if not re.search(r"^\s*(the|a)\s+", target, re.I):
+            for suffix in (f"{target} (THE)", f"{target}, THE", f"{target}, The"):
+                if suffix not in safe_targets:
+                    safe_targets.append(suffix)
+    variants = organization_name_variants(
+        original_name,
+        org.ein,
+        include_ein_aliases=True,
+        include_name_segments=True,
+        include_compact_legal_suffixes=True,
+        include_leading_article_variants=True,
+    )[:CT_NAME_VARIANT_LIMIT]
+    best_result = None
+    best_score = -10000
+    saw_zero_results = False
+    last_error = ""
+    for variant in variants:
+        try:
+            body = ct_direct_query(variant)
+        except Exception as exc:
+            last_error = str(exc)
+            continue
+        if re.search(r"Showing\s+0\s+result", body, re.I):
+            saw_zero_results = True
+            continue
+        for row_match in re.finditer(r"<tr\b[^>]*>.*?</tr>", body, re.I | re.S):
+            row_html = row_match.group(0)
+            if not re.search(r"\b(PUBLIC\s+CHARITY|CHR\.)\b", html_fragment_text(row_html), re.I):
+                continue
+            result, score = ct_direct_result_from_row(org, row_html, safe_targets, url)
+            if result and score > best_score:
+                best_result = result
+                best_score = score
+        if best_result:
+            return best_result
+    if best_result:
+        return best_result
+    if saw_zero_results:
+        return checker.StateResult(
+            original_name,
+            org.ein,
+            "CT",
+            checker.STATUS_NOT_REGISTERED,
+            url,
+            raw_status_text="No matching organization record",
+            source_note="Connecticut public registry AJAX search returned no matching public-charity row for the generated name variants.",
+            success=True,
+        )
+    result = checker.StateResult(original_name, org.ein, "CT", "Site Not Reachable", url)
+    result.raw_status_text = "Connecticut direct registry lookup could not be completed"
+    result.source_note = "Connecticut public registry AJAX lookup did not return a usable response."
+    result.error = last_error
+    result.success = False
+    return result
 
 
 def search_ct(page, org):
@@ -10893,6 +11064,17 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 result.matched_registry_identifier or "",
             ]).strip()
             return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
+
+    if state == "CT":
+        lookup_started = time.perf_counter()
+        result = search_ct_direct(org)
+        body = " ".join(part for part in [
+            result.raw_status_text or "",
+            result.source_note or "",
+            result.matched_registry_name or "",
+            result.matched_registry_identifier or "",
+        ]).strip()
+        return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
 
     result = None
     lookup_started = time.perf_counter()
