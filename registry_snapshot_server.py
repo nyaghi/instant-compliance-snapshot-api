@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.76-staging"
+APP_VERSION = "2026.05.30.77-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -4843,6 +4843,36 @@ def ct_direct_query(search_name: str, timeout_seconds: float | None = None) -> s
         "Referer": url,
         "Origin": "https://www.elicense.ct.gov",
     }
+    try:
+        from curl_cffi import requests as curl_requests
+
+        session = curl_requests.Session(impersonate="chrome")
+        response = session.get(url, headers=headers, timeout=(min(3.0, timeout), timeout))
+        response.raise_for_status()
+        fields = ct_direct_form_fields(response.text)
+        fields["ctl00$MainContentPlaceHolder$ucLicenseLookup$ctl03$tbDBA_Contact"] = search_name
+        fields["__EVENTTARGET"] = "ctl00$MainContentPlaceHolder$ucLicenseLookup$UpdtPanelGridLookup"
+        fields["__EVENTARGUMENT"] = "3"
+        fields["ctl00$ScriptManager1"] = (
+            "ctl00$MainContentPlaceHolder$ucLicenseLookup$UpdtPanelGridLookup|"
+            "ctl00$MainContentPlaceHolder$ucLicenseLookup$UpdtPanelGridLookup"
+        )
+        fields["__ASYNCPOST"] = "true"
+        response = session.post(
+            url,
+            data=fields,
+            headers={
+                **headers,
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "X-MicrosoftAjax": "Delta=true",
+                "X-Requested-With": "XMLHttpRequest",
+            },
+            timeout=(min(3.0, timeout), timeout),
+        )
+        response.raise_for_status()
+        return response.text
+    except Exception:
+        pass
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
     with opener.open(urllib.request.Request(url, headers=headers), timeout=timeout) as response:
         page_html = response.read().decode("utf-8", errors="replace")
