@@ -90,6 +90,8 @@ services:
         value: "25"
       - key: CE_WI_BROWSER_VARIANT_LIMIT
         value: "0"
+      - key: CE_WI_DIRECT_VARIANT_LIMIT
+        value: "6"
       - key: CE_WI_LOOKUP_MAX_SECONDS
         value: "32"
       - key: CE_WI_SIDECAR_ATTEMPTS

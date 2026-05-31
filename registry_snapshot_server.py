@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.31.93-staging"
+APP_VERSION = "2026.05.31.94-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -479,7 +479,7 @@ WI_READER_BASE_URL = os.environ.get("CE_WI_READER_BASE_URL", "https://r.jina.ai/
 WI_LOOKUP_MAX_SECONDS = min(max(12.0, float(os.environ.get("CE_WI_LOOKUP_MAX_SECONDS", "32"))), 90.0)
 WI_READER_TIMEOUT_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_READER_TIMEOUT_SECONDS", "12"))), 20.0)
 WI_HTTP_TIMEOUT_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_HTTP_TIMEOUT_SECONDS", "10"))), 20.0)
-WI_DIRECT_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_WI_DIRECT_VARIANT_LIMIT", "10"))), 12)
+WI_DIRECT_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_WI_DIRECT_VARIANT_LIMIT", "6"))), 12)
 WI_BROWSER_VARIANT_LIMIT = min(max(0, int(os.environ.get("CE_WI_BROWSER_VARIANT_LIMIT", "0"))), 5)
 WI_SIDECAR_URL = os.environ.get("CE_WI_SIDECAR_URL", "").strip()
 WI_LOOKUP_SECRET = os.environ.get("CE_WI_LOOKUP_SECRET", "").strip()
@@ -7485,27 +7485,39 @@ def wi_search_names_for_org(org) -> list[str]:
         if len(us_compacted.split()) >= 2 and us_compacted.lower() != cleaned.lower() and us_compacted not in expanded_names:
             expanded_names.append(us_compacted)
 
+    seed_key_names = {re.sub(r"\s+", " ", (seed or "").strip()).lower() for seed in seed_names if seed}
+    original_substantive_count = len([
+        word for word in re.findall(r"[A-Za-z0-9]+", original_name or "")
+        if word.lower() not in {
+            "the", "a", "an", "of", "for", "to", "and",
+            "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited",
+        }
+    ])
+
     def priority(value: str) -> tuple[int, int, str]:
         cleaned = re.sub(r"\s+", " ", (value or "").strip())
         if not cleaned:
             return (99, 99, "")
         has_punctuation = bool(re.search(r"[-,/\.]", cleaned))
         starts_article = bool(re.match(r"^(?:the|a|an)\s+", cleaned, re.I))
-        exact_seed = cleaned.lower() in {re.sub(r"\s+", " ", (seed or "").strip()).lower() for seed in seed_names if seed}
+        exact_seed = cleaned.lower() in seed_key_names
+        word_rank = -min(len(cleaned.split()), 8)
         if exact_seed and not (has_punctuation or starts_article):
-            return (-1, len(cleaned.split()), cleaned.lower())
+            return (-1, word_rank, cleaned.lower())
         compact = re.sub(r"[^A-Za-z0-9]+", "", cleaned)
         if 2 <= len(compact) <= 8 and compact.upper() == compact:
-            return (0, len(cleaned.split()), cleaned.lower())
+            if original_substantive_count > 3 and not exact_seed:
+                return (5, word_rank, cleaned.lower())
+            return (0, word_rank, cleaned.lower())
         if re.match(r"^(?:u\.?\s*s\.?|us)\s+", cleaned, re.I):
             noisy_us_query = bool(re.search(r"[-,/]", cleaned)) or bool(re.match(r"^u\.", cleaned, re.I))
-            return (0 if not noisy_us_query else 1, len(cleaned.split()), cleaned.lower())
+            return (0 if not noisy_us_query else 1, word_rank, cleaned.lower())
         if re.fullmatch(r"(?i)(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited|the|a|an)", cleaned):
             return (90, 99, cleaned.lower())
         has_legal_suffix = bool(re.search(r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\b", cleaned, re.I))
         return (
             1 if not (has_punctuation or has_legal_suffix or starts_article) else 2,
-            len(cleaned.split()),
+            word_rank,
             cleaned.lower(),
         )
 
@@ -8152,10 +8164,11 @@ def _search_wi_sidecar_unlocked(org):
         result.success = False
         return result
     search_names = wi_search_names_for_org(org) or [org.organization_name]
+    sidecar_search_names = search_names[:WI_DIRECT_VARIANT_LIMIT]
     payload = {
         "organization_name": org.organization_name,
         "ein": org.ein,
-        "search_names": search_names[:max(WI_DIRECT_VARIANT_LIMIT, 12)],
+        "search_names": sidecar_search_names,
         "target_names": organization_match_target_variants(org.organization_name, org.ein),
         "max_seconds": WI_SIDECAR_TIMEOUT_SECONDS,
         "app_version": APP_VERSION,
