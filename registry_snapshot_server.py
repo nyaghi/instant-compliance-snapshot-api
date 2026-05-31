@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.31.99-staging"
+APP_VERSION = "2026.05.31.100-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -297,8 +297,8 @@ DOWNLOADABLE_DATA_COMMENT_FOOTERS = {
         "For time-sensitive decisions, confirm directly with the Kentucky registry because records can change between refreshes."
     ),
     "WI": (
-        "Data freshness note: Wisconsin is checked from a Sunday-refreshed CharityClarity snapshot built from official Wisconsin DFI public credential pages. "
-        "For time-sensitive decisions, confirm directly with the Wisconsin registry because records can change between refreshes."
+        "Data freshness note: Wisconsin is checked against official Wisconsin DFI public credential pages using CharityClarity's bounded Wisconsin lookup path. "
+        "For time-sensitive decisions, confirm directly with the Wisconsin registry because records can change between checks."
     ),
 }
 CONFIRMED_FEEDBACK_CORRECTIONS = {
