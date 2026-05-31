@@ -89,12 +89,16 @@ services:
       - key: CE_SC_NAME_VARIANT_MAX_SECONDS
         value: "25"
       - key: CE_WI_BROWSER_VARIANT_LIMIT
-        value: "3"
+        value: "0"
       - key: CE_WI_LOOKUP_MAX_SECONDS
-        value: "42"
+        value: "18"
       - key: CE_WI_SIDECAR_ATTEMPTS
-        value: "2"
+        value: "1"
       - key: CE_WI_SIDECAR_TIMEOUT_SECONDS
-        value: "35"
+        value: "18"
       - key: CE_WI_CONFIRM_SIDECAR_NO_MATCH
         value: "1"
+      - key: CE_WI_NO_MATCH_CONFIRMATION_ATTEMPTS
+        value: "1"
+      - key: CE_WI_USE_BACKEND_BROWSER_FALLBACK
+        value: "0"
