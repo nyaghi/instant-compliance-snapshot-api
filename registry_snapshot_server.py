@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.31.87-staging"
+APP_VERSION = "2026.05.31.88-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -216,7 +216,7 @@ SINGLE_STATE_SEMANTIC_RETRY_STATES = {
 PUBLIC_SINGLE_STATE_ONLY = os.environ.get("CE_PUBLIC_SINGLE_STATE_ONLY", "0").strip().lower() in {"1", "true", "yes"}
 FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_FL_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "2"))), 10.0)
 FL_NOT_REGISTERED_CONFIRMATION_MAX_FIRST_SECONDS = min(
-    max(6.0, float(os.environ.get("CE_FL_NOT_REGISTERED_CONFIRMATION_MAX_FIRST_SECONDS", "14"))),
+    max(6.0, float(os.environ.get("CE_FL_NOT_REGISTERED_CONFIRMATION_MAX_FIRST_SECONDS", "22"))),
     25.0,
 )
 NAME_SEARCH_PREFLIGHT_URLS = {
