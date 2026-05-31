@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.30.85-staging"
+APP_VERSION = "2026.05.30.86-staging"
 SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
@@ -5205,7 +5205,7 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
         result.status = "Closed / Withdrawn / Canceled"
     elif exp_date:
         result.status = classify_expiration_date(exp_date)
-    elif re.search(r"\bACTIVE\b", status_text, re.I) and (not status_reason or re.search(r"\bCURRENT\b", status_reason, re.I)):
+    elif re.search(r"\bACTIVE\b", status_text, re.I) and (not status_reason or re.search(r"\b(CURRENT|ACTIVE)\b", status_reason, re.I)):
         result.status = checker.STATUS_CURRENT
     elif re.search(r"\bCURRENT\b", combined, re.I):
         result.status = checker.STATUS_CURRENT
@@ -9141,6 +9141,8 @@ def true_status_from_body(result, body: str) -> str:
         ct_registry_date = explicit_registry_date(result, combined)
         if ct_registry_date and re.search(r"\bPUBLIC\s+CHARITY\b", result.raw_status_text or "", re.I):
             return status_from_calendar_date(ct_registry_date)
+        if re.search(r"\bStatus:\s*ACTIVE\b", ct_status_fields, re.I) and re.search(r"\bStatus Reason:\s*ACTIVE\b", ct_status_fields, re.I):
+            return "Current"
     adverse_status = explicit_adverse_registry_status(result, combined)
     if adverse_status:
         return adverse_status
