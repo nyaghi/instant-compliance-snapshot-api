@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.01.115-staging"
+APP_VERSION = "2026.06.01.116-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -11834,17 +11834,11 @@ def search_wa_nm_state(org, state: str):
     if state == "WA":
         external_result = module.search_wa(external_org, show_process=False)
     elif state == "NM":
-        external_result = module.search_nm(external_org, show_process=False)
-        if (
-            external_status_to_checker_status(getattr(external_result, "status", "")) == checker.STATUS_UNKNOWN
-            and re.search(r"status-history rows were not parsed|Tax Year", " ".join([
-                getattr(external_result, "raw_status_text", "") or "",
-                getattr(external_result, "source_note", "") or "",
-            ]), re.I)
-        ):
-            fallback_result = search_nm_status_history_fallback(org, module)
-            if external_status_to_checker_status(getattr(fallback_result, "status", "")) != checker.STATUS_UNKNOWN:
-                external_result = fallback_result
+        external_result = search_nm_status_history_fallback(org, module)
+        if external_status_to_checker_status(getattr(external_result, "status", "")) == checker.STATUS_UNKNOWN:
+            hosted_result = module.search_nm(external_org, show_process=False)
+            if external_status_to_checker_status(getattr(hosted_result, "status", "")) != checker.STATUS_UNKNOWN:
+                external_result = hosted_result
     else:
         raise ValueError(f"Unsupported WA/NM state adapter: {state}")
     return copy_external_result(org, state, external_result)
@@ -11873,17 +11867,17 @@ def search_nm_status_history_fallback(org, module):
                 html = ""
                 rows = []
                 detail_url = f"https://secure.nmdoj.gov/CharitySearch/CharityDetail.aspx?FEIN={format_ein(org.ein)}"
-                for attempt in range(2):
-                    page.goto(detail_url, wait_until="domcontentloaded", timeout=45000)
-                    safe_wait_for_network_idle(page, timeout=10000)
+                for attempt in range(1):
+                    page.goto(detail_url, wait_until="domcontentloaded", timeout=30000)
+                    safe_wait_for_network_idle(page, timeout=5000)
                     try:
-                        page.locator("#MainContent_GridViewStatuses").wait_for(state="attached", timeout=15000)
+                        page.locator("#MainContent_GridViewStatuses").wait_for(state="attached", timeout=7000)
                     except Exception:
                         try:
-                            page.get_by_text(re.compile(r"Status\s+History|Tax\s+Year\s+Registration\s+Details", re.I)).first.wait_for(timeout=8000)
+                            page.get_by_text(re.compile(r"Status\s+History|Tax\s+Year\s+Registration\s+Details", re.I)).first.wait_for(timeout=3000)
                         except Exception:
-                            page.wait_for_timeout(4000)
-                    body = page.locator("body").inner_text(timeout=15000)
+                            page.wait_for_timeout(1000)
+                    body = page.locator("body").inner_text(timeout=10000)
                     html = page.content()
                     rows = module.nm_parse_history_rows_from_html(html) or module.nm_parse_history_rows_from_text(body)
                     if rows or attempt:
