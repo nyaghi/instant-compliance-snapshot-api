@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.01.117-staging"
+APP_VERSION = "2026.06.01.118-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -11928,7 +11928,8 @@ def search_nm_status_history_fallback(org, module):
             if name_match:
                 result.matched_registry_name = re.sub(r"\s+", " ", name_match.group(1)).strip()
         if not rows:
-            result.raw_status_text = "NM detail page reached, but Status History rows were still not parsed"
+            snippet = re.sub(r"\s+", " ", body or html or "").strip()[:700]
+            result.raw_status_text = f"NM detail page reached, but Status History rows were still not parsed | Body Snippet: {snippet}"
             result.success = True
             return result
         latest_submitted = module.nm_latest_submitted(rows)
