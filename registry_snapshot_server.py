@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.01.113-staging"
+APP_VERSION = "2026.06.01.114-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -11835,9 +11835,72 @@ def search_wa_nm_state(org, state: str):
         external_result = module.search_wa(external_org, show_process=False)
     elif state == "NM":
         external_result = module.search_nm(external_org, show_process=False)
+        if (
+            external_status_to_checker_status(getattr(external_result, "status", "")) == checker.STATUS_UNKNOWN
+            and re.search(r"status-history rows were not parsed|Tax Year", " ".join([
+                getattr(external_result, "raw_status_text", "") or "",
+                getattr(external_result, "source_note", "") or "",
+            ]), re.I)
+        ):
+            fallback_result = search_nm_status_history_fallback(org, module)
+            if external_status_to_checker_status(getattr(fallback_result, "status", "")) != checker.STATUS_UNKNOWN:
+                external_result = fallback_result
     else:
         raise ValueError(f"Unsupported WA/NM state adapter: {state}")
     return copy_external_result(org, state, external_result)
+
+
+def search_nm_status_history_fallback(org, module):
+    result = module.SearchResult(
+        organization_name=org.organization_name,
+        ein=org.ein,
+        state="NM",
+        status=getattr(module, "STATUS_UNKNOWN", "Unknown"),
+        raw_status_text="",
+        source_url=getattr(module, "NM_SEARCH_URL", "https://secure.nmdoj.gov/CharitySearch/"),
+        source_note=(
+            "New Mexico detail page was re-read by the master Status History parser after the primary hosted parser "
+            "could not parse rows from the available page text."
+        ),
+    )
+    try:
+        with checker.sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(user_agent=BROWSER_USER_AGENT, locale="en-US")
+            page = context.new_page()
+            try:
+                page.goto(
+                    f"https://secure.nmdoj.gov/CharitySearch/CharityDetail.aspx?FEIN={format_ein(org.ein)}",
+                    wait_until="domcontentloaded",
+                    timeout=45000,
+                )
+                safe_wait_for_network_idle(page, timeout=10000)
+                page.wait_for_timeout(1500)
+                body = page.locator("body").inner_text(timeout=15000)
+                html = page.content()
+            finally:
+                context.close()
+                browser.close()
+        result.matched_registry_name = module.nm_registry_name_from_html(html)
+        if not result.matched_registry_name:
+            ein_pattern = re.escape(format_ein(org.ein))
+            name_match = re.search(rf"([A-Z][^\n\r]+?)\s*\({ein_pattern}\)", body, re.I)
+            if name_match:
+                result.matched_registry_name = re.sub(r"\s+", " ", name_match.group(1)).strip()
+        rows = module.nm_parse_history_rows_from_html(html) or module.nm_parse_history_rows_from_text(body)
+        if not rows:
+            result.raw_status_text = "NM detail page reached, but Status History rows were still not parsed"
+            result.success = True
+            return result
+        latest_submitted = module.nm_latest_submitted(rows)
+        fye_text = module.nm_extract_fye_from_html(
+            html,
+            preferred_year=latest_submitted[0] if latest_submitted else None,
+        )
+        return module.apply_nm_rows_to_result(result, rows, fye_text=fye_text)
+    except Exception as exc:
+        result.error = f"NM master Status History fallback error: {exc}"
+        return result
 
 
 def browser_capacity_busy_result(organization_name: str, ein: str, state: str, url: str = ""):
