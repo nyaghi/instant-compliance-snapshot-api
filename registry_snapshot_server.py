@@ -94,7 +94,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.01.119-staging"
+APP_VERSION = "2026.06.01.120-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -11679,7 +11679,7 @@ def wv_status_from_fields(status_text: str, expiration_text: str) -> str:
     return status or checker.STATUS_UNKNOWN
 
 
-def wv_preferred_query_variants(name: str) -> list[str]:
+def wv_preferred_query_variants(name: str, ein: str = "") -> list[str]:
     """Search suffix-light WV names first while keeping row acceptance strict."""
     preferred = []
 
@@ -11688,30 +11688,38 @@ def wv_preferred_query_variants(name: str) -> list[str]:
         if cleaned and cleaned.lower() not in {existing.lower() for existing in preferred}:
             preferred.append(cleaned)
 
-    base = re.sub(r"\s+", " ", (name or "").strip())
-    without_comma_suffix = re.sub(
-        r",\s*(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\s*$",
-        "",
-        base,
-        flags=re.I,
-    ).strip()
-    without_suffix = re.sub(
-        r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\s*$",
-        "",
-        without_comma_suffix,
-        flags=re.I,
-    ).strip()
-    no_punctuation_without_suffix = re.sub(r"[^\w\s]", " ", without_suffix).strip()
-    no_punctuation_without_suffix = re.sub(r"\s+", " ", no_punctuation_without_suffix)
-    without_leading_article = re.sub(r"^\s*(the|a|an)\s+", "", no_punctuation_without_suffix or without_suffix, flags=re.I).strip()
+    def add_name_forms(source_name: str) -> None:
+        base = re.sub(r"\s+", " ", (source_name or "").strip())
+        if not base:
+            return
+        without_comma_suffix = re.sub(
+            r",\s*(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\s*$",
+            "",
+            base,
+            flags=re.I,
+        ).strip()
+        without_suffix = re.sub(
+            r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\s*$",
+            "",
+            without_comma_suffix,
+            flags=re.I,
+        ).strip()
+        no_punctuation_without_suffix = re.sub(r"[^\w\s]", " ", without_suffix).strip()
+        no_punctuation_without_suffix = re.sub(r"\s+", " ", no_punctuation_without_suffix)
+        without_leading_article = re.sub(r"^\s*(the|a|an)\s+", "", no_punctuation_without_suffix or without_suffix, flags=re.I).strip()
 
-    if without_leading_article and without_leading_article.lower() != base.lower():
-        add(without_leading_article)
-    if without_suffix and without_suffix.lower() != base.lower():
-        add(without_suffix)
-    if no_punctuation_without_suffix and no_punctuation_without_suffix.lower() != without_suffix.lower():
-        add(no_punctuation_without_suffix)
-    add(base)
+        if without_leading_article and without_leading_article.lower() != base.lower():
+            add(without_leading_article)
+        if without_suffix and without_suffix.lower() != base.lower():
+            add(without_suffix)
+        if no_punctuation_without_suffix and no_punctuation_without_suffix.lower() != without_suffix.lower():
+            add(no_punctuation_without_suffix)
+        add(base)
+
+    add_name_forms(name)
+    for alias in known_names_for_ein(ein):
+        if compatible_ein_alias_for_name(name, alias):
+            add_name_forms(alias)
     return preferred
 
 
@@ -11733,7 +11741,7 @@ def search_wv_precise(page, org):
         best_score = -10000
         searched_queries: list[str] = []
         saw_result_rows = False
-        for query_name in wv_preferred_query_variants(org.organization_name):
+        for query_name in wv_preferred_query_variants(org.organization_name, org.ein):
             page.goto(WV_SEARCH_URL, wait_until="domcontentloaded", timeout=WV_GOTO_TIMEOUT_MS)
             safe_wait_for_network_idle(page, timeout=WV_NETWORK_IDLE_TIMEOUT_MS)
             try:
@@ -12489,37 +12497,11 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 if not reachable:
                     result = preflight_result
                 else:
-                    result = search_with_name_variants(
-                        page,
-                        org,
-                        search_wv_precise,
-                        max_variants=12,
-                        max_elapsed_seconds=min(max(NAME_SEARCH_VARIANT_MAX_SECONDS, 45.0), 58.0),
-                        include_ein_aliases=True,
-                        include_name_segments=True,
-                        include_compact_legal_suffixes=True,
-                        include_leading_article_variants=True,
-                        prioritize_institution_reductions=True,
-                        require_safe_registry_name=True,
-                        preferred_variants=wv_preferred_query_variants(org.organization_name),
-                    )
+                    result = search_wv_precise(page, org)
                     elapsed_before_wv_confirmation = time.perf_counter() - lookup_started
-                    if confirm_single_no_match and public_status(result) == "Not Registered" and elapsed_before_wv_confirmation < 50.0:
+                    if confirm_single_no_match and public_status(result) == "Not Registered" and elapsed_before_wv_confirmation < 40.0:
                         time.sleep(2.0)
-                        confirmed_result = search_with_name_variants(
-                            page,
-                            org,
-                            search_wv_precise,
-                            max_variants=12,
-                            max_elapsed_seconds=min(max(NAME_SEARCH_VARIANT_MAX_SECONDS, 30.0), 36.0),
-                            include_ein_aliases=True,
-                            include_name_segments=True,
-                            include_compact_legal_suffixes=True,
-                            include_leading_article_variants=True,
-                            prioritize_institution_reductions=True,
-                            require_safe_registry_name=True,
-                            preferred_variants=wv_preferred_query_variants(org.organization_name),
-                        )
+                        confirmed_result = search_wv_precise(page, org)
                         if public_status(confirmed_result) != "Not Registered":
                             confirmed_result.source_note = " ".join(part for part in [
                                 confirmed_result.source_note or "",
