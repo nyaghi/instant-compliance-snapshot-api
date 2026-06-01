@@ -94,7 +94,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.01.123-staging"
+APP_VERSION = "2026.06.01.124-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -5428,7 +5428,6 @@ def ct_prioritized_name_variants(original_name: str, variants: list[str]) -> lis
             prioritized.append(cleaned)
 
     base = re.sub(r"\s+", " ", (original_name or "").strip())
-    add(base)
     if re.search(r"[-\u2010-\u2015]", base):
         hyphen_as_space = re.sub(r"[-\u2010-\u2015]+", " ", base)
         hyphen_as_space = re.sub(r"\s+", " ", hyphen_as_space).strip()
@@ -5447,6 +5446,9 @@ def ct_prioritized_name_variants(original_name: str, variants: list[str]) -> lis
                 add(f"{without_suffix} {legal}")
                 add(f"{without_suffix}, {legal}")
         add(without_suffix)
+        add(base)
+    else:
+        add(base)
     for variant in variants:
         add(variant)
     return prioritized
