@@ -94,7 +94,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.01.124-staging"
+APP_VERSION = "2026.06.01.125-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -12404,15 +12404,35 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     result.matched_registry_identifier or "",
                 ]).strip()
             elif state == "NY":
-                result = search_with_name_variants(
-                    page,
-                    org,
-                    checker.search_ny,
-                    max_variants=12,
-                    max_elapsed_seconds=min(max(NAME_SEARCH_VARIANT_MAX_SECONDS, 40.0), 50.0),
-                )
+                ny_has_ein = bool(checker.digits_only(org.ein))
+                if ny_has_ein:
+                    result = checker.search_ny(page, org)
+                else:
+                    result = search_with_name_variants(
+                        page,
+                        org,
+                        checker.search_ny,
+                        max_variants=12,
+                        max_elapsed_seconds=min(max(NAME_SEARCH_VARIANT_MAX_SECONDS, 40.0), 50.0),
+                    )
                 elapsed_before_ny_confirmation = time.perf_counter() - lookup_started
-                if public_status(result) == "Not Registered" and elapsed_before_ny_confirmation < 48.0:
+                clean_ny_ein_no_result = bool(
+                    ny_has_ein
+                    and public_status(result) == "Not Registered"
+                    and re.search(
+                        r"\bno\s+results\s+found\b|\bno\s+records?\b|\b0\s+results\b",
+                        " ".join([
+                            result.raw_status_text or "",
+                            result.source_note or "",
+                        ]),
+                        re.I,
+                    )
+                )
+                if (
+                    public_status(result) == "Not Registered"
+                    and not clean_ny_ein_no_result
+                    and elapsed_before_ny_confirmation < 48.0
+                ):
                     time.sleep(2.0)
                     confirmed_result = search_with_name_variants(
                         page,
@@ -12588,33 +12608,64 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     enrich_me_result_from_body(result, body)
             elif state == "ND":
                 reachable, _, preflight_result = preflight_name_search_registry(org, "ND")
-                if not reachable:
-                    result = preflight_result
-                else:
-                    def run_nd_lookup():
-                        return search_with_name_variants(
-                            page,
-                            org,
-                            checker.search_nd,
-                            max_variants=18,
-                            max_elapsed_seconds=NAME_SEARCH_VARIANT_MAX_SECONDS,
-                            include_ein_aliases=True,
-                            include_name_segments=True,
-                            include_compact_legal_suffixes=False,
-                            include_leading_article_variants=True,
-                            prioritize_institution_reductions=True,
-                        )
+                def run_nd_lookup():
+                    return search_with_name_variants(
+                        page,
+                        org,
+                        checker.search_nd,
+                        max_variants=18,
+                        max_elapsed_seconds=NAME_SEARCH_VARIANT_MAX_SECONDS,
+                        include_ein_aliases=True,
+                        include_name_segments=True,
+                        include_compact_legal_suffixes=False,
+                        include_leading_article_variants=True,
+                        prioritize_institution_reductions=True,
+                    )
 
-                    result = run_nd_lookup()
-                    if state_result_has_weak_terminal_name_match(result, org):
-                        time.sleep(min(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS, 5.0))
-                        confirmed_result = run_nd_lookup()
-                        if state_result_should_replace_weak_match(result, confirmed_result, org):
-                            confirmed_result.source_note = " ".join(part for part in [
-                                confirmed_result.source_note or "",
-                                "A delayed confirmation lookup replaced an initial weaker North Dakota registry-name match.",
-                            ]).strip()
-                            result = confirmed_result
+                def run_nd_confirmation_lookup():
+                    return search_with_name_variants(
+                        page,
+                        org,
+                        checker.search_nd,
+                        max_variants=8,
+                        max_elapsed_seconds=22.0,
+                        include_ein_aliases=True,
+                        include_name_segments=True,
+                        include_compact_legal_suffixes=False,
+                        include_leading_article_variants=True,
+                        prioritize_institution_reductions=True,
+                    )
+
+                result = run_nd_lookup()
+                if (
+                    not reachable
+                    and preflight_result is not None
+                    and public_status(result) in {"Site Not Reachable", "Unknown", ""}
+                ):
+                    result = preflight_result
+                if state_result_has_weak_terminal_name_match(result, org):
+                    time.sleep(min(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS, 5.0))
+                    confirmed_result = run_nd_lookup()
+                    if state_result_should_replace_weak_match(result, confirmed_result, org):
+                        confirmed_result.source_note = " ".join(part for part in [
+                            confirmed_result.source_note or "",
+                            "A delayed confirmation lookup replaced an initial weaker North Dakota registry-name match.",
+                        ]).strip()
+                        result = confirmed_result
+                elapsed_before_nd_confirmation = time.perf_counter() - lookup_started
+                if (
+                    public_status(result) == "Not Registered"
+                    and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0
+                    and elapsed_before_nd_confirmation < 64.0
+                ):
+                    time.sleep(min(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS, 1.0))
+                    confirmed_result = run_nd_confirmation_lookup()
+                    if public_status(confirmed_result) != "Not Registered":
+                        confirmed_result.source_note = " ".join(part for part in [
+                            confirmed_result.source_note or "",
+                            "A bounded confirmation lookup replaced an initial North Dakota no-record response.",
+                        ]).strip()
+                        result = confirmed_result
             elif state == "OR":
                 result = search_bundled_extension_state(page, org, "OR")
                 elapsed_before_confirmation = time.perf_counter() - lookup_started
