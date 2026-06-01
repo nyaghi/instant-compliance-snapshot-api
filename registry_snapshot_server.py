@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.31.107-staging"
+APP_VERSION = "2026.06.01.108-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -297,8 +297,8 @@ DOWNLOADABLE_DATA_COMMENT_FOOTERS = {
         "For time-sensitive decisions, confirm directly with the Kentucky registry because records can change between refreshes."
     ),
     "WI": (
-        "Data freshness note: Wisconsin is checked against official Wisconsin DFI public credential pages using CharityClarity's bounded Wisconsin lookup path. "
-        "For time-sensitive decisions, confirm directly with the Wisconsin registry because records can change between checks."
+        "Data freshness note: Wisconsin is checked from CharityClarity's Sunday-refreshed local snapshot built from official Wisconsin DFI public credential pages. "
+        "For time-sensitive decisions, confirm directly with the Wisconsin registry because records can change between snapshot refreshes."
     ),
 }
 CONFIRMED_FEEDBACK_CORRECTIONS = {
@@ -7865,6 +7865,10 @@ def search_wi_snapshot(org):
     if not snapshot:
         return None
     targets = organization_match_target_variants(org.organization_name, org.ein)
+    for wi_name in wi_search_names_for_org(org):
+        cleaned = re.sub(r"\s+", " ", (wi_name or "").strip())
+        if cleaned and cleaned.lower() not in {target.lower() for target in targets}:
+            targets.append(cleaned)
     best: dict | None = None
     for record in snapshot.get("records") or []:
         if not isinstance(record, dict):
@@ -9523,6 +9527,8 @@ def true_status_from_body(result, body: str) -> str:
         ar_status = explicit_ar_registry_status(result)
         if ar_status:
             return ar_status
+    if state == "OK" and re.search(r"Oklahoma annual registration is tied to the Form 990 filing deadline", result.source_note or "", re.I):
+        return base_status
     if state == "NH":
         _, effective_report_due = nh_effective_report_due_date(result, body)
         if effective_report_due:
@@ -11353,7 +11359,7 @@ def search_ok_precise(page, org, module):
         latest_filing_date = module.parse_ok_filing_date(latest_filing)
         if latest_filing_date:
             assumed_due_date = date(latest_filing_date.year + 1, 11, 15)
-            result.status = module.classify_due_date(assumed_due_date)
+            result.status = status_from_calendar_date(assumed_due_date)
             result.source_note = (
                 "Oklahoma annual registration is tied to the Form 990 filing deadline; "
                 "the checker uses the most recent filing-history date and the next annual extension deadline "
@@ -11855,18 +11861,6 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 BROWSER_LOOKUP_SEMAPHORE.release()
         return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
 
-    if state == "OR":
-        lookup_started = time.perf_counter()
-        result = or_snapshot_result_for_ein(org)
-        if result:
-            body = " ".join(part for part in [
-                result.raw_status_text or "",
-                result.source_note or "",
-                result.matched_registry_name or "",
-                result.matched_registry_identifier or "",
-            ]).strip()
-            return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
-
     if state == "CO":
         lookup_started = time.perf_counter()
         result = search_co_snapshot(None, org)
@@ -12046,7 +12040,22 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 if public_status(result) != "Not Registered":
                     body = nj_detail_body(page, org)
             elif state == "PA":
-                result = checker.search_pa(page, org)
+                result = search_pa_with_name_fallback(page, org)
+                elapsed_before_confirmation = time.perf_counter() - lookup_started
+                if (
+                    confirm_single_no_match
+                    and public_status(result) == "Not Registered"
+                    and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0
+                    and elapsed_before_confirmation < 35.0
+                ):
+                    time.sleep(min(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS, 5.0))
+                    confirmed_result = search_pa_with_name_fallback(page, org)
+                    if public_status(confirmed_result) != "Not Registered":
+                        confirmed_result.source_note = " ".join(part for part in [
+                            confirmed_result.source_note or "",
+                            "A delayed confirmation lookup replaced an initial Pennsylvania no-record response.",
+                        ]).strip()
+                        result = confirmed_result
             elif state == "VA":
                 result = search_va_direct(org)
                 body = " ".join(part for part in [
