@@ -94,7 +94,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.01.120-staging"
+APP_VERSION = "2026.06.01.121-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -11706,8 +11706,11 @@ def wv_preferred_query_variants(name: str, ein: str = "") -> list[str]:
         ).strip()
         no_punctuation_without_suffix = re.sub(r"[^\w\s]", " ", without_suffix).strip()
         no_punctuation_without_suffix = re.sub(r"\s+", " ", no_punctuation_without_suffix)
+        punctuated_without_leading_article = re.sub(r"^\s*(the|a|an)\s+", "", without_suffix, flags=re.I).strip()
         without_leading_article = re.sub(r"^\s*(the|a|an)\s+", "", no_punctuation_without_suffix or without_suffix, flags=re.I).strip()
 
+        if punctuated_without_leading_article and punctuated_without_leading_article.lower() != base.lower():
+            add(punctuated_without_leading_article)
         if without_leading_article and without_leading_article.lower() != base.lower():
             add(without_leading_article)
         if without_suffix and without_suffix.lower() != base.lower():
