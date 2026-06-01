@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.01.109-staging"
+APP_VERSION = "2026.06.01.110-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -526,7 +526,7 @@ WI_READER_BASE_URL = os.environ.get("CE_WI_READER_BASE_URL", "https://r.jina.ai/
 WI_LOOKUP_MAX_SECONDS = min(max(12.0, float(os.environ.get("CE_WI_LOOKUP_MAX_SECONDS", "24"))), 90.0)
 WI_READER_TIMEOUT_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_READER_TIMEOUT_SECONDS", "12"))), 20.0)
 WI_HTTP_TIMEOUT_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_HTTP_TIMEOUT_SECONDS", "10"))), 20.0)
-WI_DIRECT_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_WI_DIRECT_VARIANT_LIMIT", "6"))), 12)
+WI_DIRECT_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_WI_DIRECT_VARIANT_LIMIT", "12"))), 12)
 WI_BROWSER_VARIANT_LIMIT = min(max(0, int(os.environ.get("CE_WI_BROWSER_VARIANT_LIMIT", "0"))), 5)
 WI_SIDECAR_URL = os.environ.get("CE_WI_SIDECAR_URL", "").strip()
 WI_LOOKUP_SECRET = os.environ.get("CE_WI_LOOKUP_SECRET", "").strip()
@@ -8315,11 +8315,16 @@ def _search_wi_sidecar_unlocked(org):
         return result
     search_names = wi_search_names_for_org(org) or [org.organization_name]
     sidecar_search_names = search_names[:WI_DIRECT_VARIANT_LIMIT]
+    target_names = organization_match_target_variants(org.organization_name, org.ein)
+    for wi_name in search_names:
+        cleaned = re.sub(r"\s+", " ", (wi_name or "").strip())
+        if cleaned and cleaned.lower() not in {target.lower() for target in target_names}:
+            target_names.append(cleaned)
     payload = {
         "organization_name": org.organization_name,
         "ein": org.ein,
         "search_names": sidecar_search_names,
-        "target_names": organization_match_target_variants(org.organization_name, org.ein),
+        "target_names": target_names,
         "max_seconds": WI_SIDECAR_TIMEOUT_SECONDS,
         "app_version": APP_VERSION,
     }
