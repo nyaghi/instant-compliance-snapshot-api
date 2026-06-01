@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.05.31.106-staging"
+APP_VERSION = "2026.05.31.107-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -11645,61 +11645,74 @@ def search_wv_precise(page, org):
         "CharityClarity uses bounded organization-name/DBA variants and requires a safe registry-name match before using a result row."
     )
     try:
-        page.goto(WV_SEARCH_URL, wait_until="domcontentloaded", timeout=WV_GOTO_TIMEOUT_MS)
-        safe_wait_for_network_idle(page, timeout=WV_NETWORK_IDLE_TIMEOUT_MS)
-        try:
-            page.locator("#ddlType").select_option(label="CHARITABLE ORGANIZATIONS", timeout=5000)
-        except Exception:
-            pass
-
-        name_input = page.locator("#CharitiesSearch-CharitiesSearch_txtName").first
-        name_input.wait_for(state="visible", timeout=5000)
-        query_name = wv_preferred_query_variants(org.organization_name)[0]
-        name_input.fill("")
-        name_input.type(query_name, delay=25)
-
-        page.locator("#CharitiesSearch-CharitiesSearch_btnSearch").click(timeout=7000)
-        safe_wait_for_network_idle(page, timeout=WV_SEARCH_IDLE_TIMEOUT_MS)
-        page.wait_for_timeout(WV_RESULTS_SETTLE_MS)
-
-        body = registry_page_body(page)
-        if re.search(r"\bNo\s+(?:matching\s+)?(?:records?|results?)\b|records\s+0\s+to\s+0\s+of\s+0", body, re.I):
-            result.status = checker.STATUS_NOT_REGISTERED
-            result.raw_status_text = "No matching organization row"
-            result.source_note = "West Virginia public charity search returned no matching rows for the generated name variant."
-            result.success = True
-            return result
-
         safe_targets = getattr(org, "match_target_names", None) or organization_match_target_variants(org.organization_name, org.ein)
-        rows = page.locator("tr")
         best = None
         best_score = -10000
-        try:
-            row_count = min(rows.count(), 100)
-        except Exception:
-            row_count = 0
-        for index in range(row_count):
-            row = rows.nth(index)
+        searched_queries: list[str] = []
+        saw_result_rows = False
+        for query_name in wv_preferred_query_variants(org.organization_name):
+            page.goto(WV_SEARCH_URL, wait_until="domcontentloaded", timeout=WV_GOTO_TIMEOUT_MS)
+            safe_wait_for_network_idle(page, timeout=WV_NETWORK_IDLE_TIMEOUT_MS)
             try:
-                cells = row.locator("td")
-                if cells.count() < 5:
-                    continue
-                registry_id = re.sub(r"\s+", " ", cells.nth(0).inner_text(timeout=1000)).strip()
-                registry_name = useful_registry_name(cells.nth(1).inner_text(timeout=1000))
-                status_text = re.sub(r"\s+", " ", cells.nth(4).inner_text(timeout=1000)).strip()
+                page.locator("#ddlType").select_option(label="CHARITABLE ORGANIZATIONS", timeout=5000)
             except Exception:
+                pass
+
+            name_input = page.locator("#CharitiesSearch-CharitiesSearch_txtName").first
+            name_input.wait_for(state="visible", timeout=5000)
+            name_input.fill("")
+            name_input.type(query_name, delay=25)
+            searched_queries.append(query_name)
+
+            page.locator("#CharitiesSearch-CharitiesSearch_btnSearch").click(timeout=7000)
+            safe_wait_for_network_idle(page, timeout=WV_SEARCH_IDLE_TIMEOUT_MS)
+            page.wait_for_timeout(WV_RESULTS_SETTLE_MS)
+
+            body = registry_page_body(page)
+            if re.search(r"\bNo\s+(?:matching\s+)?(?:records?|results?)\b|records\s+0\s+to\s+0\s+of\s+0", body, re.I):
                 continue
-            if not registry_id or not registry_name:
-                continue
-            score = target_name_score(registry_name, safe_targets)
-            if score > best_score:
-                best_score = score
-                best = (row, registry_id, registry_name, status_text)
+
+            rows = page.locator("tr")
+            try:
+                row_count = min(rows.count(), 100)
+            except Exception:
+                row_count = 0
+            if row_count:
+                saw_result_rows = True
+            for index in range(row_count):
+                row = rows.nth(index)
+                try:
+                    cells = row.locator("td")
+                    if cells.count() < 5:
+                        continue
+                    registry_id = re.sub(r"\s+", " ", cells.nth(0).inner_text(timeout=1000)).strip()
+                    registry_name = useful_registry_name(cells.nth(1).inner_text(timeout=1000))
+                    status_text = re.sub(r"\s+", " ", cells.nth(4).inner_text(timeout=1000)).strip()
+                except Exception:
+                    continue
+                if not registry_id or not registry_name:
+                    continue
+                score = target_name_score(registry_name, safe_targets)
+                if score > best_score:
+                    best_score = score
+                    best = (row, registry_id, registry_name, status_text)
+            if best is not None and best_score >= 450:
+                break
 
         if best is None or best_score < 450:
             result.status = checker.STATUS_NOT_REGISTERED
-            result.raw_status_text = "No safely matching organization row"
-            result.source_note = "West Virginia returned rows, but none safely matched the requested organization or generated DBA/name variants."
+            if saw_result_rows:
+                result.raw_status_text = "No safely matching organization row"
+                result.source_note = (
+                    "West Virginia returned rows, but none safely matched the requested organization "
+                    "or generated DBA/name variants."
+                )
+            else:
+                result.raw_status_text = "No matching organization row"
+                result.source_note = (
+                    "West Virginia public charity search returned no matching rows for the bounded "
+                    f"name variants tried: {', '.join(searched_queries[:4])}."
+                )
             result.success = True
             return result
 
