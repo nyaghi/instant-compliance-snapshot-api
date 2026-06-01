@@ -94,7 +94,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.01.122-staging"
+APP_VERSION = "2026.06.01.123-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -5419,6 +5419,39 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
     return result, score
 
 
+def ct_prioritized_name_variants(original_name: str, variants: list[str]) -> list[str]:
+    prioritized: list[str] = []
+
+    def add(value: str) -> None:
+        cleaned = re.sub(r"\s+", " ", (value or "").strip(" ,;-"))
+        if cleaned and cleaned.lower() not in {item.lower() for item in prioritized}:
+            prioritized.append(cleaned)
+
+    base = re.sub(r"\s+", " ", (original_name or "").strip())
+    add(base)
+    if re.search(r"[-\u2010-\u2015]", base):
+        hyphen_as_space = re.sub(r"[-\u2010-\u2015]+", " ", base)
+        hyphen_as_space = re.sub(r"\s+", " ", hyphen_as_space).strip()
+        no_punctuation = re.sub(r"[^\w\s]", " ", base)
+        no_punctuation = re.sub(r"\s+", " ", no_punctuation).strip()
+        add(no_punctuation)
+        add(hyphen_as_space)
+        without_suffix = re.sub(
+            r",?\s+\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\b\.?\s*$",
+            "",
+            hyphen_as_space,
+            flags=re.I,
+        ).strip(" ,;-")
+        for legal in ("Inc", "Inc."):
+            if without_suffix:
+                add(f"{without_suffix} {legal}")
+                add(f"{without_suffix}, {legal}")
+        add(without_suffix)
+    for variant in variants:
+        add(variant)
+    return prioritized
+
+
 def search_ct_direct(org):
     url = "https://www.elicense.ct.gov/lookup/licenselookup.aspx"
     original_name = org.organization_name
@@ -5430,14 +5463,14 @@ def search_ct_direct(org):
             for suffix in (f"{target} (THE)", f"{target}, THE", f"{target}, The"):
                 if suffix not in safe_targets:
                     safe_targets.append(suffix)
-    variants = organization_name_variants(
+    variants = ct_prioritized_name_variants(original_name, organization_name_variants(
         original_name,
         org.ein,
         include_ein_aliases=True,
         include_name_segments=True,
         include_compact_legal_suffixes=True,
         include_leading_article_variants=True,
-    )[:CT_NAME_VARIANT_LIMIT]
+    ))[:CT_NAME_VARIANT_LIMIT]
     best_result = None
     best_score = -10000
     saw_zero_results = False
@@ -5507,14 +5540,14 @@ def search_ct(page, org):
                 if suffix not in safe_targets:
                     safe_targets.append(suffix)
     best_result = None
-    variants = organization_name_variants(
+    variants = ct_prioritized_name_variants(original_name, organization_name_variants(
         original_name,
         org.ein,
         include_ein_aliases=True,
         include_name_segments=True,
         include_compact_legal_suffixes=True,
         include_leading_article_variants=True,
-    )[:CT_NAME_VARIANT_LIMIT]
+    ))[:CT_NAME_VARIANT_LIMIT]
     last_error = ""
     for variant in variants:
         if time.perf_counter() >= deadline:
@@ -10964,10 +10997,12 @@ def search_ms_fast(page, org, navigate: bool = True):
     )
     try:
         if navigate:
-            page.goto(module.MS_SEARCH_URL, wait_until="domcontentloaded", timeout=12000)
-            safe_wait_for_network_idle(page, timeout=1500)
+            page.goto(module.MS_SEARCH_URL, wait_until="domcontentloaded", timeout=9000)
+            safe_wait_for_network_idle(page, timeout=1000)
 
         input_box = module.find_visible_input(page, [
+            "#ContentPlaceHolder1_PortalPageControl1_ctl10_IFSearchControl1_EntityNameTextBox",
+            'input[name="ctl00$ContentPlaceHolder1$PortalPageControl1$ctl10$IFSearchControl1$EntityNameTextBox"]',
             'input[aria-label*="Charity Name" i]',
             'input[name*="CharityName" i]',
             'input[id*="CharityName" i]',
@@ -10977,9 +11012,11 @@ def search_ms_fast(page, org, navigate: bool = True):
         ])
         if not input_box:
             if not navigate:
-                page.goto(module.MS_SEARCH_URL, wait_until="domcontentloaded", timeout=12000)
-                safe_wait_for_network_idle(page, timeout=1500)
+                page.goto(module.MS_SEARCH_URL, wait_until="domcontentloaded", timeout=9000)
+                safe_wait_for_network_idle(page, timeout=1000)
                 input_box = module.find_visible_input(page, [
+                    "#ContentPlaceHolder1_PortalPageControl1_ctl10_IFSearchControl1_EntityNameTextBox",
+                    'input[name="ctl00$ContentPlaceHolder1$PortalPageControl1$ctl10$IFSearchControl1$EntityNameTextBox"]',
                     'input[aria-label*="Charity Name" i]',
                     'input[name*="CharityName" i]',
                     'input[id*="CharityName" i]',
@@ -10998,6 +11035,7 @@ def search_ms_fast(page, org, navigate: bool = True):
 
         clicked = False
         for candidate in [
+            page.locator("#SearchButton").first,
             page.get_by_role("button", name=re.compile(r"^Search$", re.I)),
             page.locator('input[type="submit"][value*="Search" i]').first,
             page.locator('button:has-text("Search")').first,
@@ -11012,14 +11050,14 @@ def search_ms_fast(page, org, navigate: bool = True):
             result.error = "Could not click the Mississippi Search button."
             return result
 
-        safe_wait_for_network_idle(page, timeout=2500)
+        safe_wait_for_network_idle(page, timeout=1500)
 
         table = None
         page_text = ""
-        deadline = time.perf_counter() + 7.0
+        deadline = time.perf_counter() + 4.0
         while time.perf_counter() < deadline:
             page.wait_for_timeout(500)
-            page_text = page.locator("body").inner_text(timeout=8000)
+            page_text = page.locator("body").inner_text(timeout=4000)
             if re.search(r"no results found|no records found|no matching|0 results", page_text, re.I):
                 break
             table = module.find_results_table(page)
@@ -11090,7 +11128,7 @@ def search_ms_fast(page, org, navigate: bool = True):
 
         detail_text = ""
         if clicked_detail:
-            safe_wait_for_network_idle(page, timeout=2500)
+            safe_wait_for_network_idle(page, timeout=1500)
             page.wait_for_timeout(500)
             detail_text = module.body_text(page)
 
@@ -11135,7 +11173,7 @@ def search_batch_browser_state(page, org, state: str):
             variants.insert(0, org.organization_name)
         variants = variants[:4]
         best_external = None
-        ms_deadline = time.perf_counter() + 42.0
+        ms_deadline = time.perf_counter() + 24.0
         for attempt_index, variant_name in enumerate(variants or [org.organization_name]):
             if time.perf_counter() >= ms_deadline:
                 break
@@ -11435,7 +11473,7 @@ def search_ok_precise(page, org, module):
 
         latest_filing_date = module.parse_ok_filing_date(latest_filing)
         if latest_filing_date:
-            assumed_due_date = date(latest_filing_date.year + 1, 11, 15)
+            assumed_due_date = date(latest_filing_date.year, 11, 15)
             result.status = status_from_calendar_date(assumed_due_date)
             result.source_note = (
                 "Oklahoma annual registration is tied to the Form 990 filing deadline; "
@@ -12218,6 +12256,14 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
     if state == "CT":
         lookup_started = time.perf_counter()
         result = search_ct_direct(org)
+        if public_status(result) == "Site Not Reachable":
+            retried_result = search_ct_direct(org)
+            if public_status(retried_result) != "Site Not Reachable":
+                retried_result.source_note = " ".join(part for part in [
+                    retried_result.source_note or "",
+                    "A quick retry replaced an initial Connecticut direct lookup failure.",
+                ]).strip()
+                result = retried_result
         body = " ".join(part for part in [
             result.raw_status_text or "",
             result.source_note or "",
