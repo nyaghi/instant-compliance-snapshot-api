@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.01.110-staging"
+APP_VERSION = "2026.06.01.111-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -8314,7 +8314,28 @@ def _search_wi_sidecar_unlocked(org):
         result.success = False
         return result
     search_names = wi_search_names_for_org(org) or [org.organization_name]
-    sidecar_search_names = search_names[:WI_DIRECT_VARIANT_LIMIT]
+    sidecar_search_names = []
+
+    def add_sidecar_name(value: str) -> None:
+        cleaned = re.sub(r"\s+", " ", (value or "").strip())
+        if cleaned and cleaned.lower() not in {existing.lower() for existing in sidecar_search_names}:
+            sidecar_search_names.append(cleaned)
+
+    for search_name in search_names[:4]:
+        add_sidecar_name(search_name)
+        national_prefix_removed = re.sub(
+            r"^(?:the\s+)?(?:u\.?\s*s\.?|us|united\s+states)\s+",
+            "",
+            search_name,
+            flags=re.I,
+        ).strip()
+        if len(national_prefix_removed.split()) >= 2:
+            add_sidecar_name(national_prefix_removed)
+    for search_name in search_names:
+        add_sidecar_name(search_name)
+        if len(sidecar_search_names) >= WI_DIRECT_VARIANT_LIMIT:
+            break
+    sidecar_search_names = sidecar_search_names[:WI_DIRECT_VARIANT_LIMIT]
     target_names = organization_match_target_variants(org.organization_name, org.ein)
     for wi_name in search_names:
         cleaned = re.sub(r"\s+", " ", (wi_name or "").strip())
