@@ -94,7 +94,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.01.121-staging"
+APP_VERSION = "2026.06.01.122-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -12502,6 +12502,15 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 else:
                     result = search_wv_precise(page, org)
                     elapsed_before_wv_confirmation = time.perf_counter() - lookup_started
+                    if public_status(result) == "Site Not Reachable" and elapsed_before_wv_confirmation < 45.0:
+                        time.sleep(1.0)
+                        retried_result = search_wv_precise(page, org)
+                        if public_status(retried_result) != "Site Not Reachable":
+                            retried_result.source_note = " ".join(part for part in [
+                                retried_result.source_note or "",
+                                "A quick retry replaced an initial West Virginia transient lookup failure.",
+                            ]).strip()
+                            result = retried_result
                     if confirm_single_no_match and public_status(result) == "Not Registered" and elapsed_before_wv_confirmation < 40.0:
                         time.sleep(2.0)
                         confirmed_result = search_wv_precise(page, org)
