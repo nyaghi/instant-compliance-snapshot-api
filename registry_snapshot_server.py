@@ -34,6 +34,10 @@ os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "0")
 
 from PIL import Image, ImageDraw, ImageFont
 try:
+    from curl_cffi import requests as curl_requests
+except Exception:
+    curl_requests = None
+try:
     from pypdf import PdfReader, PdfWriter
 except Exception:
     PdfReader = None
@@ -90,7 +94,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.01.118-staging"
+APP_VERSION = "2026.06.01.119-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -543,6 +547,11 @@ WI_BACKEND_BROWSER_ACQUIRE_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_BA
 WI_BACKEND_BROWSER_SEMAPHORE = threading.BoundedSemaphore(WI_BACKEND_BROWSER_LANES)
 WI_USE_BACKEND_BROWSER_FALLBACK = os.environ.get("CE_WI_USE_BACKEND_BROWSER_FALLBACK", "0").strip().lower() in {"1", "true", "yes"}
 WI_SNAPSHOT_PATH = Path(os.environ.get("CE_WI_SNAPSHOT_PATH", str(BASE_DIR / "wi_charities_snapshot.json")))
+NM_SIDECAR_URL = os.environ.get(
+    "CE_NM_STATUS_SIDECAR_URL",
+    "https://staging.compliance-express.com/.netlify/functions/nm-status",
+).strip()
+NM_SIDECAR_TIMEOUT_SECONDS = min(max(8.0, float(os.environ.get("CE_NM_SIDECAR_TIMEOUT_SECONDS", "24"))), 45.0)
 WI_USE_SNAPSHOT = os.environ.get("CE_WI_USE_SNAPSHOT", "1").strip().lower() in {"1", "true", "yes"}
 WI_REQUIRE_COMPLETE_SNAPSHOT = os.environ.get("CE_WI_REQUIRE_COMPLETE_SNAPSHOT", "1").strip().lower() in {"1", "true", "yes"}
 WI_SNAPSHOT_MAX_AGE_SECONDS = min(max(86400, int(os.environ.get("CE_WI_SNAPSHOT_MAX_AGE_SECONDS", str(14 * 86400)))), 45 * 86400)
@@ -11848,11 +11857,23 @@ def nm_status_history_rows_from_text_master(*texts: str) -> list[tuple[int, str,
     combined = "\n".join(text for text in texts if text)
     if not combined:
         return []
+    rows: list[tuple[int, str, str]] = []
+    markdown_row_pattern = re.compile(
+        r"\|\s*\*{0,2}(20\d{2})\*{0,2}\s*\|\s*(.*?)\s*\|\s*(\d{1,2}/\d{1,2}/\d{4})\s*\|",
+        re.I | re.S,
+    )
+    for row in markdown_row_pattern.finditer(combined):
+        detail = re.sub(r"\[[^\]]*\]\([^)]*\)", " ", row.group(2))
+        detail = re.sub(r"[*_`]+", "", detail)
+        detail = re.sub(r"\s+", " ", detail).strip()
+        if detail:
+            rows.append((int(row.group(1)), detail, row.group(3)))
+    if rows:
+        return rows
     combined = html.unescape(re.sub(r"<[^>]+>", " ", combined))
     combined = re.sub(r"\s+", " ", combined).strip()
     status_section_match = re.search(r"Status\s+History(.*)", combined, re.I | re.S)
     section = status_section_match.group(1) if status_section_match else combined
-    rows: list[tuple[int, str, str]] = []
     row_pattern = re.compile(
         r"\b(20\d{2})\s+"
         r"((?:Tax\s+Year\s+Registration\s+Open|Registration\s+Submitted(?:\s+\d{10,})?|"
@@ -11876,7 +11897,130 @@ def nm_status_history_rows_from_text_master(*texts: str) -> list[tuple[int, str,
     return rows
 
 
+def search_nm_status_history_reader(org, module):
+    formatted_ein = format_ein(org.ein)
+    detail_url = f"https://secure.nmdoj.gov/CharitySearch/CharityDetail.aspx?FEIN={quote(formatted_ein, safe='')}"
+    reader_url = f"https://r.jina.ai/http://{detail_url}"
+    result = module.SearchResult(
+        organization_name=org.organization_name,
+        ein=org.ein,
+        state="NM",
+        status=getattr(module, "STATUS_UNKNOWN", "Unknown"),
+        raw_status_text="",
+        source_url=detail_url,
+        source_note=(
+            "New Mexico Status History was read from the public NM DOJ detail page through "
+            "the Jina reader after the direct API-host path could not expose usable rows."
+        ),
+    )
+    try:
+        if curl_requests is not None:
+            response = curl_requests.get(
+                reader_url,
+                impersonate="chrome136",
+                timeout=18,
+                headers={"Accept": "text/plain,text/markdown,*/*"},
+            )
+            if response.status_code != 200:
+                raise RuntimeError(f"HTTP {response.status_code}")
+            text = response.text or ""
+        else:
+            request = urllib.request.Request(
+                reader_url,
+                headers={
+                    "Accept": "text/plain,text/markdown,*/*",
+                    "User-Agent": f"CharityClarity/{APP_VERSION}",
+                },
+            )
+            with urllib.request.urlopen(request, timeout=18) as response:
+                text = response.read().decode("utf-8", errors="replace")
+    except Exception as exc:
+        result.error = f"NM reader error: {exc}"
+        result.raw_status_text = "New Mexico reader lookup could not be completed"
+        result.success = False
+        return result
+
+    if re.search(r"\bCharity\s+Registration\s+Status\s+is\s+unknown\b", text, re.I) and "Tax Year" not in text:
+        result.status = getattr(module, "STATUS_NOT_REGISTERED", "Not registered")
+        result.raw_status_text = "No New Mexico charity registration status-history rows found for this FEIN."
+        result.success = True
+        return result
+
+    name_match = re.search(r"Markdown Content:\s*([^\n\r]+?)\s*\(" + re.escape(formatted_ein) + r"\)", text, re.I)
+    if name_match:
+        result.matched_registry_name = re.sub(r"\s+", " ", name_match.group(1)).strip()
+    rows = nm_status_history_rows_from_text_master(text)
+    if not rows:
+        result.raw_status_text = "NM reader page reached, but Status History rows were not parsed"
+        result.success = True
+        return result
+    latest_submitted = module.nm_latest_submitted(rows)
+    fye_text = module.nm_extract_fye_from_html(
+        text,
+        preferred_year=latest_submitted[0] if latest_submitted else None,
+    )
+    return module.apply_nm_rows_to_result(result, rows, fye_text=fye_text)
+
+
+def search_nm_status_history_sidecar(org, module, note: str = ""):
+    result = module.SearchResult(
+        organization_name=org.organization_name,
+        ein=org.ein,
+        state="NM",
+        status=getattr(module, "STATUS_UNKNOWN", "Unknown"),
+        raw_status_text="",
+        source_url=NM_SIDECAR_URL or getattr(module, "NM_SEARCH_URL", "https://secure.nmdoj.gov/CharitySearch/"),
+        source_note=(
+            "New Mexico Status History was read through the CharityClarity staging sidecar "
+            "after the direct API-host lookup could not read usable Status History rows."
+        ),
+    )
+    if not NM_SIDECAR_URL:
+        result.raw_status_text = "New Mexico sidecar is not configured"
+        result.success = False
+        return result
+    payload = {
+        "organization_name": org.organization_name,
+        "ein": org.ein,
+        "app_version": APP_VERSION,
+        "note": note,
+    }
+    try:
+        request = urllib.request.Request(
+            NM_SIDECAR_URL,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": f"CharityClarity/{APP_VERSION}",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=NM_SIDECAR_TIMEOUT_SECONDS + 3) as response:
+            response_body = response.read().decode("utf-8", errors="replace")
+        data = json.loads(response_body)
+    except Exception as exc:
+        result.error = f"NM sidecar error: {exc}"
+        result.raw_status_text = "New Mexico sidecar lookup could not be completed"
+        result.success = False
+        return result
+
+    result.status = data.get("status") or getattr(module, "STATUS_UNKNOWN", "Unknown")
+    result.raw_status_text = data.get("raw_status_text") or result.status
+    result.source_url = data.get("source_url") or result.source_url
+    result.source_note = data.get("source_note") or result.source_note
+    result.matched_registry_name = data.get("matched_registry_name") or ""
+    result.matched_registry_identifier = data.get("matched_registry_identifier") or ""
+    result.error = data.get("error") or ""
+    result.success = bool(data.get("success", False))
+    return result
+
+
 def search_nm_status_history_fallback(org, module):
+    reader_result = search_nm_status_history_reader(org, module)
+    if external_status_to_checker_status(getattr(reader_result, "status", "")) != checker.STATUS_UNKNOWN:
+        return reader_result
+
     result = module.SearchResult(
         organization_name=org.organization_name,
         ein=org.ein,
@@ -11928,8 +12072,17 @@ def search_nm_status_history_fallback(org, module):
             if name_match:
                 result.matched_registry_name = re.sub(r"\s+", " ", name_match.group(1)).strip()
         if not rows:
-            snippet = re.sub(r"\s+", " ", body or html or "").strip()[:700]
-            result.raw_status_text = f"NM detail page reached, but Status History rows were still not parsed | Body Snippet: {snippet}"
+            blocked = re.search(r"\b(?:Cloudflare|you have been blocked|unable to access nmdoj\.gov|Ray ID)\b", body or html or "", re.I)
+            sidecar_result = search_nm_status_history_sidecar(
+                org,
+                module,
+                note="direct lookup blocked" if blocked else "direct lookup returned no parsed rows",
+            )
+            if external_status_to_checker_status(getattr(sidecar_result, "status", "")) != checker.STATUS_UNKNOWN:
+                return sidecar_result
+            result.raw_status_text = "NM detail page reached, but Status History rows were still not parsed"
+            if blocked:
+                result.raw_status_text = "NM detail page returned an upstream block page before Status History could be read"
             result.success = True
             return result
         latest_submitted = module.nm_latest_submitted(rows)
