@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.01.116-staging"
+APP_VERSION = "2026.06.01.117-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -11844,6 +11844,38 @@ def search_wa_nm_state(org, state: str):
     return copy_external_result(org, state, external_result)
 
 
+def nm_status_history_rows_from_text_master(*texts: str) -> list[tuple[int, str, str]]:
+    combined = "\n".join(text for text in texts if text)
+    if not combined:
+        return []
+    combined = html.unescape(re.sub(r"<[^>]+>", " ", combined))
+    combined = re.sub(r"\s+", " ", combined).strip()
+    status_section_match = re.search(r"Status\s+History(.*)", combined, re.I | re.S)
+    section = status_section_match.group(1) if status_section_match else combined
+    rows: list[tuple[int, str, str]] = []
+    row_pattern = re.compile(
+        r"\b(20\d{2})\s+"
+        r"((?:Tax\s+Year\s+Registration\s+Open|Registration\s+Submitted(?:\s+\d{10,})?|"
+        r"Extension\s+(?:Granted|Requested)|Reinstatement\s+Issued|Registration\s+Submission\s+Delinquent))"
+        r"\s+(\d{1,2}/\d{1,2}/\d{4})",
+        re.I,
+    )
+    for row in row_pattern.finditer(section):
+        detail = re.sub(r"\s+", " ", row.group(2)).strip()
+        rows.append((int(row.group(1)), detail, row.group(3)))
+    if rows:
+        return rows
+    generic_pattern = re.compile(
+        r"\b(20\d{2})\s+(.+?)\s+(\d{1,2}/\d{1,2}/\d{4})(?=\s+20\d{2}\s+|$)",
+        re.I | re.S,
+    )
+    for row in generic_pattern.finditer(section):
+        detail = re.sub(r"\s+", " ", row.group(2)).strip()
+        if detail:
+            rows.append((int(row.group(1)), detail, row.group(3)))
+    return rows
+
+
 def search_nm_status_history_fallback(org, module):
     result = module.SearchResult(
         organization_name=org.organization_name,
@@ -11879,7 +11911,11 @@ def search_nm_status_history_fallback(org, module):
                             page.wait_for_timeout(1000)
                     body = page.locator("body").inner_text(timeout=10000)
                     html = page.content()
-                    rows = module.nm_parse_history_rows_from_html(html) or module.nm_parse_history_rows_from_text(body)
+                    rows = (
+                        nm_status_history_rows_from_text_master(body, html)
+                        or module.nm_parse_history_rows_from_html(html)
+                        or module.nm_parse_history_rows_from_text(body)
+                    )
                     if rows or attempt:
                         break
             finally:
