@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.01.111-staging"
+APP_VERSION = "2026.06.01.112-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -8940,6 +8940,11 @@ def search_pa_with_name_fallback(page, org):
         return result
     url = "https://www.charities.pa.gov/#/page/searchCharities"
     safe_targets = organization_match_target_variants(org.organization_name, org.ein)
+    fallback_started = time.monotonic()
+    try:
+        fallback_budget_seconds = float(os.environ.get("CE_PA_NAME_FALLBACK_SECONDS", "20"))
+    except Exception:
+        fallback_budget_seconds = 20.0
     for variant in organization_name_variants(
         org.organization_name,
         org.ein,
@@ -8948,12 +8953,18 @@ def search_pa_with_name_fallback(page, org):
         include_compact_legal_suffixes=True,
         include_leading_article_variants=True,
         include_broad_query_prefixes=False,
-    )[:8]:
+    )[:4]:
+        if time.monotonic() - fallback_started > fallback_budget_seconds:
+            result.source_note = (
+                (result.source_note or "PA search results did not contain a matching EIN row.")
+                + " Pennsylvania name fallback was bounded to preserve bulk reliability."
+            )
+            return result
         fallback = checker.StateResult(org.organization_name, org.ein, "PA", checker.STATUS_UNKNOWN, url)
         try:
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            checker.safe_wait_for_network_idle(page, timeout=5000)
-            time.sleep(1)
+            page.goto(url, wait_until="domcontentloaded", timeout=12000)
+            checker.safe_wait_for_network_idle(page, timeout=2500)
+            time.sleep(0.4)
             name_input = checker.find_visible_input(page, [
                 'input[name*="CharityName" i]',
                 'input[ng-model*="name" i]',
@@ -8968,8 +8979,8 @@ def search_pa_with_name_fallback(page, org):
             name_input.fill(variant)
             if not checker.click_pa_search_button(page):
                 continue
-            checker.safe_wait_for_network_idle(page, timeout=15000)
-            time.sleep(2)
+            checker.safe_wait_for_network_idle(page, timeout=5000)
+            time.sleep(0.8)
             candidates = []
             for selector in ["tbody tr", "tr", "[role='row']"]:
                 try:
