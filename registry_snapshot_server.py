@@ -90,7 +90,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.01.112-staging"
+APP_VERSION = "2026.06.01.113-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -3967,6 +3967,30 @@ def classify_nm_status_history(raw_status: str) -> str:
     return ""
 
 
+def classify_or_latest_report_status(raw_status: str) -> str:
+    due_date = or_latest_report_base_due_date(raw_status)
+    if due_date:
+        return status_from_calendar_date(due_date)
+    raw = re.sub(r"\s+", " ", raw_status or "").strip()
+    if not raw:
+        return ""
+    if not re.search(r"\bLatest\s+Report\s+Year\s*:", raw, re.I):
+        return ""
+    year_values = [int(value) for value in re.findall(r"\bLatest\s+Report\s+Year\s*:\s*(20\d{2})\b", raw, re.I)]
+    if year_values and max(year_values) <= date.today().year - 2:
+        return checker.STATUS_DELINQUENT
+    return ""
+
+
+def or_latest_report_base_due_date(raw_status: str) -> date | None:
+    raw = re.sub(r"\s+", " ", raw_status or "").strip()
+    if not re.search(r"\bLatest\s+Report\s+Year\s*:", raw, re.I):
+        return None
+    fye_match = re.search(r"\bFiscal\s+Year\s+End\s*:\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})", raw, re.I)
+    fye_date = parse_due_date(fye_match.group(1)) if fye_match else None
+    return fifteenth_day_after_fiscal_year_end(fye_date, 5) if fye_date else None
+
+
 def copy_external_result(org, state: str, external_result):
     status = external_status_to_checker_status(getattr(external_result, "status", ""))
     raw_status = getattr(external_result, "raw_status_text", "") or status
@@ -3982,6 +4006,13 @@ def copy_external_result(org, state: str, external_result):
         if nm_status:
             status = nm_status
             normalized_error = ""
+    if state_upper == "OR":
+        or_status = classify_or_latest_report_status(raw_status)
+        if or_status:
+            status = or_status
+            base_due = or_latest_report_base_due_date(raw_status)
+            if base_due and "Base Due from Latest Report Period" not in raw_status:
+                raw_status = f"{raw_status} | Base Due from Latest Report Period: {format_date(base_due)}"
     if state_upper == "MI":
         if re.search(r"Could not find the Michigan results frame", normalized_error, re.I):
             status = checker.STATUS_NOT_REGISTERED
@@ -12062,17 +12093,18 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     page,
                     org,
                     checker.search_ny,
-                    max_variants=10,
-                    max_elapsed_seconds=min(NAME_SEARCH_VARIANT_MAX_SECONDS, 30.0),
+                    max_variants=12,
+                    max_elapsed_seconds=min(max(NAME_SEARCH_VARIANT_MAX_SECONDS, 40.0), 50.0),
                 )
-                if public_status(result) == "Not Registered":
-                    time.sleep(1.0)
+                elapsed_before_ny_confirmation = time.perf_counter() - lookup_started
+                if public_status(result) == "Not Registered" and elapsed_before_ny_confirmation < 48.0:
+                    time.sleep(2.0)
                     confirmed_result = search_with_name_variants(
                         page,
                         org,
                         checker.search_ny,
-                        max_variants=10,
-                        max_elapsed_seconds=min(NAME_SEARCH_VARIANT_MAX_SECONDS, 24.0),
+                        max_variants=12,
+                        max_elapsed_seconds=min(max(NAME_SEARCH_VARIANT_MAX_SECONDS, 34.0), 44.0),
                     )
                     if public_status(confirmed_result) != "Not Registered":
                         confirmed_result.source_note = " ".join(part for part in [
@@ -12205,8 +12237,8 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                         page,
                         org,
                         search_wv_precise,
-                        max_variants=10,
-                        max_elapsed_seconds=NAME_SEARCH_VARIANT_MAX_SECONDS,
+                        max_variants=12,
+                        max_elapsed_seconds=min(max(NAME_SEARCH_VARIANT_MAX_SECONDS, 45.0), 58.0),
                         include_ein_aliases=True,
                         include_name_segments=True,
                         include_compact_legal_suffixes=True,
@@ -12215,6 +12247,29 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                         require_safe_registry_name=True,
                         preferred_variants=wv_preferred_query_variants(org.organization_name),
                     )
+                    elapsed_before_wv_confirmation = time.perf_counter() - lookup_started
+                    if confirm_single_no_match and public_status(result) == "Not Registered" and elapsed_before_wv_confirmation < 50.0:
+                        time.sleep(2.0)
+                        confirmed_result = search_with_name_variants(
+                            page,
+                            org,
+                            search_wv_precise,
+                            max_variants=12,
+                            max_elapsed_seconds=min(max(NAME_SEARCH_VARIANT_MAX_SECONDS, 30.0), 36.0),
+                            include_ein_aliases=True,
+                            include_name_segments=True,
+                            include_compact_legal_suffixes=True,
+                            include_leading_article_variants=True,
+                            prioritize_institution_reductions=True,
+                            require_safe_registry_name=True,
+                            preferred_variants=wv_preferred_query_variants(org.organization_name),
+                        )
+                        if public_status(confirmed_result) != "Not Registered":
+                            confirmed_result.source_note = " ".join(part for part in [
+                                confirmed_result.source_note or "",
+                                "A delayed confirmation lookup replaced an initial West Virginia no-record response.",
+                            ]).strip()
+                            result = confirmed_result
                 body = registry_page_body(page)
             elif state == "WI":
                 result = search_wi(page, org)

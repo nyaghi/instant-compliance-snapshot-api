@@ -683,9 +683,11 @@ def nm_parse_history_rows_from_text(body_text: str) -> list[tuple[int, str, str]
         body_text or "",
         re.I | re.S,
     )
-    if not match:
-        return []
-    section = match.group(1)
+    if match:
+        section = match.group(1)
+    else:
+        fallback = re.search(r"Status\s+History(.*)", body_text or "", re.I | re.S)
+        section = fallback.group(1) if fallback else (body_text or "")
     rows: list[tuple[int, str, str]] = []
     for row in re.finditer(
         r"\b(20\d{2})\s+(.+?)\s+(\d{1,2}/\d{1,2}/\d{4})(?=\s+20\d{2}\s+|$)",
@@ -696,6 +698,20 @@ def nm_parse_history_rows_from_text(body_text: str) -> list[tuple[int, str, str]
         if not detail_text:
             continue
         rows.append((int(row.group(1)), detail_text, row.group(3)))
+    if rows:
+        return rows
+    # Some NM detail pages now include Registrar Notes before Status History,
+    # and the table text can arrive without the exact header spacing. In that
+    # case, scan for the repeated tax-year/detail/date row shape directly.
+    for row in re.finditer(
+        r"\b(20\d{2})\s+"
+        r"((?:Tax\s+Year\s+Registration\s+Open|Registration\s+Submitted(?:\s+\d{10,})?|"
+        r"Extension\s+(?:Granted|Requested)|Reinstatement\s+Issued|Registration\s+Submission\s+Delinquent))"
+        r"\s+(\d{1,2}/\d{1,2}/\d{4})",
+        section,
+        re.I,
+    ):
+        rows.append((int(row.group(1)), normalize_spaces(row.group(2)), row.group(3)))
     return rows
 
 
