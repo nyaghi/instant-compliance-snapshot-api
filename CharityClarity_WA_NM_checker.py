@@ -274,6 +274,90 @@ def fill_fein_and_search(page, ein: str) -> bool:
     return False
 
 
+def switch_to_name_mode(page) -> None:
+    for candidate in [
+        page.get_by_text(re.compile(r"Organization\s+Name|Charity\s+Name|Business\s+Name|Name", re.I)).first,
+        page.locator("label").filter(has_text=re.compile(r"Organization\s+Name|Charity\s+Name|Business\s+Name|Name", re.I)).first,
+        page.locator("input[value='OrgName']").first,
+        page.locator("input[value='OrganizationName']").first,
+        page.locator("input[value='Name']").first,
+    ]:
+        try:
+            candidate.click(timeout=3000, force=True)
+            time.sleep(1)
+            return
+        except Exception:
+            continue
+
+    page.evaluate(
+        """
+        () => {
+          const radios = Array.from(document.querySelectorAll("input[type='radio']"));
+          const nameRadio = radios.find((radio) => {
+            const value = String(radio.value || radio.id || radio.name || "");
+            const label = radio.id ? String(document.querySelector(`label[for="${radio.id}"]`)?.textContent || "") : "";
+            return /org|organization|charity|business|name/i.test(value + " " + label)
+              && !/fein|ein/i.test(value + " " + label);
+          });
+          if (nameRadio) {
+            nameRadio.checked = true;
+            nameRadio.dispatchEvent(new Event('click', { bubbles: true }));
+            nameRadio.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        }
+        """
+    )
+    time.sleep(1)
+
+
+def fill_name_and_search(page, org_name: str) -> bool:
+    try:
+        page.locator("#FEINNoSearchField").first.fill("")
+    except Exception:
+        pass
+
+    name_box = page.locator("#txtKeywordSearch").first
+    name_box.wait_for(state="visible", timeout=10000)
+    name_box.click(timeout=5000, force=True)
+    time.sleep(1)
+    name_box.fill("")
+    name_box.type(org_name, delay=35)
+    page.evaluate(
+        """
+        () => {
+          const nameBox = document.querySelector('#txtKeywordSearch');
+          if (nameBox) {
+            nameBox.dispatchEvent(new Event('input', { bubbles: true }));
+            nameBox.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        }
+        """
+    )
+    time.sleep(1)
+
+    for candidate in [
+        page.get_by_role("button", name=re.compile(r"^Search$", re.I)),
+        page.locator("button").filter(has_text=re.compile(r"^Search$", re.I)).first,
+        page.locator("input[value='Search']").first,
+    ]:
+        try:
+            candidate.click(timeout=5000, force=True)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def wa_name_fallback_result_link(page, org: Organization):
+    switch_to_name_mode(page)
+    if not fill_name_and_search(page, org.organization_name):
+        return None
+    safe_wait_for_network_idle(page, timeout=8000)
+    time.sleep(1)
+    found = wait_for_result_link_or_no_value(page, org.organization_name, timeout_seconds=18, require_search_response=True)
+    return None if found == "NO_VALUE" else found
+
+
 def scroll_to_results(page) -> None:
     for _ in range(3):
         try:
@@ -529,8 +613,8 @@ def search_wa(org: Organization, show_process: bool = False) -> SearchResult:
         page = context.new_page()
         try:
             page.goto(WA_SEARCH_URL, wait_until="domcontentloaded", timeout=45000)
-            safe_wait_for_network_idle(page)
-            time.sleep(4)
+            safe_wait_for_network_idle(page, timeout=10000)
+            time.sleep(1)
             install_wa_search_tracker(page)
 
             switch_to_fein_mode(page)
@@ -540,16 +624,22 @@ def search_wa(org: Organization, show_process: bool = False) -> SearchResult:
                 result.error = "Could not click the Washington Search button."
                 return result
 
-            safe_wait_for_network_idle(page)
-            time.sleep(4)
+            safe_wait_for_network_idle(page, timeout=8000)
+            time.sleep(1)
 
-            found = wait_for_result_link_or_no_value(page, org.organization_name, timeout_seconds=35, require_search_response=True)
+            found = wait_for_result_link_or_no_value(page, org.organization_name, timeout_seconds=22, require_search_response=True)
             if found == "NO_VALUE":
-                result.status = STATUS_NOT_REGISTERED
-                result.raw_status_text = "No Value Found."
-                result.source_note = "Washington FEIN search completed and returned zero result rows."
-                result.success = True
-                return result
+                found = wa_name_fallback_result_link(page, org)
+                if not found:
+                    result.status = STATUS_NOT_REGISTERED
+                    result.raw_status_text = "No Value Found."
+                    result.source_note = "Washington FEIN search completed and returned zero result rows; bounded name fallback also found no safe result row."
+                    result.success = True
+                    return result
+                result.source_note = (
+                    "Washington FEIN search completed and returned zero result rows; "
+                    "CharityClarity then used a bounded organization-name fallback and selected a safe matching result."
+                )
             if not found:
                 tracker = wa_search_tracker_state(page)
                 status = int(tracker.get("lastStatus") or 0)
@@ -572,8 +662,8 @@ def search_wa(org: Organization, show_process: bool = False) -> SearchResult:
                 pass
             found.click(timeout=5000, force=True)
 
-            safe_wait_for_network_idle(page)
-            time.sleep(4)
+            safe_wait_for_network_idle(page, timeout=10000)
+            time.sleep(1)
 
             detail_text = page.locator("body").inner_text(timeout=15000)
             status_text = extract_label(detail_text, "Status")
