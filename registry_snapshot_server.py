@@ -94,7 +94,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.01.125-staging"
+APP_VERSION = "2026.06.01.126-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -11318,6 +11318,14 @@ def ok_terminal_closed_text(*texts: str) -> bool:
     )
 
 
+def ok_status_from_latest_filing_date(latest_filing_date: date) -> tuple[str, date | None]:
+    today = date.today()
+    if latest_filing_date.year >= today.year:
+        return "Current", None
+    assumed_due_date = date(latest_filing_date.year, 11, 15)
+    return status_from_calendar_date(assumed_due_date), assumed_due_date
+
+
 def ok_search_name_for_org(org) -> str:
     name = re.sub(r"\s+", " ", getattr(org, "organization_name", "") or "").strip()
     name = re.sub(r"\b(inc|corp|ltd)\.$", r"\1", name, flags=re.I).strip()
@@ -11475,12 +11483,15 @@ def search_ok_precise(page, org, module):
 
         latest_filing_date = module.parse_ok_filing_date(latest_filing)
         if latest_filing_date:
-            assumed_due_date = date(latest_filing_date.year, 11, 15)
-            result.status = status_from_calendar_date(assumed_due_date)
+            result.status, assumed_due_date = ok_status_from_latest_filing_date(latest_filing_date)
+            due_note = (
+                f" For prior-year filing activity, CharityClarity uses the filing-year annual extension deadline ({assumed_due_date.isoformat()}) to classify status."
+                if assumed_due_date
+                else " Current-year Oklahoma filing-history activity is treated as satisfying the current annual registration cycle."
+            )
             result.source_note = (
-                "Oklahoma annual registration is tied to the Form 990 filing deadline; "
-                "the checker uses the most recent filing-history date and the next annual extension deadline "
-                f"({assumed_due_date.isoformat()}) to classify status. "
+                "Oklahoma uses the latest filing-history entry to classify the annual registration cycle. "
+                f"{due_note} "
                 "The accepted row safely matched the requested organization."
             )
         else:
