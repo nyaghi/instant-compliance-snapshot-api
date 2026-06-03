@@ -94,7 +94,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.03.136-staging"
+APP_VERSION = "2026.06.03.137-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -4945,6 +4945,12 @@ def target_name_score(row_name: str, targets: list[str]) -> int:
 def clean_registry_name(value: str) -> str:
     cleaned = re.sub(r"\s+", " ", (value or "").strip())
     cleaned = re.sub(r"\s*/\s*DBA\s*/\s*Nickname\s*:?.*$", "", cleaned, flags=re.I).strip()
+    cleaned = re.sub(
+        r"\s+\d{5,}\s+(?:current|closed|expired|registered|not\s+registered|delinquent|pending)\b.*$",
+        "",
+        cleaned,
+        flags=re.I,
+    ).strip()
     cleaned = re.sub(
         r"\s+\b(?:aka|d/?b/?a|f/?k/?a|formerly(?:\s+known\s+as)?|doing\s+business\s+as|also\s+soliciting\s+as|soliciting\s+as|also\s+known\s+as)\b\s+.*$",
         "",
