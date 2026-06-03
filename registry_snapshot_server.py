@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.03.142-staging"
+APP_VERSION = "2026.06.03.143-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -12392,6 +12392,10 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             result.raw_status_text = "Wisconsin snapshot is unavailable and no WI fallback is configured"
             result.source_note = "Wisconsin DFI lookup could not be completed because the local snapshot was unavailable."
             result.success = False
+        if result is not None and public_status(result) == "Not Registered":
+            direct_result = search_wi(None, org)
+            if public_status(direct_result) != "Not Registered":
+                result = direct_result
         body = " ".join(part for part in [
             result.raw_status_text or "",
             result.source_note or "",
