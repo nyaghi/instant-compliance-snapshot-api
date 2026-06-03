@@ -3761,11 +3761,18 @@ def search_nd(page, org: Organization) -> StateResult:
         best_match_name = ""
         best_match_identifier = ""
         best_match_row_text = ""
+        candidate_scan_started = time.monotonic()
+        try:
+            candidate_scan_budget_seconds = float(os.environ.get("CE_ND_CANDIDATE_SCAN_SECONDS", "16"))
+        except Exception:
+            candidate_scan_budget_seconds = 16.0
         for selector in ['div.interactive-cell-button', 'div[role="button"]']:
             try:
                 items = page.locator(selector)
                 count = min(items.count(), 100)
                 for i in range(count):
+                    if time.monotonic() - candidate_scan_started > candidate_scan_budget_seconds:
+                        break
                     item = items.nth(i)
                     try:
                         if not item.is_visible(timeout=750):
@@ -3810,6 +3817,8 @@ def search_nd(page, org: Organization) -> StateResult:
                 rows = page.locator("tr")
                 count = min(rows.count(), 100)
                 for i in range(count):
+                    if time.monotonic() - candidate_scan_started > candidate_scan_budget_seconds:
+                        break
                     row = rows.nth(i)
                     try:
                         row_txt = re.sub(r"\s+", " ", row.inner_text(timeout=1000)).strip()
@@ -3848,7 +3857,17 @@ def search_nd(page, org: Organization) -> StateResult:
             # try the safe query variants. Candidate acceptance still uses the
             # full target-name set, so broad queries cannot be accepted unless
             # the returned row itself is a credible match.
+            fallback_started = time.monotonic()
+            try:
+                fallback_budget_seconds = float(os.environ.get("CE_ND_NAME_FALLBACK_SECONDS", "28"))
+            except Exception:
+                fallback_budget_seconds = 28.0
             for query in search_name_query_variants(org.organization_name, max_words=5)[1:5]:
+                if (
+                    time.monotonic() - fallback_started > fallback_budget_seconds
+                    or time.monotonic() - candidate_scan_started > candidate_scan_budget_seconds
+                ):
+                    break
                 try:
                     page.goto(url, wait_until="domcontentloaded", timeout=12000)
                     safe_wait_for_network_idle(page, timeout=2500)
@@ -3887,6 +3906,8 @@ def search_nd(page, org: Organization) -> StateResult:
                             items = page.locator(selector)
                             count = min(items.count(), 100)
                             for i in range(count):
+                                if time.monotonic() - candidate_scan_started > candidate_scan_budget_seconds:
+                                    break
                                 item = items.nth(i)
                                 try:
                                     if not item.is_visible(timeout=750):
@@ -3930,6 +3951,8 @@ def search_nd(page, org: Organization) -> StateResult:
                             rows = page.locator("tr")
                             count = min(rows.count(), 100)
                             for i in range(count):
+                                if time.monotonic() - candidate_scan_started > candidate_scan_budget_seconds:
+                                    break
                                 row = rows.nth(i)
                                 try:
                                     row_txt = re.sub(r"\s+", " ", row.inner_text(timeout=1000)).strip()
