@@ -18,6 +18,7 @@ import sys
 import threading
 import time
 import traceback
+import zipfile
 import zlib
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 from datetime import date, datetime, timedelta
@@ -28,6 +29,7 @@ from types import ModuleType, SimpleNamespace
 from urllib.parse import parse_qs, quote, unquote, urlencode, urljoin, urlparse
 import urllib.error
 import urllib.request
+import xml.etree.ElementTree as ET
 from zoneinfo import ZoneInfo
 
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "0")
@@ -94,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.03.140-staging"
+APP_VERSION = "2026.06.03.141-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -354,7 +356,9 @@ NH_LIVE_PDF_URL = os.environ.get(
     "https://mm.nh.gov/files/uploads/doj/remote-docs/registered-charities.pdf",
 ).strip()
 NH_BUNDLED_PDF_PATH = BASE_DIR / "registered-charities.pdf"
+NH_BUNDLED_XLSX_PATH = BASE_DIR / "registered-charities-nh.xlsx"
 NH_ENV_PDF_PATH = Path(os.environ["CE_NH_LIVE_PDF_LOCAL_PATH"]) if os.environ.get("CE_NH_LIVE_PDF_LOCAL_PATH") else None
+NH_ENV_XLSX_PATH = Path(os.environ["CE_NH_LIVE_XLSX_LOCAL_PATH"]) if os.environ.get("CE_NH_LIVE_XLSX_LOCAL_PATH") else None
 NH_PREFER_ENV_PDF = os.environ.get("CE_NH_PREFER_ENV_PDF", "0").strip().lower() in {"1", "true", "yes"}
 NH_LIVE_PDF_MAX_AGE_SECONDS = min(max(3600, int(os.environ.get("CE_NH_LIVE_PDF_MAX_AGE_SECONDS", "604800"))), 1209600)
 NH_LIVE_PDF_RECORDS = None
@@ -2901,6 +2905,10 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
         return False
     if incompatible_institutional_prefix_expansion(original_name, registry_name):
         return False
+    if wrapped_supporting_foundation_match(registry_name, original_name):
+        return True
+    if descriptor_entity_extension_match(original_name, registry_name):
+        return True
     if missing_distinctive_prefix_mismatch(original_name, registry_name):
         return False
     if distinctive_entity_extension_mismatch(original_name, registry_name):
@@ -2909,6 +2917,57 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
     if target_name_score(registry_name, safe_targets) >= 450:
         return True
     return compatible_ein_alias_for_name(original_name, registry_name)
+
+
+def wrapped_supporting_foundation_match(registry_name: str, original_name: str) -> bool:
+    registry_norm = normalized_match_name(registry_name)
+    original_norm = normalized_match_name(original_name)
+    if not registry_norm or not original_norm or registry_norm == original_norm:
+        return False
+    original_words = original_norm.split()
+    if len(original_words) < 4 or not registry_norm.endswith(original_norm):
+        return False
+    prefix_words = registry_norm[: -len(original_norm)].strip().split()
+    if not prefix_words or len(prefix_words) > 5:
+        return False
+    return "foundation" in prefix_words and not any(
+        word in {"chapter", "affiliate", "auxiliary", "alumni", "booster"}
+        for word in prefix_words
+    )
+
+
+def descriptor_entity_extension_match(original_name: str, registry_name: str) -> bool:
+    original_norm = normalized_match_name(original_name)
+    registry_norm = normalized_match_name(registry_name)
+    if not original_norm or not registry_norm or original_norm == registry_norm:
+        return False
+    original_words = original_norm.split()
+    registry_words = registry_norm.split()
+    ignored_words = {
+        "the", "a", "an", "of", "for", "and", "to", "in", "on", "at", "by",
+        "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited",
+        "co", "company",
+    }
+    descriptor_words = {
+        "national", "international", "global", "worldwide", "world", "america",
+        "medical", "center", "centre", "hospital", "health", "system",
+    }
+
+    def safe_extra(words: list[str]) -> bool:
+        extra = [word for word in words if word not in ignored_words]
+        return bool(extra) and all(word in descriptor_words for word in extra)
+
+    if len(registry_words) > len(original_words):
+        if registry_words[: len(original_words)] == original_words:
+            return safe_extra(registry_words[len(original_words):])
+        if registry_words[-len(original_words):] == original_words:
+            return safe_extra(registry_words[:-len(original_words)])
+    if len(original_words) > len(registry_words):
+        if original_words[: len(registry_words)] == registry_words:
+            return safe_extra(original_words[len(registry_words):])
+        if original_words[-len(registry_words):] == registry_words:
+            return safe_extra(original_words[:-len(registry_words)])
+    return False
 
 
 def distinctive_entity_extension_mismatch(original_name: str, registry_name: str) -> bool:
@@ -2926,6 +2985,10 @@ def distinctive_entity_extension_mismatch(original_name: str, registry_name: str
         "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited",
         "co", "company",
     }
+    safe_descriptor_extension_words = {
+        "national", "international", "global", "worldwide", "world", "america",
+        "medical", "center", "centre", "hospital", "health", "system",
+    }
 
     def acronym(words: list[str]) -> str:
         return "".join(word[0] for word in words if word and word not in ignored_extension_words)
@@ -2933,6 +2996,8 @@ def distinctive_entity_extension_mismatch(original_name: str, registry_name: str
     def extension_is_safe(extra_words: list[str], base_words: list[str]) -> bool:
         extra = [word for word in extra_words if word not in ignored_extension_words]
         if not extra:
+            return True
+        if all(word in safe_descriptor_extension_words for word in extra):
             return True
         compact_extra = "".join(extra)
         base_acronym = acronym(base_words)
@@ -6311,7 +6376,8 @@ def find_ak_print_link_relaxed(page, org):
         ({ formattedEin, einDigits, names }) => {
             const normalize = (value) => (value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
             const normalizedNames = (names || []).map(normalize).filter(Boolean);
-                const rows = Array.from(document.querySelectorAll('table.DocTable tbody tr, table tbody tr'));
+            const rows = Array.from(document.querySelectorAll('table.DocTable tbody tr, table tbody tr'));
+            let nameOnlyCandidate = null;
             for (const row of rows) {
                 const rowText = (row.innerText || row.textContent || '').trim().replace(/\\s+/g, ' ');
                 const cells = Array.from(row.querySelectorAll('td')).map((cell) => (cell.innerText || cell.textContent || '').trim().replace(/\\s+/g, ' ')).filter(Boolean);
@@ -6327,11 +6393,13 @@ def find_ak_print_link_relaxed(page, org):
                     const style = window.getComputedStyle(link);
                     const visible = !!(rect.width && rect.height) && style.display !== 'none' && style.visibility !== 'hidden';
                     if (/^Print$/i.test(text) && visible) {
-                        return { found: true, rowText, cells, x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+                        const candidate = { found: true, rowText, cells, x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+                        if (einSeen) return candidate;
+                        if (!nameOnlyCandidate) nameOnlyCandidate = candidate;
                     }
                 }
             }
-            return null;
+            return nameOnlyCandidate;
         }
         """,
         {"formattedEin": formatted_ein, "einDigits": ein_digits, "names": variants},
@@ -6844,13 +6912,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                         if row_name and not registry_name_is_safe_for_org(row_name, original_name, org.ein):
                             continue
                     wrong_ein = ak_row_has_wrong_ein(row_text, org.ein)
-                    alias_name_match = bool(
-                        row_name
-                        and search_name != original_name
-                        and registry_name_is_safe_for_org(row_name, search_name, org.ein)
-                        and registry_name_is_safe_for_org(row_name, original_name, org.ein)
-                    )
-                    if wrong_ein and not alias_name_match:
+                    if wrong_ein:
                         continue
                     newer_year, newer_name, newer_identifier, newer_body = ak_newer_year_result_from_retry(
                         ak_page,
@@ -6871,6 +6933,8 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                         if refreshed_print_link:
                             print_link = refreshed_print_link
                             row_text = re.sub(r"\s+", " ", (print_link.get("rowText") or "")).strip() if isinstance(print_link, dict) else ""
+                            if ak_row_has_wrong_ein(row_text, org.ein):
+                                continue
                             last_year_on_record = ak_last_year_from_print_row(print_link, row_text)
                     result.matched_registry_name = row_name or search_name
                     if not result.matched_registry_identifier:
@@ -6884,7 +6948,6 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                         year,
                         " ".join(part for part in [
                             f"Matched using Alaska name fallback after EIN search returned no rows: {search_name}.",
-                            "Registry EIN differs from supplied EIN; accepted because the registry name safely matches a compatible public alias." if wrong_ein else "",
                         ] if part),
                         last_year_on_record or year,
                     )
@@ -7698,6 +7761,8 @@ def wi_snapshot_record_names(record: dict) -> list[str]:
 
 
 def wi_snapshot_has_distinctive_leading_prefix(candidate: str, target: str) -> bool:
+    if wrapped_supporting_foundation_match(candidate, target):
+        return False
     candidate_norm = normalized_match_name(candidate)
     target_norm = normalized_match_name(target)
     if not candidate_norm or not target_norm or candidate_norm == target_norm or target_norm not in candidate_norm:
@@ -10323,7 +10388,157 @@ def search_ky_strict_snapshot(org):
     return result
 
 
+def nh_excel_column_index(ref: str) -> int:
+    letters = re.sub(r"[^A-Za-z]", "", ref or "").upper()
+    value = 0
+    for char in letters:
+        value = value * 26 + (ord(char) - ord("A") + 1)
+    return value - 1
+
+
+def nh_excel_date(value) -> date | None:
+    if isinstance(value, date):
+        return value
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return None
+    parsed = parse_due_date(text)
+    if parsed:
+        return parsed
+    try:
+        serial = float(text)
+    except Exception:
+        return None
+    if serial <= 0:
+        return None
+    try:
+        return (datetime(1899, 12, 30) + timedelta(days=serial)).date()
+    except Exception:
+        return None
+
+
+def nh_load_xlsx_rows(path: Path) -> list[list[str]]:
+    ns = {"main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    with zipfile.ZipFile(path) as archive:
+        shared_strings: list[str] = []
+        if "xl/sharedStrings.xml" in archive.namelist():
+            root = ET.fromstring(archive.read("xl/sharedStrings.xml"))
+            for item in root.findall("main:si", ns):
+                parts = [node.text or "" for node in item.findall(".//main:t", ns)]
+                shared_strings.append("".join(parts))
+
+        workbook = ET.fromstring(archive.read("xl/workbook.xml"))
+        rels = ET.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
+        rel_map = {
+            rel.attrib.get("Id"): rel.attrib.get("Target", "")
+            for rel in rels
+        }
+        sheet_id = None
+        sheets = workbook.find("main:sheets", ns)
+        if sheets is not None:
+            sheet = sheets.find("main:sheet", ns)
+            if sheet is not None:
+                sheet_id = sheet.attrib.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id")
+        target = rel_map.get(sheet_id or "", "worksheets/sheet1.xml")
+        target = target.lstrip("/")
+        sheet_path = target if target.startswith("xl/") else f"xl/{target}"
+        sheet_xml = ET.fromstring(archive.read(sheet_path))
+        rows: list[list[str]] = []
+        for row in sheet_xml.findall(".//main:sheetData/main:row", ns):
+            cells: dict[int, str] = {}
+            max_index = -1
+            for cell in row.findall("main:c", ns):
+                ref = cell.attrib.get("r", "")
+                index = nh_excel_column_index(ref)
+                max_index = max(max_index, index)
+                cell_type = cell.attrib.get("t", "")
+                value_node = cell.find("main:v", ns)
+                inline_node = cell.find("main:is/main:t", ns)
+                raw = value_node.text if value_node is not None else (inline_node.text if inline_node is not None else "")
+                if cell_type == "s":
+                    try:
+                        raw = shared_strings[int(raw)]
+                    except Exception:
+                        raw = ""
+                cells[index] = str(raw or "").strip()
+            if max_index >= 0:
+                rows.append([cells.get(index, "") for index in range(max_index + 1)])
+    return rows
+
+
+def nh_download_xlsx_records() -> tuple[list[dict], str]:
+    candidates = []
+    if NH_ENV_XLSX_PATH is not None:
+        candidates.append(NH_ENV_XLSX_PATH)
+    candidates.append(NH_BUNDLED_XLSX_PATH)
+    snapshot_path = next((path for path in candidates if path.exists()), None)
+    if snapshot_path is None:
+        return [], ""
+    rows = nh_load_xlsx_rows(snapshot_path)
+    header_index = -1
+    for index, row in enumerate(rows):
+        normalized = [re.sub(r"\s+", " ", cell or "").strip().lower() for cell in row]
+        if "reg. no." in normalized and "charity name" in normalized and "report due" in normalized:
+            header_index = index
+            break
+    if header_index < 0:
+        return [], ""
+    headers = [re.sub(r"\s+", " ", cell or "").strip().lower() for cell in rows[header_index]]
+    def column(name: str) -> int:
+        return headers.index(name)
+    reg_col = column("reg. no.")
+    name_col = column("charity name")
+    status_col = column("status")
+    due_col = column("report due")
+    address_col = headers.index("address") if "address" in headers else -1
+    city_col = headers.index("city") if "city" in headers else -1
+    state_col = headers.index("state") if "state" in headers else -1
+    zip_col = headers.index("zip") if "zip" in headers else -1
+
+    records: list[dict] = []
+    seen_record_keys: set[tuple[str, str, str, str]] = set()
+    for row in rows[header_index + 1:]:
+        def get(col: int) -> str:
+            return row[col].strip() if 0 <= col < len(row) else ""
+        registry_id = get(reg_col)
+        registry_name = useful_registry_name(get(name_col))
+        status_code = get(status_col).upper()
+        due_date = nh_excel_date(get(due_col))
+        if not registry_id or not registry_name or not status_code or not due_date:
+            continue
+        due_raw = format_date(due_date)
+        body = " ".join(part for part in [
+            registry_name,
+            get(address_col),
+            get(city_col),
+            get(state_col),
+            get(zip_col),
+        ] if part)
+        registry_norm = normalized_match_name(registry_name)
+        key = (registry_id, registry_name, status_code, due_raw)
+        if key in seen_record_keys:
+            continue
+        seen_record_keys.add(key)
+        records.append({
+            "registry_id": registry_id,
+            "body": re.sub(r"\s+", " ", body).strip(),
+            "registry_name": registry_name,
+            "registry_words": set(registry_norm.split()),
+            "status_code": status_code,
+            "due_raw": due_raw,
+            "due_date": due_date,
+        })
+    label = f"{snapshot_path.name} structured NH weekly snapshot"
+    return records, label
+
+
 def nh_download_live_pdf_records() -> tuple[list[dict], str]:
+    try:
+        xlsx_records, xlsx_label = nh_download_xlsx_records()
+        if xlsx_records:
+            return xlsx_records, xlsx_label
+    except Exception:
+        pass
     if PdfReader is None:
         return [], ""
     pdf_source = NH_LIVE_PDF_URL
@@ -10515,11 +10730,12 @@ def search_nh_live_pdf(org):
         if target_words and len(registry_words & target_words) < minimum_overlap:
             continue
         score = target_name_score(registry_name, targets)
-        if score < 450:
+        safe_match = registry_name_is_safe_against_targets(registry_name, targets, original_name, org.ein)
+        if score < 450 and not safe_match:
             continue
-        if not registry_name_is_safe_against_targets(registry_name, targets, original_name, org.ein):
+        if not safe_match:
             continue
-        composite = (score, len(normalized_match_name(registry_name).split()))
+        composite = (max(score, 450), len(normalized_match_name(registry_name).split()))
         if composite > best_score:
             best_score = composite
             best = (record, registry_name)
@@ -10734,7 +10950,10 @@ def ms_short_prefix_name_mismatch(original_name: str, candidate_name: str) -> bo
     candidate_words = ms_words_for_match(normalized_match_name(candidate_name))
     if len(original_words) < 5 or not candidate_words:
         return False
-    if candidate_words[0] in {"of", "for", "and", "or", "to", "in", "on", "at", "by"}:
+    if (
+        candidate_words[0] in {"of", "for", "and", "or", "to", "in", "on", "at", "by"}
+        and (not original_words or original_words[0] != candidate_words[0])
+    ):
         return True
     if len(candidate_words) <= 3 and original_words[: len(candidate_words)] == candidate_words:
         return True
@@ -10773,6 +10992,9 @@ def ms_preferred_search_variants(name: str, ein: str = "") -> list[str]:
     for alias in known_names_for_ein(ein):
         if compatible_ein_alias_for_name(name, alias):
             seeds.append(alias)
+    for variant in organization_match_target_variants(name, ein):
+        if registry_name_is_safe_for_org(variant, name, ein):
+            seeds.append(variant)
     for seed in seeds:
         base = re.sub(r"\s+", " ", (seed or "").strip())
         add(base)
@@ -11276,6 +11498,9 @@ def ok_status_from_latest_filing_date(latest_filing_date: date) -> tuple[str, da
 def ok_search_name_for_org(org) -> str:
     name = re.sub(r"\s+", " ", getattr(org, "organization_name", "") or "").strip()
     name = re.sub(r"\b(inc|corp|ltd)\.$", r"\1", name, flags=re.I).strip()
+    reduced = institutional_tail_reduction(name)
+    if reduced and reduced.lower() != name.lower() and len(reduced.split()) >= 3:
+        return reduced
     without_article = re.sub(r"^the\s+", "", name, flags=re.I).strip()
     if without_article and without_article.lower() != name.lower():
         return without_article
@@ -11734,6 +11959,9 @@ def wv_preferred_query_variants(name: str, ein: str = "") -> list[str]:
     for alias in known_names_for_ein(ein):
         if compatible_ein_alias_for_name(name, alias):
             add_name_forms(alias)
+    for variant in organization_match_target_variants(name, ein):
+        if registry_name_is_safe_for_org(variant, name, ein):
+            add_name_forms(variant)
     return preferred
 
 

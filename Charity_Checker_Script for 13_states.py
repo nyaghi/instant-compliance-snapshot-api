@@ -480,11 +480,13 @@ def find_ak_print_link(page, org: Organization):
         ({ organizationName, ein }) => {
             const normalize = (value) => (value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
             const targetOrg = normalize(organizationName);
+            const einDigits = (ein || '').replace(/\\D/g, '');
             const rows = Array.from(document.querySelectorAll('table.DocTable tbody tr'));
 
             for (const row of rows) {
                 const rowText = (row.innerText || row.textContent || '').trim().replace(/\\s+/g, ' ');
-                if (!rowText.includes(ein)) {
+                const rowDigits = rowText.replace(/\\D/g, '');
+                if (!rowText.includes(ein) && !(einDigits && rowDigits.includes(einDigits))) {
                     continue;
                 }
 
