@@ -94,7 +94,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.03.134-staging"
+APP_VERSION = "2026.06.03.135-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -5091,7 +5091,7 @@ def ct_direct_form_fields(page_html: str) -> dict[str, str]:
     return fields
 
 
-def ct_direct_query(search_name: str, timeout_seconds: float | None = None) -> str:
+def ct_direct_prepare_session(timeout_seconds: float | None = None):
     url = "https://www.elicense.ct.gov/lookup/licenselookup.aspx"
     timeout = max(2.0, min(float(timeout_seconds or CT_DIRECT_TIMEOUT_SECONDS), CT_DIRECT_TIMEOUT_SECONDS))
     headers = {
@@ -5099,34 +5099,45 @@ def ct_direct_query(search_name: str, timeout_seconds: float | None = None) -> s
         "Referer": url,
         "Origin": "https://www.elicense.ct.gov",
     }
-    try:
-        from curl_cffi import requests as curl_requests
+    from curl_cffi import requests as curl_requests
 
-        session = curl_requests.Session(impersonate="chrome")
-        response = session.get(url, headers=headers, timeout=(min(3.0, timeout), timeout))
-        response.raise_for_status()
-        fields = ct_direct_form_fields(response.text)
-        fields["ctl00$MainContentPlaceHolder$ucLicenseLookup$ctl03$tbDBA_Contact"] = search_name
-        fields["__EVENTTARGET"] = "ctl00$MainContentPlaceHolder$ucLicenseLookup$UpdtPanelGridLookup"
-        fields["__EVENTARGUMENT"] = "3"
-        fields["ctl00$ScriptManager1"] = (
-            "ctl00$MainContentPlaceHolder$ucLicenseLookup$UpdtPanelGridLookup|"
-            "ctl00$MainContentPlaceHolder$ucLicenseLookup$UpdtPanelGridLookup"
-        )
-        fields["__ASYNCPOST"] = "true"
-        response = session.post(
-            url,
-            data=fields,
-            headers={
-                **headers,
-                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-                "X-MicrosoftAjax": "Delta=true",
-                "X-Requested-With": "XMLHttpRequest",
-            },
-            timeout=(min(3.0, timeout), timeout),
-        )
-        response.raise_for_status()
-        return response.text
+    session = curl_requests.Session(impersonate="chrome")
+    response = session.get(url, headers=headers, timeout=(min(3.0, timeout), timeout))
+    response.raise_for_status()
+    return session, ct_direct_form_fields(response.text), headers
+
+
+def ct_direct_post_query(session, base_fields: dict[str, str], headers: dict[str, str], search_name: str, timeout_seconds: float | None = None) -> str:
+    url = "https://www.elicense.ct.gov/lookup/licenselookup.aspx"
+    timeout = max(2.0, min(float(timeout_seconds or CT_DIRECT_TIMEOUT_SECONDS), CT_DIRECT_TIMEOUT_SECONDS))
+    fields = dict(base_fields)
+    fields["ctl00$MainContentPlaceHolder$ucLicenseLookup$ctl03$tbDBA_Contact"] = search_name
+    fields["__EVENTTARGET"] = "ctl00$MainContentPlaceHolder$ucLicenseLookup$UpdtPanelGridLookup"
+    fields["__EVENTARGUMENT"] = "3"
+    fields["ctl00$ScriptManager1"] = (
+        "ctl00$MainContentPlaceHolder$ucLicenseLookup$UpdtPanelGridLookup|"
+        "ctl00$MainContentPlaceHolder$ucLicenseLookup$UpdtPanelGridLookup"
+    )
+    fields["__ASYNCPOST"] = "true"
+    response = session.post(
+        url,
+        data=fields,
+        headers={
+            **headers,
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "X-MicrosoftAjax": "Delta=true",
+            "X-Requested-With": "XMLHttpRequest",
+        },
+        timeout=(min(3.0, timeout), timeout),
+    )
+    response.raise_for_status()
+    return response.text
+
+
+def ct_direct_query(search_name: str, timeout_seconds: float | None = None) -> str:
+    try:
+        session, fields, headers = ct_direct_prepare_session(timeout_seconds)
+        return ct_direct_post_query(session, fields, headers, search_name, timeout_seconds)
     except Exception as exc:
         raise RuntimeError(f"Connecticut direct HTTP query failed: {exc}") from exc
 
@@ -5274,15 +5285,23 @@ def search_ct_direct(org):
     best_score = -10000
     saw_zero_results = False
     last_error = ""
+    session = None
+    fields = None
+    headers = None
     for variant in variants:
         remaining = deadline - time.perf_counter()
         if remaining <= 1.5:
             break
         try:
             attempt_timeout = min(CT_DIRECT_TIMEOUT_SECONDS, max(4.0, remaining - 1.0))
-            body = ct_direct_query(variant, attempt_timeout)
+            if session is None or fields is None or headers is None:
+                session, fields, headers = ct_direct_prepare_session(attempt_timeout)
+            body = ct_direct_post_query(session, fields, headers, variant, attempt_timeout)
         except Exception as exc:
             last_error = str(exc)
+            session = None
+            fields = None
+            headers = None
             continue
         if re.search(r"Showing\s+0\s+result", body, re.I):
             saw_zero_results = True
