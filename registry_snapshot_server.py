@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.03.141-staging"
+APP_VERSION = "2026.06.03.142-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -7649,6 +7649,7 @@ def wi_search_names_for_org(org) -> list[str]:
         if not cleaned:
             return (99, 99, "")
         has_punctuation = bool(re.search(r"[-,/\.]", cleaned))
+        has_safe_hyphen = bool(re.search(r"[-\u2010-\u2015]", cleaned)) and generated_hyphen_variant_is_safe(cleaned)
         starts_article = bool(re.match(r"^(?:the|a|an)\s+", cleaned, re.I))
         exact_seed = cleaned.lower() in seed_key_names
         word_rank = -min(len(cleaned.split()), 8)
@@ -7656,6 +7657,8 @@ def wi_search_names_for_org(org) -> list[str]:
             return (-2, word_rank, cleaned.lower())
         if exact_seed:
             return (-1, word_rank, cleaned.lower())
+        if has_safe_hyphen:
+            return (0, word_rank, cleaned.lower())
         compact = re.sub(r"[^A-Za-z0-9]+", "", cleaned)
         if 2 <= len(compact) <= 8 and compact.upper() == compact:
             if original_substantive_count > 3 and not exact_seed:
