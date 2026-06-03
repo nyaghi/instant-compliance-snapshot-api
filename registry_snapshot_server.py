@@ -94,7 +94,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.03.135-staging"
+APP_VERSION = "2026.06.03.136-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -2903,10 +2903,59 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
         return False
     if missing_distinctive_prefix_mismatch(original_name, registry_name):
         return False
+    if distinctive_entity_extension_mismatch(original_name, registry_name):
+        return False
     safe_targets = organization_match_target_variants(original_name, ein)
     if target_name_score(registry_name, safe_targets) >= 450:
         return True
     return compatible_ein_alias_for_name(original_name, registry_name)
+
+
+def distinctive_entity_extension_mismatch(original_name: str, registry_name: str) -> bool:
+    original_norm = normalized_match_name(original_name)
+    registry_norm = normalized_match_name(registry_name)
+    if not original_norm or not registry_norm or original_norm == registry_norm:
+        return False
+    original_words = original_norm.split()
+    registry_words = registry_norm.split()
+    if not original_words or not registry_words:
+        return False
+
+    ignored_extension_words = {
+        "the", "a", "an", "of", "for", "and", "to", "in", "on", "at", "by",
+        "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited",
+        "co", "company",
+    }
+
+    def acronym(words: list[str]) -> str:
+        return "".join(word[0] for word in words if word and word not in ignored_extension_words)
+
+    def extension_is_safe(extra_words: list[str], base_words: list[str]) -> bool:
+        extra = [word for word in extra_words if word not in ignored_extension_words]
+        if not extra:
+            return True
+        compact_extra = "".join(extra)
+        base_acronym = acronym(base_words)
+        if 2 <= len(compact_extra) <= 8 and compact_extra == base_acronym:
+            return True
+        if len(extra) == 1 and 2 <= len(extra[0]) <= 8 and extra[0] == base_acronym[: len(extra[0])]:
+            return True
+        return False
+
+    if len(registry_words) > len(original_words):
+        if registry_words[-len(original_words):] == original_words:
+            return not extension_is_safe(registry_words[:-len(original_words)], original_words)
+        if registry_words[:len(original_words)] == original_words:
+            return not extension_is_safe(registry_words[len(original_words):], original_words)
+    if len(original_words) > len(registry_words):
+        if original_words[:len(registry_words)] == registry_words:
+            return not extension_is_safe(original_words[len(registry_words):], registry_words)
+        if original_words[-len(registry_words):] == registry_words:
+            return not (
+                extension_is_safe(original_words[:-len(registry_words)], registry_words)
+                or acronym_prefix_expands_to_registry(original_name, registry_name)
+            )
+    return False
 
 
 def missing_distinctive_prefix_mismatch(original_name: str, registry_name: str) -> bool:
