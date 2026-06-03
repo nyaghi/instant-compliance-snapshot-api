@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.03.144-staging"
+APP_VERSION = "2026.06.03.145-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -13792,6 +13792,24 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
                         record_device_check(device_id, limit_ein)
                     self._send_json(200, {"results": results, "checked_at_epoch": int(time.time())})
                 else:
+                    if (
+                        is_single_state_request
+                        and results
+                        and str(results[0].get("status") or "").strip().lower() == "site not reachable"
+                        and not payload.get("_single_state_overflow_hops")
+                        and SINGLE_STATE_OVERFLOW_API_URL
+                        and not PUBLIC_SINGLE_STATE_ONLY
+                    ):
+                        overflow_response = proxy_single_state_request_to_overflow(payload)
+                        if overflow_response is not None:
+                            status_code, overflow_payload, overflow_headers = overflow_response
+                            if (
+                                status_code == 200
+                                and isinstance(overflow_payload, dict)
+                                and str(overflow_payload.get("status") or "").strip().lower() != "site not reachable"
+                            ):
+                                self._send_json(status_code, overflow_payload, overflow_headers)
+                                return
                     self._send_json(200, results[0])
             finally:
                 if single_state_admitted:
