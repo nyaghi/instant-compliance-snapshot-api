@@ -50,6 +50,10 @@ MAX_FIXED_SLEEP_SECONDS = max(0.25, float(os.environ.get("CE_MAX_FIXED_SLEEP_SEC
 SC_GOTO_TIMEOUT_MS = max(5000, int(os.environ.get("CE_SC_GOTO_TIMEOUT_MS", "12000")))
 SC_NETWORK_IDLE_TIMEOUT_MS = max(500, int(os.environ.get("CE_SC_NETWORK_IDLE_TIMEOUT_MS", "1500")))
 SC_MAX_GOTO_ATTEMPTS = max(1, int(os.environ.get("CE_SC_MAX_GOTO_ATTEMPTS", "2")))
+ND_CANDIDATE_SCAN_SECONDS = max(3.0, min(float(os.environ.get("CE_ND_CANDIDATE_SCAN_SECONDS", "7")), 16.0))
+ND_NAME_FALLBACK_SECONDS = max(3.0, min(float(os.environ.get("CE_ND_NAME_FALLBACK_SECONDS", "9")), 28.0))
+ND_CANDIDATE_LIMIT = max(12, min(int(os.environ.get("CE_ND_CANDIDATE_LIMIT", "36")), 100))
+ND_FALLBACK_VARIANT_LIMIT = max(1, min(int(os.environ.get("CE_ND_FALLBACK_VARIANT_LIMIT", "3")), 4))
 _REAL_SLEEP = time.sleep
 
 
@@ -3764,28 +3768,25 @@ def search_nd(page, org: Organization) -> StateResult:
         best_match_identifier = ""
         best_match_row_text = ""
         candidate_scan_started = time.monotonic()
-        try:
-            candidate_scan_budget_seconds = float(os.environ.get("CE_ND_CANDIDATE_SCAN_SECONDS", "16"))
-        except Exception:
-            candidate_scan_budget_seconds = 16.0
+        candidate_scan_budget_seconds = ND_CANDIDATE_SCAN_SECONDS
         for selector in ['div.interactive-cell-button', 'div[role="button"]']:
             try:
                 items = page.locator(selector)
-                count = min(items.count(), 100)
+                count = min(items.count(), ND_CANDIDATE_LIMIT)
                 for i in range(count):
                     if time.monotonic() - candidate_scan_started > candidate_scan_budget_seconds:
                         break
                     item = items.nth(i)
                     try:
-                        if not item.is_visible(timeout=250):
+                        if not item.is_visible(timeout=100):
                             continue
-                        txt = item.inner_text(timeout=700)
+                        txt = item.inner_text(timeout=350)
                         row_txt = txt
                         try:
-                            row_txt = item.locator("xpath=ancestor::*[self::tr or @role='row' or contains(@class,'row')][1]").inner_text(timeout=500)
+                            row_txt = item.locator("xpath=ancestor::*[self::tr or @role='row' or contains(@class,'row')][1]").inner_text(timeout=300)
                         except Exception:
                             try:
-                                row_txt = item.locator("xpath=ancestor::div[contains(@class,'row')][1]").inner_text(timeout=500)
+                                row_txt = item.locator("xpath=ancestor::div[contains(@class,'row')][1]").inner_text(timeout=300)
                             except Exception:
                                 row_txt = txt
                         combined_txt = re.sub(r"\s+", " ", f"{txt} {row_txt}").strip()
@@ -3817,19 +3818,19 @@ def search_nd(page, org: Organization) -> StateResult:
         if not best_button or best_priority < 0:
             try:
                 rows = page.locator("tr")
-                count = min(rows.count(), 100)
+                count = min(rows.count(), ND_CANDIDATE_LIMIT)
                 for i in range(count):
                     if time.monotonic() - candidate_scan_started > candidate_scan_budget_seconds:
                         break
                     row = rows.nth(i)
                     try:
-                        row_txt = re.sub(r"\s+", " ", row.inner_text(timeout=700)).strip()
+                        row_txt = re.sub(r"\s+", " ", row.inner_text(timeout=350)).strip()
                         if not row_txt or re.search(r"\bForm\s+Info\b.*\bSOS\s+Control\b", row_txt, re.I):
                             continue
                         cells = row.locator("td")
                         if cells.count() < 2:
                             continue
-                        name_text = re.sub(r"\s+", " ", cells.nth(0).inner_text(timeout=700)).strip()
+                        name_text = re.sub(r"\s+", " ", cells.nth(0).inner_text(timeout=350)).strip()
                         if not name_text or text_has_wrong_ein_match(row_txt, org.ein):
                             continue
                         priority, status_score = candidate_selection_score_for_targets(name_text, target_names, row_txt)
@@ -3860,19 +3861,16 @@ def search_nd(page, org: Organization) -> StateResult:
             # full target-name set, so broad queries cannot be accepted unless
             # the returned row itself is a credible match.
             fallback_started = time.monotonic()
-            try:
-                fallback_budget_seconds = float(os.environ.get("CE_ND_NAME_FALLBACK_SECONDS", "28"))
-            except Exception:
-                fallback_budget_seconds = 28.0
-            for query in search_name_query_variants(org.organization_name, max_words=5)[1:5]:
+            fallback_budget_seconds = ND_NAME_FALLBACK_SECONDS
+            for query in search_name_query_variants(org.organization_name, max_words=5)[1 : 1 + ND_FALLBACK_VARIANT_LIMIT]:
                 if (
                     time.monotonic() - fallback_started > fallback_budget_seconds
                     or time.monotonic() - candidate_scan_started > candidate_scan_budget_seconds
                 ):
                     break
                 try:
-                    page.goto(url, wait_until="domcontentloaded", timeout=12000)
-                    safe_wait_for_network_idle(page, timeout=2500)
+                    page.goto(url, wait_until="domcontentloaded", timeout=9000)
+                    safe_wait_for_network_idle(page, timeout=1500)
                     fast_sleep(0.5)
                     search_input = find_visible_input(page, [
                         'input[placeholder*="Search by name"]',
@@ -3896,31 +3894,31 @@ def search_nd(page, org: Organization) -> StateResult:
                             continue
                     if not search_button:
                         continue
-                    search_button.click(timeout=5000)
-                    fast_sleep(3)
-                    safe_wait_for_network_idle(page, timeout=2500)
+                    search_button.click(timeout=4000)
+                    fast_sleep(1.25)
+                    safe_wait_for_network_idle(page, timeout=1500)
                     fast_sleep(0.25)
-                    body = page.locator("body").inner_text(timeout=4000)
+                    body = page.locator("body").inner_text(timeout=2500)
                     if re.search(r"Results:\s*0\b|No results|No matching", body, re.I):
                         continue
                     for selector in ['div.interactive-cell-button', 'div[role="button"]']:
                         try:
                             items = page.locator(selector)
-                            count = min(items.count(), 100)
+                            count = min(items.count(), ND_CANDIDATE_LIMIT)
                             for i in range(count):
                                 if time.monotonic() - candidate_scan_started > candidate_scan_budget_seconds:
                                     break
                                 item = items.nth(i)
                                 try:
-                                    if not item.is_visible(timeout=250):
+                                    if not item.is_visible(timeout=100):
                                         continue
-                                    txt = item.inner_text(timeout=700)
+                                    txt = item.inner_text(timeout=350)
                                     row_txt = txt
                                     try:
-                                        row_txt = item.locator("xpath=ancestor::*[self::tr or @role='row' or contains(@class,'row')][1]").inner_text(timeout=500)
+                                        row_txt = item.locator("xpath=ancestor::*[self::tr or @role='row' or contains(@class,'row')][1]").inner_text(timeout=300)
                                     except Exception:
                                         try:
-                                            row_txt = item.locator("xpath=ancestor::div[contains(@class,'row')][1]").inner_text(timeout=500)
+                                            row_txt = item.locator("xpath=ancestor::div[contains(@class,'row')][1]").inner_text(timeout=300)
                                         except Exception:
                                             row_txt = txt
                                     combined_txt = re.sub(r"\s+", " ", f"{txt} {row_txt}").strip()
@@ -3951,19 +3949,19 @@ def search_nd(page, org: Organization) -> StateResult:
                     if not best_button or best_priority < 0:
                         try:
                             rows = page.locator("tr")
-                            count = min(rows.count(), 100)
+                            count = min(rows.count(), ND_CANDIDATE_LIMIT)
                             for i in range(count):
                                 if time.monotonic() - candidate_scan_started > candidate_scan_budget_seconds:
                                     break
                                 row = rows.nth(i)
                                 try:
-                                    row_txt = re.sub(r"\s+", " ", row.inner_text(timeout=700)).strip()
+                                    row_txt = re.sub(r"\s+", " ", row.inner_text(timeout=350)).strip()
                                     if not row_txt or re.search(r"\bForm\s+Info\b.*\bSOS\s+Control\b", row_txt, re.I):
                                         continue
                                     cells = row.locator("td")
                                     if cells.count() < 2:
                                         continue
-                                    name_text = re.sub(r"\s+", " ", cells.nth(0).inner_text(timeout=700)).strip()
+                                    name_text = re.sub(r"\s+", " ", cells.nth(0).inner_text(timeout=350)).strip()
                                     if not name_text or text_has_wrong_ein_match(row_txt, org.ein):
                                         continue
                                     priority, status_score = candidate_selection_score_for_targets(name_text, target_names, row_txt)
