@@ -3775,15 +3775,15 @@ def search_nd(page, org: Organization) -> StateResult:
                         break
                     item = items.nth(i)
                     try:
-                        if not item.is_visible(timeout=750):
+                        if not item.is_visible(timeout=250):
                             continue
-                        txt = item.inner_text(timeout=1500)
+                        txt = item.inner_text(timeout=700)
                         row_txt = txt
                         try:
-                            row_txt = item.locator("xpath=ancestor::*[self::tr or @role='row' or contains(@class,'row')][1]").inner_text(timeout=1000)
+                            row_txt = item.locator("xpath=ancestor::*[self::tr or @role='row' or contains(@class,'row')][1]").inner_text(timeout=500)
                         except Exception:
                             try:
-                                row_txt = item.locator("xpath=ancestor::div[contains(@class,'row')][1]").inner_text(timeout=1000)
+                                row_txt = item.locator("xpath=ancestor::div[contains(@class,'row')][1]").inner_text(timeout=500)
                             except Exception:
                                 row_txt = txt
                         combined_txt = re.sub(r"\s+", " ", f"{txt} {row_txt}").strip()
@@ -3821,13 +3821,13 @@ def search_nd(page, org: Organization) -> StateResult:
                         break
                     row = rows.nth(i)
                     try:
-                        row_txt = re.sub(r"\s+", " ", row.inner_text(timeout=1000)).strip()
+                        row_txt = re.sub(r"\s+", " ", row.inner_text(timeout=700)).strip()
                         if not row_txt or re.search(r"\bForm\s+Info\b.*\bSOS\s+Control\b", row_txt, re.I):
                             continue
                         cells = row.locator("td")
                         if cells.count() < 2:
                             continue
-                        name_text = re.sub(r"\s+", " ", cells.nth(0).inner_text(timeout=1000)).strip()
+                        name_text = re.sub(r"\s+", " ", cells.nth(0).inner_text(timeout=700)).strip()
                         if not name_text or text_has_wrong_ein_match(row_txt, org.ein):
                             continue
                         priority, status_score = candidate_selection_score_for_targets(name_text, target_names, row_txt)
@@ -3910,15 +3910,15 @@ def search_nd(page, org: Organization) -> StateResult:
                                     break
                                 item = items.nth(i)
                                 try:
-                                    if not item.is_visible(timeout=750):
+                                    if not item.is_visible(timeout=250):
                                         continue
-                                    txt = item.inner_text(timeout=1500)
+                                    txt = item.inner_text(timeout=700)
                                     row_txt = txt
                                     try:
-                                        row_txt = item.locator("xpath=ancestor::*[self::tr or @role='row' or contains(@class,'row')][1]").inner_text(timeout=1000)
+                                        row_txt = item.locator("xpath=ancestor::*[self::tr or @role='row' or contains(@class,'row')][1]").inner_text(timeout=500)
                                     except Exception:
                                         try:
-                                            row_txt = item.locator("xpath=ancestor::div[contains(@class,'row')][1]").inner_text(timeout=1000)
+                                            row_txt = item.locator("xpath=ancestor::div[contains(@class,'row')][1]").inner_text(timeout=500)
                                         except Exception:
                                             row_txt = txt
                                     combined_txt = re.sub(r"\s+", " ", f"{txt} {row_txt}").strip()
@@ -3955,13 +3955,13 @@ def search_nd(page, org: Organization) -> StateResult:
                                     break
                                 row = rows.nth(i)
                                 try:
-                                    row_txt = re.sub(r"\s+", " ", row.inner_text(timeout=1000)).strip()
+                                    row_txt = re.sub(r"\s+", " ", row.inner_text(timeout=700)).strip()
                                     if not row_txt or re.search(r"\bForm\s+Info\b.*\bSOS\s+Control\b", row_txt, re.I):
                                         continue
                                     cells = row.locator("td")
                                     if cells.count() < 2:
                                         continue
-                                    name_text = re.sub(r"\s+", " ", cells.nth(0).inner_text(timeout=1000)).strip()
+                                    name_text = re.sub(r"\s+", " ", cells.nth(0).inner_text(timeout=700)).strip()
                                     if not name_text or text_has_wrong_ein_match(row_txt, org.ein):
                                         continue
                                     priority, status_score = candidate_selection_score_for_targets(name_text, target_names, row_txt)
