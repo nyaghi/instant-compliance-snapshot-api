@@ -94,7 +94,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.03.129-staging"
+APP_VERSION = "2026.06.03.130-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -8783,6 +8783,11 @@ def search_nj_with_name_fallback(page, org):
     result = search_nj_direct(page, org)
     if public_status(result) != "Not Registered":
         return result
+    fallback_started = time.monotonic()
+    try:
+        fallback_budget_seconds = float(os.environ.get("CE_NJ_NAME_FALLBACK_SECONDS", "32"))
+    except Exception:
+        fallback_budget_seconds = 32.0
     for variant in organization_name_variants(
         org.organization_name,
         org.ein,
@@ -8791,7 +8796,13 @@ def search_nj_with_name_fallback(page, org):
         include_compact_legal_suffixes=True,
         include_leading_article_variants=True,
         include_broad_query_prefixes=False,
-    )[:8]:
+    )[:4]:
+        if time.monotonic() - fallback_started > fallback_budget_seconds:
+            result.source_note = (
+                (result.source_note or "New Jersey search returned no matching record.")
+                + " New Jersey name fallback was bounded to preserve bulk reliability."
+            )
+            return result
         fallback_org = SimpleNamespace(organization_name=variant, ein="")
         fallback = search_nj_direct(page, fallback_org)
         if public_status(fallback) == "Site Not Reachable":
