@@ -5,6 +5,7 @@ services:
     plan: standard
     buildCommand: pip install -r requirements.txt && PLAYWRIGHT_BROWSERS_PATH=0 python -m playwright install chromium
     startCommand: python registry_snapshot_server.py
+    healthCheckPath: /healthz
     envVars:
       - key: HOST
         value: 0.0.0.0

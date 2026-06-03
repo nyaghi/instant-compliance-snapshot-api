@@ -94,7 +94,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.03.136-staging"
+APP_VERSION = "2026.06.03.139-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -13401,7 +13401,21 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
         if include_body:
             self.wfile.write(body)
 
+    def _send_healthz(self, include_body: bool = True) -> None:
+        body = json.dumps({"ok": True, "app_version": APP_VERSION}).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body) if include_body else 0))
+        self.end_headers()
+        if include_body:
+            self.wfile.write(body)
+
     def do_HEAD(self) -> None:
+        if self.path in {"/healthz", "/health"}:
+            self._send_healthz(include_body=False)
+            return
+
         if self._send_lead_log(include_body=False):
             return
 
@@ -13415,6 +13429,10 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
         self._send_json(404, {"error": "Open http://127.0.0.1:8765/ to use the registry snapshot page."})
 
     def do_GET(self) -> None:
+        if self.path in {"/healthz", "/health"}:
+            self._send_healthz(include_body=True)
+            return
+
         if self._send_lead_log(include_body=True):
             return
 
