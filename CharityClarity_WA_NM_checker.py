@@ -349,6 +349,9 @@ def fill_name_and_search(page, org_name: str) -> bool:
 
 
 def wa_name_fallback_result_link(page, org: Organization):
+    name_tokens = re.findall(r"[A-Za-z0-9]+", org.organization_name or "")
+    if len(name_tokens) == 1 and 2 <= len(name_tokens[0]) <= 3:
+        return None
     switch_to_name_mode(page)
     if not fill_name_and_search(page, org.organization_name):
         return None

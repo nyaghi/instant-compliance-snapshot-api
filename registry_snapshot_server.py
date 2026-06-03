@@ -94,7 +94,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.02.127-staging"
+APP_VERSION = "2026.06.03.128-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -305,215 +305,7 @@ DOWNLOADABLE_DATA_COMMENT_FOOTERS = {
         "For time-sensitive decisions, confirm directly with the Wisconsin registry because records can change between snapshot refreshes."
     ),
 }
-CONFIRMED_FEEDBACK_CORRECTIONS = {
-    ("CA", "363937766"): {
-        "status": "Delinquent",
-        "matched_name": "Showing Animals Respect And Kindness, Inc.",
-        "raw": "CA registry review confirmed delinquent annual-renewal status.",
-    },
-    ("KS", "912155317"): {
-        "status": "Closed / Withdrawn / Canceled",
-        "matched_name": "Allen Institute",
-        "identifier": "21-025433",
-        "raw": "Kansas registry row status: Withdrawn.",
-    },
-    ("MS", "131624009"): {
-        "status": "Upcoming Filing",
-        "matched_name": "Fountain House, Inc.",
-        "raw": "Mississippi registry review confirmed an upcoming filing status.",
-    },
-    ("NM", "912155317"): {
-        "status": "Delinquent",
-        "matched_name": "Allen Institute",
-        "raw": "New Mexico status history shows Tax Year 2022 Registration Submitted.",
-    },
-    ("NM", "131624009"): {
-        "status": "Delinquent",
-        "matched_name": "Fountain House, Inc.",
-        "raw": "New Mexico status history shows Registration Submission Delinquent.",
-    },
-    ("NM", "943373670"): {
-        "status": "Upcoming Filing",
-        "matched_name": "Give2Asia",
-        "raw": "New Mexico status history shows Extension Granted.",
-    },
-    ("OK", "912155317"): {
-        "status": "Closed / Withdrawn / Canceled",
-        "matched_name": "Allen Institute",
-        "raw": "Oklahoma registry review confirmed closed/withdrawn/canceled status.",
-    },
-    ("OK", "620695676"): {
-        "status": "Upcoming Filing",
-        "matched_name": "American Choral Directors Association",
-        "raw": "Oklahoma registry review confirmed upcoming filing status.",
-    },
-    ("OK", "150532082"): {
-        "status": "Delinquent",
-        "matched_name": "Cornell University",
-        "raw": "Oklahoma registry review confirmed delinquent status.",
-    },
-    ("OK", "131624009"): {
-        "status": "Upcoming Filing",
-        "matched_name": "Fountain House, Inc.",
-        "raw": "Oklahoma registry review confirmed upcoming filing status.",
-    },
-    ("OK", "943373670"): {
-        "status": "Upcoming Filing",
-        "matched_name": "Give2Asia",
-        "raw": "Oklahoma registry review confirmed upcoming filing status.",
-    },
-    ("OK", "135598093"): {
-        "status": "Delinquent",
-        "matched_name": "The Trustees Of Columbia University In The City Of New York",
-        "raw": "Oklahoma registry review confirmed delinquent status.",
-    },
-    ("OK", "590624458"): {
-        "status": "Delinquent",
-        "matched_name": "University Of Miami",
-        "raw": "Oklahoma registry review confirmed delinquent status.",
-    },
-    ("WA", "150532082"): {
-        "status": "Closed / Withdrawn / Canceled",
-        "matched_name": "Cornell University",
-        "raw": "Washington registry review confirmed closed/withdrawn/canceled status.",
-    },
-    ("WA", "135598093"): {
-        "status": "Closed / Withdrawn / Canceled",
-        "matched_name": "The Trustees Of Columbia University In The City Of New York",
-        "raw": "Washington registry review confirmed closed/withdrawn/canceled status.",
-    },
-    ("WA", "590624458"): {
-        "status": "Closed / Withdrawn / Canceled",
-        "matched_name": "University Of Miami",
-        "raw": "Washington registry review confirmed closed/withdrawn/canceled status.",
-    },
-    ("WI", "912155317"): {
-        "status": "Closed / Withdrawn / Canceled",
-        "matched_name": "Allen Institute",
-        "identifier": "19614-800",
-        "raw": "Wisconsin registry review confirmed closed/withdrawn/canceled status.",
-    },
-    ("WI", "943373670"): {
-        "status": "Revoked",
-        "matched_name": "Give2Asia",
-        "raw": "Wisconsin registry review confirmed revoked status.",
-    },
-    ("AR", "770646756"): {
-        "status": "Current",
-        "matched_name": "Cair-Foundation, Inc.",
-        "raw": "Arkansas registry review confirmed current registration status.",
-    },
-    ("AR", "231727133"): {
-        "status": "Current",
-        "matched_name": "Resources For Human Development, Inc.",
-        "raw": "Arkansas registry review confirmed current registration status.",
-    },
-    ("AR", "223630133"): {
-        "status": "Delinquent",
-        "matched_name": "The International Centre For Missing And Exploited Children",
-        "raw": "Arkansas registry review confirmed NOT CURRENT charitable-registration status.",
-    },
-    ("MS", "770646756"): {
-        "status": "Upcoming Filing",
-        "matched_name": "Cair-Foundation, Inc.",
-        "raw": "Mississippi registry review confirmed upcoming filing status.",
-    },
-    ("NM", "131623892"): {
-        "status": "Current",
-        "matched_name": "American Institute Of Chemical Engineers",
-        "raw": "New Mexico registry review confirmed current registration status.",
-    },
-    ("NM", "363203648"): {
-        "status": "Delinquent",
-        "matched_name": "Northern Illinois Food Bank",
-        "raw": "New Mexico registry review confirmed delinquent status.",
-    },
-    ("NM", "770646756"): {
-        "status": "Current",
-        "matched_name": "Cair-Foundation, Inc.",
-        "raw": "New Mexico registry review confirmed current registration status.",
-    },
-    ("NM", "231727133"): {
-        "status": "Delinquent",
-        "matched_name": "Resources For Human Development, Inc.",
-        "raw": "New Mexico registry review confirmed delinquent status.",
-    },
-    ("NM", "135564934"): {
-        "status": "Upcoming Filing",
-        "matched_name": "Beth Israel Medical Center",
-        "raw": "New Mexico registry review confirmed upcoming filing status.",
-    },
-    ("NM", "110303001"): {
-        "status": "Delinquent",
-        "matched_name": "Fidelity Investments Charitable Gift Fund",
-        "raw": "New Mexico registry review confirmed delinquent status.",
-    },
-    ("NM", "845024713"): {
-        "status": "Upcoming Filing",
-        "matched_name": "Climate Imperative Foundation",
-        "raw": "New Mexico registry review confirmed upcoming filing status.",
-    },
-    ("OK", "823015119"): {
-        "status": "Delinquent",
-        "matched_name": "Trucking Cares Foundation",
-        "raw": "Oklahoma registry review confirmed delinquent status.",
-    },
-    ("OK", "131623892"): {
-        "status": "Current",
-        "matched_name": "American Institute Of Chemical Engineers",
-        "raw": "Oklahoma registry review confirmed current registration status.",
-    },
-    ("OK", "363203648"): {
-        "status": "Delinquent",
-        "matched_name": "Northern Illinois Food Bank",
-        "raw": "Oklahoma registry review confirmed delinquent status.",
-    },
-    ("OK", "770646756"): {
-        "status": "Current",
-        "matched_name": "Cair-Foundation, Inc.",
-        "raw": "Oklahoma registry review confirmed current registration status.",
-    },
-    ("OK", "231727133"): {
-        "status": "Upcoming Filing",
-        "matched_name": "Resources For Human Development, Inc.",
-        "raw": "Oklahoma registry review confirmed upcoming filing status.",
-    },
-    ("OK", "135564934"): {
-        "status": "Current",
-        "matched_name": "Beth Israel Medical Center",
-        "raw": "Oklahoma registry review confirmed current registration status.",
-    },
-    ("OK", "110303001"): {
-        "status": "Upcoming Filing",
-        "matched_name": "Fidelity Investments Charitable Gift Fund",
-        "raw": "Oklahoma registry review confirmed upcoming filing status.",
-    },
-    ("WA", "823015119"): {
-        "status": "Closed / Withdrawn / Canceled",
-        "matched_name": "Trucking Cares Foundation",
-        "raw": "Washington registry review confirmed closed/withdrawn/canceled status.",
-    },
-    ("WA", "845024713"): {
-        "status": "Closed / Withdrawn / Canceled",
-        "matched_name": "Climate Imperative Foundation",
-        "raw": "Washington registry review confirmed closed/withdrawn/canceled status.",
-    },
-    ("WI", "131623892"): {
-        "status": "Upcoming Filing",
-        "matched_name": "American Institute Of Chemical Engineers",
-        "raw": "Wisconsin registry review confirmed upcoming filing status.",
-    },
-    ("WI", "231727133"): {
-        "status": "Revoked",
-        "matched_name": "Resources For Human Development, Inc.",
-        "raw": "Wisconsin registry review confirmed revoked status.",
-    },
-    ("WI", "110303001"): {
-        "status": "Delinquent",
-        "matched_name": "Fidelity Investments Charitable Gift Fund",
-        "raw": "Wisconsin registry review confirmed delinquent status.",
-    },
-}
+CONFIRMED_FEEDBACK_CORRECTIONS = {}
 ME_LOOKUP_LOCK = threading.Lock()
 ME_LAST_LOOKUP_FINISHED = 0.0
 AR_LOOKUP_LOCK = threading.Lock()
@@ -1710,15 +1502,7 @@ def public_profile_name_for_ein(ein: str) -> str:
 
 
 def known_names_for_ein(ein: str) -> list[str]:
-    names = []
-    for name in [
-        organization_name_for_ein(ein),
-        public_profile_name_for_ein(ein),
-    ]:
-        cleaned = re.sub(r"\s+", " ", (name or "").strip())
-        if cleaned and cleaned not in names:
-            names.append(cleaned)
-    return names
+    return []
 
 
 def public_profile_latest_tax_year_for_ein(ein: str) -> int | None:
@@ -2882,6 +2666,8 @@ def compatible_ein_alias_for_name(original_name: str, alias_name: str) -> bool:
     alias_compact = re.sub(r"[^a-z0-9]+", "", alias)
     alias_acronym = acronym_from_words(alias_words)
     original_acronym = acronym_from_words(original_words)
+    if acronym_prefix_expands_to_registry(original_name, alias_name) or acronym_prefix_expands_to_registry(alias_name, original_name):
+        return True
     if 2 <= len(original_compact) <= 8 and original_compact == alias_acronym:
         return True
     if 2 <= len(alias_compact) <= 8 and alias_compact == original_acronym:
@@ -3009,6 +2795,32 @@ def short_acronym_prefix_registry_match(original_name: str, registry_name: str) 
     return registry_words[0].upper() == original_compact.upper()
 
 
+def acronym_prefix_expands_to_registry(original_name: str, registry_name: str) -> bool:
+    """Accept submitted forms like "ASEE / American Society..." safely.
+
+    Some prospect lists include an acronym followed by the full legal name. If
+    a state registry returns just the full legal name, the prefix is not a
+    distinct organization term and should not trigger the missing-prefix guard.
+    """
+    original_norm = normalized_match_name(original_name)
+    registry_norm = normalized_match_name(registry_name)
+    if not original_norm or not registry_norm or not original_norm.endswith(registry_norm):
+        return False
+    original_words = original_norm.split()
+    registry_words = registry_norm.split()
+    if len(original_words) <= len(registry_words):
+        return False
+    prefix_words = original_words[: len(original_words) - len(registry_words)]
+    if len(prefix_words) != 1:
+        return False
+    prefix = re.sub(r"[^a-z0-9]+", "", prefix_words[0])
+    if not (2 <= len(prefix) <= 8 and prefix.isalpha()):
+        return False
+    ignored = {"the", "a", "an", "of", "for", "and", "to", "in", "on", "at", "by", "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited"}
+    registry_acronym = "".join(word[0] for word in registry_words if word and word not in ignored)
+    return prefix == registry_acronym[: len(prefix)]
+
+
 def organization_match_target_variants(name: str, ein: str = "") -> list[str]:
     """Safe names used to accept a registry row after a broad search query.
 
@@ -3109,6 +2921,8 @@ def missing_distinctive_prefix_mismatch(original_name: str, registry_name: str) 
     if len(original_words) <= len(registry_words):
         return False
     prefix_words = original_words[: len(original_words) - len(registry_words)]
+    if acronym_prefix_expands_to_registry(original_name, registry_name):
+        return False
     generic_prefix_words = {"the", "a", "an", "of", "for", "to", "and", "dba", "aka"}
     return any(word not in generic_prefix_words for word in prefix_words)
 
@@ -4899,16 +4713,7 @@ def first_date_near_label(text: str, labels: list[str]) -> date | None:
 
 
 def fl_fallback_cache() -> dict:
-    global _FL_FALLBACK_CACHE
-    if _FL_FALLBACK_CACHE is not None:
-        return _FL_FALLBACK_CACHE
-    try:
-        payload = json.loads(Path(FL_FALLBACK_CACHE_PATH).read_text(encoding="utf-8"))
-        entries = payload.get("entries", {}) if isinstance(payload, dict) else {}
-        _FL_FALLBACK_CACHE = entries if isinstance(entries, dict) else {}
-    except Exception:
-        _FL_FALLBACK_CACHE = {}
-    return _FL_FALLBACK_CACHE
+    return {}
 
 
 def fl_status_from_cached_entry(entry: dict) -> str:
@@ -5144,33 +4949,11 @@ def normalized_ein_key(value: str) -> str:
 
 
 def confirmed_feedback_correction_for_result(result):
-    key = ((getattr(result, "state", "") or "").upper(), normalized_ein_key(getattr(result, "ein", "") or ""))
-    return CONFIRMED_FEEDBACK_CORRECTIONS.get(key)
+    return None
 
 
 def apply_confirmed_feedback_correction(result) -> str:
-    correction = confirmed_feedback_correction_for_result(result)
-    if not correction or public_status(result) == "Site Not Reachable":
-        return ""
-    result.status = correction["status"]
-    result.raw_status_text = " | ".join(part for part in [
-        correction.get("raw", ""),
-        result.raw_status_text or "",
-    ] if part)
-    result.source_note = " ".join(part for part in [
-        result.source_note or "",
-        "CharityClarity confirmed this status during targeted staging regression review of the public registry result.",
-    ] if part).strip()
-    result.matched_registry_name = useful_registry_name(
-        result.matched_registry_name or correction.get("matched_name", "")
-    )
-    result.matched_registry_identifier = (
-        result.matched_registry_identifier or correction.get("identifier", "")
-    )
-    result.success = True
-    result.error = ""
-    setattr(result, "_cc_confirmed_feedback_status", correction["status"])
-    return correction.get("raw", "")
+    return ""
 
 
 def fill_registry_match_from_text(result, body: str, org) -> None:
@@ -9316,6 +9099,32 @@ def status_from_calendar_date(value: date) -> str:
     return "Current"
 
 
+def repair_ny_not_registered_with_due_date(org, result):
+    """Promote a NY row when the registry text includes a safe match and due date."""
+    if public_status(result) != "Not Registered":
+        return result
+    registry_name = clean_registry_name(getattr(result, "matched_registry_name", "") or "")
+    if not registry_name or not registry_name_is_safe_for_org(registry_name, org.organization_name, org.ein):
+        return result
+    text = " ".join(part for part in [
+        getattr(result, "raw_status_text", "") or "",
+        getattr(result, "source_note", "") or "",
+    ])
+    due_match = re.search(r"\bDue\s*:?\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})", text, re.I)
+    if not due_match:
+        return result
+    due_date = parse_due_date(due_match.group(1))
+    if not due_date:
+        return result
+    result.status = status_from_calendar_date(due_date)
+    result.source_note = " ".join(part for part in [
+        getattr(result, "source_note", "") or "",
+        "New York returned a safe matching organization row with an annual-report due date; CharityClarity classified the status from that due date.",
+    ]).strip()
+    result.success = True
+    return result
+
+
 def labeled_due_dates_from_text(text: str) -> list[date]:
     dates = []
     due_patterns = [
@@ -9337,8 +9146,9 @@ def explicit_registry_date(result, body: str) -> date | None:
     if raw_date and re.fullmatch(r"\s*(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}-[A-Za-z]{3}-\d{2,4})\s*", result.raw_status_text or ""):
         return raw_date
     patterns = [
-        rf"(?:expires|expired|expired on|expiration date|registration expires|automatic extension)\s*:?\s*([A-Za-z]{{3,9}}\s+\d{{1,2}},\s+\d{{4}})",
-        rf"(?:expires|expired|expired on|expiration date|registration expires|automatic extension)\s*:?\s*(\d{{1,2}}[/-]\d{{1,2}}[/-]\d{{4}})",
+        rf"(?:expires|expired|expired on|expiration date|registration expires|current registration expires|automatic extension)\s*:?\s*([A-Za-z]{{3,9}}\s+\d{{1,2}},\s+\d{{4}})",
+        rf"(?:expires|expired|expired on|expiration date|registration expires|current registration expires|automatic extension)\s*:?\s*(\d{{1,2}}[/-]\d{{1,2}}[/-]\d{{2,4}})",
+        rf"(?:expires|expired|expired on|expiration date|registration expires|current registration expires|automatic extension)\s*:?\s*(\d{{1,2}}-[A-Za-z]{{3}}-\d{{2,4}})",
         r"^\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})\s*$",
     ]
     for source in [focused, text]:
@@ -11804,6 +11614,10 @@ def wv_preferred_query_variants(name: str, ein: str = "") -> list[str]:
         base = re.sub(r"\s+", " ", (source_name or "").strip())
         if not base:
             return
+        for segment in re.split(r"\s*/\s*|\s+also\s+soliciting\s+as\s+|\s+d/?b/?a\s+|\s+doing\s+business\s+as\s+", base, flags=re.I):
+            segment = re.sub(r"\s+", " ", (segment or "").strip(" ,;-"))
+            if segment and segment.lower() != base.lower():
+                add_name_forms(segment)
         without_comma_suffix = re.sub(
             r",\s*(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\s*$",
             "",
@@ -12245,22 +12059,6 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
         org.evidence_mode = capture_source_snapshot
     body = ""
     proof_url = None
-    correction = CONFIRMED_FEEDBACK_CORRECTIONS.get(((state or "").upper(), normalized_ein_key(ein)))
-    if correction:
-        result = checker.StateResult(
-            organization_name or correction.get("matched_name", "") or f"EIN {format_ein(ein)}",
-            format_ein(ein),
-            state,
-            correction["status"],
-            "",
-        )
-        result.raw_status_text = correction.get("raw", "")
-        result.matched_registry_name = correction.get("matched_name", "")
-        result.matched_registry_identifier = correction.get("identifier", "")
-        result.source_note = "CharityClarity confirmed this status during targeted staging regression review of the public registry result."
-        result.success = True
-        return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
-
     if state == "WI":
         result = search_wi_snapshot(org)
         if WI_SIDECAR_URL and WI_LOOKUP_SECRET and (
@@ -12519,8 +12317,9 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                             "Confirmed on a second NY public-registry pass after the first pass returned no record.",
                         ]).strip()
                         result = confirmed_result
+                result = repair_ny_not_registered_with_due_date(org, result)
             elif state == "NJ":
-                result = search_nj_direct(page, org)
+                result = search_nj_with_name_fallback(page, org)
                 if public_status(result) != "Not Registered":
                     body = nj_detail_body(page, org)
             elif state == "PA":
