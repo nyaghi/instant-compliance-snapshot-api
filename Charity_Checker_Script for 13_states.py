@@ -158,7 +158,7 @@ def write_results(prefix: str, results: List[StateResult]) -> None:
     json_path = Path(f"{prefix}.json")
     summary_path = Path(f"{prefix}_summary_table.csv")
     with csv_path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["organization_name", "ein", "state", "status", "source_url", "raw_status_text", "source_note", "success", "error"])
+        writer = csv.DictWriter(f, fieldnames=list(asdict(results[0]).keys()) if results else ["organization_name", "ein", "state", "status", "source_url", "raw_status_text", "source_note", "success", "error"])
         writer.writeheader()
         for r in results:
             writer.writerow(asdict(r))
@@ -1232,9 +1232,9 @@ def search_nj(page, org: Organization) -> StateResult:
     url = "https://charportal.dca.njoag.gov/Charity-Registration/CHR-Public-Search-Page/"
     result = StateResult(org.organization_name, org.ein, "NJ", STATUS_UNKNOWN, url)
     try:
-        page.goto(url, wait_until="domcontentloaded", timeout=45000)
-        safe_wait_for_network_idle(page, timeout=20000)
-        fast_sleep(4)
+        page.goto(url, wait_until="domcontentloaded", timeout=25000)
+        safe_wait_for_network_idle(page, timeout=6000)
+        fast_sleep(1)
 
         query = digits_only(org.ein) if digits_only(org.ein) else org.organization_name
         input_box = find_visible_input(page, [
@@ -1254,10 +1254,21 @@ def search_nj(page, org: Organization) -> StateResult:
         input_box.fill("")
         input_box.fill(query)
         page.keyboard.press("Enter")
-        safe_wait_for_network_idle(page, timeout=25000)
-        fast_sleep(4)
+        safe_wait_for_network_idle(page, timeout=8000)
 
-        body = page.locator("body").inner_text(timeout=15000)
+        body = ""
+        deadline = time.time() + 18
+        while time.time() < deadline:
+            try:
+                body = page.locator("body").inner_text(timeout=3000)
+            except Exception:
+                body = ""
+            if re.search(r"no records found|no records|no matching", body, re.I):
+                break
+            if re.search(r"\b(Exempt|Compliant|Active|Delinquent|Expired|Revoked|Suspended|Withdrawn|Non-Compliant|Pending|Retired|Denied)\b", body, re.I):
+                break
+            fast_sleep(1)
+
         if re.search(r"no records found|no records|no matching", body, re.I):
             result.raw_status_text = "No record found"
             result.status = STATUS_NOT_REGISTERED
@@ -3738,10 +3749,11 @@ def search_nd(page, org: Organization) -> StateResult:
 
         body = page.locator("body").inner_text(timeout=5000)
         if re.search(r"Results:\s*0\b|No results|No matching", body, re.I):
-            # Do not stop on the first no-result response. North Dakota's name
-            # search can miss punctuation/possessive variants that a later safe
-            # query variant finds.
-            body = ""
+            result.raw_status_text = "No matching organization result"
+            result.status = STATUS_NOT_REGISTERED
+            result.source_note = "North Dakota search returned zero results for the normalized primary name query."
+            result.success = True
+            return result
 
         best_button = None
         best_priority = -1
