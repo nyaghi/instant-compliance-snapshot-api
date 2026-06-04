@@ -16,7 +16,7 @@ import urllib.request
 from dataclasses import dataclass, asdict
 from datetime import datetime, date
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Set
 from urllib.parse import quote, urljoin
 
 try:
@@ -364,21 +364,22 @@ def extract_ak_accounting_end_year(pdf_text: str) -> Optional[int]:
     return None
 
 def classify_ak_registration_year(registration_year: int, accounting_year_end: Optional[int] = None):
-    expiration_date = date(registration_year, 9, 1)
+    due_year = registration_year + 1
+    expiration_date = date(due_year, 9, 1)
     status = status_from_due_date(expiration_date)
-    raw_status_text = f"{registration_year} registration found; expires September 1, {registration_year}"
+    raw_status_text = f"{registration_year} registration found; next filing due September 1, {due_year}"
     accounting_note = ""
     if accounting_year_end is not None:
         accounting_note = f"; accounting year in PDF ends {accounting_year_end} and is informational only"
 
     if status == STATUS_DELINQUENT:
         source_note = (
-            f"{registration_year} Alaska registration found; September 1 annual expiration "
+            f"{registration_year} Alaska registration found; September 1, {due_year} annual filing deadline "
             f"has passed as of the run date{accounting_note}"
         )
     else:
         source_note = (
-            f"{registration_year} Alaska registration found; September 1 annual expiration "
+            f"{registration_year} Alaska registration found; September 1, {due_year} annual filing deadline "
             f"has not yet passed as of the run date{accounting_note}"
         )
     return status, raw_status_text, source_note
@@ -536,17 +537,56 @@ def find_ak_print_link(page, org: Organization, target_names: Optional[List[str]
         },
     )
 
+def ak_registry_name_from_row_text(row_text: str, requested_ein: str) -> str:
+    readable = re.sub(r"\s+", " ", row_text or "").strip()
+    if not readable:
+        return ""
+    readable = re.sub(r"\bPrint\b.*$", "", readable, flags=re.I).strip()
+    ein = format_ein_with_dash(requested_ein)
+    compact_ein = digits_only(requested_ein)
+    readable = re.sub(r"^\d{4}\s+", "", readable)
+    if ein:
+        readable = re.sub(rf"^{re.escape(ein)}\s+", "", readable)
+    if compact_ein:
+        readable = re.sub(rf"^{re.escape(compact_ein)}\s+", "", readable)
+    readable = re.split(
+        r"\s+(?:P\.?\s*O\.?\s+Box|PO\s+Box|\d{1,6}\s+[A-Z0-9])",
+        readable,
+        maxsplit=1,
+        flags=re.I,
+    )[0]
+    return re.sub(r"\s+", " ", readable).strip(" ,;-")
+
+def ak_registry_identifier_from_row_text(row_text: str, requested_ein: str) -> str:
+    readable = re.sub(r"\s+", " ", row_text or "").strip()
+    match = re.search(r"\b(\d{2}-\d{7})\b", readable)
+    if match:
+        return match.group(1)
+    compact_match = re.search(r"^\s*\d{4}\s*(\d{9})", readable)
+    if compact_match:
+        return format_ein_with_dash(compact_match.group(1))
+    return format_ein_with_dash(requested_ein)
+
 def ak_name_fallback_variants(name: str) -> List[str]:
     base_variants = search_name_query_variants(name, max_words=5)
     prioritized: List[str] = []
+    seen_lower: Set[str] = set()
 
     def add(value: str) -> None:
         cleaned = re.sub(r"\s+", " ", (value or "").strip(" ,;-"))
-        if cleaned and cleaned.lower() not in {item.lower() for item in prioritized}:
+        key = cleaned.lower()
+        if cleaned and key not in seen_lower:
+            seen_lower.add(key)
             prioritized.append(cleaned)
 
     if base_variants:
         add(base_variants[0])
+    if re.search(r"[/\\]", name or ""):
+        for part in re.split(r"[/\\]+", name or ""):
+            add(part)
+        for variant in base_variants:
+            if "/" not in variant and "\\" not in variant and re.search(r"\b[A-Za-z]{3,}\b", variant):
+                add(variant)
     hyphen_variants = [variant for variant in base_variants if "-" in variant]
     hyphen_variants.sort(key=lambda value: 1 if re.search(r"^\S+[-\u2010-\u2015]\S+", value or "") else 0)
     for variant in hyphen_variants:
@@ -1363,95 +1403,129 @@ def search_ak(browser, org: Organization, artifacts_dir: Optional[Path] = None) 
         return result
 
     started = time.perf_counter()
+    ak_context = None
+    ak_page = None
 
-    def run_ak_query(year: int, query_name: str = "", use_ein: bool = True, artifact_suffix: str = ""):
+    def close_ak_page() -> None:
+        nonlocal ak_context, ak_page
+        if ak_context is not None:
+            try:
+                ak_context.close()
+            except Exception:
+                pass
+        ak_context = None
+        ak_page = None
+
+    def ensure_ak_page():
+        nonlocal ak_context, ak_page
+        if ak_context is not None and ak_page is not None:
+            return ak_context, ak_page
         ak_context = browser.new_context(viewport={"width": 1365, "height": 900}, accept_downloads=True)
         ak_page = ak_context.new_page()
+        if not open_ak_public_search(ak_page):
+            close_ak_page()
+            result.error = "Could not open Alaska Public Search form"
+            return None, None
+        return ak_context, ak_page
+
+    def run_ak_query(year: int, query_name: str = "", use_ein: bool = True, artifact_suffix: str = ""):
         try:
-            if not open_ak_public_search(ak_page):
-                result.error = "Could not open Alaska Public Search form"
+            context, page = ensure_ak_page()
+            if context is None or page is None:
                 return None
 
-            fill_ak_search_form(ak_page, org, year, query_name=query_name, use_ein=use_ein)
+            fill_ak_search_form(page, org, year, query_name=query_name, use_ein=use_ein)
             target_names = ak_name_fallback_variants(org.organization_name)
             if query_name and query_name not in target_names:
                 target_names.insert(0, query_name)
-            print_link = find_ak_print_link(ak_page, org, target_names=target_names)
+            print_link = find_ak_print_link(page, org, target_names=target_names)
             if not print_link:
                 if artifacts_dir and artifact_suffix:
-                    save_artifacts(ak_page, artifacts_dir, "AK", f"{org.organization_name}_{artifact_suffix}")
+                    save_artifacts(page, artifacts_dir, "AK", f"{org.organization_name}_{artifact_suffix}")
                 return None
 
-            accounting_year_end = read_ak_accounting_year_from_pdf(ak_page, ak_context, print_link)
+            accounting_year_end = read_ak_accounting_year_from_pdf(page, context, print_link)
             result.status, result.raw_status_text, result.source_note = classify_ak_registration_year(
                 year,
                 accounting_year_end,
+            )
+            result.matched_registry_name = ak_registry_name_from_row_text(
+                print_link.get("rowText", ""),
+                org.ein,
+            ) or org.organization_name
+            result.matched_registry_identifier = ak_registry_identifier_from_row_text(
+                print_link.get("rowText", ""),
+                org.ein,
             )
             if query_name and not use_ein:
                 result.source_note = f"{result.source_note}; matched using generated name variant '{query_name}' after FEIN search returned no row"
             result.success = True
             if artifacts_dir:
-                save_artifacts(ak_page, artifacts_dir, "AK", org.organization_name)
+                save_artifacts(page, artifacts_dir, "AK", org.organization_name)
             return result
-        finally:
-            ak_context.close()
+        except Exception:
+            close_ak_page()
+            raise
 
-    first_ein_years = AK_YEARS_TO_TRY[:AK_EIN_FIRST_YEARS]
-    remaining_ein_years = AK_YEARS_TO_TRY[AK_EIN_FIRST_YEARS:]
+    try:
+        first_ein_years = AK_YEARS_TO_TRY[:AK_EIN_FIRST_YEARS]
+        remaining_ein_years = AK_YEARS_TO_TRY[AK_EIN_FIRST_YEARS:]
 
-    for idx, year in enumerate(first_ein_years):
-        try:
-            matched = run_ak_query(
-                year,
-                use_ein=True,
-                artifact_suffix="ein_no_match" if not remaining_ein_years and idx == len(first_ein_years) - 1 else "",
-            )
-            if matched:
-                return matched
-        except Exception as e:
-            result.error = f"AK error: {e}"
-            continue
-
-    fallback_variants = ak_name_fallback_variants(org.organization_name)
-    fallback_years = AK_YEARS_TO_TRY[:AK_NAME_FALLBACK_YEARS]
-    for variant in fallback_variants:
-        if time.perf_counter() - started >= AK_LOOKUP_MAX_SECONDS:
-            break
-        for year in fallback_years:
-            if time.perf_counter() - started >= AK_LOOKUP_MAX_SECONDS:
-                break
+        for idx, year in enumerate(first_ein_years):
             try:
-                matched = run_ak_query(year, query_name=variant, use_ein=False)
+                matched = run_ak_query(
+                    year,
+                    use_ein=True,
+                    artifact_suffix="ein_no_match" if not remaining_ein_years and idx == len(first_ein_years) - 1 else "",
+                )
                 if matched:
                     return matched
             except Exception as e:
-                result.error = f"AK name fallback error: {e}"
+                result.error = f"AK error: {e}"
                 continue
 
-    for idx, year in enumerate(remaining_ein_years):
-        if time.perf_counter() - started >= AK_LOOKUP_MAX_SECONDS:
-            break
-        try:
-            matched = run_ak_query(
-                year,
-                use_ein=True,
-                artifact_suffix="ein_no_match" if idx == len(remaining_ein_years) - 1 else "",
-            )
-            if matched:
-                return matched
-        except Exception as e:
-            result.error = f"AK error: {e}"
-            continue
+        for idx, year in enumerate(remaining_ein_years):
+            if time.perf_counter() - started >= AK_LOOKUP_MAX_SECONDS:
+                break
+            try:
+                matched = run_ak_query(
+                    year,
+                    use_ein=True,
+                    artifact_suffix="ein_no_match" if idx == len(remaining_ein_years) - 1 else "",
+                )
+                if matched:
+                    return matched
+            except Exception as e:
+                result.error = f"AK error: {e}"
+                continue
 
-    if result.error:
+        fallback_variants = ak_name_fallback_variants(org.organization_name)
+        fallback_years = AK_YEARS_TO_TRY[:AK_NAME_FALLBACK_YEARS]
+        for variant in fallback_variants:
+            if time.perf_counter() - started >= AK_LOOKUP_MAX_SECONDS:
+                break
+            for year in fallback_years:
+                if time.perf_counter() - started >= AK_LOOKUP_MAX_SECONDS:
+                    break
+                try:
+                    matched = run_ak_query(year, query_name=variant, use_ein=False)
+                    if matched:
+                        return matched
+                except Exception as e:
+                    result.error = f"AK name fallback error: {e}"
+                    continue
+
+        if result.error:
+            return result
+
+        checked_years = ", ".join(str(year) for year in AK_YEARS_TO_TRY)
+        result.raw_status_text = f"No Alaska registration found for checked years {checked_years}"
+        result.status = STATUS_NOT_REGISTERED
+        result.source_note = f"No Alaska registration found in public search for years {checked_years}"
+        result.success = True
         return result
-
-    checked_years = ", ".join(str(year) for year in AK_YEARS_TO_TRY)
-    result.raw_status_text = f"No Alaska registration found for checked years {checked_years}"
-    result.status = STATUS_NOT_REGISTERED
-    result.source_note = f"No Alaska registration found in public search for years {checked_years}"
-    result.success = True
-    return result
+    finally:
+        close_ak_page()
 
 def find_pa_ein_input(page):
     return find_visible_input(page, [

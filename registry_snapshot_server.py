@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.04.150-staging"
+APP_VERSION = "2026.06.04.151-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -10741,13 +10741,38 @@ def nh_download_xlsx_records() -> tuple[list[dict], str]:
     return records, label
 
 
-def nh_download_live_pdf_records() -> tuple[list[dict], str]:
+def nh_should_try_xlsx_before_pdf() -> bool:
+    if NH_ENV_XLSX_PATH is not None and NH_ENV_XLSX_PATH.exists():
+        xlsx_path = NH_ENV_XLSX_PATH
+    elif NH_BUNDLED_XLSX_PATH.exists():
+        xlsx_path = NH_BUNDLED_XLSX_PATH
+    else:
+        return False
+
+    pdf_candidates = []
+    if NH_PREFER_ENV_PDF and NH_ENV_PDF_PATH is not None:
+        pdf_candidates.append(NH_ENV_PDF_PATH)
+    pdf_candidates.append(NH_BUNDLED_PDF_PATH)
+    if not NH_PREFER_ENV_PDF and NH_ENV_PDF_PATH is not None:
+        pdf_candidates.append(NH_ENV_PDF_PATH)
+    pdf_path = next((path for path in pdf_candidates if path.exists()), None)
+    if pdf_path is None:
+        return True
+
     try:
-        xlsx_records, xlsx_label = nh_download_xlsx_records()
-        if xlsx_records:
-            return xlsx_records, xlsx_label
+        return xlsx_path.stat().st_mtime >= pdf_path.stat().st_mtime
     except Exception:
-        pass
+        return False
+
+
+def nh_download_live_pdf_records() -> tuple[list[dict], str]:
+    if nh_should_try_xlsx_before_pdf():
+        try:
+            xlsx_records, xlsx_label = nh_download_xlsx_records()
+            if xlsx_records:
+                return xlsx_records, xlsx_label
+        except Exception:
+            pass
     if PdfReader is None:
         return [], ""
     pdf_source = NH_LIVE_PDF_URL
@@ -10858,6 +10883,13 @@ def nh_download_live_pdf_records() -> tuple[list[dict], str]:
                 match.group("status"),
                 match.group("due"),
             )
+    if not records:
+        try:
+            xlsx_records, xlsx_label = nh_download_xlsx_records()
+            if xlsx_records:
+                return xlsx_records, xlsx_label
+        except Exception:
+            pass
     if pdf_source != NH_LIVE_PDF_URL and updated_label:
         updated_label = f"{updated_label} from bundled NH PDF"
     return records, updated_label
