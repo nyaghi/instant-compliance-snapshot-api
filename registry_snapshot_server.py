@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.04.149-staging"
+APP_VERSION = "2026.06.04.150-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -2865,6 +2865,41 @@ def organization_match_target_variants(name: str, ein: str = "") -> list[str]:
     return variants or [name]
 
 
+def connector_light_name_variants(name: str) -> list[str]:
+    variants: list[str] = []
+
+    def add(value: str) -> None:
+        cleaned = re.sub(r"\s+", " ", (value or "").strip(" ,;-"))
+        if cleaned and cleaned.lower() not in {existing.lower() for existing in variants}:
+            variants.append(cleaned)
+
+    cleaned_name = re.sub(
+        r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\b\.?\s*$",
+        "",
+        (name or "").strip(),
+        flags=re.I,
+    ).strip(" ,;-")
+    parts = re.split(r"\s*(?:[/&+]|\band\b)\s*", cleaned_name, flags=re.I)
+    if len(parts) < 2:
+        return variants
+    for left, right in zip(parts, parts[1:]):
+        left_tokens = re.findall(r"[A-Za-z0-9]+", left or "")
+        right_tokens = re.findall(r"[A-Za-z0-9]+", right or "")
+        if not left_tokens or not right_tokens:
+            continue
+        left_token = left_tokens[-1]
+        if len(left_token) <= 2 and len(left_tokens) >= 2:
+            left_token = left_tokens[-2]
+        normalized_left = re.sub(r"'?s$", "", left_token, flags=re.I)
+        for token in [left_token, normalized_left]:
+            if len(token) >= 3:
+                add(" ".join([token, *right_tokens]))
+                if len(right_tokens) > 1:
+                    add(" ".join([token, *right_tokens[:-1]]))
+        add(" ".join(right_tokens))
+    return variants
+
+
 def org_with_name(org, name: str):
     clone = SimpleNamespace(organization_name=name, ein=org.ein)
     clone.original_organization_name = getattr(org, "original_organization_name", getattr(org, "organization_name", ""))
@@ -2911,6 +2946,8 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
         return False
     if wrapped_supporting_foundation_match(registry_name, original_name):
         return True
+    if parenthetical_descriptor_match(original_name, registry_name):
+        return True
     if descriptor_entity_extension_match(original_name, registry_name):
         return True
     if missing_distinctive_prefix_mismatch(original_name, registry_name):
@@ -2921,6 +2958,24 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
     if target_name_score(registry_name, safe_targets) >= 450:
         return True
     return compatible_ein_alias_for_name(original_name, registry_name)
+
+
+def parenthetical_descriptor_match(original_name: str, registry_name: str) -> bool:
+    match = re.search(r"\(([^)]{2,80})\)\s*$", registry_name or "")
+    if not match:
+        return False
+    descriptor_norm = normalized_match_name(match.group(1))
+    if not descriptor_norm:
+        return False
+    descriptor_words = descriptor_norm.split()
+    allowed_descriptor_words = {
+        "national", "headquarters", "headquarter", "hq", "main", "office",
+        "principal", "central", "corporate",
+    }
+    if any(word not in allowed_descriptor_words for word in descriptor_words):
+        return False
+    base_name = re.sub(r"\s*\([^)]{2,80}\)\s*$", "", registry_name or "").strip()
+    return normalized_match_name(base_name) == normalized_match_name(original_name)
 
 
 def wrapped_supporting_foundation_match(registry_name: str, original_name: str) -> bool:
@@ -12975,6 +13030,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     enrich_me_result_from_body(result, body)
             elif state == "ND":
                 reachable, _, preflight_result = preflight_name_search_registry(org, "ND")
+                nd_preferred_variants = connector_light_name_variants(org.organization_name)
                 def run_nd_lookup():
                     return search_with_name_variants(
                         page,
@@ -12987,6 +13043,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                         include_compact_legal_suffixes=False,
                         include_leading_article_variants=True,
                         prioritize_institution_reductions=True,
+                        preferred_variants=nd_preferred_variants,
                     )
 
                 def run_nd_confirmation_lookup():
@@ -13001,6 +13058,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                         include_compact_legal_suffixes=False,
                         include_leading_article_variants=True,
                         prioritize_institution_reductions=True,
+                        preferred_variants=nd_preferred_variants,
                     )
 
                 result = run_nd_lookup()
