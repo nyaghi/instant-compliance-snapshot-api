@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.04.156-staging"
+APP_VERSION = "2026.06.04.157-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -4478,232 +4478,6 @@ def search_co_with_name_fallback(page, org):
             )
             return copy_name_fallback_result(org, fallback)
     return result
-
-
-CO_CHARITIES_EXTRACT_URL = "https://coloradosos.gov/pubs/charities/downloadFiles/CharitableOrganizationsDataExtract.txt"
-CO_CHARITIES_EXTRACT_TTL_SECONDS = int(os.environ.get("CE_CO_CHARITIES_EXTRACT_TTL_SECONDS", str(6 * 60 * 60)))
-CO_CHARITIES_EXTRACT_TIMEOUT_SECONDS = float(os.environ.get("CE_CO_CHARITIES_EXTRACT_TIMEOUT_SECONDS", "45"))
-_CO_CHARITIES_CACHE: dict[str, object] = {"loaded_at": 0.0, "by_ein": {}, "rows": [], "error": ""}
-_CO_CHARITIES_CACHE_LOCK = threading.Lock()
-
-
-def co_parse_yyyymmdd(value: str) -> date | None:
-    digits = re.sub(r"\D", "", value or "")
-    if len(digits) != 8:
-        return None
-    try:
-        return datetime.strptime(digits, "%Y%m%d").date()
-    except ValueError:
-        return None
-
-
-def co_format_date(value: str) -> str:
-    parsed = co_parse_yyyymmdd(value)
-    return parsed.strftime("%m/%d/%Y") if parsed else (value or "").strip()
-
-
-def co_row_sort_key(row: dict[str, str]) -> tuple[date, date, date, str]:
-    earliest = date(1900, 1, 1)
-    approved = co_parse_yyyymmdd(row.get("approved_date", "")) or earliest
-    status_date = co_parse_yyyymmdd(row.get("status_date", "")) or earliest
-    expiration = co_parse_yyyymmdd(row.get("expiration_date", "")) or earliest
-    return (approved, status_date, expiration, row.get("registration_number", ""))
-
-
-def co_simplify_row(row: dict[str, str]) -> dict[str, str]:
-    return {
-        "name": (row.get("Charitable Organization Name") or "").strip(),
-        "ein": canonical_ein_digits(row.get("EIN") or ""),
-        "registration_number": (row.get("Registration Number") or "").strip(),
-        "dbas": (row.get("DBAs") or "").strip(),
-        "approved_date": (row.get("Most Recent Registration, Amendment, Renewal or Reinstatement Approved Date") or "").strip(),
-        "filing_type": (row.get("Filing Type") or "").strip(),
-        "current_status": (row.get("Current Status") or "").strip(),
-        "status_date": (row.get("Status Date") or "").strip(),
-        "expiration_date": (row.get("Expiration Date") or "").strip(),
-        "financial_report_end_date": (row.get("Financial Report End Date") or "").strip(),
-        "accounting_period": (row.get("Accounting Period") or "").strip(),
-    }
-
-
-def co_load_charities_extract(force: bool = False) -> tuple[dict[str, list[dict[str, str]]], list[dict[str, str]], str]:
-    now = time.time()
-    cached_at = float(_CO_CHARITIES_CACHE.get("loaded_at") or 0.0)
-    if (
-        not force
-        and cached_at
-        and now - cached_at < CO_CHARITIES_EXTRACT_TTL_SECONDS
-        and _CO_CHARITIES_CACHE.get("rows")
-    ):
-        return (
-            _CO_CHARITIES_CACHE.get("by_ein") or {},
-            _CO_CHARITIES_CACHE.get("rows") or [],
-            str(_CO_CHARITIES_CACHE.get("error") or ""),
-        )
-    with _CO_CHARITIES_CACHE_LOCK:
-        now = time.time()
-        cached_at = float(_CO_CHARITIES_CACHE.get("loaded_at") or 0.0)
-        if (
-            not force
-            and cached_at
-            and now - cached_at < CO_CHARITIES_EXTRACT_TTL_SECONDS
-            and _CO_CHARITIES_CACHE.get("rows")
-        ):
-            return (
-                _CO_CHARITIES_CACHE.get("by_ein") or {},
-                _CO_CHARITIES_CACHE.get("rows") or [],
-                str(_CO_CHARITIES_CACHE.get("error") or ""),
-            )
-        try:
-            request = urllib.request.Request(
-                CO_CHARITIES_EXTRACT_URL,
-                headers={
-                    "User-Agent": f"CharityClarity/{APP_VERSION}",
-                    "Accept": "text/plain,*/*",
-                },
-            )
-            with urllib.request.urlopen(request, timeout=CO_CHARITIES_EXTRACT_TIMEOUT_SECONDS) as response:
-                text = response.read().decode("utf-8-sig", "replace")
-            rows: list[dict[str, str]] = []
-            by_ein: dict[str, list[dict[str, str]]] = {}
-            reader = csv.DictReader(io.StringIO(text), delimiter="\t")
-            for raw_row in reader:
-                row = co_simplify_row(raw_row)
-                if not row["name"]:
-                    continue
-                rows.append(row)
-                if len(row["ein"]) == 9:
-                    by_ein.setdefault(row["ein"], []).append(row)
-            for matches in by_ein.values():
-                matches.sort(key=co_row_sort_key, reverse=True)
-            rows.sort(key=co_row_sort_key, reverse=True)
-            _CO_CHARITIES_CACHE.update({"loaded_at": time.time(), "by_ein": by_ein, "rows": rows, "error": ""})
-            return by_ein, rows, ""
-        except Exception as exc:
-            _CO_CHARITIES_CACHE["error"] = str(exc)
-            return (
-                _CO_CHARITIES_CACHE.get("by_ein") or {},
-                _CO_CHARITIES_CACHE.get("rows") or [],
-                str(exc),
-            )
-
-
-def co_row_names(row: dict[str, str]) -> list[str]:
-    names = [row.get("name", "")]
-    dbas = row.get("dbas", "")
-    if dbas:
-        for part in re.split(r"\s*(?:;|\||,|\band\b|\bd/?b/?a\b|\baka\b|\balso\s+soliciting\s+as\b|\bdoing\s+business\s+as\b)\s*", dbas, flags=re.I):
-            part = part.strip()
-            if part and part.upper() not in {"N/A", "NONE", "NULL"}:
-                names.append(part)
-    return [name for name in names if name]
-
-
-def co_find_name_match(rows: list[dict[str, str]], org) -> dict[str, str] | None:
-    targets = organization_match_target_variants(getattr(org, "organization_name", ""), getattr(org, "ein", ""))
-    supplied_ein = canonical_ein_digits(getattr(org, "ein", ""))
-    best: tuple[tuple[int, tuple[date, date, date, str]], dict[str, str]] | None = None
-    for row in rows:
-        if supplied_ein and len(row.get("ein", "")) == 9 and row.get("ein") != supplied_ein:
-            continue
-        row_score = -1000
-        for row_name in co_row_names(row):
-            row_score = max(row_score, target_name_score(row_name, targets))
-        if row_score < 700:
-            continue
-        score = (row_score, co_row_sort_key(row))
-        if best is None or score > best[0]:
-            best = (score, row)
-    return best[1] if best else None
-
-
-def co_status_from_snapshot_row(row: dict[str, str]) -> tuple[str, str]:
-    raw_status = re.sub(r"\s+", " ", row.get("current_status", "") or "").strip().upper()
-    expiration = co_parse_yyyymmdd(row.get("expiration_date", ""))
-    if re.search(r"\bEXEMPT\b", raw_status):
-        return "Exempt", "Colorado extract Current Status is EXEMPT."
-    if re.search(r"\b(WITHDRAWN|CANCEL(?:ED|LED)|CLOSED|TERMINATED|INACTIVE)\b", raw_status):
-        return "Closed / Withdrawn / Canceled", f"Colorado extract Current Status is {raw_status}."
-    if re.search(r"\b(REVOKED|DENIED)\b", raw_status):
-        return "Revoked", f"Colorado extract Current Status is {raw_status}."
-    if re.search(r"\bNOTICE\s*[23]\b", raw_status):
-        return "Suspended", f"Colorado extract Current Status is {raw_status}."
-    if re.search(r"\b(NOTICE|REMINDER|EXPIRED|DELINQUENT)\b", raw_status):
-        return "Delinquent", f"Colorado extract Current Status is {raw_status}."
-    if re.search(r"\b(PENDING|RENEWAL|AMENDMENT|IN\s+PROCESS)\b", raw_status):
-        return "Pending", f"Colorado extract Current Status is {raw_status}."
-    if expiration:
-        return status_from_calendar_date(expiration), f"Colorado extract Current Status is {raw_status or 'available'}; status is derived from Expiration Date."
-    if raw_status in {"GOOD", "CURRENT", "ACTIVE", "COMPLIANT"}:
-        return "Current", f"Colorado extract Current Status is {raw_status}."
-    return checker.STATUS_UNKNOWN, f"Colorado extract Current Status is {raw_status or 'blank'}."
-
-
-def co_result_from_snapshot_row(org, row: dict[str, str]) -> object:
-    status, status_note = co_status_from_snapshot_row(row)
-    result = checker.StateResult(
-        getattr(org, "organization_name", ""),
-        getattr(org, "ein", ""),
-        "CO",
-        status,
-        CO_CHARITIES_EXTRACT_URL,
-    )
-    result.matched_registry_name = row.get("name", "")
-    result.matched_registry_identifier = row.get("registration_number", "")
-    result.raw_status_text = " | ".join(part for part in [
-        f"CO Status: {row.get('current_status', '')}".strip(),
-        f"Registration Number: {row.get('registration_number', '')}".strip(),
-        f"Expiration Date: {co_format_date(row.get('expiration_date', ''))}".strip(),
-        f"Approved Date: {co_format_date(row.get('approved_date', ''))}".strip(),
-        f"Financial Report End Date: {co_format_date(row.get('financial_report_end_date', ''))}".strip(),
-        f"DBAs: {row.get('dbas', '')}".strip() if row.get("dbas") else "",
-    ] if part and not part.endswith(":"))
-    result.source_note = (
-        f"{status_note} CharityClarity used Colorado's official public registry data extract, fetched on demand, with EIN-first matching; "
-        "when multiple rows match, the most recent registry row is selected."
-    )
-    result.success = True
-    result.error = ""
-    return result
-
-
-def search_co_snapshot(page, org):
-    by_ein, rows, load_error = co_load_charities_extract()
-    if rows:
-        ein = canonical_ein_digits(getattr(org, "ein", ""))
-        if ein and by_ein.get(ein):
-            return co_result_from_snapshot_row(org, by_ein[ein][0])
-        name_row = co_find_name_match(rows, org)
-        if name_row:
-            result = co_result_from_snapshot_row(org, name_row)
-            if ein and name_row.get("ein") and name_row.get("ein") != ein:
-                result = checker.StateResult(getattr(org, "organization_name", ""), getattr(org, "ein", ""), "CO", checker.STATUS_NOT_REGISTERED, CO_CHARITIES_EXTRACT_URL)
-                result.raw_status_text = "Colorado extract contained a name-similar row with a different EIN."
-                result.source_note = "CharityClarity rejected the Colorado name fallback because the downloadable registry row's EIN did not match the requested EIN."
-                result.success = True
-            else:
-                result.source_note = f"{result.source_note} EIN search did not find a row, so CharityClarity used a strict name/DBA fallback."
-            return result
-        result = checker.StateResult(getattr(org, "organization_name", ""), getattr(org, "ein", ""), "CO", checker.STATUS_NOT_REGISTERED, CO_CHARITIES_EXTRACT_URL)
-        result.raw_status_text = "No matching Colorado extract row"
-        result.source_note = "Colorado's official public registry data extract was reachable, but no strict EIN or safe organization-name/DBA match was found."
-        result.success = True
-        result.error = ""
-        return result
-    if page is None:
-        result = checker.StateResult(getattr(org, "organization_name", ""), getattr(org, "ein", ""), "CO", "Site Not Reachable", CO_CHARITIES_EXTRACT_URL)
-        result.raw_status_text = "Colorado extract could not be loaded"
-        result.source_note = f"Colorado's official public registry data extract was not reachable: {load_error}"
-        result.error = load_error or "Colorado extract unavailable"
-        result.success = False
-        return result
-    browser_result = search_co_with_name_fallback(page, org)
-    if load_error and public_status(browser_result) == "Site Not Reachable":
-        browser_result.source_note = " ".join(part for part in [
-            browser_result.source_note or "",
-            f"Colorado extract fallback also failed: {load_error}",
-        ]).strip()
-    return browser_result
 
 
 def search_mi_name_fallback(page, org):
@@ -12781,17 +12555,6 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 BROWSER_LOOKUP_SEMAPHORE.release()
         return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
 
-    if state == "CO":
-        lookup_started = time.perf_counter()
-        result = search_co_snapshot(None, org)
-        body = " ".join(part for part in [
-            result.raw_status_text or "",
-            result.source_note or "",
-            result.matched_registry_name or "",
-            result.matched_registry_identifier or "",
-        ]).strip()
-        return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
-
     if state == "CT":
         lookup_started = time.perf_counter()
         result = search_ct_direct(org)
@@ -12911,7 +12674,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 else:
                     body = md_no_results_body(page)
             elif state == "CO":
-                result = search_co_snapshot(page, org)
+                result = search_co_with_name_fallback(page, org)
                 body = registry_page_body(page)
                 if not (getattr(result, "matched_registry_name", "") or "").strip():
                     co_name = checker.extract_labeled_value_from_text(body, ["Name"])
@@ -13133,7 +12896,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     if confirm_single_no_match and public_status(result) == "Not Registered" and elapsed_before_wv_confirmation < 40.0:
                         time.sleep(2.0)
                         confirmed_result = search_wv_precise(page, org)
-                        if public_status(confirmed_result) != "Not Registered":
+                        if public_status(confirmed_result) not in {"Not Registered", "Site Not Reachable", checker.STATUS_UNKNOWN}:
                             confirmed_result.source_note = " ".join(part for part in [
                                 confirmed_result.source_note or "",
                                 "A delayed confirmation lookup replaced an initial West Virginia no-record response.",
