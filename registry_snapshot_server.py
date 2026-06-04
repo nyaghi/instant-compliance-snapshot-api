@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.03.147-staging"
+APP_VERSION = "2026.06.03.148-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -188,7 +188,7 @@ SC_NAME_VARIANT_MAX_SECONDS = max(12.0, float(os.environ.get("CE_SC_NAME_VARIANT
 NAME_SEARCH_VARIANT_MAX_SECONDS = max(18.0, float(os.environ.get("CE_NAME_SEARCH_VARIANT_MAX_SECONDS", "35")))
 CT_NAME_VARIANT_MAX_SECONDS = min(max(10.0, float(os.environ.get("CE_CT_NAME_VARIANT_MAX_SECONDS", "24"))), 35.0)
 CT_NAME_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_CT_NAME_VARIANT_LIMIT", "8"))), 12)
-CT_DIRECT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_CT_DIRECT_TIMEOUT_SECONDS", "6"))), 12.0)
+CT_DIRECT_TIMEOUT_SECONDS = min(max(6.0, float(os.environ.get("CE_CT_DIRECT_TIMEOUT_SECONDS", "8"))), 12.0)
 CT_DIRECT_MAX_SECONDS = min(max(6.0, float(os.environ.get("CE_CT_DIRECT_MAX_SECONDS", "14"))), 22.0)
 MN_NAME_FALLBACK_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_MN_NAME_FALLBACK_MAX_SECONDS", "18"))), 30.0)
 MN_NAME_FALLBACK_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_MN_NAME_FALLBACK_MAX_VARIANTS", "4"))), 10)
@@ -7997,6 +7997,67 @@ def search_wi_snapshot(org):
     return result
 
 
+def wi_separator_retry_names(org) -> list[str]:
+    original_name = re.sub(r"\s+", " ", (getattr(org, "organization_name", "") or "").strip())
+    if not re.search(r"[/|;]|(?:\s+-\s+)|\b(?:d/?b/?a|aka|also\s+soliciting\s+as|doing\s+business\s+as)\b", original_name, re.I):
+        return []
+    retries: list[str] = []
+
+    def add(value: str) -> None:
+        cleaned = re.sub(r"\s+", " ", (value or "").strip(" ,;/|-"))
+        if not cleaned or cleaned.lower() == original_name.lower():
+            return
+        compact = re.sub(r"[^A-Za-z0-9]+", "", cleaned)
+        words = re.findall(r"[A-Za-z0-9]+", cleaned)
+        if len(words) < 2 and not (2 <= len(compact) <= 8 and compact.upper() == compact):
+            return
+        if cleaned.lower() not in {item.lower() for item in retries}:
+            retries.append(cleaned)
+
+    for target in organization_match_target_variants(original_name, getattr(org, "ein", "")):
+        add(target)
+
+    def priority(value: str) -> tuple[int, int, str]:
+        compact = re.sub(r"[^A-Za-z0-9]+", "", value or "")
+        is_acronym = 2 <= len(compact) <= 8 and compact.upper() == compact
+        word_count = len(re.findall(r"[A-Za-z0-9]+", value or ""))
+        still_has_separator = bool(re.search(r"[/|;]|(?:\s+-\s+)", value or ""))
+        return (1 if still_has_separator else 0, 1 if is_acronym else 0, -word_count, value.lower())
+
+    retries.sort(key=priority)
+    return retries[:4]
+
+
+def search_wi_with_separator_retries(org, current_result):
+    if public_status(current_result) != "Not Registered":
+        return current_result
+    for retry_name in wi_separator_retry_names(org):
+        retry_org = org_with_name(org, retry_name)
+        retry_result = search_wi_snapshot(retry_org)
+        if WI_SIDECAR_URL and WI_LOOKUP_SECRET and (
+            retry_result is None
+            or (
+                WI_CONFIRM_SIDECAR_NO_MATCH
+                and public_status(retry_result) == "Not Registered"
+            )
+        ):
+            sidecar_result = search_wi_sidecar(retry_org)
+            if retry_result is None or public_status(sidecar_result) != "Not Registered":
+                retry_result = sidecar_result
+        if retry_result is not None and public_status(retry_result) == "Not Registered":
+            direct_result = search_wi(None, retry_org)
+            if public_status(direct_result) != "Not Registered":
+                retry_result = direct_result
+        if retry_result is not None and public_status(retry_result) not in {"Not Registered", "Site Not Reachable"}:
+            retry_result.organization_name = org.organization_name
+            retry_result.source_note = " ".join(part for part in [
+                retry_result.source_note or "",
+                f"Matched after retrying separator-delimited name segment: {retry_name}.",
+            ]).strip()
+            return retry_result
+    return current_result
+
+
 def wi_contains_full_target_name(registry_name: str, target_names: list[str]) -> bool:
     """Allow WI rows where the full target is embedded in a longer legal name."""
     normalize = getattr(checker, "normalize_name", lambda value: re.sub(r"\W+", " ", (value or "").lower()).strip())
@@ -12489,6 +12550,8 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             direct_result = search_wi(None, org)
             if public_status(direct_result) != "Not Registered":
                 result = direct_result
+        if result is not None and public_status(result) == "Not Registered":
+            result = search_wi_with_separator_retries(org, result)
         body = " ".join(part for part in [
             result.raw_status_text or "",
             result.source_note or "",
