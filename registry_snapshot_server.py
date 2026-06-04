@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.03.148-staging"
+APP_VERSION = "2026.06.04.149-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -4571,7 +4571,7 @@ def co_status_from_snapshot_row(row: dict[str, str]) -> tuple[str, str]:
         return "Closed / Withdrawn / Canceled", f"Colorado extract Current Status is {raw_status}."
     if re.search(r"\b(REVOKED|DENIED)\b", raw_status):
         return "Revoked", f"Colorado extract Current Status is {raw_status}."
-    if re.search(r"\bNOTICE\s*3\b", raw_status):
+    if re.search(r"\bNOTICE\s*[23]\b", raw_status):
         return "Suspended", f"Colorado extract Current Status is {raw_status}."
     if re.search(r"\b(NOTICE|REMINDER|EXPIRED|DELINQUENT)\b", raw_status):
         return "Delinquent", f"Colorado extract Current Status is {raw_status}."
@@ -6826,17 +6826,17 @@ def apply_ak_registration_status_from_best_evidence(
             pdf_text, pdf_url = "", ""
         last_year = ak_last_year_on_record_from_pdf_text(pdf_text)
     if last_year:
-        due_date = date(last_year + 1, 9, 1)
+        due_date = date(last_year, 9, 1)
         result.status = status_from_calendar_date(due_date)
         result.raw_status_text = " | ".join(part for part in [
             f"Last Year on Record: {last_year}",
-            f"Annual Registration Due: {format_date(due_date)}",
+            f"Annual Registration Expiration: {format_date(due_date)}",
             f"Registration Year Searched: {registration_year}",
             f"PDF: {pdf_url}" if pdf_url else "",
         ] if part)
         evidence_note = (
             "Alaska registry evidence includes the last year on record; "
-            "CharityClarity uses that year to determine the next September 1 annual registration cycle."
+            "CharityClarity treats that registry year as expiring on Alaska's September 1 annual registration date."
         )
     else:
         result.status, result.raw_status_text, evidence_note = checker.classify_ak_registration_year(registration_year, None)
@@ -9443,9 +9443,9 @@ def explicit_registry_date(result, body: str) -> date | None:
     if raw_date and re.fullmatch(r"\s*(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}-[A-Za-z]{3}-\d{2,4})\s*", result.raw_status_text or ""):
         return raw_date
     patterns = [
-        rf"(?:expires|expired|expired on|expiration date|registration expires|current registration expires|automatic extension)\s*:?\s*([A-Za-z]{{3,9}}\s+\d{{1,2}},\s+\d{{4}})",
-        rf"(?:expires|expired|expired on|expiration date|registration expires|current registration expires|automatic extension)\s*:?\s*(\d{{1,2}}[/-]\d{{1,2}}[/-]\d{{2,4}})",
-        rf"(?:expires|expired|expired on|expiration date|registration expires|current registration expires|automatic extension)\s*:?\s*(\d{{1,2}}-[A-Za-z]{{3}}-\d{{2,4}})",
+        rf"(?:expires|expired|expired on|expiration date|registration expires|registration expiration|current registration expires|automatic extension)\s*:?\s*([A-Za-z]{{3,9}}\s+\d{{1,2}},\s+\d{{4}})",
+        rf"(?:expires|expired|expired on|expiration date|registration expires|registration expiration|current registration expires|automatic extension)\s*:?\s*(\d{{1,2}}[/-]\d{{1,2}}[/-]\d{{2,4}})",
+        rf"(?:expires|expired|expired on|expiration date|registration expires|registration expiration|current registration expires|automatic extension)\s*:?\s*(\d{{1,2}}-[A-Za-z]{{3}}-\d{{2,4}})",
         r"^\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})\s*$",
     ]
     for source in [focused, text]:
@@ -9867,6 +9867,8 @@ def true_status_from_body(result, body: str) -> str:
         return status_from_calendar_date(registry_date)
     if state == "PA" and record_confirmed and not use_registry_date:
         return "Delinquent"
+    if state == "AK" and registry_date:
+        return status_from_calendar_date(registry_date)
     if state == "AK" and represented_year and due_date:
         return status_from_calendar_date(due_date)
     if state == "CA":
@@ -10039,12 +10041,17 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
         return f"The {state} public registry shows a found organization record with a closed or inactive registration status."
     if normalized_status == "delinquent" and state == "VA" and re.search(r"not\s+authorized\s+to\s+solicit", " ".join([result.status or "", result.raw_status_text or "", result.source_note or ""]), re.I):
         return "The VA public registry shows the organization is not authorized to solicit in Virginia, which CharityClarity treats as Delinquent."
-    if state == "AK" and normalized_status in {"upcoming filing", "current", "delinquent"} and context.get("represented_year") and context.get("due_date"):
-        timing = "within 6 months" if normalized_status == "upcoming filing" else ("overdue" if normalized_status == "delinquent" else "not within the next 6 months")
-        return (
-            f"The AK public registry shows the {context['represented_year']} charitable organization registration/renewal is on file. "
-            f"The next Alaska charitable registration renewal is due {format_date(context.get('due_date'))}, which is {timing}."
-        )
+    if state == "AK" and normalized_status in {"upcoming filing", "current", "delinquent"}:
+        registry_date = explicit_registry_date(result, body)
+        if registry_date:
+            timing = "within 6 months" if normalized_status == "upcoming filing" else ("overdue" if normalized_status == "delinquent" else "not within the next 6 months")
+            return f"The AK public registry shows a charitable registration expiration date of {format_date(registry_date)}, which is {timing}."
+        if context.get("represented_year") and context.get("due_date"):
+            timing = "within 6 months" if normalized_status == "upcoming filing" else ("overdue" if normalized_status == "delinquent" else "not within the next 6 months")
+            return (
+                f"The AK public registry shows the {context['represented_year']} charitable organization registration/renewal is on file. "
+                f"The next Alaska charitable registration renewal is due {format_date(context.get('due_date'))}, which is {timing}."
+            )
     registry_noncompliant_text = " ".join([result.raw_status_text or "", result.source_note or "", body or ""])
     if normalized_status == "delinquent" and re.search(r"\bnon\W*compliant\b", registry_noncompliant_text, re.I):
         return f"The {state} public registry shows a Noncompliant status, which CharityClarity treats as Delinquent."
