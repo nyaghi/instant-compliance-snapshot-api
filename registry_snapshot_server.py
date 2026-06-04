@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.04.151-staging"
+APP_VERSION = "2026.06.04.152-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -10742,6 +10742,8 @@ def nh_download_xlsx_records() -> tuple[list[dict], str]:
 
 
 def nh_should_try_xlsx_before_pdf() -> bool:
+    if os.environ.get("CE_NH_PREFER_XLSX", "").strip().lower() not in {"1", "true", "yes"}:
+        return False
     if NH_ENV_XLSX_PATH is not None and NH_ENV_XLSX_PATH.exists():
         xlsx_path = NH_ENV_XLSX_PATH
     elif NH_BUNDLED_XLSX_PATH.exists():
