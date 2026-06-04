@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.03.145-staging"
+APP_VERSION = "2026.06.03.146-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -187,7 +187,7 @@ LOOKUP_SOFT_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_LOOKUP_SOFT_MAX
 SC_NAME_VARIANT_MAX_SECONDS = max(12.0, float(os.environ.get("CE_SC_NAME_VARIANT_MAX_SECONDS", "25")))
 NAME_SEARCH_VARIANT_MAX_SECONDS = max(18.0, float(os.environ.get("CE_NAME_SEARCH_VARIANT_MAX_SECONDS", "35")))
 CT_NAME_VARIANT_MAX_SECONDS = min(max(10.0, float(os.environ.get("CE_CT_NAME_VARIANT_MAX_SECONDS", "24"))), 35.0)
-CT_NAME_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_CT_NAME_VARIANT_LIMIT", "5"))), 10)
+CT_NAME_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_CT_NAME_VARIANT_LIMIT", "8"))), 12)
 CT_DIRECT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_CT_DIRECT_TIMEOUT_SECONDS", "6"))), 12.0)
 CT_DIRECT_MAX_SECONDS = min(max(6.0, float(os.environ.get("CE_CT_DIRECT_MAX_SECONDS", "14"))), 22.0)
 MN_NAME_FALLBACK_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_MN_NAME_FALLBACK_MAX_SECONDS", "18"))), 30.0)
@@ -2373,12 +2373,9 @@ def organization_name_variants(
 
     if include_name_segments:
         segmented_seeds = []
+        and_segmented_seeds = []
         for seed in list(seed_names):
-            segment_pattern = (
-                r"\s*(?:/|\\|,|&|\band\b|\bd/?b/?a\b|\bdoing\s+business\s+as\b|\balso\s+soliciting\s+as\b|\bsoliciting\s+as\b|\balso\s+known\s+as\b|\baka\b|\bfka\b|\bformerly\b)\s*"
-                if include_and_segments
-                else r"\s*(?:/|\\|,|\bd/?b/?a\b|\bdoing\s+business\s+as\b|\balso\s+soliciting\s+as\b|\bsoliciting\s+as\b|\balso\s+known\s+as\b|\baka\b|\bfka\b|\bformerly\b)\s*"
-            )
+            segment_pattern = r"\s*(?:/|\\|,|\bd/?b/?a\b|\bdoing\s+business\s+as\b|\balso\s+soliciting\s+as\b|\bsoliciting\s+as\b|\balso\s+known\s+as\b|\baka\b|\bfka\b|\bformerly\b)\s*"
             for part in re.split(
                 segment_pattern,
                 seed or "",
@@ -2389,11 +2386,18 @@ def organization_name_variants(
                     continue
                 if (len(part.split()) >= 2) or len(part) >= 4:
                     segmented_seeds.append(part)
+            if include_and_segments and re.search(r"\s(?:&|and)\s", seed or "", re.I):
+                for part in re.split(r"\s*(?:&|\band\b)\s*", seed or "", flags=re.I):
+                    part = re.sub(r"\s+", " ", part.strip(" ,;-"))
+                    if re.fullmatch(r"(?i)(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)", part):
+                        continue
+                    if (len(part.split()) >= 2) or len(part) >= 8:
+                        and_segmented_seeds.append(part)
         # Try slash/DBA/AKA sides early. Several name-only registries do not
         # find "A / B" as a combined string, but do find the formal side by
         # itself. Keep the original name first, then the meaningful segments,
         # then any EIN-sourced aliases.
-        seed_names = [seed_names[0], *segmented_seeds, *seed_names[1:]]
+        seed_names = [seed_names[0], *segmented_seeds, *seed_names[1:], *and_segmented_seeds]
         if segmented_seeds:
             add(seed_names[0])
             for disease_seed in [seed_names[0]]:
@@ -3460,7 +3464,7 @@ def search_va_direct(org):
     for alias in known_names_for_ein(org.ein):
         if compatible_ein_alias_for_name(org.organization_name, alias):
             add_va_core_forms(alias)
-    generated_variants = organization_name_variants(
+    generated_variants = prioritized_institutional_variants(organization_name_variants(
         org.organization_name,
         org.ein,
         include_ein_aliases=True,
@@ -3469,12 +3473,12 @@ def search_va_direct(org):
         include_compact_legal_suffixes=False,
         include_leading_article_variants=True,
         include_institutional_reductions=True,
-    )
+    ))
     for generated in generated_variants:
-        if len(variants) >= 4:
+        if len(variants) >= 8:
             break
         add_variant(generated)
-    variants = variants[:4]
+    variants = variants[:8]
     targets = organization_match_target_variants(org.organization_name, org.ein)
     best_rejected_name = ""
     last_error = ""
@@ -11110,6 +11114,9 @@ def ms_choose_safe_row_from_table(table, original_name: str, ein: str = ""):
     candidates = []
     for index in range(min(row_count, 80)):
         row = rows.nth(index)
+        row_cells = ms_result_row_cells(row)
+        if len(row_cells) > 6:
+            continue
         try:
             row_text = re.sub(r"\s+", " ", row.inner_text(timeout=1000)).strip()
         except Exception:
@@ -11244,6 +11251,8 @@ def search_ms_fast(page, org, navigate: bool = True):
         original_name = getattr(org, "original_organization_name", org.organization_name)
         name_index, status_index = module.detect_header_indexes(table)
         row = module.choose_matching_row(table, org.organization_name, name_index)
+        if row and len(ms_result_row_cells(row)) > 6:
+            row = None
         if row and not ms_registry_name_from_row(row, original_name, getattr(org, "ein", "")):
             row = None
         if not row:
@@ -11260,12 +11269,8 @@ def search_ms_fast(page, org, navigate: bool = True):
             result.matched_registry_name = row_registry_name
 
         status_text = module.extract_status_from_row(row, status_index) or ms_status_from_row_cells(row)
-        if not status_text:
-            result.status = module.STATUS_UNKNOWN
-            result.raw_status_text = "Status not visible in results table"
-            result.success = True
-            result.source_note = "Mississippi results table row was found, but the status cell could not be extracted."
-            return result
+        if re.fullmatch(r"\d{5,}", re.sub(r"\D", "", status_text or "")):
+            status_text = ""
 
         clicked_detail = False
         try:
@@ -11304,11 +11309,20 @@ def search_ms_fast(page, org, navigate: bool = True):
             expiration_raw = ""
         if not filing_status:
             filing_status = status_text
+        if re.fullmatch(r"\d{5,}", re.sub(r"\D", "", filing_status or "")):
+            filing_status = ""
         if not expiration_date:
             fallback_expiration_raw = module.extract_labeled_value_from_text(detail_text, ["Expire Date"])
             expiration_date = module.parse_mmddyyyy_date(fallback_expiration_raw)
             if expiration_date and not expiration_raw:
                 expiration_raw = fallback_expiration_raw
+
+        if not filing_status:
+            result.status = module.STATUS_UNKNOWN
+            result.raw_status_text = "Status not visible in matched Mississippi result"
+            result.success = True
+            result.source_note = "Mississippi matched the organization row, but neither the row nor detail page exposed a usable Filing Status."
+            return result
 
         display_filing_status = module.normalize_ms_filing_status(filing_status)
         result.raw_status_text = (

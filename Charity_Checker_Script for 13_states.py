@@ -40,6 +40,10 @@ STATUS_UNKNOWN = "Unknown"
 AK_SEARCH_URL = "https://online-registrations-law.alaska.gov/TLP/WebDoc/?link=PubQry"
 AK_YEARS_TO_TRY_COUNT = max(2, min(int(os.environ.get("CE_AK_YEARS_TO_TRY_COUNT", "6")), 8))
 AK_YEARS_TO_TRY = list(range(date.today().year, date.today().year - AK_YEARS_TO_TRY_COUNT, -1))
+AK_NAME_FALLBACK_YEARS = max(2, min(int(os.environ.get("CE_AK_NAME_FALLBACK_YEARS", "4")), AK_YEARS_TO_TRY_COUNT))
+AK_NAME_FALLBACK_VARIANTS = max(2, min(int(os.environ.get("CE_AK_NAME_FALLBACK_VARIANTS", "7")), 10))
+AK_LOOKUP_MAX_SECONDS = max(35.0, min(float(os.environ.get("CE_AK_LOOKUP_MAX_SECONDS", "78")), 90.0))
+AK_EIN_FIRST_YEARS = max(1, min(int(os.environ.get("CE_AK_EIN_FIRST_YEARS", "2")), AK_YEARS_TO_TRY_COUNT))
 FAST_WAIT_MAX_MS = max(750, min(int(os.environ.get("CE_FAST_WAIT_MAX_MS", "1500")), 2000))
 FULL_PAGE_ARTIFACTS = os.environ.get("CE_FULL_PAGE_ARTIFACTS", "0").strip().lower() in {"1", "true", "yes"}
 ARTIFACT_SCREENSHOT_TIMEOUT_MS = max(1000, int(os.environ.get("CE_ARTIFACT_SCREENSHOT_TIMEOUT_MS", "10000")))
@@ -417,7 +421,7 @@ def open_ak_public_search(page) -> bool:
         fast_sleep(1)
     return False
 
-def fill_ak_search_form(page, org: Organization, year: int) -> None:
+def fill_ak_search_form(page, org: Organization, year: int, query_name: str = "", use_ein: bool = True) -> None:
     submission = page.locator("#Dq-8")
     if submission.count() == 0:
         submission = page.get_by_label(re.compile(r"Submission\s+type", re.I)).first
@@ -459,13 +463,21 @@ def fill_ak_search_form(page, org: Organization, year: int) -> None:
         name_input.fill("")
     except Exception:
         pass
+    if query_name:
+        name_input.type(query_name, delay=20)
+        try:
+            name_input.dispatch_event("input")
+            name_input.dispatch_event("change")
+        except Exception:
+            pass
     fast_sleep(0.5)
     fein_input = page.locator("#Dq-b")
     if fein_input.count() == 0:
         fein_input = page.get_by_label(re.compile(r"FEIN", re.I)).first
     fein_input.wait_for(state="visible", timeout=8000)
     fein_input.fill("")
-    fein_input.type(format_ein_with_dash(org.ein), delay=40)
+    if use_ein:
+        fein_input.type(format_ein_with_dash(org.ein), delay=40)
     try:
         fein_input.dispatch_event("input")
         fein_input.dispatch_event("change")
@@ -478,19 +490,23 @@ def fill_ak_search_form(page, org: Organization, year: int) -> None:
     search_button.click(timeout=10000, force=True)
     fast_sleep(2)
 
-def find_ak_print_link(page, org: Organization):
+def find_ak_print_link(page, org: Organization, target_names: Optional[List[str]] = None):
     return page.evaluate(
         """
-        ({ organizationName, ein }) => {
+        ({ organizationName, ein, targetNames }) => {
             const normalize = (value) => (value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
             const targetOrg = normalize(organizationName);
+            const targets = Array.from(new Set([targetOrg, ...(targetNames || []).map(normalize)].filter(Boolean)));
             const einDigits = (ein || '').replace(/\\D/g, '');
             const rows = Array.from(document.querySelectorAll('table.DocTable tbody tr'));
 
             for (const row of rows) {
                 const rowText = (row.innerText || row.textContent || '').trim().replace(/\\s+/g, ' ');
                 const rowDigits = rowText.replace(/\\D/g, '');
-                if (!rowText.includes(ein) && !(einDigits && rowDigits.includes(einDigits))) {
+                const rowNorm = normalize(rowText);
+                const einMatch = !!(einDigits && rowDigits.includes(einDigits));
+                const nameMatch = targets.some((target) => target.length >= 8 && rowNorm.includes(target));
+                if (!rowText.includes(ein) && !einMatch && !nameMatch) {
                     continue;
                 }
 
@@ -513,8 +529,40 @@ def find_ak_print_link(page, org: Organization):
             return null;
         }
         """,
-        {"organizationName": org.organization_name, "ein": format_ein_with_dash(org.ein)},
+        {
+            "organizationName": org.organization_name,
+            "ein": format_ein_with_dash(org.ein),
+            "targetNames": target_names or [],
+        },
     )
+
+def ak_name_fallback_variants(name: str) -> List[str]:
+    base_variants = search_name_query_variants(name, max_words=5)
+    prioritized: List[str] = []
+
+    def add(value: str) -> None:
+        cleaned = re.sub(r"\s+", " ", (value or "").strip(" ,;-"))
+        if cleaned and cleaned.lower() not in {item.lower() for item in prioritized}:
+            prioritized.append(cleaned)
+
+    if base_variants:
+        add(base_variants[0])
+    hyphen_variants = [variant for variant in base_variants if "-" in variant]
+    hyphen_variants.sort(key=lambda value: 1 if re.search(r"^\S+[-\u2010-\u2015]\S+", value or "") else 0)
+    for variant in hyphen_variants:
+        add(variant)
+    reduced = re.sub(
+        r"\b(?:national\s+)?(?:medical\s+center|hospital\s+center|hospital)\b\.?\s*$",
+        "",
+        name or "",
+        flags=re.I,
+    ).strip(" ,;-")
+    add(reduced)
+    if reduced:
+        add(re.sub(r"[-\u2010-\u2015]+", " ", reduced))
+    for variant in base_variants:
+        add(variant)
+    return prioritized[:AK_NAME_FALLBACK_VARIANTS]
 
 def read_ak_accounting_year_from_pdf(page, context, print_link) -> Optional[int]:
     if PdfReader is None:
@@ -1314,35 +1362,86 @@ def search_ak(browser, org: Organization, artifacts_dir: Optional[Path] = None) 
         result.error = "AK search requires 9-digit EIN"
         return result
 
-    for idx, year in enumerate(AK_YEARS_TO_TRY):
+    started = time.perf_counter()
+
+    def run_ak_query(year: int, query_name: str = "", use_ein: bool = True, artifact_suffix: str = ""):
         ak_context = browser.new_context(viewport={"width": 1365, "height": 900}, accept_downloads=True)
         ak_page = ak_context.new_page()
         try:
             if not open_ak_public_search(ak_page):
                 result.error = "Could not open Alaska Public Search form"
-                continue
+                return None
 
-            fill_ak_search_form(ak_page, org, year)
-            print_link = find_ak_print_link(ak_page, org)
+            fill_ak_search_form(ak_page, org, year, query_name=query_name, use_ein=use_ein)
+            target_names = ak_name_fallback_variants(org.organization_name)
+            if query_name and query_name not in target_names:
+                target_names.insert(0, query_name)
+            print_link = find_ak_print_link(ak_page, org, target_names=target_names)
             if not print_link:
-                if artifacts_dir and idx == len(AK_YEARS_TO_TRY) - 1:
-                    save_artifacts(ak_page, artifacts_dir, "AK", org.organization_name)
-                continue
+                if artifacts_dir and artifact_suffix:
+                    save_artifacts(ak_page, artifacts_dir, "AK", f"{org.organization_name}_{artifact_suffix}")
+                return None
 
             accounting_year_end = read_ak_accounting_year_from_pdf(ak_page, ak_context, print_link)
             result.status, result.raw_status_text, result.source_note = classify_ak_registration_year(
                 year,
                 accounting_year_end,
             )
+            if query_name and not use_ein:
+                result.source_note = f"{result.source_note}; matched using generated name variant '{query_name}' after FEIN search returned no row"
             result.success = True
             if artifacts_dir:
                 save_artifacts(ak_page, artifacts_dir, "AK", org.organization_name)
             return result
+        finally:
+            ak_context.close()
+
+    first_ein_years = AK_YEARS_TO_TRY[:AK_EIN_FIRST_YEARS]
+    remaining_ein_years = AK_YEARS_TO_TRY[AK_EIN_FIRST_YEARS:]
+
+    for idx, year in enumerate(first_ein_years):
+        try:
+            matched = run_ak_query(
+                year,
+                use_ein=True,
+                artifact_suffix="ein_no_match" if not remaining_ein_years and idx == len(first_ein_years) - 1 else "",
+            )
+            if matched:
+                return matched
         except Exception as e:
             result.error = f"AK error: {e}"
             continue
-        finally:
-            ak_context.close()
+
+    fallback_variants = ak_name_fallback_variants(org.organization_name)
+    fallback_years = AK_YEARS_TO_TRY[:AK_NAME_FALLBACK_YEARS]
+    for variant in fallback_variants:
+        if time.perf_counter() - started >= AK_LOOKUP_MAX_SECONDS:
+            break
+        for year in fallback_years:
+            if time.perf_counter() - started >= AK_LOOKUP_MAX_SECONDS:
+                break
+            try:
+                matched = run_ak_query(year, query_name=variant, use_ein=False)
+                if matched:
+                    return matched
+            except Exception as e:
+                result.error = f"AK name fallback error: {e}"
+                continue
+
+    for idx, year in enumerate(remaining_ein_years):
+        if time.perf_counter() - started >= AK_LOOKUP_MAX_SECONDS:
+            break
+        try:
+            matched = run_ak_query(
+                year,
+                use_ein=True,
+                artifact_suffix="ein_no_match" if idx == len(remaining_ein_years) - 1 else "",
+            )
+            if matched:
+                return matched
+        except Exception as e:
+            result.error = f"AK error: {e}"
+            continue
 
     if result.error:
         return result
