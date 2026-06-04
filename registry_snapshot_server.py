@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.04.152-staging"
+APP_VERSION = "2026.06.04.153-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -188,8 +188,8 @@ SC_NAME_VARIANT_MAX_SECONDS = max(12.0, float(os.environ.get("CE_SC_NAME_VARIANT
 NAME_SEARCH_VARIANT_MAX_SECONDS = max(18.0, float(os.environ.get("CE_NAME_SEARCH_VARIANT_MAX_SECONDS", "35")))
 CT_NAME_VARIANT_MAX_SECONDS = min(max(10.0, float(os.environ.get("CE_CT_NAME_VARIANT_MAX_SECONDS", "24"))), 35.0)
 CT_NAME_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_CT_NAME_VARIANT_LIMIT", "8"))), 12)
-CT_DIRECT_TIMEOUT_SECONDS = min(max(6.0, float(os.environ.get("CE_CT_DIRECT_TIMEOUT_SECONDS", "8"))), 12.0)
-CT_DIRECT_MAX_SECONDS = min(max(6.0, float(os.environ.get("CE_CT_DIRECT_MAX_SECONDS", "14"))), 22.0)
+CT_DIRECT_TIMEOUT_SECONDS = min(max(6.0, float(os.environ.get("CE_CT_DIRECT_TIMEOUT_SECONDS", "10"))), 12.0)
+CT_DIRECT_MAX_SECONDS = min(max(6.0, float(os.environ.get("CE_CT_DIRECT_MAX_SECONDS", "20"))), 22.0)
 MN_NAME_FALLBACK_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_MN_NAME_FALLBACK_MAX_SECONDS", "18"))), 30.0)
 MN_NAME_FALLBACK_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_MN_NAME_FALLBACK_MAX_VARIANTS", "4"))), 10)
 FL_CHECK_A_CHARITY_URL = "https://csapp.fdacs.gov/CSPublicApp/CheckACharity/CheckACharity.aspx"
@@ -5408,13 +5408,25 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
 
 def ct_prioritized_name_variants(original_name: str, variants: list[str]) -> list[str]:
     prioritized: list[str] = []
+    seen: set[str] = set()
 
     def add(value: str) -> None:
         cleaned = re.sub(r"\s+", " ", (value or "").strip(" ,;-"))
-        if cleaned and cleaned.lower() not in {item.lower() for item in prioritized}:
+        key = cleaned.lower()
+        if cleaned and key not in seen:
+            seen.add(key)
             prioritized.append(cleaned)
 
     base = re.sub(r"\s+", " ", (original_name or "").strip())
+    add(base)
+    if "&" in base:
+        add(re.sub(r"\s*&\s*", " and ", base))
+    if re.search(r"\band\b", base, re.I):
+        add(re.sub(r"\band\b", "&", base, flags=re.I))
+    if re.search(r"['\u2019]", base):
+        add(re.sub(r"['\u2019]", "", base))
+    no_punctuation_base = re.sub(r"[^\w\s&]", " ", base)
+    add(no_punctuation_base)
     if re.search(r"[-\u2010-\u2015]", base):
         hyphen_as_space = re.sub(r"[-\u2010-\u2015]+", " ", base)
         hyphen_as_space = re.sub(r"\s+", " ", hyphen_as_space).strip()
@@ -5433,9 +5445,6 @@ def ct_prioritized_name_variants(original_name: str, variants: list[str]) -> lis
                 add(f"{without_suffix} {legal}")
                 add(f"{without_suffix}, {legal}")
         add(without_suffix)
-        add(base)
-    else:
-        add(base)
     for variant in variants:
         add(variant)
     return prioritized
@@ -5464,6 +5473,8 @@ def search_ct_direct(org):
     best_score = -10000
     saw_zero_results = False
     last_error = ""
+    attempted_variants = 0
+    completed_variants = 0
     session = None
     fields = None
     headers = None
@@ -5471,6 +5482,7 @@ def search_ct_direct(org):
         remaining = deadline - time.perf_counter()
         if remaining <= 1.5:
             break
+        attempted_variants += 1
         try:
             attempt_timeout = min(CT_DIRECT_TIMEOUT_SECONDS, max(4.0, remaining - 1.0))
             if session is None or fields is None or headers is None:
@@ -5482,6 +5494,7 @@ def search_ct_direct(org):
             fields = None
             headers = None
             continue
+        completed_variants += 1
         if re.search(r"Showing\s+0\s+result", body, re.I):
             saw_zero_results = True
             continue
@@ -5497,7 +5510,8 @@ def search_ct_direct(org):
             return best_result
     if best_result:
         return best_result
-    if saw_zero_results:
+    exhausted_budget = time.perf_counter() >= deadline - 0.25
+    if not last_error and not exhausted_budget and completed_variants >= len(variants):
         return checker.StateResult(
             original_name,
             org.ein,
@@ -5505,12 +5519,15 @@ def search_ct_direct(org):
             checker.STATUS_NOT_REGISTERED,
             url,
             raw_status_text="No matching organization record",
-            source_note="Connecticut public registry AJAX search returned no matching public-charity row for the generated name variants.",
+            source_note="Connecticut public registry AJAX search returned no safely matching public-charity row for the generated name variants.",
             success=True,
         )
     result = checker.StateResult(original_name, org.ein, "CT", "Site Not Reachable", url)
     result.raw_status_text = "Connecticut direct registry lookup could not be completed"
-    result.source_note = "Connecticut public registry AJAX lookup did not return a usable response."
+    if saw_zero_results and (exhausted_budget or attempted_variants < len(variants)):
+        result.source_note = "Connecticut public registry AJAX lookup ended before all prioritized name variants could be checked."
+    else:
+        result.source_note = "Connecticut public registry AJAX lookup did not return a usable response."
     result.error = last_error
     result.success = False
     return result
@@ -5702,16 +5719,11 @@ def search_ct(page, org):
     if best_result:
         return best_result
     if time.perf_counter() >= deadline:
-        return checker.StateResult(
-            original_name,
-            org.ein,
-            "CT",
-            checker.STATUS_NOT_REGISTERED,
-            url,
-            raw_status_text="No matching organization record within bounded CT lookup window",
-            source_note="Connecticut public registry lookup reached the bounded lookup window without a safely matching organization row.",
-            success=True,
-        )
+        result = checker.StateResult(original_name, org.ein, "CT", "Site Not Reachable", url)
+        result.raw_status_text = "Connecticut lookup reached the bounded lookup window"
+        result.source_note = "Connecticut public registry lookup reached the bounded lookup window before all prioritized name variants could be checked."
+        result.success = False
+        return result
     if last_error:
         result = checker.StateResult(original_name, org.ein, "CT", "Site Not Reachable", url)
         result.raw_status_text = "Connecticut lookup could not be completed"
@@ -9456,13 +9468,25 @@ def repair_ny_not_registered_with_due_date(org, result):
     if public_status(result) != "Not Registered":
         return result
     registry_name = clean_registry_name(getattr(result, "matched_registry_name", "") or "")
-    if not registry_name or not registry_name_is_safe_for_org(registry_name, org.organization_name, org.ein):
-        return result
-    text = " ".join(part for part in [
+    identifier = getattr(result, "matched_registry_identifier", "") or ""
+    evidence_text = " ".join(part for part in [
+        registry_name,
+        identifier,
         getattr(result, "raw_status_text", "") or "",
         getattr(result, "source_note", "") or "",
-    ])
-    due_match = re.search(r"\bDue\s*:?\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})", text, re.I)
+    ] if part)
+    requested_ein = re.sub(r"\D", "", getattr(org, "ein", "") or "")
+    evidence_digits = re.sub(r"\D", "", evidence_text)
+    safe_identity = bool(
+        registry_name
+        and (
+            registry_name_is_safe_for_org(registry_name, org.organization_name, org.ein)
+            or (requested_ein and requested_ein in evidence_digits)
+        )
+    )
+    if not safe_identity:
+        return result
+    due_match = re.search(r"\bDue\s*:?\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})", evidence_text, re.I)
     if not due_match:
         return result
     due_date = parse_due_date(due_match.group(1))
@@ -9489,6 +9513,22 @@ def labeled_due_dates_from_text(text: str) -> list[date]:
             if parsed:
                 dates.append(parsed)
     return dates
+
+
+def ak_next_filing_due_from_result(result) -> date | None:
+    text = " ".join([
+        getattr(result, "raw_status_text", "") or "",
+        getattr(result, "source_note", "") or "",
+    ])
+    match = re.search(
+        r"\b(?:next\s+filing\s+due|annual\s+filing\s+deadline)\s*:?\s*"
+        r"(September\s+1,\s+20\d{2}|9/1/20\d{2}|09/01/20\d{2})",
+        text,
+        re.I,
+    )
+    if not match:
+        return None
+    return parse_due_date(match.group(1))
 
 
 def explicit_registry_date(result, body: str) -> date | None:
@@ -9822,6 +9862,10 @@ def true_status_from_body(result, body: str) -> str:
         _, effective_report_due = nh_effective_report_due_date(result, body)
         if effective_report_due:
             return status_from_calendar_date(effective_report_due)
+    if state == "AK":
+        ak_next_due = ak_next_filing_due_from_result(result)
+        if ak_next_due:
+            return status_from_calendar_date(ak_next_due)
     if state == "SC" and re.search(r"^\s*Registered\b", " ".join([result.status or "", result.raw_status_text or ""]), re.I):
         registry_date = explicit_registry_date(result, combined)
         return status_from_calendar_date(registry_date) if registry_date else "Current"
@@ -10097,6 +10141,10 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
     if normalized_status == "delinquent" and state == "VA" and re.search(r"not\s+authorized\s+to\s+solicit", " ".join([result.status or "", result.raw_status_text or "", result.source_note or ""]), re.I):
         return "The VA public registry shows the organization is not authorized to solicit in Virginia, which CharityClarity treats as Delinquent."
     if state == "AK" and normalized_status in {"upcoming filing", "current", "delinquent"}:
+        ak_next_due = ak_next_filing_due_from_result(result)
+        if ak_next_due:
+            timing = "within 6 months" if normalized_status == "upcoming filing" else ("overdue" if normalized_status == "delinquent" else "not within the next 6 months")
+            return f"The AK public registry shows the next Alaska charitable registration renewal is due {format_date(ak_next_due)}, which is {timing}."
         registry_date = explicit_registry_date(result, body)
         if registry_date:
             timing = "within 6 months" if normalized_status == "upcoming filing" else ("overdue" if normalized_status == "delinquent" else "not within the next 6 months")

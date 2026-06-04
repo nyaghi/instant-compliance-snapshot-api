@@ -14,7 +14,7 @@ import http.cookiejar
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, asdict
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import List, Optional, Set
 from urllib.parse import quote, urljoin
@@ -366,7 +366,13 @@ def extract_ak_accounting_end_year(pdf_text: str) -> Optional[int]:
 def classify_ak_registration_year(registration_year: int, accounting_year_end: Optional[int] = None):
     due_year = registration_year + 1
     expiration_date = date(due_year, 9, 1)
-    status = status_from_due_date(expiration_date)
+    today = date.today()
+    if expiration_date < today:
+        status = STATUS_DELINQUENT
+    elif expiration_date <= today + timedelta(days=183):
+        status = STATUS_UPCOMING
+    else:
+        status = STATUS_CURRENT
     raw_status_text = f"{registration_year} registration found; next filing due September 1, {due_year}"
     accounting_note = ""
     if accounting_year_end is not None:
@@ -377,10 +383,15 @@ def classify_ak_registration_year(registration_year: int, accounting_year_end: O
             f"{registration_year} Alaska registration found; September 1, {due_year} annual filing deadline "
             f"has passed as of the run date{accounting_note}"
         )
+    elif status == STATUS_UPCOMING:
+        source_note = (
+            f"{registration_year} Alaska registration found; September 1, {due_year} annual filing deadline "
+            f"is within 6 months of the run date{accounting_note}"
+        )
     else:
         source_note = (
             f"{registration_year} Alaska registration found; September 1, {due_year} annual filing deadline "
-            f"has not yet passed as of the run date{accounting_note}"
+            f"is not within 6 months of the run date{accounting_note}"
         )
     return status, raw_status_text, source_note
 
