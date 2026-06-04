@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.03.146-staging"
+APP_VERSION = "2026.06.03.147-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -231,7 +231,7 @@ BATCH_ISOLATED_STATE_ORDER = [
 BATCH_ISOLATED_STATES = set(BATCH_ISOLATED_STATE_ORDER)
 BATCH_ISOLATED_WORKERS = min(max(1, int(os.environ.get("CE_BATCH_ISOLATED_WORKERS", "2"))), 12)
 BATCH_STATE_LOOKUP_TIMEOUT_SECONDS = min(
-    max(55.0, float(os.environ.get("CE_BATCH_STATE_LOOKUP_TIMEOUT_SECONDS", "68"))),
+    max(55.0, float(os.environ.get("CE_BATCH_STATE_LOOKUP_TIMEOUT_SECONDS", "88"))),
     90.0,
 )
 BATCH_FANOUT_SINGLE_STATE_LOOKUPS = os.environ.get("CE_BATCH_FANOUT_SINGLE_STATE_LOOKUPS", "0").strip().lower() in {"1", "true", "yes"}
@@ -6556,6 +6556,39 @@ def ak_name_fallback_variants(original_name: str, ein: str = "") -> list[str]:
         if cleaned.lower() not in {existing.lower() for existing in variants}:
             variants.append(cleaned)
 
+    def add_internal_hyphen_variants(value: str) -> None:
+        words = re.findall(r"[A-Za-z0-9&']+", value or "")
+        if len(words) < 3:
+            return
+        # Prefer non-leading internal joins first: "Sloan-Kettering" is much
+        # more likely to be a registry spelling than "Memorial-Sloan".
+        for index in range(1, len(words) - 1):
+            add(" ".join(words[:index] + [f"{words[index]}-{words[index + 1]}"] + words[index + 2:]))
+        add(" ".join([f"{words[0]}-{words[1]}"] + words[2:]))
+
+    def add_suffix_reductions(value: str) -> None:
+        cleaned = re.sub(r"\s+", " ", (value or "").strip())
+        suffixes = [
+            "national medical center",
+            "medical center",
+            "hospital center",
+            "hospital",
+            "foundation",
+            "incorporated",
+            "inc",
+        ]
+        for suffix in suffixes:
+            match = re.search(rf"\s+{re.escape(suffix)}\.?$", cleaned, re.I)
+            if match:
+                add(cleaned[: match.start()])
+
+    def add_light_preposition_reduction(value: str) -> None:
+        words = re.findall(r"[A-Za-z0-9&']+", value or "")
+        if len(words) >= 4:
+            reduced = " ".join(word for word in words if word.lower() not in {"of", "for"})
+            if reduced and reduced.lower() != re.sub(r"\s+", " ", value or "").strip().lower():
+                add(reduced)
+
     for alias in known_names_for_ein(ein):
         if compatible_ein_alias_for_name(original_name, alias):
             alias_words = normalized_match_name(alias).split()
@@ -6565,6 +6598,9 @@ def ak_name_fallback_variants(original_name: str, ein: str = "") -> list[str]:
                 add(rest)
             add(alias)
     add(original_name)
+    add_internal_hyphen_variants(original_name)
+    add_suffix_reductions(original_name)
+    add_light_preposition_reduction(original_name)
     for variant in organization_name_variants(
         original_name,
         ein,
@@ -6573,12 +6609,12 @@ def ak_name_fallback_variants(original_name: str, ein: str = "") -> list[str]:
         include_compact_legal_suffixes=True,
         include_leading_article_variants=True,
         include_broad_query_prefixes=False,
-        include_institutional_reductions=False,
+        include_institutional_reductions=True,
     ):
         add(variant)
-        if len(variants) >= 4:
+        if len(variants) >= 8:
             break
-    return variants[:4]
+    return variants[:8]
 
 
 def ak_row_has_wrong_ein(row_text: str, expected_ein: str) -> bool:
@@ -6834,9 +6870,11 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
         if not checker.open_ak_public_search(ak_page):
             result.error = "Could not open Alaska Public Search form"
             return result, ""
+        first_ein_years = years_to_try[:2]
+        remaining_ein_years = years_to_try[2:]
         for search_name in search_names or [original_name]:
             lookup_org = org_with_name(org, search_name)
-            for year in years_to_try:
+            for year in first_ein_years:
                 page_body = ""
                 try:
                     fill_ak_search_form_ein_fast(ak_page, lookup_org, year)
@@ -6894,7 +6932,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                     except Exception:
                         pass
                     continue
-        name_deadline = time.perf_counter() + 26.0
+        name_deadline = time.perf_counter() + 54.0
         name_fallback_years = list(range(date.today().year, max(2018, date.today().year - 5), -1))
         for search_name in ak_name_fallback_variants(original_name, org.ein):
             lookup_org = org_with_name(org, search_name)
@@ -6958,6 +6996,47 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                     return result, page_body
                 except Exception as e:
                     result.error = f"AK name fallback error: {e}"
+                    try:
+                        checker.open_ak_public_search(ak_page)
+                    except Exception:
+                        pass
+                    continue
+        for search_name in search_names or [original_name]:
+            lookup_org = org_with_name(org, search_name)
+            for year in remaining_ein_years:
+                if time.perf_counter() >= name_deadline:
+                    break
+                page_body = ""
+                try:
+                    fill_ak_search_form_ein_fast(ak_page, lookup_org, year)
+                    print_link = find_ak_print_link_relaxed(ak_page, lookup_org)
+                    page_body = registry_page_body(ak_page)
+                    if not print_link:
+                        continue
+                    row_text = re.sub(r"\s+", " ", (print_link.get("rowText") or "")).strip() if isinstance(print_link, dict) else ""
+                    last_year_on_record = ak_last_year_from_print_row(print_link, row_text)
+                    if ak_row_has_wrong_ein(row_text, org.ein):
+                        continue
+                    if row_text:
+                        row_name = ak_registry_name_from_print_row(print_link, row_text, original_name, org.ein)
+                        if row_name and registry_name_is_safe_for_org(row_name, original_name, org.ein):
+                            result.matched_registry_name = row_name
+                            result.matched_registry_identifier = ak_registry_identifier_from_print_row(print_link, row_text)
+                        elif row_name:
+                            continue
+                    apply_ak_registration_status_from_best_evidence(
+                        result,
+                        ak_page,
+                        ak_context,
+                        print_link,
+                        original_name,
+                        year,
+                        getattr(result, "source_note", "") or "",
+                        last_year_on_record or year,
+                    )
+                    return result, page_body
+                except Exception as e:
+                    result.error = f"AK error: {e}"
                     try:
                         checker.open_ak_public_search(ak_page)
                     except Exception:
@@ -12511,7 +12590,20 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 ]
             browser = p.chromium.launch(headless=True, **launch_kwargs)
             if state == "AK":
-                result, body = search_ak_with_registration_evidence(browser, org, artifact_name)
+                result = checker.search_ak(browser, org)
+                if public_status(result) not in {"Not Registered", "Site Not Reachable"} and not (result.matched_registry_name or "").strip():
+                    variant_match = re.search(r"variant\s+'([^']+)'", result.source_note or "", re.I)
+                    result.matched_registry_name = (
+                        variant_match.group(1).strip()
+                        if variant_match
+                        else re.sub(r"\s+", " ", organization_name or org.organization_name).strip()
+                    )
+                body = " ".join(part for part in [
+                    result.raw_status_text or "",
+                    result.source_note or "",
+                    result.matched_registry_name or "",
+                    result.matched_registry_identifier or "",
+                ]).strip()
             else:
                 context_kwargs = {"user_agent": BROWSER_USER_AGENT, "locale": "en-US"}
                 if state == "AR":
