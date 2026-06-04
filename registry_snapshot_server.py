@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.04.153-staging"
+APP_VERSION = "2026.06.04.154-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -2747,6 +2747,8 @@ def compatible_ein_alias_for_name(original_name: str, alias_name: str) -> bool:
 
     if alias in original or original in alias:
         shorter_words = alias_words if len(alias_words) <= len(original_words) else original_words
+        if alias in original and len(alias_words) <= 3 and len(original_words) - len(alias_words) >= 2:
+            return False
         if len(shorter_words) >= 3:
             return True
         # Allow established two-word fund aliases while
@@ -2862,7 +2864,20 @@ def organization_match_target_variants(name: str, ein: str = "") -> list[str]:
                 include_broad_query_prefixes=False,
                 include_institutional_reductions=False,
             ))
-    return variants or [name]
+    original_norm = normalized_match_name(name)
+    original_tokens = original_norm.split()
+    filtered: list[str] = []
+    for variant in variants or [name]:
+        variant_norm = normalized_match_name(variant)
+        variant_tokens = variant_norm.split()
+        if (
+            len(original_tokens) >= 5
+            and len(variant_tokens) <= 2
+            and original_norm.startswith(variant_norm)
+        ):
+            continue
+        filtered.append(variant)
+    return filtered or [name]
 
 
 def connector_light_name_variants(name: str) -> list[str]:
@@ -3023,6 +3038,8 @@ def descriptor_entity_extension_match(original_name: str, registry_name: str) ->
             return safe_extra(registry_words[:-len(original_words)])
     if len(original_words) > len(registry_words):
         if original_words[: len(registry_words)] == registry_words:
+            if len(registry_words) <= 3 and len(original_words) - len(registry_words) >= 2:
+                return False
             return safe_extra(original_words[len(registry_words):])
         if original_words[-len(registry_words):] == registry_words:
             return safe_extra(original_words[:-len(registry_words)])
@@ -5056,7 +5073,11 @@ def target_name_score(row_name: str, targets: list[str]) -> int:
         elif single_plural_token_variant_match(row_norm, target_norm):
             best = max(best, 920)
         elif row_norm.startswith(target_norm) or target_norm.startswith(row_norm):
-            shorter = min(len(row_norm.split()), len(target_norm.split()))
+            row_tokens = row_norm.split()
+            target_tokens = target_norm.split()
+            if target_norm.startswith(row_norm) and len(row_tokens) <= 3 and len(target_tokens) - len(row_tokens) >= 2:
+                continue
+            shorter = min(len(row_tokens), len(target_tokens))
             if shorter >= 3:
                 best = max(best, 700 + shorter)
         elif target_norm in row_norm or row_norm in target_norm:
