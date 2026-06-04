@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.04.157-staging"
+APP_VERSION = "2026.06.04.158-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -11925,7 +11925,7 @@ def ar_transient_unreachable_result(result) -> bool:
         getattr(result, "source_note", "") or "",
         getattr(result, "error", "") or "",
     ])
-    if status == "Not Registered" and re.search(r"did not return usable results|not contain a usable charity row", text, re.I):
+    if status == "Not Registered" and re.search(r"did not return usable results", text, re.I):
         return True
     return bool(re.search(r"bot-verification|human verification|captcha|cloudfront|waf|challenge|block page|preflight", text, re.I))
 
