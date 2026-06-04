@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.04.155-staging"
+APP_VERSION = "2026.06.04.156-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -11601,6 +11601,20 @@ def search_ms_fast(page, org, navigate: bool = True):
             if expiration_date and not expiration_raw:
                 expiration_raw = fallback_expiration_raw
 
+        if (
+            not expiration_date
+            and re.search(r"\bcurrent\b|\bregistered\b", filing_status or "", re.I)
+        ):
+            result.status = "Site Not Reachable"
+            result.raw_status_text = f"{module.normalize_ms_filing_status(filing_status)} | Expiration Date not visible"
+            result.error = "Mississippi matched row but expiration date was not visible"
+            result.success = False
+            result.source_note = (
+                "Mississippi matched the organization row, but the detail page did not expose an expiration date. "
+                "CharityClarity did not make a final current/upcoming determination from the row status alone."
+            )
+            return result
+
         if not filing_status:
             result.status = module.STATUS_UNKNOWN
             result.raw_status_text = "Status not visible in matched Mississippi result"
@@ -12129,13 +12143,16 @@ def search_ar_precise(page, org):
 
 
 def ar_transient_unreachable_result(result) -> bool:
-    if public_status(result) != "Site Not Reachable":
+    status = public_status(result)
+    if status not in {"Site Not Reachable", "Not Registered"}:
         return False
     text = " ".join([
         getattr(result, "raw_status_text", "") or "",
         getattr(result, "source_note", "") or "",
         getattr(result, "error", "") or "",
     ])
+    if status == "Not Registered" and re.search(r"did not return usable results|not contain a usable charity row", text, re.I):
+        return True
     return bool(re.search(r"bot-verification|human verification|captcha|cloudfront|waf|challenge|block page|preflight", text, re.I))
 
 
@@ -12192,6 +12209,19 @@ def search_ar_serialized(page, org):
                 (last_result.source_note or "Arkansas public charity search was not usable from this runtime.")
                 + f" CharityClarity retried Arkansas {AR_TRANSIENT_RETRY_ATTEMPTS} time(s) with a serialized browser session before returning this result."
             )
+            if public_status(last_result) == "Not Registered" and re.search(
+                r"did not return usable results|not contain a usable charity row",
+                " ".join([last_result.raw_status_text or "", last_result.source_note or ""]),
+                re.I,
+            ):
+                last_result.status = "Site Not Reachable"
+                last_result.error = "AR transient no usable rows after retry"
+                last_result.raw_status_text = "Arkansas public charity search did not return usable rows after retry"
+                last_result.source_note = (
+                    "Arkansas public charity search was reachable, but the result table did not expose usable rows "
+                    "after a serialized retry; no no-record determination was made."
+                )
+                last_result.success = False
         return last_result
 
 
@@ -12393,6 +12423,23 @@ def search_wa_nm_state(org, state: str):
     external_org = module.Organization(organization_name=org.organization_name, ein=org.ein)
     if state == "WA":
         external_result = module.search_wa(external_org, show_process=False)
+        wa_raw = " ".join([
+            getattr(external_result, "raw_status_text", "") or "",
+            getattr(external_result, "source_note", "") or "",
+        ])
+        if (
+            external_status_to_checker_status(getattr(external_result, "status", "")) == checker.STATUS_UNKNOWN
+            and getattr(external_result, "matched_registry_name", "")
+            and re.search(r"Renewal\s+Date\s*:\s*CONTACT\s+INFORMATION|Status\s*:\s*No", wa_raw, re.I)
+        ):
+            external_result.status = "Site Not Reachable"
+            external_result.error = "Washington detail page did not expose a usable renewal/status section"
+            external_result.success = False
+            external_result.raw_status_text = "Washington detail page did not expose a usable renewal/status section"
+            external_result.source_note = (
+                "Washington returned a registry match, but the detail page exposed the contact-information section "
+                "instead of a usable renewal/status section; no final status determination was made."
+            )
     elif state == "NM":
         external_result = search_nm_status_history_fallback(org, module)
         if external_status_to_checker_status(getattr(external_result, "status", "")) == checker.STATUS_UNKNOWN:
