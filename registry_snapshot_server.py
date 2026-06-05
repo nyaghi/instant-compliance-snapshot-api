@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.05.161-staging"
+APP_VERSION = "2026.06.05.162-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -5279,10 +5279,10 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
         result.status = "Exempt"
     elif re.search(r"\b(non\W*compliant|not\s+in\s+compliance)\b", combined, re.I):
         result.status = checker.STATUS_DELINQUENT
+    elif exp_date and not re.search(r"\bCLOSED\b|\bWITHDRAWN\b|\bCANCEL(?:ED|LED)\b", " ".join([status_text, status_reason, credential_description]), re.I):
+        result.status = classify_expiration_date(exp_date)
     elif re.search(r"\bINACTIVE\b|\bCLOSED\b|\bWITHDRAWN\b|\bCANCEL(?:ED|LED)\b", " ".join([status_text, status_reason, credential_description]), re.I):
         result.status = "Closed / Withdrawn / Canceled"
-    elif exp_date:
-        result.status = classify_expiration_date(exp_date)
     elif re.search(r"\bACTIVE\b", status_text, re.I) and (not status_reason or re.search(r"\b(CURRENT|ACTIVE)\b", status_reason, re.I)):
         result.status = checker.STATUS_CURRENT
     elif re.search(r"\bCURRENT\b", combined, re.I):
@@ -5596,10 +5596,10 @@ def search_ct(page, org):
                 result.status = "Exempt"
             elif re.search(r"\b(non\W*compliant|not\s+in\s+compliance)\b", combined_detail, re.I):
                 result.status = checker.STATUS_DELINQUENT
+            elif exp_date and not re.search(r"\bCLOSED\b|\bWITHDRAWN\b|\bCANCEL(?:ED|LED)\b", status_text or combined_detail, re.I):
+                result.status = classify_expiration_date(exp_date)
             elif re.search(r"\bINACTIVE\b", status_text or combined_detail, re.I):
                 result.status = "Closed / Withdrawn / Canceled"
-            elif exp_date:
-                result.status = classify_expiration_date(exp_date)
             elif re.search(r"\bStatus\s+ACTIVE\b|\bStatus\s+Reason\s+CURRENT\b|\bACTIVE\s+Status\s+Reason\s+CURRENT\b", detail_text, re.I):
                 result.status = checker.STATUS_CURRENT
             else:
@@ -9794,11 +9794,13 @@ def true_status_from_body(result, body: str) -> str:
             result.raw_status_text or "",
             result.error or "",
         ])
-        if re.search(r"\b(inactive|closed|withdrawn|cancel(?:ed|led))\b", ct_status_fields, re.I):
-            return "Closed / Withdrawn / Canceled"
         ct_registry_date = explicit_registry_date(result, combined)
         if ct_registry_date and re.search(r"\bPUBLIC\s+CHARITY\b", result.raw_status_text or "", re.I):
             return status_from_calendar_date(ct_registry_date)
+        if re.search(r"\b(closed|withdrawn|cancel(?:ed|led))\b", ct_status_fields, re.I):
+            return "Closed / Withdrawn / Canceled"
+        if re.search(r"\binactive\b", ct_status_fields, re.I):
+            return "Closed / Withdrawn / Canceled"
         if re.search(r"\bStatus:\s*ACTIVE\b", ct_status_fields, re.I) and re.search(r"\bStatus Reason:\s*ACTIVE\b", ct_status_fields, re.I):
             return "Current"
     adverse_status = explicit_adverse_registry_status(result, combined)
@@ -10051,6 +10053,10 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
             return f"The NH public registry shows Good Standing with report due date {format_date(base_due)}, which is {timing}."
     if state == "SC" and normalized_status == "current" and re.search(r"^\s*Registered\b", " ".join([result.status or "", result.raw_status_text or ""]), re.I):
         return "The SC public registry shows the organization registration status as Registered. CharityClarity treats that as Current."
+    if state == "CT" and normalized_status == "delinquent":
+        registry_date = explicit_registry_date(result, body)
+        if registry_date:
+            return f"The CT public registry shows an expiration date of {format_date(registry_date)}, which is overdue."
     if state == "MD" and normalized_status == "current" and not context.get("represented_year"):
         return (
             "The MD public registry shows Registration Status: Current. CharityClarity did not identify a Maryland filing-year value "
@@ -12724,14 +12730,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
         lookup_started = time.perf_counter()
         reachable, preflight_note = quick_registry_preflight(FL_CHECK_A_CHARITY_URL, FL_PREFLIGHT_TIMEOUT_SECONDS)
         if not reachable:
-            result = fl_unavailable_fallback_result(org, preflight_note)
-            body = " ".join(part for part in [
-                result.raw_status_text or "",
-                result.source_note or "",
-                result.matched_registry_name or "",
-                result.matched_registry_identifier or "",
-            ]).strip()
-            return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
+            print(f"FL preflight did not respond; continuing to bounded browser lookup: {preflight_note}", flush=True)
 
     result = None
     lookup_started = time.perf_counter()
