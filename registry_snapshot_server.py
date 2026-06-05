@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.04.158-staging"
+APP_VERSION = "2026.06.04.159-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -3493,6 +3493,28 @@ def va_registry_status_from_detail(detail_text: str) -> str:
     return checker.STATUS_UNKNOWN
 
 
+def va_detail_confirms_requested_ein(detail_text: str, org) -> bool:
+    requested = canonical_ein_digits(getattr(org, "ein", "") or "")
+    if len(requested) != 9:
+        return False
+    return requested in re.sub(r"\D", "", detail_text or "")
+
+
+def va_expanded_other_name_matches_requested(alias: str, requested_name: str) -> bool:
+    alias_key = normalized_match_name(alias)
+    requested_key = normalized_match_name(requested_name)
+    if not alias_key or not requested_key:
+        return False
+    alias_words = alias_key.split()
+    requested_words = requested_key.split()
+    if len(requested_words) < 2 or len(alias_words) <= len(requested_words):
+        return False
+    if alias_words[-len(requested_words):] != requested_words:
+        return False
+    extra_words = alias_words[:-len(requested_words)]
+    return 1 <= len(extra_words) <= 2
+
+
 def search_va_direct(org):
     url = NAME_SEARCH_PREFLIGHT_URLS["VA"]
     variants = []
@@ -3552,17 +3574,22 @@ def search_va_direct(org):
             continue
 
         safe_links = []
+        identity_probe_links = []
         for href, link_text, identifier in links:
             if registry_name_is_safe_for_org(link_text, org.organization_name, org.ein) or short_acronym_prefix_registry_match(org.organization_name, link_text):
                 safe_links.append((target_name_score(link_text, targets), href, link_text, identifier))
             elif not best_rejected_name:
                 best_rejected_name = link_text
+                identity_probe_links.append((-1, href, link_text, identifier))
+            elif len(identity_probe_links) < 3:
+                identity_probe_links.append((-1, href, link_text, identifier))
 
-        if not safe_links:
+        candidate_links = safe_links + identity_probe_links
+        if not candidate_links:
             continue
 
         accepted_details = []
-        for order_index, (_, href, link_text, identifier) in enumerate(sorted(safe_links, key=lambda item: item[0], reverse=True)):
+        for order_index, (_, href, link_text, identifier) in enumerate(sorted(candidate_links, key=lambda item: item[0], reverse=True)):
             detail_url = urljoin(url, href)
             try:
                 detail_html = va_direct_request(detail_url, timeout_seconds=16.0)
@@ -3572,9 +3599,18 @@ def search_va_direct(org):
 
             detail_text = va_html_to_text(detail_html)
             primary_name = va_labeled_value(detail_text, "Primary Name") or link_text
+            other_names = va_labeled_value(detail_text, "Other Names")
+            detail_ein_match = va_detail_confirms_requested_ein(detail_text, org)
+            expanded_alias_match = any(
+                va_expanded_other_name_matches_requested(alias, org.organization_name)
+                for alias in re.split(r"\s*(?:;|\||/|, aka | aka | dba | doing business as | also soliciting as )\s*", other_names or "", flags=re.I)
+                if alias.strip()
+            )
             if primary_name and not (
                 registry_name_is_safe_for_org(primary_name, org.organization_name, org.ein)
                 or short_acronym_prefix_registry_match(org.organization_name, primary_name)
+                or detail_ein_match
+                or expanded_alias_match
             ):
                 best_rejected_name = primary_name
                 continue
@@ -3601,7 +3637,10 @@ def search_va_direct(org):
                 "raw_status": raw_status,
                 "status": va_registry_status_from_detail(detail_text),
                 "primary_name": primary_name,
+                "display_name": other_names if expanded_alias_match and other_names else primary_name,
                 "identifier": identifier,
+                "detail_ein_match": detail_ein_match,
+                "expanded_alias_match": expanded_alias_match,
             })
 
         if accepted_details:
@@ -3611,8 +3650,15 @@ def search_va_direct(org):
             )
             result = checker.StateResult(org.organization_name, org.ein, "VA", selected["status"], selected["detail_url"])
             result.raw_status_text = selected["raw_status"]
-            result.source_note = "Virginia public registry was searched directly by name; when multiple safe same-name links existed, CharityClarity selected the most recent accepted detail record."
-            result.matched_registry_name = selected["primary_name"]
+            result.source_note = (
+                "Virginia public registry was searched directly by name; when multiple accepted links existed, "
+                "CharityClarity selected the most recent accepted detail record."
+            )
+            if selected.get("detail_ein_match"):
+                result.source_note += " The selected Virginia detail page exposed the requested EIN, so CharityClarity accepted the identity even though the visible registry name was an expanded form."
+            if selected.get("expanded_alias_match"):
+                result.source_note += " The selected Virginia detail listed an Other Names alias that expands the requested organization name."
+            result.matched_registry_name = selected.get("display_name") or selected["primary_name"]
             result.matched_registry_identifier = selected["identifier"]
             result.success = True
             return result
@@ -9242,6 +9288,12 @@ def repair_ny_not_registered_with_due_date(org, result):
     if public_status(result) != "Not Registered":
         return result
     registry_name = clean_registry_name(getattr(result, "matched_registry_name", "") or "")
+    registry_identity_name = re.split(
+        r"\b(?:Registration\s+type|Registration\s+category|Federal\s+tax\s+ID|County)\b",
+        registry_name,
+        maxsplit=1,
+        flags=re.I,
+    )[0].strip()
     identifier = getattr(result, "matched_registry_identifier", "") or ""
     evidence_text = " ".join(part for part in [
         registry_name,
@@ -9255,10 +9307,19 @@ def repair_ny_not_registered_with_due_date(org, result):
         registry_name
         and (
             registry_name_is_safe_for_org(registry_name, org.organization_name, org.ein)
+            or (registry_identity_name and registry_name_is_safe_for_org(registry_identity_name, org.organization_name, org.ein))
             or (requested_ein and requested_ein in evidence_digits)
         )
     )
     if not safe_identity:
+        return result
+    if re.search(r"\bNo\s+filings?\s+found\b", evidence_text, re.I):
+        result.status = checker.STATUS_DELINQUENT
+        result.source_note = " ".join(part for part in [
+            getattr(result, "source_note", "") or "",
+            "New York returned a safe matching organization row but no annual filings were exposed; CharityClarity treats the non-exempt matched record as Delinquent.",
+        ]).strip()
+        result.success = True
         return result
     due_match = re.search(r"\bDue\s*:?\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})", evidence_text, re.I)
     if not due_match:
@@ -12513,7 +12574,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             result.success = False
         if result is not None and public_status(result) == "Not Registered":
             direct_result = search_wi(None, org)
-            if public_status(direct_result) != "Not Registered":
+            if public_status(direct_result) not in {"Not Registered", "Site Not Reachable"}:
                 result = direct_result
         if result is not None and public_status(result) == "Not Registered":
             result = search_wi_with_separator_retries(org, result)
@@ -12717,7 +12778,8 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     result.matched_registry_identifier or "",
                 ]).strip()
             elif state == "NY":
-                ny_has_ein = bool(checker.digits_only(org.ein))
+                requested_ein = canonical_ein_digits(org.ein)
+                ny_has_ein = bool(requested_ein)
                 if ny_has_ein:
                     result = checker.search_ny(page, org)
                 else:
@@ -12741,6 +12803,33 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                         re.I,
                     )
                 )
+                if clean_ny_ein_no_result and org.organization_name.strip():
+                    name_only_org = checker.Organization(organization_name=org.organization_name, ein="")
+                    if hasattr(name_only_org, "original_ein"):
+                        name_only_org.original_ein = org.ein
+                    name_only_result = search_with_name_variants(
+                        page,
+                        name_only_org,
+                        checker.search_ny,
+                        max_variants=10,
+                        max_elapsed_seconds=min(max(NAME_SEARCH_VARIANT_MAX_SECONDS, 34.0), 44.0),
+                    )
+                    name_only_evidence = " ".join(part for part in [
+                        getattr(name_only_result, "matched_registry_name", "") or "",
+                        getattr(name_only_result, "matched_registry_identifier", "") or "",
+                        getattr(name_only_result, "raw_status_text", "") or "",
+                        getattr(name_only_result, "source_note", "") or "",
+                    ])
+                    name_only_digits = re.sub(r"\D", "", name_only_evidence)
+                    name_only_exposes_ein = bool(re.search(r"\b(?:EIN|Federal\s+tax\s+ID|Tax\s+ID)\b", name_only_evidence, re.I))
+                    name_only_wrong_ein = bool(requested_ein and name_only_exposes_ein and requested_ein not in name_only_digits)
+                    if public_status(name_only_result) != "Not Registered" and not name_only_wrong_ein:
+                        name_only_result.ein = org.ein
+                        name_only_result.source_note = " ".join(part for part in [
+                            name_only_result.source_note or "",
+                            "New York exact-EIN search returned no results, so CharityClarity retried by generated organization-name variants.",
+                        ]).strip()
+                        result = name_only_result
                 if (
                     public_status(result) == "Not Registered"
                     and not clean_ny_ein_no_result
