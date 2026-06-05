@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.04.159-staging"
+APP_VERSION = "2026.06.05.160-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -4500,6 +4500,10 @@ def search_bundled_extension_state(page, org, state: str):
 
 def search_co_with_name_fallback(page, org):
     result = checker.search_co(page, org)
+    if public_status(result) == "Site Not Reachable":
+        api_result = co_api_fallback_result(org)
+        if api_result is not None:
+            return api_result
     if public_status(result) != "Not Registered":
         return result
     for variant in organization_name_variants(
@@ -4523,6 +4527,87 @@ def search_co_with_name_fallback(page, org):
                 + " CharityClarity used a name fallback after the EIN search returned no matching record."
             )
             return copy_name_fallback_result(org, fallback)
+    return result
+
+
+def co_api_fallback_result(org):
+    ein = canonical_ein_digits(getattr(org, "ein", ""))
+    if len(ein) != 9:
+        return None
+    formatted_ein = f"{ein[:2]}-{ein[2:]}"
+    params = urlencode({
+        "$limit": "10",
+        "$where": f"fein='{formatted_ein}'",
+        "$order": "registrationapproveddate DESC",
+    })
+    url = f"https://data.colorado.gov/resource/37wu-kn3g.json?{params}"
+    try:
+        request = urllib.request.Request(
+            url,
+            headers={"User-Agent": "ComplianceExpressRegistrySnapshot/1.0"},
+        )
+        with urllib.request.urlopen(request, timeout=18) as response:
+            rows = json.loads(response.read().decode("utf-8", errors="replace"))
+    except Exception:
+        return None
+    if not isinstance(rows, list) or not rows:
+        result = checker.StateResult(org.organization_name, format_ein(ein), "CO", checker.STATUS_NOT_REGISTERED, url)
+        result.raw_status_text = "No Colorado data.colorado.gov record found for this FEIN"
+        result.source_note = "Colorado's public search page was unavailable, so CharityClarity checked the official Colorado Information Marketplace registration dataset by FEIN."
+        result.success = True
+        return result
+
+    targets = organization_match_target_variants(org.organization_name, ein)
+    safe_rows = [
+        row for row in rows
+        if result_registry_name_is_safe(
+            SimpleNamespace(
+                matched_registry_name=row.get("name") or "",
+                matched_registry_identifier=row.get("entityid") or "",
+                raw_status_text=" ".join(str(row.get(key) or "") for key in ("currentstatus", "filingtype", "expirationdate")),
+            ),
+            org.organization_name,
+            ein,
+        )
+        or normalized_name(row.get("name") or "") in targets
+    ]
+    if not safe_rows:
+        result = checker.StateResult(org.organization_name, format_ein(ein), "CO", checker.STATUS_NOT_REGISTERED, url)
+        result.raw_status_text = "Colorado FEIN rows did not safely match the requested organization name"
+        result.source_note = "Colorado's public search page was unavailable, and the official dataset did not expose a safe registry-name match for this FEIN."
+        result.success = True
+        return result
+
+    row = safe_rows[0]
+    raw_status = str(row.get("currentstatus") or "").strip()
+    expiration = parse_due_date(str(row.get("expirationdate") or "").split("T", 1)[0])
+    if re.search(r"\b(suspend|revok|notice\s*\d*|may\s+not|not\s+authorized)\b", raw_status, re.I):
+        status = "Suspended"
+    elif re.search(r"\b(withdraw|cancel|closed)\b", raw_status, re.I):
+        status = "Closed / Withdrawn / Canceled"
+    elif re.search(r"\b(delinquent|expired|lapsed)\b", raw_status, re.I):
+        status = "Delinquent"
+    elif expiration is not None:
+        status = checker.status_from_due_date(expiration)
+    elif raw_status:
+        status = raw_status
+    else:
+        status = checker.STATUS_UNKNOWN
+
+    result = checker.StateResult(org.organization_name, format_ein(ein), "CO", status, url)
+    result.matched_registry_name = row.get("name") or ""
+    result.matched_registry_identifier = row.get("entityid") or row.get("documentid") or ""
+    raw_parts = []
+    if raw_status:
+        raw_parts.append(f"Current Status: {raw_status}")
+    if expiration is not None:
+        raw_parts.append(f"Expiration Date: {expiration.strftime('%m/%d/%Y')}")
+    if row.get("nextrenewalregistrationdate"):
+        renewal = parse_due_date(str(row.get("nextrenewalregistrationdate") or "").split("T", 1)[0])
+        raw_parts.append(f"Next Renewal: {renewal.strftime('%m/%d/%Y') if renewal else row.get('nextrenewalregistrationdate')}")
+    result.raw_status_text = " | ".join(raw_parts) or raw_status or "Colorado registration data row found"
+    result.source_note = "Colorado's public search page was unavailable, so CharityClarity used Colorado's official Information Marketplace registration dataset by FEIN."
+    result.success = True
     return result
 
 
