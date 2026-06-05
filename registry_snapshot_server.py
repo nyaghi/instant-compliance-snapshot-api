@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.05.163-staging"
+APP_VERSION = "2026.06.05.164-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -9796,13 +9796,13 @@ def true_status_from_body(result, body: str) -> str:
             result.raw_status_text or "",
             result.error or "",
         ])
-        ct_registry_date = explicit_registry_date(result, combined)
-        if ct_registry_date and re.search(r"\bPUBLIC\s+CHARITY\b", result.raw_status_text or "", re.I):
-            return status_from_calendar_date(ct_registry_date)
         if re.search(r"\b(closed|withdrawn|cancel(?:ed|led))\b", ct_status_fields, re.I):
             return "Closed / Withdrawn / Canceled"
         if re.search(r"\binactive\b", ct_status_fields, re.I):
             return "Closed / Withdrawn / Canceled"
+        ct_registry_date = explicit_registry_date(result, combined)
+        if ct_registry_date and re.search(r"\bPUBLIC\s+CHARITY\b", result.raw_status_text or "", re.I):
+            return status_from_calendar_date(ct_registry_date)
         if re.search(r"\bStatus:\s*ACTIVE\b", ct_status_fields, re.I) and re.search(r"\bStatus Reason:\s*ACTIVE\b", ct_status_fields, re.I):
             return "Current"
     adverse_status = explicit_adverse_registry_status(result, combined)
