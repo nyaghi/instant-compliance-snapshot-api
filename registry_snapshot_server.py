@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.05.162-staging"
+APP_VERSION = "2026.06.05.163-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -5275,14 +5275,15 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
     credential_match = re.search(r"\b[A-Z]{2,5}\.[0-9A-Z.-]+", combined)
     result.matched_registry_identifier = credential or (credential_match.group(0) if credential_match else "")
     exp_date = first_date_near_label(" ".join([row_text, detail_text]), ["Expiration Date", "Expiration", "Expires", "Expire Date"])
+    terminal_status_text = " ".join([status_text, status_reason, credential_description])
     if re.search(r"\bEXEMPT\b", " ".join([credential, credential_description]), re.I):
         result.status = "Exempt"
+    elif re.search(r"\bINACTIVE\b|\bCLOSED\b|\bWITHDRAWN\b|\bCANCEL(?:ED|LED)\b", terminal_status_text, re.I):
+        result.status = "Closed / Withdrawn / Canceled"
     elif re.search(r"\b(non\W*compliant|not\s+in\s+compliance)\b", combined, re.I):
         result.status = checker.STATUS_DELINQUENT
-    elif exp_date and not re.search(r"\bCLOSED\b|\bWITHDRAWN\b|\bCANCEL(?:ED|LED)\b", " ".join([status_text, status_reason, credential_description]), re.I):
+    elif exp_date:
         result.status = classify_expiration_date(exp_date)
-    elif re.search(r"\bINACTIVE\b|\bCLOSED\b|\bWITHDRAWN\b|\bCANCEL(?:ED|LED)\b", " ".join([status_text, status_reason, credential_description]), re.I):
-        result.status = "Closed / Withdrawn / Canceled"
     elif re.search(r"\bACTIVE\b", status_text, re.I) and (not status_reason or re.search(r"\b(CURRENT|ACTIVE)\b", status_reason, re.I)):
         result.status = checker.STATUS_CURRENT
     elif re.search(r"\bCURRENT\b", combined, re.I):
@@ -5592,14 +5593,15 @@ def search_ct(page, org):
             result.matched_registry_name = matched_name
             credential_match = re.search(r"\b[A-Z]{2,5}\.[0-9A-Z.-]+", " ".join([credential, row_text, detail_segment]))
             result.matched_registry_identifier = credential_match.group(0) if credential_match else (checker.extract_registry_identifier_from_text(detail_text, org.ein) if hasattr(checker, "extract_registry_identifier_from_text") else "")
+            terminal_status_text = " ".join([status_text, status_reason, credential_description, registration_type])
             if re.search(r"\bEXEMPT\b", " ".join([credential, credential_description, registration_type, row_text]), re.I):
                 result.status = "Exempt"
+            elif re.search(r"\bINACTIVE\b|\bCLOSED\b|\bWITHDRAWN\b|\bCANCEL(?:ED|LED)\b", terminal_status_text, re.I):
+                result.status = "Closed / Withdrawn / Canceled"
             elif re.search(r"\b(non\W*compliant|not\s+in\s+compliance)\b", combined_detail, re.I):
                 result.status = checker.STATUS_DELINQUENT
-            elif exp_date and not re.search(r"\bCLOSED\b|\bWITHDRAWN\b|\bCANCEL(?:ED|LED)\b", status_text or combined_detail, re.I):
+            elif exp_date:
                 result.status = classify_expiration_date(exp_date)
-            elif re.search(r"\bINACTIVE\b", status_text or combined_detail, re.I):
-                result.status = "Closed / Withdrawn / Canceled"
             elif re.search(r"\bStatus\s+ACTIVE\b|\bStatus\s+Reason\s+CURRENT\b|\bACTIVE\s+Status\s+Reason\s+CURRENT\b", detail_text, re.I):
                 result.status = checker.STATUS_CURRENT
             else:
