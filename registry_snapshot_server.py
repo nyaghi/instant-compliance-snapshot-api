@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.05.166-staging"
+APP_VERSION = "2026.06.05.167-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -7504,10 +7504,16 @@ def wi_reader_url(source_url: str) -> str:
     return f"{WI_READER_BASE_URL}{source_url}"
 
 
-def wi_reader_text(source_url: str) -> str:
+def wi_reader_text(source_url: str, no_cache: bool = False) -> str:
     for attempt in range(3):
         try:
-            request = urllib.request.Request(wi_reader_url(source_url), headers={"User-Agent": "Mozilla/5.0"})
+            headers = {
+                "User-Agent": "Mozilla/5.0 CharityClarity-WI/1.0",
+                "Accept": "text/markdown,text/plain,text/html;q=0.8,*/*;q=0.5",
+            }
+            if no_cache:
+                headers["X-No-Cache"] = "true"
+            request = urllib.request.Request(wi_reader_url(source_url), headers=headers)
             with urllib.request.urlopen(request, timeout=WI_READER_TIMEOUT_SECONDS) as response:
                 return response.read().decode("utf-8", errors="replace")
         except Exception:
@@ -7714,8 +7720,10 @@ def wi_search_names_for_org(org) -> list[str]:
             return (-2, word_rank, cleaned.lower())
         if exact_seed:
             return (-1, word_rank, cleaned.lower())
-        if has_safe_hyphen:
+        if not has_punctuation and not re.search(r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\b", cleaned, re.I):
             return (0, word_rank, cleaned.lower())
+        if has_safe_hyphen:
+            return (1, word_rank, cleaned.lower())
         compact = re.sub(r"[^A-Za-z0-9]+", "", cleaned)
         if 2 <= len(compact) <= 8 and compact.upper() == compact:
             if original_substantive_count > 3 and not exact_seed:
@@ -8206,6 +8214,13 @@ def wi_reader_search_best_match(search_names: list[str], target_names: list[str]
         if re.search(r"Organization Search Results|Search Parameters|Total Search Results", result_text or "", re.I):
             reader_reached = True
         best_match = wi_best_match_from_markdown(result_text, target_names, best_match)
+        if not best_match and time.perf_counter() < (deadline or float("inf")):
+            separator = "&" if "?" in source_url else "?"
+            fresh_source_url = f"{source_url}{separator}_cc_cache_bust={int(time.time())}"
+            fresh_text = wi_reader_text(fresh_source_url, no_cache=True)
+            if re.search(r"Organization Search Results|Search Parameters|Total Search Results", fresh_text or "", re.I):
+                reader_reached = True
+            best_match = wi_best_match_from_markdown(fresh_text, target_names, best_match)
     return best_match, reader_reached
 
 
