@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.05.167-staging"
+APP_VERSION = "2026.06.05.168-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -207,7 +207,7 @@ AR_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_AR_LOOKUP
 AR_TRANSIENT_RETRY_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_AR_TRANSIENT_RETRY_DELAY_SECONDS", "4.0"))), 20.0)
 AR_TRANSIENT_RETRY_ATTEMPTS = min(max(1, int(os.environ.get("CE_AR_TRANSIENT_RETRY_ATTEMPTS", "2"))), 3)
 AR_NAME_SEARCH_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_AR_NAME_SEARCH_MAX_VARIANTS", "5"))), 5)
-AR_NAME_SEARCH_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_AR_NAME_SEARCH_MAX_SECONDS", "22"))), 30.0)
+AR_NAME_SEARCH_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_AR_NAME_SEARCH_MAX_SECONDS", "30"))), 30.0)
 ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "1.0"))), 30.0)
 ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS = min(max(1, int(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS", "2"))), 4)
 ME_CONFIRM_NOT_REGISTERED = os.environ.get("CE_ME_CONFIRM_NOT_REGISTERED", "1").strip().lower() in {"1", "true", "yes"}
@@ -7505,7 +7505,7 @@ def wi_reader_url(source_url: str) -> str:
 
 
 def wi_reader_text(source_url: str, no_cache: bool = False) -> str:
-    for attempt in range(3):
+    for attempt in range(1):
         try:
             headers = {
                 "User-Agent": "Mozilla/5.0 CharityClarity-WI/1.0",
@@ -8214,13 +8214,6 @@ def wi_reader_search_best_match(search_names: list[str], target_names: list[str]
         if re.search(r"Organization Search Results|Search Parameters|Total Search Results", result_text or "", re.I):
             reader_reached = True
         best_match = wi_best_match_from_markdown(result_text, target_names, best_match)
-        if not best_match and time.perf_counter() < (deadline or float("inf")):
-            separator = "&" if "?" in source_url else "?"
-            fresh_source_url = f"{source_url}{separator}_cc_cache_bust={int(time.time())}"
-            fresh_text = wi_reader_text(fresh_source_url, no_cache=True)
-            if re.search(r"Organization Search Results|Search Parameters|Total Search Results", fresh_text or "", re.I):
-                reader_reached = True
-            best_match = wi_best_match_from_markdown(fresh_text, target_names, best_match)
     return best_match, reader_reached
 
 
