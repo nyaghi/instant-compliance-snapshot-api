@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.05.160-staging"
+APP_VERSION = "2026.06.05.161-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -193,7 +193,7 @@ CT_DIRECT_MAX_SECONDS = min(max(6.0, float(os.environ.get("CE_CT_DIRECT_MAX_SECO
 MN_NAME_FALLBACK_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_MN_NAME_FALLBACK_MAX_SECONDS", "18"))), 30.0)
 MN_NAME_FALLBACK_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_MN_NAME_FALLBACK_MAX_VARIANTS", "4"))), 10)
 FL_CHECK_A_CHARITY_URL = "https://csapp.fdacs.gov/CSPublicApp/CheckACharity/CheckACharity.aspx"
-FL_PREFLIGHT_TIMEOUT_SECONDS = min(max(2.0, float(os.environ.get("CE_FL_PREFLIGHT_TIMEOUT_SECONDS", "6"))), 12.0)
+FL_PREFLIGHT_TIMEOUT_SECONDS = min(max(2.0, float(os.environ.get("CE_FL_PREFLIGHT_TIMEOUT_SECONDS", "12"))), 12.0)
 FL_LOOKUP_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_FL_LOOKUP_MAX_SECONDS", "35"))), 45.0)
 FL_LOOKUP_LANES = min(max(1, int(os.environ.get("CE_FL_LOOKUP_LANES", "2"))), 4)
 FL_LOOKUP_ACQUIRE_SECONDS = min(max(1.0, float(os.environ.get("CE_FL_LOOKUP_ACQUIRE_SECONDS", "12"))), 30.0)
