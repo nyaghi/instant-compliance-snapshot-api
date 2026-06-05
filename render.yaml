@@ -95,6 +95,8 @@ services:
         value: "12"
       - key: CE_SC_NAME_VARIANT_MAX_SECONDS
         value: "25"
+      - key: CE_AR_NAME_SEARCH_MAX_SECONDS
+        value: "40"
       - key: CE_WI_BROWSER_VARIANT_LIMIT
         value: "0"
       - key: CE_WI_DIRECT_VARIANT_LIMIT

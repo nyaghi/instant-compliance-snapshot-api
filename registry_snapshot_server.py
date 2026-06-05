@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.05.169-staging"
+APP_VERSION = "2026.06.05.170-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -207,7 +207,7 @@ AR_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_AR_LOOKUP
 AR_TRANSIENT_RETRY_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_AR_TRANSIENT_RETRY_DELAY_SECONDS", "4.0"))), 20.0)
 AR_TRANSIENT_RETRY_ATTEMPTS = min(max(1, int(os.environ.get("CE_AR_TRANSIENT_RETRY_ATTEMPTS", "2"))), 3)
 AR_NAME_SEARCH_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_AR_NAME_SEARCH_MAX_VARIANTS", "8"))), 8)
-AR_NAME_SEARCH_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_AR_NAME_SEARCH_MAX_SECONDS", "30"))), 30.0)
+AR_NAME_SEARCH_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_AR_NAME_SEARCH_MAX_SECONDS", "40"))), 42.0)
 ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "1.0"))), 30.0)
 ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS = min(max(1, int(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS", "2"))), 4)
 ME_CONFIRM_NOT_REGISTERED = os.environ.get("CE_ME_CONFIRM_NOT_REGISTERED", "1").strip().lower() in {"1", "true", "yes"}
@@ -3010,6 +3010,7 @@ def descriptor_entity_extension_match(original_name: str, registry_name: str) ->
     descriptor_words = {
         "national", "international", "global", "worldwide", "world", "america",
         "medical", "center", "centre", "hospital", "health", "system",
+        "mount", "sinai",
     }
 
     def safe_extra(words: list[str]) -> bool:
@@ -3047,6 +3048,7 @@ def distinctive_entity_extension_mismatch(original_name: str, registry_name: str
     safe_descriptor_extension_words = {
         "national", "international", "global", "worldwide", "world", "america",
         "medical", "center", "centre", "hospital", "health", "system",
+        "mount", "sinai",
     }
 
     def acronym(words: list[str]) -> str:
@@ -7862,10 +7864,41 @@ def wi_snapshot_has_distinctive_leading_prefix(candidate: str, target: str) -> b
     return any(word not in generic_prefix_words for word in before.split())
 
 
+def wi_snapshot_canonical_name(value: str) -> str:
+    canonical = normalized_match_name(value)
+    if not canonical:
+        return ""
+    canonical = re.sub(r"\bst\b", "saint", canonical)
+    canonical = re.sub(r"\b([a-z]{3,})\s+s\b", r"\1s", canonical)
+    canonical = re.sub(r"\bhospital\s+center\b", "hospital", canonical)
+    canonical = re.sub(r"\bmedical\s+center\b", "medical", canonical)
+    return re.sub(r"\s+", " ", canonical).strip()
+
+
+def wi_snapshot_canonical_target_match(candidate: str, targets: list[str]) -> bool:
+    candidate_key = wi_snapshot_canonical_name(candidate)
+    if not candidate_key:
+        return False
+    for target in targets or []:
+        target_key = wi_snapshot_canonical_name(target)
+        if not target_key:
+            continue
+        if candidate_key == target_key:
+            return True
+        shorter = min(len(candidate_key.split()), len(target_key.split()))
+        if shorter >= 3 and (candidate_key.startswith(target_key) or target_key.startswith(candidate_key)):
+            return True
+        if shorter >= 4 and (target_key in candidate_key or candidate_key in target_key):
+            return True
+    return False
+
+
 def wi_snapshot_name_is_safe(candidate: str, targets: list[str], original_name: str, ein: str) -> bool:
     for target in targets or []:
         if wi_snapshot_has_distinctive_leading_prefix(candidate, target):
             return False
+    if wi_snapshot_canonical_target_match(candidate, targets):
+        return True
     if registry_name_is_safe_against_targets(candidate, targets, original_name, ein):
         return True
     return wi_contains_full_target_name(candidate, targets)
@@ -7878,6 +7911,8 @@ def wi_snapshot_record_match(record: dict, org, targets: list[str]) -> tuple[int
         if not wi_snapshot_name_is_safe(registry_name, targets, original_name, getattr(org, "ein", "")):
             continue
         priority = checker.name_match_priority_for_targets(registry_name, targets)
+        if wi_snapshot_canonical_target_match(registry_name, targets):
+            priority = max(priority, 5)
         full_target = wi_contains_full_target_name(registry_name, targets)
         if priority < 4 and not full_target:
             continue
@@ -9689,6 +9724,12 @@ def explicit_adverse_registry_status(result, body: str) -> str:
     status_evidence = " ".join([raw_fields, labeled_status_text])
     if result_explicitly_exempt(result):
         return ""
+    if state == "MS" and explicit_registry_date(result, text):
+        # Mississippi can show a Filing Status such as Closed/Withdrawn while
+        # still exposing an expiration date for the matched charitable record.
+        # In that case the dated filing window is more specific than the raw
+        # status label and should be handled by the MS date logic below.
+        return ""
     withdrawn_pattern = r"\b(withdrawn|retired|terminated|cancelled|canceled|voluntar(?:y|ily)\s+(?:deactivat(?:ed|ion)|surrender(?:ed)?))\b"
     closed_pattern = r"\bclosed\b"
     inactive_pattern = r"\binactive\b"
@@ -9815,6 +9856,10 @@ def true_status_from_body(result, body: str) -> str:
         return "Delinquent"
     if explicit_no_registration_status(result, combined):
         return "Not Registered"
+    if state == "MS":
+        ms_registry_date = explicit_registry_date(result, combined)
+        if ms_registry_date and not result_indicates_no_record(result):
+            return status_from_calendar_date(ms_registry_date)
     if state == "AR":
         ar_status = explicit_ar_registry_status(result)
         if ar_status:
@@ -9846,6 +9891,14 @@ def true_status_from_body(result, body: str) -> str:
             return status_from_calendar_date(ct_registry_date)
         if re.search(r"\bStatus:\s*ACTIVE\b", ct_status_fields, re.I) and re.search(r"\bStatus Reason:\s*ACTIVE\b", ct_status_fields, re.I):
             return "Current"
+    if state == "MD":
+        md_status_fields = " ".join([
+            result.status or "",
+            result.raw_status_text or "",
+            result.source_note or "",
+        ])
+        if re.search(r"\b(closed|inactive|withdrawn|cancel(?:ed|led)|terminated)\b", md_status_fields, re.I):
+            return "Closed / Withdrawn / Canceled"
     early_context = filing_context(result, body) if state == "MD" else None
     if state == "MD" and md_detail_page_matched(result, combined) and early_context:
         early_due_date = early_context["due_date"]
@@ -11418,6 +11471,8 @@ def ms_status_from_filing_status(filing_status: str, expiration_date: date | Non
     text = filing_status or ""
     if re.search(r"\bexempt(?:ed|ion)?\b", text, re.I):
         return "Exempt"
+    if expiration_date:
+        return status_from_calendar_date(expiration_date)
     if re.search(r"\b(closed|withdrawn|cancel(?:ed|led)|terminated|dissolved)\b", text, re.I):
         return "Closed / Withdrawn / Canceled"
     return classifier(filing_status, expiration_date)
