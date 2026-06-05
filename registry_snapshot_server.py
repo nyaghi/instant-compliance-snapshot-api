@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.05.165-staging"
+APP_VERSION = "2026.06.05.166-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -12072,10 +12072,16 @@ def search_ar_precise(page, org):
     best = None
     best_score = -10000
     reached = False
+    deadline = time.perf_counter() + AR_NAME_SEARCH_MAX_SECONDS
     for variant in variants[:AR_NAME_SEARCH_MAX_VARIANTS]:
+        remaining = deadline - time.perf_counter()
+        if remaining <= 2.0:
+            break
+        nav_timeout_ms = max(3000, min(12000, int(remaining * 1000)))
+        settle_timeout_ms = max(1000, min(2500, int(remaining * 500)))
         try:
-            page.goto(AR_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(500)
+            page.goto(AR_SEARCH_URL, wait_until="domcontentloaded", timeout=nav_timeout_ms)
+            page.wait_for_timeout(250)
             body = registry_page_body(page)
             if re.search(r"403\s+ERROR|request could not be satisfied|cloudfront|human verification|verify you are human|captcha", body, re.I):
                 result.status = "Site Not Reachable"
@@ -12086,10 +12092,10 @@ def search_ar_precise(page, org):
                 return result
             page.locator('input[name="name"]').fill("")
             page.locator('input[name="name"]').fill(variant)
-            page.get_by_role("button", name=re.compile("search", re.I)).click(timeout=10000)
-            page.wait_for_load_state("domcontentloaded", timeout=30000)
-            safe_wait_for_network_idle(page, timeout=5000)
-            page.wait_for_timeout(1200)
+            page.get_by_role("button", name=re.compile("search", re.I)).click(timeout=min(5000, nav_timeout_ms))
+            page.wait_for_load_state("domcontentloaded", timeout=nav_timeout_ms)
+            safe_wait_for_network_idle(page, timeout=settle_timeout_ms)
+            page.wait_for_timeout(600)
             body = registry_page_body(page)
             if re.search(r"Back\s+to\s+Search\s+Form|Registration\s+Date|No\s+Results\s+Found", body, re.I):
                 reached = True
@@ -12113,10 +12119,20 @@ def search_ar_precise(page, org):
             continue
 
     if not best:
-        result.status = checker.STATUS_NOT_REGISTERED
-        result.raw_status_text = "No matching organization row" if reached else "Arkansas search did not return usable results"
-        result.source_note = "Arkansas search did not contain a usable charity row after master-code safe-name filtering."
-        result.success = True
+        if not reached:
+            result.status = "Site Not Reachable"
+            result.raw_status_text = "Arkansas public charity search did not return usable results within the bounded lookup window"
+            result.source_note = (
+                "Arkansas search stayed inside CharityClarity's per-state time budget and did not expose a usable "
+                "result table; no no-record determination was made."
+            )
+            result.error = "AR bounded lookup did not expose usable rows"
+            result.success = False
+        else:
+            result.status = checker.STATUS_NOT_REGISTERED
+            result.raw_status_text = "No matching organization row"
+            result.source_note = "Arkansas search did not contain a usable charity row after master-code safe-name filtering."
+            result.success = True
         return result
 
     result.matched_registry_name = best.get("name", "")
