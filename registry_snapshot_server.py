@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.05.164-staging"
+APP_VERSION = "2026.06.05.165-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -7738,6 +7738,23 @@ def wi_search_names_for_org(org) -> list[str]:
         )
 
     filtered_names = []
+    def add_wi_structural_variant(value: str) -> None:
+        cleaned = re.sub(r"\s+", " ", (value or "").strip())
+        if cleaned and cleaned not in expanded_names:
+            expanded_names.append(cleaned)
+
+    for value in list(expanded_names):
+        cleaned = re.sub(r"\s+", " ", (value or "").strip())
+        if not cleaned:
+            continue
+        add_wi_structural_variant(re.sub(r"[-\u2010-\u2015]+", " ", cleaned))
+        add_wi_structural_variant(re.sub(r"\bSt\.?\s+", "Saint ", cleaned, flags=re.I))
+        add_wi_structural_variant(re.sub(r"\bSaint\s+", "St ", cleaned, flags=re.I))
+        add_wi_structural_variant(re.sub(r"['\u2019]s\b", "s", cleaned, flags=re.I))
+        add_wi_structural_variant(re.sub(r"['\u2019]s\b", "", cleaned, flags=re.I))
+        add_wi_structural_variant(re.sub(r"\bHospital\s+Center\b", "Hospital", cleaned, flags=re.I))
+        add_wi_structural_variant(re.sub(r"\bMedical\s+Center\b", "Medical", cleaned, flags=re.I))
+
     for value in expanded_names:
         if re.search(r"[-\u2010-\u2015]", value or "") and not generated_hyphen_variant_is_safe(value):
             continue
@@ -8035,13 +8052,29 @@ def search_wi_with_separator_retries(org, current_result):
 def wi_contains_full_target_name(registry_name: str, target_names: list[str]) -> bool:
     """Allow WI rows where the full target is embedded in a longer legal name."""
     normalize = getattr(checker, "normalize_name", lambda value: re.sub(r"\W+", " ", (value or "").lower()).strip())
-    candidate = normalize(registry_name)
-    if not candidate:
+    candidate_values = {
+        normalize(registry_name),
+        normalized_match_name(registry_name),
+    }
+    candidate_values = {value for value in candidate_values if value}
+    if not candidate_values:
         return False
     for target_name in target_names or []:
-        target = normalize(target_name)
-        if target and len(target.split()) >= 4 and target in candidate:
-            return True
+        target_values = {
+            normalize(target_name),
+            normalized_match_name(target_name),
+        }
+        for target in {value for value in target_values if value}:
+            target_words = target.split()
+            if len(target_words) >= 4 and any(target in candidate for candidate in candidate_values):
+                return True
+            if len(target_words) >= 3:
+                target_core = " ".join(
+                    word for word in target_words
+                    if word not in {"the", "a", "an", "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited"}
+                )
+                if target_core and len(target_core.split()) >= 3 and any(target_core in candidate for candidate in candidate_values):
+                    return True
     return False
 
 
@@ -9805,6 +9838,18 @@ def true_status_from_body(result, body: str) -> str:
             return status_from_calendar_date(ct_registry_date)
         if re.search(r"\bStatus:\s*ACTIVE\b", ct_status_fields, re.I) and re.search(r"\bStatus Reason:\s*ACTIVE\b", ct_status_fields, re.I):
             return "Current"
+    early_context = filing_context(result, body) if state == "MD" else None
+    if state == "MD" and md_detail_page_matched(result, combined) and early_context:
+        early_due_date = early_context["due_date"]
+        early_represented_year = early_context["represented_year"]
+        early_registry_date = explicit_registry_date(result, combined)
+        early_filed_cycle_status = status_for_filed_cycle(state, early_context, early_registry_date)
+        if early_filed_cycle_status:
+            return early_filed_cycle_status
+        if stale_represented_year_is_delinquent(early_represented_year):
+            return "Delinquent"
+        if early_due_date and early_represented_year:
+            return status_from_calendar_date(early_due_date)
     adverse_status = explicit_adverse_registry_status(result, combined)
     if adverse_status:
         return adverse_status
@@ -11363,6 +11408,8 @@ def ms_choose_safe_row_from_table(table, original_name: str, ein: str = ""):
 
 def ms_status_from_filing_status(filing_status: str, expiration_date: date | None, classifier) -> str:
     text = filing_status or ""
+    if re.search(r"\bexempt(?:ed|ion)?\b", text, re.I):
+        return "Exempt"
     if re.search(r"\b(closed|withdrawn|cancel(?:ed|led)|terminated|dissolved)\b", text, re.I):
         return "Closed / Withdrawn / Canceled"
     return classifier(filing_status, expiration_date)
@@ -11529,6 +11576,16 @@ def search_ms_fast(page, org, navigate: bool = True):
             if expiration_date and not expiration_raw:
                 expiration_raw = fallback_expiration_raw
 
+        if re.search(r"\bexempt(?:ed|ion)?\b", filing_status or "", re.I):
+            result.status = "Exempt"
+            result.raw_status_text = module.normalize_ms_filing_status(filing_status)
+            result.source_note = (
+                "Mississippi matched the organization row and the filing status is exempt; "
+                "no expiration-date calculation is required for exempt records."
+            )
+            result.success = True
+            return result
+
         if (
             not expiration_date
             and re.search(r"\bcurrent\b|\bregistered\b", filing_status or "", re.I)
@@ -11576,7 +11633,7 @@ def search_batch_browser_state(page, org, state: str):
         variants = ms_preferred_search_variants(org.organization_name, org.ein)
         if org.organization_name and not ms_search_variant_too_broad(org.organization_name) and org.organization_name not in variants:
             variants.insert(0, org.organization_name)
-        variants = variants[:4]
+        variants = variants[:6]
         if not variants:
             external_result = module.SearchResult(
                 organization_name=org.organization_name,
@@ -11587,7 +11644,7 @@ def search_batch_browser_state(page, org, state: str):
             external_result.source_note = "Mississippi skipped a one-token acronym search because name-only results would be too broad to certify safely."
             return copy_external_result(org, state, external_result)
         best_external = None
-        ms_deadline = time.perf_counter() + 24.0
+        ms_deadline = time.perf_counter() + 32.0
         for attempt_index, variant_name in enumerate(variants or [org.organization_name]):
             if time.perf_counter() >= ms_deadline:
                 break
@@ -12015,7 +12072,7 @@ def search_ar_precise(page, org):
     best = None
     best_score = -10000
     reached = False
-    for variant in variants[:max(AR_NAME_SEARCH_MAX_VARIANTS, 8)]:
+    for variant in variants[:AR_NAME_SEARCH_MAX_VARIANTS]:
         try:
             page.goto(AR_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
             page.wait_for_timeout(500)

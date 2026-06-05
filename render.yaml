@@ -28,7 +28,7 @@ services:
       - key: CE_BATCH_CONFIRMATION_WORKERS
         value: "8"
       - key: CE_BATCH_ISOLATED_STATES
-        value: "ME,OR,FL,WI,VA,SC,ND,WA,NM,MS,OK,WV"
+        value: "AR,ME,OR,FL,WI,VA,SC,ND,WA,NM,MS,OK,WV"
       - key: CE_BATCH_ISOLATED_WORKERS
         value: "8"
       - key: CE_BATCH_STATE_LOOKUP_TIMEOUT_SECONDS
