@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.05.170-staging"
+APP_VERSION = "2026.06.05.171-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -12224,14 +12224,39 @@ def ar_preferred_name_variants(org) -> list[str]:
     original = re.sub(r"\s+", " ", (getattr(org, "organization_name", "") or "").strip())
     variants = []
 
+    def too_broad(value: str) -> bool:
+        words = [
+            word.lower()
+            for word in re.findall(r"[A-Za-z0-9]+", value or "")
+            if word.lower() not in {
+                "the", "a", "an", "of", "for", "to", "and", "in", "on", "at", "by",
+                "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited",
+            }
+        ]
+        return len(words) < 2
+
     def add(value: str) -> None:
         cleaned = re.sub(r"\s+", " ", (value or "").strip())
-        if cleaned and cleaned.lower() not in {existing.lower() for existing in variants}:
+        if cleaned and not too_broad(cleaned) and cleaned.lower() not in {existing.lower() for existing in variants}:
             variants.append(cleaned)
 
     compact = re.sub(r",\s*(incorporated|inc\.?|corporation|corp\.?|llc|ltd\.?)", r" \1", original, flags=re.I)
     add(re.sub(r"\b(inc|corp|ltd)\.", r"\1", compact, flags=re.I))
     add(compact)
+    add(re.sub(r"^(?:the|a|an)\s+", "", compact, flags=re.I))
+    add(re.sub(r"[^\w\s]", " ", compact))
+    add(re.sub(r"^(?:the\s+)?trustees\s+of\s+", "", compact, flags=re.I))
+    add(re.sub(r"\bcentre\b", "Center", compact, flags=re.I))
+    add(re.sub(r"\bcenter\b", "Centre", compact, flags=re.I))
+    aids_tb_variant = re.sub(
+        r"\b(AIDS?)\s*,?\s+Tuberculosis\s+(?:And|&)\s+Malaria\b",
+        r"\1, Tuberculosis & Malaria",
+        compact,
+        flags=re.I,
+    )
+    add(aids_tb_variant)
+    for connector_variant in connector_light_name_variants(compact):
+        add(connector_variant)
     add(re.sub(r"\b(?:local|chapter|affiliate)\b\.?\s*$", "", compact, flags=re.I))
     for alias in known_names_for_ein(getattr(org, "ein", "")):
         if normalized_match_name(alias) != normalized_match_name(original) and compatible_ein_alias_for_name(original, alias):
