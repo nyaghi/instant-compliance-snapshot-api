@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.06.184-staging"
+APP_VERSION = "2026.06.06.185-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -1286,6 +1286,11 @@ def should_record_domain_check(results: list[dict]) -> bool:
 
 
 def public_status(result) -> str:
+    if not hasattr(result, "status"):
+        raw = re.sub(r"\s+", " ", str(result or "")).strip()
+        if re.search(r"\b(?:not\s+registered|not\s+found|no\s+record|no\s+results?)\b", raw, re.I):
+            return "Not Registered"
+        return raw or "Unknown"
     status = (result.status or "").strip()
     error = (result.error or "").strip().lower()
 
@@ -13813,6 +13818,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
             if browser_admitted:
                 BROWSER_LOOKUP_SEMAPHORE.release()
 
+    result = ensure_state_result(result, org, state)
     return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
 
 
