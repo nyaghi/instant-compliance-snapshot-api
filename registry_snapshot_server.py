@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.06.181-staging"
+APP_VERSION = "2026.06.06.182-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -12556,8 +12556,56 @@ def ar_preferred_name_variants(org) -> list[str]:
     return variants
 
 
+def ar_high_signal_alias_retry_names(org) -> list[str]:
+    original = re.sub(r"\s+", " ", (getattr(org, "organization_name", "") or "").strip())
+    if not original:
+        return []
+    candidates = []
+
+    def add(value: str) -> None:
+        cleaned = re.sub(r"\s+", " ", (value or "").strip())
+        if (
+            cleaned
+            and cleaned.lower() != original.lower()
+            and cleaned.lower() not in {existing.lower() for existing in candidates}
+        ):
+            candidates.append(cleaned)
+
+    for variant in ar_preferred_name_variants(org)[:6]:
+        if re.search(r"\bto\s+fight\b", original, re.I):
+            if not re.search(r"^(?:the|a|an)\s+", variant or "", re.I):
+                add(variant)
+        if (
+            re.search(r"\bmissing\b", original, re.I)
+            and re.search(r"\bexploited\b", original, re.I)
+            and re.search(r"\bchildren\b", original, re.I)
+        ):
+            if re.search(r"\b(?:national|international)\s+(?:center|centre)\s+for\b|\bmissing\b.*\bexploited\b.*\bchildren\b", variant or "", re.I):
+                add(variant)
+    return candidates[:2]
+
+
 def search_ar_name_variants_once(page, org):
-    return search_ar_precise(page, org)
+    result = search_ar_precise(page, org)
+    if public_status(result) != checker.STATUS_NOT_REGISTERED:
+        return result
+
+    original_name = getattr(org, "organization_name", "") or ""
+    for retry_name in ar_high_signal_alias_retry_names(org):
+        retry_result = search_ar_precise(page, org_with_name(org, retry_name))
+        retry_status = public_status(retry_result)
+        if retry_status in {"Site Not Reachable", checker.STATUS_NOT_REGISTERED, checker.STATUS_UNKNOWN}:
+            continue
+        matched_name = getattr(retry_result, "matched_registry_name", "") or retry_name
+        if not registry_name_is_safe_for_org(matched_name, original_name, getattr(org, "ein", "")):
+            continue
+        retry_result.organization_name = original_name
+        retry_result.source_note = " ".join(part for part in [
+            retry_result.source_note or "",
+            f"Matched after retrying generated Arkansas high-signal alias: {retry_name}.",
+        ]).strip()
+        return retry_result
+    return result
 
 
 def search_ar_serialized(page, org):
