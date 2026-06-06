@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.06.178-staging"
+APP_VERSION = "2026.06.06.179-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -2961,6 +2961,8 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
         return False
     if legal_trustee_entity_match(original_name, registry_name):
         return True
+    if long_truncated_registry_name_match(original_name, registry_name):
+        return True
     if shared_distinctive_core_match(original_name, registry_name):
         return True
     if charitable_wrapper_short_name_match(original_name, registry_name):
@@ -2985,6 +2987,20 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
     if target_name_score(registry_name, safe_targets) >= 450:
         return True
     return compatible_ein_alias_for_name(original_name, registry_name)
+
+
+def long_truncated_registry_name_match(original_name: str, registry_name: str) -> bool:
+    original_norm = normalized_match_name(original_name)
+    registry_norm = normalized_match_name(registry_name)
+    if not original_norm or not registry_norm:
+        return False
+    original_norm = re.sub(r"^(?:the|a|an)\s+", "", original_norm)
+    registry_norm = re.sub(r"^(?:the|a|an)\s+", "", registry_norm)
+    if not original_norm.startswith(registry_norm):
+        return False
+    original_words = original_norm.split()
+    registry_words = registry_norm.split()
+    return len(registry_words) >= 6 and 0 < len(original_words) - len(registry_words) <= 2
 
 
 def parenthetical_descriptor_match(original_name: str, registry_name: str) -> bool:
@@ -12474,6 +12490,12 @@ def ar_preferred_name_variants(org) -> list[str]:
     add(re.sub(r"\b(inc|corp|ltd)\.", r"\1", compact, flags=re.I))
     add(compact)
     add(re.sub(r"^(?:the|a|an)\s+", "", compact, flags=re.I))
+    no_punct_compact = re.sub(r"[^\w\s]", " ", compact)
+    no_punct_compact = re.sub(r"\s+", " ", no_punct_compact).strip()
+    connector_light = re.sub(r"\b(?:and|&)\b", " ", no_punct_compact, flags=re.I)
+    connector_light = re.sub(r"\s+", " ", connector_light).strip()
+    if len(re.findall(r"[A-Za-z0-9]+", connector_light)) >= 3:
+        add(connector_light)
     if re.search(r"\bto\s+fight\b", compact, re.I):
         fight_prefix = re.split(r"\bto\s+fight\b", compact, maxsplit=1, flags=re.I)[0]
         add(fight_prefix)
@@ -12487,12 +12509,12 @@ def ar_preferred_name_variants(org) -> list[str]:
             compact,
             flags=re.I,
         ).strip(" ,")
+        add("Missing Exploited Children")
+        add("Missing and Exploited Children")
         if len(re.findall(r"[A-Za-z0-9]+", missing_object)) >= 3:
             add(f"National Center for {missing_object}")
             add(f"National Centre for {missing_object}")
-        add("Missing Exploited Children")
-        add("Missing and Exploited Children")
-    add(re.sub(r"[^\w\s]", " ", compact))
+    add(no_punct_compact)
     trustee_reduced = re.sub(r"^(?:the\s+)?trustees\s+of\s+", "", compact, flags=re.I)
     add(trustee_reduced)
     if trustee_reduced != compact:
