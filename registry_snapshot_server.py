@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.06.177-staging"
+APP_VERSION = "2026.06.06.178-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -7837,6 +7837,30 @@ def wi_search_names_for_org(org) -> list[str]:
         }
     ])
 
+    original_core_words = [
+        word.lower()
+        for word in re.findall(r"[A-Za-z0-9]+", re.sub(r"^(?:the|a|an)\s+", "", original_name or "", flags=re.I))
+        if word.lower() not in {
+            "the", "a", "an", "of", "for", "to", "and",
+            "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited",
+            "hospital", "center", "centre", "foundation", "fund", "association", "society",
+        }
+    ]
+
+    def is_leading_core_query(value: str) -> bool:
+        words = [
+            word.lower()
+            for word in re.findall(r"[A-Za-z0-9]+", value or "")
+            if word.lower() not in {
+                "the", "a", "an", "of", "for", "to", "and",
+                "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited",
+                "hospital", "center", "centre", "foundation", "fund", "association", "society",
+            }
+        ]
+        if len(words) < 2 or len(words) > 4 or len(original_core_words) < len(words) + 1:
+            return False
+        return words == original_core_words[:len(words)]
+
     def priority(value: str) -> tuple[int, int, str]:
         cleaned = re.sub(r"\s+", " ", (value or "").strip())
         if not cleaned:
@@ -7850,6 +7874,8 @@ def wi_search_names_for_org(org) -> list[str]:
             return (-2, word_rank, cleaned.lower())
         if exact_seed:
             return (-1, word_rank, cleaned.lower())
+        if is_leading_core_query(cleaned):
+            return (0, -10 + len(cleaned.split()), cleaned.lower())
         if len(cleaned.split()) == 1 and re.search(r"[-\u2010-\u2015]", original_name or ""):
             return (0, -9, cleaned.lower())
         if not has_punctuation and not re.search(r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\b", cleaned, re.I):
@@ -8369,14 +8395,14 @@ def wi_best_match_from_markdown(result_text: str, target_names: list[str], best_
     return best_match
 
 
-def wi_reader_search_best_match(search_names: list[str], target_names: list[str], deadline: float | None = None) -> tuple[dict | None, bool]:
+def wi_reader_search_best_match(search_names: list[str], target_names: list[str], deadline: float | None = None, no_cache: bool = False) -> tuple[dict | None, bool]:
     best_match = None
     reader_reached = False
     for search_name in search_names:
         if deadline and time.perf_counter() >= deadline:
             break
         source_url = f"{WI_RESULTS_URL}?{urlencode({'CredentialType': '800', 'FirmName': search_name, 'LicenseNumber': ''})}"
-        result_text = wi_reader_text(source_url)
+        result_text = wi_reader_text(source_url, no_cache=no_cache)
         if re.search(r"Organization Search Results|Search Parameters|Total Search Results", result_text or "", re.I):
             reader_reached = True
         best_match = wi_best_match_from_markdown(result_text, target_names, best_match)
@@ -8532,8 +8558,15 @@ def search_wi(page, org):
                     ):
                         best_match = candidate
 
+        if not best_match and time.perf_counter() < deadline:
+            retry_names = direct_names[: min(5, len(direct_names))]
+            retry_match, retry_reached = wi_reader_search_best_match(retry_names, target_names, deadline, no_cache=True)
+            wi_reader_reached = wi_reader_reached or retry_reached
+            if retry_match:
+                best_match = retry_match
+
         if not best_match and time.perf_counter() < deadline and not (wi_reader_reached or wi_http_reached):
-            best_match, reached = wi_reader_search_best_match(direct_names, target_names, deadline)
+            best_match, reached = wi_reader_search_best_match(direct_names, target_names, deadline, no_cache=True)
             if not best_match:
                 best_match, reached_http = wi_http_search_best_match(direct_names, target_names, deadline)
                 wi_http_reached = wi_http_reached or reached_http
@@ -12442,20 +12475,32 @@ def ar_preferred_name_variants(org) -> list[str]:
     add(compact)
     add(re.sub(r"^(?:the|a|an)\s+", "", compact, flags=re.I))
     if re.search(r"\bto\s+fight\b", compact, re.I):
-        add(re.split(r"\bto\s+fight\b", compact, maxsplit=1, flags=re.I)[0])
+        fight_prefix = re.split(r"\bto\s+fight\b", compact, maxsplit=1, flags=re.I)[0]
+        add(fight_prefix)
+        fight_prefix_no_article = re.sub(r"^(?:the|a|an)\s+", "", fight_prefix, flags=re.I).strip()
+        if len(re.findall(r"[A-Za-z0-9]+", fight_prefix_no_article)) >= 2:
+            add(f"Fund for the {fight_prefix_no_article}")
     if re.search(r"\bmissing\b", compact, re.I) and re.search(r"\bexploited\b", compact, re.I) and re.search(r"\bchildren\b", compact, re.I):
+        missing_object = re.sub(
+            r"^(?:the\s+)?(?:international|national)?\s*(?:centre|center)\s+for\s+",
+            "",
+            compact,
+            flags=re.I,
+        ).strip(" ,")
+        if len(re.findall(r"[A-Za-z0-9]+", missing_object)) >= 3:
+            add(f"National Center for {missing_object}")
+            add(f"National Centre for {missing_object}")
         add("Missing Exploited Children")
         add("Missing and Exploited Children")
     add(re.sub(r"[^\w\s]", " ", compact))
     trustee_reduced = re.sub(r"^(?:the\s+)?trustees\s+of\s+", "", compact, flags=re.I)
     add(trustee_reduced)
     if trustee_reduced != compact:
-        trustee_words = [
-            word for word in re.findall(r"[A-Za-z0-9]+", trustee_reduced)
-            if word.lower() not in {"the", "a", "an", "of", "for", "to", "and", "in", "on", "at", "by", "city"}
-        ]
-        if trustee_words:
-            add(trustee_words[0], allow_broad=True)
+        trustee_core = re.sub(r"\b(?:in|of)\s+the\s+city\s+of\b.*$", "", trustee_reduced, flags=re.I).strip(" ,")
+        add(trustee_core)
+        trustee_words = re.findall(r"[A-Za-z0-9]+", trustee_core)
+        if len(trustee_words) >= 2:
+            add(" ".join(trustee_words[:2]))
     add(re.sub(r"\bcentre\b", "Center", compact, flags=re.I))
     add(re.sub(r"\bcenter\b", "Centre", compact, flags=re.I))
     aids_tb_variant = re.sub(
