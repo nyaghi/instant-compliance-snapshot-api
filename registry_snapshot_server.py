@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.06.180-staging"
+APP_VERSION = "2026.06.06.181-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -12492,8 +12492,18 @@ def ar_preferred_name_variants(org) -> list[str]:
     connector_light = re.sub(r"\b(?:and|&)\b", " ", no_punct_compact, flags=re.I)
     connector_light = re.sub(r"\s+", " ", connector_light).strip()
     if re.search(r"\bto\s+fight\b", compact, re.I) and len(re.findall(r"[A-Za-z0-9]+", connector_light)) >= 3:
+        add(re.sub(r"^(?:the|a|an)\s+", "", connector_light, flags=re.I).strip())
         add(connector_light)
     if re.search(r"\bmissing\b", compact, re.I) and re.search(r"\bexploited\b", compact, re.I) and re.search(r"\bchildren\b", compact, re.I):
+        missing_object = re.sub(
+            r"^(?:the\s+)?(?:international|national)?\s*(?:centre|center)\s+for\s+",
+            "",
+            compact,
+            flags=re.I,
+        ).strip(" ,")
+        if len(re.findall(r"[A-Za-z0-9]+", missing_object)) >= 3:
+            add(f"National Center for {missing_object}")
+            add(f"National Centre for {missing_object}")
         add("Missing Exploited Children")
         add("Missing and Exploited Children")
     add(re.sub(r"\b(inc|corp|ltd)\.", r"\1", compact, flags=re.I))
