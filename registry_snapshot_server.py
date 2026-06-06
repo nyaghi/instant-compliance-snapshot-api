@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.06.186-staging"
+APP_VERSION = "2026.06.06.187-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -7917,6 +7917,8 @@ def wi_search_names_for_org(org) -> list[str]:
             return (0, -10 + len(cleaned.split()), cleaned.lower())
         if len(cleaned.split()) == 1 and re.search(r"[-\u2010-\u2015]", original_name or ""):
             return (0, -9, cleaned.lower())
+        if re.search(r"\bChildren['\u2019]s\s+Hospital\s+Foundation\b", cleaned, re.I):
+            return (0, -20, cleaned.lower())
         if not has_punctuation and not re.search(r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\b", cleaned, re.I):
             return (0, word_rank, cleaned.lower())
         if has_safe_hyphen:
@@ -7927,8 +7929,6 @@ def wi_search_names_for_org(org) -> list[str]:
                 return (5, word_rank, cleaned.lower())
             return (0, word_rank, cleaned.lower())
         if re.search(r"\bAIDS?,\s+Tuberculosis\s+&\s+Malaria\b", cleaned, re.I):
-            return (0, word_rank, cleaned.lower())
-        if re.search(r"\bChildren['\u2019]s\s+Hospital\s+Foundation\b", cleaned, re.I):
             return (0, word_rank, cleaned.lower())
         if re.match(r"^(?:u\.?\s*s\.?|us)\s+", cleaned, re.I):
             noisy_us_query = bool(re.search(r"[-,/]", cleaned)) or bool(re.match(r"^u\.", cleaned, re.I))
