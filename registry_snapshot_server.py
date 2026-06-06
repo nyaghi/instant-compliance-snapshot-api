@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.06.176-staging"
+APP_VERSION = "2026.06.06.177-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -2961,6 +2961,10 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
         return False
     if legal_trustee_entity_match(original_name, registry_name):
         return True
+    if shared_distinctive_core_match(original_name, registry_name):
+        return True
+    if charitable_wrapper_short_name_match(original_name, registry_name):
+        return True
     if broad_governance_name_mismatch(original_name, registry_name):
         return False
     if incompatible_institutional_prefix_expansion(original_name, registry_name):
@@ -3018,6 +3022,48 @@ def institutional_affiliation_suffix_match(original_name: str, registry_name: st
         return False
     blocked = {"chapter", "affiliate", "auxiliary", "alumni", "booster", "foundation", "fund"}
     return not any(word in blocked for word in suffix)
+
+
+def distinctive_core_words(value: str) -> list[str]:
+    generic = {
+        "the", "a", "an", "of", "for", "to", "and", "in", "on", "at", "by",
+        "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited",
+        "fund", "foundation", "association", "society", "organization", "charity",
+        "charitable", "trust", "center", "centre", "national", "international",
+        "global", "world", "worldwide",
+    }
+    return [
+        word
+        for word in normalized_match_name(value).split()
+        if word not in generic and len(word) >= 3
+    ]
+
+
+def shared_distinctive_core_match(original_name: str, registry_name: str) -> bool:
+    """Accept rows that share a long distinctive core with only descriptor-word differences."""
+    original_core = distinctive_core_words(original_name)
+    registry_core = distinctive_core_words(registry_name)
+    if len(original_core) < 3 or len(registry_core) < 3:
+        return False
+    return original_core == registry_core
+
+
+def charitable_wrapper_short_name_match(original_name: str, registry_name: str) -> bool:
+    """Allow generic wrapper forms such as "Fund for the X" when X is the leading requested name."""
+    registry_norm = normalized_match_name(registry_name)
+    original_norm = normalized_match_name(original_name)
+    if not registry_norm or not original_norm:
+        return False
+    wrapper_match = re.match(r"^(?:fund|foundation|friends)\s+(?:for|of)\s+(.+)$", registry_norm)
+    if not wrapper_match:
+        return False
+    wrapper_target = re.sub(r"\s+", " ", wrapper_match.group(1)).strip()
+    if not wrapper_target:
+        return False
+    wrapper_words = wrapper_target.split()
+    if len(wrapper_words) < 2:
+        return False
+    return original_norm.startswith(f"{wrapper_target} ")
 
 
 def wrapped_supporting_foundation_match(registry_name: str, original_name: str) -> bool:
@@ -7566,13 +7612,13 @@ def wi_reader_url(source_url: str) -> str:
 
 
 def wi_reader_text(source_url: str, no_cache: bool = False) -> str:
-    for attempt in range(1):
+    for attempt in range(3):
         try:
             headers = {
                 "User-Agent": "Mozilla/5.0 CharityClarity-WI/1.0",
                 "Accept": "text/markdown,text/plain,text/html;q=0.8,*/*;q=0.5",
             }
-            if no_cache:
+            if no_cache or attempt:
                 headers["X-No-Cache"] = "true"
             request = urllib.request.Request(wi_reader_url(source_url), headers=headers)
             with urllib.request.urlopen(request, timeout=WI_READER_TIMEOUT_SECONDS) as response:
@@ -12386,9 +12432,9 @@ def ar_preferred_name_variants(org) -> list[str]:
         ]
         return len(words) < 2
 
-    def add(value: str) -> None:
+    def add(value: str, allow_broad: bool = False) -> None:
         cleaned = re.sub(r"\s+", " ", (value or "").strip())
-        if cleaned and not too_broad(cleaned) and cleaned.lower() not in {existing.lower() for existing in variants}:
+        if cleaned and (allow_broad or not too_broad(cleaned)) and cleaned.lower() not in {existing.lower() for existing in variants}:
             variants.append(cleaned)
 
     compact = re.sub(r",\s*(incorporated|inc\.?|corporation|corp\.?|llc|ltd\.?)", r" \1", original, flags=re.I)
@@ -12401,7 +12447,15 @@ def ar_preferred_name_variants(org) -> list[str]:
         add("Missing Exploited Children")
         add("Missing and Exploited Children")
     add(re.sub(r"[^\w\s]", " ", compact))
-    add(re.sub(r"^(?:the\s+)?trustees\s+of\s+", "", compact, flags=re.I))
+    trustee_reduced = re.sub(r"^(?:the\s+)?trustees\s+of\s+", "", compact, flags=re.I)
+    add(trustee_reduced)
+    if trustee_reduced != compact:
+        trustee_words = [
+            word for word in re.findall(r"[A-Za-z0-9]+", trustee_reduced)
+            if word.lower() not in {"the", "a", "an", "of", "for", "to", "and", "in", "on", "at", "by", "city"}
+        ]
+        if trustee_words:
+            add(trustee_words[0], allow_broad=True)
     add(re.sub(r"\bcentre\b", "Center", compact, flags=re.I))
     add(re.sub(r"\bcenter\b", "Centre", compact, flags=re.I))
     aids_tb_variant = re.sub(
