@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.06.183-staging"
+APP_VERSION = "2026.06.06.184-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -1333,6 +1333,24 @@ def public_status(result) -> str:
         return "Upcoming Filing"
 
     return status
+
+
+def ensure_state_result(value, org, state: str, source_url: str = "", source_note: str = ""):
+    if hasattr(value, "status"):
+        return value
+    raw = re.sub(r"\s+", " ", str(value or "")).strip()
+    status = "Not registered" if re.search(r"\b(?:not\s+registered|not\s+found|no\s+record|no\s+results?)\b", raw, re.I) else checker.STATUS_UNKNOWN
+    result = checker.StateResult(
+        getattr(org, "organization_name", "") or f"EIN {format_ein(getattr(org, 'ein', ''))}",
+        getattr(org, "ein", ""),
+        state.upper(),
+        status,
+        source_url,
+    )
+    result.raw_status_text = raw or "Checker returned a non-structured result"
+    result.source_note = source_note or f"{state.upper()} checker returned a non-structured result; CharityClarity normalized it before final status handling."
+    result.success = True
+    return result
 
 
 def parse_due_date(value: str) -> date | None:
@@ -9626,6 +9644,62 @@ def status_from_calendar_date(value: date) -> str:
     return "Current"
 
 
+def explicit_due_date_from_result_text(result) -> date | None:
+    text = " ".join(part for part in [
+        getattr(result, "raw_status_text", "") or "",
+        getattr(result, "source_note", "") or "",
+    ] if part)
+    match = re.search(
+        r"\b(?:Due|Next\s+Due|Renewal\s+Date|Expiration\s+Date|Report\s+Due)\s*:?\s*"
+        r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4}|\d{4}-\d{2}-\d{2})",
+        text,
+        re.I,
+    )
+    return parse_due_date(match.group(1)) if match else None
+
+
+def repair_status_from_explicit_due_text(result, state: str):
+    due = explicit_due_date_from_result_text(result)
+    if not due:
+        return result
+    repaired_status = status_from_calendar_date(due)
+    if public_status(result) != repaired_status:
+        result.status = repaired_status
+        result.source_note = " ".join(part for part in [
+            getattr(result, "source_note", "") or "",
+            f"{state.upper()} status was classified from the explicit public-registry due date {format_date(due)}.",
+        ]).strip()
+        result.success = True
+    return result
+
+
+def repair_md_current_from_fiscal_due(result, org):
+    if public_status(result) != "Current":
+        return result
+    if re.search(r"\b(filing|fiscal|due|expiration|renewal)\b", " ".join([
+        getattr(result, "raw_status_text", "") or "",
+        getattr(result, "source_note", "") or "",
+    ]), re.I):
+        return repair_status_from_explicit_due_text(result, "MD")
+    fiscal_end = fiscal_year_end_for_ein(getattr(org, "ein", "") or "")
+    due = next_base_due_from_fiscal_end("MD", fiscal_end)
+    if not due:
+        return result
+    repaired_status = status_from_calendar_date(due)
+    if repaired_status != "Current":
+        result.status = repaired_status
+        result.raw_status_text = " | ".join(part for part in [
+            getattr(result, "raw_status_text", "") or "Current",
+            f"Next Due: {format_date(due)}",
+        ] if part)
+        result.source_note = " ".join(part for part in [
+            getattr(result, "source_note", "") or "",
+            f"Maryland registry status is Current; CharityClarity inferred the next Maryland base filing due date as {format_date(due)} from the organization's fiscal year end.",
+        ]).strip()
+        result.success = True
+    return result
+
+
 def repair_ny_not_registered_with_due_date(org, result):
     """Promote a NY row when the registry text includes a safe match and due date."""
     if public_status(result) != "Not Registered":
@@ -12873,6 +12947,7 @@ def search_wa_nm_state(org, state: str):
             hosted_result = module.search_nm(external_org, show_process=False)
             if external_status_to_checker_status(getattr(hosted_result, "status", "")) != checker.STATUS_UNKNOWN:
                 external_result = hosted_result
+        external_result = repair_status_from_explicit_due_text(external_result, "NM")
     else:
         raise ValueError(f"Unsupported WA/NM state adapter: {state}")
     return copy_external_result(org, state, external_result)
@@ -13312,6 +13387,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 result = validate_ma_positive_record(org, result, body)
             elif state == "MD":
                 result = checker.search_md(page, org)
+                result = ensure_state_result(result, org, "MD", source_note="Maryland checker returned a non-structured result.")
                 md_body = registry_page_body(page)
                 if public_status(result) != "Not Registered" and not md_detail_page_matched(result, md_body):
                     result.raw_status_text = "No matching EIN result"
@@ -13331,6 +13407,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     body = md_detail_body(page, deep=capture_source_snapshot)
                 else:
                     body = md_no_results_body(page)
+                result = repair_md_current_from_fiscal_due(result, org)
             elif state == "CO":
                 result = search_co_with_name_fallback(page, org)
                 body = registry_page_body(page)
@@ -13379,6 +13456,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 ny_has_ein = bool(requested_ein)
                 if ny_has_ein:
                     result = checker.search_ny(page, org)
+                    result = ensure_state_result(result, org, "NY", "https://www.charitiesnys.com/RegistrySearch/search_charities.jsp", "New York exact-EIN checker returned a non-structured result.")
                 else:
                     result = search_with_name_variants(
                         page,
@@ -13387,6 +13465,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                         max_variants=12,
                         max_elapsed_seconds=min(max(NAME_SEARCH_VARIANT_MAX_SECONDS, 40.0), 50.0),
                     )
+                    result = ensure_state_result(result, org, "NY", "https://www.charitiesnys.com/RegistrySearch/search_charities.jsp", "New York name-variant checker returned a non-structured result.")
                 elapsed_before_ny_confirmation = time.perf_counter() - lookup_started
                 clean_ny_ein_no_result = bool(
                     ny_has_ein
@@ -13411,6 +13490,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                         max_variants=10,
                         max_elapsed_seconds=min(max(NAME_SEARCH_VARIANT_MAX_SECONDS, 34.0), 44.0),
                     )
+                    name_only_result = ensure_state_result(name_only_result, name_only_org, "NY", "https://www.charitiesnys.com/RegistrySearch/search_charities.jsp", "New York name-only checker returned a non-structured result.")
                     name_only_evidence = " ".join(part for part in [
                         getattr(name_only_result, "matched_registry_name", "") or "",
                         getattr(name_only_result, "matched_registry_identifier", "") or "",
@@ -13440,6 +13520,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                         max_variants=12,
                         max_elapsed_seconds=min(max(NAME_SEARCH_VARIANT_MAX_SECONDS, 34.0), 44.0),
                     )
+                    confirmed_result = ensure_state_result(confirmed_result, org, "NY", "https://www.charitiesnys.com/RegistrySearch/search_charities.jsp", "New York confirmation checker returned a non-structured result.")
                     if public_status(confirmed_result) != "Not Registered":
                         confirmed_result.source_note = " ".join(part for part in [
                             confirmed_result.source_note or "",
