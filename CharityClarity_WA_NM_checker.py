@@ -1038,7 +1038,9 @@ def apply_nm_rows_to_result(
 
     today = date.today()
     six_months = today + timedelta(days=183)
-    if due_date < today:
+    if has_extension and latest_tax_year >= today.year - 1:
+        result.status = STATUS_UPCOMING
+    elif due_date < today:
         result.status = STATUS_DELINQUENT
     elif due_date <= six_months:
         result.status = STATUS_UPCOMING

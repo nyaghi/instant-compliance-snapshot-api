@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.06.174-staging"
+APP_VERSION = "2026.06.06.175-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -4036,6 +4036,8 @@ def classify_nm_status_history(raw_status: str) -> str:
     tax_years = [int(value) for value in re.findall(r"\bTax\s+Year\s+(20\d{2})\b", raw, re.I)]
     latest_tax_year = max(tax_years) if tax_years else None
     if re.search(r"\bExtension\s+Granted\b", raw, re.I):
+        if latest_tax_year and latest_tax_year >= date.today().year - 1:
+            return "Upcoming Filing"
         fye_match = re.search(r"\bFYE\s*:\s*([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", raw, re.I)
         fye_date = parse_due_date(fye_match.group(1)) if fye_match else None
         if fye_date:
