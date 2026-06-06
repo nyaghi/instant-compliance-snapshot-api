@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.06.185-staging"
+APP_VERSION = "2026.06.06.186-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -7957,6 +7957,8 @@ def wi_search_names_for_org(org) -> list[str]:
         add_wi_structural_variant(re.sub(r"\bSaint\s+", "St ", cleaned, flags=re.I))
         add_wi_structural_variant(re.sub(r"['\u2019]s\b", "s", cleaned, flags=re.I))
         add_wi_structural_variant(re.sub(r"['\u2019]s\b", "", cleaned, flags=re.I))
+        if re.search(r"\bChildren['\u2019]?s?\s+Foundation\b", cleaned, re.I) and not re.search(r"\bHospital\b", cleaned, re.I):
+            add_wi_structural_variant(re.sub(r"\b(Children(?:['\u2019]s)?)\s+Foundation\b", r"\1 Hospital Foundation", cleaned, flags=re.I))
         add_wi_structural_variant(re.sub(r"\bHospital\s+Center\b", "Hospital", cleaned, flags=re.I))
         add_wi_structural_variant(re.sub(r"\bMedical\s+Center\b", "Medical", cleaned, flags=re.I))
 
@@ -9649,10 +9651,11 @@ def status_from_calendar_date(value: date) -> str:
     return "Current"
 
 
-def explicit_due_date_from_result_text(result) -> date | None:
+def explicit_due_date_from_result_text(result, *extra_texts: str) -> date | None:
     text = " ".join(part for part in [
         getattr(result, "raw_status_text", "") or "",
         getattr(result, "source_note", "") or "",
+        *[text for text in extra_texts if text],
     ] if part)
     match = re.search(
         r"\b(?:Due|Next\s+Due|Renewal\s+Date|Expiration\s+Date|Report\s+Due)\s*:?\s*"
@@ -9663,8 +9666,8 @@ def explicit_due_date_from_result_text(result) -> date | None:
     return parse_due_date(match.group(1)) if match else None
 
 
-def repair_status_from_explicit_due_text(result, state: str):
-    due = explicit_due_date_from_result_text(result)
+def repair_status_from_explicit_due_text(result, state: str, *extra_texts: str):
+    due = explicit_due_date_from_result_text(result, *extra_texts)
     if not due:
         return result
     repaired_status = status_from_calendar_date(due)
@@ -9678,14 +9681,12 @@ def repair_status_from_explicit_due_text(result, state: str):
     return result
 
 
-def repair_md_current_from_fiscal_due(result, org):
+def repair_md_current_from_fiscal_due(result, org, body_text: str = ""):
     if public_status(result) != "Current":
         return result
-    if re.search(r"\b(filing|fiscal|due|expiration|renewal)\b", " ".join([
-        getattr(result, "raw_status_text", "") or "",
-        getattr(result, "source_note", "") or "",
-    ]), re.I):
-        return repair_status_from_explicit_due_text(result, "MD")
+    explicit_repair = repair_status_from_explicit_due_text(result, "MD", body_text)
+    if public_status(explicit_repair) != "Current":
+        return explicit_repair
     fiscal_end = fiscal_year_end_for_ein(getattr(org, "ein", "") or "")
     due = next_base_due_from_fiscal_end("MD", fiscal_end)
     if not due:
@@ -13412,7 +13413,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     body = md_detail_body(page, deep=capture_source_snapshot)
                 else:
                     body = md_no_results_body(page)
-                result = repair_md_current_from_fiscal_due(result, org)
+                result = repair_md_current_from_fiscal_due(result, org, md_body)
             elif state == "CO":
                 result = search_co_with_name_fallback(page, org)
                 body = registry_page_body(page)
