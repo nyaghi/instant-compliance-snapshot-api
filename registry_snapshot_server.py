@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.05.171-staging"
+APP_VERSION = "2026.06.05.172-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -206,7 +206,7 @@ ME_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_LOOKUP
 AR_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_AR_LOOKUP_MIN_INTERVAL_SECONDS", "1.5"))), 20.0)
 AR_TRANSIENT_RETRY_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_AR_TRANSIENT_RETRY_DELAY_SECONDS", "4.0"))), 20.0)
 AR_TRANSIENT_RETRY_ATTEMPTS = min(max(1, int(os.environ.get("CE_AR_TRANSIENT_RETRY_ATTEMPTS", "2"))), 3)
-AR_NAME_SEARCH_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_AR_NAME_SEARCH_MAX_VARIANTS", "8"))), 8)
+AR_NAME_SEARCH_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_AR_NAME_SEARCH_MAX_VARIANTS", "12"))), 12)
 AR_NAME_SEARCH_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_AR_NAME_SEARCH_MAX_SECONDS", "40"))), 42.0)
 ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "1.0"))), 30.0)
 ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS = min(max(1, int(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS", "2"))), 4)
@@ -2486,6 +2486,10 @@ def organization_name_variants(
         apostrophe_removed = re.sub(r"[']", "", base).strip()
         possessive_removed = re.sub(r"\b([A-Za-z]+)'[sS]\b", r"\1s", base).strip()
         possessive_s_removed = re.sub(r"\b([A-Za-z]+)'[sS]\b", r"\1", base).strip()
+        hyphen_space_possessive_removed = re.sub(r"[-\u2010-\u2015]+", " ", possessive_removed).strip()
+        hyphen_space_possessive_removed = re.sub(r"\s+", " ", hyphen_space_possessive_removed)
+        hyphen_space_possessive_s_removed = re.sub(r"[-\u2010-\u2015]+", " ", possessive_s_removed).strip()
+        hyphen_space_possessive_s_removed = re.sub(r"\s+", " ", hyphen_space_possessive_s_removed)
         compact_alnum_token = re.sub(r"\b([A-Za-z]\d)\s+([A-Za-z])\b", r"\1\2", base).strip()
         compact_alnum_token = re.sub(r"\b([A-Za-z]+)\s+(\d+)\s+([A-Za-z]+)\b", r"\1\2\3", compact_alnum_token).strip()
         spaced_alnum_token = re.sub(r"\b([A-Za-z]+)(\d+)([A-Za-z]+)\b", r"\1 \2 \3", base).strip()
@@ -2597,6 +2601,8 @@ def organization_name_variants(
             apostrophe_removed,
             possessive_removed,
             possessive_s_removed,
+            hyphen_space_possessive_removed,
+            hyphen_space_possessive_s_removed,
             saint_expanded,
             saint_abbreviated,
             cancer_research_center,
@@ -2940,6 +2946,8 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
         return False
     if related_affiliate_or_chapter_mismatch(original_name, registry_name):
         return False
+    if legal_trustee_entity_match(original_name, registry_name):
+        return True
     if broad_governance_name_mismatch(original_name, registry_name):
         return False
     if incompatible_institutional_prefix_expansion(original_name, registry_name):
@@ -3010,7 +3018,6 @@ def descriptor_entity_extension_match(original_name: str, registry_name: str) ->
     descriptor_words = {
         "national", "international", "global", "worldwide", "world", "america",
         "medical", "center", "centre", "hospital", "health", "system",
-        "mount", "sinai",
     }
 
     def safe_extra(words: list[str]) -> bool:
@@ -3048,7 +3055,6 @@ def distinctive_entity_extension_mismatch(original_name: str, registry_name: str
     safe_descriptor_extension_words = {
         "national", "international", "global", "worldwide", "world", "america",
         "medical", "center", "centre", "hospital", "health", "system",
-        "mount", "sinai",
     }
 
     def acronym(words: list[str]) -> str:
@@ -3111,6 +3117,18 @@ def related_affiliate_or_chapter_mismatch(original_name: str, registry_name: str
     original_terms = set(original_norm.split())
     registry_terms = set(registry_norm.split())
     return any(term in registry_terms and term not in original_terms for term in related_terms)
+
+
+def legal_trustee_entity_match(original_name: str, registry_name: str) -> bool:
+    original_norm = normalized_match_name(original_name)
+    registry_norm = normalized_match_name(registry_name)
+    if not original_norm or not registry_norm:
+        return False
+    match = re.match(r"^(?:the\s+)?trustees\s+of\s+(.+)$", original_norm)
+    if not match:
+        return False
+    trustee_target = re.sub(r"\s+", " ", match.group(1)).strip()
+    return bool(trustee_target) and registry_norm == trustee_target
 
 
 def broad_governance_name_mismatch(original_name: str, registry_name: str) -> bool:
@@ -9839,6 +9857,12 @@ def true_status_from_body(result, body: str) -> str:
         solicitation_status = classify_mi_solicitation_status(mi_solicitation_raw_from_combined(result.raw_status_text or ""))
         if solicitation_status:
             return solicitation_status
+    if (
+        state == "MD"
+        and re.fullmatch(r"\s*pending\s*", result.raw_status_text or "", re.I)
+        and not re.search(r"\b(current|active|expired|delinquent|closed|withdrawn|cancel(?:ed|led)|inactive)\b", result.status or "", re.I)
+    ):
+        return "Pending"
     if state == "MI" and re.search(r"Solicitation\s+Registration\s+Status\s*:\s*Registered", result.raw_status_text or "", re.I):
         registry_date = explicit_registry_date(result, result.raw_status_text or "")
         return status_from_calendar_date(registry_date) if registry_date else base_status
@@ -12115,6 +12139,25 @@ def ar_result_rows(page) -> list[dict]:
     return rows
 
 
+def ar_wait_for_search_form(page, timeout_ms: int) -> bool:
+    deadline = time.perf_counter() + max(1.0, timeout_ms / 1000.0)
+    while time.perf_counter() < deadline:
+        try:
+            if page.locator('input[name="name"]').count() > 0:
+                page.locator('input[name="name"]').first.wait_for(state="visible", timeout=1000)
+                return True
+        except Exception:
+            pass
+        try:
+            body = registry_page_body(page)
+            if re.search(r"403\s+ERROR|request could not be satisfied|cloudfront", body, re.I):
+                return False
+        except Exception:
+            pass
+        page.wait_for_timeout(500)
+    return False
+
+
 def search_ar_precise(page, org):
     result = checker.StateResult(org.organization_name, org.ein, "AR", checker.STATUS_UNKNOWN, AR_SEARCH_URL)
     original_name = getattr(org, "organization_name", "") or ""
@@ -12144,7 +12187,16 @@ def search_ar_precise(page, org):
         settle_timeout_ms = max(1000, min(2500, int(remaining * 500)))
         try:
             page.goto(AR_SEARCH_URL, wait_until="domcontentloaded", timeout=nav_timeout_ms)
-            page.wait_for_timeout(250)
+            if not ar_wait_for_search_form(page, nav_timeout_ms):
+                body = registry_page_body(page)
+                if re.search(r"403\s+ERROR|request could not be satisfied|cloudfront|human verification|verify you are human|captcha", body, re.I):
+                    result.status = "Site Not Reachable"
+                    result.raw_status_text = "Arkansas public charity search returned a bot-verification or block page"
+                    result.source_note = "Arkansas public charity search could not be reached from this runtime; no no-record determination was made."
+                    result.error = "AR registry returned bot-verification or block page"
+                    result.success = False
+                    return result
+                raise RuntimeError("Arkansas search form did not become visible")
             body = registry_page_body(page)
             if re.search(r"403\s+ERROR|request could not be satisfied|cloudfront|human verification|verify you are human|captcha", body, re.I):
                 result.status = "Site Not Reachable"
@@ -12160,6 +12212,13 @@ def search_ar_precise(page, org):
             safe_wait_for_network_idle(page, timeout=settle_timeout_ms)
             page.wait_for_timeout(600)
             body = registry_page_body(page)
+            if re.search(r"403\s+ERROR|request could not be satisfied|cloudfront|human verification|verify you are human|captcha", body, re.I):
+                result.status = "Site Not Reachable"
+                result.raw_status_text = "Arkansas public charity search returned a bot-verification or block page after submit"
+                result.source_note = "Arkansas public charity search could not be reached from this runtime after submitting the search; no no-record determination was made."
+                result.error = "AR registry returned bot-verification or block page after submit"
+                result.success = False
+                return result
             if re.search(r"Back\s+to\s+Search\s+Form|Registration\s+Date|No\s+Results\s+Found", body, re.I):
                 reached = True
             for row in ar_result_rows(page):
