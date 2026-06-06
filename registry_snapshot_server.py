@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.06.182-staging"
+APP_VERSION = "2026.06.06.183-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -12587,14 +12587,14 @@ def ar_high_signal_alias_retry_names(org) -> list[str]:
 
 def search_ar_name_variants_once(page, org):
     result = search_ar_precise(page, org)
-    if public_status(result) != checker.STATUS_NOT_REGISTERED:
+    if public_status(result) != "Not Registered":
         return result
 
     original_name = getattr(org, "organization_name", "") or ""
     for retry_name in ar_high_signal_alias_retry_names(org):
         retry_result = search_ar_precise(page, org_with_name(org, retry_name))
         retry_status = public_status(retry_result)
-        if retry_status in {"Site Not Reachable", checker.STATUS_NOT_REGISTERED, checker.STATUS_UNKNOWN}:
+        if retry_status in {"Site Not Reachable", "Not Registered", "Unknown"}:
             continue
         matched_name = getattr(retry_result, "matched_registry_name", "") or retry_name
         if not registry_name_is_safe_for_org(matched_name, original_name, getattr(org, "ein", "")):
