@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.06.175-staging"
+APP_VERSION = "2026.06.06.176-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -2969,6 +2969,8 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
         return True
     if parenthetical_descriptor_match(original_name, registry_name):
         return True
+    if institutional_affiliation_suffix_match(original_name, registry_name):
+        return True
     if descriptor_entity_extension_match(original_name, registry_name):
         return True
     if missing_distinctive_prefix_mismatch(original_name, registry_name):
@@ -2997,6 +2999,25 @@ def parenthetical_descriptor_match(original_name: str, registry_name: str) -> bo
         return False
     base_name = re.sub(r"\s*\([^)]{2,80}\)\s*$", "", registry_name or "").strip()
     return normalized_match_name(base_name) == normalized_match_name(original_name)
+
+
+def institutional_affiliation_suffix_match(original_name: str, registry_name: str) -> bool:
+    """Allow exact full-name rows followed by a short institutional affiliation."""
+    original_norm = normalized_match_name(original_name)
+    registry_norm = normalized_match_name(registry_name)
+    if not original_norm or not registry_norm or original_norm == registry_norm:
+        return False
+    original_words = original_norm.split()
+    registry_words = registry_norm.split()
+    if len(original_words) < 4 or len(registry_words) <= len(original_words):
+        return False
+    if registry_words[: len(original_words)] != original_words:
+        return False
+    suffix = registry_words[len(original_words):]
+    if len(suffix) > 4 or suffix[0] not in {"of", "at"}:
+        return False
+    blocked = {"chapter", "affiliate", "auxiliary", "alumni", "booster", "foundation", "fund"}
+    return not any(word in blocked for word in suffix)
 
 
 def wrapped_supporting_foundation_match(registry_name: str, original_name: str) -> bool:
@@ -7736,6 +7757,29 @@ def wi_search_names_for_org(org) -> list[str]:
         )
         if aids_tb_variant.lower() != cleaned.lower() and aids_tb_variant not in expanded_names:
             expanded_names.append(aids_tb_variant)
+        connector_core_variants = connector_light_name_variants(cleaned)
+        for core_variant in connector_core_variants[:3]:
+            if core_variant not in expanded_names:
+                expanded_names.append(core_variant)
+        hyphen_parts = [
+            part.strip(" ,;")
+            for part in re.split(r"[-\u2010-\u2015]+", cleaned)
+            if part.strip(" ,;")
+        ]
+        if len(hyphen_parts) >= 2:
+            for part in hyphen_parts[1:]:
+                part_words = [
+                    word for word in re.findall(r"[A-Za-z0-9]+", part)
+                    if word.lower() not in {
+                        "the", "a", "an", "inc", "incorporated", "corp", "corporation",
+                        "llc", "ltd", "limited", "hospital", "center", "centre",
+                        "foundation", "fund", "association", "society",
+                    }
+                ]
+                if part_words:
+                    core_part = part_words[-1]
+                    if len(core_part) >= 5 and core_part not in expanded_names:
+                        expanded_names.append(core_part)
 
     seed_key_names = {re.sub(r"\s+", " ", (seed or "").strip()).lower() for seed in seed_names if seed}
     original_seed_key = re.sub(r"\s+", " ", (original_name or "").strip()).lower()
@@ -7760,6 +7804,8 @@ def wi_search_names_for_org(org) -> list[str]:
             return (-2, word_rank, cleaned.lower())
         if exact_seed:
             return (-1, word_rank, cleaned.lower())
+        if len(cleaned.split()) == 1 and re.search(r"[-\u2010-\u2015]", original_name or ""):
+            return (0, -9, cleaned.lower())
         if not has_punctuation and not re.search(r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\b", cleaned, re.I):
             return (0, word_rank, cleaned.lower())
         if has_safe_hyphen:
@@ -7813,7 +7859,8 @@ def wi_search_names_for_org(org) -> list[str]:
         compact = re.sub(r"[^A-Za-z0-9]+", "", value or "")
         is_short_acronym = 2 <= len(compact) <= 8 and compact.upper() == compact
         is_compact_alnum_name = bool(re.fullmatch(r"(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9]{4,}", compact or ""))
-        if (len(substantive) >= 2 or is_short_acronym or is_compact_alnum_name) and value not in filtered_names:
+        is_hyphen_core = bool(seed_has_hyphen and len(substantive) == 1 and len(compact) >= 5)
+        if (len(substantive) >= 2 or is_short_acronym or is_compact_alnum_name or is_hyphen_core) and value not in filtered_names:
             filtered_names.append(value)
     filtered_names.sort(key=priority)
     return filtered_names
@@ -9892,6 +9939,11 @@ def true_status_from_body(result, body: str) -> str:
         and not body_indicates_no_organization_record(combined)
     ):
         return "Delinquent"
+    if state == "NY" and normalized == "not registered":
+        repaired_result = repair_ny_not_registered_with_due_date(result, combined)
+        repaired_status = public_status(repaired_result)
+        if repaired_status != "Not Registered":
+            return repaired_status
     if explicit_no_registration_status(result, combined):
         return "Not Registered"
     if state == "MS":
@@ -12201,6 +12253,7 @@ def search_ar_precise(page, org):
 
     best = None
     best_score = -10000
+    first_rejected_row = ""
     reached = False
     deadline = time.perf_counter() + AR_NAME_SEARCH_MAX_SECONDS
     for variant in variants[:AR_NAME_SEARCH_MAX_VARIANTS]:
@@ -12247,7 +12300,18 @@ def search_ar_precise(page, org):
                 reached = True
             for row in ar_result_rows(page):
                 row_name = row.get("name", "")
-                if not row_name or not registry_name_is_safe_for_org(row_name, original_name, getattr(org, "ein", "")):
+                if not row_name:
+                    continue
+                if not registry_name_is_safe_for_org(row_name, original_name, getattr(org, "ein", "")):
+                    if not first_rejected_row:
+                        first_rejected_row = " | ".join(
+                            part for part in [
+                                f"Name: {row.get('name', '')}",
+                                f"Type: {row.get('type', '')}",
+                                f"Status: {row.get('status', '')}",
+                                f"Registration Date: {row.get('registration_date', '')}",
+                            ] if part
+                        )
                     continue
                 name_score = checker.name_match_priority_for_targets(row_name, organization_match_target_variants(original_name, getattr(org, "ein", "")))
                 score = (
@@ -12276,7 +12340,11 @@ def search_ar_precise(page, org):
             result.success = False
         else:
             result.status = checker.STATUS_NOT_REGISTERED
-            result.raw_status_text = "No matching organization row"
+            result.raw_status_text = (
+                "No matching organization row"
+                if not first_rejected_row
+                else f"No safely matching organization row. First rejected row: {first_rejected_row}"
+            )
             result.source_note = "Arkansas search did not contain a usable charity row after master-code safe-name filtering."
             result.success = True
         return result
@@ -12327,6 +12395,11 @@ def ar_preferred_name_variants(org) -> list[str]:
     add(re.sub(r"\b(inc|corp|ltd)\.", r"\1", compact, flags=re.I))
     add(compact)
     add(re.sub(r"^(?:the|a|an)\s+", "", compact, flags=re.I))
+    if re.search(r"\bto\s+fight\b", compact, re.I):
+        add(re.split(r"\bto\s+fight\b", compact, maxsplit=1, flags=re.I)[0])
+    if re.search(r"\bmissing\b", compact, re.I) and re.search(r"\bexploited\b", compact, re.I) and re.search(r"\bchildren\b", compact, re.I):
+        add("Missing Exploited Children")
+        add("Missing and Exploited Children")
     add(re.sub(r"[^\w\s]", " ", compact))
     add(re.sub(r"^(?:the\s+)?trustees\s+of\s+", "", compact, flags=re.I))
     add(re.sub(r"\bcentre\b", "Center", compact, flags=re.I))
