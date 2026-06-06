@@ -963,7 +963,27 @@ def apply_nm_rows_to_result(
 ) -> SearchResult:
     latest_tax_year = max(year for year, _, _ in rows)
     latest_year_rows = [(year, detail, status_date) for year, detail, status_date in rows if year == latest_tax_year]
-    latest_detail = re.sub(r"\s+\d{10,}$", "", latest_year_rows[0][1]).strip()
+
+    def row_sort_key(row: tuple[int, str, str]):
+        _, detail, status_date = row
+        parsed_status_date = parse_date(status_date) or date.min
+        if re.search(r"\bdelinquent\b", detail, re.I):
+            priority = 4
+        elif detail.startswith("Extension Granted"):
+            priority = 3
+        elif detail.startswith("Registration Submitted"):
+            priority = 2
+        elif detail.startswith("Tax Year Registration Open"):
+            priority = 1
+        else:
+            priority = 0
+        return parsed_status_date, priority
+
+    latest_detail = re.sub(
+        r"\s+\d{10,}$",
+        "",
+        max(latest_year_rows, key=row_sort_key)[1],
+    ).strip()
 
     latest_submitted = nm_latest_submitted(rows)
     if latest_detail.startswith("Tax Year Registration Open"):
@@ -983,8 +1003,12 @@ def apply_nm_rows_to_result(
         return result
 
     _, reg_number, _ = latest_submitted
+    history_fye_text = nm_fye_from_tax_year_open(rows, latest_tax_year)
+    has_extension = any(detail.startswith("Extension Granted") for _, detail, _ in latest_year_rows)
+    if has_extension and history_fye_text:
+        fye_text = history_fye_text
     if not fye_text:
-        fye_text = nm_fye_from_tax_year_open(rows, latest_tax_year)
+        fye_text = history_fye_text
     if not fye_text and context is not None:
         _, fye_text = nm_extract_fye(context, reg_number)
     if not fye_text:
@@ -1009,7 +1033,7 @@ def apply_nm_rows_to_result(
 
     cycle_fye = date(latest_tax_year, fye_date.month, fye_date.day)
     due_date = add_months(cycle_fye, 6)
-    if any(detail.startswith("Extension Granted") for _, detail, _ in latest_year_rows):
+    if has_extension:
         due_date = add_months(due_date, 6)
 
     today = date.today()

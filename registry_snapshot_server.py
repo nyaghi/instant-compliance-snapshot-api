@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.05.173-staging"
+APP_VERSION = "2026.06.06.174-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -1780,6 +1780,19 @@ def filing_due_date_options(state: str, report_year: int, fiscal_end: tuple[int,
         "uses_extension_assumption": False,
         "rule_note": rule_note,
     }
+
+
+def next_base_due_from_fiscal_end(state: str, fiscal_end: tuple[int, int] | None) -> date | None:
+    if not fiscal_end:
+        return None
+    state = (state or "").upper()
+    today = date.today()
+    future_due_dates = []
+    for report_year in range(today.year - 2, today.year + 3):
+        due_date = filing_due_date_options(state, report_year, fiscal_end).get("base_due")
+        if due_date and due_date >= today:
+            future_due_dates.append(due_date)
+    return min(future_due_dates) if future_due_dates else None
 
 
 def nj_inferred_latest_filing_year(fiscal_end: tuple[int, int]) -> int | None:
@@ -4022,6 +4035,11 @@ def classify_nm_status_history(raw_status: str) -> str:
         return ""
     tax_years = [int(value) for value in re.findall(r"\bTax\s+Year\s+(20\d{2})\b", raw, re.I)]
     latest_tax_year = max(tax_years) if tax_years else None
+    if re.search(r"\bExtension\s+Granted\b", raw, re.I):
+        fye_match = re.search(r"\bFYE\s*:\s*([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", raw, re.I)
+        fye_date = parse_due_date(fye_match.group(1)) if fye_match else None
+        if fye_date:
+            return status_from_calendar_date(add_months(fye_date, 12))
     due_dates = [
         parsed
         for parsed in (
@@ -9742,12 +9760,6 @@ def explicit_adverse_registry_status(result, body: str) -> str:
     status_evidence = " ".join([raw_fields, labeled_status_text])
     if result_explicitly_exempt(result):
         return ""
-    if state == "MS" and explicit_registry_date(result, text):
-        # Mississippi can show a Filing Status such as Closed/Withdrawn while
-        # still exposing an expiration date for the matched charitable record.
-        # In that case the dated filing window is more specific than the raw
-        # status label and should be handled by the MS date logic below.
-        return ""
     withdrawn_pattern = r"\b(withdrawn|retired|terminated|cancelled|canceled|voluntar(?:y|ily)\s+(?:deactivat(?:ed|ion)|surrender(?:ed)?))\b"
     closed_pattern = r"\bclosed\b"
     inactive_pattern = r"\binactive\b"
@@ -9881,6 +9893,9 @@ def true_status_from_body(result, body: str) -> str:
     if explicit_no_registration_status(result, combined):
         return "Not Registered"
     if state == "MS":
+        ms_status_text = " ".join([result.status or "", result.raw_status_text or "", result.source_note or ""])
+        if re.search(r"\b(closed|withdrawn|cancel(?:ed|led)|revoked|terminated|inactive)\b", ms_status_text, re.I):
+            return "Closed / Withdrawn / Canceled"
         ms_registry_date = explicit_registry_date(result, combined)
         if ms_registry_date and not result_indicates_no_record(result):
             return status_from_calendar_date(ms_registry_date)
@@ -9935,6 +9950,10 @@ def true_status_from_body(result, body: str) -> str:
             return "Delinquent"
         if early_due_date and early_represented_year:
             return status_from_calendar_date(early_due_date)
+        if re.search(r"Registration\s+Status\s+Current|Registration\s+Status[^A-Za-z0-9]{0,40}Current", combined, re.I):
+            inferred_due = next_base_due_from_fiscal_end(state, early_context.get("fiscal_end"))
+            if inferred_due:
+                return status_from_calendar_date(inferred_due)
     adverse_status = explicit_adverse_registry_status(result, combined)
     if adverse_status:
         return adverse_status
@@ -9983,6 +10002,9 @@ def true_status_from_body(result, body: str) -> str:
         if due_date and represented_year:
             return status_from_calendar_date(due_date)
         if re.search(r"Registration\s+Status\s+Current|Registration\s+Status[^A-Za-z0-9]{0,40}Current", combined, re.I):
+            inferred_due = next_base_due_from_fiscal_end(state, context.get("fiscal_end"))
+            if inferred_due:
+                return status_from_calendar_date(inferred_due)
             return "Current"
 
     record_confirmed = organization_record_confirmed(result, combined) or (state == "MD" and md_detail_page_matched(result, combined))
@@ -11495,10 +11517,10 @@ def ms_status_from_filing_status(filing_status: str, expiration_date: date | Non
     text = filing_status or ""
     if re.search(r"\bexempt(?:ed|ion)?\b", text, re.I):
         return "Exempt"
-    if expiration_date:
-        return status_from_calendar_date(expiration_date)
     if re.search(r"\b(closed|withdrawn|cancel(?:ed|led)|terminated|dissolved)\b", text, re.I):
         return "Closed / Withdrawn / Canceled"
+    if expiration_date:
+        return status_from_calendar_date(expiration_date)
     return classifier(filing_status, expiration_date)
 
 
@@ -12947,6 +12969,18 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             result.matched_registry_identifier or "",
         ]).strip()
         return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
+
+    if state == "OR":
+        lookup_started = time.perf_counter()
+        result = or_snapshot_result_for_ein(org)
+        if result is not None:
+            body = " ".join(part for part in [
+                result.raw_status_text or "",
+                result.source_note or "",
+                result.matched_registry_name or "",
+                result.matched_registry_identifier or "",
+            ]).strip()
+            return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
 
     if state == "FL":
         lookup_started = time.perf_counter()
