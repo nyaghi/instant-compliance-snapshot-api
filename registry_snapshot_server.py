@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.06.188-staging"
+APP_VERSION = "2026.06.06.189-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -10115,7 +10115,7 @@ def true_status_from_body(result, body: str) -> str:
     ):
         return "Delinquent"
     if state == "NY" and normalized == "not registered":
-        repaired_result = repair_ny_not_registered_with_due_date(result, combined)
+        repaired_result = repair_ny_not_registered_with_due_date(result, result)
         repaired_status = public_status(repaired_result)
         if repaired_status != "Not Registered":
             return repaired_status
@@ -13835,12 +13835,14 @@ def fragile_batch_result_needs_confirmation(result: dict) -> bool:
         "ND", "NH", "NM", "NY", "OK", "OR", "SC", "VA", "WA", "WI", "WV",
     }
     if state in BATCH_ISOLATED_STATES and status in {"not registered", "site not reachable", "error", ""}:
-        return state in {"AR", "MS", "ND", "NM", "OK", "SC", "VA", "WA", "WV"}
+        return state in {"AR", "MS", "ND", "NM", "NY", "OK", "SC", "VA", "WA", "WV"}
     if weak_terminal_name_match_result(result):
         return True
     if state in BATCH_ISOLATED_STATES and status in {"not registered", "site not reachable", "error", ""}:
         return False
     if state in name_registry_states and status in {"site not reachable", "error", ""}:
+        return True
+    if state == "NY" and status == "not registered":
         return True
     if status == "not registered" and state not in {"ME", "ND", "OR"} and slow_explicit_no_match_result(result):
         return False
@@ -14055,11 +14057,11 @@ def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
             original_status_lower = (original.get("status") or "").strip().lower()
             original_is_no_match = original_status_lower == "not registered"
             original_is_unreachable = original_status_lower == "site not reachable"
-            if state in {"AR", "CO", "FL", "ME", "MI", "MS", "ND", "NM", "OK", "SC", "VA", "WA", "WI", "WV"} and (original_is_no_match or original_is_unreachable) and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0:
+            if state in {"AR", "CO", "FL", "ME", "MI", "MS", "ND", "NM", "NY", "OK", "SC", "VA", "WA", "WI", "WV"} and (original_is_no_match or original_is_unreachable) and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0:
                 time.sleep(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS)
             confirmed = run_state_lookup_for_batch(name, ein, state, confirm_single_no_match=(state == "ME"))
             if (
-                state in {"AR", "CO", "FL", "ME", "MI", "MS", "NM", "OK", "WA", "WI", "WV"}
+                state in {"AR", "CO", "FL", "ME", "MI", "MS", "NM", "NY", "OK", "WA", "WI", "WV"}
                 and (original_is_no_match or original_is_unreachable)
                 and (confirmed.get("status") or "").strip().lower() in {"not registered", "site not reachable"}
                 and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0

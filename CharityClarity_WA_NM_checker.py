@@ -863,6 +863,13 @@ def nm_fye_from_tax_year_open(rows: list[tuple[int, str, str]], tax_year: int) -
     return ""
 
 
+def nm_due_date_from_fye(cycle_fye: date, has_extension: bool) -> date:
+    if has_extension:
+        extended_month = add_months(cycle_fye.replace(day=1), 11)
+        return date(extended_month.year, extended_month.month, 15)
+    return add_months(cycle_fye, 6)
+
+
 def nm_extract_fye(context, reg_number: str) -> tuple[str, str]:
     if not reg_number:
         return "", ""
@@ -1005,8 +1012,6 @@ def apply_nm_rows_to_result(
     _, reg_number, _ = latest_submitted
     history_fye_text = nm_fye_from_tax_year_open(rows, latest_tax_year)
     has_extension = any(detail.startswith("Extension Granted") for _, detail, _ in latest_year_rows)
-    if has_extension and history_fye_text:
-        fye_text = history_fye_text
     if not fye_text:
         fye_text = history_fye_text
     if not fye_text and context is not None:
@@ -1032,15 +1037,11 @@ def apply_nm_rows_to_result(
         return result
 
     cycle_fye = date(latest_tax_year, fye_date.month, fye_date.day)
-    due_date = add_months(cycle_fye, 6)
-    if has_extension:
-        due_date = add_months(due_date, 6)
+    due_date = nm_due_date_from_fye(cycle_fye, has_extension)
 
     today = date.today()
     six_months = today + timedelta(days=183)
-    if has_extension and latest_tax_year >= today.year - 1:
-        result.status = STATUS_UPCOMING
-    elif due_date < today:
+    if due_date < today:
         result.status = STATUS_DELINQUENT
     elif due_date <= six_months:
         result.status = STATUS_UPCOMING
