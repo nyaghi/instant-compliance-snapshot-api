@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.06.187-staging"
+APP_VERSION = "2026.06.06.188-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -330,8 +330,8 @@ WI_SIDECAR_URL = os.environ.get("CE_WI_SIDECAR_URL", "").strip()
 WI_LOOKUP_SECRET = os.environ.get("CE_WI_LOOKUP_SECRET", "").strip()
 WI_SIDECAR_TIMEOUT_SECONDS = min(max(8.0, float(os.environ.get("CE_WI_SIDECAR_TIMEOUT_SECONDS", "24"))), 58.0)
 WI_SIDECAR_ATTEMPTS = min(max(1, int(os.environ.get("CE_WI_SIDECAR_ATTEMPTS", "1"))), 5)
-WI_CONFIRM_SIDECAR_NO_MATCH = os.environ.get("CE_WI_CONFIRM_SIDECAR_NO_MATCH", "1").strip().lower() in {"1", "true", "yes"}
-WI_NO_MATCH_CONFIRMATION_ATTEMPTS = min(max(0, int(os.environ.get("CE_WI_NO_MATCH_CONFIRMATION_ATTEMPTS", "1"))), 3)
+WI_CONFIRM_SIDECAR_NO_MATCH = os.environ.get("CE_WI_CONFIRM_SIDECAR_NO_MATCH", "0").strip().lower() in {"1", "true", "yes"}
+WI_NO_MATCH_CONFIRMATION_ATTEMPTS = min(max(0, int(os.environ.get("CE_WI_NO_MATCH_CONFIRMATION_ATTEMPTS", "0"))), 3)
 WI_NO_MATCH_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_WI_NO_MATCH_CONFIRMATION_DELAY_SECONDS", "1.0"))), 5.0)
 WI_SIDECAR_LANES = min(max(1, int(os.environ.get("CE_WI_SIDECAR_LANES", "2"))), 3)
 WI_SIDECAR_ACQUIRE_SECONDS = min(max(10.0, float(os.environ.get("CE_WI_SIDECAR_ACQUIRE_SECONDS", "85"))), 100.0)
@@ -13230,11 +13230,14 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
     proof_url = None
     if state == "WI":
         result = search_wi_snapshot(org)
+        snapshot_backed = bool(result is not None and re.search(r"\blocal\s+snapshot\b", result.source_note or "", re.I))
+        snapshot_no_match = snapshot_backed and public_status(result) == checker.STATUS_NOT_REGISTERED
         if WI_SIDECAR_URL and WI_LOOKUP_SECRET and (
             result is None
             or (
                 WI_CONFIRM_SIDECAR_NO_MATCH
                 and public_status(result) == "Not Registered"
+                and not snapshot_no_match
             )
         ):
             sidecar_result = search_wi_sidecar(org)
@@ -13245,11 +13248,11 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             result.raw_status_text = "Wisconsin snapshot is unavailable and no WI fallback is configured"
             result.source_note = "Wisconsin DFI lookup could not be completed because the local snapshot was unavailable."
             result.success = False
-        if result is not None and public_status(result) == "Not Registered":
+        if result is not None and public_status(result) == "Not Registered" and WI_CONFIRM_SIDECAR_NO_MATCH and not snapshot_no_match:
             direct_result = search_wi(None, org)
             if public_status(direct_result) not in {"Not Registered", "Site Not Reachable"}:
                 result = direct_result
-        if result is not None and public_status(result) == "Not Registered":
+        if result is not None and public_status(result) == "Not Registered" and not snapshot_no_match:
             result = search_wi_with_separator_retries(org, result)
         body = " ".join(part for part in [
             result.raw_status_text or "",
