@@ -831,6 +831,9 @@ def nm_extract_fye_from_html(page_html: str, preferred_year: int | None = None) 
     ):
         year = int(match.group(1))
         candidates.append((year, match.group(3)))
+    for match in re.finditer(r"\bFYE\s*[-_ ]?(20\d{2})(\d{2})(\d{2})\b", text, re.I):
+        year = int(match.group(1))
+        candidates.append((year, f"{match.group(2)}/{match.group(3)}/{year}"))
     if not candidates:
         return ""
     if preferred_year is not None:
@@ -843,9 +846,9 @@ def nm_extract_fye_from_html(page_html: str, preferred_year: int | None = None) 
 def nm_latest_submitted(rows: list[tuple[int, str, str]]):
     submitted = []
     for year, detail, status_date in rows:
-        match = re.match(r"^Registration Submitted\s+(\d{10,})$", detail)
+        match = re.match(r"^Registration Submitted(?:\s+(\d{10,}))?$", detail)
         if match:
-            submitted.append((year, match.group(1), status_date))
+            submitted.append((year, match.group(1) or "", status_date))
     if not submitted:
         return None
     return max(submitted, key=lambda item: item[0])
@@ -986,13 +989,40 @@ def apply_nm_rows_to_result(
             priority = 0
         return parsed_status_date, priority
 
+    latest_submitted = nm_latest_submitted(rows)
+    latest_year_has_filing_evidence = any(
+        year == latest_tax_year
+        and (
+            detail.startswith("Registration Submitted")
+            or detail.startswith("Extension Granted")
+            or detail.startswith("Extension Requested")
+        )
+        for year, detail, _ in latest_year_rows
+    )
+    if latest_submitted and not latest_year_has_filing_evidence:
+        # A newer "Tax Year Registration Open" row is only an open cycle, not
+        # evidence that the prior submitted cycle is current. Prefer the latest
+        # delinquent cycle when it is newer than the last submitted filing;
+        # otherwise classify from the latest actual submitted year.
+        delinquent_years = [
+            year
+            for year, detail, _ in rows
+            if re.search(r"\bRegistration\s+Submission\s+Delinquent\b", detail, re.I)
+        ]
+        latest_delinquent_year = max(delinquent_years) if delinquent_years else None
+        latest_tax_year = (
+            latest_delinquent_year
+            if latest_delinquent_year and latest_delinquent_year > latest_submitted[0]
+            else latest_submitted[0]
+        )
+        latest_year_rows = [(year, detail, status_date) for year, detail, status_date in rows if year == latest_tax_year]
+
     latest_detail = re.sub(
         r"\s+\d{10,}$",
         "",
         max(latest_year_rows, key=row_sort_key)[1],
     ).strip()
 
-    latest_submitted = nm_latest_submitted(rows)
     if latest_detail.startswith("Tax Year Registration Open"):
         result.status = STATUS_UPCOMING if latest_tax_year >= date.today().year - 1 else STATUS_DELINQUENT
         result.raw_status_text = f"Tax Year {latest_tax_year} | {latest_detail}"

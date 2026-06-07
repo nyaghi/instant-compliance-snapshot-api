@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.06.189-staging"
+APP_VERSION = "2026.06.07.190-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -2359,7 +2359,7 @@ def organization_name_variants(
     name: str,
     ein: str = "",
     include_ein_aliases: bool = True,
-    include_name_segments: bool = False,
+    include_name_segments: bool = True,
     include_and_segments: bool = True,
     include_compact_legal_suffixes: bool = True,
     include_leading_article_variants: bool = True,
@@ -2422,6 +2422,14 @@ def organization_name_variants(
                     continue
                 if (len(part.split()) >= 2) or len(part) >= 4:
                     segmented_seeds.append(part)
+            for parenthetical in re.findall(r"\(([^)]{2,120})\)", seed or ""):
+                parenthetical = re.sub(r"\s+", " ", parenthetical.strip(" ,;-"))
+                if (len(parenthetical.split()) >= 2) or len(parenthetical) >= 4:
+                    segmented_seeds.append(parenthetical)
+            without_parenthetical_seed = re.sub(r"\s*\([^)]{2,120}\)\s*", " ", seed or "")
+            without_parenthetical_seed = re.sub(r"\s+", " ", without_parenthetical_seed.strip(" ,;-"))
+            if without_parenthetical_seed and without_parenthetical_seed.lower() != (seed or "").strip().lower():
+                segmented_seeds.append(without_parenthetical_seed)
             if include_and_segments and re.search(r"\s(?:&|and)\s", seed or "", re.I):
                 for part in re.split(r"\s*(?:&|\band\b)\s*", seed or "", flags=re.I):
                     part = re.sub(r"\s+", " ", part.strip(" ,;-"))
@@ -2436,6 +2444,13 @@ def organization_name_variants(
         seed_names = [seed_names[0], *segmented_seeds, *seed_names[1:], *and_segmented_seeds]
         if segmented_seeds:
             add(seed_names[0])
+            for early_seed in [seed_names[0]]:
+                if re.search(r"\b[A-Za-z]+'[sS]\b", early_seed or ""):
+                    add(re.sub(r"\b([A-Za-z]+)'[sS]\b", r"\1s", early_seed).strip())
+                    add(re.sub(r"\b([A-Za-z]+)'[sS]\b", r"\1", early_seed).strip())
+                if re.search(r"\bu\.?\s*s\.?(?=\W|$)", early_seed or "", re.I):
+                    add(re.sub(r"\bu\.?\s*s\.?(?=\W|$)", "US", early_seed, flags=re.I).strip())
+                    add(re.sub(r"\bu\.?\s*s\.?(?=\W|$)", "United States", early_seed, flags=re.I).strip())
             for disease_seed in [seed_names[0]]:
                 if re.search(r"\bTuberculosis\b", disease_seed or "", re.I):
                     abbreviated = re.sub(r"\bTuberculosis\b", "TB", disease_seed, flags=re.I).strip()
@@ -2468,6 +2483,12 @@ def organization_name_variants(
         without_leading_article = re.sub(r"^(?:the|a|an)\s+", "", base, flags=re.I).strip()
         without_comma_suffix = re.sub(r",\s*(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?)\s*$", "", base, flags=re.I).strip()
         without_suffix = re.sub(r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?)\s*$", "", without_comma_suffix, flags=re.I).strip()
+        without_common_entity_suffix = re.sub(
+            r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited|foundation|fund)\s*$",
+            "",
+            without_comma_suffix,
+            flags=re.I,
+        ).strip(" ,;-")
         no_comma = re.sub(r",\s*", " ", base).strip()
         no_punctuation = re.sub(r"[^\w\s]", " ", base).strip()
         no_punctuation = re.sub(r"\s+", " ", no_punctuation)
@@ -2613,7 +2634,11 @@ def organization_name_variants(
             without_leading_article,
             without_comma_suffix,
             without_suffix,
+            without_common_entity_suffix,
             no_comma,
+            *us_word_variants,
+            possessive_s_removed,
+            possessive_removed,
             disease_abbreviated,
             disease_abbreviated_ampersand,
             disease_abbreviated_no_punctuation,
@@ -2623,7 +2648,6 @@ def organization_name_variants(
             childrens_hospital,
             childrens_hospital_no_punctuation,
             *hyphenated_word_pairs,
-            *us_word_variants,
             no_punctuation,
             slash_as_space,
             institute_plural,
@@ -2635,8 +2659,6 @@ def organization_name_variants(
             ampersand_as_and,
             ampersand_removed,
             apostrophe_removed,
-            possessive_removed,
-            possessive_s_removed,
             hyphen_space_possessive_removed,
             hyphen_space_possessive_s_removed,
             saint_expanded,
@@ -2980,6 +3002,7 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
     registry_name = clean_registry_name(registry_name or "")
     if not registry_name:
         return False
+    safe_targets = organization_match_target_variants(original_name, ein)
     if related_affiliate_or_chapter_mismatch(original_name, registry_name):
         return False
     if legal_trustee_entity_match(original_name, registry_name):
@@ -3002,11 +3025,19 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
         return True
     if descriptor_entity_extension_match(original_name, registry_name):
         return True
+    if (
+        registry_name_has_distinctive_overlap(registry_name, safe_targets)
+        and target_name_score(registry_name, safe_targets) >= 1000
+    ):
+        return True
     if missing_distinctive_prefix_mismatch(original_name, registry_name):
         return False
     if distinctive_entity_extension_mismatch(original_name, registry_name):
         return False
-    safe_targets = organization_match_target_variants(original_name, ein)
+    if not registry_name_has_distinctive_overlap(registry_name, safe_targets):
+        if acronym_prefix_expands_to_registry(original_name, registry_name) or acronym_prefix_expands_to_registry(registry_name, original_name):
+            return compatible_ein_alias_for_name(original_name, registry_name)
+        return False
     if target_name_score(registry_name, safe_targets) >= 450:
         return True
     return compatible_ein_alias_for_name(original_name, registry_name)
@@ -3693,6 +3724,11 @@ def search_va_direct(org):
     for generated in generated_variants:
         if len(variants) >= 8:
             break
+        if "-" in generated:
+            add_variant(generated)
+    for generated in generated_variants:
+        if len(variants) >= 8:
+            break
         add_variant(generated)
     variants = variants[:8]
     targets = organization_match_target_variants(org.organization_name, org.ein)
@@ -4142,12 +4178,19 @@ def classify_nm_status_history(raw_status: str) -> str:
     tax_years = [int(value) for value in re.findall(r"\bTax\s+Year\s+(20\d{2})\b", raw, re.I)]
     latest_tax_year = max(tax_years) if tax_years else None
     if re.search(r"\bExtension\s+Granted\b", raw, re.I):
-        if latest_tax_year and latest_tax_year >= date.today().year - 1:
-            return "Upcoming Filing"
-        fye_match = re.search(r"\bFYE\s*:\s*([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})", raw, re.I)
+        fye_match = re.search(
+            r"\bFYE\s*:\s*([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})",
+            raw,
+            re.I,
+        )
         fye_date = parse_due_date(fye_match.group(1)) if fye_match else None
+        if fye_date and latest_tax_year:
+            cycle_fye = date(latest_tax_year, fye_date.month, fye_date.day)
+            extended_due_month = add_months(cycle_fye.replace(day=1), 11)
+            return status_from_calendar_date(date(extended_due_month.year, extended_due_month.month, 15))
         if fye_date:
-            return status_from_calendar_date(add_months(fye_date, 12))
+            extended_due_month = add_months(fye_date.replace(day=1), 11)
+            return status_from_calendar_date(date(extended_due_month.year, extended_due_month.month, 15))
     due_dates = [
         parsed
         for parsed in (
@@ -4646,10 +4689,19 @@ def search_bundled_extension_state(page, org, state: str):
 
 def search_co_with_name_fallback(page, org):
     result = checker.search_co(page, org)
+    result = normalize_co_matched_closed_status(result, org)
     if public_status(result) == "Site Not Reachable":
         api_result = co_api_fallback_result(org)
-        if api_result is not None:
+        if api_result is not None and public_status(api_result) != "Not Registered":
             return api_result
+        if api_result is not None:
+            result.raw_status_text = "Colorado public search did not complete; official FEIN dataset fallback returned no row"
+            result.source_note = (
+                "Colorado supports name fallback after a completed FEIN no-match. "
+                "Because the browser FEIN search was incomplete, CharityClarity did not finalize Not Registered from the FEIN dataset alone."
+            )
+            result.success = False
+            return result
     if public_status(result) != "Not Registered":
         return result
     for variant in organization_name_variants(
@@ -4665,6 +4717,7 @@ def search_co_with_name_fallback(page, org):
         fallback = checker.search_co(page, variant_org)
         if public_status(fallback) == "Site Not Reachable":
             return copy_name_fallback_result(org, fallback)
+        fallback = normalize_co_matched_closed_status(fallback, org)
         if public_status(fallback) == "Not Registered":
             continue
         if result_registry_name_is_safe(fallback, org.organization_name, org.ein):
@@ -4673,6 +4726,26 @@ def search_co_with_name_fallback(page, org):
                 + " CharityClarity used a name fallback after the EIN search returned no matching record."
             )
             return copy_name_fallback_result(org, fallback)
+    return result
+
+
+def normalize_co_matched_closed_status(result, org):
+    text = " ".join([
+        getattr(result, "status", "") or "",
+        getattr(result, "raw_status_text", "") or "",
+        getattr(result, "source_note", "") or "",
+    ])
+    if (
+        getattr(result, "matched_registry_name", "") or ""
+    ).strip() and result_registry_name_is_safe(result, getattr(org, "organization_name", "") or "", getattr(org, "ein", "") or ""):
+        if re.search(r"\b(withdrawn?|cancel(?:ed|led)?|closed|terminated|dissolved)\b", text, re.I):
+            result.status = "Closed / Withdrawn / Canceled"
+            result.raw_status_text = getattr(result, "raw_status_text", "") or re.sub(r"\s+", " ", text).strip()
+            result.source_note = " ".join(part for part in [
+                getattr(result, "source_note", "") or "",
+                "Colorado returned a safe matching registry row with a withdrawn/closed status; CharityClarity maps that to Closed / Withdrawn / Canceled rather than Not Registered.",
+            ]).strip()
+            result.success = True
     return result
 
 
@@ -5063,6 +5136,53 @@ def normalized_match_name(value: str) -> str:
     return re.sub(r"\s+", " ", normalized).strip()
 
 
+WEAK_NAME_MATCH_TOKENS = {
+    "a", "an", "and", "association", "america", "american", "americans",
+    "center", "centre", "charitable", "charities", "charity", "christian",
+    "community", "corp", "corporation", "for", "foundation", "friends",
+    "fund", "inc", "incorporated", "international", "limited", "llc", "ltd",
+    "national", "of", "organization", "outreach", "society", "the", "to",
+    "trust",
+}
+
+
+def distinctive_match_tokens(value: str) -> set[str]:
+    tokens = set()
+    for token in re.findall(r"[a-z0-9]+", normalized_match_name(value or "")):
+        if token in WEAK_NAME_MATCH_TOKENS:
+            continue
+        if len(token) < 2:
+            continue
+        tokens.add(token)
+    return tokens
+
+
+def distinctive_overlap_is_sufficient(row_norm: str, target_norm: str) -> bool:
+    if row_norm == target_norm:
+        return True
+    row_tokens = distinctive_match_tokens(row_norm)
+    target_tokens = distinctive_match_tokens(target_norm)
+    if not row_tokens or not target_tokens:
+        return False
+    shared = row_tokens & target_tokens
+    if len(shared) >= 2:
+        return True
+    if len(shared) == 1 and len(row_tokens) == 1 and len(target_tokens) == 1:
+        return True
+    return False
+
+
+def registry_name_has_distinctive_overlap(registry_name: str, targets: list[str]) -> bool:
+    row_norm = normalized_match_name(registry_name)
+    if not row_norm:
+        return False
+    for target in targets:
+        target_norm = normalized_match_name(target)
+        if target_norm and distinctive_overlap_is_sufficient(row_norm, target_norm):
+            return True
+    return False
+
+
 def single_plural_token_variant_match(left: str, right: str) -> bool:
     left_tokens = (left or "").split()
     right_tokens = (right or "").split()
@@ -5104,6 +5224,8 @@ def target_name_score(row_name: str, targets: list[str]) -> int:
             best = max(best, 1000)
         if row_norm == target_norm:
             best = max(best, 1000)
+        elif not distinctive_overlap_is_sufficient(row_norm, target_norm):
+            continue
         elif single_plural_token_variant_match(row_norm, target_norm):
             best = max(best, 920)
         elif row_norm.startswith(target_norm) or target_norm.startswith(row_norm):
@@ -6725,16 +6847,16 @@ def ak_name_fallback_variants(original_name: str, ein: str = "") -> list[str]:
         original_name,
         ein,
         include_ein_aliases=False,
-        include_name_segments=False,
+        include_name_segments=True,
         include_compact_legal_suffixes=True,
         include_leading_article_variants=True,
         include_broad_query_prefixes=False,
         include_institutional_reductions=True,
     ):
         add(variant)
-        if len(variants) >= 8:
+        if len(variants) >= 14:
             break
-    return variants[:8]
+    return variants[:14]
 
 
 def ak_row_has_wrong_ein(row_text: str, expected_ein: str) -> bool:
@@ -6990,8 +7112,8 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
         if not checker.open_ak_public_search(ak_page):
             result.error = "Could not open Alaska Public Search form"
             return result, ""
-        first_ein_years = years_to_try[:2]
-        remaining_ein_years = years_to_try[2:]
+        first_ein_years = years_to_try
+        remaining_ein_years = []
         for search_name in search_names or [original_name]:
             lookup_org = org_with_name(org, search_name)
             for year in first_ein_years:
@@ -7053,11 +7175,13 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                         pass
                     continue
         name_deadline = time.perf_counter() + 54.0
+        ak_confirmation_incomplete = False
         name_fallback_years = list(range(date.today().year, max(2018, date.today().year - 5), -1))
         for search_name in ak_name_fallback_variants(original_name, org.ein):
             lookup_org = org_with_name(org, search_name)
             for year in name_fallback_years:
                 if time.perf_counter() >= name_deadline:
+                    ak_confirmation_incomplete = True
                     break
                 page_body = ""
                 try:
@@ -7125,6 +7249,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
             lookup_org = org_with_name(org, search_name)
             for year in remaining_ein_years:
                 if time.perf_counter() >= name_deadline:
+                    ak_confirmation_incomplete = True
                     break
                 page_body = ""
                 try:
@@ -7165,6 +7290,12 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
     finally:
         ak_context.close()
     checked_years = ", ".join(str(year) for year in years_to_try)
+    if locals().get("ak_confirmation_incomplete"):
+        result.raw_status_text = f"Alaska lookup did not complete all EIN/name confirmation passes before the bounded deadline; checked years included {checked_years}"
+        result.status = "Site Not Reachable"
+        result.source_note = "Alaska public search did not complete the full EIN-first and name-fallback confirmation path, so CharityClarity did not finalize Not Registered."
+        result.success = False
+        return result, ""
     result.raw_status_text = f"No Alaska registration found for checked years {checked_years}"
     result.status = "Not registered"
     result.source_note = f"No Alaska registration found in public search for years {checked_years}"
@@ -10119,6 +10250,13 @@ def true_status_from_body(result, body: str) -> str:
         repaired_status = public_status(repaired_result)
         if repaired_status != "Not Registered":
             return repaired_status
+    if (
+        state == "CO"
+        and (getattr(result, "matched_registry_name", "") or "").strip()
+        and registry_name_is_safe_for_org(result.matched_registry_name or "", result.organization_name, result.ein)
+        and re.search(r"\b(withdrawn?|cancel(?:ed|led)?|closed|terminated|dissolved)\b", combined, re.I)
+    ):
+        return "Closed / Withdrawn / Canceled"
     if explicit_no_registration_status(result, combined):
         return "Not Registered"
     if state == "MS":
@@ -10144,7 +10282,7 @@ def true_status_from_body(result, body: str) -> str:
             return status_from_calendar_date(ak_next_due)
     if state == "SC" and re.search(r"^\s*Registered\b", " ".join([result.status or "", result.raw_status_text or ""]), re.I):
         registry_date = explicit_registry_date(result, combined)
-        return status_from_calendar_date(registry_date) if registry_date else "Current"
+        return status_from_calendar_date(registry_date) if registry_date else checker.STATUS_UNKNOWN
     if state == "CT":
         ct_status_fields = " ".join([
             result.raw_status_text or "",
@@ -13349,7 +13487,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 ]
             browser = p.chromium.launch(headless=True, **launch_kwargs)
             if state == "AK":
-                result = checker.search_ak(browser, org)
+                result, body = search_ak_with_registration_evidence(browser, org, artifact_name)
                 if public_status(result) not in {"Not Registered", "Site Not Reachable"} and not (result.matched_registry_name or "").strip():
                     variant_match = re.search(r"variant\s+'([^']+)'", result.source_note or "", re.I)
                     result.matched_registry_name = (
@@ -13362,7 +13500,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     result.source_note or "",
                     result.matched_registry_name or "",
                     result.matched_registry_identifier or "",
-                ]).strip()
+                ]).strip() or body
             else:
                 context_kwargs = {"user_agent": BROWSER_USER_AGENT, "locale": "en-US"}
                 if state == "AR":
