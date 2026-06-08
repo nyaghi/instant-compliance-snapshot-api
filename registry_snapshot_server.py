@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.08.194-staging"
+APP_VERSION = "2026.06.08.195-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -328,19 +328,20 @@ WI_DIRECT_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_WI_DIRECT_VARIANT_LI
 WI_BROWSER_VARIANT_LIMIT = min(max(0, int(os.environ.get("CE_WI_BROWSER_VARIANT_LIMIT", "0"))), 5)
 WI_SIDECAR_URL = os.environ.get("CE_WI_SIDECAR_URL", "").strip()
 WI_LOOKUP_SECRET = os.environ.get("CE_WI_LOOKUP_SECRET", "").strip()
-WI_SIDECAR_TIMEOUT_SECONDS = min(max(8.0, float(os.environ.get("CE_WI_SIDECAR_TIMEOUT_SECONDS", "24"))), 58.0)
-WI_SIDECAR_ATTEMPTS = min(max(1, int(os.environ.get("CE_WI_SIDECAR_ATTEMPTS", "1"))), 5)
+WI_SIDECAR_TIMEOUT_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_SIDECAR_TIMEOUT_SECONDS", "10"))), 12.0)
+WI_SIDECAR_ATTEMPTS = 1
 WI_CONFIRM_SIDECAR_NO_MATCH = os.environ.get("CE_WI_CONFIRM_SIDECAR_NO_MATCH", "0").strip().lower() in {"1", "true", "yes"}
 WI_NO_MATCH_CONFIRMATION_ATTEMPTS = min(max(0, int(os.environ.get("CE_WI_NO_MATCH_CONFIRMATION_ATTEMPTS", "0"))), 3)
 WI_NO_MATCH_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_WI_NO_MATCH_CONFIRMATION_DELAY_SECONDS", "1.0"))), 5.0)
 WI_SIDECAR_LANES = min(max(1, int(os.environ.get("CE_WI_SIDECAR_LANES", "2"))), 3)
-WI_SIDECAR_ACQUIRE_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_SIDECAR_ACQUIRE_SECONDS", "10"))), 45.0)
+WI_SIDECAR_ACQUIRE_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_SIDECAR_ACQUIRE_SECONDS", "8"))), 12.0)
 WI_SIDECAR_SEMAPHORE = threading.BoundedSemaphore(WI_SIDECAR_LANES)
 WI_BACKEND_BROWSER_LANES = min(max(1, int(os.environ.get("CE_WI_BACKEND_BROWSER_LANES", "3"))), 4)
-WI_BACKEND_BROWSER_ACQUIRE_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_BACKEND_BROWSER_ACQUIRE_SECONDS", "10"))), 45.0)
+WI_BACKEND_BROWSER_ACQUIRE_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_BACKEND_BROWSER_ACQUIRE_SECONDS", "8"))), 12.0)
 WI_BACKEND_BROWSER_SEMAPHORE = threading.BoundedSemaphore(WI_BACKEND_BROWSER_LANES)
 WI_USE_BACKEND_BROWSER_FALLBACK = os.environ.get("CE_WI_USE_BACKEND_BROWSER_FALLBACK", "0").strip().lower() in {"1", "true", "yes"}
 WI_SNAPSHOT_PATH = Path(os.environ.get("CE_WI_SNAPSHOT_PATH", str(BASE_DIR / "wi_charities_snapshot.json")))
+WI_TOTAL_FALLBACK_MAX_SECONDS = min(max(24.0, float(os.environ.get("CE_WI_TOTAL_FALLBACK_MAX_SECONDS", "42"))), 45.0)
 NM_SIDECAR_URL = os.environ.get(
     "CE_NM_STATUS_SIDECAR_URL",
     "https://staging.compliance-express.com/.netlify/functions/nm-status",
@@ -8643,6 +8644,33 @@ def wi_snapshot_search_name_can_be_acceptance_target(value: str) -> bool:
     return len(distinctive_core_words(cleaned)) >= 2
 
 
+def wi_name_needs_variant_no_match_confirmation(name: str) -> bool:
+    cleaned = re.sub(r"\s+", " ", (name or "").strip())
+    if not cleaned:
+        return False
+    if re.search(r"['\u2019]|[/|;()]|(?:\s+-\s+)|[-\u2010-\u2015]", cleaned):
+        return True
+    if re.search(r"\b(?:d/?b/?a|a/?k/?a|also\s+known\s+as|also\s+soliciting\s+as|doing\s+business\s+as)\b", cleaned, re.I):
+        return True
+    if re.search(r"\bU\.?\s*S\.?\b", cleaned, re.I):
+        return True
+    if re.search(r"\b(?:and|&)\b", cleaned) and any("&" in variant or re.search(r"\band\b", variant, re.I) for variant in organization_name_variants(cleaned)):
+        return True
+    return False
+
+
+def wi_conservative_no_match_result(org, note: str = ""):
+    result = checker.StateResult(org.organization_name, org.ein, "WI", "Unable to Confirm", WI_SEARCH_URL)
+    result.raw_status_text = "Wisconsin no-match was not confirmed by a complete authoritative lookup"
+    result.source_note = (
+        note
+        or "Wisconsin DFI lookup was bounded and did not prove a clean no-record result for the generated name variants."
+    )
+    result.success = False
+    result.error = "Wisconsin bounded lookup did not prove a clean no-match"
+    return result
+
+
 def search_wi_snapshot(org):
     snapshot, load_error = wi_snapshot_load()
     if not snapshot:
@@ -9198,6 +9226,12 @@ def search_wi_sidecar(org):
 
 
 def _search_wi_sidecar_unlocked(org):
+    sidecar_started = time.perf_counter()
+    sidecar_deadline = sidecar_started + WI_TOTAL_FALLBACK_MAX_SECONDS
+
+    def fallback_budget_exhausted() -> bool:
+        return time.perf_counter() >= sidecar_deadline
+
     result = checker.StateResult(org.organization_name, org.ein, "WI", "Site Not Reachable", WI_SEARCH_URL)
     if not (WI_SIDECAR_URL and WI_LOOKUP_SECRET):
         result.raw_status_text = "Wisconsin sidecar is not configured"
@@ -9242,6 +9276,8 @@ def _search_wi_sidecar_unlocked(org):
     }
 
     def direct_then_browser_fallback(note: str, site_result=None):
+        if fallback_budget_exhausted():
+            return wi_conservative_no_match_result(org, f"{note} Wisconsin fallback budget was exhausted before a clean no-match could be confirmed.")
         sidecar_status = public_status(site_result) if site_result is not None else str((data or {}).get("status") or "")
         sidecar_confirmed_no_match = sidecar_status == checker.STATUS_NOT_REGISTERED
         direct_result = search_wi(None, org)
@@ -9251,6 +9287,11 @@ def _search_wi_sidecar_unlocked(org):
             direct_result.source_note = note
             return direct_result
         if direct_status == checker.STATUS_NOT_REGISTERED:
+            if wi_name_needs_variant_no_match_confirmation(org.organization_name):
+                return wi_conservative_no_match_result(
+                    org,
+                    f"{note} Wisconsin returned no row for a punctuation/alias-sensitive name; CharityClarity did not treat that bounded result as a definitive no-record finding.",
+                )
             if sidecar_confirmed_no_match:
                 direct_result.source_note = (
                     f"{note} Wisconsin DFI returned no matching credential after sidecar "
@@ -9295,7 +9336,7 @@ def _search_wi_sidecar_unlocked(org):
                 return confirmed_result
             direct_result = confirmed_result
 
-        if not WI_USE_BACKEND_BROWSER_FALLBACK:
+        if not WI_USE_BACKEND_BROWSER_FALLBACK or time.perf_counter() + 8.0 >= sidecar_deadline:
             return site_result or direct_result
 
         browser_result = search_wi_backend_browser_fallback(org)
@@ -9308,6 +9349,11 @@ def _search_wi_sidecar_unlocked(org):
             return browser_result
         best_terminal = browser_result if browser_status == checker.STATUS_NOT_REGISTERED else direct_result
         if browser_status == checker.STATUS_NOT_REGISTERED:
+            if wi_name_needs_variant_no_match_confirmation(org.organization_name):
+                return wi_conservative_no_match_result(
+                    org,
+                    f"{note} Wisconsin backend browser returned no row for a punctuation/alias-sensitive name; CharityClarity did not treat that bounded result as a definitive no-record finding.",
+                )
             for attempt_index in range(WI_NO_MATCH_CONFIRMATION_ATTEMPTS):
                 if WI_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0:
                     time.sleep(min(WI_NO_MATCH_CONFIRMATION_DELAY_SECONDS * (attempt_index + 1), 5.0))
@@ -9341,7 +9387,10 @@ def _search_wi_sidecar_unlocked(org):
     data = None
     last_exception = None
     for attempt_index in range(WI_SIDECAR_ATTEMPTS):
+        if fallback_budget_exhausted():
+            break
         try:
+            request_timeout = max(3.0, min(WI_SIDECAR_TIMEOUT_SECONDS + 2, sidecar_deadline - time.perf_counter()))
             request = urllib.request.Request(
                 WI_SIDECAR_URL,
                 data=json.dumps(payload).encode("utf-8"),
@@ -9353,7 +9402,7 @@ def _search_wi_sidecar_unlocked(org):
                 },
                 method="POST",
             )
-            with urllib.request.urlopen(request, timeout=WI_SIDECAR_TIMEOUT_SECONDS + 5) as response:
+            with urllib.request.urlopen(request, timeout=request_timeout) as response:
                 response_body = response.read().decode("utf-8", errors="replace")
             candidate_data = json.loads(response_body)
         except Exception as exc:
@@ -9395,6 +9444,11 @@ def _search_wi_sidecar_unlocked(org):
             "Wisconsin DFI lookup used backend fallbacks to confirm the sidecar no-match result."
         )
         return fallback_result
+    if data.get("status") == "Not Registered" and wi_name_needs_variant_no_match_confirmation(org.organization_name):
+        return wi_conservative_no_match_result(
+            org,
+            "Wisconsin sidecar returned no row for a punctuation/alias-sensitive name; CharityClarity did not treat that bounded sidecar result as a definitive no-record finding.",
+        )
 
     candidate_name = data.get("matched_registry_name") or ""
     candidate_status = data.get("status") or ""
@@ -13834,6 +13888,15 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 result = direct_result
         if result is not None and public_status(result) == "Not Registered" and not snapshot_no_match:
             result = search_wi_with_separator_retries(org, result)
+        if (
+            result is not None
+            and public_status(result) == "Not Registered"
+            and wi_name_needs_variant_no_match_confirmation(org.organization_name)
+        ):
+            result = wi_conservative_no_match_result(
+                org,
+                "Wisconsin returned no matching row for a punctuation/alias-sensitive organization name; CharityClarity did not treat the bounded snapshot/live lookup as a definitive no-record finding.",
+            )
         body = " ".join(part for part in [
             result.raw_status_text or "",
             result.source_note or "",
