@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.07.190-staging"
+APP_VERSION = "2026.06.08.191-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -225,7 +225,7 @@ BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("C
 BATCH_TRUST_SLOW_NO_MATCH_SECONDS = min(max(15.0, float(os.environ.get("CE_BATCH_TRUST_SLOW_NO_MATCH_SECONDS", "35"))), 90.0)
 BATCH_ISOLATED_STATE_ORDER = [
     state.strip().upper()
-    for state in os.environ.get("CE_BATCH_ISOLATED_STATES", "AR,ME,FL,WI,VA,SC,ND,WA,NM,MS,OK,WV").split(",")
+    for state in os.environ.get("CE_BATCH_ISOLATED_STATES", "AK,AR,ME,FL,WI,VA,SC,ND,WA,NM,MS,OK,WV").split(",")
     if state.strip()
 ]
 BATCH_ISOLATED_STATES = set(BATCH_ISOLATED_STATE_ORDER)
@@ -351,6 +351,8 @@ WI_REQUIRE_COMPLETE_SNAPSHOT = os.environ.get("CE_WI_REQUIRE_COMPLETE_SNAPSHOT",
 WI_SNAPSHOT_MAX_AGE_SECONDS = min(max(86400, int(os.environ.get("CE_WI_SNAPSHOT_MAX_AGE_SECONDS", str(14 * 86400)))), 45 * 86400)
 WI_SNAPSHOT_CACHE: dict[str, object] = {"loaded_at": 0.0, "mtime": 0.0, "snapshot": None, "name_index": None, "error": ""}
 WI_SNAPSHOT_LOCK = threading.Lock()
+AK_LOOKUP_TOTAL_BUDGET_SECONDS = min(max(25.0, float(os.environ.get("CE_AK_LOOKUP_TOTAL_BUDGET_SECONDS", "48"))), 82.0)
+AK_ACTION_TIMEOUT_MS = min(max(2500, int(os.environ.get("CE_AK_ACTION_TIMEOUT_MS", "5000"))), 10000)
 NH_LIVE_PDF_URL = os.environ.get(
     "CE_NH_LIVE_PDF_URL",
     "https://mm.nh.gov/files/uploads/doj/remote-docs/registered-charities.pdf",
@@ -4729,23 +4731,47 @@ def search_co_with_name_fallback(page, org):
     return result
 
 
-def normalize_co_matched_closed_status(result, org):
-    text = " ".join([
-        getattr(result, "status", "") or "",
-        getattr(result, "raw_status_text", "") or "",
-        getattr(result, "source_note", "") or "",
-    ])
+def co_registry_evidence_text(result, body: str = "") -> str:
+    """Colorado status overrides must come from registry evidence, not comments."""
+    raw = re.sub(r"\s+", " ", getattr(result, "raw_status_text", "") or "").strip()
+    if raw:
+        return raw
+    return re.sub(r"\s+", " ", body or "").strip()
+
+
+def co_status_from_registry_evidence(result, org, body: str = "") -> str:
     if (
         getattr(result, "matched_registry_name", "") or ""
     ).strip() and result_registry_name_is_safe(result, getattr(org, "organization_name", "") or "", getattr(org, "ein", "") or ""):
+        text = co_registry_evidence_text(result, body)
         if re.search(r"\b(withdrawn?|cancel(?:ed|led)?|closed|terminated|dissolved)\b", text, re.I):
-            result.status = "Closed / Withdrawn / Canceled"
-            result.raw_status_text = getattr(result, "raw_status_text", "") or re.sub(r"\s+", " ", text).strip()
-            result.source_note = " ".join(part for part in [
-                getattr(result, "source_note", "") or "",
-                "Colorado returned a safe matching registry row with a withdrawn/closed status; CharityClarity maps that to Closed / Withdrawn / Canceled rather than Not Registered.",
-            ]).strip()
-            result.success = True
+            return "Closed / Withdrawn / Canceled"
+        if re.search(r"\b(may\s+not\s+solicit|not\s+authorized|suspend(?:ed)?|revok(?:ed)?|cease\s+and\s+desist)\b", text, re.I):
+            return "Suspended"
+        expiration_match = re.search(r"\bexpires?\s+on\s+([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4}|\d{1,2}/\d{1,2}/\d{2,4})\b", text, re.I)
+        if expiration_match:
+            expiration_date = parse_due_date(expiration_match.group(1))
+            if expiration_date:
+                return status_from_calendar_date(expiration_date)
+    return ""
+
+
+def normalize_co_matched_closed_status(result, org):
+    interpreted = co_status_from_registry_evidence(result, org)
+    if interpreted:
+        result.status = interpreted
+        result.raw_status_text = getattr(result, "raw_status_text", "") or co_registry_evidence_text(result)
+        if interpreted == "Closed / Withdrawn / Canceled":
+            note = "Colorado returned a safe matching registry row with a withdrawn/closed status; CharityClarity maps that to Closed / Withdrawn / Canceled rather than Not Registered."
+        elif interpreted == "Suspended":
+            note = "Colorado returned a safe matching registry row showing the organization may not solicit or is not authorized; CharityClarity maps that to Suspended."
+        else:
+            note = "Colorado returned a safe matching registry row with an expiration date; CharityClarity interpreted the date using the standard upcoming-filing window."
+        result.source_note = " ".join(part for part in [
+            getattr(result, "source_note", "") or "",
+            note,
+        ]).strip()
+        result.success = True
     return result
 
 
@@ -6720,7 +6746,7 @@ def fill_ak_search_form_ein_fast(page, org, year: int) -> None:
     search_button = page.locator("#Dq-c")
     if search_button.count() == 0:
         search_button = page.get_by_role("button", name=re.compile(r"^Search$", re.I)).first
-    search_button.click(timeout=10000, force=True)
+    search_button.click(timeout=AK_ACTION_TIMEOUT_MS, force=True)
     wait_ak_search_results(page)
 
 
@@ -6781,7 +6807,7 @@ def fill_ak_search_form_name_only(page, org, year: int, variant: str) -> None:
     search_button = page.locator("#Dq-c")
     if search_button.count() == 0:
         search_button = page.get_by_role("button", name=re.compile(r"^Search$", re.I)).first
-    search_button.click(timeout=10000, force=True)
+    search_button.click(timeout=AK_ACTION_TIMEOUT_MS, force=True)
     wait_ak_search_results(page)
 
 
@@ -6922,16 +6948,19 @@ def ak_last_year_from_print_row(print_link: dict, row_text: str) -> int | None:
     return None
 
 
-def ak_newer_year_result_from_retry(page, lookup_org, original_org, original_name: str, found_year: int, name_fallback: bool = False) -> tuple[int | None, str, str, str]:
+def ak_newer_year_result_from_retry(page, lookup_org, original_org, original_name: str, found_year: int, name_fallback: bool = False, deadline: float | None = None) -> tuple[int | None, str, str, str]:
     current_year = date.today().year
     if found_year >= current_year:
         return None, "", "", ""
     for newer_year in range(current_year, found_year, -1):
+        if deadline and time.perf_counter() >= deadline:
+            return None, "", "", ""
         try:
             if name_fallback:
                 fill_ak_search_form_name_only(page, lookup_org, newer_year, lookup_org.organization_name)
             else:
                 fill_ak_search_form_ein_fast(page, lookup_org, newer_year)
+            body = registry_page_body(page)
             print_link = find_ak_print_link_relaxed(page, lookup_org)
             if not print_link:
                 continue
@@ -6944,7 +6973,7 @@ def ak_newer_year_result_from_retry(page, lookup_org, original_org, original_nam
             row_name = ak_registry_name_from_print_row(print_link, row_text, original_name, original_org.ein) if row_text else ""
             if row_name and not registry_name_is_safe_for_org(row_name, original_name, original_org.ein):
                 continue
-            return newer_year, row_name, ak_registry_identifier_from_print_row(print_link, row_text), registry_page_body(page)
+            return newer_year, row_name, ak_registry_identifier_from_print_row(print_link, row_text), body
         except Exception:
             try:
                 checker.open_ak_public_search(page)
@@ -7092,6 +7121,13 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
     if len(re.sub(r"\D", "", org.ein or "")) != 9:
         result.error = "AK search requires 9-digit EIN"
         return result, ""
+    started = time.perf_counter()
+    ak_deadline = started + AK_LOOKUP_TOTAL_BUDGET_SECONDS
+    ak_confirmation_incomplete = False
+
+    def ak_budget_exhausted() -> bool:
+        return time.perf_counter() >= ak_deadline
+
     years_to_try = list(range(date.today().year, 2018, -1))
     original_name = getattr(org, "organization_name", "") or ""
     search_names = []
@@ -7109,6 +7145,11 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
     configure_browser_context(ak_context)
     ak_page = ak_context.new_page()
     try:
+        ak_page.set_default_timeout(AK_ACTION_TIMEOUT_MS)
+        ak_page.set_default_navigation_timeout(max(AK_ACTION_TIMEOUT_MS, 10000))
+    except Exception:
+        pass
+    try:
         if not checker.open_ak_public_search(ak_page):
             result.error = "Could not open Alaska Public Search form"
             return result, ""
@@ -7117,11 +7158,14 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
         for search_name in search_names or [original_name]:
             lookup_org = org_with_name(org, search_name)
             for year in first_ein_years:
+                if ak_budget_exhausted():
+                    ak_confirmation_incomplete = True
+                    break
                 page_body = ""
                 try:
                     fill_ak_search_form_ein_fast(ak_page, lookup_org, year)
-                    print_link = find_ak_print_link_relaxed(ak_page, lookup_org)
                     page_body = registry_page_body(ak_page)
+                    print_link = find_ak_print_link_relaxed(ak_page, lookup_org)
                     if not print_link:
                         continue
                     row_text = re.sub(r"\s+", " ", (print_link.get("rowText") or "")).strip() if isinstance(print_link, dict) else ""
@@ -7143,6 +7187,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                         org,
                         original_name,
                         year,
+                        deadline=ak_deadline,
                     )
                     if newer_year:
                         year = newer_year
@@ -7170,24 +7215,29 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                 except Exception as e:
                     result.error = f"AK error: {e}"
                     try:
-                        checker.open_ak_public_search(ak_page)
+                        if not ak_budget_exhausted():
+                            checker.open_ak_public_search(ak_page)
                     except Exception:
                         pass
                     continue
-        name_deadline = time.perf_counter() + 54.0
-        ak_confirmation_incomplete = False
+            if ak_confirmation_incomplete:
+                break
+        name_deadline = min(time.perf_counter() + 54.0, ak_deadline)
         name_fallback_years = list(range(date.today().year, max(2018, date.today().year - 5), -1))
         for search_name in ak_name_fallback_variants(original_name, org.ein):
+            if ak_budget_exhausted():
+                ak_confirmation_incomplete = True
+                break
             lookup_org = org_with_name(org, search_name)
             for year in name_fallback_years:
-                if time.perf_counter() >= name_deadline:
+                if time.perf_counter() >= name_deadline or ak_budget_exhausted():
                     ak_confirmation_incomplete = True
                     break
                 page_body = ""
                 try:
                     fill_ak_search_form_name_only(ak_page, lookup_org, year, search_name)
-                    print_link = find_ak_print_link_relaxed(ak_page, lookup_org)
                     page_body = registry_page_body(ak_page)
+                    print_link = find_ak_print_link_relaxed(ak_page, lookup_org)
                     if not print_link:
                         continue
                     row_text = re.sub(r"\s+", " ", (print_link.get("rowText") or "")).strip() if isinstance(print_link, dict) else ""
@@ -7207,6 +7257,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                         original_name,
                         year,
                         name_fallback=True,
+                        deadline=ak_deadline,
                     )
                     if newer_year:
                         year = newer_year
@@ -7241,21 +7292,27 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                 except Exception as e:
                     result.error = f"AK name fallback error: {e}"
                     try:
-                        checker.open_ak_public_search(ak_page)
+                        if not ak_budget_exhausted():
+                            checker.open_ak_public_search(ak_page)
                     except Exception:
                         pass
                     continue
+            if ak_confirmation_incomplete:
+                break
         for search_name in search_names or [original_name]:
+            if ak_budget_exhausted():
+                ak_confirmation_incomplete = True
+                break
             lookup_org = org_with_name(org, search_name)
             for year in remaining_ein_years:
-                if time.perf_counter() >= name_deadline:
+                if time.perf_counter() >= name_deadline or ak_budget_exhausted():
                     ak_confirmation_incomplete = True
                     break
                 page_body = ""
                 try:
                     fill_ak_search_form_ein_fast(ak_page, lookup_org, year)
-                    print_link = find_ak_print_link_relaxed(ak_page, lookup_org)
                     page_body = registry_page_body(ak_page)
+                    print_link = find_ak_print_link_relaxed(ak_page, lookup_org)
                     if not print_link:
                         continue
                     row_text = re.sub(r"\s+", " ", (print_link.get("rowText") or "")).strip() if isinstance(print_link, dict) else ""
@@ -7283,10 +7340,13 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                 except Exception as e:
                     result.error = f"AK error: {e}"
                     try:
-                        checker.open_ak_public_search(ak_page)
+                        if not ak_budget_exhausted():
+                            checker.open_ak_public_search(ak_page)
                     except Exception:
                         pass
                     continue
+            if ak_confirmation_incomplete:
+                break
     finally:
         ak_context.close()
     checked_years = ", ".join(str(year) for year in years_to_try)
@@ -8176,6 +8236,15 @@ def wi_snapshot_record_names(record: dict) -> list[str]:
     return names
 
 
+def wi_snapshot_display_name(record: dict) -> str:
+    for key in ("registry_name", "full_name"):
+        value = re.sub(r"\s+", " ", str(record.get(key) or "").strip())
+        if value:
+            return value
+    names = wi_snapshot_record_names(record)
+    return names[0] if names else ""
+
+
 def wi_snapshot_has_distinctive_leading_prefix(candidate: str, target: str) -> bool:
     if wrapped_supporting_foundation_match(candidate, target):
         return False
@@ -8235,6 +8304,9 @@ def wi_snapshot_name_is_safe(candidate: str, targets: list[str], original_name: 
 
 def wi_snapshot_record_match(record: dict, org, targets: list[str]) -> tuple[int, int, str] | None:
     original_name = getattr(org, "original_organization_name", org.organization_name)
+    display_name = wi_snapshot_display_name(record)
+    if display_name and not wi_snapshot_name_is_safe(display_name, targets, original_name, getattr(org, "ein", "")):
+        return None
     best: tuple[int, int, str] | None = None
     for registry_name in wi_snapshot_record_names(record):
         if not wi_snapshot_name_is_safe(registry_name, targets, original_name, getattr(org, "ein", "")):
@@ -8450,12 +8522,18 @@ def wi_contains_full_target_name(registry_name: str, target_names: list[str]) ->
     return False
 
 
-def wi_candidate_from_row_html(row_html: str, target_names: list[str]) -> dict | None:
+def wi_live_candidate_name_is_safe(registry_name: str, target_names: list[str], original_name: str, ein: str) -> bool:
+    return wi_snapshot_name_is_safe(registry_name, target_names, original_name, ein)
+
+
+def wi_candidate_from_row_html(row_html: str, target_names: list[str], original_name: str = "", ein: str = "") -> dict | None:
     values = html_table_cells(row_html)
     if len(values) < 6:
         return None
     license_number, profession, registry_name, location, granted_date, expiration_text = values[:6]
     if not re.search(r"Charitable\s+Organization", profession, re.I):
+        return None
+    if not wi_live_candidate_name_is_safe(registry_name, target_names, original_name, ein):
         return None
     score = checker.name_match_priority_for_targets(registry_name, target_names)
     if score < 4 and not wi_contains_full_target_name(registry_name, target_names):
@@ -8478,7 +8556,7 @@ def wi_candidate_from_row_html(row_html: str, target_names: list[str]) -> dict |
     }
 
 
-def wi_candidate_from_markdown_row(row_text: str, target_names: list[str]) -> dict | None:
+def wi_candidate_from_markdown_row(row_text: str, target_names: list[str], original_name: str = "", ein: str = "") -> dict | None:
     cells = [cell.strip() for cell in (row_text or "").strip().strip("|").split("|")]
     if len(cells) < 6:
         return None
@@ -8488,6 +8566,8 @@ def wi_candidate_from_markdown_row(row_text: str, target_names: list[str]) -> di
     if re.match(r"^-+$", license_number) or re.match(r"license#?$", license_number, re.I):
         return None
     registry_name, detail_href = wi_markdown_link_parts(registry_cell)
+    if not wi_live_candidate_name_is_safe(registry_name, target_names, original_name, ein):
+        return None
     score = checker.name_match_priority_for_targets(registry_name, target_names)
     if score < 4 and not wi_contains_full_target_name(registry_name, target_names):
         return None
@@ -8538,7 +8618,7 @@ def wi_is_decisive_candidate(candidate: dict | None) -> bool:
     return bool(wi_status_from_detail_status(candidate.get("detail_status", "")))
 
 
-def wi_best_match_from_html(result_html: str, target_names: list[str], best_match: dict | None = None) -> dict | None:
+def wi_best_match_from_html(result_html: str, target_names: list[str], best_match: dict | None = None, original_name: str = "", ein: str = "") -> dict | None:
     table_match = re.search(
         r"<table[^>]+id=[\"']ctl00_cphMainContent_OrgCredentialSearch_gvCredentialSearchResults[\"'][^>]*>([\s\S]*?)</table>",
         result_html,
@@ -8551,23 +8631,23 @@ def wi_best_match_from_html(result_html: str, target_names: list[str], best_matc
         row_html = row_match.group(1)
         if re.search(r"<th\b", row_html, re.I):
             continue
-        candidate = wi_candidate_from_row_html(row_html, target_names)
+        candidate = wi_candidate_from_row_html(row_html, target_names, original_name, ein)
         if candidate and wi_better_candidate(candidate, best_match):
             best_match = candidate
     return best_match
 
 
-def wi_best_match_from_markdown(result_text: str, target_names: list[str], best_match: dict | None = None) -> dict | None:
+def wi_best_match_from_markdown(result_text: str, target_names: list[str], best_match: dict | None = None, original_name: str = "", ein: str = "") -> dict | None:
     for line in (result_text or "").splitlines():
         if not line.strip().startswith("|"):
             continue
-        candidate = wi_candidate_from_markdown_row(line, target_names)
+        candidate = wi_candidate_from_markdown_row(line, target_names, original_name, ein)
         if candidate and wi_better_candidate(candidate, best_match):
             best_match = candidate
     return best_match
 
 
-def wi_reader_search_best_match(search_names: list[str], target_names: list[str], deadline: float | None = None, no_cache: bool = False) -> tuple[dict | None, bool]:
+def wi_reader_search_best_match(search_names: list[str], target_names: list[str], deadline: float | None = None, no_cache: bool = False, original_name: str = "", ein: str = "") -> tuple[dict | None, bool]:
     best_match = None
     reader_reached = False
     for search_name in search_names:
@@ -8577,11 +8657,11 @@ def wi_reader_search_best_match(search_names: list[str], target_names: list[str]
         result_text = wi_reader_text(source_url, no_cache=no_cache)
         if re.search(r"Organization Search Results|Search Parameters|Total Search Results", result_text or "", re.I):
             reader_reached = True
-        best_match = wi_best_match_from_markdown(result_text, target_names, best_match)
+        best_match = wi_best_match_from_markdown(result_text, target_names, best_match, original_name, ein)
     return best_match, reader_reached
 
 
-def wi_http_search_best_match(search_names: list[str], target_names: list[str], deadline: float | None = None) -> tuple[dict | None, bool]:
+def wi_http_search_best_match(search_names: list[str], target_names: list[str], deadline: float | None = None, original_name: str = "", ein: str = "") -> tuple[dict | None, bool]:
     best_match = None
     http_reached = False
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
@@ -8603,7 +8683,7 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str], 
             if wi_result_html_requires_verification(result_html):
                 continue
             http_reached = True
-            best_match = wi_best_match_from_html(result_html, target_names, best_match)
+            best_match = wi_best_match_from_html(result_html, target_names, best_match, original_name, ein)
         except Exception:
             pass
 
@@ -8632,7 +8712,7 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str], 
         except Exception:
             continue
 
-        best_match = wi_best_match_from_html(result_html, target_names, best_match)
+        best_match = wi_best_match_from_html(result_html, target_names, best_match, original_name, ein)
     return best_match, http_reached
 
 
@@ -8642,6 +8722,8 @@ def search_wi(page, org):
     started = time.perf_counter()
     deadline = started + WI_LOOKUP_MAX_SECONDS
     direct_names = searched_names[:WI_DIRECT_VARIANT_LIMIT]
+    original_name = getattr(org, "original_organization_name", org.organization_name)
+    ein = getattr(org, "ein", "") or ""
 
     best_match = None
     last_body = ""
@@ -8649,9 +8731,9 @@ def search_wi(page, org):
     wi_http_reached = False
     target_names = organization_match_target_variants(org.organization_name, org.ein)
     try:
-        best_match, wi_reader_reached = wi_reader_search_best_match(direct_names, target_names, deadline)
+        best_match, wi_reader_reached = wi_reader_search_best_match(direct_names, target_names, deadline, original_name=original_name, ein=ein)
         if not best_match:
-            best_match, wi_http_reached = wi_http_search_best_match(direct_names, target_names, deadline)
+            best_match, wi_http_reached = wi_http_search_best_match(direct_names, target_names, deadline, original_name=original_name, ein=ein)
 
         if not best_match and page is not None and time.perf_counter() < deadline and WI_BROWSER_VARIANT_LIMIT > 0:
             for search_name in searched_names[:WI_BROWSER_VARIANT_LIMIT]:
@@ -8702,6 +8784,8 @@ def search_wi(page, org):
                     license_number, profession, registry_name, location, granted_date, expiration_text = values
                     if not re.search(r"Charitable\s+Organization", profession, re.I):
                         continue
+                    if not wi_live_candidate_name_is_safe(registry_name, target_names, original_name, ein):
+                        continue
                     score = checker.name_match_priority_for_targets(registry_name, target_names)
                     if score < 4 and not wi_contains_full_target_name(registry_name, target_names):
                         continue
@@ -8732,15 +8816,15 @@ def search_wi(page, org):
 
         if not best_match and time.perf_counter() < deadline:
             retry_names = direct_names[: min(5, len(direct_names))]
-            retry_match, retry_reached = wi_reader_search_best_match(retry_names, target_names, deadline, no_cache=True)
+            retry_match, retry_reached = wi_reader_search_best_match(retry_names, target_names, deadline, no_cache=True, original_name=original_name, ein=ein)
             wi_reader_reached = wi_reader_reached or retry_reached
             if retry_match:
                 best_match = retry_match
 
         if not best_match and time.perf_counter() < deadline and not (wi_reader_reached or wi_http_reached):
-            best_match, reached = wi_reader_search_best_match(direct_names, target_names, deadline, no_cache=True)
+            best_match, reached = wi_reader_search_best_match(direct_names, target_names, deadline, no_cache=True, original_name=original_name, ein=ein)
             if not best_match:
-                best_match, reached_http = wi_http_search_best_match(direct_names, target_names, deadline)
+                best_match, reached_http = wi_http_search_best_match(direct_names, target_names, deadline, original_name=original_name, ein=ein)
                 wi_http_reached = wi_http_reached or reached_http
             wi_reader_reached = wi_reader_reached or reached
 
@@ -10250,13 +10334,10 @@ def true_status_from_body(result, body: str) -> str:
         repaired_status = public_status(repaired_result)
         if repaired_status != "Not Registered":
             return repaired_status
-    if (
-        state == "CO"
-        and (getattr(result, "matched_registry_name", "") or "").strip()
-        and registry_name_is_safe_for_org(result.matched_registry_name or "", result.organization_name, result.ein)
-        and re.search(r"\b(withdrawn?|cancel(?:ed|led)?|closed|terminated|dissolved)\b", combined, re.I)
-    ):
-        return "Closed / Withdrawn / Canceled"
+    if state == "CO":
+        co_status = co_status_from_registry_evidence(result, result, body)
+        if co_status:
+            return co_status
     if explicit_no_registration_status(result, combined):
         return "Not Registered"
     if state == "MS":
