@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.08.195-staging"
+APP_VERSION = "2026.06.08.196-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -3422,6 +3422,9 @@ def incomplete_registry_search_result(
     source_note: str = "",
     error: str = "",
 ):
+    # Use this only for true incomplete registry states: timeout, block,
+    # parser/load failure, unavailable registry, or no meaningful completed
+    # search. A bounded variant cap after clean no-results is not incomplete.
     result = checker.StateResult(
         getattr(org, "organization_name", "") or "",
         getattr(org, "ein", "") or "",
@@ -3648,14 +3651,6 @@ def search_with_name_variants(
         if max_elapsed_seconds and best_result is not None and (time.perf_counter() - started) >= max_elapsed_seconds:
             if getattr(best_result, "organization_name", "") != original_name:
                 best_result.organization_name = original_name
-            if incomplete_status_on_cap and result_is_retryable_name_miss(best_result):
-                return incomplete_registry_search_result(
-                    org,
-                    getattr(best_result, "state", "") or "",
-                    getattr(best_result, "source_url", "") or "",
-                    raw_status_text="Name-variant search reached the bounded state budget before all high-signal variants completed",
-                    source_note="The public registry was reachable, but CharityClarity did not complete enough high-signal name variants to make a definitive no-record determination.",
-                )
             return best_result
         variant_org = org_with_name(org, variant)
         variant_org.match_target_names = safe_match_targets
@@ -3693,14 +3688,6 @@ def search_with_name_variants(
         best_result = result
     if best_result and getattr(best_result, "organization_name", "") != original_name:
         best_result.organization_name = original_name
-    if incomplete_status_on_cap and best_result and result_is_retryable_name_miss(best_result) and not attempted_all_variants:
-        return incomplete_registry_search_result(
-            org,
-            getattr(best_result, "state", "") or "",
-            getattr(best_result, "source_url", "") or "",
-            raw_status_text="Name-variant search stopped at the configured high-signal variant cap",
-            source_note="The registry search completed for the bounded variants, but additional high-signal variants remained outside the cap; CharityClarity did not treat this as a definitive no-record result.",
-        )
     return best_result
 
 
@@ -4818,14 +4805,6 @@ def search_bundled_extension_state(page, org, state: str):
         cap_truncated = len(expanded) > variant_cap
         for variant in expanded[:variant_cap]:
             if best_result is not None and (time.perf_counter() - started) >= min(NAME_SEARCH_VARIANT_MAX_SECONDS, 30.0):
-                if result_is_retryable_name_miss(best_result):
-                    return incomplete_registry_search_result(
-                        org,
-                        "OR",
-                        getattr(best_result, "source_url", "") or "",
-                        raw_status_text="Oregon name search reached the bounded state budget before all high-signal variants completed",
-                        source_note="Oregon public search did not complete enough high-signal name variants to make a definitive no-record determination.",
-                    )
                 return best_result
             active_org = org_with_name(org, variant)
             external_result = module.search_or(
@@ -4902,14 +4881,6 @@ def search_bundled_extension_state(page, org, state: str):
                 if not result_is_retryable_name_miss(result):
                     return result
             best_result = result
-        if best_result and cap_truncated and result_is_retryable_name_miss(best_result):
-            return incomplete_registry_search_result(
-                org,
-                "OR",
-                getattr(best_result, "source_url", "") or "",
-                raw_status_text="Oregon name search stopped at the configured high-signal variant cap",
-                source_note="Oregon public search completed for the bounded variants, but additional high-signal variants remained outside the cap; CharityClarity did not treat this as a definitive no-record result.",
-            )
         return best_result or copy_external_result(org, "OR", module.search_or(page, bundle_org))
     else:
         raise ValueError(f"Unsupported bundled extension state: {state}")
@@ -9287,11 +9258,6 @@ def _search_wi_sidecar_unlocked(org):
             direct_result.source_note = note
             return direct_result
         if direct_status == checker.STATUS_NOT_REGISTERED:
-            if wi_name_needs_variant_no_match_confirmation(org.organization_name):
-                return wi_conservative_no_match_result(
-                    org,
-                    f"{note} Wisconsin returned no row for a punctuation/alias-sensitive name; CharityClarity did not treat that bounded result as a definitive no-record finding.",
-                )
             if sidecar_confirmed_no_match:
                 direct_result.source_note = (
                     f"{note} Wisconsin DFI returned no matching credential after sidecar "
@@ -9349,11 +9315,6 @@ def _search_wi_sidecar_unlocked(org):
             return browser_result
         best_terminal = browser_result if browser_status == checker.STATUS_NOT_REGISTERED else direct_result
         if browser_status == checker.STATUS_NOT_REGISTERED:
-            if wi_name_needs_variant_no_match_confirmation(org.organization_name):
-                return wi_conservative_no_match_result(
-                    org,
-                    f"{note} Wisconsin backend browser returned no row for a punctuation/alias-sensitive name; CharityClarity did not treat that bounded result as a definitive no-record finding.",
-                )
             for attempt_index in range(WI_NO_MATCH_CONFIRMATION_ATTEMPTS):
                 if WI_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0:
                     time.sleep(min(WI_NO_MATCH_CONFIRMATION_DELAY_SECONDS * (attempt_index + 1), 5.0))
@@ -9444,12 +9405,6 @@ def _search_wi_sidecar_unlocked(org):
             "Wisconsin DFI lookup used backend fallbacks to confirm the sidecar no-match result."
         )
         return fallback_result
-    if data.get("status") == "Not Registered" and wi_name_needs_variant_no_match_confirmation(org.organization_name):
-        return wi_conservative_no_match_result(
-            org,
-            "Wisconsin sidecar returned no row for a punctuation/alias-sensitive name; CharityClarity did not treat that bounded sidecar result as a definitive no-record finding.",
-        )
-
     candidate_name = data.get("matched_registry_name") or ""
     candidate_status = data.get("status") or ""
     if candidate_name and candidate_status not in {"Not Registered", "Site Not Reachable", "Unable to Confirm"}:
@@ -9871,16 +9826,29 @@ def search_nj_direct(page, org):
                 result.raw_status_text,
                 f"Next filing due date: {format_date(due_date)}",
             ] if part)
-        elif result.status in {"Compliant", "Active", "Current"} and not re.search(
-            r"\b(?:annual\s+filing|filing\s+year|fiscal\s+year|fye|due\s+date|expiration\s+date|renewal\s+due|20\d{2}\s+filing)\b",
-            filing_evidence or "",
-            re.I,
-        ):
-            result.status = "Needs Review"
-            result.source_note = (
-                "New Jersey public search returned a Compliant row, but the bounded detail evidence did not expose "
-                "annual filing or due-date data; CharityClarity did not let raw Compliant override filing-deadline interpretation."
-            )
+        elif result.status in {"Compliant", "Active", "Current"}:
+            filing_evidence_is_error = bool(re.search(
+                r"\b(?:lacks\s+read\s+permissions|restrictions\s+on\s+the\s+web\s+page|MessageCode|Server\"\s*,\s*\"Level\"\s*:\s*\"Error|portal\s+error)\b",
+                filing_evidence or "",
+                re.I,
+            ))
+            filing_evidence_has_unparsed_deadline = bool(re.search(
+                r"\b(?:annual\s+filing|filing\s+year|fiscal\s+year|fye|due\s+date|expiration\s+date|renewal\s+due|20\d{2}\s+filing)\b",
+                filing_evidence or "",
+                re.I,
+            ))
+            if filing_evidence_is_error or filing_evidence_has_unparsed_deadline:
+                result.status = "Needs Review"
+                result.source_note = (
+                    "New Jersey public search returned a Compliant row, but CharityClarity could not read enough filing-deadline evidence "
+                    "from the bounded detail response to make a date-based interpretation."
+                )
+            else:
+                result.status = checker.STATUS_CURRENT
+                result.source_note = (
+                    "New Jersey public search returned a Compliant row; bounded detail text did not expose separate filing-deadline evidence, "
+                    "so CharityClarity used the public Compliant status."
+                )
         result.source_note = " ".join(part for part in [
             result.source_note or "",
             "New Jersey uses the public search result Status value.",
@@ -13104,14 +13072,6 @@ def search_ar_precise(page, org):
             )
             result.error = "AR bounded lookup did not expose usable rows"
             result.success = False
-        elif not attempted_all_variants:
-            result.status = "Unable to Confirm"
-            result.raw_status_text = "Arkansas name search stopped at the configured high-signal variant cap"
-            result.source_note = (
-                "Arkansas public search completed for the bounded variants, but additional high-signal variants "
-                "remained outside the cap; CharityClarity did not treat this as a definitive no-record result."
-            )
-            result.success = False
         else:
             result.status = checker.STATUS_NOT_REGISTERED
             result.raw_status_text = (
@@ -13495,7 +13455,7 @@ def search_wv_precise(page, org):
                     "or generated DBA/name variants."
                 )
                 result.success = True
-            elif saw_clean_no_results and attempted_all_variants and time.perf_counter() < deadline:
+            elif saw_clean_no_results and time.perf_counter() < deadline:
                 result.status = checker.STATUS_NOT_REGISTERED
                 result.raw_status_text = "No matching organization row"
                 result.source_note = (
@@ -13888,15 +13848,6 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 result = direct_result
         if result is not None and public_status(result) == "Not Registered" and not snapshot_no_match:
             result = search_wi_with_separator_retries(org, result)
-        if (
-            result is not None
-            and public_status(result) == "Not Registered"
-            and wi_name_needs_variant_no_match_confirmation(org.organization_name)
-        ):
-            result = wi_conservative_no_match_result(
-                org,
-                "Wisconsin returned no matching row for a punctuation/alias-sensitive organization name; CharityClarity did not treat the bounded snapshot/live lookup as a definitive no-record finding.",
-            )
         body = " ".join(part for part in [
             result.raw_status_text or "",
             result.source_note or "",
