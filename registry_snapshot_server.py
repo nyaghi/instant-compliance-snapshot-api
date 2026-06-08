@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.08.191-staging"
+APP_VERSION = "2026.06.08.192-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -8292,6 +8292,14 @@ def wi_snapshot_canonical_target_match(candidate: str, targets: list[str]) -> bo
 
 
 def wi_snapshot_name_is_safe(candidate: str, targets: list[str], original_name: str, ein: str) -> bool:
+    candidate_core_words = distinctive_core_words(candidate or "")
+    candidate_is_acronym = (
+        len(candidate_core_words) == 1
+        and 2 <= len(candidate_core_words[0]) <= 4
+        and re.search(rf"\b{re.escape(candidate_core_words[0])}\b", normalized_match_name(original_name or ""), re.I)
+    )
+    if not candidate_is_acronym and len(candidate_core_words) < 2:
+        return False
     for target in targets or []:
         if wi_snapshot_has_distinctive_leading_prefix(candidate, target):
             return False
@@ -8393,6 +8401,16 @@ def wi_snapshot_result_from_candidate(org, snapshot: dict, candidate: dict):
     return result
 
 
+def wi_snapshot_search_name_can_be_acceptance_target(value: str) -> bool:
+    cleaned = re.sub(r"\s+", " ", (value or "").strip())
+    if not cleaned:
+        return False
+    compact = re.sub(r"[^A-Za-z0-9]+", "", cleaned)
+    if 2 <= len(compact) <= 8 and compact.upper() == compact:
+        return True
+    return len(distinctive_core_words(cleaned)) >= 2
+
+
 def search_wi_snapshot(org):
     snapshot, load_error = wi_snapshot_load()
     if not snapshot:
@@ -8400,7 +8418,11 @@ def search_wi_snapshot(org):
     targets = organization_match_target_variants(org.organization_name, org.ein)
     for wi_name in wi_search_names_for_org(org):
         cleaned = re.sub(r"\s+", " ", (wi_name or "").strip())
-        if cleaned and cleaned.lower() not in {target.lower() for target in targets}:
+        if (
+            cleaned
+            and wi_snapshot_search_name_can_be_acceptance_target(cleaned)
+            and cleaned.lower() not in {target.lower() for target in targets}
+        ):
             targets.append(cleaned)
     best: dict | None = None
     for record in snapshot.get("records") or []:
