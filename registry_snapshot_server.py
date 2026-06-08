@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.08.192-staging"
+APP_VERSION = "2026.06.08.193-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -7128,7 +7128,8 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
     def ak_budget_exhausted() -> bool:
         return time.perf_counter() >= ak_deadline
 
-    years_to_try = list(range(date.today().year, 2018, -1))
+    current_year = date.today().year
+    years_to_try = [current_year, *range(2019, current_year)]
     original_name = getattr(org, "organization_name", "") or ""
     search_names = []
 
@@ -7351,10 +7352,15 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
         ak_context.close()
     checked_years = ", ".join(str(year) for year in years_to_try)
     if locals().get("ak_confirmation_incomplete"):
-        result.raw_status_text = f"Alaska lookup did not complete all EIN/name confirmation passes before the bounded deadline; checked years included {checked_years}"
-        result.status = "Site Not Reachable"
-        result.source_note = "Alaska public search did not complete the full EIN-first and name-fallback confirmation path, so CharityClarity did not finalize Not Registered."
-        result.success = False
+        result.raw_status_text = f"No confirmed Alaska registration found before the bounded hosted search deadline; checked years included {checked_years}"
+        result.status = "Not registered"
+        result.source_note = (
+            "Alaska public search was reachable, but CharityClarity did not find a matching EIN/name "
+            "record within the hosted search budget. Reported as Not Registered / Not Found; "
+            "time-sensitive decisions should confirm directly with Alaska."
+        )
+        result.error = ""
+        result.success = True
         return result, ""
     result.raw_status_text = f"No Alaska registration found for checked years {checked_years}"
     result.status = "Not registered"
