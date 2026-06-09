@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.08.196-staging"
+APP_VERSION = "2026.06.08.197-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -341,7 +341,9 @@ WI_BACKEND_BROWSER_ACQUIRE_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_BA
 WI_BACKEND_BROWSER_SEMAPHORE = threading.BoundedSemaphore(WI_BACKEND_BROWSER_LANES)
 WI_USE_BACKEND_BROWSER_FALLBACK = os.environ.get("CE_WI_USE_BACKEND_BROWSER_FALLBACK", "0").strip().lower() in {"1", "true", "yes"}
 WI_SNAPSHOT_PATH = Path(os.environ.get("CE_WI_SNAPSHOT_PATH", str(BASE_DIR / "wi_charities_snapshot.json")))
-WI_TOTAL_FALLBACK_MAX_SECONDS = min(max(24.0, float(os.environ.get("CE_WI_TOTAL_FALLBACK_MAX_SECONDS", "42"))), 45.0)
+WI_TOTAL_FALLBACK_MAX_SECONDS = min(max(18.0, float(os.environ.get("CE_WI_TOTAL_FALLBACK_MAX_SECONDS", "28"))), 30.0)
+WI_SINGLE_WALL_MAX_SECONDS = min(max(25.0, float(os.environ.get("CE_WI_SINGLE_WALL_MAX_SECONDS", "45"))), 45.0)
+WI_BULK_WALL_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_WI_BULK_WALL_MAX_SECONDS", "30"))), 30.0)
 NM_SIDECAR_URL = os.environ.get(
     "CE_NM_STATUS_SIDECAR_URL",
     "https://staging.compliance-express.com/.netlify/functions/nm-status",
@@ -3531,9 +3533,32 @@ def search_sc_resilient(page, org):
     if not reachable and public_status(result) in {"Site Not Reachable", "Unknown", ""}:
         return preflight_result
     raw_sc = " ".join([
+        getattr(result, "status", "") or "",
         getattr(result, "raw_status_text", "") or "",
         getattr(result, "source_note", "") or "",
     ])
+    raw_sc_registry_text = " ".join([
+        getattr(result, "status", "") or "",
+        getattr(result, "raw_status_text", "") or "",
+    ])
+    safe_matched_name = bool(
+        (getattr(result, "matched_registry_name", "") or "").strip()
+        and result_registry_name_is_safe(result, org.organization_name, getattr(org, "ein", ""))
+    )
+    sc_has_registered_label = bool(re.search(r"^\s*Registered\b|\bStatus\s*:\s*Registered\b", raw_sc_registry_text, re.I))
+    sc_has_usable_filing_evidence = bool(re.search(
+        r"\b(?:expiration|expire|due|filed|filing|fy|20\d{2}|[0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})\b",
+        raw_sc_registry_text,
+        re.I,
+    ))
+    if safe_matched_name and sc_has_registered_label and not sc_has_usable_filing_evidence:
+        result.status = checker.STATUS_DELINQUENT
+        result.source_note = (
+            "South Carolina returned a safe matching Registered row, but the public detail page did not expose "
+            "usable annual filing, fiscal-year, or due-date evidence. CharityClarity treats blank filing evidence as Delinquent."
+        )
+        result.success = True
+        return result
     if (
         public_status(result) == checker.STATUS_CURRENT
         and re.search(r"\bRegistered\b", raw_sc, re.I)
@@ -8716,10 +8741,18 @@ def wi_separator_retry_names(org) -> list[str]:
     return retries[:4]
 
 
-def search_wi_with_separator_retries(org, current_result):
+def search_wi_with_separator_retries(org, current_result, deadline: float | None = None):
     if public_status(current_result) != "Not Registered":
         return current_result
-    for retry_name in wi_separator_retry_names(org):
+    retry_names = wi_separator_retry_names(org)
+    if not retry_names:
+        return current_result
+    for retry_name in retry_names:
+        if deadline is not None and time.perf_counter() + WI_TOTAL_FALLBACK_MAX_SECONDS + 2.0 >= deadline:
+            return wi_conservative_no_match_result(
+                org,
+                "Wisconsin separator/alias confirmation could not complete within CharityClarity's Wisconsin wall-time budget.",
+            )
         retry_org = org_with_name(org, retry_name)
         retry_result = search_wi_snapshot(retry_org)
         if WI_SIDECAR_URL and WI_LOOKUP_SECRET and (
@@ -8733,6 +8766,11 @@ def search_wi_with_separator_retries(org, current_result):
             if retry_result is None or public_status(sidecar_result) != "Not Registered":
                 retry_result = sidecar_result
         if retry_result is not None and public_status(retry_result) == "Not Registered":
+            if deadline is not None and time.perf_counter() + 8.0 >= deadline:
+                return wi_conservative_no_match_result(
+                    org,
+                    "Wisconsin direct separator confirmation could not complete within CharityClarity's Wisconsin wall-time budget.",
+                )
             direct_result = search_wi(None, retry_org)
             if public_status(direct_result) != "Not Registered":
                 retry_result = direct_result
@@ -10982,6 +11020,12 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
             return f"The NH public registry shows Good Standing with report due date {format_date(base_due)}, which is {timing}."
     if state == "SC" and normalized_status == "current" and re.search(r"^\s*Registered\b", " ".join([result.status or "", result.raw_status_text or ""]), re.I):
         return "The SC public registry shows the organization registration status as Registered. CharityClarity treats that as Current."
+    if state == "SC" and normalized_status == "delinquent" and re.search(r"^\s*Registered\b", " ".join([result.raw_status_text or "", result.status or ""]), re.I):
+        return (
+            "The SC public registry returned a safe matching Registered row, but the annual filing, fiscal-year, "
+            "and due-date fields needed for compliance interpretation were blank or unusable. CharityClarity treats "
+            "that missing filing evidence as Delinquent."
+        )
     if state == "CT" and normalized_status == "delinquent":
         registry_date = explicit_registry_date(result, body)
         if registry_date:
@@ -13813,7 +13857,14 @@ def browser_capacity_busy_result(organization_name: str, ein: str, state: str, u
     return result
 
 
-def run_state_lookup(organization_name: str, ein: str, state: str, capture_source_snapshot: bool = False, confirm_single_no_match: bool = True) -> dict:
+def run_state_lookup(
+    organization_name: str,
+    ein: str,
+    state: str,
+    capture_source_snapshot: bool = False,
+    confirm_single_no_match: bool = True,
+    batch_mode: bool = False,
+) -> dict:
     lookup_started = time.perf_counter()
     artifact_name = organization_name or f"EIN {format_ein(ein)}"
     lookup_name = organization_name
@@ -13823,6 +13874,18 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
     body = ""
     proof_url = None
     if state == "WI":
+        wi_wall_budget = WI_BULK_WALL_MAX_SECONDS if batch_mode else WI_SINGLE_WALL_MAX_SECONDS
+        wi_deadline = lookup_started + wi_wall_budget
+
+        def wi_budget_exhausted(min_remaining: float = 0.0) -> bool:
+            return time.perf_counter() + min_remaining >= wi_deadline
+
+        def wi_budget_result(note: str):
+            return wi_conservative_no_match_result(
+                org,
+                f"{note} Wisconsin lookup reached CharityClarity's {wi_wall_budget:g}s wall-time budget before a clean no-match could be safely confirmed.",
+            )
+
         result = search_wi_snapshot(org)
         snapshot_backed = bool(result is not None and re.search(r"\blocal\s+snapshot\b", result.source_note or "", re.I))
         snapshot_no_match = snapshot_backed and public_status(result) == checker.STATUS_NOT_REGISTERED
@@ -13837,17 +13900,41 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             sidecar_result = search_wi_sidecar(org)
             if result is None or public_status(sidecar_result) != "Not Registered":
                 result = sidecar_result
+        if (
+            result is not None
+            and public_status(result) == "Not Registered"
+            and not snapshot_no_match
+            and wi_budget_exhausted(8.0)
+        ):
+            result = wi_budget_result("Wisconsin sidecar/direct no-match confirmation used the available budget.")
         elif result is None:
             result = checker.StateResult(organization_name or f"EIN {format_ein(ein)}", format_ein(ein), state, "Site Not Reachable", WI_SEARCH_URL)
             result.raw_status_text = "Wisconsin snapshot is unavailable and no WI fallback is configured"
             result.source_note = "Wisconsin DFI lookup could not be completed because the local snapshot was unavailable."
             result.success = False
-        if result is not None and public_status(result) == "Not Registered" and WI_CONFIRM_SIDECAR_NO_MATCH and not snapshot_no_match:
+        if (
+            result is not None
+            and public_status(result) == "Not Registered"
+            and WI_CONFIRM_SIDECAR_NO_MATCH
+            and not snapshot_no_match
+            and not wi_budget_exhausted(8.0)
+        ):
             direct_result = search_wi(None, org)
             if public_status(direct_result) not in {"Not Registered", "Site Not Reachable"}:
                 result = direct_result
+        if (
+            result is not None
+            and public_status(result) == "Not Registered"
+            and WI_CONFIRM_SIDECAR_NO_MATCH
+            and not snapshot_no_match
+            and wi_budget_exhausted(8.0)
+        ):
+            result = wi_budget_result("Wisconsin direct no-match confirmation could not start.")
         if result is not None and public_status(result) == "Not Registered" and not snapshot_no_match:
-            result = search_wi_with_separator_retries(org, result)
+            if wi_name_needs_variant_no_match_confirmation(org.organization_name):
+                result = search_wi_with_separator_retries(org, result, deadline=wi_deadline)
+            elif wi_budget_exhausted(0.0):
+                result = wi_budget_result("Wisconsin no-match lookup completed at the wall-time cap.")
         body = " ".join(part for part in [
             result.raw_status_text or "",
             result.source_note or "",
@@ -14545,6 +14632,7 @@ def run_state_lookup_for_batch(
         state,
         False,
         confirm_single_no_match,
+        True,
     )
     try:
         return future.result(timeout=BATCH_STATE_LOOKUP_TIMEOUT_SECONDS)
@@ -14721,8 +14809,6 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
         if status != "site not reachable":
             best_reachable_result = dict(result)
         retryable_statuses = {"site not reachable"}
-        if state == "WI":
-            retryable_statuses.add("not registered")
         retry_text = " ".join([
             result.get("raw_status_text") or "",
             result.get("source_note") or "",
