@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR))
@@ -24,7 +25,10 @@ def assert_name_variants(rows: list[dict[str, str]], failures: list[str]) -> Non
         expected = (row.get("expected_variant") or "").strip()
         if not expected:
             continue
-        variants = cc.organization_name_variants(row["organization_name"], row.get("ein", ""))
+        variants = [
+            *cc.organization_name_variants(row["organization_name"], row.get("ein", "")),
+            *cc.category_preferred_name_variants(row["organization_name"]),
+        ]
         normalized_variants = {norm(variant) for variant in variants}
         if norm(expected) not in normalized_variants:
             failures.append(
@@ -40,6 +44,56 @@ def assert_false_positive_guards(rows: list[dict[str, str]], failures: list[str]
         if cc.registry_name_is_safe_for_org(forbidden, row["organization_name"], row.get("ein", "")):
             failures.append(
                 f"{row['case_id']}: weak registry name {forbidden!r} was accepted for {row['organization_name']!r}"
+            )
+
+
+def assert_alias_segment_guards(failures: list[str]) -> None:
+    good_cases = [
+        ("Umbrella Charity dba River Scholars", "River Scholars"),
+        ("Community Health Fund AKA Clinic Partners", "Clinic Partners"),
+        ("Legal Organization also soliciting as Reading Partners", "Reading Partners"),
+        ("Former Legal Name / Bright Futures Project", "Bright Futures Project"),
+    ]
+    for registry_text, requested_name in good_cases:
+        if not cc.registry_alias_segment_matches_requested(registry_text, requested_name):
+            failures.append(
+                f"alias_segment: expected {registry_text!r} to safely match requested alias {requested_name!r}"
+            )
+
+    bad_cases = [
+        ("Umbrella Charity dba River Scholars", "Bridge Fund"),
+        ("America Inc", "BMW Car Club Of America Foundation"),
+        ("Outreach Inc", "Christian World Outreach"),
+    ]
+    for registry_text, requested_name in bad_cases:
+        if cc.registry_alias_segment_matches_requested(registry_text, requested_name):
+            failures.append(
+                f"alias_segment: weak/unrelated registry text {registry_text!r} was accepted for {requested_name!r}"
+            )
+
+
+def assert_state_specific_variant_order(failures: list[str]) -> None:
+    ar_org = SimpleNamespace(
+        organization_name="THE MARIAN A. SMITH FUND INC. (COMMUNITY SCHOLARS)",
+        ein="000000000",
+    )
+    ar_variants = cc.ar_preferred_name_variants(ar_org)[:12]
+    ar_norms = {norm(variant) for variant in ar_variants}
+    for expected in ["COMMUNITY SCHOLARS", "MARIAN"]:
+        if norm(expected) not in ar_norms:
+            failures.append(
+                f"ar_variant_order: expected {expected!r} inside bounded AR variants; got {ar_variants!r}"
+            )
+
+    ms_variants = cc.ms_preferred_search_variants(
+        "Wilkes Barre Community Foundation Incorporated",
+        "000000000",
+    )[:6]
+    ms_norms = {norm(variant) for variant in ms_variants}
+    for expected in ["Wilkes-Barre Community Foundation", "Wilkes-Barre Community"]:
+        if norm(expected) not in ms_norms:
+            failures.append(
+                f"ms_variant_order: expected {expected!r} inside bounded MS variants; got {ms_variants!r}"
             )
 
 
@@ -98,9 +152,13 @@ def assert_deadline_helpers(failures: list[str]) -> None:
         "",
         raw_status_text="Registered. Information from this organization's annual financial report is listed below.",
     )
+    sc_result.matched_registry_name = "Foot Soldiers Park Inc"
     interpreted = cc.true_status_from_body(sc_result, sc_result.raw_status_text)
-    if interpreted == "Current":
-        failures.append("sc_missing_filing_data: raw Registered without a filing date was classified as Current")
+    if interpreted != cc.checker.STATUS_DELINQUENT:
+        failures.append(
+            "sc_missing_filing_data: expected safe raw Registered without usable filing evidence to classify as "
+            f"Delinquent; got {interpreted!r}"
+        )
 
 
 def main() -> int:
@@ -109,6 +167,8 @@ def main() -> int:
     failures: list[str] = []
     assert_name_variants(rows, failures)
     assert_false_positive_guards(rows, failures)
+    assert_alias_segment_guards(failures)
+    assert_state_specific_variant_order(failures)
     assert_deadline_helpers(failures)
     if failures:
         print("FAIL")
