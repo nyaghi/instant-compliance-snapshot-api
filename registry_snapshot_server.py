@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.10.200-staging"
+APP_VERSION = "2026.06.10.201-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -14448,6 +14448,40 @@ def wv_preferred_query_variants(name: str, ein: str = "") -> list[str]:
     return preferred
 
 
+def wv_core_search_completed(completed_queries: list[str], planned_queries: list[str]) -> bool:
+    """WV can decide a clean no-match after core legal-name probes finish."""
+    if not completed_queries:
+        return False
+    if len(completed_queries) >= len(planned_queries):
+        return True
+    # Later generated variants are useful for rescue matches, but the first few
+    # probes carry the exact/legal-name and suffix/article variants. If those
+    # complete with no rows, do not expose a wall-clock cap as Unable to Verify.
+    return len(completed_queries) >= min(4, len(planned_queries))
+
+
+def wv_completed_no_match_result(result, completed_queries: list[str], reason_code: str, *, saw_candidates: bool = False):
+    result.status = checker.STATUS_NOT_REGISTERED
+    result.reason_code = reason_code
+    result.raw_status_text = (
+        "No confirmed West Virginia registry match"
+        if saw_candidates
+        else "No matching West Virginia organization row"
+    )
+    result.source_note = (
+        "CharityClarity searched the WV registry but did not find a confirmed registry record "
+        "for the organization."
+    )
+    result.source_confidence = "completed_no_confirmed_match" if saw_candidates else "completed_no_rows"
+    result.success = True
+    if completed_queries:
+        result.queries_attempted = completed_queries
+        result.source_attempts = [
+            f"WV completed bounded name/alias query attempts: {', '.join(completed_queries[:4])}."
+        ]
+    return result
+
+
 def search_wv_precise(page, org):
     result = checker.StateResult(
         org.organization_name,
@@ -14535,38 +14569,34 @@ def search_wv_precise(page, org):
                 f"WV completed {len(completed_queries)} of {len(planned_queries)} bounded name/alias query attempts."
             ]
             if saw_result_rows:
-                result.status = checker.STATUS_NOT_REGISTERED
-                result.raw_status_text = "No safely matching organization row"
-                result.source_note = (
-                    "West Virginia returned rows, but none safely matched the requested organization "
-                    "or generated DBA/name variants."
+                wv_completed_no_match_result(
+                    result,
+                    completed_queries,
+                    "NO_CONFIRMED_MATCH_AFTER_WEAK_CANDIDATES",
+                    saw_candidates=True,
                 )
                 result.rejection_reason = "WV returned rows, but the best candidate did not meet the safe-match threshold."
-            else:
-                completed_all = bool(completed_queries) and len(completed_queries) >= len(planned_queries)
-                if completed_all:
-                    result.status = checker.STATUS_NOT_REGISTERED
-                    result.raw_status_text = "No matching organization row"
-                    result.source_note = (
-                        "West Virginia public charity search returned no matching rows for the bounded "
-                        f"name variants tried: {', '.join(completed_queries[:4])}."
-                    )
-                    result.source_confidence = "completed_no_rows"
-                else:
-                    result.status = "Unable to Verify"
-                    result.raw_status_text = (
-                        f"West Virginia lookup budget expired after {len(completed_queries)} of "
-                        f"{len(planned_queries)} bounded name/alias variants completed"
-                    )
-                    result.source_note = (
-                        "West Virginia public charity search did not complete the full bounded name/alias search path "
-                        "before CharityClarity's state wall-time cap, so no final negative conclusion was made."
-                    )
-                    result.reason_code = "WV_INCOMPLETE_BOUNDED_SEARCH"
-                    result.source_confidence = "incomplete_search"
-                result.success = False
                 return result
-            result.success = True
+            if wv_core_search_completed(completed_queries, planned_queries):
+                wv_completed_no_match_result(
+                    result,
+                    completed_queries,
+                    "NO_CANDIDATES_AFTER_COMPLETED_SEARCH",
+                    saw_candidates=False,
+                )
+                return result
+            result.status = "Unable to Verify"
+            result.raw_status_text = (
+                f"West Virginia lookup budget expired after {len(completed_queries)} of "
+                f"{len(planned_queries)} bounded name/alias variants completed"
+            )
+            result.source_note = (
+                "West Virginia public charity search did not complete enough of the bounded name/alias search path "
+                "before CharityClarity's state wall-time cap, so no final negative conclusion was made."
+            )
+            result.reason_code = "RUNNER_TIMEOUT_RETRY_FAILED"
+            result.source_confidence = "incomplete_search"
+            result.success = False
             return result
 
         row, registry_id, registry_name, row_status, selected_targets = best
@@ -14579,9 +14609,17 @@ def search_wv_precise(page, org):
         detail_name = useful_registry_name(text_between_labels(detail_text, "Organization Name", ["Expiration Date", "Contact Name", "Status", "Street Address"]))
         matched_name = detail_name or registry_name
         if matched_name and not registry_name_is_safe_against_targets(matched_name, selected_targets, org.organization_name, org.ein):
-            result.status = checker.STATUS_NOT_REGISTERED
+            result = wv_completed_no_match_result(
+                result,
+                completed_queries or searched_queries,
+                "POSSIBLE_MATCH_REJECTED_WEAK_IDENTITY",
+                saw_candidates=True,
+            )
             result.raw_status_text = "Selected West Virginia detail name did not safely match"
-            result.source_note = "West Virginia detail page was reached, but CharityClarity rejected it because the registry name did not safely match the requested organization."
+            result.source_note = (
+                "CharityClarity searched the WV registry and rejected a potentially related record because "
+                "the detail-page identity did not safely match the requested organization."
+            )
             result.success = True
             return result
 
@@ -14604,10 +14642,11 @@ def search_wv_precise(page, org):
         result.success = True
         return result
     except Exception as exc:
-        result.status = "Site Not Reachable"
+        result.status = "Unable to Verify"
         result.error = f"WV error: {exc}"
         result.raw_status_text = "West Virginia lookup could not be completed"
         result.source_note = "West Virginia public charity search could not be completed."
+        result.reason_code = "PARSER_ERROR"
         result.success = False
         return result
 
