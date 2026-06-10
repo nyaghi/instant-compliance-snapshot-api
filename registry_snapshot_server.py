@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.10.205-staging"
+APP_VERSION = "2026.06.10.206-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -14496,12 +14496,12 @@ def wv_preferred_query_variants(name: str, ein: str = "") -> list[str]:
             add(no_punctuation_without_suffix)
         add(base)
 
-    add_name_forms(name)
     if re.search(r"\bWinston\s+Salem\b", name or "", re.I):
         hyphenated = re.sub(r"\bWinston\s+Salem\b", "Winston-Salem", name, flags=re.I)
         add_name_forms(hyphenated)
         add("Winston Salem")
         add("Winston-Salem")
+    add_name_forms(name)
     for query in build_search_queries(
         name,
         ein,
@@ -15080,6 +15080,12 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             wi_live_rescue_attempted = True
             direct_result = search_wi(None, org)
             direct_status = public_status(direct_result)
+            if direct_status == "Not Registered" and time.perf_counter() < wi_deadline:
+                retry_direct_result = search_wi(None, org)
+                retry_direct_status = public_status(retry_direct_result)
+                if retry_direct_status != "Not Registered":
+                    direct_result = retry_direct_result
+                    direct_status = retry_direct_status
             if direct_status not in {"Not Registered", "Site Not Reachable"}:
                 direct_result.source_note = " ".join(part for part in [
                     direct_result.source_note or "",
