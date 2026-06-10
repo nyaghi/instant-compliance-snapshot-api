@@ -1,0 +1,31 @@
+organization_name,ein,state,expected_status,prior_actual_status,failure_category,expected_query,forbidden_registry_name,notes
+"HOPE RESOURCE CENTER/Sav-A-Life of Lucedale, Inc.",581592223,AR,Delinquent,Not Registered,search_retrieval,Hope Resource Center,,Slash alias side must be searched.
+THE JANE STERN DORADO COMMUNITY LIBRARY INC.,660360258,NM,Not Registered,Delinquent,fixture_expected_wrong,,Jane Stern,Prior diagnostic expected value appears wrong/source truth verified; keep NM identity-anchor hardening but do not treat as active code defect.
+Kemper And Leila Williams Foundation,237336090,AR,Current,Not Registered,search_retrieval,Kemper & Leila Williams,,And/ampersand variant must be searched.
+USEA FOUNDATION,046700121,NJ,Delinquent,Current,status_calculation,,,NJ stale filing due-date logic.
+Winston Salem State University Foundation Incorporated,560989620,AR,Current,Not Registered,search_retrieval,Winston-Salem State University,,Hyphen variant must be searched.
+American Institute Of Chemical Engineers,131623892,LA,Not Registered,Unable to Verify,source_truth_verified,American Institute Of Chemical Engineers,,Fresh official Louisiana export was parsed and no safe matching row was present; do not treat as active code defect.
+American Institute Of Chemical Engineers,131623892,MS,Upcoming Filing,Not Registered,search_retrieval,American Institute Of Chemical Engineers,,MS must use shared queries.
+Pacific Battleship Center,263934742,MS,Upcoming Filing,Not Registered,search_retrieval,Pacific Battleship Center,,High-signal phrase.
+Thousand Currents,770071852,MS,Upcoming Filing,Not Registered,search_retrieval,Thousand Currents,,Short exact distinctive name.
+Idaho Youth Ranch Inc,820253346,OR,Upcoming Filing,Upcoming Filing,source_truth_verified,,,Fresh official Oregon export contains exact EIN evidence with PeriodEnding 30-Jun-25; treat export evidence as authoritative.
+Sistema Infantil Teleton Usa,464845389,MS,Upcoming Filing,Not Registered,search_retrieval,Sistema Infantil Teleton Usa,,Full legal name.
+National Center For Police Defense Inc,473387615,MS,Upcoming Filing,Not Registered,search_retrieval,National Center Police Defense,,High-signal phrase.
+The Charlemagne Institute,264057885,MS,Upcoming Filing,Not Registered,search_retrieval,Charlemagne Institute,,Leading article/suffix reduction.
+UNIVISION FOUNDATION,822659345,NH,Not Registered,Runner Timeout,timeout_retry,Univision Foundation,,Timeout must not become Not Registered.
+SPECIALIZED ALTERNATIVES FOR FAMILIES AND YOUTH OF AMERICA INC.,341600251,SC,Upcoming Filing,Not Registered,search_retrieval,Specialized Alternatives Families Youth,,High-signal phrase.
+Thousand Currents,770071852,KY,Delinquent,Delinquent,source_truth_verified,,Currents Inc,Fresh Kentucky file/listing confirms Thousand Currents is present with last year on record 2024; weak partial candidates must still be rejected.
+FRIENDS OF JERUSALEM COLLEGE OF TECHNOLOGY LTD.,510165015,SC,Closed/Withdrawn/Canceled,Not Registered,search_retrieval,Friends Jerusalem,,High-signal phrase from long legal name.
+Kemper And Leila Williams Foundation,237336090,SC,Upcoming Filing,Not Registered,search_retrieval,Kemper & Leila Williams,,And/ampersand variant.
+Winston Salem State University Foundation Incorporated,560989620,SC,Delinquent,Not Registered,search_retrieval,Winston-Salem State University,,Hyphen variant.
+Kemper And Leila Williams Foundation,237336090,VA,Delinquent,Not Registered,search_retrieval,Kemper & Leila Williams,,VA shared queries.
+Winston Salem State University Foundation Incorporated,560989620,VA,Exempt,Not Registered,search_retrieval,Winston-Salem State University,,VA shared queries.
+FRIENDS OF FAI - THE ITALIAN ENVIRONMENT FOUNDATION INC.,133599581,WI,Not Registered,Runner Timeout,timeout_retry,Friends of FAI,,Timeout must not become Not Registered.
+BATTEN'S DISEASE SUPPORT AND RESEARCH ASSOCIATION,911397792,WI,Delinquent,Not Registered,search_retrieval,Batten Disease Support,,Possessive variant.
+Primerica Foundation Inc,274689647,WI,Delinquent,Not Registered,search_retrieval,Primerica Foundation,,Distinctive phrase.
+Freedom Fund,300805768,WI,Current,Not Registered,search_retrieval,Freedom Fund,,Distinctive phrase.
+Multiplier,912166435,WI,Revoked,Not Registered,search_retrieval,Multiplier,,Single rare token fallback.
+Hypersomnia Foundation,464162735,WI,Current,Not Registered,search_retrieval,Hypersomnia Foundation,,Distinctive phrase.
+BATTEN'S DISEASE SUPPORT AND RESEARCH ASSOCIATION,911397792,WV,Delinquent,Not Registered,search_retrieval,Batten Disease Support,,WV must try more than first query.
+Kemper And Leila Williams Foundation,237336090,WV,Current,Not Registered,search_retrieval,Kemper,,Single distinctive token fallback.
+Winston Salem State University Foundation Incorporated,560989620,WV,Exempt,Not Registered,search_retrieval,Winston-Salem State University,,WV must try hyphen variant.

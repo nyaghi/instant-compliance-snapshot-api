@@ -14,6 +14,8 @@ import registry_snapshot_server as cc
 
 
 FIXTURE = Path(__file__).with_name("core_matching_regression_cases.csv")
+LATEST_FIXTURE = Path(__file__).with_name("latest_failure_regression_cases.csv")
+SERVER_SOURCE = BASE_DIR / "registry_snapshot_server.py"
 
 
 def norm(value: str) -> str:
@@ -44,6 +46,44 @@ def assert_false_positive_guards(rows: list[dict[str, str]], failures: list[str]
         if cc.registry_name_is_safe_for_org(forbidden, row["organization_name"], row.get("ein", "")):
             failures.append(
                 f"{row['case_id']}: weak registry name {forbidden!r} was accepted for {row['organization_name']!r}"
+            )
+
+
+def assert_shared_query_builder(rows: list[dict[str, str]], failures: list[str]) -> None:
+    for row in rows:
+        expected = (row.get("expected_query") or "").strip()
+        if not expected:
+            continue
+        queries = cc.build_search_queries(
+            row["organization_name"],
+            row.get("ein", ""),
+            include_ein=False,
+            include_ein_aliases=True,
+            include_name_segments=True,
+            max_queries=40,
+        )
+        normalized_queries = {norm(query) for query in queries}
+        if norm(expected) not in normalized_queries:
+            failures.append(
+                f"latest_{row['state']}_{row['ein']}: missing shared query {expected!r}; got {queries[:16]!r}"
+            )
+
+
+def assert_latest_false_positive_categories(rows: list[dict[str, str]], failures: list[str]) -> None:
+    for row in rows:
+        if row.get("failure_category") != "false_positive":
+            continue
+        weak_name = (row.get("forbidden_registry_name") or "").strip()
+        if not weak_name:
+            continue
+        decision = cc.score_candidate(
+            row["organization_name"],
+            row.get("ein", ""),
+            {"name": weak_name},
+        )
+        if decision.get("decision") == "accepted" and int(decision.get("score") or 0) >= 70:
+            failures.append(
+                f"latest_false_positive_{row['state']}_{row['ein']}: weak candidate {weak_name!r} accepted with {decision!r}"
             )
 
 
@@ -161,15 +201,38 @@ def assert_deadline_helpers(failures: list[str]) -> None:
         )
 
 
+def assert_no_fixture_hardwiring(rows: list[dict[str, str]], failures: list[str]) -> None:
+    source = SERVER_SOURCE.read_text(encoding="utf-8", errors="ignore")
+    compact_source = source.lower()
+    for row in rows:
+        ein = "".join(ch for ch in (row.get("ein") or "") if ch.isdigit())
+        if len(ein) == 9 and ein in compact_source:
+            failures.append(
+                f"anti_hardwiring: fixture EIN {ein} appears in runtime server source"
+            )
+        org_name = (row.get("organization_name") or "").strip()
+        if len(org_name) >= 12 and org_name.lower() in compact_source:
+            failures.append(
+                f"anti_hardwiring: fixture organization {org_name!r} appears in runtime server source"
+            )
+
+
 def main() -> int:
     with FIXTURE.open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
+    latest_rows = []
+    if LATEST_FIXTURE.exists():
+        with LATEST_FIXTURE.open(newline="", encoding="utf-8") as handle:
+            latest_rows = list(csv.DictReader(handle))
     failures: list[str] = []
     assert_name_variants(rows, failures)
+    assert_shared_query_builder(latest_rows, failures)
     assert_false_positive_guards(rows, failures)
+    assert_latest_false_positive_categories(latest_rows, failures)
     assert_alias_segment_guards(failures)
     assert_state_specific_variant_order(failures)
     assert_deadline_helpers(failures)
+    assert_no_fixture_hardwiring(latest_rows, failures)
     if failures:
         print("FAIL")
         for failure in failures:
