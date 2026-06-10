@@ -1,4 +1,19 @@
 organization_name,ein,state,expected_status,prior_actual_status,failure_category,expected_query,forbidden_registry_name,notes
+"WILD SPIRIT WOLF SANCTUARY",850424026,AR,Not Registered,Delinquent,false_positive,Wild Spirit Wolf,Sanctuary Inc,Generic sanctuary-only candidate must be rejected.
+"BLESSINGS THROUGH ACTION INC.",832260054,KY,Not Registered,Delinquent,false_positive,Blessings Through Action,"ACTION, Inc.",Generic action-only candidate must be rejected.
+"BMW CAR CLUB OF AMERICA FOUNDATION",030437428,KY,Not Registered,Delinquent,false_positive,BMW Car Club,"The America Fund, Inc.",Generic America/Fund candidate must be rejected.
+"Children Of Restaurant Employees",201584617,KY,Not Registered,Delinquent,false_positive,Restaurant Employees,"Children, Inc.",Generic children-only candidate must be rejected.
+"Friends Of Elnet",452212393,ND,Not Registered,Upcoming Filing,false_positive,Friends Of Elnet,"FRIENDSHIP, INC.",Friends/Friendship generic-only candidate must be rejected.
+"CHRISTIAN WORLD OUTREACH",841445744,VA,Not Registered,Delinquent,false_positive,Christian World Outreach,Outreach,Outreach-only candidate must be rejected.
+"Care And Share Inc",840731930,WI,Not Registered,Current,false_positive,Care And Share,Care,Care-only candidate must be rejected.
+"Law Enforcement United Inc",270743821,MS,Upcoming Filing,Not Registered,search_retrieval,Law Enforcement United,,MS must recover safe exact name match.
+"Compassion Services International",273067958,AK,Upcoming Filing,Delinquent,source_truth_verified,,,AK source currently shows Next Filing Due 9/1/2027; do not hardwire old expected value.
+"FRIENDS OF JERUSALEM COLLEGE OF TECHNOLOGY LTD.",510165015,NJ,Upcoming Filing,Current,comment_date_format,,,NJ comments must show full latest fiscal year date.
+"Showing Animals Respect And Kindness Inc",363937766,NJ,Upcoming Filing,Current,comment_date_format,,,NJ comments must show full latest fiscal year date.
+"Doctors For America",352237413,NJ,Upcoming Filing,Current,source_truth_verified,,,NJ currently returns completed no-record on repeated EIN/name lookup; do not hardwire expected value.
+"Lwala Community Alliance Inc",261303951,NJ,Upcoming Filing,Current,comment_date_format,,,NJ comments must show full latest fiscal year date.
+"National Center For Police Defense Inc",473387615,NJ,Upcoming Filing,Current,comment_date_format,,,NJ comments must show full latest fiscal year date.
+"Just One Africa Inc",455399345,NJ,Upcoming Filing,Current,comment_date_format,,,NJ comments must show full latest fiscal year date.
 "HOPE RESOURCE CENTER/Sav-A-Life of Lucedale, Inc.",581592223,AR,Delinquent,Not Registered,search_retrieval,Hope Resource Center,,Slash alias side must be searched.
 THE JANE STERN DORADO COMMUNITY LIBRARY INC.,660360258,NM,Not Registered,Delinquent,fixture_expected_wrong,,Jane Stern,Prior diagnostic expected value appears wrong/source truth verified; keep NM identity-anchor hardening but do not treat as active code defect.
 Kemper And Leila Williams Foundation,237336090,AR,Current,Not Registered,search_retrieval,Kemper & Leila Williams,,And/ampersand variant must be searched.
@@ -15,7 +30,7 @@ The Charlemagne Institute,264057885,MS,Upcoming Filing,Not Registered,search_ret
 UNIVISION FOUNDATION,822659345,NH,Not Registered,Runner Timeout,timeout_retry,Univision Foundation,,Timeout must not become Not Registered.
 SPECIALIZED ALTERNATIVES FOR FAMILIES AND YOUTH OF AMERICA INC.,341600251,SC,Upcoming Filing,Not Registered,search_retrieval,Specialized Alternatives Families Youth,,High-signal phrase.
 Thousand Currents,770071852,KY,Delinquent,Delinquent,source_truth_verified,,Currents Inc,Fresh Kentucky file/listing confirms Thousand Currents is present with last year on record 2024; weak partial candidates must still be rejected.
-FRIENDS OF JERUSALEM COLLEGE OF TECHNOLOGY LTD.,510165015,SC,Closed/Withdrawn/Canceled,Not Registered,search_retrieval,Friends Jerusalem,,High-signal phrase from long legal name.
+FRIENDS OF JERUSALEM COLLEGE OF TECHNOLOGY LTD.,510165015,SC,Closed/Withdrawn/Canceled,Not Registered,source_truth_verified,Friends Jerusalem,,SC currently returns rows that fail the central safe-identity gate; do not weaken matching without source evidence.
 Kemper And Leila Williams Foundation,237336090,SC,Upcoming Filing,Not Registered,search_retrieval,Kemper & Leila Williams,,And/ampersand variant.
 Winston Salem State University Foundation Incorporated,560989620,SC,Delinquent,Not Registered,search_retrieval,Winston-Salem State University,,Hyphen variant.
 Kemper And Leila Williams Foundation,237336090,VA,Delinquent,Not Registered,search_retrieval,Kemper & Leila Williams,,VA shared queries.

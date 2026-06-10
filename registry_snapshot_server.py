@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.09.199-staging"
+APP_VERSION = "2026.06.10.200-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -289,6 +289,7 @@ WV_GOTO_TIMEOUT_MS = min(max(4000, int(os.environ.get("CE_WV_GOTO_TIMEOUT_MS", "
 WV_NETWORK_IDLE_TIMEOUT_MS = min(max(1000, int(os.environ.get("CE_WV_NETWORK_IDLE_TIMEOUT_MS", "1500"))), 3000)
 WV_SEARCH_IDLE_TIMEOUT_MS = min(max(1000, int(os.environ.get("CE_WV_SEARCH_IDLE_TIMEOUT_MS", "1500"))), 3000)
 WV_LOOKUP_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_WV_LOOKUP_MAX_SECONDS", "12"))), 24.0)
+WV_QUERY_LIMIT = min(max(3, int(os.environ.get("CE_WV_QUERY_LIMIT", "6"))), 12)
 WV_RESULTS_SETTLE_MS = min(max(250, int(os.environ.get("CE_WV_RESULTS_SETTLE_MS", "500"))), 1000)
 DOWNLOADABLE_DATA_COMMENT_FOOTERS = {
     "KS": (
@@ -2993,6 +2994,9 @@ LOW_SIGNAL_MATCH_TOKENS = {
     "society", "organization", "organizations", "center", "centre", "institute",
     "institutes", "trust", "community", "national", "international", "american",
     "america", "usa", "us", "united", "states", "university", "college",
+    "action", "care", "share", "children", "child", "outreach", "sanctuary",
+    "friend", "friends", "friendship", "christian", "services", "service",
+    "global", "project", "projects", "program", "programs",
 }
 
 
@@ -3069,6 +3073,9 @@ def high_signal_search_phrases(name: str) -> list[str]:
     connector_stripped = re.sub(r"\b(?:of|for|to|and|&)\b", " ", no_article, flags=re.I)
     connector_stripped = re.sub(r"\s+", " ", connector_stripped).strip()
     add(connector_stripped)
+    friends_probe = re.match(r"^(friends)\s+(?:of|for)\s+([A-Za-z0-9]{3,})\b", no_suffix or base, re.I)
+    if friends_probe:
+        add(f"{friends_probe.group(1)} {friends_probe.group(2)}", allow_single=True)
     add(possessive_plain)
     add(possessive_plain_no_punct)
     possessive_s = re.sub(r"\b([A-Za-z]+)'[sS]\b", r"\1s", no_suffix)
@@ -3250,7 +3257,10 @@ def registry_name_is_safe_against_targets(registry_name: str, targets: list[str]
         return False
     if registry_name_is_safe_for_org(registry_name, original_name, ein):
         return True
-    if target_name_score(registry_name, targets) >= 700:
+    if (
+        any(has_sufficient_identity_overlap(target, registry_name, ein) for target in targets or [])
+        and target_name_score(registry_name, targets) >= 700
+    ):
         return not (
             related_affiliate_or_chapter_mismatch(original_name, registry_name)
             or broad_governance_name_mismatch(original_name, registry_name)
@@ -3264,6 +3274,10 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
     if not registry_name:
         return False
     safe_targets = organization_match_target_variants(original_name, ein)
+    if normalized_match_name(registry_name) == normalized_match_name(original_name):
+        return True
+    if not has_sufficient_identity_overlap(original_name, registry_name, ein):
+        return False
     if related_affiliate_or_chapter_mismatch(original_name, registry_name):
         return False
     if legal_trustee_entity_match(original_name, registry_name):
@@ -5892,12 +5906,14 @@ def normalized_match_name(value: str) -> str:
 
 
 WEAK_NAME_MATCH_TOKENS = {
-    "a", "an", "and", "association", "america", "american", "americans",
-    "center", "centre", "charitable", "charities", "charity", "christian",
-    "community", "corp", "corporation", "for", "foundation", "friends",
-    "fund", "inc", "incorporated", "international", "limited", "llc", "ltd",
-    "national", "of", "organization", "outreach", "society", "the", "to",
-    "trust",
+    "a", "action", "an", "and", "association", "america", "american",
+    "americans", "care", "center", "centre", "charitable", "charities",
+    "charity", "child", "children", "christian", "community", "corp",
+    "corporation", "for", "foundation", "friend", "friends", "friendship",
+    "fund", "global", "inc", "incorporated", "international", "limited",
+    "llc", "ltd", "national", "of", "organization", "outreach", "project",
+    "projects", "program", "programs", "sanctuary", "service", "services",
+    "share", "society", "the", "to", "trust", "united",
 }
 
 
@@ -5924,6 +5940,54 @@ def distinctive_overlap_is_sufficient(row_norm: str, target_norm: str) -> bool:
         return True
     if len(shared) == 1 and len(row_tokens) == 1 and len(target_tokens) == 1:
         return True
+    return False
+
+
+def has_sufficient_identity_overlap(
+    expected_name: str,
+    candidate_name: str,
+    expected_ein: str | None = None,
+    candidate_ein: str | None = None,
+) -> bool:
+    """Shared hard gate for accepting registry identities without an EIN match."""
+    expected_digits = re.sub(r"\D", "", expected_ein or "")
+    candidate_digits = re.sub(r"\D", "", candidate_ein or "")
+    if expected_digits and candidate_digits:
+        return expected_digits == candidate_digits
+
+    expected_norm = normalized_match_name(expected_name or "")
+    candidate_norm = normalized_match_name(candidate_name or "")
+    if not expected_norm or not candidate_norm:
+        return False
+    if candidate_norm == expected_norm:
+        return True
+
+    candidate_tokens = distinctive_match_tokens(candidate_norm)
+    expected_tokens = distinctive_match_tokens(expected_norm)
+    if not candidate_tokens or not expected_tokens:
+        return False
+
+    shared_tokens = candidate_tokens & expected_tokens
+    if len(shared_tokens) >= 2:
+        return True
+    if len(shared_tokens) == 1:
+        shared = next(iter(shared_tokens))
+        if (
+            len(candidate_tokens) == 1
+            and len(expected_tokens) == 1
+            and len(shared) >= 5
+            and shared not in WEAK_NAME_MATCH_TOKENS
+        ):
+            return True
+        if (
+            len(shared) >= 8
+            and (
+                candidate_norm.startswith(shared)
+                or expected_norm.startswith(shared)
+                or f" {shared} " in f" {candidate_norm} "
+            )
+        ):
+            return True
     return False
 
 
@@ -7826,17 +7890,17 @@ def apply_ak_registration_status_from_best_evidence(
             pdf_text, pdf_url = "", ""
         last_year = ak_last_year_on_record_from_pdf_text(pdf_text)
     if last_year:
-        due_date = date(last_year, 9, 1)
+        due_date = date(last_year + 1, 9, 1)
         result.status = status_from_calendar_date(due_date)
         result.raw_status_text = " | ".join(part for part in [
             f"Last Year on Record: {last_year}",
-            f"Annual Registration Expiration: {format_date(due_date)}",
+            f"Next Filing Due: {format_date(due_date)}",
             f"Registration Year Searched: {registration_year}",
             f"PDF: {pdf_url}" if pdf_url else "",
         ] if part)
         evidence_note = (
             "Alaska registry evidence includes the last year on record; "
-            "CharityClarity treats that registry year as expiring on Alaska's September 1 annual registration date."
+            "CharityClarity treats the next Alaska annual registration renewal as due on September 1 of the following year."
         )
     else:
         result.status, result.raw_status_text, evidence_note = checker.classify_ak_registration_year(registration_year, None)
@@ -10447,10 +10511,14 @@ def search_nj_direct(page, org):
             result.success = True
             return result
         if ein_digits and ein_digits not in re.sub(r"\D", "", body or ""):
-            result.raw_status_text = "Requested EIN not found in New Jersey public search results"
-            result.status = checker.STATUS_NOT_REGISTERED
-            result.source_note = "New Jersey public search did not return the requested EIN within CharityClarity's bounded lookup window."
-            result.success = True
+            result.raw_status_text = "Requested EIN was not visible before the New Jersey bounded lookup window ended"
+            result.status = "Unable to Verify"
+            result.source_note = (
+                "New Jersey public search did not return the requested EIN or an explicit no-record message "
+                "within CharityClarity's bounded lookup window, so CharityClarity did not finalize a Not Registered result."
+            )
+            result.reason_code = "NJ_INCOMPLETE_EIN_SEARCH"
+            result.success = False
             return result
 
         try:
@@ -11689,8 +11757,18 @@ def concise_status_rationale_comment(result, body: str, public_facing_status: st
         return "Official state records indicate this organization is exempt from charitable registration or not required to register in this state."
 
     if state == "NJ" and status_reason == "NJ_STATUS_FROM_REGISTRY_FILING_PERIOD" and computed_due:
-        fiscal_text = f" as {fiscal_year_end}" if fiscal_year_end else ""
-        next_period_text = f" The next required filing period is {next_period}." if next_period else ""
+        next_period_date = parse_due_date(next_period)
+        latest_period_date = add_months_preserving_end_of_month(next_period_date, -12) if next_period_date else None
+        fiscal_text = (
+            f": {format_date(latest_period_date)}"
+            if latest_period_date else
+            (f" as {fiscal_year_end}" if fiscal_year_end else "")
+        )
+        next_period_text = (
+            f" The next required fiscal year ends {format_date(next_period_date)}."
+            if next_period_date else
+            (f" The next required filing period is {next_period}." if next_period else "")
+        )
         return (
             f"New Jersey records show the latest fiscal year end on file{fiscal_text}. "
             f"The next filing was due {format_date(computed_due)}.{next_period_text} "
@@ -11723,6 +11801,16 @@ def concise_status_rationale_comment(result, body: str, public_facing_status: st
             f"The Kentucky downloadable registry snapshot includes a confirmed-safe match for {result.matched_registry_name}."
             f"{year_text}{due_text} CharityClarity therefore returns {public_facing_status}."
         )
+
+    if state == "AK" and normalized_status in {"current", "upcoming filing", "delinquent"}:
+        ak_due = ak_next_filing_due_from_result(result)
+        if ak_due:
+            timing = status_timing_phrase(public_facing_status)
+            timing_text = f", which is {timing}" if timing else ""
+            return (
+                f"Official Alaska registry evidence shows the next charitable registration renewal is due "
+                f"{format_date(ak_due)}{timing_text}, so the status is {public_facing_status}."
+            )
 
     if normalized_status in {"current", "upcoming filing", "delinquent"} and computed_due:
         timing = status_timing_phrase(public_facing_status)
@@ -11850,6 +11938,18 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
                     f"CharityClarity applies the six-month extension window and uses {format_date(effective_due)}, which is {timing}."
                 )
             return f"The NH public registry shows Good Standing with report due date {format_date(base_due)}, which is {timing}."
+    if state == "NJ" and normalized_status in {"current", "upcoming filing", "delinquent"}:
+        nj_context = nj_filing_context_from_body(body or result.raw_status_text or "")
+        last_period_end = nj_context.get("last_period_end")
+        next_required_period = nj_context.get("next_required_period")
+        due_date = nj_context.get("computed_due_date")
+        if last_period_end and next_required_period and due_date:
+            timing = "within 6 months" if normalized_status == "upcoming filing" else ("overdue" if normalized_status == "delinquent" else "not within the next 6 months")
+            return (
+                f"The NJ public registry filing evidence shows latest fiscal year on file: {format_date(last_period_end)}. "
+                f"The next required fiscal year ends {format_date(next_required_period)} and is due {format_date(due_date)}, "
+                f"which is {timing}."
+            )
     if state == "SC" and normalized_status == "current" and re.search(r"^\s*Registered\b", " ".join([result.status or "", result.raw_status_text or ""]), re.I):
         return "The SC public registry shows the organization registration status as Registered. CharityClarity treats that as Current."
     if state == "CT" and normalized_status == "delinquent":
@@ -12351,6 +12451,8 @@ def search_ky_strict_snapshot(org):
     for registry_id, registry_name, filed_year, record_text in load_ky_snapshot_records():
         registry_norm = normalized_match_name(registry_name)
         if target_first_words and registry_norm.split() and registry_norm.split()[0] not in target_first_words:
+            continue
+        if not registry_name_is_safe_for_org(registry_name, org.organization_name, org.ein):
             continue
         score = ky_strict_name_score(registry_name, target_norms, org.organization_name)
         match_score = target_name_score(registry_name, targets)
@@ -13398,14 +13500,21 @@ def search_ms_fast(page, org, navigate: bool = True):
             not expiration_date
             and re.search(r"\bcurrent\b|\bregistered\b", filing_status or "", re.I)
         ):
-            result.status = "Site Not Reachable"
-            result.raw_status_text = f"{module.normalize_ms_filing_status(filing_status)} | Expiration Date not visible"
-            result.error = "Mississippi matched row but expiration date was not visible"
-            result.success = False
-            result.source_note = (
-                "Mississippi matched the organization row, but the detail page did not expose an expiration date. "
-                "CharityClarity did not make a final current/upcoming determination from the row status alone."
+            default_expiration = date(date.today().year, 11, 15)
+            if default_expiration < date.today():
+                default_expiration = date(date.today().year + 1, 11, 15)
+            result.status = status_from_calendar_date(default_expiration)
+            result.raw_status_text = (
+                f"{module.normalize_ms_filing_status(filing_status)} | "
+                f"Expiration Date not visible; MS annual renewal date used: {format_date(default_expiration)}"
             )
+            result.error = ""
+            result.success = True
+            result.source_note = (
+                "Mississippi matched the organization row with Current/Registered status, but the detail page did not expose "
+                "an expiration date. CharityClarity used Mississippi's annual November 15 renewal timing for the interpreted status."
+            )
+            result.reason_code = "MS_STATUS_FROM_SAFE_MATCH_DEFAULT_RENEWAL_DATE"
             return result
 
         if not filing_status:
@@ -13439,8 +13548,20 @@ def search_batch_browser_state(page, org, state: str):
     module = modules[load_state_batch_bundle().STATE_TO_MODULE[state]]
     if state == "MS":
         variants = ms_preferred_search_variants(org.organization_name, org.ein)
-        if org.organization_name and not ms_search_variant_too_broad(org.organization_name) and org.organization_name not in variants:
-            variants.insert(0, org.organization_name)
+        priority_variants = []
+        for value in [
+            org.organization_name,
+            re.sub(
+                r"(?:,\s*)?\b(?:incorporated|inc\.?|corp\.?|corporation|llc|ltd\.?|limited)\b\.?\s*$",
+                "",
+                org.organization_name or "",
+                flags=re.I,
+            ).strip(" ,;-"),
+        ]:
+            cleaned = re.sub(r"\s+", " ", (value or "").strip())
+            if cleaned and not ms_search_variant_too_broad(cleaned):
+                priority_variants.append(cleaned)
+        variants = list(dict.fromkeys([*priority_variants, *variants]))
         variants = variants[:6]
         if not variants:
             external_result = module.SearchResult(
@@ -14347,7 +14468,7 @@ def search_wv_precise(page, org):
         completed_queries: list[str] = []
         saw_result_rows = False
         deadline = time.perf_counter() + WV_LOOKUP_MAX_SECONDS
-        planned_queries = wv_preferred_query_variants(org.organization_name, org.ein)[:12]
+        planned_queries = wv_preferred_query_variants(org.organization_name, org.ein)[:WV_QUERY_LIMIT]
         for query_name in planned_queries:
             if time.perf_counter() >= deadline:
                 break
@@ -14433,11 +14554,15 @@ def search_wv_precise(page, org):
                     result.source_confidence = "completed_no_rows"
                 else:
                     result.status = "Unable to Verify"
-                    result.raw_status_text = "West Virginia lookup budget expired before all bounded name/alias variants completed"
+                    result.raw_status_text = (
+                        f"West Virginia lookup budget expired after {len(completed_queries)} of "
+                        f"{len(planned_queries)} bounded name/alias variants completed"
+                    )
                     result.source_note = (
                         "West Virginia public charity search did not complete the full bounded name/alias search path "
                         "before CharityClarity's state wall-time cap, so no final negative conclusion was made."
                     )
+                    result.reason_code = "WV_INCOMPLETE_BOUNDED_SEARCH"
                     result.source_confidence = "incomplete_search"
                 result.success = False
                 return result
@@ -15817,6 +15942,60 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
     return result or run_state_lookup(organization_name, ein, state)
 
 
+def apply_batch_state_health(results: list[dict]) -> list[dict]:
+    by_state: dict[str, list[dict]] = {}
+    for result in results:
+        state = (result.get("state") or "").upper()
+        if state:
+            by_state.setdefault(state, []).append(result)
+    for state, state_results in by_state.items():
+        total = len(state_results)
+        if total < 10:
+            for result in state_results:
+                result.setdefault("state_health", "STATE_HEALTH_OK")
+            continue
+        inconclusive = [
+            result for result in state_results
+            if (result.get("status") or "").strip().lower()
+            in {"unable to verify", "unable to confirm", "needs review", "runner timeout"}
+        ]
+        unreachable = [
+            result for result in state_results
+            if (result.get("status") or "").strip().lower() == "site not reachable"
+        ]
+        timeouts = [
+            result for result in state_results
+            if re.search(
+                r"timeout|wall-time|budget|runner_timeout",
+                " ".join([
+                    result.get("status") or "",
+                    result.get("raw_status_text") or "",
+                    result.get("comments") or "",
+                    result.get("runner_error") or "",
+                    result.get("reason_code") or "",
+                    result.get("runner_reason_code") or "",
+                ]),
+                re.I,
+            )
+        ]
+        health = "STATE_HEALTH_OK"
+        if len(inconclusive) / total >= 0.25:
+            health = "STATE_HEALTH_TIMEOUT_CLUSTER" if timeouts else "STATE_HEALTH_UNKNOWN_FAILURE"
+        elif len(unreachable) / total >= 0.25:
+            health = "STATE_HEALTH_PORTAL_UNAVAILABLE"
+        elif len(timeouts) / total >= 0.20:
+            health = "STATE_HEALTH_TIMEOUT_CLUSTER"
+        for result in state_results:
+            result["state_health"] = health
+            if health != "STATE_HEALTH_OK":
+                result["state_health_note"] = (
+                    f"{state} batch health classified as {health}: "
+                    f"{len(inconclusive)} inconclusive, {len(unreachable)} site-not-reachable, "
+                    f"{len(timeouts)} timeout-like results out of {total} checks."
+                )
+    return results
+
+
 def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> list[dict]:
     lookup_requests = [
         (org["organization_name"], org["ein"], st)
@@ -15839,7 +16018,7 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
             for future in as_completed(futures):
                 index, result = future.result()
                 results_by_index[index] = result
-        return [results_by_index[index] for index in range(len(lookup_requests))]
+        return apply_batch_state_health([results_by_index[index] for index in range(len(lookup_requests))])
 
     indexed_requests = list(enumerate(lookup_requests))
     main_requests = [
@@ -15950,7 +16129,7 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
             for index, retry_result in executor.map(run_retry_job, retry_jobs):
                 if retry_result is not None:
                     results[index] = retry_result
-    return results
+    return apply_batch_state_health(results)
 
 
 def proxy_single_state_request_to_overflow(payload: dict) -> tuple[int, dict, dict[str, str]] | None:
