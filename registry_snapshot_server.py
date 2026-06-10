@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.10.206-staging"
+APP_VERSION = "2026.06.10.207-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -9607,11 +9607,11 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str], 
     return best_match, http_reached
 
 
-def search_wi(page, org):
+def search_wi(page, org, max_seconds: float | None = None):
     result = checker.StateResult(org.organization_name, org.ein, "WI", checker.STATUS_UNKNOWN, WI_SEARCH_URL)
     searched_names = wi_search_names_for_org(org) or [org.organization_name]
     started = time.perf_counter()
-    deadline = started + WI_LOOKUP_MAX_SECONDS
+    deadline = started + (max_seconds if max_seconds is not None else WI_LOOKUP_MAX_SECONDS)
     direct_names = searched_names[:WI_DIRECT_VARIANT_LIMIT]
     original_name = getattr(org, "original_organization_name", org.organization_name)
     ein = getattr(org, "ein", "") or ""
@@ -15078,10 +15078,10 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
         snapshot_no_match = snapshot_backed and public_status(result) == checker.STATUS_NOT_REGISTERED
         if snapshot_no_match and time.perf_counter() < wi_deadline:
             wi_live_rescue_attempted = True
-            direct_result = search_wi(None, org)
+            direct_result = search_wi(None, org, max_seconds=min(42.0, max(28.0, WI_LOOKUP_MAX_SECONDS)))
             direct_status = public_status(direct_result)
             if direct_status == "Not Registered" and time.perf_counter() < wi_deadline:
-                retry_direct_result = search_wi(None, org)
+                retry_direct_result = search_wi(None, org, max_seconds=min(42.0, max(28.0, WI_LOOKUP_MAX_SECONDS)))
                 retry_direct_status = public_status(retry_direct_result)
                 if retry_direct_status != "Not Registered":
                     direct_result = retry_direct_result
@@ -15111,7 +15111,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 result = sidecar_result
         elif result is None:
             wi_live_rescue_attempted = True
-            direct_result = search_wi(None, org)
+            direct_result = search_wi(None, org, max_seconds=min(42.0, max(28.0, WI_LOOKUP_MAX_SECONDS)))
             if public_status(direct_result) != "Site Not Reachable":
                 result = direct_result
             else:
