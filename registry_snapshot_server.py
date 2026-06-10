@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.10.204-staging"
+APP_VERSION = "2026.06.10.205-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -8735,6 +8735,17 @@ def wi_search_names_for_org(org) -> list[str]:
 
     original_name = getattr(org, "organization_name", "")
     add_many([original_name])
+    for segment in re.split(r"\s*/\s*|\s+also\s+soliciting\s+as\s+|\s+d/?b/?a\s+|\s+doing\s+business\s+as\s+", original_name or "", flags=re.I):
+        segment = re.sub(r"\s+", " ", (segment or "").strip(" ,;/|-"))
+        if segment and segment.lower() != (original_name or "").strip().lower():
+            add_many([segment])
+    rare_probe_skip = {
+        "library", "libraries", "resource", "resources", "center", "centre",
+        "foundation", "fund", "community", "organization", "association",
+    }
+    for token in search_query_tokens(original_name):
+        if len(token) >= 6 and token not in rare_probe_skip:
+            add_many([token.upper()])
     add_many(known_names_for_ein(getattr(org, "ein", "")))
     add_many(build_search_queries(
         original_name,
@@ -8907,11 +8918,24 @@ def wi_search_names_for_org(org) -> list[str]:
         cleaned = re.sub(r"\s+", " ", (value or "").strip())
         if not cleaned:
             return (99, 99, "")
+        leading_alias_segment = ""
+        if re.search(r"\s*/\s*", original_name or ""):
+            leading_alias_segment = re.split(r"\s*/\s*", original_name or "", maxsplit=1)[0].strip(" ,;/|-")
         has_punctuation = bool(re.search(r"[-,/\.]", cleaned))
         has_safe_hyphen = bool(re.search(r"[-\u2010-\u2015]", cleaned)) and generated_hyphen_variant_is_safe(cleaned)
         starts_article = bool(re.match(r"^(?:the|a|an)\s+", cleaned, re.I))
         exact_seed = cleaned.lower() in seed_key_names
         word_rank = -min(len(cleaned.split()), 8)
+        compact = re.sub(r"[^A-Za-z0-9]+", "", cleaned)
+        if (
+            5 <= len(compact) <= 8
+            and compact.upper() == compact
+            and compact.lower() in search_query_tokens(original_name)
+            and not re.search(r"\bfund\b", original_name or "", re.I)
+        ):
+            return (-4, word_rank, cleaned.lower())
+        if leading_alias_segment and cleaned.lower() == leading_alias_segment.lower():
+            return (-3, word_rank, cleaned.lower())
         if original_seed_key and cleaned.lower() == original_seed_key:
             return (-2, word_rank, cleaned.lower())
         if exact_seed:
@@ -8926,7 +8950,6 @@ def wi_search_names_for_org(org) -> list[str]:
             return (0, word_rank, cleaned.lower())
         if has_safe_hyphen:
             return (1, word_rank, cleaned.lower())
-        compact = re.sub(r"[^A-Za-z0-9]+", "", cleaned)
         if 2 <= len(compact) <= 8 and compact.upper() == compact:
             if original_substantive_count > 3 and not exact_seed:
                 return (5, word_rank, cleaned.lower())
@@ -9127,13 +9150,13 @@ def wi_snapshot_name_is_safe(candidate: str, targets: list[str], original_name: 
         and candidate_distinctive.issubset(original_distinctive)
         and not re.search(r"\bfund\b", original_name or "", re.I)
     )
+    if wi_snapshot_canonical_target_match(candidate, targets):
+        return True
     if not (candidate_is_raw_acronym or safe_single_token) and len(candidate_core_words) < 2:
         return False
     for target in targets or []:
         if wi_snapshot_has_distinctive_leading_prefix(candidate, target):
             return False
-    if wi_snapshot_canonical_target_match(candidate, targets):
-        return True
     if registry_name_is_safe_against_targets(candidate, targets, original_name, ein):
         return True
     return wi_contains_full_target_name(candidate, targets)
