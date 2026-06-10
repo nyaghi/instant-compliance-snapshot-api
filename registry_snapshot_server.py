@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.10.207-staging"
+APP_VERSION = "2026.06.10.208-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -15075,7 +15075,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
         result = search_wi_snapshot(org)
         wi_live_rescue_attempted = False
         snapshot_backed = bool(result is not None and re.search(r"\blocal\s+snapshot\b", result.source_note or "", re.I))
-        snapshot_no_match = snapshot_backed and public_status(result) == checker.STATUS_NOT_REGISTERED
+        snapshot_no_match = snapshot_backed and public_status(result) == "Not Registered"
         if snapshot_no_match and time.perf_counter() < wi_deadline:
             wi_live_rescue_attempted = True
             direct_result = search_wi(None, org, max_seconds=min(42.0, max(28.0, WI_LOOKUP_MAX_SECONDS)))
