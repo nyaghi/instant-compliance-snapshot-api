@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.10.202-staging"
+APP_VERSION = "2026.06.10.203-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -14454,10 +14454,10 @@ def wv_core_search_completed(completed_queries: list[str], planned_queries: list
         return False
     if len(completed_queries) >= len(planned_queries):
         return True
-    # Later generated variants are useful for rescue matches, but the first three
-    # probes carry the exact/legal-name and nearest suffix/article variants. If those
+    # Later generated variants are useful for rescue matches, but the first two
+    # probes carry the suffixless legal name and full legal name. If those
     # complete with no rows, do not expose a wall-clock cap as Unable to Verify.
-    return len(completed_queries) >= min(3, len(planned_queries))
+    return len(completed_queries) >= min(2, len(planned_queries))
 
 
 def wv_completed_no_match_result(result, completed_queries: list[str], reason_code: str, *, saw_candidates: bool = False):
