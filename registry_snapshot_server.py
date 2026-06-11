@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.10.208-staging"
+APP_VERSION = "2026.06.11.209-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -304,10 +304,6 @@ DOWNLOADABLE_DATA_COMMENT_FOOTERS = {
         "Data freshness note: Kentucky is checked from a refreshed downloadable registry snapshot. "
         "For time-sensitive decisions, confirm directly with the Kentucky registry because records can change between refreshes."
     ),
-    "WI": (
-        "Data freshness note: Wisconsin is checked from CharityClarity's Sunday-refreshed local snapshot built from official Wisconsin DFI public credential pages. "
-        "For time-sensitive decisions, confirm directly with the Wisconsin registry because records can change between snapshot refreshes."
-    ),
 }
 CONFIRMED_FEEDBACK_CORRECTIONS = {}
 ME_LOOKUP_LOCK = threading.Lock()
@@ -348,7 +344,7 @@ NM_SIDECAR_URL = os.environ.get(
     "https://staging.compliance-express.com/.netlify/functions/nm-status",
 ).strip()
 NM_SIDECAR_TIMEOUT_SECONDS = min(max(8.0, float(os.environ.get("CE_NM_SIDECAR_TIMEOUT_SECONDS", "24"))), 45.0)
-WI_USE_SNAPSHOT = os.environ.get("CE_WI_USE_SNAPSHOT", "1").strip().lower() in {"1", "true", "yes"}
+WI_USE_SNAPSHOT = False
 WI_REQUIRE_COMPLETE_SNAPSHOT = os.environ.get("CE_WI_REQUIRE_COMPLETE_SNAPSHOT", "1").strip().lower() in {"1", "true", "yes"}
 WI_SNAPSHOT_MAX_AGE_SECONDS = min(max(86400, int(os.environ.get("CE_WI_SNAPSHOT_MAX_AGE_SECONDS", str(14 * 86400)))), 45 * 86400)
 WI_SNAPSHOT_CACHE: dict[str, object] = {"loaded_at": 0.0, "mtime": 0.0, "snapshot": None, "name_index": None, "error": ""}
@@ -9355,7 +9351,10 @@ def search_wi_with_separator_retries(org, current_result, deadline: float | None
         if deadline is not None and time.perf_counter() >= deadline:
             return current_result
         retry_org = org_with_name(org, retry_name)
-        retry_result = search_wi_snapshot(retry_org)
+        remaining = None
+        if deadline is not None:
+            remaining = max(1.0, deadline - time.perf_counter())
+        retry_result = search_wi(None, retry_org, max_seconds=remaining)
         if deadline is not None and time.perf_counter() >= deadline:
             return current_result
         if WI_SIDECAR_URL and WI_LOOKUP_SECRET and (
@@ -9370,10 +9369,6 @@ def search_wi_with_separator_retries(org, current_result, deadline: float | None
                 retry_result = sidecar_result
         if deadline is not None and time.perf_counter() >= deadline:
             return current_result
-        if retry_result is not None and public_status(retry_result) == "Not Registered":
-            direct_result = search_wi(None, retry_org)
-            if public_status(direct_result) != "Not Registered":
-                retry_result = direct_result
         if retry_result is not None and public_status(retry_result) not in {"Not Registered", "Site Not Reachable"}:
             retry_result.organization_name = org.organization_name
             retry_result.source_note = " ".join(part for part in [
@@ -9414,7 +9409,19 @@ def wi_contains_full_target_name(registry_name: str, target_names: list[str]) ->
 
 
 def wi_live_candidate_name_is_safe(registry_name: str, target_names: list[str], original_name: str, ein: str) -> bool:
-    return wi_snapshot_name_is_safe(registry_name, target_names, original_name, ein)
+    if wi_snapshot_name_is_safe(registry_name, target_names, original_name, ein):
+        return True
+    candidate_tokens = distinctive_match_tokens(registry_name or "")
+    for target_name in target_names or []:
+        target_tokens = distinctive_match_tokens(target_name or "")
+        if (
+            len(target_tokens) == 1
+            and next(iter(target_tokens)) not in WEAK_NAME_MATCH_TOKENS
+            and len(next(iter(target_tokens))) >= 6
+            and target_tokens.issubset(candidate_tokens)
+        ):
+            return True
+    return False
 
 
 def wi_candidate_from_row_html(row_html: str, target_names: list[str], original_name: str = "", ein: str = "") -> dict | None:
@@ -15072,75 +15079,13 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
     proof_url = None
     if state == "WI":
         wi_deadline = lookup_started + min(WI_LOOKUP_MAX_SECONDS, 45.0)
-        result = search_wi_snapshot(org)
-        wi_live_rescue_attempted = False
-        snapshot_backed = bool(result is not None and re.search(r"\blocal\s+snapshot\b", result.source_note or "", re.I))
-        snapshot_no_match = snapshot_backed and public_status(result) == "Not Registered"
-        if snapshot_no_match and time.perf_counter() < wi_deadline:
-            wi_live_rescue_attempted = True
-            direct_result = search_wi(None, org, max_seconds=min(42.0, max(28.0, WI_LOOKUP_MAX_SECONDS)))
-            direct_status = public_status(direct_result)
-            if direct_status == "Not Registered" and time.perf_counter() < wi_deadline:
-                retry_direct_result = search_wi(None, org, max_seconds=min(42.0, max(28.0, WI_LOOKUP_MAX_SECONDS)))
-                retry_direct_status = public_status(retry_direct_result)
-                if retry_direct_status != "Not Registered":
-                    direct_result = retry_direct_result
-                    direct_status = retry_direct_status
-            if direct_status not in {"Not Registered", "Site Not Reachable"}:
-                direct_result.source_note = " ".join(part for part in [
-                    direct_result.source_note or "",
-                    "Wisconsin snapshot returned no matching credential, so CharityClarity used the live Wisconsin lookup path as a rescue source.",
-                ]).strip()
-                result = direct_result
-                snapshot_no_match = False
-            elif direct_status == "Site Not Reachable":
-                result.source_note = " ".join(part for part in [
-                    result.source_note or "",
-                    "Wisconsin live rescue lookup did not complete; snapshot no-match remains the only completed source.",
-                ]).strip()
-        if WI_SIDECAR_URL and WI_LOOKUP_SECRET and (
-            result is None
-            or (
-                WI_CONFIRM_SIDECAR_NO_MATCH
-                and public_status(result) == "Not Registered"
-                and not snapshot_no_match
-            )
-        ):
+        result = search_wi(None, org, max_seconds=min(42.0, max(28.0, WI_LOOKUP_MAX_SECONDS)))
+        if WI_SIDECAR_URL and WI_LOOKUP_SECRET and WI_CONFIRM_SIDECAR_NO_MATCH and public_status(result) == "Not Registered":
             sidecar_result = search_wi_sidecar(org)
-            if result is None or public_status(sidecar_result) != "Not Registered":
+            if public_status(sidecar_result) != "Not Registered":
                 result = sidecar_result
-        elif result is None:
-            wi_live_rescue_attempted = True
-            direct_result = search_wi(None, org, max_seconds=min(42.0, max(28.0, WI_LOOKUP_MAX_SECONDS)))
-            if public_status(direct_result) != "Site Not Reachable":
-                result = direct_result
-            else:
-                result = checker.StateResult(organization_name or f"EIN {format_ein(ein)}", format_ein(ein), state, "Site Not Reachable", WI_SEARCH_URL)
-                result.raw_status_text = "Wisconsin snapshot is unavailable and no WI fallback completed"
-                result.source_note = "Wisconsin DFI lookup could not be completed because the local snapshot was unavailable and the live fallback did not complete."
-                result.success = False
-        if result is not None and public_status(result) == "Not Registered" and WI_CONFIRM_SIDECAR_NO_MATCH and not snapshot_no_match:
-            direct_result = search_wi(None, org)
-            if public_status(direct_result) not in {"Not Registered", "Site Not Reachable"}:
-                result = direct_result
-        if result is not None and public_status(result) == "Not Registered" and not snapshot_no_match:
+        if result is not None and public_status(result) == "Not Registered":
             result = search_wi_with_separator_retries(org, result, deadline=wi_deadline)
-        if result is not None and time.perf_counter() >= wi_deadline and public_status(result) == "Not Registered":
-            if wi_live_rescue_attempted or getattr(result, "source_confidence", "") not in {"wi_snapshot_no_match"}:
-                result.status = "Unable to Verify"
-                result.reason_code = "RUNNER_TIMEOUT_RETRY_FAILED"
-                result.runner_reason_code = "RUNNER_TIMEOUT_RETRY_FAILED"
-                result.raw_status_text = "Wisconsin lookup reached the state wall-time cap before a complete no-match confirmation"
-                result.source_note = (
-                    "Wisconsin lookup did not complete the required confirmation path before CharityClarity's "
-                    "state wall-time cap, so no final negative conclusion was made."
-                )
-                result.success = False
-            else:
-                result.source_note = " ".join(part for part in [
-                    result.source_note or "",
-                    "Wisconsin live rescue lookup was bounded by CharityClarity's state wall-time cap; snapshot no-match remains the completed source.",
-                ]).strip()
         body = " ".join(part for part in [
             result.raw_status_text or "",
             result.source_note or "",

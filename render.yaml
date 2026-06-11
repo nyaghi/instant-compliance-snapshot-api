@@ -116,7 +116,7 @@ services:
       - key: CE_WI_READER_TIMEOUT_SECONDS
         value: "16"
       - key: CE_WI_USE_SNAPSHOT
-        value: "1"
+        value: "0"
       - key: CE_WI_REQUIRE_COMPLETE_SNAPSHOT
         value: "1"
       - key: CE_WI_CONFIRM_SIDECAR_NO_MATCH
