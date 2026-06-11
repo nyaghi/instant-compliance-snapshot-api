@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.11.210-staging"
+APP_VERSION = "2026.06.11.211-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -14532,6 +14532,15 @@ def wv_core_search_completed(completed_queries: list[str], planned_queries: list
     if not completed_queries:
         return False
     if len(completed_queries) >= len(planned_queries):
+        return True
+    first_completed = completed_queries[0] if completed_queries else ""
+    first_planned = planned_queries[0] if planned_queries else ""
+    if (
+        len(completed_queries) == 1
+        and first_planned
+        and normalized_match_name(first_completed) == normalized_match_name(first_planned)
+        and len(distinctive_match_tokens(first_completed)) >= 2
+    ):
         return True
     # Later generated variants are useful for rescue matches, but the first two
     # probes carry the suffixless legal name and full legal name. If those
