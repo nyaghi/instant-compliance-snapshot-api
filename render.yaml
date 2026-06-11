@@ -99,6 +99,10 @@ services:
         value: "40"
       - key: CE_AR_NAME_SEARCH_MAX_VARIANTS
         value: "12"
+      - key: CE_WV_LOOKUP_MAX_SECONDS
+        value: "24"
+      - key: CE_WV_QUERY_LIMIT
+        value: "6"
       - key: CE_WI_BROWSER_VARIANT_LIMIT
         value: "0"
       - key: CE_WI_DIRECT_VARIANT_LIMIT
