@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.11.213-staging"
+APP_VERSION = "2026.06.11.214-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -3049,6 +3049,20 @@ def high_signal_search_phrases(name: str) -> list[str]:
     no_punct = re.sub(r"[^\w\s]", " ", no_suffix)
     no_punct = re.sub(r"\s+", " ", no_punct).strip()
     no_article = re.sub(r"^(?:the|a|an)\s+", "", no_punct, flags=re.I).strip()
+    tokens = search_query_tokens(no_punct)
+
+    def add_token_phrase(token_values: list[str]) -> None:
+        if len(token_values) >= 2:
+            add(" ".join(token_values), allow_single=False)
+
+    # Try concise, distinctive identity cores before legal/punctuation noise.
+    # The acceptance layer still requires a safe registry-name match.
+    if len(tokens) >= 3:
+        add_token_phrase(tokens[:3])
+    if len(tokens) >= 4:
+        add_token_phrase(tokens[:4])
+    add_token_phrase(tokens)
+    add(no_article)
 
     early_structural: list[str] = []
     if re.search(r"\s(?:and|&)\s", no_suffix or base, re.I):
@@ -3060,7 +3074,7 @@ def high_signal_search_phrases(name: str) -> list[str]:
     if len(words_for_hyphen) >= 3 and words_for_hyphen[0][0:1].isupper() and words_for_hyphen[1][0:1].isupper():
         early_structural.append(" ".join([f"{words_for_hyphen[0]}-{words_for_hyphen[1]}", *words_for_hyphen[2:]]))
 
-    for source in [base, no_suffix, *early_structural, possessive_plain, possessive_plain_no_punct, no_punct, no_article]:
+    for source in [no_suffix, *early_structural, possessive_plain, possessive_plain_no_punct, no_punct, base]:
         add(source)
     original_words = re.findall(r"[A-Za-z0-9]+", no_suffix or base)
     if len(original_words) >= 4:
@@ -3127,9 +3141,7 @@ def high_signal_search_phrases(name: str) -> list[str]:
         if len(words) >= 3 and words[0][0:1].isupper() and words[1][0:1].isupper():
             add(" ".join([f"{words[0]}-{words[1]}", *words[2:]]))
 
-    tokens = search_query_tokens(no_punct)
     if len(tokens) >= 2:
-        add(" ".join(tokens), allow_single=False)
         add(" ".join(tokens[:4]), allow_single=False)
         add(" ".join(tokens[:3]), allow_single=False)
         add(" ".join(tokens[:2]), allow_single=False)
@@ -3169,9 +3181,9 @@ def build_search_queries(
             add(digits)
             add(format_ein(digits))
 
-    add(org_name)
     for variant in high_signal_search_phrases(org_name):
         add(variant)
+    add(org_name)
     for variant in organization_name_variants(
         org_name,
         ein or "",
@@ -8760,6 +8772,20 @@ def wi_search_names_for_org(org) -> list[str]:
                 names.append(value)
 
     original_name = getattr(org, "organization_name", "")
+    central_queries = build_search_queries(
+        original_name,
+        getattr(org, "ein", ""),
+        include_ein=False,
+        include_ein_aliases=True,
+        include_name_segments=True,
+        max_queries=24,
+    )
+    central_query_rank = {
+        re.sub(r"\s+", " ", (query or "").strip()).lower(): index
+        for index, query in enumerate(central_queries)
+        if re.sub(r"\s+", " ", (query or "").strip())
+    }
+    add_many(central_queries)
     add_many([original_name])
     us_compacted_original = re.sub(
         r"^(?:the\s+)?(?:u\.?\s*s\.?|us)\s+",
@@ -8786,14 +8812,6 @@ def wi_search_names_for_org(org) -> list[str]:
         if len(token) >= 6 and token not in rare_probe_skip:
             add_many([token.upper()])
     add_many(known_names_for_ein(getattr(org, "ein", "")))
-    add_many(build_search_queries(
-        original_name,
-        getattr(org, "ein", ""),
-        include_ein=False,
-        include_ein_aliases=True,
-        include_name_segments=True,
-        max_queries=24,
-    ))
     seed_names = list(names)
     seed_has_hyphen = any(re.search(r"[-\u2010-\u2015]", seed or "") for seed in seed_names)
 
@@ -8916,6 +8934,12 @@ def wi_search_names_for_org(org) -> list[str]:
 
     seed_key_names = {re.sub(r"\s+", " ", (seed or "").strip()).lower() for seed in seed_names if seed}
     original_seed_key = re.sub(r"\s+", " ", (original_name or "").strip()).lower()
+    original_stripped_full_key = re.sub(r"\s+", " ", re.sub(
+        r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\s*$",
+        "",
+        re.sub(r"^(?:the|a|an)\s+", "", original_name or "", flags=re.I).strip(" ,."),
+        flags=re.I,
+    ).strip(" ,.")).lower()
     original_substantive_count = len([
         word for word in re.findall(r"[A-Za-z0-9]+", original_name or "")
         if word.lower() not in {
@@ -8957,6 +8981,9 @@ def wi_search_names_for_org(org) -> list[str]:
         cleaned = re.sub(r"\s+", " ", (value or "").strip())
         if not cleaned:
             return (99, 99, "")
+        central_rank = central_query_rank.get(cleaned.lower())
+        if central_rank is not None:
+            return (-4, central_rank, cleaned.lower())
         leading_alias_segment = ""
         if re.search(r"\s*/\s*", original_name or ""):
             leading_alias_segment = re.split(r"\s*/\s*", original_name or "", maxsplit=1)[0].strip(" ,;/|-")
@@ -8979,6 +9006,8 @@ def wi_search_names_for_org(org) -> list[str]:
             return (-2, word_rank, cleaned.lower())
         if us_compacted_original and cleaned.lower() == us_compacted_original.lower():
             return (-2, -20, cleaned.lower())
+        if original_stripped_full_key and cleaned.lower() == original_stripped_full_key:
+            return (-2, word_rank + 1, cleaned.lower())
         if exact_seed:
             return (-1, word_rank, cleaned.lower())
         if is_leading_core_query(cleaned):
@@ -15051,14 +15080,13 @@ def search_nm_status_history_reader(org, module):
         result.success = True
         return result
     if not result.matched_registry_name:
-        result.status = getattr(module, "STATUS_NOT_REGISTERED", "Not registered")
-        result.raw_status_text = "No New Mexico charity registration name found for this FEIN."
+        result.raw_status_text = "New Mexico reader exposed status-history rows without a charity name identity anchor."
         result.source_note = (
             "New Mexico reader exposed status-history rows, but did not expose a charity name or FEIN/name "
-            "identity anchor. CharityClarity requires the official detail page to identify the charity before "
-            "treating status-history rows as a registered match."
+            "identity anchor. CharityClarity treated this as an incomplete reader result and continued to the "
+            "direct lookup path instead of finalizing a Not Registered result."
         )
-        result.success = True
+        result.success = False
         return result
     latest_submitted = module.nm_latest_submitted(rows)
     fye_text = module.nm_extract_fye_from_html(
@@ -15178,14 +15206,21 @@ def search_nm_status_history_fallback(org, module):
             if name_match:
                 result.matched_registry_name = re.sub(r"\s+", " ", name_match.group(1)).strip()
         if not result.matched_registry_name and rows:
-            result.status = getattr(module, "STATUS_NOT_REGISTERED", "Not registered")
-            result.raw_status_text = "No New Mexico charity registration name found for this FEIN."
+            sidecar_result = search_nm_status_history_sidecar(
+                org,
+                module,
+                note="direct lookup returned rows without a charity name identity anchor",
+            )
+            if external_status_to_checker_status(getattr(sidecar_result, "status", "")) != checker.STATUS_UNKNOWN:
+                return sidecar_result
+            result.status = "Unable to Verify"
+            result.raw_status_text = "New Mexico status-history rows were present but the charity name identity anchor was missing."
             result.source_note = (
                 "New Mexico returned a FEIN detail shell with status-history rows, but the official page did not "
-                "expose a charity name or FEIN/name identity anchor. CharityClarity requires the official detail "
-                "page to identify the charity before treating status-history rows as a registered match."
+                "expose a charity name or FEIN/name identity anchor. CharityClarity did not treat that incomplete "
+                "identity evidence as a clean no-record finding."
             )
-            result.success = True
+            result.success = False
             return result
         if not rows:
             blocked = re.search(r"\b(?:Cloudflare|you have been blocked|unable to access nmdoj\.gov|Ray ID)\b", body or html or "", re.I)
