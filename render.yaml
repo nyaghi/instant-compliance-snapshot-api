@@ -106,9 +106,9 @@ services:
       - key: CE_WI_BROWSER_VARIANT_LIMIT
         value: "0"
       - key: CE_WI_DIRECT_VARIANT_LIMIT
-        value: "12"
+        value: "18"
       - key: CE_WI_LOOKUP_MAX_SECONDS
-        value: "24"
+        value: "60"
       - key: CE_WI_SIDECAR_ATTEMPTS
         value: "1"
       - key: CE_WI_SIDECAR_LANES
@@ -116,7 +116,7 @@ services:
       - key: CE_WI_SIDECAR_ACQUIRE_SECONDS
         value: "85"
       - key: CE_WI_SIDECAR_TIMEOUT_SECONDS
-        value: "24"
+        value: "55"
       - key: CE_WI_READER_TIMEOUT_SECONDS
         value: "16"
       - key: CE_WI_USE_SNAPSHOT

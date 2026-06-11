@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.11.212-staging"
+APP_VERSION = "2026.06.11.213-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -184,7 +184,7 @@ CAPTURE_EVIDENCE_SCREENSHOTS = os.environ.get("CE_CAPTURE_EVIDENCE_SCREENSHOTS",
 CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT = os.environ.get("CE_CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT", "0").strip().lower() in {"1", "true", "yes"}
 ON_DEMAND_EVIDENCE_SCREENSHOT = os.environ.get("CE_ON_DEMAND_EVIDENCE_SCREENSHOT", "1").strip().lower() not in {"0", "false", "no"}
 LOOKUP_SOFT_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_LOOKUP_SOFT_MAX_SECONDS", "59"))), 59.0)
-SC_NAME_VARIANT_MAX_SECONDS = max(12.0, float(os.environ.get("CE_SC_NAME_VARIANT_MAX_SECONDS", "25")))
+SC_NAME_VARIANT_MAX_SECONDS = max(12.0, float(os.environ.get("CE_SC_NAME_VARIANT_MAX_SECONDS", "35")))
 NAME_SEARCH_VARIANT_MAX_SECONDS = max(18.0, float(os.environ.get("CE_NAME_SEARCH_VARIANT_MAX_SECONDS", "35")))
 CT_NAME_VARIANT_MAX_SECONDS = min(max(10.0, float(os.environ.get("CE_CT_NAME_VARIANT_MAX_SECONDS", "24"))), 35.0)
 CT_NAME_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_CT_NAME_VARIANT_LIMIT", "8"))), 12)
@@ -319,10 +319,10 @@ BROWSER_USER_AGENT = os.environ.get(
 WI_SEARCH_URL = "https://apps.dfi.wi.gov/ice/berg/Registration/OrganizationCredentialSearch.aspx"
 WI_RESULTS_URL = "https://apps.dfi.wi.gov/ice/berg/Registration/OrgCredentialSearchResults.aspx"
 WI_READER_BASE_URL = os.environ.get("CE_WI_READER_BASE_URL", "https://r.jina.ai/http://")
-WI_LOOKUP_MAX_SECONDS = min(max(12.0, float(os.environ.get("CE_WI_LOOKUP_MAX_SECONDS", "24"))), 90.0)
+WI_LOOKUP_MAX_SECONDS = min(max(12.0, float(os.environ.get("CE_WI_LOOKUP_MAX_SECONDS", "60"))), 90.0)
 WI_READER_TIMEOUT_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_READER_TIMEOUT_SECONDS", "12"))), 20.0)
 WI_HTTP_TIMEOUT_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_HTTP_TIMEOUT_SECONDS", "10"))), 20.0)
-WI_DIRECT_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_WI_DIRECT_VARIANT_LIMIT", "12"))), 12)
+WI_DIRECT_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_WI_DIRECT_VARIANT_LIMIT", "18"))), 24)
 WI_BROWSER_VARIANT_LIMIT = min(max(0, int(os.environ.get("CE_WI_BROWSER_VARIANT_LIMIT", "0"))), 5)
 WI_SIDECAR_URL = os.environ.get("CE_WI_SIDECAR_URL", "").strip()
 WI_LOOKUP_SECRET = os.environ.get("CE_WI_LOOKUP_SECRET", "").strip()
@@ -3386,7 +3386,22 @@ def shared_distinctive_core_match(original_name: str, registry_name: str) -> boo
     registry_core = distinctive_core_words(registry_name)
     if len(original_core) < 3 or len(registry_core) < 3:
         return False
-    return original_core == registry_core
+    if original_core == registry_core:
+        return True
+    if len(original_core) != len(registry_core):
+        return False
+
+    def singular_plural_key(word: str) -> str:
+        word = (word or "").lower()
+        if len(word) >= 5 and word.endswith("ies"):
+            return f"{word[:-3]}y"
+        if len(word) >= 5 and word.endswith("s") and not word.endswith("ss"):
+            return word[:-1]
+        return word
+
+    return [singular_plural_key(word) for word in original_core] == [
+        singular_plural_key(word) for word in registry_core
+    ]
 
 
 def charitable_wrapper_short_name_match(original_name: str, registry_name: str) -> bool:
@@ -3777,7 +3792,7 @@ def search_sc_resilient(page, org):
         page,
         org,
         checker.search_sc,
-        max_variants=14,
+        max_variants=18,
         max_elapsed_seconds=SC_NAME_VARIANT_MAX_SECONDS,
         require_safe_registry_name=True,
         preferred_variants=build_search_queries(
@@ -3786,7 +3801,7 @@ def search_sc_resilient(page, org):
             include_ein=False,
             include_ein_aliases=True,
             include_name_segments=True,
-            max_queries=14,
+            max_queries=18,
         ),
         include_ein_aliases=True,
         include_name_segments=True,
@@ -3942,6 +3957,8 @@ def search_with_name_variants(
                 source_note="The public registry returned a row, but CharityClarity rejected it because the registry name did not safely match the requested organization.",
                 success=True,
             )
+            replacement.matched_registry_name = getattr(result, "matched_registry_name", "") or ""
+            replacement.matched_registry_identifier = getattr(result, "matched_registry_identifier", "") or ""
             best_result = replacement
             continue
         if not result_is_retryable_name_miss(result):
@@ -5956,6 +5973,8 @@ def has_sufficient_identity_overlap(
     if not expected_norm or not candidate_norm:
         return False
     if candidate_norm == expected_norm:
+        return True
+    if single_plural_token_variant_match(expected_norm, candidate_norm):
         return True
 
     candidate_tokens = distinctive_match_tokens(candidate_norm)
@@ -8395,11 +8414,22 @@ def repair_ma_false_not_registered(page, org, result, body: str):
             "from Annual Filings because the search result does not expose EIN text in the visible page."
         )
     else:
+        readable_digits = re.sub(r"\D", "", body or "")
+        requested_ein = re.sub(r"\D", "", getattr(org, "ein", "") or "")
         result.raw_status_text = "Annual Filings not visible"
-        result.status = checker.STATUS_DELINQUENT
-        result.source_note = (
-            "Massachusetts EIN search returned a charity record, but did not expose a visible Form PC filing year after Get Filings."
-        )
+        if requested_ein and requested_ein not in readable_digits:
+            result.status = checker.STATUS_NOT_REGISTERED
+            result.matched_registry_name = ""
+            result.matched_registry_identifier = ""
+            result.source_note = (
+                "Massachusetts returned a possible charity page, but CharityClarity could not confirm the requested EIN "
+                "or visible Annual Filings evidence, so it did not treat the possible page as a registered match."
+            )
+        else:
+            result.status = checker.STATUS_DELINQUENT
+            result.source_note = (
+                "Massachusetts EIN search returned a charity record, but did not expose a visible Form PC filing year after Get Filings."
+            )
     result.success = True
     return result, body
 
@@ -8731,6 +8761,19 @@ def wi_search_names_for_org(org) -> list[str]:
 
     original_name = getattr(org, "organization_name", "")
     add_many([original_name])
+    us_compacted_original = re.sub(
+        r"^(?:the\s+)?(?:u\.?\s*s\.?|us)\s+",
+        "US ",
+        original_name or "",
+        flags=re.I,
+    ).strip()
+    us_compacted_original = re.sub(r"\s+", " ", us_compacted_original)
+    if (
+        us_compacted_original
+        and us_compacted_original.lower() != (original_name or "").strip().lower()
+        and len(us_compacted_original.split()) >= 2
+    ):
+        add_many([us_compacted_original])
     for segment in re.split(r"\s*/\s*|\s+also\s+soliciting\s+as\s+|\s+d/?b/?a\s+|\s+doing\s+business\s+as\s+", original_name or "", flags=re.I):
         segment = re.sub(r"\s+", " ", (segment or "").strip(" ,;/|-"))
         if segment and segment.lower() != (original_name or "").strip().lower():
@@ -8929,11 +8972,13 @@ def wi_search_names_for_org(org) -> list[str]:
             and compact.lower() in search_query_tokens(original_name)
             and not re.search(r"\bfund\b", original_name or "", re.I)
         ):
-            return (-4, word_rank, cleaned.lower())
+            return (3, word_rank, cleaned.lower())
         if leading_alias_segment and cleaned.lower() == leading_alias_segment.lower():
             return (-3, word_rank, cleaned.lower())
         if original_seed_key and cleaned.lower() == original_seed_key:
             return (-2, word_rank, cleaned.lower())
+        if us_compacted_original and cleaned.lower() == us_compacted_original.lower():
+            return (-2, -20, cleaned.lower())
         if exact_seed:
             return (-1, word_rank, cleaned.lower())
         if is_leading_core_query(cleaned):
@@ -12482,6 +12527,27 @@ def ky_strict_name_score(registry_name: str, target_norms: set[str], original_na
     return best
 
 
+def ky_snapshot_registry_name_is_safe(registry_name: str, targets: list[str], original_name: str, ein: str = "") -> bool:
+    if registry_name_is_safe_for_org(registry_name, original_name, ein):
+        return True
+    registry_norm = normalized_match_name(registry_name)
+    if not registry_norm:
+        return False
+    descriptive_tail_words = {
+        "childrens", "children", "rehabilitation", "rehab", "institute", "inst",
+        "crit", "usa", "us", "program", "programs", "services", "service",
+        "center", "centre", "medical", "clinic", "hospital",
+    }
+    for target in targets:
+        target_norm = normalized_match_name(target)
+        if not target_norm or not registry_norm.startswith(f"{target_norm} "):
+            continue
+        extra_words = registry_norm[len(target_norm):].strip().split()
+        if extra_words and all(word in descriptive_tail_words for word in extra_words):
+            return True
+    return False
+
+
 def saint_university_canonical(value: str) -> tuple[str, ...]:
     tokens = normalized_match_name(value).split()
     if not tokens:
@@ -12526,10 +12592,10 @@ def search_ky_strict_snapshot(org):
         registry_norm = normalized_match_name(registry_name)
         if target_first_words and registry_norm.split() and registry_norm.split()[0] not in target_first_words:
             continue
-        if not registry_name_is_safe_for_org(registry_name, org.organization_name, org.ein):
-            continue
         score = ky_strict_name_score(registry_name, target_norms, org.organization_name)
         match_score = target_name_score(registry_name, targets)
+        if not ky_snapshot_registry_name_is_safe(registry_name, targets, org.organization_name, org.ein) and score < 900:
+            continue
         composite_score = (score, match_score, len(registry_norm.split()))
         if composite_score > best_score:
             best_score = composite_score
@@ -12538,8 +12604,20 @@ def search_ky_strict_snapshot(org):
         return result
     registry_id, registry_name, filed_year, record_text = best
     result.status = checker.STATUS_CURRENT
+    due_date = None
+    next_required_period = ""
+    if filed_year and re.fullmatch(r"20\d{2}", filed_year):
+        report_year = int(filed_year) + 1
+        fiscal_end = fiscal_year_end_for_ein(getattr(org, "ein", "") or "") or (12, 31)
+        due_options = filing_due_date_options("KY", report_year, fiscal_end)
+        due_date = due_options.get("base_due") or due_options.get("effective_due")
+        next_required_period = format_date(date(report_year, fiscal_end[0], fiscal_end[1]))
+        if due_date:
+            result.status = status_from_calendar_date(due_date)
     result.raw_status_text = " | ".join(part for part in [
         f"Yr Last Filed: {filed_year}" if filed_year else "",
+        f"Next Required Period: {next_required_period}" if next_required_period else "",
+        f"Next Filing Due: {format_date(due_date)}" if due_date else "",
         f"KY ID: {registry_id}",
     ] if part) or record_text
     result.matched_registry_name = registry_name
@@ -13680,11 +13758,94 @@ def search_batch_browser_state(page, org, state: str):
             break
         external_result = best_external
     elif state == "OK":
-        module_org = module.Organization(organization_name=org.organization_name)
-        external_result = search_ok_precise(page, org, module)
+        external_result = search_ok_with_variants(page, org, module)
     else:
         raise ValueError(f"Unsupported browser batch state adapter: {state}")
     return copy_external_result(org, state, external_result)
+
+
+def search_ok_with_variants(page, org, module):
+    original_name = getattr(org, "organization_name", "") or ""
+    variants = build_search_queries(
+        original_name,
+        getattr(org, "ein", "") or "",
+        include_ein=False,
+        include_ein_aliases=True,
+        include_name_segments=True,
+        include_compact_legal_suffixes=True,
+        include_leading_article_variants=True,
+        max_queries=6,
+    )
+    if original_name and original_name not in variants:
+        variants.insert(0, original_name)
+    insert_index = min(2, len(variants))
+    for variant in ok_singular_plural_name_variants(original_name):
+        if variant and variant.lower() not in {existing.lower() for existing in variants}:
+            variants.insert(insert_index, variant)
+            insert_index += 1
+    best_result = None
+    started = time.perf_counter()
+    for variant in variants[:6] or [original_name]:
+        if best_result is not None and time.perf_counter() - started > 72.0:
+            return best_result
+        variant_org = org_with_name(org, variant)
+        variant_org.match_target_names = list(dict.fromkeys([
+            *organization_match_target_variants(original_name, getattr(org, "ein", "") or ""),
+            *organization_match_target_variants(variant, getattr(org, "ein", "") or ""),
+        ]))
+        result = search_ok_precise(page, variant_org, module)
+        if getattr(result, "organization_name", "") != original_name:
+            result.organization_name = original_name
+        if public_status(result) == "Site Not Reachable":
+            return result
+        if public_status(result) != "Not Registered":
+            if variant != original_name:
+                result.source_note = " ".join(part for part in [
+                    getattr(result, "source_note", "") or "",
+                    f"Matched using generated name/DBA variant: {variant}.",
+                ]).strip()
+            return result
+        best_result = result
+    return best_result or search_ok_precise(page, org, module)
+
+
+def ok_singular_plural_name_variants(name: str) -> list[str]:
+    base = re.sub(r"\s+", " ", (name or "").strip())
+    if not base:
+        return []
+    base = re.sub(
+        r"(?:,\s*)?\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\b\.?\s*$",
+        "",
+        base,
+        flags=re.I,
+    ).strip(" ,;-")
+    tokens = re.findall(r"[A-Za-z0-9]+", base)
+    if len(tokens) < 2:
+        return []
+    generic = {
+        "the", "a", "an", "of", "for", "and", "to", "in", "on", "at", "by",
+        "foundation", "fund", "association", "organization", "center", "centre",
+        "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited",
+    }
+    variants: list[str] = []
+    for index, token in enumerate(tokens):
+        lower = token.lower()
+        if len(token) < 5 or lower in generic:
+            continue
+        replacements = []
+        if lower.endswith("ies"):
+            replacements.append(token[:-3] + ("Y" if token.isupper() else "y"))
+        elif lower.endswith("s") and not lower.endswith("ss"):
+            replacements.append(token[:-1])
+        else:
+            replacements.append(token + ("S" if token.isupper() else "s"))
+        for replacement in replacements:
+            candidate_tokens = tokens[:]
+            candidate_tokens[index] = replacement
+            candidate = " ".join(candidate_tokens)
+            if candidate.lower() != base.lower() and candidate.lower() not in {item.lower() for item in variants}:
+                variants.append(candidate)
+    return variants[:3]
 
 
 def ok_choose_safe_result_row(page, org, module):
@@ -15078,8 +15239,8 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
     body = ""
     proof_url = None
     if state == "WI":
-        wi_deadline = lookup_started + min(WI_LOOKUP_MAX_SECONDS, 45.0)
-        result = search_wi(None, org, max_seconds=min(42.0, max(28.0, WI_LOOKUP_MAX_SECONDS)))
+        wi_deadline = lookup_started + min(WI_LOOKUP_MAX_SECONDS, 60.0)
+        result = search_wi(None, org, max_seconds=min(57.0, max(28.0, WI_LOOKUP_MAX_SECONDS)))
         if WI_SIDECAR_URL and WI_LOOKUP_SECRET and WI_CONFIRM_SIDECAR_NO_MATCH and public_status(result) == "Not Registered":
             sidecar_result = search_wi_sidecar(org)
             if public_status(sidecar_result) != "Not Registered":
