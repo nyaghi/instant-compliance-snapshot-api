@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.11.214-staging"
+APP_VERSION = "2026.06.11.215-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -349,8 +349,9 @@ WI_REQUIRE_COMPLETE_SNAPSHOT = os.environ.get("CE_WI_REQUIRE_COMPLETE_SNAPSHOT",
 WI_SNAPSHOT_MAX_AGE_SECONDS = min(max(86400, int(os.environ.get("CE_WI_SNAPSHOT_MAX_AGE_SECONDS", str(14 * 86400)))), 45 * 86400)
 WI_SNAPSHOT_CACHE: dict[str, object] = {"loaded_at": 0.0, "mtime": 0.0, "snapshot": None, "name_index": None, "error": ""}
 WI_SNAPSHOT_LOCK = threading.Lock()
-AK_LOOKUP_TOTAL_BUDGET_SECONDS = min(max(25.0, float(os.environ.get("CE_AK_LOOKUP_TOTAL_BUDGET_SECONDS", "48"))), 82.0)
+AK_LOOKUP_TOTAL_BUDGET_SECONDS = min(max(25.0, float(os.environ.get("CE_AK_LOOKUP_TOTAL_BUDGET_SECONDS", "42"))), 82.0)
 AK_ACTION_TIMEOUT_MS = min(max(2500, int(os.environ.get("CE_AK_ACTION_TIMEOUT_MS", "5000"))), 10000)
+AK_RECENT_FILING_CUTOFF_YEAR = min(max(2020, int(os.environ.get("CE_AK_RECENT_FILING_CUTOFF_YEAR", "2023"))), 2100)
 NH_LIVE_PDF_URL = os.environ.get(
     "CE_NH_LIVE_PDF_URL",
     "https://mm.nh.gov/files/uploads/doj/remote-docs/registered-charities.pdf",
@@ -7473,10 +7474,11 @@ def find_ak_print_link_relaxed(page, org):
             for (const row of rows) {
                 const rowText = (row.innerText || row.textContent || '').trim().replace(/\\s+/g, ' ');
                 const cells = Array.from(row.querySelectorAll('td')).map((cell) => (cell.innerText || cell.textContent || '').trim().replace(/\\s+/g, ' ')).filter(Boolean);
+                if (!rowText && !cells.length) continue;
                 const rowDigits = rowText.replace(/\\D/g, '');
                 const rowNorm = normalize(rowText);
                 const einSeen = (formattedEin && rowText.includes(formattedEin)) || (einDigits && rowDigits.includes(einDigits));
-                const nameSeen = normalizedNames.length && normalizedNames.some((name) => rowNorm.includes(name) || name.includes(rowNorm));
+                const nameSeen = !!rowNorm && normalizedNames.length && normalizedNames.some((name) => rowNorm.includes(name) || name.includes(rowNorm));
                 if (!einSeen && !nameSeen) continue;
                 const links = Array.from(row.querySelectorAll('a'));
                 for (const link of links) {
@@ -7506,6 +7508,37 @@ def find_ak_print_link_relaxed(page, org):
         except Exception:
             pass
     return None
+
+
+def find_ak_result_row_relaxed(page, org):
+    formatted_ein = checker.format_ein_with_dash(org.ein)
+    ein_digits = re.sub(r"\D", "", org.ein or "")
+    variants = organization_name_variants(org.organization_name, org.ein)
+    return page.evaluate(
+        """
+        ({ formattedEin, einDigits, names }) => {
+            const normalize = (value) => (value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+            const normalizedNames = (names || []).map(normalize).filter(Boolean);
+            const rows = Array.from(document.querySelectorAll('table.DocTable tbody tr, table tbody tr'));
+            let nameOnlyCandidate = null;
+            for (const row of rows) {
+                const rowText = (row.innerText || row.textContent || '').trim().replace(/\\s+/g, ' ');
+                const cells = Array.from(row.querySelectorAll('td')).map((cell) => (cell.innerText || cell.textContent || '').trim().replace(/\\s+/g, ' ')).filter(Boolean);
+                if (!rowText && !cells.length) continue;
+                const rowDigits = rowText.replace(/\\D/g, '');
+                const rowNorm = normalize(rowText);
+                const einSeen = (formattedEin && rowText.includes(formattedEin)) || (einDigits && rowDigits.includes(einDigits));
+                const nameSeen = !!rowNorm && normalizedNames.length && normalizedNames.some((name) => rowNorm.includes(name) || name.includes(rowNorm));
+                if (!einSeen && !nameSeen) continue;
+                const candidate = { found: true, rowText, cells, einSeen, nameSeen };
+                if (einSeen) return candidate;
+                if (!nameOnlyCandidate) nameOnlyCandidate = candidate;
+            }
+            return nameOnlyCandidate;
+        }
+        """,
+        {"formattedEin": formatted_ein, "einDigits": ein_digits, "names": variants},
+    )
 
 
 def wait_ak_search_results(page, timeout: float = 3.5) -> None:
@@ -7944,12 +7977,82 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
     started = time.perf_counter()
     ak_deadline = started + AK_LOOKUP_TOTAL_BUDGET_SECONDS
     ak_confirmation_incomplete = False
+    ak_best_confirmed_year: int | None = None
+    ak_best_confirmed_search_year: int | None = None
+    ak_best_confirmed_name = ""
+    ak_best_confirmed_identifier = ""
 
     def ak_budget_exhausted() -> bool:
         return time.perf_counter() >= ak_deadline
 
+    def remember_ak_confirmed_row(
+        search_year: int,
+        row_year: int | None,
+        row_name: str = "",
+        row_identifier: str = "",
+    ) -> None:
+        nonlocal ak_best_confirmed_year, ak_best_confirmed_search_year
+        nonlocal ak_best_confirmed_name, ak_best_confirmed_identifier
+        evidence_year = row_year or search_year
+        if not evidence_year:
+            return
+        if ak_best_confirmed_year is None or evidence_year > ak_best_confirmed_year:
+            ak_best_confirmed_year = evidence_year
+            ak_best_confirmed_search_year = search_year
+            ak_best_confirmed_name = row_name or ak_best_confirmed_name
+            ak_best_confirmed_identifier = row_identifier or ak_best_confirmed_identifier
+
+    def apply_ak_status_from_confirmed_year() -> bool:
+        if ak_best_confirmed_year is None:
+            return False
+        due_date = date(ak_best_confirmed_year + 1, 9, 1)
+        result.status = status_from_calendar_date(due_date)
+        result.matched_registry_name = ak_best_confirmed_name or result.matched_registry_name or original_name
+        result.matched_registry_identifier = ak_best_confirmed_identifier or result.matched_registry_identifier
+        result.raw_status_text = " | ".join(part for part in [
+            f"Last Year on Record: {ak_best_confirmed_year}",
+            f"Next Filing Due: {format_date(due_date)}",
+            f"Registration Year Searched: {ak_best_confirmed_search_year or ak_best_confirmed_year}",
+        ] if part)
+        result.source_note = (
+            "Alaska registry evidence confirmed the organization identity, but richer filing detail could not be loaded before "
+            "the hosted lookup budget expired. CharityClarity used the latest confirmed Alaska registration year as the last "
+            "year on record and applies the September 1 renewal rule."
+        )
+        result.error = ""
+        result.success = True
+        return True
+
+    def remember_ak_result_row(search_year: int, row_info: dict | None, fallback_name: str = "") -> bool:
+        if not isinstance(row_info, dict) or not row_info.get("found"):
+            return False
+        row_text = re.sub(r"\s+", " ", (row_info.get("rowText") or "")).strip()
+        if not row_text or ak_row_has_wrong_ein(row_text, org.ein):
+            return False
+        row_year = ak_last_year_from_print_row(row_info, row_text)
+        row_name = ak_registry_name_from_print_row(row_info, row_text, original_name, org.ein)
+        row_identifier = ak_registry_identifier_from_print_row(row_info, row_text)
+        expected_ein = re.sub(r"\D", "", org.ein or "")
+        identifier_matches = bool(row_identifier and re.sub(r"\D", "", row_identifier) == expected_ein)
+        name_matches = bool(row_name and registry_name_is_safe_for_org(row_name, original_name, org.ein))
+        fallback_matches = bool(
+            fallback_name
+            and row_info.get("nameSeen")
+            and registry_name_is_safe_for_org(fallback_name, original_name, org.ein)
+        )
+        if not (identifier_matches or name_matches or fallback_matches):
+            return False
+        remember_ak_confirmed_row(
+            search_year,
+            row_year,
+            row_name or fallback_name or original_name,
+            row_identifier,
+        )
+        return True
+
     current_year = date.today().year
-    years_to_try = [current_year, *range(2019, current_year)]
+    recent_cutoff_year = min(current_year, AK_RECENT_FILING_CUTOFF_YEAR)
+    years_to_try = list(range(current_year, recent_cutoff_year - 1, -1))
     original_name = getattr(org, "organization_name", "") or ""
     search_names = []
 
@@ -7988,6 +8091,9 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                     page_body = registry_page_body(ak_page)
                     print_link = find_ak_print_link_relaxed(ak_page, lookup_org)
                     if not print_link:
+                        if remember_ak_result_row(year, find_ak_result_row_relaxed(ak_page, lookup_org), lookup_org.organization_name):
+                            apply_ak_status_from_confirmed_year()
+                            return result, page_body
                         continue
                     row_text = re.sub(r"\s+", " ", (print_link.get("rowText") or "")).strip() if isinstance(print_link, dict) else ""
                     last_year_on_record = ak_last_year_from_print_row(print_link, row_text)
@@ -7995,11 +8101,15 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                         continue
                     if row_text:
                         row_name = ak_registry_name_from_print_row(print_link, row_text, original_name, org.ein)
+                        row_identifier = ak_registry_identifier_from_print_row(print_link, row_text)
                         if row_name and registry_name_is_safe_for_org(row_name, original_name, org.ein):
                             result.matched_registry_name = row_name
-                            result.matched_registry_identifier = ak_registry_identifier_from_print_row(print_link, row_text)
+                            result.matched_registry_identifier = row_identifier
+                            remember_ak_confirmed_row(year, last_year_on_record, row_name, row_identifier)
                         elif row_name:
                             continue
+                        elif row_identifier and re.sub(r"\D", "", row_identifier) == re.sub(r"\D", "", org.ein or ""):
+                            remember_ak_confirmed_row(year, last_year_on_record, original_name, row_identifier)
                     if search_name != original_name:
                         result.source_note = f"Matched using EIN-resolved compatible name variant: {search_name}."
                     newer_year, newer_name, newer_identifier, newer_body = ak_newer_year_result_from_retry(
@@ -8043,8 +8153,18 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                     continue
             if ak_confirmation_incomplete:
                 break
+        if not ak_confirmation_incomplete:
+            result.status = checker.STATUS_DELINQUENT
+            result.raw_status_text = f"No Alaska filing found for recent compliance years {', '.join(str(year) for year in years_to_try)}"
+            result.source_note = (
+                f"Alaska public FEIN search completed for recent compliance years {', '.join(str(year) for year in years_to_try)}. "
+                f"Because no {recent_cutoff_year}-or-newer filing was found, CharityClarity treats the Alaska registration as Delinquent."
+            )
+            result.error = ""
+            result.success = True
+            return result, ""
         name_deadline = min(time.perf_counter() + 54.0, ak_deadline)
-        name_fallback_years = list(range(date.today().year, max(2018, date.today().year - 5), -1))
+        name_fallback_years = years_to_try
         for search_name in ak_name_fallback_variants(original_name, org.ein):
             if ak_budget_exhausted():
                 ak_confirmation_incomplete = True
@@ -8060,6 +8180,9 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                     page_body = registry_page_body(ak_page)
                     print_link = find_ak_print_link_relaxed(ak_page, lookup_org)
                     if not print_link:
+                        if remember_ak_result_row(year, find_ak_result_row_relaxed(ak_page, lookup_org), search_name):
+                            apply_ak_status_from_confirmed_year()
+                            return result, page_body
                         continue
                     row_text = re.sub(r"\s+", " ", (print_link.get("rowText") or "")).strip() if isinstance(print_link, dict) else ""
                     last_year_on_record = ak_last_year_from_print_row(print_link, row_text)
@@ -8071,6 +8194,14 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                     wrong_ein = ak_row_has_wrong_ein(row_text, org.ein)
                     if wrong_ein:
                         continue
+                    row_identifier = ak_registry_identifier_from_print_row(print_link, row_text)
+                    if row_name or row_identifier:
+                        remember_ak_confirmed_row(
+                            year,
+                            last_year_on_record,
+                            row_name or search_name,
+                            row_identifier,
+                        )
                     newer_year, newer_name, newer_identifier, newer_body = ak_newer_year_result_from_retry(
                         ak_page,
                         lookup_org,
@@ -8135,6 +8266,9 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                     page_body = registry_page_body(ak_page)
                     print_link = find_ak_print_link_relaxed(ak_page, lookup_org)
                     if not print_link:
+                        if remember_ak_result_row(year, find_ak_result_row_relaxed(ak_page, lookup_org), lookup_org.organization_name):
+                            apply_ak_status_from_confirmed_year()
+                            return result, page_body
                         continue
                     row_text = re.sub(r"\s+", " ", (print_link.get("rowText") or "")).strip() if isinstance(print_link, dict) else ""
                     last_year_on_record = ak_last_year_from_print_row(print_link, row_text)
@@ -8142,11 +8276,15 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                         continue
                     if row_text:
                         row_name = ak_registry_name_from_print_row(print_link, row_text, original_name, org.ein)
+                        row_identifier = ak_registry_identifier_from_print_row(print_link, row_text)
                         if row_name and registry_name_is_safe_for_org(row_name, original_name, org.ein):
                             result.matched_registry_name = row_name
-                            result.matched_registry_identifier = ak_registry_identifier_from_print_row(print_link, row_text)
+                            result.matched_registry_identifier = row_identifier
+                            remember_ak_confirmed_row(year, last_year_on_record, row_name, row_identifier)
                         elif row_name:
                             continue
+                        elif row_identifier and re.sub(r"\D", "", row_identifier) == re.sub(r"\D", "", org.ein or ""):
+                            remember_ak_confirmed_row(year, last_year_on_record, original_name, row_identifier)
                     apply_ak_registration_status_from_best_evidence(
                         result,
                         ak_page,
@@ -8172,19 +8310,24 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
         ak_context.close()
     checked_years = ", ".join(str(year) for year in years_to_try)
     if locals().get("ak_confirmation_incomplete"):
+        if apply_ak_status_from_confirmed_year():
+            return result, ""
         result.raw_status_text = f"No confirmed Alaska registration found before the bounded hosted search deadline; checked years included {checked_years}"
-        result.status = "Not registered"
+        result.status = "Unable to Verify"
         result.source_note = (
-            "Alaska public search was reachable, but CharityClarity did not find a matching EIN/name "
-            "record within the hosted search budget. Reported as Not Registered / Not Found; "
+            "Alaska public search was reachable, but CharityClarity could not complete the historical EIN/name "
+            "confirmation within the hosted search budget. No definitive registration status was returned; "
             "time-sensitive decisions should confirm directly with Alaska."
         )
         result.error = ""
         result.success = True
         return result, ""
-    result.raw_status_text = f"No Alaska registration found for checked years {checked_years}"
-    result.status = "Not registered"
-    result.source_note = f"No Alaska registration found in public search for years {checked_years}"
+    result.status = checker.STATUS_DELINQUENT
+    result.raw_status_text = f"No Alaska filing found for recent compliance years {checked_years}"
+    result.source_note = (
+        f"Alaska public search completed for recent compliance years {checked_years}. "
+        f"Because no {recent_cutoff_year}-or-newer filing was found, CharityClarity treats the Alaska registration as Delinquent."
+    )
     result.success = True
     return result, ""
 
@@ -10173,6 +10316,8 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
     if public_status(result) != "Not Registered":
         fill_registry_match_from_text(result, body, org)
     normalize_registry_match_fields(result, org)
+    if (getattr(result, "state", "") or "").upper() == "NY":
+        result = normalize_ny_registry_match_metadata(org, result)
     if (
         (getattr(result, "state", "") or "").upper() == "WI"
         and public_status(result) != "Not Registered"
@@ -11226,6 +11371,10 @@ def repair_ny_not_registered_with_due_date(org, result):
     )
     if not safe_identity:
         return result
+    if registry_identity_name and registry_name_is_safe_for_org(registry_identity_name, org.organization_name, org.ein):
+        result.matched_registry_name = registry_identity_name
+    if requested_ein and requested_ein in evidence_digits and not (getattr(result, "matched_registry_identifier", "") or "").strip():
+        result.matched_registry_identifier = requested_ein
     if re.search(r"\bNo\s+filings?\s+found\b", evidence_text, re.I):
         result.status = checker.STATUS_DELINQUENT
         result.source_note = " ".join(part for part in [
@@ -11246,6 +11395,32 @@ def repair_ny_not_registered_with_due_date(org, result):
         "New York returned a safe matching organization row with an annual-report due date; CharityClarity classified the status from that due date.",
     ]).strip()
     result.success = True
+    return result
+
+
+def normalize_ny_registry_match_metadata(org, result):
+    """Trim NY row metadata out of the public registry name and expose embedded EIN."""
+    registry_name = clean_registry_name(getattr(result, "matched_registry_name", "") or "")
+    if not registry_name:
+        return result
+    registry_identity_name = re.split(
+        r"\b(?:Registration\s+type|Registration\s+category|Federal\s+tax\s+ID|County)\b",
+        registry_name,
+        maxsplit=1,
+        flags=re.I,
+    )[0].strip()
+    requested_ein = re.sub(r"\D", "", getattr(org, "ein", "") or "")
+    evidence_text = " ".join(part for part in [
+        registry_name,
+        getattr(result, "matched_registry_identifier", "") or "",
+        getattr(result, "raw_status_text", "") or "",
+        getattr(result, "source_note", "") or "",
+    ] if part)
+    evidence_digits = re.sub(r"\D", "", evidence_text)
+    if registry_identity_name and registry_name_is_safe_for_org(registry_identity_name, org.organization_name, org.ein):
+        result.matched_registry_name = registry_identity_name
+    if requested_ein and requested_ein in evidence_digits and not (getattr(result, "matched_registry_identifier", "") or "").strip():
+        result.matched_registry_identifier = requested_ein
     return result
 
 
@@ -14285,6 +14460,9 @@ def search_ar_precise(page, org):
     best_score = -10000
     first_rejected_row = ""
     reached = False
+    rows_seen = 0
+    explicit_no_results_seen = False
+    result_shell_without_rows = False
     deadline = time.perf_counter() + AR_NAME_SEARCH_MAX_SECONDS
     for variant in variants[:AR_NAME_SEARCH_MAX_VARIANTS]:
         remaining = deadline - time.perf_counter()
@@ -14326,9 +14504,18 @@ def search_ar_precise(page, org):
                 result.error = "AR registry returned bot-verification or block page after submit"
                 result.success = False
                 return result
-            if re.search(r"Back\s+to\s+Search\s+Form|Registration\s+Date|No\s+Results\s+Found", body, re.I):
+            explicit_no_results = bool(re.search(r"\bNo\s+Results\s+Found\b", body, re.I))
+            result_shell_seen = bool(re.search(r"Back\s+to\s+Search\s+Form|Registration\s+Date|No\s+Results\s+Found", body, re.I))
+            if result_shell_seen:
                 reached = True
-            for row in ar_result_rows(page):
+            if explicit_no_results:
+                explicit_no_results_seen = True
+            parsed_rows = ar_result_rows(page)
+            if parsed_rows:
+                rows_seen += len(parsed_rows)
+            elif result_shell_seen and not explicit_no_results:
+                result_shell_without_rows = True
+            for row in parsed_rows:
                 row_name = row.get("name", "")
                 if not row_name:
                     continue
@@ -14372,7 +14559,7 @@ def search_ar_precise(page, org):
             )
             result.error = "AR bounded lookup did not expose usable rows"
             result.success = False
-        else:
+        elif rows_seen or (explicit_no_results_seen and not result_shell_without_rows):
             result.status = checker.STATUS_NOT_REGISTERED
             result.raw_status_text = (
                 "No matching organization row"
@@ -14381,6 +14568,16 @@ def search_ar_precise(page, org):
             )
             result.source_note = "Arkansas search did not contain a usable charity row after master-code safe-name filtering."
             result.success = True
+        else:
+            result.status = "Unable to Verify"
+            result.raw_status_text = "Arkansas public charity search reached a result page but did not expose stable result rows"
+            result.source_note = (
+                "Arkansas public charity search was reachable, but the result table did not settle into either "
+                "a parseable row set or a stable explicit no-results response within the bounded lookup window; "
+                "CharityClarity did not finalize Not Registered from an incomplete result page."
+            )
+            result.error = ""
+            result.success = False
         return result
 
     result.matched_registry_name = best.get("name", "")
@@ -14393,13 +14590,15 @@ def search_ar_precise(page, org):
 
 def ar_transient_unreachable_result(result) -> bool:
     status = public_status(result)
-    if status not in {"Site Not Reachable", "Not Registered"}:
+    if status not in {"Site Not Reachable", "Not Registered", "Unable to Verify"}:
         return False
     text = " ".join([
         getattr(result, "raw_status_text", "") or "",
         getattr(result, "source_note", "") or "",
         getattr(result, "error", "") or "",
     ])
+    if status == "Unable to Verify" and re.search(r"did not expose stable result rows|result table did not settle", text, re.I):
+        return True
     if status == "Not Registered" and re.search(r"did not return usable results", text, re.I):
         return True
     return bool(re.search(r"bot-verification|human verification|captcha|cloudfront|waf|challenge|block page|preflight", text, re.I))
@@ -15567,6 +15766,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                         ]).strip()
                         result = confirmed_result
                 result = repair_ny_not_registered_with_due_date(org, result)
+                result = normalize_ny_registry_match_metadata(org, result)
             elif state == "NJ":
                 result = search_nj_with_name_fallback(page, org)
                 if public_status(result) != "Not Registered":
