@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.11.215-staging"
+APP_VERSION = "2026.06.12.216-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -337,6 +337,7 @@ WI_SIDECAR_SEMAPHORE = threading.BoundedSemaphore(WI_SIDECAR_LANES)
 WI_BACKEND_BROWSER_LANES = min(max(1, int(os.environ.get("CE_WI_BACKEND_BROWSER_LANES", "3"))), 4)
 WI_BACKEND_BROWSER_ACQUIRE_SECONDS = min(max(5.0, float(os.environ.get("CE_WI_BACKEND_BROWSER_ACQUIRE_SECONDS", "18"))), 24.0)
 WI_BACKEND_BROWSER_SEMAPHORE = threading.BoundedSemaphore(WI_BACKEND_BROWSER_LANES)
+OK_QUERY_LIMIT = min(max(3, int(os.environ.get("CE_OK_QUERY_LIMIT", "4"))), 6)
 WI_USE_BACKEND_BROWSER_FALLBACK = os.environ.get("CE_WI_USE_BACKEND_BROWSER_FALLBACK", "0").strip().lower() in {"1", "true", "yes"}
 WI_SNAPSHOT_PATH = Path(os.environ.get("CE_WI_SNAPSHOT_PATH", str(BASE_DIR / "wi_charities_snapshot.json")))
 NM_SIDECAR_URL = os.environ.get(
@@ -3052,12 +3053,107 @@ def high_signal_search_phrases(name: str) -> list[str]:
     no_article = re.sub(r"^(?:the|a|an)\s+", "", no_punct, flags=re.I).strip()
     tokens = search_query_tokens(no_punct)
 
+    def broad_entity_suffix_removed(value: str) -> str:
+        return re.sub(
+            r"\b(?:foundation|fund|association|society|organization|organizations|"
+            r"charity|charities|inc\.?|incorporated|corp\.?|corporation|llc|"
+            r"ltd\.?|limited)\b\.?\s*$",
+            "",
+            value or "",
+            flags=re.I,
+        ).strip(" ,;-")
+
+    def possessive_search_forms(value: str) -> list[str]:
+        forms: list[str] = []
+
+        def add_form(candidate: str) -> None:
+            candidate = re.sub(r"\s+", " ", (candidate or "").strip(" ,;-"))
+            if candidate and candidate.lower() not in {existing.lower() for existing in forms}:
+                forms.append(candidate)
+
+        # Search portals often normalize apostrophes differently. Put the
+        # punctuation-light forms first, then keep the literal form as fallback.
+        add_form(re.sub(r"\b([A-Za-z]+)'[sS]\b", r"\1", value or ""))
+        add_form(re.sub(r"\b([A-Za-z]+)'[sS]\b", r"\1s", value or ""))
+        add_form(re.sub(r"'", "", value or ""))
+        add_form(value or "")
+        return forms
+
+    def connector_swapped_forms(value: str) -> list[str]:
+        forms: list[str] = []
+
+        def add_form(candidate: str) -> None:
+            candidate = re.sub(r"\s+", " ", (candidate or "").strip(" ,;-"))
+            if candidate and candidate.lower() not in {existing.lower() for existing in forms}:
+                forms.append(candidate)
+
+        # Prefer "and" before "&"; many state portals tokenize words better
+        # than symbols. The symbol variant still stays high in the ladder.
+        add_form(re.sub(r"\s*&\s*", " and ", value or ""))
+        add_form(re.sub(r"\s+and\s+", " & ", value or "", flags=re.I))
+        add_form(value or "")
+        return forms
+
+    def connector_priority_core_forms(value: str) -> list[str]:
+        value = re.sub(r"\s+", " ", (value or "").strip(" ,;-"))
+        if not value or not re.search(r"\s(?:and|&)\s", value, re.I):
+            return []
+        sources = [broad_entity_suffix_removed(value), value]
+        forms: list[str] = []
+
+        def add_form(candidate: str) -> None:
+            candidate = re.sub(r"\s+", " ", (candidate or "").strip(" ,;-"))
+            if candidate and candidate.lower() not in {existing.lower() for existing in forms}:
+                forms.append(candidate)
+
+        for source in sources:
+            if not source:
+                continue
+            for possessive_form in possessive_search_forms(source):
+                for connector_form in connector_swapped_forms(possessive_form):
+                    add_form(connector_form)
+        return forms
+
+    def connector_preserved_prefixes(value: str) -> list[str]:
+        value = re.sub(r"\s+", " ", (value or "").strip(" ,;-"))
+        value = re.sub(r"^(?:the|a|an)\s+", "", value, flags=re.I).strip()
+        words = re.findall(r"[A-Za-z0-9]+", value)
+        prefixes: list[str] = []
+
+        def add_prefix(candidate: str) -> None:
+            candidate = re.sub(r"\s+", " ", (candidate or "").strip(" ,;-"))
+            if candidate and candidate.lower() not in {existing.lower() for existing in prefixes}:
+                prefixes.append(candidate)
+
+        # Some portals require connector words such as "of" to find a short
+        # legal core ("Friends of Jerusalem"), while stripped forms
+        # ("Friends Jerusalem") return no rows.
+        for size in (3, 4, 5):
+            if len(words) < size:
+                continue
+            candidate = " ".join(words[:size])
+            candidate_tokens = search_query_tokens(candidate)
+            if len(candidate_tokens) >= 2:
+                add_prefix(candidate)
+            elif (
+                len(candidate_tokens) == 1
+                and len(candidate_tokens[0]) >= 5
+                and re.search(r"\b(?:of|for|to|from|with)\b", candidate, re.I)
+            ):
+                add_prefix(candidate)
+        return prefixes
+
     def add_token_phrase(token_values: list[str]) -> None:
         if len(token_values) >= 2:
             add(" ".join(token_values), allow_single=False)
 
-    # Try concise, distinctive identity cores before legal/punctuation noise.
+    # Try concise, portal-friendly identity cores before legal/punctuation
+    # noise. Preserve connector words before trying stripped fragments.
     # The acceptance layer still requires a safe registry-name match.
+    for variant in connector_priority_core_forms(no_suffix or base):
+        add(variant)
+    for variant in connector_preserved_prefixes(no_suffix or base):
+        add(variant, allow_single=True)
     if len(tokens) >= 3:
         add_token_phrase(tokens[:3])
     if len(tokens) >= 4:
@@ -4847,6 +4943,18 @@ def copy_external_result(org, state: str, external_result):
         result.matched_registry_name = useful_registry_name(external_organization_name or org.organization_name)
     result.success = bool(getattr(external_result, "success", False) or public_status(result) != "Site Not Reachable")
     result.error = normalized_error
+    for attr in [
+        "queries_attempted",
+        "source_attempts",
+        "source_confidence",
+        "reason_code",
+        "runner_reason_code",
+        "rejection_reason",
+        "rejected_candidates",
+        "identity_confidence",
+    ]:
+        if hasattr(external_result, attr):
+            setattr(result, attr, getattr(external_result, attr))
     return result
 
 
@@ -10400,17 +10508,19 @@ def reason_code_for_result(result, status: str) -> str:
         return "NO_CANDIDATES"
     if status in {"Site Not Reachable", "Unable to Confirm", "Unable to Verify", "Needs Review"}:
         return "PORTAL_ERROR"
-    if getattr(result, "matched_registry_identifier", "") and normalized_ein_key(getattr(result, "matched_registry_identifier", "")) == normalized_ein_key(getattr(result, "ein", "")):
-        return "MATCH_EIN_EXACT"
-    if getattr(result, "matched_registry_name", ""):
-        decision = score_candidate(getattr(result, "organization_name", ""), getattr(result, "ein", ""), {"name": getattr(result, "matched_registry_name", "")})
-        return str(decision.get("reason") or "MATCH_HIGH_SIGNAL_PHRASE")
     if re.search(r"\bclosed|withdrawn|cancel", status or "", re.I):
+        return "STATUS_RAW_CLOSED"
+    if re.search(r"\b(?:terminated|withdrawn|cancel(?:ed|led)|closed)\b", text, re.I):
         return "STATUS_RAW_CLOSED"
     if re.search(r"\brevoked\b", status or "", re.I):
         return "STATUS_RAW_REVOKED"
     if re.search(r"\bexempt\b", status or "", re.I):
         return "STATUS_RAW_EXEMPT"
+    if getattr(result, "matched_registry_identifier", "") and normalized_ein_key(getattr(result, "matched_registry_identifier", "")) == normalized_ein_key(getattr(result, "ein", "")):
+        return "MATCH_EIN_EXACT"
+    if getattr(result, "matched_registry_name", ""):
+        decision = score_candidate(getattr(result, "organization_name", ""), getattr(result, "ein", ""), {"name": getattr(result, "matched_registry_name", "")})
+        return str(decision.get("reason") or "MATCH_HIGH_SIGNAL_PHRASE")
     return "STATUS_DUE_DATE_CURRENT" if status == "Current" else "RUNNER_OK"
 
 
@@ -10433,7 +10543,25 @@ def debug_trace_for_result(result, org, state: str, interpreted_status: str) -> 
     matched_name = getattr(result, "matched_registry_name", "") or ""
     candidate = None
     if matched_name:
-        decision = score_candidate(getattr(org, "organization_name", ""), getattr(org, "ein", ""), {"name": matched_name, "ein": getattr(result, "matched_registry_identifier", "")})
+        matched_identifier = getattr(result, "matched_registry_identifier", "") or ""
+        candidate_ein = matched_identifier if normalized_ein_key(matched_identifier) == normalized_ein_key(getattr(org, "ein", "")) else ""
+        decision = score_candidate(
+            getattr(org, "organization_name", ""),
+            getattr(org, "ein", ""),
+            {"name": matched_name, "ein": candidate_ein},
+        )
+        status_reason_code = getattr(result, "reason_code", "") or reason_code_for_result(result, interpreted_status)
+        if (
+            decision.get("decision") == "rejected"
+            and status_reason_code.startswith("STATUS_RAW_")
+            and public_status(result) not in {"Not Registered", "Site Not Reachable", "Unable to Confirm", "Unable to Verify", "Needs Review"}
+            and not (getattr(result, "rejection_reason", "") or "")
+        ):
+            decision = {
+                "score": max(int(decision.get("score") or 0), 55),
+                "decision": "accepted",
+                "reason": status_reason_code,
+            }
         candidate = {
             "name": matched_name,
             "identifier": getattr(result, "matched_registry_identifier", "") or "",
@@ -13982,22 +14110,58 @@ def search_ok_with_variants(page, org, module):
     )
     if original_name and original_name not in variants:
         variants.insert(0, original_name)
+    singular_plural_variants = ok_singular_plural_name_variants(original_name)
+    stripped_original = re.sub(
+        r"(?:,\s*)?\b(?:inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited|foundation|fund)\b\.?\s*$",
+        "",
+        original_name or "",
+        flags=re.I,
+    ).strip(" ,;-")
+    early_singular_variants = [
+        variant for variant in singular_plural_variants
+        if len(re.sub(r"\W+", "", variant or "")) < len(re.sub(r"\W+", "", stripped_original or ""))
+    ]
+    late_plural_variants = [variant for variant in singular_plural_variants if variant not in early_singular_variants]
     insert_index = min(2, len(variants))
-    for variant in ok_singular_plural_name_variants(original_name):
+    for variant in early_singular_variants:
         if variant and variant.lower() not in {existing.lower() for existing in variants}:
             variants.insert(insert_index, variant)
             insert_index += 1
+    for variant in late_plural_variants:
+        if variant and variant.lower() not in {existing.lower() for existing in variants}:
+            variants.append(variant)
+    original_signal_token_count = len(search_query_tokens(original_name))
+    filtered_variants = []
+    for variant in variants:
+        cleaned = re.sub(r"\s+", " ", (variant or "").strip())
+        if not cleaned:
+            continue
+        variant_signal_tokens = search_query_tokens(cleaned)
+        if original_signal_token_count >= 2 and len(variant_signal_tokens) < 2:
+            continue
+        if cleaned.lower() not in {existing.lower() for existing in filtered_variants}:
+            filtered_variants.append(cleaned)
+    variants = filtered_variants or variants[:3]
     best_result = None
     started = time.perf_counter()
-    for variant in variants[:6] or [original_name]:
+    attempted_variants: list[str] = []
+    planned_variants = (variants[:OK_QUERY_LIMIT] or [original_name])
+    exhausted_budget = False
+    for variant in planned_variants:
         if best_result is not None and time.perf_counter() - started > 72.0:
-            return best_result
+            exhausted_budget = True
+            break
         variant_org = org_with_name(org, variant)
         variant_org.match_target_names = list(dict.fromkeys([
             *organization_match_target_variants(original_name, getattr(org, "ein", "") or ""),
             *organization_match_target_variants(variant, getattr(org, "ein", "") or ""),
         ]))
+        attempted_variants.append(variant)
         result = search_ok_precise(page, variant_org, module)
+        result.queries_attempted = list(attempted_variants)
+        result.source_attempts = [
+            f"Oklahoma attempted bounded name/alias queries: {', '.join(attempted_variants[:OK_QUERY_LIMIT])}."
+        ]
         if getattr(result, "organization_name", "") != original_name:
             result.organization_name = original_name
         if public_status(result) == "Site Not Reachable":
@@ -14010,6 +14174,27 @@ def search_ok_with_variants(page, org, module):
                 ]).strip()
             return result
         best_result = result
+    if best_result and exhausted_budget:
+        budget_result = module.SearchResult(
+            organization_name=original_name,
+            status="Unable to Verify",
+            raw_status_text=(
+                f"Oklahoma lookup budget expired after {len(attempted_variants)} of "
+                f"{len(planned_variants)} bounded name/alias variants completed"
+            ),
+            source_url=module.OK_SEARCH_URL,
+            source_note=(
+                "Oklahoma search did not complete the bounded name/alias search path before "
+                "CharityClarity's state wall-time cap, so no final negative conclusion was made."
+            ),
+        )
+        budget_result.success = False
+        budget_result.queries_attempted = list(attempted_variants)
+        budget_result.source_attempts = [
+            f"Oklahoma attempted bounded name/alias queries before budget expiration: {', '.join(attempted_variants[:OK_QUERY_LIMIT])}."
+        ]
+        budget_result.reason_code = "RUNNER_TIMEOUT_RETRY_FAILED"
+        return budget_result
     return best_result or search_ok_precise(page, org, module)
 
 
@@ -15114,7 +15299,7 @@ def search_wv_precise(page, org):
         result.error = f"WV error: {exc}"
         result.raw_status_text = "West Virginia lookup could not be completed"
         result.source_note = "West Virginia public charity search could not be completed."
-        result.reason_code = "PARSER_ERROR"
+        result.reason_code = "PORTAL_ERROR" if re.search(r"Page\.goto|Timeout|Navigation|net::ERR_", str(exc), re.I) else "PARSER_ERROR"
         result.success = False
         return result
 
@@ -15887,19 +16072,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 result = search_batch_browser_state(page, org, state)
                 body = registry_page_body(page)
             elif state == "OK":
-                result = search_with_name_variants(
-                    page,
-                    org,
-                    lambda lookup_page, lookup_org, lookup_state=state: search_batch_browser_state(lookup_page, lookup_org, lookup_state),
-                    max_variants=10,
-                    max_elapsed_seconds=NAME_SEARCH_VARIANT_MAX_SECONDS,
-                    include_ein_aliases=True,
-                    include_name_segments=True,
-                    include_compact_legal_suffixes=True,
-                    include_leading_article_variants=True,
-                    prioritize_institution_reductions=False,
-                    require_safe_registry_name=True,
-                )
+                result = search_batch_browser_state(page, org, state)
                 body = registry_page_body(page)
             elif state == "WV":
                 reachable, _, preflight_result = preflight_name_search_registry(org, "WV")
@@ -15908,15 +16081,20 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 else:
                     result = search_wv_precise(page, org)
                     elapsed_before_wv_confirmation = time.perf_counter() - lookup_started
-                    if public_status(result) == "Site Not Reachable" and elapsed_before_wv_confirmation < 45.0:
+                    wv_retry_count = 0
+                    while wv_transient_portal_failure_result(result) and elapsed_before_wv_confirmation < 55.0 and wv_retry_count < 2:
                         time.sleep(1.0)
+                        wv_retry_count += 1
                         retried_result = search_wv_precise(page, org)
-                        if public_status(retried_result) != "Site Not Reachable":
+                        if not wv_transient_portal_failure_result(retried_result):
                             retried_result.source_note = " ".join(part for part in [
                                 retried_result.source_note or "",
                                 "A quick retry replaced an initial West Virginia transient lookup failure.",
                             ]).strip()
                             result = retried_result
+                            break
+                        result = retried_result
+                        elapsed_before_wv_confirmation = time.perf_counter() - lookup_started
                     confirm_wv_no_match = os.environ.get("CE_WV_CONFIRM_SINGLE_NO_MATCH", "0").strip().lower() in {"1", "true", "yes"}
                     if confirm_single_no_match and confirm_wv_no_match and public_status(result) == "Not Registered" and elapsed_before_wv_confirmation < 40.0:
                         time.sleep(2.0)
@@ -16079,6 +16257,8 @@ def fragile_batch_result_needs_confirmation(result: dict) -> bool:
     """Identify results that should not be trusted from a busy multi-state batch alone."""
     state = (result.get("state") or "").upper()
     status = (result.get("status") or "").strip().lower()
+    if state == "WV" and wv_transient_portal_failure_result(result):
+        return True
     name_registry_states = {
         "AR", "CO", "CT", "FL", "KS", "KY", "LA", "ME", "MI", "MS",
         "ND", "NH", "NM", "NY", "OK", "OR", "SC", "VA", "WA", "WI", "WV",
@@ -16176,6 +16356,35 @@ def slow_explicit_no_match_result(result: dict) -> bool:
         r"no\s+matching\s+(?:ein|organization|wisconsin|charitable)|"
         r"no\s+results?\s+found|0\s+(?:records|results)",
         no_record_text,
+        re.I,
+    ))
+
+
+def wv_transient_portal_failure_result(result) -> bool:
+    """Detect WV lookup failures caused by portal load/navigation, not completed no-match."""
+    if result is None:
+        return False
+    get_value = result.get if isinstance(result, dict) else lambda key, default="": getattr(result, key, default)
+    if (get_value("state", "") or "").upper() != "WV":
+        return False
+    status = (get_value("status", "") or "").strip().lower()
+    if status not in {"site not reachable", "unable to verify", "error", ""}:
+        return False
+    text = " ".join([
+        get_value("raw_status_text", "") or "",
+        get_value("source_note", "") or "",
+        get_value("comments", "") or "",
+        get_value("error", "") or "",
+        get_value("reason_code", "") or "",
+        get_value("runner_reason_code", "") or "",
+    ])
+    if re.search(r"\b(?:no\s+matching|no\s+record|not\s+registered|completed_no_rows|completed_no_confirmed_match)\b", text, re.I):
+        return False
+    return bool(re.search(
+        r"West\s+Virginia\s+lookup\s+could\s+not\s+be\s+completed|"
+        r"West\s+Virginia\s+public\s+charity\s+search\s+could\s+not\s+be\s+completed|"
+        r"Page\.goto|Timeout(?:Error)?|Navigation|net::ERR_|PORTAL_ERROR|PARSER_ERROR",
+        text,
         re.I,
     ))
 
@@ -16282,6 +16491,7 @@ def run_fanout_state_lookup_for_batch(organization_name: str, ein: str, state: s
                 (result.get("status") or "").strip().lower() == "site not reachable"
                 and float(result.get("lookup_seconds") or 0) < 20
             )
+            wv_portal_failure = wv_transient_portal_failure_result(result)
             if fast_unreachable and len(fanout_urls) > 1:
                 time.sleep(1)
                 retry_url = fanout_urls[(lane_start + 1) % len(fanout_urls)]
@@ -16289,6 +16499,16 @@ def run_fanout_state_lookup_for_batch(organization_name: str, ein: str, state: s
                 if isinstance(retry_result, dict):
                     retry_result["batch_fanout"] = "single_state_http_retry"
                     if (retry_result.get("status") or "").strip().lower() != "site not reachable":
+                        return retry_result
+                    result = retry_result
+            elif wv_portal_failure:
+                time.sleep(1)
+                retry_url = fanout_urls[(lane_start + 1) % len(fanout_urls)] if len(fanout_urls) > 1 else fanout_urls[lane_start]
+                retry_result = request_once(retry_url)
+                if isinstance(retry_result, dict):
+                    retry_result["batch_fanout"] = "single_state_http_wv_portal_retry"
+                    if not wv_transient_portal_failure_result(retry_result):
+                        retry_result["runner_recovery"] = "WV fanout retry succeeded after a portal-load failure."
                         return retry_result
                     result = retry_result
             return result
@@ -16318,7 +16538,7 @@ def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
         try:
             original_status_lower = (original.get("status") or "").strip().lower()
             original_is_no_match = original_status_lower == "not registered"
-            original_is_unreachable = original_status_lower == "site not reachable"
+            original_is_unreachable = original_status_lower == "site not reachable" or wv_transient_portal_failure_result(original)
             if state in {"AR", "CO", "FL", "ME", "MI", "MS", "ND", "NM", "NY", "OK", "SC", "VA", "WA", "WI", "WV"} and (original_is_no_match or original_is_unreachable) and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0:
                 time.sleep(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS)
             confirmed = run_state_lookup_for_batch(name, ein, state, confirm_single_no_match=(state == "ME"))
