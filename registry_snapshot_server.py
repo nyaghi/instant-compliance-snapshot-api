@@ -311,6 +311,10 @@ ME_LAST_LOOKUP_FINISHED = 0.0
 AR_LOOKUP_LOCK = threading.Lock()
 AR_LAST_LOOKUP_FINISHED = 0.0
 VA_SEARCH_VARIANT_LOCK = threading.Lock()
+VA_EVOKE_API_ROOT = os.environ.get("CE_VA_EVOKE_API_ROOT", "https://vdacs.evokeplatform.com/api").rstrip("/")
+VA_EVOKE_PUBLIC_PORTAL_URL = "https://vdacs.evokeplatform.com/app/publicPortal/home"
+VA_EVOKE_TIMEOUT_SECONDS = min(max(6.0, float(os.environ.get("CE_VA_EVOKE_TIMEOUT_SECONDS", "18"))), 30.0)
+VA_NAME_FALLBACK_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_VA_NAME_FALLBACK_VARIANT_LIMIT", "3"))), 12)
 BROWSER_USER_AGENT = os.environ.get(
     "CE_BROWSER_USER_AGENT",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -353,6 +357,10 @@ WI_SNAPSHOT_LOCK = threading.Lock()
 AK_LOOKUP_TOTAL_BUDGET_SECONDS = min(max(25.0, float(os.environ.get("CE_AK_LOOKUP_TOTAL_BUDGET_SECONDS", "42"))), 82.0)
 AK_ACTION_TIMEOUT_MS = min(max(2500, int(os.environ.get("CE_AK_ACTION_TIMEOUT_MS", "5000"))), 10000)
 AK_RECENT_FILING_CUTOFF_YEAR = min(max(2020, int(os.environ.get("CE_AK_RECENT_FILING_CUTOFF_YEAR", "2023"))), 2100)
+AK_HISTORICAL_IDENTITY_FLOOR_YEAR = min(
+    AK_RECENT_FILING_CUTOFF_YEAR - 1,
+    max(2015, int(os.environ.get("CE_AK_HISTORICAL_IDENTITY_FLOOR_YEAR", "2019"))),
+)
 NH_LIVE_PDF_URL = os.environ.get(
     "CE_NH_LIVE_PDF_URL",
     "https://mm.nh.gov/files/uploads/doj/remote-docs/registered-charities.pdf",
@@ -1326,7 +1334,7 @@ def public_status(result) -> str:
         return "Suspended"
     if re.search(r"\bpending\b", normalized, re.I):
         return "Pending"
-    if re.search(r"\bin\s+process\b", normalized, re.I):
+    if re.search(r"\bin\s+(?:process|progress)\b", normalized, re.I):
         return "Pending"
     if re.search(r"\b(withdrawn|retired|terminated|cancelled|canceled|voluntar(?:y|ily)\s+(?:deactivat(?:ed|ion)|surrender(?:ed)?))\b", normalized, re.I):
         return "Closed / Withdrawn / Canceled"
@@ -1727,21 +1735,8 @@ def filing_due_date(state: str, report_year: int, fiscal_end: tuple[int, int]) -
     fy_end = date(report_year, fiscal_end[0], fiscal_end[1])
     state = state.upper()
     if state == "CA":
-        if fiscal_end == (6, 30):
-            base_due = date(report_year, 12, 31)
-            extended_due = date(report_year + 1, 5, 15)
-            effective_due = base_due if base_due >= date.today() else extended_due
-            return effective_due, (
-                f"California annual filing base due date is {format_date(base_due)}; "
-                f"if an extension was applied, the extended due date is {format_date(extended_due)}"
-            )
         base_due = fifteenth_day_after_fiscal_year_end(fy_end, 5)
-        extended_due = add_months(base_due, 6)
-        effective_due = base_due if base_due >= date.today() else extended_due
-        return effective_due, (
-            f"California annual filing base due date is {format_date(base_due)}; "
-            f"if an extension was applied, the extended due date is {format_date(extended_due)}"
-        )
+        return base_due, "based on California's 4.5-month annual renewal cycle"
     if state == "MD":
         base_due = add_months_preserving_end_of_month(fy_end, 6)
         extended_due = md_automatic_extension_due_date(fy_end)
@@ -1797,7 +1792,7 @@ def filing_due_date_options(state: str, report_year: int, fiscal_end: tuple[int,
     state = state.upper()
     fy_end = date(report_year, fiscal_end[0], fiscal_end[1])
     if state == "CA":
-        base_due = date(report_year, 12, 31) if fiscal_end == (6, 30) else fifteenth_day_after_fiscal_year_end(fy_end, 5)
+        base_due = fifteenth_day_after_fiscal_year_end(fy_end, 5)
     elif state == "MD":
         base_due = add_months_preserving_end_of_month(fy_end, 6)
     elif state in {"MA", "NY", "HI", "SC", "KY"}:
@@ -1818,6 +1813,8 @@ def filing_due_date_options(state: str, report_year: int, fiscal_end: tuple[int,
 
     if state == "MD":
         extended_due = md_automatic_extension_due_date(fy_end)
+    elif state == "CA":
+        extended_due = None
     else:
         extended_due = add_months_preserving_end_of_month(base_due, 6) if state in EXTENSION_SCENARIO_STATES else None
     effective_due = base_due
@@ -2006,7 +2003,7 @@ def ca_annual_renewal_years_from_text(body: str) -> dict:
             re.I,
         )
         year = int(end_match.group(1))
-        if re.search(r"\b(?:in\s+process|pending)\b", status_text, re.I):
+        if re.search(r"\b(?:in\s+(?:process|progress)|pending)\b", status_text, re.I):
             pending_years.append(year)
             pending_status_by_year[year] = status_text or "In Process"
         elif re.search(r"\bnot\s+submitted\b", status_text, re.I):
@@ -2121,7 +2118,10 @@ def filing_context(result, body: str) -> dict:
         years = [int(match.group(1)) for match in re.finditer(pattern, registry_text, re.I)]
         if years:
             registry_latest_year = max(years) if registry_latest_year is None else max(registry_latest_year, max(years))
-    if state == "MD":
+    if state == "CA":
+        ca_years = ca_annual_renewal_years_from_text(body)
+        latest_year = ca_years.get("latest_submitted_year")
+    elif state == "MD":
         latest_year = md_represented_year_from_text(body, result.ein, result.organization_name)
     else:
         latest_year = registry_latest_year or latest_year_from_text(body, result.state)
@@ -4198,6 +4198,311 @@ def va_direct_request(url: str, data: dict[str, str] | None = None, timeout_seco
     raise last_error
 
 
+def va_format_ein_for_evoke(value: str) -> str:
+    digits = canonical_ein_digits(value)
+    if len(digits) == 9:
+        return f"{digits[:2]}-{digits[2:]}"
+    return (value or "").strip()
+
+
+def va_evoke_api_get(path: str, filter_payload: dict | None = None, timeout_seconds: float = VA_EVOKE_TIMEOUT_SECONDS):
+    url = f"{VA_EVOKE_API_ROOT}{path}"
+    if filter_payload is not None:
+        url = f"{url}?{urlencode({'filter': json.dumps(filter_payload, separators=(',', ':'))})}"
+    last_error = None
+    for attempt in range(2):
+        request = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": BROWSER_USER_AGENT,
+                "Accept": "application/json,text/plain,*/*",
+                "Referer": VA_EVOKE_PUBLIC_PORTAL_URL,
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+                charset = response.headers.get_content_charset() or "utf-8"
+                payload = response.read().decode(charset, errors="replace")
+            return json.loads(payload)
+        except Exception as exc:
+            last_error = exc
+            if attempt == 0:
+                time.sleep(0.6)
+    raise last_error
+
+
+def va_evoke_entity_search_by_ein(ein: str) -> list[dict]:
+    formatted = va_format_ein_for_evoke(ein)
+    if not formatted:
+        return []
+    return va_evoke_api_get(
+        "/data/objects/entity/instances",
+        {
+            "where": {
+                "and": [
+                    {"type": "Business/Organization"},
+                    {"status": {"neq": "Excluded"}},
+                    {
+                        "or": [
+                            {"ein": formatted},
+                            {"identificationNumber": formatted},
+                        ]
+                    },
+                ]
+            },
+            "limit": 20,
+            "order": "name ASC",
+        },
+    )
+
+
+def va_evoke_entity_search_by_name(name: str) -> list[dict]:
+    query = re.sub(r"\s+", " ", (name or "").strip())
+    if not query:
+        return []
+    return va_evoke_api_get(
+        "/data/objects/entity/instances",
+        {
+            "where": {
+                "and": [
+                    {"type": "Business/Organization"},
+                    {"status": {"neq": "Excluded"}},
+                    {
+                        "or": [
+                            {"name": {"like": query, "options": "i"}},
+                            {"fullName": {"like": query, "options": "i"}},
+                            {"primaryName": {"like": query, "options": "i"}},
+                            {"ein": {"like": query, "options": "i"}},
+                            {"identificationNumber": {"like": query, "options": "i"}},
+                        ]
+                    },
+                ]
+            },
+            "limit": 50,
+            "order": "name ASC",
+        },
+    )
+
+
+def va_evoke_registrations_for_entity(entity_id: str) -> list[dict]:
+    if not entity_id:
+        return []
+    return va_evoke_api_get(
+        "/data/objects/registration/instances",
+        {"where": {"entity.id": str(entity_id)}, "limit": 50, "order": "registrationNumber ASC"},
+    )
+
+
+def va_evoke_status_from_entity_and_registrations(entity: dict, registrations: list[dict]) -> tuple[str, str, str, date | None]:
+    entity_status = str(entity.get("status") or "")
+    selected = None
+    selected_date = None
+    for reg in registrations or []:
+        candidates = [
+            parse_due_date(str(reg.get("extensionDate") or "")),
+            parse_due_date(str(reg.get("expirationDate") or "")),
+            parse_due_date(str(reg.get("calculatedExpirationDate") or "")),
+            parse_due_date(str(reg.get("issueDate") or "")),
+            parse_due_date(str(reg.get("initialIssueDate") or "")),
+        ]
+        reg_date = next((candidate for candidate in candidates if candidate), None)
+        if selected is None or (reg_date or date.min) > (selected_date or date.min):
+            selected = reg
+            selected_date = reg_date
+
+    reg = selected or {}
+    reg_status = str((reg.get("status") or {}).get("name") or reg.get("calculatedRegistrationStatusLabel") or "")
+    reg_type = str((reg.get("registrationType") or {}).get("name") or reg.get("calculatedRegistrationTypeLabel") or "")
+    form_name = str(reg.get("calculatedFormName") or "")
+    renewal_status = str(reg.get("renewalStatus") or "")
+    expiration_date = parse_due_date(str(reg.get("expirationDate") or ""))
+    extension_date = parse_due_date(str(reg.get("extensionDate") or ""))
+    effective_date = expiration_date
+    combined = " | ".join(part for part in [entity_status, reg_status, reg_type, form_name, renewal_status] if part)
+
+    if re.search(r"\bunregistered\b", entity_status, re.I):
+        status = checker.STATUS_NOT_REGISTERED
+    elif re.search(r"\bpending|in\s+(?:process|progress)\b", combined, re.I):
+        status = "Pending"
+    elif re.search(r"\b(?:withdrawn|closed|cancel(?:ed|led)|terminated|inactive|ceased)\b", combined, re.I):
+        status = "Closed / Withdrawn / Canceled"
+    elif re.search(r"\bnot\s+authorized\s+to\s+solicit|suspended\b", entity_status, re.I):
+        status = "Suspended"
+    elif re.search(r"\bexempt\b", reg_type + " " + form_name, re.I):
+        status = "Exempt"
+    elif effective_date:
+        status = status_from_calendar_date(effective_date)
+    elif re.search(r"\bexpired|lapsed|delinquent|unregistered\b", combined, re.I):
+        status = "Delinquent"
+    elif re.search(r"\bregistered\b", combined, re.I):
+        status = "Current"
+    else:
+        status = checker.STATUS_UNKNOWN
+
+    raw_status = " | ".join(
+        part
+        for part in [
+            f"Entity Status: {entity_status}" if entity_status else "",
+            f"Registration Type: {reg_type}" if reg_type else "",
+            f"Registration Status: {reg_status}" if reg_status else "",
+            f"Registration Number: {reg.get('registrationNumber')}" if reg.get("registrationNumber") else "",
+            f"Expiration Date: {format_date(expiration_date)}" if expiration_date else "",
+            f"Extension Date: {format_date(extension_date)}" if extension_date else "",
+            f"Renewal Status: {renewal_status}" if renewal_status else "",
+        ]
+        if part
+    )
+    return status, raw_status, str(reg.get("registrationNumber") or reg.get("id") or ""), effective_date
+
+
+def va_evoke_entity_matches_request(entity: dict, org, allow_name_match: bool) -> bool:
+    requested_ein = canonical_ein_digits(getattr(org, "ein", "") or "")
+    entity_ein = canonical_ein_digits(str(entity.get("ein") or entity.get("identificationNumber") or ""))
+    if requested_ein and entity_ein == requested_ein:
+        return True
+    if not allow_name_match:
+        return False
+    candidates = [
+        str(entity.get("name") or ""),
+        str(entity.get("fullName") or ""),
+        str(entity.get("primaryName") or ""),
+    ]
+    return any(registry_name_is_safe_for_org(candidate, org.organization_name, org.ein) for candidate in candidates if candidate)
+
+
+def search_va_evoke_api(org):
+    variants = []
+
+    def add_variant(value: str) -> None:
+        cleaned = re.sub(r"\s+", " ", (value or "").strip())
+        if cleaned and cleaned.lower() not in {existing.lower() for existing in variants}:
+            variants.append(cleaned)
+
+    for query in build_search_queries(
+        org.organization_name,
+        org.ein,
+        include_ein=False,
+        include_ein_aliases=True,
+        include_name_segments=True,
+        max_queries=10,
+    ):
+        add_variant(query)
+    for variant in prioritized_institutional_variants(
+        organization_name_variants(
+            org.organization_name,
+            org.ein,
+            include_ein_aliases=True,
+            include_name_segments=True,
+            include_and_segments=True,
+            include_compact_legal_suffixes=False,
+            include_leading_article_variants=True,
+            include_institutional_reductions=True,
+        )
+    ):
+        if len(variants) >= 14:
+            break
+        add_variant(variant)
+
+    api_completed = False
+    best_rejected_name = ""
+    candidates: list[tuple[dict, bool, str]] = []
+    last_error = ""
+    try:
+        ein_entities = va_evoke_entity_search_by_ein(org.ein)
+        api_completed = True
+        for entity in ein_entities:
+            candidates.append((entity, False, "exact FEIN"))
+    except Exception as exc:
+        last_error = str(exc)
+
+    if api_completed and not candidates:
+        for variant in variants[:VA_NAME_FALLBACK_VARIANT_LIMIT]:
+            try:
+                entities = va_evoke_entity_search_by_name(variant)
+                api_completed = True
+            except Exception as exc:
+                last_error = str(exc)
+                continue
+            for entity in entities:
+                display_name = str(entity.get("name") or entity.get("fullName") or entity.get("primaryName") or "")
+                if va_evoke_entity_matches_request(entity, org, allow_name_match=True):
+                    candidates.append((entity, True, f"name variant: {variant}"))
+                elif not best_rejected_name and display_name:
+                    best_rejected_name = display_name
+            if candidates:
+                break
+
+    if not api_completed:
+        result = checker.StateResult(org.organization_name, org.ein, "VA", "Unable to Verify", VA_EVOKE_PUBLIC_PORTAL_URL)
+        result.raw_status_text = "Virginia Evoke public registry API lookup did not complete."
+        result.source_note = f"Virginia public registry lookup could not be completed. Last error: {last_error[:160]}"
+        result.success = False
+        result.error = last_error[:240]
+        return result
+
+    if not candidates:
+        raw = "No matching Virginia organization record"
+        if best_rejected_name:
+            raw = f"Virginia returned rows, but none safely matched. First rejected row: {best_rejected_name}"
+        result = checker.StateResult(
+            org.organization_name,
+            org.ein,
+            "VA",
+            checker.STATUS_NOT_REGISTERED,
+            VA_EVOKE_PUBLIC_PORTAL_URL,
+            raw_status_text=raw,
+            source_note="Virginia Evoke public registry search completed and found no confirmed organization record.",
+            success=True,
+        )
+        return result
+
+    accepted = []
+    registration_fetch_errors = []
+    for entity, used_name_fallback, match_basis in candidates:
+        registration_error = ""
+        try:
+            registrations = va_evoke_registrations_for_entity(str(entity.get("id") or ""))
+        except Exception as exc:
+            last_error = str(exc)
+            registration_error = last_error
+            registration_fetch_errors.append(last_error)
+            registrations = []
+        if registration_error:
+            continue
+        status, raw_status, identifier, effective_date = va_evoke_status_from_entity_and_registrations(entity, registrations)
+        display_name = str(entity.get("name") or entity.get("fullName") or entity.get("primaryName") or org.organization_name)
+        accepted.append({
+            "entity": entity,
+            "status": status,
+            "raw_status": raw_status or f"Entity Status: {entity.get('status') or ''}",
+            "identifier": identifier or str(entity.get("id") or ""),
+            "effective_date": effective_date,
+            "display_name": display_name,
+            "match_basis": match_basis,
+            "used_name_fallback": used_name_fallback,
+        })
+
+    if not accepted and registration_fetch_errors:
+        result = checker.StateResult(org.organization_name, org.ein, "VA", "Unable to Verify", VA_EVOKE_PUBLIC_PORTAL_URL)
+        result.raw_status_text = "Virginia Evoke entity search found a possible organization record, but registration detail retrieval did not complete."
+        result.source_note = f"Virginia public registry lookup was incomplete after matching the entity. Last error: {registration_fetch_errors[-1][:160]}"
+        result.success = False
+        result.error = registration_fetch_errors[-1][:240]
+        return result
+
+    selected = max(accepted, key=lambda item: (item["effective_date"] or date.min, item["identifier"]))
+    result = checker.StateResult(org.organization_name, org.ein, "VA", selected["status"], VA_EVOKE_PUBLIC_PORTAL_URL)
+    result.raw_status_text = selected["raw_status"]
+    result.source_note = (
+        f"Virginia Evoke public registry was searched by {selected['match_basis']}; "
+        "CharityClarity selected the most recent accepted registration evidence when available."
+    )
+    result.matched_registry_name = selected["display_name"]
+    result.matched_registry_identifier = selected["identifier"]
+    result.success = public_status(result) != "Unable to Verify"
+    return result
+
+
 def va_result_links(search_html: str) -> list[tuple[str, str, str]]:
     links = []
     for match in re.finditer(r"<a\s+[^>]*href=(?:\"([^\"]+)\"|'([^']+)'|([^>\s]+))[^>]*>(.*?)</a>", search_html or "", re.I | re.S):
@@ -4275,6 +4580,10 @@ def registry_alias_segment_matches_requested(registry_text: str, requested_name:
 
 
 def search_va_direct(org):
+    evoke_result = search_va_evoke_api(org)
+    if evoke_result is not None:
+        return evoke_result
+
     url = NAME_SEARCH_PREFLIGHT_URLS["VA"]
     variants = []
 
@@ -7818,6 +8127,11 @@ def ak_name_fallback_variants(original_name: str, ein: str = "") -> list[str]:
             if reduced and reduced.lower() != re.sub(r"\s+", " ", value or "").strip().lower():
                 add(reduced)
 
+    def add_comma_before_terminal_modifier(value: str) -> None:
+        words = re.findall(r"[A-Za-z0-9&']+", value or "")
+        if len(words) >= 3:
+            add(f"{' '.join(words[:-1])}, {words[-1]}")
+
     for alias in known_names_for_ein(ein):
         if compatible_ein_alias_for_name(original_name, alias):
             alias_words = normalized_match_name(alias).split()
@@ -7826,9 +8140,10 @@ def ak_name_fallback_variants(original_name: str, ein: str = "") -> list[str]:
                 add(f"{alias_words[0].upper()}: {rest}")
                 add(rest)
             add(alias)
-    add(original_name)
-    add_internal_hyphen_variants(original_name)
     add_suffix_reductions(original_name)
+    add(original_name)
+    add_comma_before_terminal_modifier(original_name)
+    add_internal_hyphen_variants(original_name)
     add_light_preposition_reduction(original_name)
     for variant in organization_name_variants(
         original_name,
@@ -8131,7 +8446,30 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
         result.success = True
         return True
 
-    def remember_ak_result_row(search_year: int, row_info: dict | None, fallback_name: str = "") -> bool:
+    def apply_ak_not_registered_after_completed_search() -> object:
+        checked_years = ak_negative_checked_years or years_to_try
+        result.status = checker.STATUS_NOT_REGISTERED
+        result.raw_status_text = (
+            f"No confirmed Alaska registration found for checked compliance years "
+            f"{', '.join(str(year) for year in checked_years)}"
+        )
+        result.matched_registry_name = ""
+        result.matched_registry_identifier = ""
+        result.source_note = (
+            f"Alaska public search completed for checked compliance years "
+            f"{', '.join(str(year) for year in checked_years)}. CharityClarity did not find a confirmed "
+            "Alaska registration record for this organization, so the status is Not Registered."
+        )
+        result.error = ""
+        result.success = True
+        return result
+
+    def remember_ak_result_row(
+        search_year: int,
+        row_info: dict | None,
+        fallback_name: str = "",
+        require_exact_ein: bool = False,
+    ) -> bool:
         if not isinstance(row_info, dict) or not row_info.get("found"):
             return False
         row_text = re.sub(r"\s+", " ", (row_info.get("rowText") or "")).strip()
@@ -8142,6 +8480,8 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
         row_identifier = ak_registry_identifier_from_print_row(row_info, row_text)
         expected_ein = re.sub(r"\D", "", org.ein or "")
         identifier_matches = bool(row_identifier and re.sub(r"\D", "", row_identifier) == expected_ein)
+        if require_exact_ein and not identifier_matches:
+            return False
         name_matches = bool(row_name and registry_name_is_safe_for_org(row_name, original_name, org.ein))
         fallback_matches = bool(
             fallback_name
@@ -8161,6 +8501,8 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
     current_year = date.today().year
     recent_cutoff_year = min(current_year, AK_RECENT_FILING_CUTOFF_YEAR)
     years_to_try = list(range(current_year, recent_cutoff_year - 1, -1))
+    historical_identity_years = list(range(recent_cutoff_year - 1, AK_HISTORICAL_IDENTITY_FLOOR_YEAR - 1, -1))
+    ak_negative_checked_years = list(dict.fromkeys([*years_to_try, *historical_identity_years]))
     original_name = getattr(org, "organization_name", "") or ""
     search_names = []
 
@@ -8186,7 +8528,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
             result.error = "Could not open Alaska Public Search form"
             return result, ""
         first_ein_years = years_to_try
-        remaining_ein_years = []
+        remaining_ein_years = historical_identity_years
         for search_name in search_names or [original_name]:
             lookup_org = org_with_name(org, search_name)
             for year in first_ein_years:
@@ -8262,25 +8604,68 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
             if ak_confirmation_incomplete:
                 break
         if not ak_confirmation_incomplete:
-            result.status = checker.STATUS_DELINQUENT
-            result.raw_status_text = f"No Alaska filing found for recent compliance years {', '.join(str(year) for year in years_to_try)}"
-            result.source_note = (
-                f"Alaska public FEIN search completed for recent compliance years {', '.join(str(year) for year in years_to_try)}. "
-                f"Because no {recent_cutoff_year}-or-newer filing was found, CharityClarity treats the Alaska registration as Delinquent."
-            )
-            result.error = ""
-            result.success = True
-            return result, ""
-        name_deadline = min(time.perf_counter() + 54.0, ak_deadline)
-        name_fallback_years = years_to_try
-        for search_name in ak_name_fallback_variants(original_name, org.ein):
+            if apply_ak_status_from_confirmed_year():
+                return result, ""
+        for search_name in search_names or [original_name]:
             if ak_budget_exhausted():
                 ak_confirmation_incomplete = True
                 break
             lookup_org = org_with_name(org, search_name)
+            for year in remaining_ein_years:
+                if ak_budget_exhausted():
+                    ak_confirmation_incomplete = True
+                    break
+                page_body = ""
+                try:
+                    fill_ak_search_form_ein_fast(ak_page, lookup_org, year)
+                    page_body = registry_page_body(ak_page)
+                    print_link = find_ak_print_link_relaxed(ak_page, lookup_org)
+                    if not print_link:
+                        if remember_ak_result_row(year, find_ak_result_row_relaxed(ak_page, lookup_org), lookup_org.organization_name):
+                            apply_ak_status_from_confirmed_year()
+                            return result, page_body
+                        continue
+                    row_text = re.sub(r"\s+", " ", (print_link.get("rowText") or "")).strip() if isinstance(print_link, dict) else ""
+                    last_year_on_record = ak_last_year_from_print_row(print_link, row_text)
+                    if ak_row_has_wrong_ein(row_text, org.ein):
+                        continue
+                    if row_text:
+                        row_name = ak_registry_name_from_print_row(print_link, row_text, original_name, org.ein)
+                        row_identifier = ak_registry_identifier_from_print_row(print_link, row_text)
+                        if row_name and registry_name_is_safe_for_org(row_name, original_name, org.ein):
+                            result.matched_registry_name = row_name
+                            result.matched_registry_identifier = row_identifier
+                            remember_ak_confirmed_row(year, last_year_on_record, row_name, row_identifier)
+                        elif row_name:
+                            continue
+                        elif row_identifier and re.sub(r"\D", "", row_identifier) == re.sub(r"\D", "", org.ein or ""):
+                            remember_ak_confirmed_row(year, last_year_on_record, original_name, row_identifier)
+                    if apply_ak_status_from_confirmed_year():
+                        return result, page_body
+                except Exception as e:
+                    result.error = f"AK historical EIN error: {e}"
+                    try:
+                        if not ak_budget_exhausted():
+                            checker.open_ak_public_search(ak_page)
+                    except Exception:
+                        pass
+                    continue
+            if ak_confirmation_incomplete:
+                break
+        if not ak_confirmation_incomplete and apply_ak_status_from_confirmed_year():
+            return result, ""
+        name_deadline = min(time.perf_counter() + 20.0, ak_deadline)
+        name_fallback_years = ak_negative_checked_years
+        exact_ein_name_variants = ak_name_fallback_variants(original_name, org.ein)[:2]
+        ak_name_fallback_stopped = False
+        for search_name in exact_ein_name_variants:
+            if ak_budget_exhausted():
+                ak_name_fallback_stopped = True
+                break
+            lookup_org = org_with_name(org, search_name)
             for year in name_fallback_years:
                 if time.perf_counter() >= name_deadline or ak_budget_exhausted():
-                    ak_confirmation_incomplete = True
+                    ak_name_fallback_stopped = True
                     break
                 page_body = ""
                 try:
@@ -8288,7 +8673,12 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                     page_body = registry_page_body(ak_page)
                     print_link = find_ak_print_link_relaxed(ak_page, lookup_org)
                     if not print_link:
-                        if remember_ak_result_row(year, find_ak_result_row_relaxed(ak_page, lookup_org), search_name):
+                        if remember_ak_result_row(
+                            year,
+                            find_ak_result_row_relaxed(ak_page, lookup_org),
+                            search_name,
+                            require_exact_ein=True,
+                        ):
                             apply_ak_status_from_confirmed_year()
                             return result, page_body
                         continue
@@ -8303,13 +8693,15 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                     if wrong_ein:
                         continue
                     row_identifier = ak_registry_identifier_from_print_row(print_link, row_text)
-                    if row_name or row_identifier:
-                        remember_ak_confirmed_row(
-                            year,
-                            last_year_on_record,
-                            row_name or search_name,
-                            row_identifier,
-                        )
+                    if not row_identifier or re.sub(r"\D", "", row_identifier) != re.sub(r"\D", "", org.ein or ""):
+                        continue
+                    if not remember_ak_result_row(
+                        year,
+                        print_link,
+                        row_name or search_name,
+                        require_exact_ein=True,
+                    ):
+                        continue
                     newer_year, newer_name, newer_identifier, newer_body = ak_newer_year_result_from_retry(
                         ak_page,
                         lookup_org,
@@ -8357,62 +8749,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                     except Exception:
                         pass
                     continue
-            if ak_confirmation_incomplete:
-                break
-        for search_name in search_names or [original_name]:
-            if ak_budget_exhausted():
-                ak_confirmation_incomplete = True
-                break
-            lookup_org = org_with_name(org, search_name)
-            for year in remaining_ein_years:
-                if time.perf_counter() >= name_deadline or ak_budget_exhausted():
-                    ak_confirmation_incomplete = True
-                    break
-                page_body = ""
-                try:
-                    fill_ak_search_form_ein_fast(ak_page, lookup_org, year)
-                    page_body = registry_page_body(ak_page)
-                    print_link = find_ak_print_link_relaxed(ak_page, lookup_org)
-                    if not print_link:
-                        if remember_ak_result_row(year, find_ak_result_row_relaxed(ak_page, lookup_org), lookup_org.organization_name):
-                            apply_ak_status_from_confirmed_year()
-                            return result, page_body
-                        continue
-                    row_text = re.sub(r"\s+", " ", (print_link.get("rowText") or "")).strip() if isinstance(print_link, dict) else ""
-                    last_year_on_record = ak_last_year_from_print_row(print_link, row_text)
-                    if ak_row_has_wrong_ein(row_text, org.ein):
-                        continue
-                    if row_text:
-                        row_name = ak_registry_name_from_print_row(print_link, row_text, original_name, org.ein)
-                        row_identifier = ak_registry_identifier_from_print_row(print_link, row_text)
-                        if row_name and registry_name_is_safe_for_org(row_name, original_name, org.ein):
-                            result.matched_registry_name = row_name
-                            result.matched_registry_identifier = row_identifier
-                            remember_ak_confirmed_row(year, last_year_on_record, row_name, row_identifier)
-                        elif row_name:
-                            continue
-                        elif row_identifier and re.sub(r"\D", "", row_identifier) == re.sub(r"\D", "", org.ein or ""):
-                            remember_ak_confirmed_row(year, last_year_on_record, original_name, row_identifier)
-                    apply_ak_registration_status_from_best_evidence(
-                        result,
-                        ak_page,
-                        ak_context,
-                        print_link,
-                        original_name,
-                        year,
-                        getattr(result, "source_note", "") or "",
-                        last_year_on_record or year,
-                    )
-                    return result, page_body
-                except Exception as e:
-                    result.error = f"AK error: {e}"
-                    try:
-                        if not ak_budget_exhausted():
-                            checker.open_ak_public_search(ak_page)
-                    except Exception:
-                        pass
-                    continue
-            if ak_confirmation_incomplete:
+            if ak_name_fallback_stopped:
                 break
     finally:
         ak_context.close()
@@ -8430,14 +8767,9 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
         result.error = ""
         result.success = True
         return result, ""
-    result.status = checker.STATUS_DELINQUENT
-    result.raw_status_text = f"No Alaska filing found for recent compliance years {checked_years}"
-    result.source_note = (
-        f"Alaska public search completed for recent compliance years {checked_years}. "
-        f"Because no {recent_cutoff_year}-or-newer filing was found, CharityClarity treats the Alaska registration as Delinquent."
-    )
-    result.success = True
-    return result, ""
+    if apply_ak_status_from_confirmed_year():
+        return result, ""
+    return apply_ak_not_registered_after_completed_search(), ""
 
 
 def ca_detail_body(page, org) -> str:
@@ -11781,7 +12113,7 @@ def explicit_adverse_registry_status(result, body: str) -> str:
     closed_pattern = r"\bclosed\b"
     inactive_pattern = r"\binactive\b"
     terminal_pattern = rf"(?:{withdrawn_pattern}|{closed_pattern}|{inactive_pattern})"
-    pending_pattern = r"\bpending\b"
+    pending_pattern = r"\b(?:pending|in\s+(?:process|progress))\b"
     failed_to_renew_pattern = r"\bfailed\s+to\s+renew\b"
     if re.search(inactive_pattern, primary_status_fields, re.I):
         return "Closed / Withdrawn / Canceled"
@@ -12295,6 +12627,66 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
     normalized_status = public_facing_status.lower()
     state = (result.state or "the selected state").upper()
     context = filing_context(result, body)
+    if state == "CA" and normalized_status in {"current", "upcoming filing", "delinquent"}:
+        ca_years = ca_annual_renewal_years_from_text(body)
+        latest_submitted_year = ca_years.get("latest_submitted_year")
+        latest_not_submitted_year = ca_years.get("latest_not_submitted_year")
+        latest_pending_year = ca_years.get("latest_pending_year")
+        ca_has_newer_nonfinal_renewal = bool(
+            (latest_pending_year and (not latest_submitted_year or latest_pending_year > latest_submitted_year))
+            or (latest_not_submitted_year and (not latest_submitted_year or latest_not_submitted_year > latest_submitted_year))
+        )
+        if (
+            normalized_status == "delinquent"
+            and latest_not_submitted_year
+            and (not latest_submitted_year or latest_not_submitted_year > latest_submitted_year)
+        ):
+            fiscal_end = context.get("fiscal_end") or fiscal_year_end_for_ein(result.ein)
+            submitted_sentence = (
+                f" The latest accepted annual renewal year identified is {latest_submitted_year}."
+                if latest_submitted_year else
+                " CharityClarity did not identify a later accepted annual renewal year."
+            )
+            due_sentence = ""
+            if fiscal_end:
+                due_options = filing_due_date_options("CA", latest_not_submitted_year, fiscal_end)
+                due_date = due_options.get("base_due") or due_options.get("effective_due")
+                if due_date:
+                    due_status = status_from_calendar_date(due_date)
+                    timing = (
+                        "within 6 months"
+                        if due_status == "Upcoming Filing"
+                        else ("overdue" if due_status == "Delinquent" else "not within the next 6 months")
+                    )
+                    due_sentence = (
+                        f" Based on a {fiscal_end[0]}/{fiscal_end[1]} fiscal year end, the "
+                        f"{latest_not_submitted_year} annual renewal is due {format_date(due_date)}, which is {timing}."
+                    )
+            latest_not_submitted_status = ca_years.get("latest_not_submitted_status") or "Not Submitted"
+            return (
+                f"The CA Annual Renewal Data shows the {latest_not_submitted_year} annual renewal with Status of Filing: "
+                f"{latest_not_submitted_status}.{submitted_sentence}{due_sentence} "
+                "CharityClarity treats the organization as Delinquent."
+            )
+        if (
+            not ca_has_newer_nonfinal_renewal
+            and context.get("represented_year")
+            and context.get("fiscal_end")
+            and context.get("due_date")
+        ):
+            due_status = status_from_calendar_date(context["due_date"])
+            timing = (
+                "within 6 months"
+                if due_status == "Upcoming Filing"
+                else ("overdue" if due_status == "Delinquent" else "not within the next 6 months")
+            )
+            fiscal_end = context["fiscal_end"]
+            return (
+                f"The CA Annual Renewal Data shows {context['represented_year']} as the latest accepted annual renewal year. "
+                f"Based on a {fiscal_end[0]}/{fiscal_end[1]} fiscal year end, the {context['next_report_year']} "
+                f"annual renewal is due {format_date(context['due_date'])}, which is {timing}. "
+                f"CharityClarity treats the organization as {public_facing_status}."
+            )
     rationale = concise_status_rationale_comment(result, body, public_facing_status)
     if rationale:
         return rationale
