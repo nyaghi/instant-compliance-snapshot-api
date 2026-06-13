@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.13.217-staging"
+APP_VERSION = "2026.06.13.218-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -225,7 +225,7 @@ BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("C
 BATCH_TRUST_SLOW_NO_MATCH_SECONDS = min(max(15.0, float(os.environ.get("CE_BATCH_TRUST_SLOW_NO_MATCH_SECONDS", "35"))), 90.0)
 BATCH_ISOLATED_STATE_ORDER = [
     state.strip().upper()
-    for state in os.environ.get("CE_BATCH_ISOLATED_STATES", "AK,AR,ME,FL,WI,VA,SC,ND,WA,NM,MS,OK,WV").split(",")
+    for state in os.environ.get("CE_BATCH_ISOLATED_STATES", "AK,AR,ME,FL,WI,VA,SC,ND,WA,NM,MS,OK,WV,CO,MI,NY").split(",")
     if state.strip()
 ]
 BATCH_ISOLATED_STATES = set(BATCH_ISOLATED_STATE_ORDER)
@@ -3393,6 +3393,8 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
         return True
     if charitable_wrapper_short_name_match(original_name, registry_name):
         return True
+    if distinctive_prefix_core_match(original_name, registry_name):
+        return True
     if broad_governance_name_mismatch(original_name, registry_name):
         return False
     if incompatible_institutional_prefix_expansion(original_name, registry_name):
@@ -3529,6 +3531,35 @@ def charitable_wrapper_short_name_match(original_name: str, registry_name: str) 
     if len(wrapper_words) < 2:
         return False
     return original_norm.startswith(f"{wrapper_target} ")
+
+
+def distinctive_prefix_core_match(original_name: str, registry_name: str) -> bool:
+    """Allow a short registry row when it is the distinctive leading legal core."""
+    original_norm = normalized_match_name(original_name)
+    registry_norm = normalized_match_name(registry_name)
+    if not original_norm or not registry_norm or original_norm == registry_norm:
+        return False
+    if not original_norm.startswith(f"{registry_norm} "):
+        return False
+    registry_words = registry_norm.split()
+    if len(registry_words) < 3:
+        return False
+    registry_core = distinctive_core_words(registry_name)
+    original_core = distinctive_core_words(original_name)
+    if len(registry_core) < 2 or original_core[: len(registry_core)] != registry_core:
+        return False
+    ignored_tail_words = {
+        "the", "a", "an", "of", "for", "and", "to", "in", "on", "at", "by",
+        "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited",
+        "co", "company",
+    }
+    allowed_tail_words = {
+        "college", "university", "school", "technology", "technological",
+        "institute", "institution", "academy", "center", "centre",
+    }
+    tail_words = original_norm.split()[len(registry_words):]
+    tail_distinctive = [word for word in tail_words if word not in ignored_tail_words]
+    return bool(tail_distinctive) and all(word in allowed_tail_words for word in tail_distinctive)
 
 
 def wrapped_supporting_foundation_match(registry_name: str, original_name: str) -> bool:
@@ -3930,14 +3961,56 @@ def sc_official_detail_lookup(org) -> object | None:
     original_name = getattr(org, "organization_name", "") or ""
     targets = organization_match_target_variants(original_name, getattr(org, "ein", ""))
     url = NAME_SEARCH_PREFLIGHT_URLS["SC"]
-    cookie_jar = http.cookiejar.CookieJar()
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
-    opener.addheaders = [
-        ("User-Agent", BROWSER_USER_AGENT),
-        ("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
-        ("Accept-Language", "en-US,en;q=0.9"),
-        ("Upgrade-Insecure-Requests", "1"),
-    ]
+    session = None
+    opener = None
+    if curl_requests is not None:
+        try:
+            session = curl_requests.Session(impersonate="chrome136")
+            session.headers.update({
+                "User-Agent": BROWSER_USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Upgrade-Insecure-Requests": "1",
+            })
+        except Exception:
+            session = None
+    if session is None:
+        cookie_jar = http.cookiejar.CookieJar()
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+        opener.addheaders = [
+            ("User-Agent", BROWSER_USER_AGENT),
+            ("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+            ("Accept-Language", "en-US,en;q=0.9"),
+            ("Upgrade-Insecure-Requests", "1"),
+        ]
+
+    def fetch_get() -> str:
+        if session is not None:
+            response = session.get(url, timeout=8)
+            response.raise_for_status()
+            return response.text or ""
+        page_response = opener.open(url, timeout=8)
+        return page_response.read().decode(page_response.headers.get_content_charset() or "utf-8", "replace")
+
+    def fetch_post(fields: dict[str, str]) -> str:
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Origin": "https://search.scsos.com",
+            "Referer": url,
+            "User-Agent": BROWSER_USER_AGENT,
+        }
+        if session is not None:
+            response = session.post(url, data=fields, headers=headers, timeout=8)
+            response.raise_for_status()
+            return response.text or ""
+        request = urllib.request.Request(
+            url,
+            data=urlencode(fields).encode("utf-8"),
+            method="POST",
+            headers=headers,
+        )
+        response = opener.open(request, timeout=8)
+        return response.read().decode(response.headers.get_content_charset() or "utf-8", "replace")
     search_queries = build_search_queries(
         original_name,
         getattr(org, "ein", ""),
@@ -3947,33 +4020,24 @@ def sc_official_detail_lookup(org) -> object | None:
         max_queries=8,
     )
     last_html = ""
+    transport_errors = 0
     for query in search_queries:
         if not query:
             continue
         try:
-            page_response = opener.open(url, timeout=12)
-            page_html = page_response.read().decode(page_response.headers.get_content_charset() or "utf-8", "replace")
+            page_html = fetch_get()
             fields = sc_extract_hidden_fields(page_html)
             fields.update({
                 "ctl00$MainContent$dd_CharitySearchOperator": "Contains",
                 "ctl00$MainContent$txt_CharitySearchName": query,
                 "ctl00$MainContent$butt_Search": "Search",
             })
-            request = urllib.request.Request(
-                url,
-                data=urlencode(fields).encode("utf-8"),
-                method="POST",
-                headers={
-                    "Content-Type": "application/x-www-form-urlencoded",
-                    "Origin": "https://search.scsos.com",
-                    "Referer": url,
-                    "User-Agent": BROWSER_USER_AGENT,
-                },
-            )
-            response = opener.open(request, timeout=14)
-            result_html = response.read().decode(response.headers.get_content_charset() or "utf-8", "replace")
+            result_html = fetch_post(fields)
             last_html = result_html
         except Exception:
+            transport_errors += 1
+            if transport_errors >= 2:
+                break
             continue
         candidates: dict[str, dict[str, object]] = {}
         for match in re.finditer(r'CharityInfo\((?P<id>\d+)\)[^>]*>\s*(?P<name>.*?)\s*</a>', result_html, re.I | re.S):
@@ -3981,13 +4045,14 @@ def sc_official_detail_lookup(org) -> object | None:
             candidate_name = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", match.group("name")))).strip()
             if not candidate_id or not candidate_name:
                 continue
-            if not registry_name_is_safe_against_targets(candidate_name, targets, original_name, getattr(org, "ein", "")):
+            safe_candidate_name = registry_name_is_safe_against_targets(candidate_name, targets, original_name, getattr(org, "ein", ""))
+            if not safe_candidate_name:
                 continue
             score = target_name_score(candidate_name, targets)
-            if score < 450:
+            if score < 450 and not safe_candidate_name:
                 continue
             exact_bonus = 500 if normalized_match_name(candidate_name) == normalized_match_name(original_name) else 0
-            candidate_score = score + exact_bonus + len(normalized_match_name(candidate_name).split())
+            candidate_score = max(score, 450) + exact_bonus + len(normalized_match_name(candidate_name).split())
             existing = candidates.get(candidate_id)
             if not existing or candidate_score > int(existing.get("score", -1000)):
                 candidates[candidate_id] = {"id": candidate_id, "name": candidate_name, "score": candidate_score}
@@ -4000,19 +4065,7 @@ def sc_official_detail_lookup(org) -> object | None:
                 "ctl00$MainContent$Hidden_CharityID": str(best["id"]),
                 "ctl00$MainContent$hButt_GetCharityDetail": "",
             })
-            detail_request = urllib.request.Request(
-                url,
-                data=urlencode(detail_fields).encode("utf-8"),
-                method="POST",
-                headers={
-                    "Content-Type": "application/x-www-form-urlencoded",
-                    "Origin": "https://search.scsos.com",
-                    "Referer": url,
-                    "User-Agent": BROWSER_USER_AGENT,
-                },
-            )
-            detail_response = opener.open(detail_request, timeout=14)
-            detail_html = detail_response.read().decode(detail_response.headers.get_content_charset() or "utf-8", "replace")
+            detail_html = fetch_post(detail_fields)
         except Exception:
             continue
         detail_text = sc_html_to_text(detail_html)
@@ -4022,7 +4075,7 @@ def sc_official_detail_lookup(org) -> object | None:
         public_id = sc_regex_value(detail_text, r"\bPublic\s+Id\s*:?\s*(P\d+)\b") or f"P{best['id']}"
         raw_status = sc_regex_value(
             detail_text,
-            r"\bStatus\s*:?\s*(Registered|Suspended|Terminated|Withdrawn|Closed|Canceled|Cancelled|Revoked|Inactive|Not\s+Authorized|May\s+Not\s+Solicit)\b",
+            r"\bStatus\s*:?\s*(Registered|Expired|Delinquent|Suspended|Terminated|Withdrawn|Closed|Canceled|Cancelled|Revoked|Inactive|Not\s+Authorized|May\s+Not\s+Solicit)\b",
         )
         due_raw = sc_regex_value(detail_text, r"\bDue\s+Date\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})")
         fiscal_year = sc_regex_value(
@@ -4039,6 +4092,8 @@ def sc_official_detail_lookup(org) -> object | None:
             interpreted = "Closed / Withdrawn / Canceled"
         elif re.search(r"\b(suspended|revoked|not\s+authorized|may\s+not\s+solicit)\b", status_text, re.I):
             interpreted = "Suspended"
+        elif re.search(r"\b(expired|delinquent)\b", status_text, re.I):
+            interpreted = checker.STATUS_DELINQUENT
         elif due_date:
             interpreted = status_from_calendar_date(due_date)
         elif re.search(r"\bRegistered\b", raw_status or "", re.I):
@@ -4068,10 +4123,10 @@ def sc_official_detail_lookup(org) -> object | None:
                 f"South Carolina returned safe registry match {registry_name} ({public_id}). "
                 f"The detail page lists due date {format_date(due_date)}, so CharityClarity interprets the status as {interpreted}."
             )
-        elif interpreted == checker.STATUS_DELINQUENT and re.search(r"\bRegistered\b", raw_status or "", re.I):
+        elif interpreted == checker.STATUS_DELINQUENT and re.search(r"\b(?:Registered|Expired|Delinquent)\b", raw_status or "", re.I):
             result.source_note = (
-                f"South Carolina returned safe registry match {registry_name} ({public_id}) with raw Registered status, "
-                "but no usable due-date or fiscal-year evidence; CharityClarity treats blank filing evidence as Delinquent."
+                f"South Carolina returned safe registry match {registry_name} ({public_id}) with raw status {raw_status}. "
+                "CharityClarity treats SC Expired/Delinquent records, or Registered records with blank filing evidence, as Delinquent."
             )
         else:
             result.source_note = f"South Carolina returned safe registry match {registry_name} ({public_id}) from the official result list."
@@ -4097,7 +4152,12 @@ def result_has_safe_matched_registry_name(result, original_name: str, ein: str =
 
 
 def search_sc_resilient(page, org):
+    official_result = sc_official_detail_lookup(org)
+    if official_result:
+        return official_result
     reachable, _, preflight_result = preflight_name_search_registry(org, "SC")
+    if not reachable:
+        return preflight_result
     result = search_with_name_variants(
         page,
         org,
@@ -4120,7 +4180,6 @@ def search_sc_resilient(page, org):
     )
     if not reachable and public_status(result) in {"Site Not Reachable", "Unknown", ""}:
         return preflight_result
-    official_result = sc_official_detail_lookup(org)
     if official_result and (
         public_status(official_result) != "Not Registered"
         or public_status(result) in {"Not Registered", "Unknown", "Site Not Reachable"}
@@ -5676,21 +5735,32 @@ def patch_mi_module_for_fast_lookups(module) -> None:
         return False
 
     def open_search_form_fast(page) -> bool:
-        for _ in range(1):
-            page.goto(module.MI_DISCLAIMER_URL, wait_until="domcontentloaded", timeout=12000)
+        for _ in range(2):
+            try:
+                page.goto(module.MI_DISCLAIMER_URL, wait_until="domcontentloaded", timeout=12000)
+            except Exception:
+                continue
             if wait_for_search_form_fast(page):
                 return True
 
             actions = [
                 lambda: page.evaluate("__doPostBack('ctl00$MainContent$lblYes','')"),
-                lambda: page.locator("#ctl00_MainContent_lblYes").click(timeout=3500, no_wait_after=True),
                 lambda: page.locator("#ctl00_MainContent_lblYes").evaluate("el => el.click()"),
+                lambda: page.locator("#ctl00_MainContent_lblYes").click(timeout=3500, no_wait_after=True, force=True),
             ]
             for action in actions:
                 try:
                     action()
                 except Exception:
                     continue
+                try:
+                    page.wait_for_load_state("domcontentloaded", timeout=4000)
+                except Exception:
+                    pass
+                try:
+                    page.locator("#ctl00_MainContent_txtEIN").wait_for(state="visible", timeout=4000)
+                except Exception:
+                    pass
                 if wait_for_search_form_fast(page):
                     return True
 
@@ -5703,10 +5773,10 @@ def patch_mi_module_for_fast_lookups(module) -> None:
         return False
 
     def find_results_frame_fast(page):
-        deadline = time.time() + 24
+        deadline = time.time() + 8
         while time.time() < deadline:
             for frame in reversed(page.frames):
-                text = re.sub(r"\s+", " ", module.body_text(frame, timeout=2500)).strip()
+                text = re.sub(r"\s+", " ", module.body_text(frame, timeout=600)).strip()
                 if not text:
                     continue
                 if "Results for the following input" in text or "record(s) found" in text or "No records found" in text:
@@ -5715,7 +5785,7 @@ def patch_mi_module_for_fast_lookups(module) -> None:
         return None
 
     def find_detail_frame_fast(page):
-        deadline = time.time() + 22
+        deadline = time.time() + 12
         while time.time() < deadline:
             for frame in reversed(page.frames):
                 try:
@@ -5723,7 +5793,7 @@ def patch_mi_module_for_fast_lookups(module) -> None:
                         return frame
                 except Exception:
                     pass
-                text = re.sub(r"\s+", " ", module.body_text(frame, timeout=2500)).strip()
+                text = re.sub(r"\s+", " ", module.body_text(frame, timeout=600)).strip()
                 if "Solicitation Registration Status" in text and "Charitable Trust Registration Status" in text:
                     return frame
             time.sleep(0.25)
@@ -5749,12 +5819,12 @@ def patch_mi_module_for_fast_lookups(module) -> None:
 
             page.locator("#ctl00_MainContent_txtEIN").fill("")
             page.locator("#ctl00_MainContent_txtEIN").fill(formatted_ein)
-            page.locator("#ctl00_MainContent_btnTextSearch").click(timeout=8000, no_wait_after=True)
+            page.locator("#ctl00_MainContent_btnTextSearch").click(timeout=5000, no_wait_after=True)
             try:
                 page.wait_for_load_state("domcontentloaded", timeout=3500)
             except Exception:
                 pass
-            time.sleep(4)
+            time.sleep(2)
 
             results_frame = find_results_frame_fast(page)
             if not results_frame:
@@ -5783,7 +5853,7 @@ def patch_mi_module_for_fast_lookups(module) -> None:
                 page.wait_for_load_state("domcontentloaded", timeout=3500)
             except Exception:
                 pass
-            time.sleep(4)
+            time.sleep(2)
 
             detail_frame = find_detail_frame_fast(page)
             if not detail_frame:
@@ -6300,28 +6370,39 @@ def search_mi_name_fallback(page, org):
 
     variants = sorted(variants, key=mi_variant_priority)
 
-    for variant in variants[:2]:
-        if time.perf_counter() - started > 8:
+    for variant in variants[:4]:
+        if time.perf_counter() - started > 24:
             result.status = checker.STATUS_NOT_REGISTERED
             result.raw_status_text = "No matching organization record"
             result.source_note = "Michigan EIN search returned no exact result, and the bounded organization-name fallback found no matching record before the safe retry limit."
             result.success = True
             result.error = ""
             return result
+        active_page = page
+        fresh_page = None
         try:
-            if not module.open_search_form(page):
+            opened_form = module.open_search_form(active_page)
+            if not opened_form:
+                try:
+                    fresh_page = page.context.new_page()
+                    if module.open_search_form(fresh_page):
+                        active_page = fresh_page
+                        opened_form = True
+                except Exception:
+                    active_page = page
+            if not opened_form:
                 result.error = "MI: Could not reopen search form for name fallback"
                 return result
-            page.locator("#ctl00_MainContent_txtName").fill("")
-            page.locator("#ctl00_MainContent_txtName").fill(variant)
-            page.locator("#ctl00_MainContent_txtEIN").fill("")
-            page.locator("#ctl00_MainContent_btnTextSearch").click(timeout=5000, no_wait_after=True)
+            active_page.locator("#ctl00_MainContent_txtName").fill("")
+            active_page.locator("#ctl00_MainContent_txtName").fill(variant)
+            active_page.locator("#ctl00_MainContent_txtEIN").fill("")
+            active_page.locator("#ctl00_MainContent_btnTextSearch").click(timeout=5000, no_wait_after=True)
             try:
-                page.wait_for_load_state("domcontentloaded", timeout=3500)
+                active_page.wait_for_load_state("domcontentloaded", timeout=3500)
             except Exception:
                 pass
             time.sleep(1)
-            frame = module.find_results_frame(page)
+            frame = module.find_results_frame(active_page)
             if not frame:
                 continue
             results_text = re.sub(r"\s+", " ", module.body_text(frame, timeout=3500)).strip()
@@ -6363,11 +6444,11 @@ def search_mi_name_fallback(page, org):
                         return result
             module.click_result_link(frame, link, href)
             try:
-                page.wait_for_load_state("domcontentloaded", timeout=3500)
+                active_page.wait_for_load_state("domcontentloaded", timeout=3500)
             except Exception:
                 pass
             time.sleep(1)
-            detail_frame = module.find_detail_frame(page)
+            detail_frame = module.find_detail_frame(active_page)
             if not detail_frame:
                 continue
             detail_text = re.sub(r"\s+", " ", module.body_text(detail_frame, timeout=3500)).strip()
@@ -6393,11 +6474,128 @@ def search_mi_name_fallback(page, org):
         except Exception as exc:
             result.error = f"MI name fallback error: {exc}"
             return result
+        finally:
+            if fresh_page is not None:
+                try:
+                    fresh_page.close()
+                except Exception:
+                    pass
     result.status = checker.STATUS_NOT_REGISTERED
     result.raw_status_text = "No matching organization record"
     result.source_note = "Michigan EIN and organization-name searches returned no matching result."
     result.success = True
     result.error = ""
+    return result
+
+
+def search_mi_http_completion_probe(org):
+    """Probe Michigan's official EIN form before entering the slower browser frame path."""
+    if curl_requests is None:
+        return None
+    ein_digits = canonical_ein_digits(getattr(org, "ein", ""))
+    if len(ein_digits) != 9:
+        return None
+    formatted_ein = f"{ein_digits[:2]}-{ein_digits[2:]}"
+    source_url = "https://www.ag.state.mi.us/CharitableTrust/frmDefault.aspx"
+    result = checker.StateResult(
+        getattr(org, "organization_name", "") or formatted_ein,
+        formatted_ein,
+        "MI",
+        "Unable to Verify",
+        source_url,
+    )
+    try:
+        session = curl_requests.Session(impersonate="chrome136")
+        headers = {
+            "User-Agent": BROWSER_USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        disclaimer_url = "https://www.ag.state.mi.us/CharitableTrust/frmDisclaimer.aspx"
+        disclaimer = session.get(disclaimer_url, timeout=8, headers=headers)
+        disclaimer.raise_for_status()
+        fields = sc_extract_hidden_fields(disclaimer.text or "")
+        fields.update({"__EVENTTARGET": "ctl00$MainContent$lblYes", "__EVENTARGUMENT": ""})
+        accepted = session.post(
+            disclaimer_url,
+            data=fields,
+            timeout=8,
+            headers={
+                **headers,
+                "Referer": disclaimer_url,
+                "Origin": "https://www.ag.state.mi.us",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+        )
+        accepted.raise_for_status()
+        accepted_text = accepted.text or ""
+        if re.search(r"\btemporarily\s+unavailable\b|\bscheduled\s+maintenance\b", accepted_text, re.I):
+            result.raw_status_text = "Michigan registry reported temporary unavailability after disclaimer."
+            result.source_note = "Michigan's official charity search page reported temporary unavailability, so CharityClarity did not finalize a registration status."
+            result.reason_code = "PORTAL_ERROR"
+            result.success = False
+            return result
+        form_fields = sc_extract_hidden_fields(accepted_text)
+        form_fields.update({
+            "__LASTFOCUS": "",
+            "__EVENTTARGET": "",
+            "__EVENTARGUMENT": "",
+            "ctl00$MainContent$rbSearchType": "0",
+            "ctl00$MainContent$ddlName1": "Includes",
+            "ctl00$MainContent$ddlName2": "All words",
+            "ctl00$MainContent$txtName": "",
+            "ctl00$MainContent$txtPurpose": "",
+            "ctl00$MainContent$ddlPurpose2": "All words",
+            "ctl00$MainContent$txtEIN": formatted_ein,
+            "ctl00$MainContent$txtCity": "",
+            "ctl00$MainContent$txtCounty": "",
+            "ctl00$MainContent$txtState": "",
+            "ctl00$MainContent$btnTextSearch": "Search",
+            "ctl00$MainContent$txtFileNo": "",
+        })
+        submitted = session.post(
+            source_url,
+            data=form_fields,
+            timeout=10,
+            headers={
+                **headers,
+                "Referer": source_url,
+                "Origin": "https://www.ag.state.mi.us",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+        )
+        submitted.raise_for_status()
+        submitted_text = sc_html_to_text(submitted.text or "")
+    except Exception as exc:
+        result.raw_status_text = "Michigan EIN search submission did not complete."
+        result.source_note = (
+            "Michigan's official EIN search form did not return a completed results response within the bounded source budget. "
+            "CharityClarity returned Unable to Verify rather than finalizing Not Registered from an incomplete state-source response."
+        )
+        result.reason_code = "STATE_RESPONSE_UNREADABLE"
+        result.source_attempts = [f"Michigan HTTP EIN probe error: {exc}"]
+        result.error = ""
+        result.success = False
+        return result
+    if re.search(r"\btemporarily\s+unavailable\b|\bscheduled\s+maintenance\b", submitted_text, re.I):
+        result.raw_status_text = "Michigan registry reported temporary unavailability after EIN search submission."
+        result.source_note = "Michigan's official charity search reported temporary unavailability, so CharityClarity did not finalize a registration status."
+        result.reason_code = "PORTAL_ERROR"
+        result.success = False
+        return result
+    if re.search(r"\b0\s+record\(s\)\s+found\b|\bno\s+records?\s+found\b|\bno\s+results?\s+found\b", submitted_text, re.I):
+        result.status = checker.STATUS_NOT_REGISTERED
+        result.raw_status_text = "No results found"
+        result.source_note = "Michigan EIN search completed and returned no registry candidates for the organization."
+        result.reason_code = "NO_CANDIDATES_AFTER_COMPLETED_SEARCH"
+        result.success = True
+        return result
+    if re.search(r"\brecord\(s\)\s+found\b|\bResults\s+for\s+the\s+following\s+input\b", submitted_text, re.I):
+        return None
+    result.raw_status_text = "Michigan EIN search response could not be interpreted."
+    result.source_note = "Michigan returned a response to the EIN search, but CharityClarity could not identify completed results or no-results evidence."
+    result.reason_code = "STATE_RESPONSE_UNREADABLE"
+    result.success = False
     return result
 
 
@@ -6849,7 +7047,7 @@ def normalize_registry_match_fields(result, org) -> None:
     matched_identifier = (getattr(result, "matched_registry_identifier", "") or "").strip()
     submitted_name = re.sub(r"\s+", " ", (getattr(org, "organization_name", "") or getattr(result, "organization_name", "") or "").strip())
 
-    if public_status(result) == "Not Registered":
+    if public_status(result) in {"Not Registered", "Site Not Reachable", "Unable to Verify", "Unable to Confirm", "Needs Review"}:
         result.matched_registry_name = ""
         result.matched_registry_identifier = ""
         return
@@ -6859,7 +7057,7 @@ def normalize_registry_match_fields(result, org) -> None:
             matched_identifier = matched_name
         matched_name = ""
 
-    if not matched_name and public_status(result) not in {"Not Registered", "Site Not Reachable"} and submitted_name:
+    if not matched_name and public_status(result) not in {"Not Registered", "Site Not Reachable", "Unable to Verify", "Unable to Confirm", "Needs Review"} and submitted_name:
         matched_name = submitted_name
 
     result.matched_registry_name = matched_name
@@ -11031,7 +11229,7 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
     correction_body = apply_confirmed_feedback_correction(result)
     if correction_body:
         body = " ".join(part for part in [body or "", correction_body] if part)
-    if public_status(result) != "Not Registered":
+    if public_status(result) not in {"Not Registered", "Site Not Reachable", "Unable to Verify", "Unable to Confirm", "Needs Review"}:
         fill_registry_match_from_text(result, body, org)
     normalize_registry_match_fields(result, org)
     if (getattr(result, "state", "") or "").upper() == "NY":
@@ -14861,6 +15059,33 @@ def search_ok_with_variants(page, org, module):
             return result
         best_result = result
     if best_result and exhausted_budget:
+        clean_no_match_text = " ".join([
+            getattr(best_result, "raw_status_text", "") or "",
+            getattr(best_result, "source_note", "") or "",
+        ])
+        if (
+            public_status(best_result) == "Not Registered"
+            and len(attempted_variants) >= 2
+            and re.search(r"\b(?:no results found|no safely matching|no matching entity|no matching filing)\b", clean_no_match_text, re.I)
+        ):
+            best_result.raw_status_text = " ".join(part for part in [
+                getattr(best_result, "raw_status_text", "") or "",
+                (
+                    f"Oklahoma bounded search completed {len(attempted_variants)} high-signal name/alias variants "
+                    f"before the state budget; no safe registry row was found."
+                ),
+            ]).strip()
+            best_result.source_note = (
+                "Oklahoma completed the strongest bounded name/alias searches and returned no safe matching organization row. "
+                "CharityClarity finalized Not Registered rather than exposing a budget cap from unsearched low-priority variants."
+            )
+            best_result.success = True
+            best_result.queries_attempted = list(attempted_variants)
+            best_result.source_attempts = [
+                f"Oklahoma completed bounded high-signal name/alias queries: {', '.join(attempted_variants[:OK_QUERY_LIMIT])}."
+            ]
+            best_result.reason_code = "NO_CONFIRMED_MATCH_AFTER_COMPLETED_HIGH_SIGNAL_SEARCH"
+            return best_result
         budget_result = module.SearchResult(
             organization_name=original_name,
             status="Unable to Verify",
@@ -16039,7 +16264,36 @@ def search_wa_nm_state(org, state: str):
         external_result = search_nm_status_history_fallback(org, module)
         if external_status_to_checker_status(getattr(external_result, "status", "")) == checker.STATUS_UNKNOWN:
             hosted_result = module.search_nm(external_org, show_process=False)
-            if external_status_to_checker_status(getattr(hosted_result, "status", "")) != checker.STATUS_UNKNOWN:
+            hosted_status = external_status_to_checker_status(getattr(hosted_result, "status", ""))
+            hosted_raw = " ".join([
+                getattr(hosted_result, "raw_status_text", "") or "",
+                getattr(hosted_result, "source_note", "") or "",
+            ])
+            if hosted_status == "Not Registered" and re.search(r"\bTax\s+Year\s+Registration\s+Open\b", hosted_raw, re.I):
+                retry_result = search_nm_status_history_reader(org, module)
+                retry_status = external_status_to_checker_status(getattr(retry_result, "status", ""))
+                if retry_status not in {checker.STATUS_UNKNOWN, "Not Registered"}:
+                    external_result = retry_result
+                else:
+                    sidecar_result = search_nm_status_history_sidecar(
+                        org,
+                        module,
+                        note="hosted NM lookup exposed Tax Year Registration Open but no parsed Status History rows",
+                    )
+                    sidecar_status = external_status_to_checker_status(getattr(sidecar_result, "status", ""))
+                    if sidecar_status not in {checker.STATUS_UNKNOWN, "Not Registered"}:
+                        external_result = sidecar_result
+                    else:
+                        hosted_result.status = "Unable to Verify"
+                        hosted_result.raw_status_text = hosted_raw or "Tax Year Registration Open without parsed Status History rows"
+                        hosted_result.source_note = (
+                            "New Mexico exposed a Tax Year Registration Open row but did not expose enough Status History "
+                            "evidence to finalize a Not Registered result. CharityClarity returned Unable to Verify rather "
+                            "than a false negative."
+                        )
+                        hosted_result.success = False
+                        external_result = hosted_result
+            elif hosted_status != checker.STATUS_UNKNOWN:
                 external_result = hosted_result
         external_result = repair_status_from_explicit_due_text(external_result, "NM")
     else:
@@ -16715,21 +16969,44 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     body = hi_detail_body(page)
             elif state == "MI":
                 mi_started = time.perf_counter()
-                result = search_bundled_extension_state(page, org, "MI")
-                mi_elapsed = time.perf_counter() - mi_started
-                mi_incomplete_frame = bool(re.search(
-                    r"No results frame|Could not find the Michigan results frame|Could not load the Michigan detail page",
-                    " ".join([result.raw_status_text or "", result.source_note or "", result.error or ""]),
-                    re.I,
-                ))
+                mi_probe_result = search_mi_http_completion_probe(org)
+                if mi_probe_result is not None:
+                    result = mi_probe_result
+                    mi_elapsed = time.perf_counter() - mi_started
+                    mi_incomplete_frame = public_status(result) == "Unable to Verify"
+                else:
+                    result = search_bundled_extension_state(page, org, "MI")
+                    mi_elapsed = time.perf_counter() - mi_started
+                    mi_incomplete_frame = bool(re.search(
+                        r"No results frame|Could not find the Michigan results frame|Could not load the Michigan detail page",
+                        " ".join([result.raw_status_text or "", result.source_note or "", result.error or ""]),
+                        re.I,
+                    ))
                 if (
                     MI_ENABLE_NAME_FALLBACK
                     and public_status(result) == "Not Registered"
+                    and not mi_incomplete_frame
                     and mi_elapsed < (LOOKUP_SOFT_MAX_SECONDS - 6)
                 ):
                     fallback_result = search_mi_name_fallback(page, org)
                     if public_status(fallback_result) != "Not Registered":
                         result = fallback_result
+                if (
+                    public_status(result) == "Not Registered"
+                    and re.search(
+                        r"No results frame after Michigan EIN search|Could not find the Michigan results frame|Could not load the Michigan detail page",
+                        " ".join([result.raw_status_text or "", result.source_note or "", result.error or ""]),
+                        re.I,
+                    )
+                ):
+                    result.status = "Unable to Verify"
+                    result.raw_status_text = "Michigan EIN search did not expose a completed results frame."
+                    result.source_note = (
+                        "Michigan lookup did not complete a reliable EIN-results/detail frame. "
+                        "CharityClarity returned Unable to Verify rather than finalizing Not Registered from incomplete state-source evidence."
+                    )
+                    result.reason_code = "STATE_RESPONSE_UNREADABLE"
+                    result.success = False
                 if (
                     MI_CONFIRM_NO_RESULTS_FRAME
                     and
