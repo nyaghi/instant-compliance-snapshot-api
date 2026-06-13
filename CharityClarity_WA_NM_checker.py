@@ -1105,6 +1105,19 @@ def search_nm(org: Organization, show_process: bool = False) -> SearchResult:
         body_text = strip_html(detail_html)
         result.matched_registry_name = nm_registry_name_from_html(detail_html)
         if not result.matched_registry_name:
+            rows = nm_parse_history_rows_from_html(detail_html) or nm_parse_history_rows_from_text(body_text)
+            if rows:
+                latest_submitted = nm_latest_submitted(rows)
+                fye_text = nm_extract_fye_from_html(
+                    detail_html,
+                    preferred_year=latest_submitted[0] if latest_submitted else None,
+                )
+                result.source_note = (
+                    "New Mexico returned a FEIN detail page with Status History rows but no visible charity-name "
+                    "header. CharityClarity used the FEIN-specific Status History rather than treating the record "
+                    "as Not Registered."
+                )
+                return apply_nm_rows_to_result(result, rows, fye_text=fye_text)
             result.status = STATUS_NOT_REGISTERED
             result.raw_status_text = "No New Mexico charity registration name found for this FEIN."
             result.source_note = (

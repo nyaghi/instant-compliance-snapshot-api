@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.12.216-staging"
+APP_VERSION = "2026.06.13.217-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -3890,6 +3890,207 @@ def sc_registered_blank_filing_data(result) -> bool:
     return not any(re.search(pattern, text, re.I) for pattern in filing_evidence_patterns)
 
 
+def sc_extract_hidden_fields(page_text: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for hidden in re.finditer(r'<input[^>]+type="hidden"[^>]*>', page_text or "", re.I):
+        tag = hidden.group(0)
+        name_match = re.search(r'name=["\']([^"\']+)["\']', tag, re.I)
+        value_match = re.search(r'value=["\']([^"\']*)["\']', tag, re.I)
+        if name_match:
+            fields[html.unescape(name_match.group(1))] = html.unescape(value_match.group(1) if value_match else "")
+    return fields
+
+
+def sc_html_to_text(value: str) -> str:
+    text = re.sub(r"(?i)<\s*br\s*/?\s*>", "\n", value or "")
+    text = re.sub(r"(?i)</\s*(?:p|div|tr|li|h[1-6]|td|th)\s*>", "\n", text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html.unescape(text)
+    lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
+    return "\n".join(line for line in lines if line)
+
+
+def sc_labeled_value(text: str, label: str) -> str:
+    pattern = rf"{re.escape(label)}\s*:?\s*(.*?)(?=\s+(?:Name|Public\s+Id|Public\s+ID|Status|Fiscal\s+Year|Next\s+Report|Due\s+Date|Address)\s*:|$)"
+    match = re.search(pattern, text or "", re.I | re.S)
+    if not match:
+        return ""
+    return re.sub(r"\s+", " ", match.group(1)).strip()
+
+
+def sc_regex_value(text: str, pattern: str) -> str:
+    match = re.search(pattern, text or "", re.I | re.S)
+    if not match:
+        return ""
+    return re.sub(r"\s+", " ", match.group(1)).strip()
+
+
+def sc_official_detail_lookup(org) -> object | None:
+    """Use the SC WebForms result list to choose the strongest safe candidate."""
+    original_name = getattr(org, "organization_name", "") or ""
+    targets = organization_match_target_variants(original_name, getattr(org, "ein", ""))
+    url = NAME_SEARCH_PREFLIGHT_URLS["SC"]
+    cookie_jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+    opener.addheaders = [
+        ("User-Agent", BROWSER_USER_AGENT),
+        ("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+        ("Accept-Language", "en-US,en;q=0.9"),
+        ("Upgrade-Insecure-Requests", "1"),
+    ]
+    search_queries = build_search_queries(
+        original_name,
+        getattr(org, "ein", ""),
+        include_ein=False,
+        include_ein_aliases=True,
+        include_name_segments=True,
+        max_queries=8,
+    )
+    last_html = ""
+    for query in search_queries:
+        if not query:
+            continue
+        try:
+            page_response = opener.open(url, timeout=12)
+            page_html = page_response.read().decode(page_response.headers.get_content_charset() or "utf-8", "replace")
+            fields = sc_extract_hidden_fields(page_html)
+            fields.update({
+                "ctl00$MainContent$dd_CharitySearchOperator": "Contains",
+                "ctl00$MainContent$txt_CharitySearchName": query,
+                "ctl00$MainContent$butt_Search": "Search",
+            })
+            request = urllib.request.Request(
+                url,
+                data=urlencode(fields).encode("utf-8"),
+                method="POST",
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Origin": "https://search.scsos.com",
+                    "Referer": url,
+                    "User-Agent": BROWSER_USER_AGENT,
+                },
+            )
+            response = opener.open(request, timeout=14)
+            result_html = response.read().decode(response.headers.get_content_charset() or "utf-8", "replace")
+            last_html = result_html
+        except Exception:
+            continue
+        candidates: dict[str, dict[str, object]] = {}
+        for match in re.finditer(r'CharityInfo\((?P<id>\d+)\)[^>]*>\s*(?P<name>.*?)\s*</a>', result_html, re.I | re.S):
+            candidate_id = match.group("id")
+            candidate_name = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", match.group("name")))).strip()
+            if not candidate_id or not candidate_name:
+                continue
+            if not registry_name_is_safe_against_targets(candidate_name, targets, original_name, getattr(org, "ein", "")):
+                continue
+            score = target_name_score(candidate_name, targets)
+            if score < 450:
+                continue
+            exact_bonus = 500 if normalized_match_name(candidate_name) == normalized_match_name(original_name) else 0
+            candidate_score = score + exact_bonus + len(normalized_match_name(candidate_name).split())
+            existing = candidates.get(candidate_id)
+            if not existing or candidate_score > int(existing.get("score", -1000)):
+                candidates[candidate_id] = {"id": candidate_id, "name": candidate_name, "score": candidate_score}
+        if not candidates:
+            continue
+        best = max(candidates.values(), key=lambda item: int(item.get("score", -1000)))
+        try:
+            detail_fields = sc_extract_hidden_fields(result_html)
+            detail_fields.update({
+                "ctl00$MainContent$Hidden_CharityID": str(best["id"]),
+                "ctl00$MainContent$hButt_GetCharityDetail": "",
+            })
+            detail_request = urllib.request.Request(
+                url,
+                data=urlencode(detail_fields).encode("utf-8"),
+                method="POST",
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Origin": "https://search.scsos.com",
+                    "Referer": url,
+                    "User-Agent": BROWSER_USER_AGENT,
+                },
+            )
+            detail_response = opener.open(detail_request, timeout=14)
+            detail_html = detail_response.read().decode(detail_response.headers.get_content_charset() or "utf-8", "replace")
+        except Exception:
+            continue
+        detail_text = sc_html_to_text(detail_html)
+        registry_name = str(best["name"])
+        if not registry_name_is_safe_against_targets(registry_name, targets, original_name, getattr(org, "ein", "")):
+            registry_name = str(best["name"])
+        public_id = sc_regex_value(detail_text, r"\bPublic\s+Id\s*:?\s*(P\d+)\b") or f"P{best['id']}"
+        raw_status = sc_regex_value(
+            detail_text,
+            r"\bStatus\s*:?\s*(Registered|Suspended|Terminated|Withdrawn|Closed|Canceled|Cancelled|Revoked|Inactive|Not\s+Authorized|May\s+Not\s+Solicit)\b",
+        )
+        due_raw = sc_regex_value(detail_text, r"\bDue\s+Date\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})")
+        fiscal_year = sc_regex_value(
+            detail_text,
+            r"\b(?:fiscal\s+year|Fiscal\s+Year)\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\s*-\s*\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
+        )
+        next_report = sc_regex_value(
+            detail_text,
+            r"\bNext\s+Report\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\s*-\s*\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
+        )
+        due_date = parse_due_date(due_raw) if due_raw else None
+        status_text = " ".join([raw_status, due_raw, fiscal_year, next_report])
+        if re.search(r"\b(withdrawn|closed|cancel(?:ed|led)|inactive|terminated)\b", status_text, re.I):
+            interpreted = "Closed / Withdrawn / Canceled"
+        elif re.search(r"\b(suspended|revoked|not\s+authorized|may\s+not\s+solicit)\b", status_text, re.I):
+            interpreted = "Suspended"
+        elif due_date:
+            interpreted = status_from_calendar_date(due_date)
+        elif re.search(r"\bRegistered\b", raw_status or "", re.I):
+            interpreted = checker.STATUS_DELINQUENT
+        else:
+            interpreted = raw_status or "Unknown"
+        raw_parts = [
+            f"Status: {raw_status}" if raw_status else "",
+            f"Due Date: {due_raw}" if due_raw else "",
+            f"Fiscal Year: {fiscal_year}" if fiscal_year else "",
+            f"Next Report: {next_report}" if next_report else "",
+            f"SC ID: {public_id}" if public_id else "",
+        ]
+        result = checker.StateResult(
+            original_name,
+            getattr(org, "ein", ""),
+            "SC",
+            interpreted,
+            url,
+            raw_status_text=" | ".join(part for part in raw_parts if part),
+            matched_registry_name=registry_name,
+            matched_registry_identifier=public_id,
+            success=interpreted not in {"Site Not Reachable", "Unknown", ""},
+        )
+        if due_date:
+            result.source_note = (
+                f"South Carolina returned safe registry match {registry_name} ({public_id}). "
+                f"The detail page lists due date {format_date(due_date)}, so CharityClarity interprets the status as {interpreted}."
+            )
+        elif interpreted == checker.STATUS_DELINQUENT and re.search(r"\bRegistered\b", raw_status or "", re.I):
+            result.source_note = (
+                f"South Carolina returned safe registry match {registry_name} ({public_id}) with raw Registered status, "
+                "but no usable due-date or fiscal-year evidence; CharityClarity treats blank filing evidence as Delinquent."
+            )
+        else:
+            result.source_note = f"South Carolina returned safe registry match {registry_name} ({public_id}) from the official result list."
+        return result
+    if last_html and re.search(r"\bNo\s+results\s+found\b", sc_html_to_text(last_html), re.I):
+        result = checker.StateResult(
+            original_name,
+            getattr(org, "ein", ""),
+            "SC",
+            checker.STATUS_NOT_REGISTERED,
+            url,
+            raw_status_text="No results found",
+            success=True,
+        )
+        result.source_note = "South Carolina search completed and returned no registry candidates for the organization."
+        return result
+    return None
+
+
 def result_has_safe_matched_registry_name(result, original_name: str, ein: str = "") -> bool:
     matched = useful_registry_name(getattr(result, "matched_registry_name", "") or "")
     return bool(matched and registry_name_is_safe_for_org(matched, original_name, ein))
@@ -3919,6 +4120,19 @@ def search_sc_resilient(page, org):
     )
     if not reachable and public_status(result) in {"Site Not Reachable", "Unknown", ""}:
         return preflight_result
+    official_result = sc_official_detail_lookup(org)
+    if official_result and (
+        public_status(official_result) != "Not Registered"
+        or public_status(result) in {"Not Registered", "Unknown", "Site Not Reachable"}
+        or target_name_score(
+            getattr(official_result, "matched_registry_name", "") or "",
+            organization_match_target_variants(org.organization_name, org.ein),
+        ) >= target_name_score(
+            getattr(result, "matched_registry_name", "") or "",
+            organization_match_target_variants(org.organization_name, org.ein),
+        )
+    ):
+        return official_result
     if (
         (result_registry_name_is_safe(result, org.organization_name, org.ein) or result_has_safe_matched_registry_name(result, org.organization_name, org.ein))
         and sc_registered_blank_filing_data(result)
@@ -8386,7 +8600,17 @@ def apply_ak_registration_status_from_best_evidence(
             "CharityClarity treats the next Alaska annual registration renewal as due on September 1 of the following year."
         )
     else:
-        result.status, result.raw_status_text, evidence_note = checker.classify_ak_registration_year(registration_year, None)
+        result.status = checker.STATUS_DELINQUENT
+        result.raw_status_text = " | ".join(part for part in [
+            "Last Year on Record: not visible",
+            f"Registration Year Searched: {registration_year}",
+            f"PDF: {pdf_url}" if pdf_url else "",
+        ] if part)
+        evidence_note = (
+            "Alaska registry evidence confirmed the organization identity, but did not expose a usable latest "
+            "registration year. CharityClarity does not treat the searched year as filing evidence; without a "
+            "recent confirmed filing year, it returns Delinquent conservatively."
+        )
     result.source_note = " ".join(part for part in [source_note_prefix, evidence_note] if part).strip()
     result.success = True
     return result.raw_status_text
@@ -8416,7 +8640,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
     ) -> None:
         nonlocal ak_best_confirmed_year, ak_best_confirmed_search_year
         nonlocal ak_best_confirmed_name, ak_best_confirmed_identifier
-        evidence_year = row_year or search_year
+        evidence_year = row_year
         if not evidence_year:
             return
         if ak_best_confirmed_year is None or evidence_year > ak_best_confirmed_year:
@@ -8475,9 +8699,13 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
         row_text = re.sub(r"\s+", " ", (row_info.get("rowText") or "")).strip()
         if not row_text or ak_row_has_wrong_ein(row_text, org.ein):
             return False
+        if re.fullmatch(r"(?:Search|View the instructions for using this search)", row_text, re.I):
+            return False
         row_year = ak_last_year_from_print_row(row_info, row_text)
         row_name = ak_registry_name_from_print_row(row_info, row_text, original_name, org.ein)
         row_identifier = ak_registry_identifier_from_print_row(row_info, row_text)
+        if not row_name and not row_identifier:
+            return False
         expected_ein = re.sub(r"\D", "", org.ein or "")
         identifier_matches = bool(row_identifier and re.sub(r"\D", "", row_identifier) == expected_ein)
         if require_exact_ein and not identifier_matches:
@@ -8490,6 +8718,22 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
         )
         if not (identifier_matches or name_matches or fallback_matches):
             return False
+        if not row_year:
+            result.matched_registry_name = row_name or fallback_name or original_name
+            result.matched_registry_identifier = row_identifier
+            result.status = checker.STATUS_DELINQUENT
+            result.raw_status_text = " | ".join(part for part in [
+                "Last Year on Record: not visible",
+                f"Registration Year Searched: {search_year}",
+            ] if part)
+            result.source_note = (
+                "Alaska registry evidence confirmed the organization identity, but did not expose a usable latest "
+                "registration year. CharityClarity does not treat the searched year as filing evidence; without a "
+                "recent confirmed filing year, it returns Delinquent conservatively."
+            )
+            result.error = ""
+            result.success = True
+            return True
         remember_ak_confirmed_row(
             search_year,
             row_year,
@@ -8590,7 +8834,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                         original_name,
                         year,
                         getattr(result, "source_note", "") or "",
-                        last_year_on_record or year,
+                        last_year_on_record,
                     )
                     return result, page_body
                 except Exception as e:
@@ -8738,7 +8982,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                         " ".join(part for part in [
                             f"Matched using Alaska name fallback after EIN search returned no rows: {search_name}.",
                         ] if part),
-                        last_year_on_record or year,
+                        last_year_on_record,
                     )
                     return result, page_body
                 except Exception as e:
@@ -9355,6 +9599,29 @@ def wi_search_names_for_org(org) -> list[str]:
                 names.append(value)
 
     original_name = getattr(org, "organization_name", "")
+    us_core_source = re.sub(
+        r"^(?:the\s+)?(?:u\.?\s*s\.?|u\s+s|us)\s+",
+        "US ",
+        original_name or "",
+        flags=re.I,
+    ).strip()
+    us_core_source = re.sub(r"\s+", " ", us_core_source)
+    if us_core_source and us_core_source.lower() != (original_name or "").strip().lower():
+        us_core_no_suffix = re.sub(
+            r"(?:,\s*)?\b(?:inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited|foundation|fund)\b\.?\s*$",
+            "",
+            us_core_source,
+            flags=re.I,
+        ).strip(" ,;-")
+        us_core_no_punct = re.sub(r"[^\w\s]", " ", us_core_no_suffix)
+        us_core_no_punct = re.sub(r"\s+", " ", us_core_no_punct).strip()
+        us_core_tokens = search_query_tokens(us_core_no_punct)
+        add_many([
+            us_core_no_suffix,
+            " ".join(us_core_tokens[:4]) if len(us_core_tokens) >= 4 else "",
+            " ".join(us_core_tokens[:3]) if len(us_core_tokens) >= 3 else "",
+            us_core_no_punct,
+        ])
     central_queries = build_search_queries(
         original_name,
         getattr(org, "ein", ""),
@@ -9564,6 +9831,17 @@ def wi_search_names_for_org(org) -> list[str]:
         cleaned = re.sub(r"\s+", " ", (value or "").strip())
         if not cleaned:
             return (99, 99, "")
+        if us_core_source and cleaned.lower() == us_core_source.lower():
+            return (-7, 0, cleaned.lower())
+        if "us_core_no_suffix" in locals() and us_core_no_suffix and cleaned.lower() == us_core_no_suffix.lower():
+            return (-7, 1, cleaned.lower())
+        if "us_core_no_punct" in locals() and us_core_no_punct and cleaned.lower() == us_core_no_punct.lower():
+            return (-7, 2, cleaned.lower())
+        if re.match(r"^US\s+", cleaned, re.I):
+            if re.search(r"[-,/]", cleaned):
+                return (-4, min(len(cleaned.split()), 8), cleaned.lower())
+            has_legal_suffix = bool(re.search(r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\b", cleaned, re.I))
+            return (-5, min(len(cleaned.split()), 8) + (20 if has_legal_suffix else 0), cleaned.lower())
         central_rank = central_query_rank.get(cleaned.lower())
         if central_rank is not None:
             return (-4, central_rank, cleaned.lower())
@@ -12276,6 +12554,13 @@ def true_status_from_body(result, body: str) -> str:
             return checker.STATUS_DELINQUENT
         registry_date = explicit_registry_date(result, combined)
         return status_from_calendar_date(registry_date) if registry_date else checker.STATUS_UNKNOWN
+    if state == "CA":
+        ca_primary_status = " ".join([
+            result.status or "",
+            result.raw_status_text or "",
+        ])
+        if re.search(r"\bsuspended\b|may\s+not\s+(?:solicit|operate|raise\s+funds)|not\s+authorized\s+to\s+solicit", ca_primary_status, re.I):
+            return "Suspended"
     if state == "CT":
         ct_status_fields = " ".join([
             result.raw_status_text or "",
@@ -14350,6 +14635,15 @@ def search_ms_fast(page, org, navigate: bool = True):
         filing_status = module.extract_labeled_value_from_text(detail_text, ["Filing Status"])
         expiration_raw = module.extract_labeled_value_from_text(detail_text, ["Expiration Date"])
         expiration_date = module.parse_mmddyyyy_date(expiration_raw)
+        if not expiration_date:
+            expiration_match = re.search(
+                r"\b(?:Expiration|Expire|Renewal)\s+Date\b\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
+                detail_text or "",
+                re.I,
+            )
+            if expiration_match:
+                expiration_raw = expiration_match.group(1)
+                expiration_date = module.parse_mmddyyyy_date(expiration_raw) or parse_due_date(expiration_raw)
         if expiration_raw and not expiration_date:
             expiration_raw = ""
         if not filing_status:
@@ -14997,6 +15291,28 @@ def ar_result_rows(page) -> list[dict]:
     return rows
 
 
+def ar_registry_name_is_safe(row_name: str, original_name: str, variant_targets: list[str], ein: str = "") -> bool:
+    row_norm = normalized_match_name(row_name)
+    original_norm = normalized_match_name(original_name)
+    if not row_norm:
+        return False
+    if row_norm == original_norm:
+        return True
+    if len(row_norm.split()) <= 1 and len(original_norm.split()) >= 2:
+        return False
+    row_words = [
+        word for word in row_norm.split()
+        if word not in LOW_SIGNAL_MATCH_TOKENS
+    ]
+    original_words = [
+        word for word in original_norm.split()
+        if word not in LOW_SIGNAL_MATCH_TOKENS
+    ]
+    if len(row_words) <= 1 and len(original_words) >= 2:
+        return False
+    return registry_name_is_safe_against_targets(row_name, variant_targets, original_name, ein)
+
+
 def ar_wait_for_search_form(page, timeout_ms: int) -> bool:
     deadline = time.perf_counter() + max(1.0, timeout_ms / 1000.0)
     while time.perf_counter() < deadline:
@@ -15100,7 +15416,7 @@ def search_ar_precise(page, org):
                     *organization_match_target_variants(original_name, getattr(org, "ein", "")),
                     *organization_match_target_variants(variant, getattr(org, "ein", "")),
                 ]))
-                if not registry_name_is_safe_against_targets(row_name, variant_targets, original_name, getattr(org, "ein", "")):
+                if not ar_registry_name_is_safe(row_name, original_name, variant_targets, getattr(org, "ein", "")):
                     if not first_rejected_row:
                         first_rejected_row = " | ".join(
                             part for part in [
