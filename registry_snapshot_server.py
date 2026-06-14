@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.14.221-staging"
+APP_VERSION = "2026.06.14.222-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -11336,7 +11336,10 @@ def reason_code_for_result(result, status: str) -> str:
         getattr(result, "source_note", "") or "",
         getattr(result, "error", "") or "",
     ])
-    if re.search(r"\btimeout|time limit|wall-time|budget expired\b", text, re.I):
+    if (
+        re.search(r"\btimeout|time limit|wall-time|budget expired\b", text, re.I)
+        and status in {"Site Not Reachable", "Unable to Confirm", "Unable to Verify", "Needs Review", "Runner Timeout", ""}
+    ):
         return "RUNNER_TIMEOUT"
     if status == "Not Registered":
         if re.search(r"rejected|did not safely match|weak|too broad", text, re.I):
