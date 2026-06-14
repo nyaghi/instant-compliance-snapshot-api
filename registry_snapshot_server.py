@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.14.220-staging"
+APP_VERSION = "2026.06.14.221-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -205,9 +205,9 @@ NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_NA
 ME_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_LOOKUP_MIN_INTERVAL_SECONDS", "1.0"))), 20.0)
 AR_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_AR_LOOKUP_MIN_INTERVAL_SECONDS", "1.5"))), 20.0)
 AR_TRANSIENT_RETRY_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_AR_TRANSIENT_RETRY_DELAY_SECONDS", "4.0"))), 20.0)
-AR_TRANSIENT_RETRY_ATTEMPTS = min(max(1, int(os.environ.get("CE_AR_TRANSIENT_RETRY_ATTEMPTS", "2"))), 3)
+AR_TRANSIENT_RETRY_ATTEMPTS = min(max(1, int(os.environ.get("CE_AR_TRANSIENT_RETRY_ATTEMPTS", "1"))), 3)
 AR_NAME_SEARCH_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_AR_NAME_SEARCH_MAX_VARIANTS", "12"))), 12)
-AR_NAME_SEARCH_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_AR_NAME_SEARCH_MAX_SECONDS", "40"))), 42.0)
+AR_NAME_SEARCH_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_AR_NAME_SEARCH_MAX_SECONDS", "28"))), 30.0)
 ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "1.0"))), 30.0)
 ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS = min(max(1, int(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS", "2"))), 4)
 ME_CONFIRM_NOT_REGISTERED = os.environ.get("CE_ME_CONFIRM_NOT_REGISTERED", "1").strip().lower() in {"1", "true", "yes"}
@@ -354,7 +354,7 @@ WI_REQUIRE_COMPLETE_SNAPSHOT = os.environ.get("CE_WI_REQUIRE_COMPLETE_SNAPSHOT",
 WI_SNAPSHOT_MAX_AGE_SECONDS = min(max(86400, int(os.environ.get("CE_WI_SNAPSHOT_MAX_AGE_SECONDS", str(14 * 86400)))), 45 * 86400)
 WI_SNAPSHOT_CACHE: dict[str, object] = {"loaded_at": 0.0, "mtime": 0.0, "snapshot": None, "name_index": None, "error": ""}
 WI_SNAPSHOT_LOCK = threading.Lock()
-AK_LOOKUP_TOTAL_BUDGET_SECONDS = min(max(25.0, float(os.environ.get("CE_AK_LOOKUP_TOTAL_BUDGET_SECONDS", "42"))), 82.0)
+AK_LOOKUP_TOTAL_BUDGET_SECONDS = min(max(25.0, float(os.environ.get("CE_AK_LOOKUP_TOTAL_BUDGET_SECONDS", "55"))), 82.0)
 AK_ACTION_TIMEOUT_MS = min(max(2500, int(os.environ.get("CE_AK_ACTION_TIMEOUT_MS", "5000"))), 10000)
 AK_RECENT_FILING_CUTOFF_YEAR = min(max(2020, int(os.environ.get("CE_AK_RECENT_FILING_CUTOFF_YEAR", "2023"))), 2100)
 AK_HISTORICAL_IDENTITY_FLOOR_YEAR = min(
@@ -13130,6 +13130,27 @@ def concise_status_rationale_comment(result, body: str, public_facing_status: st
             f"{format_date(computed_due)}{timing_text}, so the status is {public_facing_status}."
         )
 
+    if normalized_status in {"current", "upcoming filing", "delinquent"}:
+        explicit_due = explicit_due_date_from_result_text(result, body)
+        if explicit_due:
+            due_status = status_from_calendar_date(explicit_due)
+            due_status_lower = due_status.strip().lower()
+            if due_status_lower == "upcoming filing":
+                timing = "within the upcoming filing window"
+            elif due_status_lower == "delinquent":
+                timing = "past due"
+            else:
+                timing = "not within the upcoming filing window"
+            if due_status_lower == normalized_status:
+                return (
+                    f"Official {state} records show a due or expiration date of {format_date(explicit_due)}, "
+                    f"which is {timing}, so the status is {public_facing_status}."
+                )
+            return (
+                f"Official {state} records include a due or expiration date of {format_date(explicit_due)}. "
+                f"CharityClarity also considered the registry status text and returns {public_facing_status}."
+            )
+
     if normalized_status == "current":
         return "Official state records show active registration or current filing evidence, so the status is Current."
 
@@ -17295,12 +17316,16 @@ def fragile_batch_result_needs_confirmation(result: dict) -> bool:
     status = (result.get("status") or "").strip().lower()
     if state == "WV" and wv_transient_portal_failure_result(result):
         return True
+    if state == "AK" and ak_batch_result_needs_confirmation(result):
+        return True
+    if state == "NM" and nm_tax_year_open_no_match_result(result):
+        return True
     name_registry_states = {
         "AR", "CO", "CT", "FL", "KS", "KY", "LA", "ME", "MI", "MS",
         "ND", "NH", "NM", "NY", "OK", "OR", "SC", "VA", "WA", "WI", "WV",
     }
     if state in BATCH_ISOLATED_STATES and status in {"not registered", "site not reachable", "error", ""}:
-        return state in {"AR", "MS", "ND", "NM", "NY", "OK", "SC", "VA", "WA", "WV"}
+        return state in {"AK", "AR", "MS", "ND", "NM", "NY", "OK", "SC", "VA", "WA", "WV"}
     if weak_terminal_name_match_result(result):
         return True
     if state in BATCH_ISOLATED_STATES and status in {"not registered", "site not reachable", "error", ""}:
@@ -17575,11 +17600,11 @@ def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
             original_status_lower = (original.get("status") or "").strip().lower()
             original_is_no_match = original_status_lower == "not registered"
             original_is_unreachable = original_status_lower == "site not reachable" or wv_transient_portal_failure_result(original)
-            if state in {"AR", "CO", "FL", "ME", "MI", "MS", "ND", "NM", "NY", "OK", "SC", "VA", "WA", "WI", "WV"} and (original_is_no_match or original_is_unreachable) and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0:
+            if state in {"AK", "AR", "CO", "FL", "ME", "MI", "MS", "ND", "NM", "NY", "OK", "SC", "VA", "WA", "WI", "WV"} and (original_is_no_match or original_is_unreachable) and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0:
                 time.sleep(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS)
             confirmed = run_state_lookup_for_batch(name, ein, state, confirm_single_no_match=(state == "ME"))
             if (
-                state in {"AR", "CO", "FL", "ME", "MI", "MS", "NM", "NY", "OK", "WA", "WI", "WV"}
+                state in {"AK", "AR", "CO", "FL", "ME", "MI", "MS", "NM", "NY", "OK", "WA", "WI", "WV"}
                 and (original_is_no_match or original_is_unreachable)
                 and (confirmed.get("status") or "").strip().lower() in {"not registered", "site not reachable"}
                 and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0
@@ -17623,7 +17648,7 @@ def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
             return index, confirmed
         return index, None
 
-    calm_no_match_states = {"WI"}
+    calm_no_match_states = {"AK", "AR", "NM", "WI"}
     serial_jobs = [
         job for job in jobs
         if (job[1].get("state") or "").upper() in calm_no_match_states
@@ -17653,9 +17678,41 @@ def transient_negative_text(result: dict) -> str:
     ])
 
 
+def nm_tax_year_open_no_match_result(result: dict) -> bool:
+    """Do not trust NM no-match when the page actually exposed an open tax-year row."""
+    state = (result.get("state") or "").upper()
+    status = (result.get("status") or "").strip().lower()
+    if state != "NM" or status != "not registered":
+        return False
+    return bool(re.search(r"\bTax\s+Year\s+Registration\s+Open\b", transient_negative_text(result), re.I))
+
+
+def ak_batch_result_needs_confirmation(result: dict) -> bool:
+    """AK historical EIN searches can miss current evidence under batch pressure; confirm risky negatives."""
+    state = (result.get("state") or "").upper()
+    status = (result.get("status") or "").strip().lower()
+    if state != "AK":
+        return False
+    if status in {"not registered", "site not reachable", "error", ""}:
+        return True
+    if status != "delinquent":
+        return False
+    text = transient_negative_text(result)
+    last_year_match = re.search(r"\bLast\s+Year\s+on\s+Record\s*:?\s*(20\d{2})\b", text, re.I)
+    if not last_year_match:
+        return False
+    try:
+        last_year = int(last_year_match.group(1))
+    except Exception:
+        return False
+    return last_year >= date.today().year - 2
+
+
 def is_incomplete_no_match_result(state: str, status: str, result: dict) -> bool:
     if status != "not registered":
         return False
+    if nm_tax_year_open_no_match_result({**result, "state": state, "status": status}):
+        return True
     text = transient_negative_text(result)
     if state == "FL":
         return bool(re.search(
@@ -17705,6 +17762,8 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
         if status != "site not reachable":
             best_reachable_result = dict(result)
         retryable_statuses = {"site not reachable"}
+        if state == "AK" and status == "not registered":
+            retryable_statuses.add("not registered")
         if state == "WI":
             retryable_statuses.add("not registered")
         retry_text = transient_negative_text(result)
