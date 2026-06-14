@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.14.219-staging"
+APP_VERSION = "2026.06.14.220-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -3177,6 +3177,10 @@ def high_signal_search_phrases(name: str) -> list[str]:
     if len(original_words) >= 4:
         add(" ".join(original_words[:4]))
         add(" ".join(original_words[:3]))
+    possessive_words = search_query_tokens(possessive_plain_no_punct)
+    if len(possessive_words) >= 3:
+        add(" ".join(possessive_words[:4]), allow_single=False)
+        add(" ".join(possessive_words[:3]), allow_single=False)
     connector_stripped = re.sub(r"\b(?:of|for|to|and|&)\b", " ", no_article, flags=re.I)
     connector_stripped = re.sub(r"\s+", " ", connector_stripped).strip()
     add(connector_stripped)
@@ -9684,6 +9688,30 @@ def html_table_cells(row_html: str) -> list[str]:
     return values
 
 
+def wi_extract_detail_status(detail_text: str) -> str:
+    compact = re.sub(r"\s+", " ", detail_text or "").strip()
+    if not compact:
+        return ""
+    status_match = re.search(
+        r"\bStatus\s+(License\s+is\s+(?:not\s+)?current\s*\([^)]+\))",
+        compact,
+        re.I,
+    )
+    if status_match:
+        return re.sub(r"\s+", " ", status_match.group(1)).strip()
+    closed_match = re.search(
+        r"\b(voluntar(?:y|ily)\s+surrender(?:ed)?|withdrawn|closed|cancel(?:ed|led))\b",
+        compact,
+        re.I,
+    )
+    if closed_match:
+        return closed_match.group(1).strip()
+    adverse_match = re.search(r"\b(revoked|suspended)\b", compact, re.I)
+    if adverse_match:
+        return adverse_match.group(1).strip()
+    return ""
+
+
 def wi_http_detail_status(detail_href: str) -> str:
     if not detail_href:
         return ""
@@ -9693,8 +9721,7 @@ def wi_http_detail_status(detail_href: str) -> str:
         with urllib.request.urlopen(request, timeout=WI_HTTP_TIMEOUT_SECONDS) as response:
             detail_html = response.read().decode("utf-8", errors="replace")
         detail_text = html_to_text(detail_html)
-        status_match = re.search(r"\bStatus\s+(License\s+is\s+(?:not\s+)?current\s*\([^)]+\))", detail_text, re.I)
-        return re.sub(r"\s+", " ", status_match.group(1)).strip() if status_match else ""
+        return wi_extract_detail_status(detail_text)
     except Exception:
         return ""
 
@@ -9727,8 +9754,7 @@ def wi_reader_detail_status(detail_href: str) -> str:
         return ""
     detail_url = urljoin(WI_SEARCH_URL, html.unescape(detail_href))
     detail_text = wi_reader_text(detail_url)
-    status_match = re.search(r"\bStatus\s+(License\s+is\s+(?:not\s+)?current\s*\([^)]+\))", detail_text, re.I)
-    return re.sub(r"\s+", " ", status_match.group(1)).strip() if status_match else ""
+    return wi_extract_detail_status(detail_text)
 
 
 def wi_markdown_link_parts(value: str) -> tuple[str, str]:
@@ -9741,6 +9767,8 @@ def wi_markdown_link_parts(value: str) -> tuple[str, str]:
 def wi_status_from_detail_status(detail_status: str) -> str:
     text = detail_status or ""
     if re.search(r"\bvoluntar(?:y|ily)\s+surrender(?:ed)?\b", text, re.I):
+        return "Closed / Withdrawn / Canceled"
+    if re.search(r"\b(withdrawn|closed|cancel(?:ed|led))\b", text, re.I):
         return "Closed / Withdrawn / Canceled"
     if re.search(r"\brevoked\b", text, re.I):
         return "Revoked"
@@ -12298,11 +12326,19 @@ def repair_ny_not_registered_with_due_date(org, result):
     requested_ein = re.sub(r"\D", "", getattr(org, "ein", "") or "")
     evidence_digits = re.sub(r"\D", "", evidence_text)
     safe_identity = bool(
-        registry_name
-        and (
+        (
+            requested_ein
+            and (
+                requested_ein in re.sub(r"\D", "", identifier)
+                or requested_ein in evidence_digits
+            )
+        )
+        or (
+            registry_name
+            and (
             registry_name_is_safe_for_org(registry_name, org.organization_name, org.ein)
             or (registry_identity_name and registry_name_is_safe_for_org(registry_identity_name, org.organization_name, org.ein))
-            or (requested_ein and requested_ein in evidence_digits)
+            )
         )
     )
     if not safe_identity:
@@ -12311,7 +12347,7 @@ def repair_ny_not_registered_with_due_date(org, result):
         result.matched_registry_name = registry_identity_name
     if requested_ein and requested_ein in evidence_digits and not (getattr(result, "matched_registry_identifier", "") or "").strip():
         result.matched_registry_identifier = requested_ein
-    if re.search(r"\bNo\s+filings?\s+found\b", evidence_text, re.I):
+    if re.search(r"\bNo\s+filings?\s+found\b", evidence_text, re.I) or annual_filings_absent(evidence_text):
         result.status = checker.STATUS_DELINQUENT
         result.source_note = " ".join(part for part in [
             getattr(result, "source_note", "") or "",
@@ -15771,8 +15807,23 @@ def ar_preferred_name_variants(org) -> list[str]:
         add(query, allow_broad=not search_query_is_too_broad(query))
     for preferred in category_preferred_name_variants(original):
         add(preferred)
+    parenthetical_aliases = [
+        re.sub(r"\s+", " ", match.group(1)).strip(" ,;-/")
+        for match in re.finditer(r"\(([^)]{3,80})\)", original)
+    ]
+    for alias in reversed(parenthetical_aliases):
+        if not alias or too_broad(alias):
+            continue
+        existing_index = next((index for index, existing in enumerate(variants) if existing.lower() == alias.lower()), None)
+        if existing_index is not None:
+            variants.pop(existing_index)
+        insert_at = 2 if len(variants) >= 2 else len(variants)
+        variants.insert(insert_at, alias)
     leading_probe = leading_distinctive_probe(original)
-    if leading_probe and leading_probe.lower() not in {existing.lower() for existing in variants}:
+    if leading_probe:
+        existing_index = next((index for index, existing in enumerate(variants) if existing.lower() == leading_probe.lower()), None)
+        if existing_index is not None:
+            variants.pop(existing_index)
         if variants:
             variants.insert(1, leading_probe)
         else:
