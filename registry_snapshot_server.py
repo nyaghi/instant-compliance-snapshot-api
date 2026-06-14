@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.13.218-staging"
+APP_VERSION = "2026.06.14.219-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -188,8 +188,8 @@ SC_NAME_VARIANT_MAX_SECONDS = max(12.0, float(os.environ.get("CE_SC_NAME_VARIANT
 NAME_SEARCH_VARIANT_MAX_SECONDS = max(18.0, float(os.environ.get("CE_NAME_SEARCH_VARIANT_MAX_SECONDS", "35")))
 CT_NAME_VARIANT_MAX_SECONDS = min(max(10.0, float(os.environ.get("CE_CT_NAME_VARIANT_MAX_SECONDS", "24"))), 35.0)
 CT_NAME_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_CT_NAME_VARIANT_LIMIT", "8"))), 12)
-CT_DIRECT_TIMEOUT_SECONDS = min(max(6.0, float(os.environ.get("CE_CT_DIRECT_TIMEOUT_SECONDS", "10"))), 12.0)
-CT_DIRECT_MAX_SECONDS = min(max(6.0, float(os.environ.get("CE_CT_DIRECT_MAX_SECONDS", "20"))), 22.0)
+CT_DIRECT_TIMEOUT_SECONDS = min(max(6.0, float(os.environ.get("CE_CT_DIRECT_TIMEOUT_SECONDS", "12"))), 16.0)
+CT_DIRECT_MAX_SECONDS = min(max(6.0, float(os.environ.get("CE_CT_DIRECT_MAX_SECONDS", "24"))), 30.0)
 MN_NAME_FALLBACK_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_MN_NAME_FALLBACK_MAX_SECONDS", "18"))), 30.0)
 MN_NAME_FALLBACK_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_MN_NAME_FALLBACK_MAX_VARIANTS", "4"))), 10)
 FL_CHECK_A_CHARITY_URL = "https://csapp.fdacs.gov/CSPublicApp/CheckACharity/CheckACharity.aspx"
@@ -17593,9 +17593,56 @@ def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
     return results
 
 
+def transient_negative_text(result: dict) -> str:
+    return " ".join([
+        str(result.get("raw_status_text") or ""),
+        str(result.get("source_note") or ""),
+        str(result.get("comments") or ""),
+        str(result.get("error") or ""),
+    ])
+
+
+def is_incomplete_no_match_result(state: str, status: str, result: dict) -> bool:
+    if status != "not registered":
+        return False
+    text = transient_negative_text(result)
+    if state == "FL":
+        return bool(re.search(
+            r"bounded\s+lookup\s+window|no\s+usable|could\s+not\s+be\s+completed|could\s+not\s+find\s+business\s+name",
+            text,
+            re.I,
+        ))
+    if state == "CT":
+        return bool(re.search(
+            r"bounded\s+lookup\s+window|ended\s+before|could\s+not\s+be\s+completed|did\s+not\s+return\s+a\s+usable",
+            text,
+            re.I,
+        ))
+    return False
+
+
+def conservative_incomplete_lookup_result(result: dict, state: str) -> dict:
+    updated = dict(result)
+    updated["status"] = "Unable to Confirm"
+    updated["raw_status_text"] = (
+        f"{state} lookup did not complete enough registry evidence to finalize Not Registered"
+    )
+    note = (
+        f"CharityClarity retried the {state} registry after an incomplete no-record response, "
+        "but the registry still did not provide a completed search result. Rerun this state before treating it as not registered."
+    )
+    updated["comments"] = "\n\n".join(part for part in [updated.get("comments") or "", note] if part)
+    updated["source_note"] = " ".join(part for part in [updated.get("source_note") or "", note] if part).strip()
+    updated["success"] = False
+    updated["reason_code"] = "INCOMPLETE_NO_MATCH_AFTER_RETRY"
+    return updated
+
+
 def run_single_state_lookup_reliably(organization_name: str, ein: str, state: str) -> dict:
     state = (state or "").upper()
     attempts = SINGLE_STATE_SEMANTIC_RETRY_ATTEMPTS if state in SINGLE_STATE_SEMANTIC_RETRY_STATES else 1
+    if state in {"CT", "FL"}:
+        attempts = max(attempts, 3)
     if state == "WA":
         attempts = 1
     result: dict | None = None
@@ -17609,19 +17656,13 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
         retryable_statuses = {"site not reachable"}
         if state == "WI":
             retryable_statuses.add("not registered")
-        retry_text = " ".join([
-            result.get("raw_status_text") or "",
-            result.get("source_note") or "",
-            result.get("comments") or "",
-            result.get("error") or "",
-        ])
+        retry_text = transient_negative_text(result)
         if state == "WA" and status == "not registered" and re.search(r"No\s+Value\s+Found|zero\s+visible\s+result", retry_text, re.I):
             retryable_statuses.add("not registered")
         if state == "NM" and status == "unknown" and re.search(r"status-history\s+rows\s+were\s+not\s+parsed", retry_text, re.I):
             retryable_statuses.add("unknown")
-        if state == "FL" and status == "not registered":
-            if re.search(r"bounded\s+lookup\s+window|no\s+usable|could\s+not\s+be\s+completed|could\s+not\s+find\s+business\s+name", retry_text, re.I):
-                retryable_statuses.add("not registered")
+        if is_incomplete_no_match_result(state, status, result):
+            retryable_statuses.add("not registered")
         if status not in retryable_statuses:
             return result
         if attempt < attempts and SINGLE_STATE_SEMANTIC_RETRY_DELAY_SECONDS > 0:
@@ -17635,6 +17676,8 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
         best_reachable_result["semantic_attempts"] = result.get("semantic_attempts", best_reachable_result.get("semantic_attempts"))
         best_reachable_result["wa_retry_fallback"] = "kept reachable result after later retry timed out"
         return best_reachable_result
+    if result and is_incomplete_no_match_result(state, (result.get("status") or "").strip().lower(), result):
+        return conservative_incomplete_lookup_result(result, state)
     return result or run_state_lookup(organization_name, ein, state)
 
 
