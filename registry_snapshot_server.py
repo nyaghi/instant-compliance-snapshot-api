@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.15.226-staging"
+APP_VERSION = "2026.06.15.227-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -13068,7 +13068,8 @@ def concise_status_rationale_comment(result, body: str, public_facing_status: st
 
     if normalized_status in {"unable to verify", "unable to confirm", "needs review"}:
         if state == "NM" and re.search(
-            r"incomplete\s+identity|without\s+(?:a\s+)?(?:visible\s+)?(?:charity\s+)?identity|"
+            r"incomplete\s+identity|did\s+not\s+complete\s+enough\s+registry\s+evidence|"
+            r"without\s+(?:a\s+)?(?:visible\s+)?(?:charity\s+)?identity|"
             r"without\s+a\s+registry\s+identifier|Status\s+History\s+rows",
             raw_text,
             re.I,
@@ -16944,6 +16945,19 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     "A bounded Wisconsin retry replaced an initial unusable registry response.",
                 ]).strip()
                 result = retry_result
+        if (
+            public_status(result) == "Site Not Reachable"
+            and WI_SIDECAR_URL
+            and WI_LOOKUP_SECRET
+            and time.perf_counter() < wi_deadline
+        ):
+            sidecar_result = search_wi_sidecar(org)
+            if public_status(sidecar_result) != "Site Not Reachable":
+                sidecar_result.source_note = " ".join(part for part in [
+                    getattr(sidecar_result, "source_note", "") or "",
+                    "A bounded Wisconsin sidecar retry replaced an unusable direct registry response.",
+                ]).strip()
+                result = sidecar_result
         if WI_SIDECAR_URL and WI_LOOKUP_SECRET and WI_CONFIRM_SIDECAR_NO_MATCH and public_status(result) == "Not Registered":
             sidecar_result = search_wi_sidecar(org)
             if public_status(sidecar_result) != "Not Registered":
