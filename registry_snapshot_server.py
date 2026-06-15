@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.14.223-staging"
+APP_VERSION = "2026.06.15.224-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -145,8 +145,8 @@ MAX_BROWSER_LOOKUPS = max(1, int(os.environ.get("CE_MAX_BROWSER_LOOKUPS", "4")))
 MAX_PARALLEL_LOOKUPS = min(REQUESTED_PARALLEL_LOOKUPS, MAX_BROWSER_LOOKUPS) if ALLOW_PARALLEL_BROWSER_LOOKUPS else 1
 BROWSER_LOOKUP_SEMAPHORE = threading.BoundedSemaphore(MAX_BROWSER_LOOKUPS)
 BROWSER_LOOKUP_ACQUIRE_SECONDS = min(
-    max(2.0, float(os.environ.get("CE_BROWSER_LOOKUP_ACQUIRE_SECONDS", "12"))),
-    45.0,
+    max(2.0, float(os.environ.get("CE_BROWSER_LOOKUP_ACQUIRE_SECONDS", "15"))),
+    60.0,
 )
 SINGLE_STATE_MAX_CONCURRENT_CAP = min(
     max(20, int(os.environ.get("CE_SINGLE_STATE_MAX_CONCURRENT_CAP", "40"))),
@@ -157,8 +157,8 @@ SINGLE_STATE_MAX_CONCURRENT = min(
     SINGLE_STATE_MAX_CONCURRENT_CAP,
 )
 SINGLE_STATE_QUEUE_TIMEOUT_SECONDS = min(
-    max(1.0, float(os.environ.get("CE_SINGLE_STATE_QUEUE_TIMEOUT_SECONDS", "30"))),
-    120.0,
+    max(1.0, float(os.environ.get("CE_SINGLE_STATE_QUEUE_TIMEOUT_SECONDS", "38"))),
+    150.0,
 )
 SINGLE_STATE_RETRY_AFTER_SECONDS = min(
     max(1, int(os.environ.get("CE_SINGLE_STATE_RETRY_AFTER_SECONDS", "8"))),
@@ -170,8 +170,8 @@ SINGLE_STATE_OVERFLOW_API_URLS = parse_api_url_list(
 )
 SINGLE_STATE_OVERFLOW_API_URL = SINGLE_STATE_OVERFLOW_API_URLS[0] if SINGLE_STATE_OVERFLOW_API_URLS else ""
 SINGLE_STATE_OVERFLOW_TIMEOUT_SECONDS = min(
-    max(20.0, float(os.environ.get("CE_SINGLE_STATE_OVERFLOW_TIMEOUT_SECONDS", "88"))),
-    89.0,
+    max(20.0, float(os.environ.get("CE_SINGLE_STATE_OVERFLOW_TIMEOUT_SECONDS", "110"))),
+    115.0,
 )
 SINGLE_STATE_LOCAL_ADMIT_TIMEOUT_SECONDS = min(
     max(0.0, float(os.environ.get("CE_SINGLE_STATE_LOCAL_ADMIT_TIMEOUT_SECONDS", "1"))),
@@ -183,31 +183,31 @@ EAGER_EVIDENCE_PDF = os.environ.get("CE_EAGER_EVIDENCE_PDF", "0").strip().lower(
 CAPTURE_EVIDENCE_SCREENSHOTS = os.environ.get("CE_CAPTURE_EVIDENCE_SCREENSHOTS", "0").strip().lower() in {"1", "true", "yes"}
 CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT = os.environ.get("CE_CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT", "0").strip().lower() in {"1", "true", "yes"}
 ON_DEMAND_EVIDENCE_SCREENSHOT = os.environ.get("CE_ON_DEMAND_EVIDENCE_SCREENSHOT", "1").strip().lower() not in {"0", "false", "no"}
-LOOKUP_SOFT_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_LOOKUP_SOFT_MAX_SECONDS", "59"))), 59.0)
-SC_NAME_VARIANT_MAX_SECONDS = max(12.0, float(os.environ.get("CE_SC_NAME_VARIANT_MAX_SECONDS", "35")))
-NAME_SEARCH_VARIANT_MAX_SECONDS = max(18.0, float(os.environ.get("CE_NAME_SEARCH_VARIANT_MAX_SECONDS", "35")))
-CT_NAME_VARIANT_MAX_SECONDS = min(max(10.0, float(os.environ.get("CE_CT_NAME_VARIANT_MAX_SECONDS", "24"))), 35.0)
+LOOKUP_SOFT_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_LOOKUP_SOFT_MAX_SECONDS", "74"))), 75.0)
+SC_NAME_VARIANT_MAX_SECONDS = max(12.0, float(os.environ.get("CE_SC_NAME_VARIANT_MAX_SECONDS", "44")))
+NAME_SEARCH_VARIANT_MAX_SECONDS = max(18.0, float(os.environ.get("CE_NAME_SEARCH_VARIANT_MAX_SECONDS", "44")))
+CT_NAME_VARIANT_MAX_SECONDS = min(max(10.0, float(os.environ.get("CE_CT_NAME_VARIANT_MAX_SECONDS", "30"))), 44.0)
 CT_NAME_VARIANT_LIMIT = min(max(3, int(os.environ.get("CE_CT_NAME_VARIANT_LIMIT", "8"))), 12)
-CT_DIRECT_TIMEOUT_SECONDS = min(max(6.0, float(os.environ.get("CE_CT_DIRECT_TIMEOUT_SECONDS", "12"))), 16.0)
-CT_DIRECT_MAX_SECONDS = min(max(6.0, float(os.environ.get("CE_CT_DIRECT_MAX_SECONDS", "24"))), 30.0)
-MN_NAME_FALLBACK_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_MN_NAME_FALLBACK_MAX_SECONDS", "18"))), 30.0)
+CT_DIRECT_TIMEOUT_SECONDS = min(max(6.0, float(os.environ.get("CE_CT_DIRECT_TIMEOUT_SECONDS", "15"))), 20.0)
+CT_DIRECT_MAX_SECONDS = min(max(6.0, float(os.environ.get("CE_CT_DIRECT_MAX_SECONDS", "30"))), 38.0)
+MN_NAME_FALLBACK_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_MN_NAME_FALLBACK_MAX_SECONDS", "23"))), 38.0)
 MN_NAME_FALLBACK_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_MN_NAME_FALLBACK_MAX_VARIANTS", "4"))), 10)
 FL_CHECK_A_CHARITY_URL = "https://csapp.fdacs.gov/CSPublicApp/CheckACharity/CheckACharity.aspx"
-FL_PREFLIGHT_TIMEOUT_SECONDS = min(max(2.0, float(os.environ.get("CE_FL_PREFLIGHT_TIMEOUT_SECONDS", "12"))), 12.0)
-FL_LOOKUP_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_FL_LOOKUP_MAX_SECONDS", "35"))), 45.0)
+FL_PREFLIGHT_TIMEOUT_SECONDS = min(max(2.0, float(os.environ.get("CE_FL_PREFLIGHT_TIMEOUT_SECONDS", "15"))), 20.0)
+FL_LOOKUP_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_FL_LOOKUP_MAX_SECONDS", "44"))), 56.0)
 FL_LOOKUP_LANES = min(max(1, int(os.environ.get("CE_FL_LOOKUP_LANES", "2"))), 4)
 FL_LOOKUP_ACQUIRE_SECONDS = min(max(1.0, float(os.environ.get("CE_FL_LOOKUP_ACQUIRE_SECONDS", "12"))), 30.0)
 FL_LOOKUP_SEMAPHORE = threading.BoundedSemaphore(FL_LOOKUP_LANES)
 FL_FALLBACK_CACHE_PATH = Path(os.environ.get("CE_FL_FALLBACK_CACHE_PATH", Path(__file__).with_name("fl_fallback_registry_cache.json")))
 _FL_FALLBACK_CACHE = None
-SC_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_SC_PREFLIGHT_TIMEOUT_SECONDS", "12"))), 20.0)
-NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS", "8"))), 10.0)
+SC_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_SC_PREFLIGHT_TIMEOUT_SECONDS", "15"))), 25.0)
+NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS", "10"))), 13.0)
 ME_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_LOOKUP_MIN_INTERVAL_SECONDS", "1.0"))), 20.0)
 AR_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_AR_LOOKUP_MIN_INTERVAL_SECONDS", "1.5"))), 20.0)
 AR_TRANSIENT_RETRY_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_AR_TRANSIENT_RETRY_DELAY_SECONDS", "4.0"))), 20.0)
 AR_TRANSIENT_RETRY_ATTEMPTS = min(max(1, int(os.environ.get("CE_AR_TRANSIENT_RETRY_ATTEMPTS", "1"))), 3)
 AR_NAME_SEARCH_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_AR_NAME_SEARCH_MAX_VARIANTS", "12"))), 12)
-AR_NAME_SEARCH_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_AR_NAME_SEARCH_MAX_SECONDS", "28"))), 30.0)
+AR_NAME_SEARCH_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_AR_NAME_SEARCH_MAX_SECONDS", "35"))), 38.0)
 ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "1.0"))), 30.0)
 ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS = min(max(1, int(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS", "2"))), 4)
 ME_CONFIRM_NOT_REGISTERED = os.environ.get("CE_ME_CONFIRM_NOT_REGISTERED", "1").strip().lower() in {"1", "true", "yes"}
@@ -221,7 +221,7 @@ MI_CONFIRM_NO_RESULTS_FRAME = os.environ.get("CE_MI_CONFIRM_NO_RESULTS_FRAME", "
 ENABLE_CROSS_STATE_NAME_RETRY = os.environ.get("CE_ENABLE_CROSS_STATE_NAME_RETRY", "0").strip().lower() in {"1", "true", "yes"}
 CONFIRM_FRAGILE_BATCH_RESULTS = os.environ.get("CE_CONFIRM_FRAGILE_BATCH_RESULTS", "1").strip().lower() in {"1", "true", "yes"}
 BATCH_CONFIRMATION_WORKERS = min(max(1, int(os.environ.get("CE_BATCH_CONFIRMATION_WORKERS", "3"))), 12)
-BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS", "8"))), 20.0)
+BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS", "10"))), 25.0)
 BATCH_TRUST_SLOW_NO_MATCH_SECONDS = min(max(15.0, float(os.environ.get("CE_BATCH_TRUST_SLOW_NO_MATCH_SECONDS", "35"))), 90.0)
 BATCH_ISOLATED_STATE_ORDER = [
     state.strip().upper()
@@ -231,8 +231,8 @@ BATCH_ISOLATED_STATE_ORDER = [
 BATCH_ISOLATED_STATES = set(BATCH_ISOLATED_STATE_ORDER)
 BATCH_ISOLATED_WORKERS = min(max(1, int(os.environ.get("CE_BATCH_ISOLATED_WORKERS", "2"))), 12)
 BATCH_STATE_LOOKUP_TIMEOUT_SECONDS = min(
-    max(55.0, float(os.environ.get("CE_BATCH_STATE_LOOKUP_TIMEOUT_SECONDS", "88"))),
-    90.0,
+    max(55.0, float(os.environ.get("CE_BATCH_STATE_LOOKUP_TIMEOUT_SECONDS", "110"))),
+    115.0,
 )
 BATCH_FANOUT_SINGLE_STATE_LOOKUPS = os.environ.get("CE_BATCH_FANOUT_SINGLE_STATE_LOOKUPS", "0").strip().lower() in {"1", "true", "yes"}
 BATCH_FANOUT_API_URLS = parse_api_url_list(
@@ -244,11 +244,11 @@ BATCH_FANOUT_API_URL = BATCH_FANOUT_API_URLS[0] if BATCH_FANOUT_API_URLS else ""
 BATCH_FANOUT_MAX_WORKERS = min(max(1, int(os.environ.get("CE_BATCH_FANOUT_MAX_WORKERS", "30"))), 40)
 BATCH_FANOUT_STATE_TIMEOUT_SECONDS = min(
     max(30.0, float(os.environ.get("CE_BATCH_FANOUT_STATE_TIMEOUT_SECONDS", str(BATCH_STATE_LOOKUP_TIMEOUT_SECONDS)))),
-    90.0,
+    115.0,
 )
 SINGLE_TRUST_SLOW_CLEAN_NO_MATCH_SECONDS = min(
-    max(20.0, float(os.environ.get("CE_SINGLE_TRUST_SLOW_CLEAN_NO_MATCH_SECONDS", "35"))),
-    55.0,
+    max(20.0, float(os.environ.get("CE_SINGLE_TRUST_SLOW_CLEAN_NO_MATCH_SECONDS", "44"))),
+    70.0,
 )
 SINGLE_STATE_SEMANTIC_RETRY_ATTEMPTS = min(
     max(1, int(os.environ.get("CE_SINGLE_STATE_SEMANTIC_RETRY_ATTEMPTS", "2"))),
@@ -288,7 +288,7 @@ WV_SEARCH_URL = "https://erls.wvsos.gov/OnlineCharitiesSearch/Search"
 WV_GOTO_TIMEOUT_MS = min(max(4000, int(os.environ.get("CE_WV_GOTO_TIMEOUT_MS", "6000"))), 8000)
 WV_NETWORK_IDLE_TIMEOUT_MS = min(max(1000, int(os.environ.get("CE_WV_NETWORK_IDLE_TIMEOUT_MS", "1500"))), 3000)
 WV_SEARCH_IDLE_TIMEOUT_MS = min(max(1000, int(os.environ.get("CE_WV_SEARCH_IDLE_TIMEOUT_MS", "1500"))), 3000)
-WV_LOOKUP_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_WV_LOOKUP_MAX_SECONDS", "20"))), 32.0)
+WV_LOOKUP_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_WV_LOOKUP_MAX_SECONDS", "25"))), 40.0)
 WV_QUERY_LIMIT = min(max(3, int(os.environ.get("CE_WV_QUERY_LIMIT", "6"))), 12)
 WV_RESULTS_SETTLE_MS = min(max(250, int(os.environ.get("CE_WV_RESULTS_SETTLE_MS", "500"))), 1000)
 DOWNLOADABLE_DATA_COMMENT_FOOTERS = {
@@ -348,13 +348,13 @@ NM_SIDECAR_URL = os.environ.get(
     "CE_NM_STATUS_SIDECAR_URL",
     "https://staging.compliance-express.com/.netlify/functions/nm-status",
 ).strip()
-NM_SIDECAR_TIMEOUT_SECONDS = min(max(8.0, float(os.environ.get("CE_NM_SIDECAR_TIMEOUT_SECONDS", "24"))), 45.0)
+NM_SIDECAR_TIMEOUT_SECONDS = min(max(8.0, float(os.environ.get("CE_NM_SIDECAR_TIMEOUT_SECONDS", "30"))), 56.0)
 WI_USE_SNAPSHOT = False
 WI_REQUIRE_COMPLETE_SNAPSHOT = os.environ.get("CE_WI_REQUIRE_COMPLETE_SNAPSHOT", "1").strip().lower() in {"1", "true", "yes"}
 WI_SNAPSHOT_MAX_AGE_SECONDS = min(max(86400, int(os.environ.get("CE_WI_SNAPSHOT_MAX_AGE_SECONDS", str(14 * 86400)))), 45 * 86400)
 WI_SNAPSHOT_CACHE: dict[str, object] = {"loaded_at": 0.0, "mtime": 0.0, "snapshot": None, "name_index": None, "error": ""}
 WI_SNAPSHOT_LOCK = threading.Lock()
-AK_LOOKUP_TOTAL_BUDGET_SECONDS = min(max(25.0, float(os.environ.get("CE_AK_LOOKUP_TOTAL_BUDGET_SECONDS", "55"))), 82.0)
+AK_LOOKUP_TOTAL_BUDGET_SECONDS = min(max(25.0, float(os.environ.get("CE_AK_LOOKUP_TOTAL_BUDGET_SECONDS", "69"))), 100.0)
 AK_ACTION_TIMEOUT_MS = min(max(2500, int(os.environ.get("CE_AK_ACTION_TIMEOUT_MS", "5000"))), 10000)
 AK_RECENT_FILING_CUTOFF_YEAR = min(max(2020, int(os.environ.get("CE_AK_RECENT_FILING_CUTOFF_YEAR", "2023"))), 2100)
 AK_HISTORICAL_IDENTITY_FLOOR_YEAR = min(
@@ -16359,15 +16359,25 @@ def search_wa_nm_state(org, state: str):
                     if sidecar_status not in {checker.STATUS_UNKNOWN, "Not Registered"}:
                         external_result = sidecar_result
                     else:
-                        hosted_result.status = "Unable to Verify"
-                        hosted_result.raw_status_text = hosted_raw or "Tax Year Registration Open without parsed Status History rows"
-                        hosted_result.source_note = (
-                            "New Mexico exposed a Tax Year Registration Open row but did not expose enough Status History "
-                            "evidence to finalize a Not Registered result. CharityClarity returned Unable to Verify rather "
-                            "than a false negative."
+                        clean_no_match = nm_completed_clean_no_match_result(
+                            org,
+                            module,
+                            hosted_result,
+                            retry_result,
+                            sidecar_result,
                         )
-                        hosted_result.success = False
-                        external_result = hosted_result
+                        if clean_no_match is not None:
+                            external_result = clean_no_match
+                        else:
+                            hosted_result.status = "Unable to Verify"
+                            hosted_result.raw_status_text = hosted_raw or "Tax Year Registration Open without parsed Status History rows"
+                            hosted_result.source_note = (
+                                "New Mexico exposed a Tax Year Registration Open row but did not expose enough Status History "
+                                "evidence to finalize a Not Registered result. CharityClarity returned Unable to Verify rather "
+                                "than a false negative."
+                            )
+                            hosted_result.success = False
+                            external_result = hosted_result
             elif hosted_status != checker.STATUS_UNKNOWN:
                 external_result = hosted_result
         external_result = repair_status_from_explicit_due_text(external_result, "NM")
@@ -16397,6 +16407,67 @@ def search_wa_nm_state(org, state: str):
             copied.success = False
             copied.error = ""
     return copied
+
+
+def nm_completed_clean_no_match_result(org, module, *attempt_results):
+    combined_text_parts = []
+    for attempt_result in attempt_results:
+        if attempt_result is None:
+            continue
+        combined_text_parts.extend([
+            getattr(attempt_result, "raw_status_text", "") or "",
+            getattr(attempt_result, "source_note", "") or "",
+            getattr(attempt_result, "error", "") or "",
+        ])
+        if (
+            (getattr(attempt_result, "matched_registry_name", "") or "").strip()
+            or (getattr(attempt_result, "matched_registry_identifier", "") or "").strip()
+        ):
+            return None
+
+    combined_text = " ".join(combined_text_parts)
+    if not combined_text.strip():
+        return None
+    if re.search(
+        r"could\s+not\s+be\s+completed|reader\s+error|sidecar\s+error|"
+        r"upstream\s+block|Cloudflare|you\s+have\s+been\s+blocked|Ray\s+ID|"
+        r"status-history\s+rows\s+were\s+present|rows\s+without\s+a\s+charity\s+name|"
+        r"identity\s+anchor\s+was\s+missing",
+        combined_text,
+        re.I,
+    ):
+        return None
+    has_completed_no_match_signal = bool(re.search(
+        r"Charity\s+Registration\s+Status\s+is\s+unknown|"
+        r"No\s+New\s+Mexico\s+charity\s+registration|"
+        r"Tax\s+Year\s+Registration\s+Open|"
+        r"detail\s+shell\s+with\s+no\s+visible\s+charity\s+name",
+        combined_text,
+        re.I,
+    ))
+    if not has_completed_no_match_signal:
+        return None
+
+    result = module.SearchResult(
+        organization_name=org.organization_name,
+        ein=org.ein,
+        state="NM",
+        status=getattr(module, "STATUS_NOT_REGISTERED", "Not registered"),
+        raw_status_text=(
+            "Completed New Mexico FEIN detail lookup found no confirmed charity identity "
+            "or status-history rows for this FEIN."
+        ),
+        source_url=getattr(module, "NM_SEARCH_URL", "https://secure.nmdoj.gov/CharitySearch/"),
+        source_note=(
+            "CharityClarity completed the New Mexico FEIN detail lookup and follow-up Status History reads. "
+            "The source did not expose a confirmed NM charity identity or filing history for the requested FEIN, "
+            "so this is treated as a completed no-match result rather than an incomplete lookup."
+        ),
+    )
+    result.reason_code = "NO_CANDIDATES_AFTER_COMPLETED_SEARCH"
+    result.source_confidence = "completed_nm_fein_no_match"
+    result.success = True
+    return result
 
 
 def nm_status_history_rows_from_text_master(*texts: str) -> list[tuple[int, str, str]]:
@@ -17687,7 +17758,19 @@ def nm_tax_year_open_no_match_result(result: dict) -> bool:
     status = (result.get("status") or "").strip().lower()
     if state != "NM" or status != "not registered":
         return False
-    return bool(re.search(r"\bTax\s+Year\s+Registration\s+Open\b", transient_negative_text(result), re.I))
+    text = transient_negative_text(result)
+    reason_code = (result.get("reason_code") or "").strip().upper()
+    has_registry_identity = bool(
+        (result.get("matched_registry_name") or "").strip()
+        or (result.get("matched_registry_identifier") or "").strip()
+    )
+    if (
+        reason_code in {"NO_CANDIDATES", "NO_CANDIDATES_AFTER_COMPLETED_SEARCH"}
+        and not has_registry_identity
+        and re.search(r"\bStatus\s+History\s+was\s+read\b|completed\s+New\s+Mexico\s+FEIN\s+detail", text, re.I)
+    ):
+        return False
+    return bool(re.search(r"\bTax\s+Year\s+Registration\s+Open\b", text, re.I))
 
 
 def ak_batch_result_needs_confirmation(result: dict) -> bool:
@@ -17709,6 +17792,55 @@ def ak_batch_result_needs_confirmation(result: dict) -> bool:
     except Exception:
         return False
     return last_year >= date.today().year - 2
+
+
+def ak_stale_exact_ein_result_needs_confirmation(result: dict) -> bool:
+    """Retry AK exact-EIN delinquent results when the lookup stopped on stale historical evidence."""
+    state = (result.get("state") or "").upper()
+    status = (result.get("status") or "").strip().lower()
+    if state != "AK" or status != "delinquent":
+        return False
+    text = transient_negative_text(result)
+    if not re.search(r"\bMATCH_EIN_EXACT\b|Registry\s+match:|Last\s+Year\s+on\s+Record", text, re.I):
+        return False
+    year_values = [
+        int(value)
+        for value in re.findall(
+            r"\b(?:Last\s+Year\s+on\s+Record|Registration\s+Year\s+Searched)\s*:?\s*(20\d{2})\b",
+            text,
+            re.I,
+        )
+    ]
+    return bool(year_values and max(year_values) <= AK_RECENT_FILING_CUTOFF_YEAR)
+
+
+def ak_confirmed_result_year(result: dict) -> int:
+    if (result.get("state") or "").upper() != "AK":
+        return 0
+    text = transient_negative_text(result)
+    years = [
+        int(value)
+        for value in re.findall(
+            r"\b(?:Last\s+Year\s+on\s+Record|Registration\s+Year\s+Searched)\s*:?\s*(20\d{2})\b",
+            text,
+            re.I,
+        )
+    ]
+    return max(years) if years else 0
+
+
+def ak_confirmed_identity_result(result: dict) -> bool:
+    if (result.get("state") or "").upper() != "AK":
+        return False
+    status = (result.get("status") or "").strip().lower()
+    if status in {"", "not registered", "site not reachable", "unable to verify", "unable to confirm", "runner timeout", "error"}:
+        return False
+    text = transient_negative_text(result)
+    return bool(
+        (result.get("matched_registry_name") or "").strip()
+        or (result.get("matched_registry_identifier") or "").strip()
+        or re.search(r"\bMATCH_EIN_EXACT\b|Registry\s+match:|Last\s+Year\s+on\s+Record", text, re.I)
+    )
 
 
 def is_incomplete_no_match_result(state: str, status: str, result: dict) -> bool:
@@ -17754,21 +17886,30 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
     attempts = SINGLE_STATE_SEMANTIC_RETRY_ATTEMPTS if state in SINGLE_STATE_SEMANTIC_RETRY_STATES else 1
     if state in {"CT", "FL"}:
         attempts = max(attempts, 3)
+    if state == "AK":
+        attempts = max(attempts, 3)
     if state == "WA":
         attempts = 1
     result: dict | None = None
     best_reachable_result: dict | None = None
+    best_ak_identity_result: dict | None = None
     for attempt in range(1, attempts + 1):
         result = run_state_lookup(organization_name, ein, state)
         result["semantic_attempts"] = attempt
         status = (result.get("status") or "").strip().lower()
         if status != "site not reachable":
             best_reachable_result = dict(result)
+        if state == "AK" and ak_confirmed_identity_result(result):
+            if (
+                best_ak_identity_result is None
+                or ak_confirmed_result_year(result) > ak_confirmed_result_year(best_ak_identity_result)
+            ):
+                best_ak_identity_result = dict(result)
         retryable_statuses = {"site not reachable"}
         if state == "AK":
             if status == "not registered":
                 retryable_statuses.add("not registered")
-            elif ak_batch_result_needs_confirmation(result):
+            elif ak_batch_result_needs_confirmation(result) or ak_stale_exact_ein_result_needs_confirmation(result):
                 retryable_statuses.add(status)
         if state == "WI":
             retryable_statuses.add("not registered")
@@ -17783,6 +17924,16 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
             return result
         if attempt < attempts and SINGLE_STATE_SEMANTIC_RETRY_DELAY_SECONDS > 0:
             time.sleep(SINGLE_STATE_SEMANTIC_RETRY_DELAY_SECONDS)
+    if state == "AK" and best_ak_identity_result and result:
+        final_status = (result.get("status") or "").strip().lower()
+        if (
+            final_status in {"not registered", "site not reachable", "unable to verify", "unable to confirm", "runner timeout", "error", ""}
+            or ak_confirmed_result_year(best_ak_identity_result) > ak_confirmed_result_year(result)
+        ):
+            best_ak_identity_result["semantic_attempts"] = result.get("semantic_attempts", best_ak_identity_result.get("semantic_attempts"))
+            best_ak_identity_result["runner_recovery"] = "Kept best confirmed Alaska EIN result after later retry degraded or returned older evidence."
+            best_ak_identity_result["runner_reason_code"] = best_ak_identity_result.get("runner_reason_code") or "AK_BEST_CONFIRMED_EIN_RESULT"
+            return best_ak_identity_result
     if (
         state == "WA"
         and result
