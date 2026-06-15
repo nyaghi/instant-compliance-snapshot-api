@@ -6595,6 +6595,37 @@ def search_mi_http_completion_probe(org):
         result.success = True
         return result
     if re.search(r"\brecord\(s\)\s+found\b|\bResults\s+for\s+the\s+following\s+input\b", submitted_text, re.I):
+        lines = [re.sub(r"\s+", " ", line).strip() for line in submitted_text.splitlines()]
+        lines = [line for line in lines if line]
+        file_number = ""
+        legal_name = ""
+        for index, line in enumerate(lines):
+            if re.fullmatch(r"\d{3,8}", line):
+                following = lines[index + 1] if index + 1 < len(lines) else ""
+                if following and not re.fullmatch(r"\d+", following) and not re.search(r"^(Name|Type|Legal|Other)$", following, re.I):
+                    file_number = line
+                    legal_name = following
+                    break
+        date_values = [
+            parse_due_date(value)
+            for value in re.findall(r"\b\d{1,2}/\d{1,2}/\d{2,4}\b", submitted_text)
+        ]
+        expiration_date = max([value for value in date_values if value is not None], default=None)
+        if legal_name or expiration_date:
+            result.status = classify_expiration_date(expiration_date) if expiration_date else checker.STATUS_UNKNOWN
+            result.matched_registry_name = clean_registry_name(legal_name)
+            result.matched_registry_identifier = file_number
+            result.raw_status_text = " | ".join(part for part in [
+                f"License / Registration Expiration: {format_date(expiration_date)}" if expiration_date else "",
+                f"AG File#: {file_number}" if file_number else "",
+            ] if part) or "Michigan EIN search returned a matching registry row."
+            result.source_note = (
+                "Michigan EIN search completed and returned a registry result row. CharityClarity interpreted "
+                "the license/registration expiration date from the completed official EIN response."
+            )
+            result.reason_code = "MATCH_EIN_EXACT"
+            result.success = True
+            return result
         return None
     result.raw_status_text = "Michigan EIN search response could not be interpreted."
     result.source_note = "Michigan returned a response to the EIN search, but CharityClarity could not identify completed results or no-results evidence."
