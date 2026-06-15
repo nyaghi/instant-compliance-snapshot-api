@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.15.224-staging"
+APP_VERSION = "2026.06.15.225-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -16471,7 +16471,6 @@ def nm_completed_clean_no_match_result(org, module, *attempt_results):
     has_completed_no_match_signal = bool(re.search(
         r"Charity\s+Registration\s+Status\s+is\s+unknown|"
         r"No\s+New\s+Mexico\s+charity\s+registration|"
-        r"Tax\s+Year\s+Registration\s+Open|"
         r"detail\s+shell\s+with\s+no\s+visible\s+charity\s+name",
         combined_text,
         re.I,
@@ -17792,26 +17791,6 @@ def nm_tax_year_open_no_match_result(result: dict) -> bool:
     return bool(re.search(r"\bTax\s+Year\s+Registration\s+Open\b", transient_negative_text(result), re.I))
 
 
-def nm_tax_year_open_clean_no_match_after_retries(result: dict) -> dict:
-    updated = dict(result)
-    updated["status"] = checker.STATUS_NOT_REGISTERED
-    updated["raw_status_text"] = (
-        "Tax Year Registration Open appeared on repeated New Mexico FEIN detail lookups, "
-        "but no confirmed charity identity or Status History rows were exposed for this FEIN."
-    )
-    note = (
-        "CharityClarity repeated the New Mexico FEIN detail lookup after a generic Tax Year Registration Open "
-        "response. The completed retries still did not expose a confirmed NM charity identity or filing history, "
-        "so this is treated as a completed no-match result."
-    )
-    updated["comments"] = "\n\n".join(part for part in [updated.get("comments") or "", note] if part)
-    updated["source_note"] = " ".join(part for part in [updated.get("source_note") or "", note] if part).strip()
-    updated["success"] = True
-    updated["reason_code"] = "NO_CANDIDATES_AFTER_COMPLETED_SEARCH"
-    updated["source_confidence"] = "completed_nm_fein_no_match_after_retry"
-    return updated
-
-
 def ak_batch_result_needs_confirmation(result: dict) -> bool:
     """AK historical EIN searches can miss current evidence under batch pressure; confirm risky negatives."""
     state = (result.get("state") or "").upper()
@@ -17982,13 +17961,6 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
         best_reachable_result["semantic_attempts"] = result.get("semantic_attempts", best_reachable_result.get("semantic_attempts"))
         best_reachable_result["wa_retry_fallback"] = "kept reachable result after later retry timed out"
         return best_reachable_result
-    if (
-        state == "NM"
-        and result
-        and (result.get("status") or "").strip().lower() == "not registered"
-        and nm_tax_year_open_no_match_result({**result, "state": state, "status": "not registered"})
-    ):
-        return nm_tax_year_open_clean_no_match_after_retries(result)
     if result and is_incomplete_no_match_result(state, (result.get("status") or "").strip().lower(), result):
         return conservative_incomplete_lookup_result(result, state)
     return result or run_state_lookup(organization_name, ein, state)
