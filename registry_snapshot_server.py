@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.15.228-staging"
+APP_VERSION = "2026.06.15.229-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -6508,76 +6508,85 @@ def search_mi_http_completion_probe(org):
         "Unable to Verify",
         source_url,
     )
-    try:
-        session = curl_requests.Session(impersonate="chrome136")
-        headers = {
-            "User-Agent": BROWSER_USER_AGENT,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-        }
-        disclaimer_url = "https://www.ag.state.mi.us/CharitableTrust/frmDisclaimer.aspx"
-        disclaimer = session.get(disclaimer_url, timeout=8, headers=headers)
-        disclaimer.raise_for_status()
-        fields = sc_extract_hidden_fields(disclaimer.text or "")
-        fields.update({"__EVENTTARGET": "ctl00$MainContent$lblYes", "__EVENTARGUMENT": ""})
-        accepted = session.post(
-            disclaimer_url,
-            data=fields,
-            timeout=8,
-            headers={
-                **headers,
-                "Referer": disclaimer_url,
-                "Origin": "https://www.ag.state.mi.us",
-                "Content-Type": "application/x-www-form-urlencoded",
-            },
-        )
-        accepted.raise_for_status()
-        accepted_text = accepted.text or ""
-        if re.search(r"\btemporarily\s+unavailable\b|\bscheduled\s+maintenance\b", accepted_text, re.I):
-            result.raw_status_text = "Michigan registry reported temporary unavailability after disclaimer."
-            result.source_note = "Michigan's official charity search page reported temporary unavailability, so CharityClarity did not finalize a registration status."
-            result.reason_code = "PORTAL_ERROR"
-            result.success = False
-            return result
-        form_fields = sc_extract_hidden_fields(accepted_text)
-        form_fields.update({
-            "__LASTFOCUS": "",
-            "__EVENTTARGET": "",
-            "__EVENTARGUMENT": "",
-            "ctl00$MainContent$rbSearchType": "0",
-            "ctl00$MainContent$ddlName1": "Includes",
-            "ctl00$MainContent$ddlName2": "All words",
-            "ctl00$MainContent$txtName": "",
-            "ctl00$MainContent$txtPurpose": "",
-            "ctl00$MainContent$ddlPurpose2": "All words",
-            "ctl00$MainContent$txtEIN": formatted_ein,
-            "ctl00$MainContent$txtCity": "",
-            "ctl00$MainContent$txtCounty": "",
-            "ctl00$MainContent$txtState": "",
-            "ctl00$MainContent$btnTextSearch": "Search",
-            "ctl00$MainContent$txtFileNo": "",
-        })
-        submitted = session.post(
-            source_url,
-            data=form_fields,
-            timeout=10,
-            headers={
-                **headers,
-                "Referer": source_url,
-                "Origin": "https://www.ag.state.mi.us",
-                "Content-Type": "application/x-www-form-urlencoded",
-            },
-        )
-        submitted.raise_for_status()
-        submitted_text = sc_html_to_text(submitted.text or "")
-    except Exception as exc:
+    submitted_text = ""
+    last_exception = None
+    for attempt_index in range(2):
+        try:
+            session = curl_requests.Session(impersonate="chrome136")
+            headers = {
+                "User-Agent": BROWSER_USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+            disclaimer_url = "https://www.ag.state.mi.us/CharitableTrust/frmDisclaimer.aspx"
+            disclaimer = session.get(disclaimer_url, timeout=10, headers=headers)
+            disclaimer.raise_for_status()
+            fields = sc_extract_hidden_fields(disclaimer.text or "")
+            fields.update({"__EVENTTARGET": "ctl00$MainContent$lblYes", "__EVENTARGUMENT": ""})
+            accepted = session.post(
+                disclaimer_url,
+                data=fields,
+                timeout=10,
+                headers={
+                    **headers,
+                    "Referer": disclaimer_url,
+                    "Origin": "https://www.ag.state.mi.us",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+            )
+            accepted.raise_for_status()
+            accepted_text = accepted.text or ""
+            if re.search(r"\btemporarily\s+unavailable\b|\bscheduled\s+maintenance\b", accepted_text, re.I):
+                result.raw_status_text = "Michigan registry reported temporary unavailability after disclaimer."
+                result.source_note = "Michigan's official charity search page reported temporary unavailability, so CharityClarity did not finalize a registration status."
+                result.reason_code = "PORTAL_ERROR"
+                result.success = False
+                return result
+            form_fields = sc_extract_hidden_fields(accepted_text)
+            form_fields.update({
+                "__LASTFOCUS": "",
+                "__EVENTTARGET": "",
+                "__EVENTARGUMENT": "",
+                "ctl00$MainContent$rbSearchType": "0",
+                "ctl00$MainContent$ddlName1": "Includes",
+                "ctl00$MainContent$ddlName2": "All words",
+                "ctl00$MainContent$txtName": "",
+                "ctl00$MainContent$txtPurpose": "",
+                "ctl00$MainContent$ddlPurpose2": "All words",
+                "ctl00$MainContent$txtEIN": formatted_ein,
+                "ctl00$MainContent$txtCity": "",
+                "ctl00$MainContent$txtCounty": "",
+                "ctl00$MainContent$txtState": "",
+                "ctl00$MainContent$btnTextSearch": "Search",
+                "ctl00$MainContent$txtFileNo": "",
+            })
+            submitted = session.post(
+                source_url,
+                data=form_fields,
+                timeout=16,
+                headers={
+                    **headers,
+                    "Referer": source_url,
+                    "Origin": "https://www.ag.state.mi.us",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+            )
+            submitted.raise_for_status()
+            submitted_text = sc_html_to_text(submitted.text or "")
+            break
+        except Exception as exc:
+            last_exception = exc
+            if attempt_index == 0:
+                time.sleep(1.0)
+            continue
+    if not submitted_text:
         result.raw_status_text = "Michigan EIN search submission did not complete."
         result.source_note = (
             "Michigan's official EIN search form did not return a completed results response within the bounded source budget. "
             "CharityClarity returned Unable to Verify rather than finalizing Not Registered from an incomplete state-source response."
         )
         result.reason_code = "STATE_RESPONSE_UNREADABLE"
-        result.source_attempts = [f"Michigan HTTP EIN probe error: {exc}"]
+        result.source_attempts = [f"Michigan HTTP EIN probe error: {last_exception}"]
         result.error = ""
         result.success = False
         return result
@@ -6612,18 +6621,33 @@ def search_mi_http_completion_probe(org):
         ]
         expiration_date = max([value for value in date_values if value is not None], default=None)
         if legal_name or expiration_date:
-            result.status = classify_expiration_date(expiration_date) if expiration_date else checker.STATUS_UNKNOWN
+            row_shows_registration_pending = bool(re.search(
+                r"\b\d{1,2}/\d{1,2}/\d{2,4}\s+Registration\s+Pending\b",
+                submitted_text,
+                re.I,
+            ))
+            result.status = "Pending" if row_shows_registration_pending else (
+                classify_expiration_date(expiration_date) if expiration_date else checker.STATUS_UNKNOWN
+            )
             result.matched_registry_name = clean_registry_name(legal_name)
             result.matched_registry_identifier = file_number
             result.raw_status_text = " | ".join(part for part in [
+                "Status: Registration Pending" if row_shows_registration_pending else "",
                 f"License / Registration Expiration: {format_date(expiration_date)}" if expiration_date else "",
                 f"AG File#: {file_number}" if file_number else "",
             ] if part) or "Michigan EIN search returned a matching registry row."
-            result.source_note = (
-                "Michigan EIN search completed and returned a registry result row. CharityClarity interpreted "
-                "the license/registration expiration date from the completed official EIN response."
-            )
-            result.reason_code = "MATCH_EIN_EXACT"
+            if row_shows_registration_pending:
+                result.source_note = (
+                    "Michigan EIN search completed and returned a registry result row marked Registration Pending; "
+                    "Michigan states organizations listed with Registration Pending are able to continue to solicit."
+                )
+                result.reason_code = "MATCH_EIN_EXACT_PENDING"
+            else:
+                result.source_note = (
+                    "Michigan EIN search completed and returned a registry result row. CharityClarity interpreted "
+                    "the license/registration expiration date from the completed official EIN response."
+                )
+                result.reason_code = "MATCH_EIN_EXACT"
             result.success = True
             return result
         return None
