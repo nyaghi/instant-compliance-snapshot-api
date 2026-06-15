@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.15.225-staging"
+APP_VERSION = "2026.06.15.226-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -13067,6 +13067,18 @@ def concise_status_rationale_comment(result, body: str, public_facing_status: st
     last_year = str(getattr(result, "last_year_on_record", "") or "").strip()
 
     if normalized_status in {"unable to verify", "unable to confirm", "needs review"}:
+        if state == "NM" and re.search(
+            r"incomplete\s+identity|without\s+(?:a\s+)?(?:visible\s+)?(?:charity\s+)?identity|"
+            r"without\s+a\s+registry\s+identifier|Status\s+History\s+rows",
+            raw_text,
+            re.I,
+        ):
+            return (
+                "New Mexico returned incomplete identity/status evidence, but did not expose a registry identifier, "
+                "confirmed EIN/name identity anchor, fiscal year end, or computed due date that CharityClarity could "
+                "safely tie to this organization. CharityClarity returned Unable to Verify instead of classifying "
+                "the organization as registered or not registered."
+            )
         return (
             f"CharityClarity could not safely verify this {state} status from the official state source, "
             "so no definitive registration status was returned."
@@ -15139,6 +15151,24 @@ def search_ok_with_variants(page, org, module):
         ]
         if getattr(result, "organization_name", "") != original_name:
             result.organization_name = original_name
+        if (
+            public_status(result) == "Site Not Reachable"
+            and re.search(r"Could not click the Oklahoma Ok button", getattr(result, "error", "") or "", re.I)
+            and time.perf_counter() - started <= 72.0
+        ):
+            retry_result = search_ok_precise(page, variant_org, module)
+            retry_result.queries_attempted = list(attempted_variants)
+            retry_result.source_attempts = [
+                f"Oklahoma retried the consent/Ok-button step for query: {variant}."
+            ]
+            if getattr(retry_result, "organization_name", "") != original_name:
+                retry_result.organization_name = original_name
+            if public_status(retry_result) != "Site Not Reachable":
+                retry_result.source_note = " ".join(part for part in [
+                    getattr(retry_result, "source_note", "") or "",
+                    "A bounded Oklahoma retry replaced an initial Ok-button interaction failure.",
+                ]).strip()
+                result = retry_result
         if public_status(result) == "Site Not Reachable":
             return result
         if public_status(result) != "Not Registered":
@@ -15362,6 +15392,62 @@ def ok_search_name_for_org(org) -> str:
     return name
 
 
+def ok_click_name_search_ok_button(page) -> bool:
+    selectors = [
+        "#ctl00_DefaultContent_CharityNameSearch1_buttonOk",
+        'input[type="submit"][value="Ok"]',
+        'input[type="submit"][value="OK"]',
+        'input[type="button"][value="Ok"]',
+        'input[id*="buttonOk" i]',
+        'button:has-text("Ok")',
+        'button:has-text("OK")',
+    ]
+    for selector in selectors:
+        try:
+            locator = page.locator(selector).first
+            if locator.count() > 0:
+                locator.scroll_into_view_if_needed(timeout=1500)
+                locator.click(timeout=3500, force=True)
+                return True
+        except Exception:
+            continue
+    role_candidates = [
+        page.get_by_role("button", name=re.compile(r"^Ok$", re.I)),
+        page.get_by_text(re.compile(r"^Ok$", re.I)),
+    ]
+    for locator in role_candidates:
+        try:
+            locator.first.scroll_into_view_if_needed(timeout=1500)
+            locator.first.click(timeout=3500, force=True)
+            return True
+        except Exception:
+            continue
+    try:
+        clicked = page.evaluate(
+            """() => {
+                const candidates = Array.from(document.querySelectorAll('input,button,a'));
+                const button = candidates.find((el) => {
+                    const value = `${el.value || ''} ${el.textContent || ''} ${el.id || ''} ${el.name || ''}`;
+                    return /(^|\\s)ok(\\s|$)|buttonok/i.test(value);
+                });
+                if (button) {
+                    button.click();
+                    return true;
+                }
+                return false;
+            }"""
+        )
+        if clicked:
+            return True
+    except Exception:
+        pass
+    try:
+        page.keyboard.press("Enter")
+        return True
+    except Exception:
+        return False
+
+
 def search_ok_precise(page, org, module):
     result = module.SearchResult(
         organization_name=org.organization_name,
@@ -15388,14 +15474,9 @@ def search_ok_precise(page, org, module):
                 result.error = "Could not select Oklahoma Search by Name."
                 return result
 
-        try:
-            page.locator("#ctl00_DefaultContent_CharityNameSearch1_buttonOk").click(timeout=5000)
-        except Exception:
-            try:
-                page.get_by_role("button", name=re.compile(r"^Ok$", re.I)).click(timeout=5000)
-            except Exception:
-                result.error = "Could not click the Oklahoma Ok button."
-                return result
+        if not ok_click_name_search_ok_button(page):
+            result.error = "Could not click the Oklahoma Ok button."
+            return result
 
         page.wait_for_timeout(1500)
         name_input = module.find_visible_input(page, [
@@ -16386,6 +16467,7 @@ def search_wa_nm_state(org, state: str):
                         module,
                         note="hosted NM lookup exposed Tax Year Registration Open but no parsed Status History rows",
                     )
+                    sidecar_result = nm_retry_identity_missing_sidecar(org, module, sidecar_result)
                     sidecar_status = external_status_to_checker_status(getattr(sidecar_result, "status", ""))
                     if sidecar_status not in {checker.STATUS_UNKNOWN, "Not Registered"}:
                         external_result = sidecar_result
@@ -16424,11 +16506,15 @@ def search_wa_nm_state(org, state: str):
         has_due_or_fye = bool(re.search(r"\b(?:FYE|Fiscal\s+Year\s+End|Due)\s*:", nm_text, re.I))
         if not has_registry_identifier and not has_due_or_fye:
             copied.status = "Unable to Verify"
-            copied.raw_status_text = "New Mexico returned a name-only detail result without registry identifier or filing due-date evidence"
+            copied.raw_status_text = (
+                "New Mexico returned incomplete identity/status evidence without a registry identifier "
+                "or filing due-date evidence"
+            )
             copied.source_note = (
-                "New Mexico source identity confidence was insufficient: the result had a safe name match, "
-                "but no registry identifier, EIN confirmation, fiscal year end, or computed due date was available. "
-                "CharityClarity did not make a final registration-status determination from name alone."
+                "New Mexico source identity confidence was insufficient: the source response did not expose "
+                "a registry identifier, confirmed EIN/name identity anchor, fiscal year end, or computed due date "
+                "that CharityClarity could safely tie to this organization. CharityClarity returned Unable to Verify "
+                "instead of classifying the organization as registered or not registered."
             )
             copied.source_confidence = "name_only_without_due_evidence"
             copied.identity_confidence = "name_only_unconfirmed"
@@ -16672,6 +16758,52 @@ def search_nm_status_history_sidecar(org, module, note: str = ""):
     return result
 
 
+def nm_sidecar_identity_missing(result) -> bool:
+    text = " ".join([
+        getattr(result, "raw_status_text", "") or "",
+        getattr(result, "source_note", "") or "",
+        getattr(result, "error", "") or "",
+    ])
+    return bool(
+        re.search(
+            r"Status\s+History\s+rows\s+but\s+no\s+visible\s+registry\s+identity|"
+            r"status-history\s+rows\s+without\s+a\s+charity\s+name|"
+            r"no\s+visible\s+registry\s+identity\s+header|"
+            r"identity\s+anchor\s+was\s+missing",
+            text,
+            re.I,
+        )
+    )
+
+
+def nm_retry_identity_missing_sidecar(org, module, first_result):
+    if not nm_sidecar_identity_missing(first_result):
+        return first_result
+    retry_result = search_nm_status_history_sidecar(
+        org,
+        module,
+        note="retry after NM returned Status History rows without a visible charity identity header",
+    )
+    retry_status = external_status_to_checker_status(getattr(retry_result, "status", ""))
+    if retry_status != checker.STATUS_UNKNOWN or (getattr(retry_result, "matched_registry_name", "") or "").strip():
+        retry_result.source_note = " ".join(part for part in [
+            getattr(retry_result, "source_note", "") or "",
+            "A bounded New Mexico retry replaced the first incomplete identity response.",
+        ]).strip()
+        return retry_result
+    first_result.source_note = (
+        "New Mexico returned FEIN-specific Status History rows, but did not expose a visible charity "
+        "name/identity header on the public detail response. CharityClarity retried the NM reader path and still "
+        "could not safely tie the history block to a visible organization identity, so it returned Unable to Verify "
+        "instead of classifying this as registered or not registered."
+    )
+    first_result.raw_status_text = (
+        "New Mexico returned Status History rows without a visible charity identity header after retry."
+    )
+    first_result.success = False
+    return first_result
+
+
 def search_nm_status_history_fallback(org, module):
     reader_result = search_nm_status_history_reader(org, module)
     if external_status_to_checker_status(getattr(reader_result, "status", "")) != checker.STATUS_UNKNOWN:
@@ -16733,11 +16865,13 @@ def search_nm_status_history_fallback(org, module):
                 module,
                 note="direct lookup returned rows without a charity name identity anchor",
             )
+            sidecar_result = nm_retry_identity_missing_sidecar(org, module, sidecar_result)
             if external_status_to_checker_status(getattr(sidecar_result, "status", "")) != checker.STATUS_UNKNOWN:
                 return sidecar_result
             result.status = "Unable to Verify"
-            result.raw_status_text = "New Mexico status-history rows were present but the charity name identity anchor was missing."
+            result.raw_status_text = getattr(sidecar_result, "raw_status_text", "") or "New Mexico status-history rows were present but the charity name identity anchor was missing."
             result.source_note = (
+                getattr(sidecar_result, "source_note", "") or
                 "New Mexico returned a FEIN detail shell with status-history rows, but the official page did not "
                 "expose a charity name or FEIN/name identity anchor. CharityClarity did not treat that incomplete "
                 "identity evidence as a clean no-record finding."
@@ -16798,6 +16932,18 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
     if state == "WI":
         wi_deadline = lookup_started + min(WI_LOOKUP_MAX_SECONDS, 60.0)
         result = search_wi(None, org, max_seconds=min(57.0, max(28.0, WI_LOOKUP_MAX_SECONDS)))
+        if public_status(result) == "Site Not Reachable" and time.perf_counter() < wi_deadline:
+            retry_result = search_wi(
+                None,
+                org,
+                max_seconds=min(45.0, max(20.0, wi_deadline - time.perf_counter())),
+            )
+            if public_status(retry_result) != "Site Not Reachable":
+                retry_result.source_note = " ".join(part for part in [
+                    getattr(retry_result, "source_note", "") or "",
+                    "A bounded Wisconsin retry replaced an initial unusable registry response.",
+                ]).strip()
+                result = retry_result
         if WI_SIDECAR_URL and WI_LOOKUP_SECRET and WI_CONFIRM_SIDECAR_NO_MATCH and public_status(result) == "Not Registered":
             sidecar_result = search_wi_sidecar(org)
             if public_status(sidecar_result) != "Not Registered":
