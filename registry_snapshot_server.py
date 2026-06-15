@@ -17789,19 +17789,27 @@ def nm_tax_year_open_no_match_result(result: dict) -> bool:
     status = (result.get("status") or "").strip().lower()
     if state != "NM" or status != "not registered":
         return False
-    text = transient_negative_text(result)
-    reason_code = (result.get("reason_code") or "").strip().upper()
-    has_registry_identity = bool(
-        (result.get("matched_registry_name") or "").strip()
-        or (result.get("matched_registry_identifier") or "").strip()
+    return bool(re.search(r"\bTax\s+Year\s+Registration\s+Open\b", transient_negative_text(result), re.I))
+
+
+def nm_tax_year_open_clean_no_match_after_retries(result: dict) -> dict:
+    updated = dict(result)
+    updated["status"] = checker.STATUS_NOT_REGISTERED
+    updated["raw_status_text"] = (
+        "Tax Year Registration Open appeared on repeated New Mexico FEIN detail lookups, "
+        "but no confirmed charity identity or Status History rows were exposed for this FEIN."
     )
-    if (
-        reason_code in {"NO_CANDIDATES", "NO_CANDIDATES_AFTER_COMPLETED_SEARCH"}
-        and not has_registry_identity
-        and re.search(r"\bStatus\s+History\s+was\s+read\b|completed\s+New\s+Mexico\s+FEIN\s+detail", text, re.I)
-    ):
-        return False
-    return bool(re.search(r"\bTax\s+Year\s+Registration\s+Open\b", text, re.I))
+    note = (
+        "CharityClarity repeated the New Mexico FEIN detail lookup after a generic Tax Year Registration Open "
+        "response. The completed retries still did not expose a confirmed NM charity identity or filing history, "
+        "so this is treated as a completed no-match result."
+    )
+    updated["comments"] = "\n\n".join(part for part in [updated.get("comments") or "", note] if part)
+    updated["source_note"] = " ".join(part for part in [updated.get("source_note") or "", note] if part).strip()
+    updated["success"] = True
+    updated["reason_code"] = "NO_CANDIDATES_AFTER_COMPLETED_SEARCH"
+    updated["source_confidence"] = "completed_nm_fein_no_match_after_retry"
+    return updated
 
 
 def ak_batch_result_needs_confirmation(result: dict) -> bool:
@@ -17974,6 +17982,13 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
         best_reachable_result["semantic_attempts"] = result.get("semantic_attempts", best_reachable_result.get("semantic_attempts"))
         best_reachable_result["wa_retry_fallback"] = "kept reachable result after later retry timed out"
         return best_reachable_result
+    if (
+        state == "NM"
+        and result
+        and (result.get("status") or "").strip().lower() == "not registered"
+        and nm_tax_year_open_no_match_result({**result, "state": state, "status": "not registered"})
+    ):
+        return nm_tax_year_open_clean_no_match_after_retries(result)
     if result and is_incomplete_no_match_result(state, (result.get("status") or "").strip().lower(), result):
         return conservative_incomplete_lookup_result(result, state)
     return result or run_state_lookup(organization_name, ein, state)
