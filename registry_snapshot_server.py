@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.15.227-staging"
+APP_VERSION = "2026.06.15.228-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -10751,6 +10751,35 @@ def wi_reader_search_best_match(search_names: list[str], target_names: list[str]
     return best_match, reader_reached
 
 
+def wi_confirm_clean_no_results_page(org, max_seconds: float = 14.0):
+    deadline = time.perf_counter() + max(3.0, max_seconds)
+    for search_name in (wi_search_names_for_org(org) or [org.organization_name])[:3]:
+        if time.perf_counter() >= deadline:
+            break
+        source_url = f"{WI_RESULTS_URL}?{urlencode({'CredentialType': '800', 'FirmName': search_name, 'LicenseNumber': ''})}"
+        result_text = wi_reader_text(source_url, no_cache=True)
+        if not result_text:
+            continue
+        if re.search(r"Organization\s+Search\s+Results|Search\s+Parameters|Charitable\s+Organization", result_text, re.I):
+            if re.search(r"There\s+are\s+no\s+query\s+results|No\s+query\s+results", result_text, re.I):
+                result = checker.StateResult(
+                    org.organization_name,
+                    org.ein,
+                    "WI",
+                    checker.STATUS_NOT_REGISTERED,
+                    source_url,
+                )
+                result.raw_status_text = "No matching Wisconsin charitable organization credential"
+                result.source_note = (
+                    "Wisconsin DFI returned an Organization Search Results page with no query results "
+                    "for the high-signal organization name searched."
+                )
+                result.success = True
+                return result
+            return None
+    return None
+
+
 def wi_http_search_best_match(search_names: list[str], target_names: list[str], deadline: float | None = None, original_name: str = "", ein: str = "") -> tuple[dict | None, bool]:
     best_match = None
     http_reached = False
@@ -16958,6 +16987,14 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     "A bounded Wisconsin sidecar retry replaced an unusable direct registry response.",
                 ]).strip()
                 result = sidecar_result
+        if public_status(result) == "Site Not Reachable":
+            clean_no_results = wi_confirm_clean_no_results_page(org)
+            if clean_no_results is not None:
+                clean_no_results.source_note = " ".join(part for part in [
+                    clean_no_results.source_note or "",
+                    "A bounded Wisconsin no-results confirmation replaced an unusable direct registry response.",
+                ]).strip()
+                result = clean_no_results
         if WI_SIDECAR_URL and WI_LOOKUP_SECRET and WI_CONFIRM_SIDECAR_NO_MATCH and public_status(result) == "Not Registered":
             sidecar_result = search_wi_sidecar(org)
             if public_status(sidecar_result) != "Not Registered":
