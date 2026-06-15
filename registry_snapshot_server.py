@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.15.229-staging"
+APP_VERSION = "2026.06.15.232-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -203,11 +203,11 @@ _FL_FALLBACK_CACHE = None
 SC_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_SC_PREFLIGHT_TIMEOUT_SECONDS", "15"))), 25.0)
 NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_NAME_SEARCH_PREFLIGHT_TIMEOUT_SECONDS", "10"))), 13.0)
 ME_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_LOOKUP_MIN_INTERVAL_SECONDS", "1.0"))), 20.0)
-AR_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_AR_LOOKUP_MIN_INTERVAL_SECONDS", "1.5"))), 20.0)
-AR_TRANSIENT_RETRY_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_AR_TRANSIENT_RETRY_DELAY_SECONDS", "4.0"))), 20.0)
-AR_TRANSIENT_RETRY_ATTEMPTS = min(max(1, int(os.environ.get("CE_AR_TRANSIENT_RETRY_ATTEMPTS", "1"))), 3)
-AR_NAME_SEARCH_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_AR_NAME_SEARCH_MAX_VARIANTS", "12"))), 12)
-AR_NAME_SEARCH_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_AR_NAME_SEARCH_MAX_SECONDS", "35"))), 38.0)
+AR_LOOKUP_MIN_INTERVAL_SECONDS = min(max(0.0, float(os.environ.get("CE_AR_LOOKUP_MIN_INTERVAL_SECONDS", "10.0"))), 25.0)
+AR_TRANSIENT_RETRY_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_AR_TRANSIENT_RETRY_DELAY_SECONDS", "12.0"))), 30.0)
+AR_TRANSIENT_RETRY_ATTEMPTS = min(max(1, int(os.environ.get("CE_AR_TRANSIENT_RETRY_ATTEMPTS", "2"))), 3)
+AR_NAME_SEARCH_MAX_VARIANTS = min(max(1, int(os.environ.get("CE_AR_NAME_SEARCH_MAX_VARIANTS", "8"))), 10)
+AR_NAME_SEARCH_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_AR_NAME_SEARCH_MAX_SECONDS", "38"))), 44.0)
 ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS = min(max(0.0, float(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS", "1.0"))), 30.0)
 ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS = min(max(1, int(os.environ.get("CE_ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS", "2"))), 4)
 ME_CONFIRM_NOT_REGISTERED = os.environ.get("CE_ME_CONFIRM_NOT_REGISTERED", "1").strip().lower() in {"1", "true", "yes"}
@@ -354,7 +354,7 @@ WI_REQUIRE_COMPLETE_SNAPSHOT = os.environ.get("CE_WI_REQUIRE_COMPLETE_SNAPSHOT",
 WI_SNAPSHOT_MAX_AGE_SECONDS = min(max(86400, int(os.environ.get("CE_WI_SNAPSHOT_MAX_AGE_SECONDS", str(14 * 86400)))), 45 * 86400)
 WI_SNAPSHOT_CACHE: dict[str, object] = {"loaded_at": 0.0, "mtime": 0.0, "snapshot": None, "name_index": None, "error": ""}
 WI_SNAPSHOT_LOCK = threading.Lock()
-AK_LOOKUP_TOTAL_BUDGET_SECONDS = min(max(25.0, float(os.environ.get("CE_AK_LOOKUP_TOTAL_BUDGET_SECONDS", "69"))), 100.0)
+AK_LOOKUP_TOTAL_BUDGET_SECONDS = min(max(25.0, float(os.environ.get("CE_AK_LOOKUP_TOTAL_BUDGET_SECONDS", "86"))), 110.0)
 AK_ACTION_TIMEOUT_MS = min(max(2500, int(os.environ.get("CE_AK_ACTION_TIMEOUT_MS", "5000"))), 10000)
 AK_RECENT_FILING_CUTOFF_YEAR = min(max(2020, int(os.environ.get("CE_AK_RECENT_FILING_CUTOFF_YEAR", "2023"))), 2100)
 AK_HISTORICAL_IDENTITY_FLOOR_YEAR = min(
@@ -2432,7 +2432,7 @@ def organization_name_variants(
         segmented_seeds = []
         and_segmented_seeds = []
         for seed in list(seed_names):
-            segment_pattern = r"\s*(?:/|\\|,|\bd/?b/?a\b|\bdoing\s+business\s+as\b|\balso\s+soliciting\s+as\b|\bsoliciting\s+as\b|\balso\s+known\s+as\b|\baka\b|\bfka\b|\bformerly\b)\s*"
+            segment_pattern = r"\s*(?:\bd\s*/?\s*b\s*/?\s*a\b|\bdoing\s+business\s+as\b|\balso\s+soliciting\s+as\b|\bsoliciting\s+as\b|\balso\s+known\s+as\b|\baka\b|\bfka\b|\bformerly\b|/|\\|,)\s*"
             for part in re.split(
                 segment_pattern,
                 seed or "",
@@ -3196,9 +3196,9 @@ def high_signal_search_phrases(name: str) -> list[str]:
     # Alias and separator sides: A/B, A - B, DBA/AKA/also soliciting as.
     for source in [base, no_parenthetical]:
         for part in re.split(
-            r"\s*(?:/|\\|\||;|\s+-\s+|\bd/?b/?a\b|\bdoing\s+business\s+as\b|"
+            r"\s*(?:\bd\s*/?\s*b\s*/?\s*a\b|\bdoing\s+business\s+as\b|"
             r"\balso\s+soliciting\s+as\b|\bsoliciting\s+as\b|\balso\s+known\s+as\b|"
-            r"\baka\b|\bfka\b|\bformerly\b)\s*",
+            r"\baka\b|\bfka\b|\bformerly\b|/|\\|\||;|\s+-\s+)\s*",
             source,
             flags=re.I,
         ):
@@ -3256,6 +3256,73 @@ def high_signal_search_phrases(name: str) -> list[str]:
     return phrases
 
 
+def explicit_name_alias_segments(name: str) -> list[str]:
+    """Return explicit DBA/AKA/also-known-as aliases before generic slash splits."""
+    base = re.sub(r"\s+", " ", (name or "").strip())
+    if not base:
+        return []
+    aliases: list[str] = []
+
+    def add(value: str) -> None:
+        cleaned = re.sub(r"\s+", " ", (value or "").strip(" ,;-"))
+        if not cleaned:
+            return
+        tokens = search_query_tokens(cleaned)
+        raw_words = re.findall(r"[A-Za-z0-9]+", cleaned)
+        if len(tokens) < 2 and not (len(tokens) == 1 and len(tokens[0]) >= 5 and len(raw_words) >= 2):
+            return
+        if cleaned.lower() not in {existing.lower() for existing in aliases}:
+            aliases.append(cleaned)
+
+    for match in re.finditer(
+        r"\b(?:d\s*/?\s*b\s*/?\s*a|doing\s+business\s+as|also\s+soliciting\s+as|"
+        r"soliciting\s+as|also\s+known\s+as|aka|fka|formerly(?:\s+known\s+as)?)\b\s*"
+        r"([^;|()]{3,120})",
+        base,
+        re.I,
+    ):
+        alias = re.split(r"\s*(?:;|\||\s+-\s+)\s*", match.group(1), maxsplit=1)[0]
+        add(alias)
+    return aliases
+
+
+def explicit_legal_name_before_alias_segments(name: str) -> list[str]:
+    """Return the legal-name side before explicit DBA/AKA markers."""
+    base = re.sub(r"\s+", " ", (name or "").strip())
+    if not base:
+        return []
+    marker = re.search(
+        r"\b(?:d\s*/?\s*b\s*/?\s*a|doing\s+business\s+as|also\s+soliciting\s+as|"
+        r"soliciting\s+as|also\s+known\s+as|aka|fka|formerly(?:\s+known\s+as)?)\b",
+        base,
+        re.I,
+    )
+    if not marker:
+        return []
+    legal = base[: marker.start()]
+    forms = [
+        legal,
+        re.sub(
+            r"(?:,\s*)?\b(?:inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\b\.?\s*$",
+            "",
+            legal,
+            flags=re.I,
+        ),
+    ]
+    values: list[str] = []
+    for form in forms:
+        cleaned = re.sub(r"\s+", " ", (form or "").strip(" ,;-"))
+        if not cleaned:
+            continue
+        tokens = search_query_tokens(cleaned)
+        raw_words = re.findall(r"[A-Za-z0-9]+", cleaned)
+        if len(tokens) < 2 and not (len(tokens) == 1 and len(tokens[0]) >= 5 and len(raw_words) >= 2):
+            continue
+        if cleaned.lower() not in {existing.lower() for existing in values}:
+            values.append(cleaned)
+    return values
+
+
 def build_search_queries(
     org_name: str,
     ein: str | None = None,
@@ -3282,6 +3349,14 @@ def build_search_queries(
             add(digits)
             add(format_ein(digits))
 
+    for alias in explicit_name_alias_segments(org_name):
+        add(alias)
+        for variant in high_signal_search_phrases(alias):
+            add(variant)
+    for legal_segment in explicit_legal_name_before_alias_segments(org_name):
+        add(legal_segment)
+        for variant in high_signal_search_phrases(legal_segment):
+            add(variant)
     for variant in high_signal_search_phrases(org_name):
         add(variant)
     add(org_name)
@@ -3364,6 +3439,8 @@ def registry_name_is_safe_against_targets(registry_name: str, targets: list[str]
     registry_name = clean_registry_name(registry_name or "")
     if not registry_name:
         return False
+    if named_jurisdiction_scope_conflict(original_name, registry_name):
+        return False
     if registry_name_is_safe_for_org(registry_name, original_name, ein):
         return True
     if (
@@ -3385,6 +3462,8 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
     safe_targets = organization_match_target_variants(original_name, ein)
     if normalized_match_name(registry_name) == normalized_match_name(original_name):
         return True
+    if named_jurisdiction_scope_conflict(original_name, registry_name):
+        return False
     if not has_sufficient_identity_overlap(original_name, registry_name, ein):
         return False
     if related_affiliate_or_chapter_mismatch(original_name, registry_name):
@@ -3427,6 +3506,40 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
     if target_name_score(registry_name, safe_targets) >= 450:
         return True
     return compatible_ein_alias_for_name(original_name, registry_name)
+
+
+def named_jurisdiction_scope_conflict(original_name: str, registry_name: str) -> bool:
+    """Reject matches where a named jurisdictional scope is plainly different.
+
+    This is intentionally narrow and only applies when both names contain the
+    same scoped-entity phrase but the named scope after "of" differs.
+    """
+    original_norm = normalized_match_name(original_name)
+    registry_norm = normalized_match_name(registry_name)
+    if not original_norm or not registry_norm or original_norm == registry_norm:
+        return False
+
+    def scoped_phrase(value: str) -> str:
+        match = re.search(
+            r"\b(?:archdiocese|diocese|district|chapter|council)\s+of\s+"
+            r"([a-z0-9]+(?:\s+[a-z0-9]+){0,3})\b",
+            value,
+            re.I,
+        )
+        if not match:
+            return ""
+        phrase = re.sub(
+            r"\b(?:the|a|an|of|for|and|inc|incorporated|corp|corporation|"
+            r"foundation|fund|association|organization)\b",
+            " ",
+            match.group(1),
+            flags=re.I,
+        )
+        return re.sub(r"\s+", " ", phrase).strip()
+
+    original_scope = scoped_phrase(original_norm)
+    registry_scope = scoped_phrase(registry_norm)
+    return bool(original_scope and registry_scope and original_scope != registry_scope)
 
 
 def long_truncated_registry_name_match(original_name: str, registry_name: str) -> bool:
@@ -4843,7 +4956,7 @@ def registry_alias_segment_matches_requested(registry_text: str, requested_name:
     if not text:
         return False
     parts = re.split(
-        r"\s*(?:;|\||/|\bd/?b/?a\b|\baka\b|\balso\s+soliciting\s+as\b|\bdoing\s+business\s+as\b|\bformerly\s+known\s+as\b)\s*",
+        r"\s*(?:\bd\s*/?\s*b\s*/?\s*a\b|\baka\b|\balso\s+soliciting\s+as\b|\bdoing\s+business\s+as\b|\bformerly\s+known\s+as\b|;|\||/)\s*",
         text,
         flags=re.I,
     )
@@ -8326,7 +8439,9 @@ def search_oh(page, org):
             f"Most Recent Report Filing Year: {filing_year_raw or 'N/A'} | "
             f"Fiscal Year End: {fiscal_year_end_raw or 'N/A'}"
         )
-        if re.search(r"\bexempt\b", " ".join([exemption_status or "", registration_status or ""]), re.I):
+        if re.search(r"\bnot\s+required\s+to\s+register\b", " ".join([exemption_status or "", registration_status or ""]), re.I):
+            result.status = "Exempt"
+        elif re.search(r"\bexempt\b", " ".join([exemption_status or "", registration_status or ""]), re.I):
             result.status = "Exempt"
         elif re.search(r"\bpending\b", registration_status or "", re.I):
             result.status = "Pending"
@@ -9931,7 +10046,7 @@ def wi_search_names_for_org(org) -> list[str]:
         and len(us_compacted_original.split()) >= 2
     ):
         add_many([us_compacted_original])
-    for segment in re.split(r"\s*/\s*|\s+also\s+soliciting\s+as\s+|\s+d/?b/?a\s+|\s+doing\s+business\s+as\s+", original_name or "", flags=re.I):
+    for segment in re.split(r"\s+(?:also\s+soliciting\s+as|doing\s+business\s+as)\s+|\bd\s*/?\s*b\s*/?\s*a\b\s*|\s*/\s*", original_name or "", flags=re.I):
         segment = re.sub(r"\s+", " ", (segment or "").strip(" ,;/|-"))
         if segment and segment.lower() != (original_name or "").strip().lower():
             add_many([segment])
@@ -12344,7 +12459,7 @@ def explicit_due_date_from_result_text(result, *extra_texts: str) -> date | None
         *[text for text in extra_texts if text],
     ] if part)
     match = re.search(
-        r"\b(?:Due|Next\s+Due|Renewal\s+Date|Expiration\s+Date|Report\s+Due)\s*:?\s*"
+        r"\b(?:Due|Next\s+Due|Renewal\s+Date|Annual\s+Renewal\s+Date(?:\s+Used)?|Expiration\s+Date|Report\s+Due)\s*:?\s*"
         r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4}|\d{4}-\d{2}-\d{2})",
         text,
         re.I,
@@ -12520,9 +12635,9 @@ def explicit_registry_date(result, body: str) -> date | None:
     if raw_date and re.fullmatch(r"\s*(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}-[A-Za-z]{3}-\d{2,4})\s*", result.raw_status_text or ""):
         return raw_date
     patterns = [
-        rf"(?:expires|expired|expired on|expiration date|registration expires|registration expiration|current registration expires|automatic extension)\s*:?\s*([A-Za-z]{{3,9}}\s+\d{{1,2}},\s+\d{{4}})",
-        rf"(?:expires|expired|expired on|expiration date|registration expires|registration expiration|current registration expires|automatic extension)\s*:?\s*(\d{{1,2}}[/-]\d{{1,2}}[/-]\d{{2,4}})",
-        rf"(?:expires|expired|expired on|expiration date|registration expires|registration expiration|current registration expires|automatic extension)\s*:?\s*(\d{{1,2}}-[A-Za-z]{{3}}-\d{{2,4}})",
+        rf"(?:expires|expired|expired on|expiration date|registration expires|registration expiration|current registration expires|automatic extension|annual renewal date(?: used)?|renewal date(?: used)?)\s*:?\s*([A-Za-z]{{3,9}}\s+\d{{1,2}},\s+\d{{4}})",
+        rf"(?:expires|expired|expired on|expiration date|registration expires|registration expiration|current registration expires|automatic extension|annual renewal date(?: used)?|renewal date(?: used)?)\s*:?\s*(\d{{1,2}}[/-]\d{{1,2}}[/-]\d{{2,4}})",
+        rf"(?:expires|expired|expired on|expiration date|registration expires|registration expiration|current registration expires|automatic extension|annual renewal date(?: used)?|renewal date(?: used)?)\s*:?\s*(\d{{1,2}}-[A-Za-z]{{3}}-\d{{2,4}})",
         r"^\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})\s*$",
     ]
     for source in [focused, text]:
@@ -12835,7 +12950,6 @@ def true_status_from_body(result, body: str) -> str:
             normalized_ein_key(result.ein) in re.sub(r"\D", "", combined)
             or registry_name_is_safe_for_org(result.matched_registry_name or "", result.organization_name, result.ein)
         )
-        and not body_indicates_no_organization_record(combined)
     ):
         return "Delinquent"
     if state == "NY" and normalized == "not registered":
@@ -12981,7 +13095,6 @@ def true_status_from_body(result, body: str) -> str:
             normalized_ein_key(result.ein) in re.sub(r"\D", "", combined)
             or registry_name_is_safe_for_org(result.matched_registry_name or "", result.organization_name, result.ein)
         )
-        and not body_indicates_no_organization_record(combined)
     ):
         return "Delinquent"
 
@@ -14654,7 +14767,7 @@ def ms_preferred_search_variants(name: str, ein: str = "") -> list[str]:
         base = re.sub(r"\s+", " ", (seed or "").strip())
         add(base)
         for part in re.split(
-            r"\s*(?:/|\\|\bd/?b/?a\b|\bdoing\s+business\s+as\b|\balso\s+soliciting\s+as\b|\bsoliciting\s+as\b|\balso\s+known\s+as\b|\baka\b|\bfka\b|\bformerly\b)\s*",
+            r"\s*(?:\bd\s*/?\s*b\s*/?\s*a\b|\bdoing\s+business\s+as\b|\balso\s+soliciting\s+as\b|\bsoliciting\s+as\b|\balso\s+known\s+as\b|\baka\b|\bfka\b|\bformerly\b|/|\\)\s*",
             base,
             flags=re.I,
         ):
@@ -15226,6 +15339,28 @@ def search_ok_with_variants(page, org, module):
         if public_status(result) == "Site Not Reachable":
             return result
         if public_status(result) != "Not Registered":
+            matched_name = getattr(result, "matched_registry_name", "") or ""
+            if matched_name and not registry_name_is_safe_for_org(matched_name, original_name, getattr(org, "ein", "")):
+                result.rejected_candidates = list(dict.fromkeys([
+                    *(getattr(result, "rejected_candidates", []) or []),
+                    matched_name,
+                ]))
+                result.rejection_reason = "REJECT_VARIANT_MATCH_NOT_SAFE_FOR_ORIGINAL_NAME"
+                best_result = module.SearchResult(
+                    organization_name=original_name,
+                    status=module.STATUS_NOT_FOUND,
+                    raw_status_text=f"No safely matching filing number link. Rejected candidate: {matched_name}",
+                    source_url=module.OK_SEARCH_URL,
+                    source_note=(
+                        "Oklahoma returned a registry row for a generated query variant, but the row did not meet "
+                        "CharityClarity's identity guardrails against the original requested organization name."
+                    ),
+                )
+                best_result.success = True
+                best_result.queries_attempted = list(attempted_variants)
+                best_result.rejected_candidates = [matched_name]
+                best_result.rejection_reason = "REJECT_VARIANT_MATCH_NOT_SAFE_FOR_ORIGINAL_NAME"
+                continue
             if variant != original_name:
                 result.source_note = " ".join(part for part in [
                     getattr(result, "source_note", "") or "",
@@ -15430,7 +15565,7 @@ def ok_status_from_latest_filing_date(latest_filing_date: date) -> tuple[str, da
     today = date.today()
     if latest_filing_date.year >= today.year:
         return "Current", None
-    assumed_due_date = date(latest_filing_date.year, 11, 15)
+    assumed_due_date = date(latest_filing_date.year + 1, 9, 1)
     return status_from_calendar_date(assumed_due_date), assumed_due_date
 
 
@@ -15647,7 +15782,7 @@ def search_ok_precise(page, org, module):
         if latest_filing_date:
             result.status, assumed_due_date = ok_status_from_latest_filing_date(latest_filing_date)
             due_note = (
-                f" For prior-year filing activity, CharityClarity uses the filing-year annual extension deadline ({assumed_due_date.isoformat()}) to classify status."
+                f" For prior-year filing activity, CharityClarity uses Oklahoma's next annual renewal deadline ({format_date(assumed_due_date)}) to classify status."
                 if assumed_due_date
                 else " Current-year Oklahoma filing-history activity is treated as satisfying the current annual registration cycle."
             )
@@ -15808,10 +15943,12 @@ def search_ar_precise(page, org):
     explicit_no_results_seen = False
     result_shell_without_rows = False
     deadline = time.perf_counter() + AR_NAME_SEARCH_MAX_SECONDS
+    attempted_variants: list[str] = []
     for variant in variants[:AR_NAME_SEARCH_MAX_VARIANTS]:
         remaining = deadline - time.perf_counter()
         if remaining <= 2.0:
             break
+        attempted_variants.append(variant)
         nav_timeout_ms = max(3000, min(12000, int(remaining * 1000)))
         settle_timeout_ms = max(1000, min(2500, int(remaining * 500)))
         try:
@@ -15894,6 +16031,10 @@ def search_ar_precise(page, org):
             continue
 
     if not best:
+        result.queries_attempted = list(attempted_variants)
+        result.source_attempts = [
+            f"Arkansas attempted bounded high-signal name/alias queries: {', '.join(attempted_variants)}."
+        ] if attempted_variants else []
         if not reached:
             result.status = "Site Not Reachable"
             result.raw_status_text = "Arkansas public charity search did not return usable results within the bounded lookup window"
@@ -15925,6 +16066,10 @@ def search_ar_precise(page, org):
         return result
 
     result.matched_registry_name = best.get("name", "")
+    result.queries_attempted = list(attempted_variants)
+    result.source_attempts = [
+        f"Arkansas attempted bounded high-signal name/alias queries: {', '.join(attempted_variants)}."
+    ] if attempted_variants else []
     result.raw_status_text = f"Type: {best.get('type', '')} | Status: {best.get('status', '')} | Registration Date: {best.get('registration_date', '')}"
     result.status = ar_status_from_text(best.get("status", ""))
     result.source_note = "Arkansas public charity search matched a safe registry name; CharityClarity maps Not Current to Delinquent."
@@ -15967,6 +16112,18 @@ def ar_preferred_name_variants(org) -> list[str]:
         cleaned = re.sub(r"\s+", " ", (value or "").strip())
         if cleaned and (allow_broad or not too_broad(cleaned)) and cleaned.lower() not in {existing.lower() for existing in variants}:
             variants.append(cleaned)
+
+    # Arkansas stores many DBA organizations under the legal registrant name.
+    # Try the legal side first for explicit DBA/AKA names, then let the shared
+    # query ladder add DBA aliases and broader fallbacks.
+    for legal_segment in explicit_legal_name_before_alias_segments(original):
+        add(legal_segment)
+        for legal_variant in high_signal_search_phrases(legal_segment):
+            add(legal_variant)
+    for alias_segment in explicit_name_alias_segments(original):
+        add(alias_segment)
+        for alias_variant in high_signal_search_phrases(alias_segment):
+            add(alias_variant)
 
     def leading_distinctive_probe(value: str) -> str:
         cleaned = re.sub(r"\([^)]*\)", " ", value or "")
@@ -16103,6 +16260,14 @@ def ar_high_signal_alias_retry_names(org) -> list[str]:
         ):
             candidates.append(cleaned)
 
+    for legal_segment in explicit_legal_name_before_alias_segments(original):
+        add(legal_segment)
+        for legal_variant in high_signal_search_phrases(legal_segment):
+            add(legal_variant)
+    for alias_segment in explicit_name_alias_segments(original):
+        add(alias_segment)
+        for alias_variant in high_signal_search_phrases(alias_segment):
+            add(alias_variant)
     for variant in ar_preferred_name_variants(org)[:6]:
         if re.search(r"\bto\s+fight\b", original, re.I):
             if not re.search(r"^(?:the|a|an)\s+", variant or "", re.I):
@@ -16114,7 +16279,7 @@ def ar_high_signal_alias_retry_names(org) -> list[str]:
         ):
             if re.search(r"\b(?:national|international)\s+(?:center|centre)\s+for\b|\bmissing\b.*\bexploited\b.*\bchildren\b", variant or "", re.I):
                 add(variant)
-    return candidates[:2]
+    return candidates[:4]
 
 
 def search_ar_name_variants_once(page, org):
@@ -16214,7 +16379,7 @@ def wv_preferred_query_variants(name: str, ein: str = "") -> list[str]:
         base = re.sub(r"\s+", " ", (source_name or "").strip())
         if not base:
             return
-        for segment in re.split(r"\s*/\s*|\s+also\s+soliciting\s+as\s+|\s+d/?b/?a\s+|\s+doing\s+business\s+as\s+", base, flags=re.I):
+        for segment in re.split(r"\s+(?:also\s+soliciting\s+as|doing\s+business\s+as)\s+|\bd\s*/?\s*b\s*/?\s*a\b\s*|\s*/\s*", base, flags=re.I):
             segment = re.sub(r"\s+", " ", (segment or "").strip(" ,;-"))
             if segment and segment.lower() != base.lower():
                 add_name_forms(segment)
