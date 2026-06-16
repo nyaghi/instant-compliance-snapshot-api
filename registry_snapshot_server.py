@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.16.233-staging"
+APP_VERSION = "2026.06.16.234-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -14424,17 +14424,24 @@ def nh_live_pdf_records() -> tuple[list[dict], str]:
 
 def nh_registry_name_from_live_body(body: str) -> str:
     cleaned = re.sub(r"\s+", " ", body or "").strip()
+    street_suffix = (
+        r"(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Drive|Dr\.?|Lane|Ln\.?|"
+        r"Boulevard|Blvd\.?|Way|Place|Pl\.?|Court|Ct\.?|Circle|Cir\.?|"
+        r"Parkway|Pkwy\.?|Highway|Hwy\.?|Plaza|Square|Sq\.?)"
+    )
     word_number_street = (
         r"(?:One|Two|Three|Four|Five|Six|Seven|Eight|Nine|Ten|Eleven|Twelve|"
         r"Thirteen|Fourteen|Fifteen|Sixteen|Seventeen|Eighteen|Nineteen|"
         r"Twenty|Thirty|Forty|Fifty|Sixty|Seventy|Eighty|Ninety)"
         r"\s+[A-Za-z][A-Za-z.'-]*(?:\s+[A-Za-z]\.?)?(?:\s+[A-Za-z][A-Za-z.'-]*){0,3}"
-        r"\s+(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Drive|Dr\.?|Lane|Ln\.?|"
-        r"Boulevard|Blvd\.?|Way|Place|Pl\.?|Court|Ct\.?|Circle|Cir\.?|"
-        r"Parkway|Pkwy\.?|Highway|Hwy\.?|Plaza|Square|Sq\.?)(?=\s|[A-Z]|$)"
+        rf"\s+{street_suffix}(?=\s|[A-Z]|$)"
+    )
+    numbered_street = (
+        rf"\d{{1,6}}\s+(?:\d+(?:st|nd|rd|th)|[A-Za-z][A-Za-z0-9.'#-]*)"
+        rf"(?:\s+[A-Za-z0-9][A-Za-z0-9.'#-]*){{0,3}}\s+{street_suffix}(?=\s|[A-Z]|$)"
     )
     cleaned = re.split(
-        rf"\s+(?:P\.?\s*O\.?\s+Box|PO\s+Box|C/O|c/o|{word_number_street}|\d{{1,6}}\s+[A-Za-z][A-Za-z0-9.'#-]*(?:\s|$))",
+        rf"(?:\s+|(?<=[A-Za-z),.]))(?:P\.?\s*O\.?\s+Box|PO\s+Box|C/O|c/o|{word_number_street}|{numbered_street}|\d{{1,6}}\s+[A-Za-z][A-Za-z0-9.'#-]*(?:\s|$))",
         cleaned,
         maxsplit=1,
         flags=re.I,
