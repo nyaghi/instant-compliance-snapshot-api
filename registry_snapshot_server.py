@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.16.235-staging"
+APP_VERSION = "2026.06.16.236-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -3143,6 +3143,51 @@ def high_signal_search_phrases(name: str) -> list[str]:
                 add_prefix(candidate)
         return prefixes
 
+    def leading_initial_core_forms(value: str) -> list[str]:
+        value = re.sub(r"\s+", " ", (value or "").strip(" ,;-"))
+        value = re.sub(r"^(?:the|a|an)\s+", "", value, flags=re.I).strip()
+        words = re.findall(r"[A-Za-z0-9]+", value)
+        forms: list[str] = []
+
+        def add_form(candidate_words: list[str]) -> None:
+            if len(candidate_words) < 2:
+                return
+            candidate = " ".join(candidate_words)
+            if len(search_query_tokens(candidate)) < 2:
+                return
+            if candidate.lower() not in {existing.lower() for existing in forms}:
+                forms.append(candidate)
+
+        if len(words) >= 3 and len(words[0]) == 1 and words[0].isalpha():
+            tail = words[1:]
+            add_form(tail[:2])
+            add_form(tail[:3])
+            add_form(tail)
+        return forms
+
+    def legal_holder_core_forms(value: str) -> list[str]:
+        value = re.sub(r"\s+", " ", (value or "").strip(" ,;-"))
+        stripped = re.sub(r"^(?:the|a|an)\s+", "", value, flags=re.I).strip()
+        forms: list[str] = []
+
+        def add_form(candidate: str) -> None:
+            candidate = re.sub(r"\s+", " ", (candidate or "").strip(" ,;-"))
+            raw_words = re.findall(r"[A-Za-z0-9]+", candidate)
+            signal_tokens = search_query_tokens(candidate)
+            if len(signal_tokens) < 2 and not (len(raw_words) >= 2 and signal_tokens):
+                return
+            if candidate.lower() not in {existing.lower() for existing in forms}:
+                forms.append(candidate)
+
+        for pattern in [
+            r"^(?:board\s+of\s+)?trustees\s+(?:of|for)\s+(.+)$",
+            r"^(?:corporation|regents)\s+(?:of|for)\s+(.+)$",
+        ]:
+            match = re.match(pattern, stripped, flags=re.I)
+            if match:
+                add_form(match.group(1))
+        return forms
+
     def add_token_phrase(token_values: list[str]) -> None:
         if len(token_values) >= 2:
             add(" ".join(token_values), allow_single=False)
@@ -3150,6 +3195,10 @@ def high_signal_search_phrases(name: str) -> list[str]:
     # Try concise, portal-friendly identity cores before legal/punctuation
     # noise. Preserve connector words before trying stripped fragments.
     # The acceptance layer still requires a safe registry-name match.
+    for variant in leading_initial_core_forms(no_suffix or base):
+        add(variant)
+    for variant in legal_holder_core_forms(no_suffix or base):
+        add(variant, allow_single=True)
     for variant in connector_priority_core_forms(no_suffix or base):
         add(variant)
     for variant in connector_preserved_prefixes(no_suffix or base):
@@ -4134,7 +4183,7 @@ def sc_official_detail_lookup(org) -> object | None:
         include_ein=False,
         include_ein_aliases=True,
         include_name_segments=True,
-        max_queries=8,
+        max_queries=18,
     )
     last_html = ""
     transport_errors = 0
@@ -4270,7 +4319,7 @@ def result_has_safe_matched_registry_name(result, original_name: str, ein: str =
 
 def search_sc_resilient(page, org):
     official_result = sc_official_detail_lookup(org)
-    if official_result:
+    if official_result and public_status(official_result) != "Not Registered":
         return official_result
     reachable, _, preflight_result = preflight_name_search_registry(org, "SC")
     if not reachable:
@@ -4683,6 +4732,18 @@ def va_evoke_registrations_for_entity(entity_id: str) -> list[dict]:
     )
 
 
+def va_evoke_registrations_for_entity_with_retry(entity_id: str) -> tuple[list[dict] | None, list[str]]:
+    errors: list[str] = []
+    for attempt in range(2):
+        try:
+            return va_evoke_registrations_for_entity(entity_id), errors
+        except Exception as exc:
+            errors.append(str(exc))
+            if attempt == 0:
+                time.sleep(0.8)
+    return None, errors
+
+
 def va_evoke_status_from_entity_and_registrations(entity: dict, registrations: list[dict]) -> tuple[str, str, str, date | None]:
     entity_status = str(entity.get("status") or "")
     selected = None
@@ -4826,6 +4887,8 @@ def search_va_evoke_api(org):
         result = checker.StateResult(org.organization_name, org.ein, "VA", "Unable to Verify", VA_EVOKE_PUBLIC_PORTAL_URL)
         result.raw_status_text = "Virginia Evoke public registry API lookup did not complete."
         result.source_note = f"Virginia public registry lookup could not be completed. Last error: {last_error[:160]}"
+        result.reason_code = "VA_ENTITY_SEARCH_INCOMPLETE"
+        result.source_confidence = "incomplete_search"
         result.success = False
         result.error = last_error[:240]
         return result
@@ -4844,20 +4907,19 @@ def search_va_evoke_api(org):
             source_note="Virginia Evoke public registry search completed and found no confirmed organization record.",
             success=True,
         )
+        result.reason_code = "NO_CANDIDATES"
+        result.source_confidence = "completed_no_confirmed_match"
         return result
 
     accepted = []
     registration_fetch_errors = []
     for entity, used_name_fallback, match_basis in candidates:
-        registration_error = ""
-        try:
-            registrations = va_evoke_registrations_for_entity(str(entity.get("id") or ""))
-        except Exception as exc:
-            last_error = str(exc)
-            registration_error = last_error
-            registration_fetch_errors.append(last_error)
-            registrations = []
-        if registration_error:
+        entity_id = str(entity.get("id") or "")
+        registrations, errors = va_evoke_registrations_for_entity_with_retry(entity_id)
+        if errors:
+            registration_fetch_errors.extend(errors)
+            last_error = errors[-1]
+        if registrations is None:
             continue
         status, raw_status, identifier, effective_date = va_evoke_status_from_entity_and_registrations(entity, registrations)
         display_name = str(entity.get("name") or entity.get("fullName") or entity.get("primaryName") or org.organization_name)
@@ -4876,6 +4938,8 @@ def search_va_evoke_api(org):
         result = checker.StateResult(org.organization_name, org.ein, "VA", "Unable to Verify", VA_EVOKE_PUBLIC_PORTAL_URL)
         result.raw_status_text = "Virginia Evoke entity search found a possible organization record, but registration detail retrieval did not complete."
         result.source_note = f"Virginia public registry lookup was incomplete after matching the entity. Last error: {registration_fetch_errors[-1][:160]}"
+        result.reason_code = "VA_REGISTRATION_DETAIL_FETCH_FAILED"
+        result.source_confidence = "incomplete_search"
         result.success = False
         result.error = registration_fetch_errors[-1][:240]
         return result
@@ -4889,6 +4953,8 @@ def search_va_evoke_api(org):
     )
     result.matched_registry_name = selected["display_name"]
     result.matched_registry_identifier = selected["identifier"]
+    result.reason_code = f"VA_MATCHED_BY_{re.sub(r'[^A-Za-z0-9]+', '_', selected['match_basis']).strip('_').upper()}"
+    result.source_confidence = "exact_ein_match" if selected["match_basis"] == "exact FEIN" else "safe_registry_name_match"
     result.success = public_status(result) != "Unable to Verify"
     return result
 
@@ -7440,6 +7506,8 @@ def ct_prioritized_name_variants(original_name: str, variants: list[str]) -> lis
             prioritized.append(cleaned)
 
     base = re.sub(r"\s+", " ", (original_name or "").strip())
+    for variant in high_signal_search_phrases(base):
+        add(variant)
     add(base)
     if "&" in base:
         add(re.sub(r"\s*&\s*", " and ", base))
@@ -7497,6 +7565,7 @@ def search_ct_direct(org):
     last_error = ""
     attempted_variants = 0
     completed_variants = 0
+    searched_variants: list[str] = []
     session = None
     fields = None
     headers = None
@@ -7505,6 +7574,7 @@ def search_ct_direct(org):
         if remaining <= 1.5:
             break
         attempted_variants += 1
+        searched_variants.append(variant)
         try:
             attempt_timeout = min(CT_DIRECT_TIMEOUT_SECONDS, max(4.0, remaining - 1.0))
             if session is None or fields is None or headers is None:
@@ -7529,12 +7599,20 @@ def search_ct_direct(org):
                 best_result = result
                 best_score = score
         if best_result:
+            best_result.queries_attempted = list(searched_variants)
+            best_result.source_attempts = [
+                f"Connecticut attempted prioritized name queries: {', '.join(searched_variants)}."
+            ]
             return best_result
     if best_result:
+        best_result.queries_attempted = list(searched_variants)
+        best_result.source_attempts = [
+            f"Connecticut attempted prioritized name queries: {', '.join(searched_variants)}."
+        ]
         return best_result
     exhausted_budget = time.perf_counter() >= deadline - 0.25
     if not last_error and not exhausted_budget and completed_variants >= len(variants):
-        return checker.StateResult(
+        result = checker.StateResult(
             original_name,
             org.ein,
             "CT",
@@ -7544,6 +7622,11 @@ def search_ct_direct(org):
             source_note="Connecticut public registry AJAX search returned no safely matching public-charity row for the generated name variants.",
             success=True,
         )
+        result.queries_attempted = list(searched_variants)
+        result.source_attempts = [
+            f"Connecticut attempted prioritized name queries: {', '.join(searched_variants)}."
+        ] if searched_variants else []
+        return result
     result = checker.StateResult(original_name, org.ein, "CT", "Site Not Reachable", url)
     result.raw_status_text = "Connecticut direct registry lookup could not be completed"
     if saw_zero_results and (exhausted_budget or attempted_variants < len(variants)):
@@ -7552,6 +7635,10 @@ def search_ct_direct(org):
         result.source_note = "Connecticut public registry AJAX lookup did not return a usable response."
     result.error = last_error
     result.success = False
+    result.queries_attempted = list(searched_variants)
+    result.source_attempts = [
+        f"Connecticut attempted prioritized name queries before stopping: {', '.join(searched_variants)}."
+    ] if searched_variants else []
     return result
 
 
@@ -9693,11 +9780,22 @@ def search_hi_precise(page, org):
         body = ""
         clicked_result = False
         attempts = []
+        attempted_queries: list[str] = []
         if ein_digits:
             for ein_value in [checker.format_ein_with_dash(org.ein), ein_digits]:
                 if ein_value and ("", ein_value) not in attempts:
                     attempts.append(("", ein_value))
-        for variant in organization_name_variants(org.organization_name, org.ein):
+        hi_name_variants = build_search_queries(
+            org.organization_name,
+            org.ein,
+            include_ein=False,
+            include_ein_aliases=True,
+            include_name_segments=True,
+            include_compact_legal_suffixes=True,
+            include_leading_article_variants=True,
+            max_queries=20,
+        )
+        for variant in hi_name_variants:
             if variant:
                 for ein_value in ([checker.format_ein_with_dash(org.ein), ein_digits, ""] if ein_digits else [""]):
                     if (variant, ein_value) not in attempts:
@@ -9705,6 +9803,9 @@ def search_hi_precise(page, org):
         clicked_result_name = ""
         clicked_result_identifier = ""
         for variant, ein_value in attempts[:4]:
+            attempted_queries.append(
+                f"{variant or '[blank name]'} / FEIN {ein_value}" if ein_value else variant
+            )
             name_input.fill("")
             name_input.fill(variant)
             fein_input.fill("")
@@ -9781,6 +9882,10 @@ def search_hi_precise(page, org):
             result.status = "Not registered"
             result.source_note = "Hawaii search results did not contain a matching organization/EIN row."
             result.success = True
+            result.queries_attempted = list(attempted_queries)
+            result.source_attempts = [
+                f"Hawaii attempted prioritized FEIN/name queries: {', '.join(attempted_queries)}."
+            ] if attempted_queries else []
             return result
         page.wait_for_load_state("domcontentloaded", timeout=30000)
         checker.safe_wait_for_network_idle(page, timeout=6000)
@@ -9792,6 +9897,7 @@ def search_hi_precise(page, org):
         )
         if ein_digits and detail_ein and re.sub(r"\D", "", detail_ein) != ein_digits:
             return checker.reject_wrong_ein_result(result, "Hawaii")
+        exact_detail_ein_match = bool(ein_digits and detail_ein and re.sub(r"\D", "", detail_ein) == ein_digits)
         status_text = checker.extract_labeled_value(page, ["Registration Status", "Status"]) or checker.extract_labeled_value_from_text(detail_text, ["Registration Status", "Status"])
         registration_type = checker.extract_labeled_value(page, ["Registration Type"]) or checker.extract_labeled_value_from_text(detail_text, ["Registration Type"])
         result.matched_registry_name = useful_registry_name(
@@ -9800,19 +9906,31 @@ def search_hi_precise(page, org):
             or clicked_result_name
         )
         result.matched_registry_identifier = detail_ein or clicked_result_identifier
-        if not result_registry_name_is_safe(result, org.organization_name, org.ein):
+        if not exact_detail_ein_match and not result_registry_name_is_safe(result, org.organization_name, org.ein):
             result.raw_status_text = "No matching organization record"
             result.status = checker.STATUS_NOT_REGISTERED
             result.source_note = "Hawaii search found a row, but the registry name did not safely match the requested organization."
             result.success = True
+            result.queries_attempted = list(attempted_queries)
+            result.source_attempts = [
+                f"Hawaii attempted prioritized FEIN/name queries: {', '.join(attempted_queries)}."
+            ] if attempted_queries else []
             return result
         result.raw_status_text = " | ".join(part for part in [
             f"Registration Status: {status_text}" if status_text else "",
             f"Registration Type: {registration_type}" if registration_type else "",
         ]) or status_text
         result.status = status_text if status_text else checker.STATUS_UNKNOWN
-        result.source_note = "Registration status and filings from Hawaii detail page."
+        result.source_note = (
+            "Hawaii detail page confirmed the requested FEIN exactly; registration status and filings are from the Hawaii detail page."
+            if exact_detail_ein_match
+            else "Registration status and filings from Hawaii detail page."
+        )
         result.success = True
+        result.queries_attempted = list(attempted_queries)
+        result.source_attempts = [
+            f"Hawaii attempted prioritized FEIN/name queries: {', '.join(attempted_queries)}."
+        ] if attempted_queries else []
         return result
     except Exception as e:
         result.error = f"HI error: {e}"
@@ -9995,6 +10113,26 @@ def wi_search_names_for_org(org) -> list[str]:
                 names.append(value)
 
     original_name = getattr(org, "organization_name", "")
+    original_no_article = re.sub(r"^(?:the|a|an)\s+", "", original_name or "", flags=re.I).strip()
+    wi_early_distinctive_tokens: set[str] = set()
+    if original_no_article and original_no_article.lower() != (original_name or "").strip().lower():
+        original_no_article_no_suffix = re.sub(
+            r"(?:,\s*)?\b(?:inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited|foundation|fund)\b\.?\s*$",
+            "",
+            original_no_article,
+            flags=re.I,
+        ).strip(" ,;-")
+        add_many([original_no_article_no_suffix, original_no_article])
+    wi_early_distinctive_skip = {
+        "association", "center", "centre", "charity", "children", "childrens",
+        "college", "community", "foundation", "fund", "hospital", "hospitals",
+        "institute", "international", "medical", "national", "organization",
+        "society", "trust", "university",
+    }
+    for token in search_query_tokens(original_name):
+        if len(token) >= 8 and token not in wi_early_distinctive_skip:
+            wi_early_distinctive_tokens.add(token.lower())
+            add_many([token.upper(), token.title()])
     us_core_source = re.sub(
         r"^(?:the\s+)?(?:u\.?\s*s\.?|u\s+s|us)\s+",
         "US ",
@@ -10233,6 +10371,13 @@ def wi_search_names_for_org(org) -> list[str]:
             return (-7, 1, cleaned.lower())
         if "us_core_no_punct" in locals() and us_core_no_punct and cleaned.lower() == us_core_no_punct.lower():
             return (-7, 2, cleaned.lower())
+        word_rank = -min(len(cleaned.split()), 8)
+        if "original_no_article_no_suffix" in locals() and original_no_article_no_suffix and cleaned.lower() == original_no_article_no_suffix.lower():
+            return (-6, word_rank, cleaned.lower())
+        if original_no_article and cleaned.lower() == original_no_article.lower():
+            return (-6, word_rank + 1, cleaned.lower())
+        if cleaned.lower() in wi_early_distinctive_tokens:
+            return (-5, word_rank, cleaned.lower())
         if re.match(r"^US\s+", cleaned, re.I):
             if re.search(r"[-,/]", cleaned):
                 return (-4, min(len(cleaned.split()), 8), cleaned.lower())
@@ -10248,7 +10393,6 @@ def wi_search_names_for_org(org) -> list[str]:
         has_safe_hyphen = bool(re.search(r"[-\u2010-\u2015]", cleaned)) and generated_hyphen_variant_is_safe(cleaned)
         starts_article = bool(re.match(r"^(?:the|a|an)\s+", cleaned, re.I))
         exact_seed = cleaned.lower() in seed_key_names
-        word_rank = -min(len(cleaned.split()), 8)
         compact = re.sub(r"[^A-Za-z0-9]+", "", cleaned)
         if (
             5 <= len(compact) <= 8
@@ -12077,6 +12221,22 @@ def search_nj_direct(page, org):
         result.matched_registry_name = registry_name
         nj_context = nj_filing_context_from_body(body)
         nj_due_date = nj_context.get("computed_due_date")
+        if (
+            not nj_due_date
+            and re.search(r"\b(compliant|current|active)\b", status or "", re.I)
+            and (not ein_digits or ein_digits in re.sub(r"\D", "", body or ""))
+        ):
+            try:
+                time.sleep(1.0)
+                retry_body = nj_detail_body(page, org)
+                retry_context = nj_filing_context_from_body(retry_body)
+                retry_due_date = retry_context.get("computed_due_date")
+                if retry_due_date:
+                    body = retry_body
+                    nj_context = retry_context
+                    nj_due_date = retry_due_date
+            except Exception:
+                pass
         result.raw_status_text = status or "Status not found"
         if nj_due_date:
             result.raw_status_text = f"{result.raw_status_text} | Next Filing Due: {format_date(nj_due_date)}"
@@ -12100,15 +12260,15 @@ def search_nj_direct(page, org):
             result.status = status_from_calendar_date(nj_due_date)
             result.source_note = "New Jersey raw Status was checked against fiscal-period due-date evidence from the public page."
         elif re.search(r"\b(compliant|current|active)\b", status, re.I):
-            result.status = "Unable to Verify"
+            result.status = checker.STATUS_CURRENT
             result.raw_status_text = f"{result.raw_status_text} | NJ filing-period evidence not visible"
             result.source_note = (
                 "New Jersey returned an exact registry status, but CharityClarity did not retrieve a usable "
-                "last accepted fiscal period or due-date section from the public page. No final Current/Upcoming/Delinquent "
-                "classification was made from raw status alone."
+                "last accepted fiscal period or due-date section from the public page. CharityClarity returned Current "
+                "based on New Jersey's raw Compliant/Active registry status."
             )
-            result.source_confidence = "status_without_filing_period_evidence"
-            result.status_reason = "NJ_MISSING_FILING_PERIOD_EVIDENCE"
+            result.source_confidence = "raw_status_without_filing_period_evidence"
+            result.status_reason = "NJ_RAW_COMPLIANT_STATUS_NO_FILING_PERIOD_EVIDENCE"
         else:
             result.status = status or checker.STATUS_UNKNOWN
         if not result.source_note:
@@ -12167,30 +12327,51 @@ def search_pa_with_name_fallback(page, org):
     url = "https://www.charities.pa.gov/#/page/searchCharities"
     safe_targets = organization_match_target_variants(org.organization_name, org.ein)
     fallback_started = time.monotonic()
+    attempted_variants: list[str] = []
     try:
         fallback_budget_seconds = float(os.environ.get("CE_PA_NAME_FALLBACK_SECONDS", "20"))
     except Exception:
         fallback_budget_seconds = 20.0
-    for variant in organization_name_variants(
+    variants = build_search_queries(
         org.organization_name,
         org.ein,
+        include_ein=False,
         include_ein_aliases=True,
         include_name_segments=True,
         include_compact_legal_suffixes=True,
         include_leading_article_variants=True,
-        include_broad_query_prefixes=False,
-    )[:4]:
+        max_queries=8,
+    )
+    for variant in variants:
         if time.monotonic() - fallback_started > fallback_budget_seconds:
             result.source_note = (
                 (result.source_note or "PA search results did not contain a matching EIN row.")
                 + " Pennsylvania name fallback was bounded to preserve bulk reliability."
             )
+            result.queries_attempted = list(attempted_variants)
             return result
+        attempted_variants.append(variant)
         fallback = checker.StateResult(org.organization_name, org.ein, "PA", checker.STATUS_UNKNOWN, url)
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=12000)
             checker.safe_wait_for_network_idle(page, timeout=2500)
             time.sleep(0.4)
+            try:
+                clear_button = page.get_by_role("button", name=re.compile(r"^Clear$", re.I))
+                if clear_button.count() > 0 and clear_button.first.is_visible(timeout=500):
+                    clear_button.first.click(timeout=1500)
+                    page.wait_for_timeout(300)
+            except Exception:
+                pass
+            try:
+                criteria = page.locator('select[name="searchCriteria"], select[ng-model*="searchCriteria" i]').first
+                if criteria.count() > 0 and criteria.is_visible(timeout=500):
+                    criteria.select_option(label="Contains", timeout=1000)
+            except Exception:
+                try:
+                    criteria.select_option(index=0, timeout=1000)
+                except Exception:
+                    pass
             name_input = checker.find_visible_input(page, [
                 'input[name*="CharityName" i]',
                 'input[ng-model*="name" i]',
@@ -12201,12 +12382,47 @@ def search_pa_with_name_fallback(page, org):
             ])
             if not name_input:
                 continue
+            for stale_selector in [
+                'input[name="EIN" i]',
+                'input[placeholder*="EIN" i]',
+                'input[name*="cert" i]',
+                'input[placeholder*="Certificate" i]',
+                'input[name*="address" i]',
+                'input[placeholder*="Address" i]',
+                'input[name="city" i]',
+                'input[placeholder*="City" i]',
+                'input[name="zip" i]',
+                'input[placeholder*="ZIP" i]',
+            ]:
+                try:
+                    stale_inputs = page.locator(stale_selector)
+                    for stale_index in range(min(stale_inputs.count(), 4)):
+                        stale_input = stale_inputs.nth(stale_index)
+                        if stale_input.is_visible(timeout=250):
+                            stale_input.fill("")
+                except Exception:
+                    continue
             name_input.fill("")
             name_input.fill(variant)
             if not checker.click_pa_search_button(page):
                 continue
             checker.safe_wait_for_network_idle(page, timeout=5000)
-            time.sleep(0.8)
+            result_wait_deadline = time.monotonic() + 4.0
+            while time.monotonic() < result_wait_deadline:
+                try:
+                    body_probe = page.locator("body").inner_text(timeout=1500)
+                    body_probe_norm = normalized_match_name(body_probe)
+                    variant_norm = normalized_match_name(variant)
+                    if variant_norm and variant_norm in body_probe_norm:
+                        break
+                    if (
+                        time.monotonic() > result_wait_deadline - 1.0
+                        and re.search(r"No\s+data\s+available|Showing\s+0\s+to\s+0\s+of\s+0", body_probe, re.I)
+                    ):
+                        break
+                except Exception:
+                    pass
+                page.wait_for_timeout(400)
             candidates = []
             for selector in ["tbody tr", "tr", "[role='row']"]:
                 try:
@@ -12251,14 +12467,26 @@ def search_pa_with_name_fallback(page, org):
                 fallback.status = status_from_calendar_date(expiration_date)
             else:
                 status_text = checker.extract_labeled_value_from_text(row_text, ["Status", "Registration Status"]) if hasattr(checker, "extract_labeled_value_from_text") else ""
-                fallback.raw_status_text = status_text or "Pennsylvania name result found"
-                fallback.status = status_text or checker.STATUS_UNKNOWN
-            fallback.source_note = "Pennsylvania name search found a matching row after the EIN search returned no matching record."
+                if status_text:
+                    fallback.raw_status_text = status_text
+                    fallback.status = status_text
+                else:
+                    fallback.raw_status_text = "Pennsylvania name row found with blank EIN, expiration date, and status fields"
+                    fallback.status = checker.STATUS_DELINQUENT
+                    fallback.reason_code = "PA_SAFE_NAME_MATCH_BLANK_FILING_DATA"
+            fallback.source_note = (
+                "Pennsylvania EIN search returned no matching row, but name fallback found a safe matching organization row. "
+                "Because PA exposed no EIN, expiration date, or usable status on that row, CharityClarity treats the record as Delinquent."
+                if fallback.status == checker.STATUS_DELINQUENT and getattr(fallback, "reason_code", "") == "PA_SAFE_NAME_MATCH_BLANK_FILING_DATA"
+                else "Pennsylvania name search found a matching row after the EIN search returned no matching record."
+            )
+            fallback.queries_attempted = list(attempted_variants)
             fallback.success = True
             return fallback
         except Exception as exc:
             fallback.error = f"PA name fallback error: {exc}"
             continue
+    result.queries_attempted = list(attempted_variants)
     return result
 
 
@@ -14743,6 +14971,21 @@ def ms_short_prefix_name_mismatch(original_name: str, candidate_name: str) -> bo
 def ms_registry_name_is_safe(candidate_name: str, original_name: str, ein: str = "") -> bool:
     if ms_short_prefix_name_mismatch(original_name, candidate_name):
         return False
+    original_words_for_acronym = [
+        word
+        for word in re.findall(r"[A-Za-z0-9]+", normalized_match_name(original_name))
+        if word not in {"the", "a", "an", "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited"}
+    ]
+    candidate_words_for_acronym = [
+        word
+        for word in re.findall(r"[A-Za-z0-9]+", normalized_match_name(candidate_name))
+        if word not in {"the", "a", "an", "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited"}
+    ]
+    if original_words_for_acronym and candidate_words_for_acronym[: len(original_words_for_acronym)] == original_words_for_acronym:
+        extra_words = candidate_words_for_acronym[len(original_words_for_acronym) :]
+        acronym = "".join(word[0] for word in original_words_for_acronym if word)
+        if extra_words and "".join(extra_words) == acronym:
+            return True
     original_words = ms_words_for_match(normalized_match_name(original_name))
     candidate_words = ms_words_for_match(normalized_match_name(candidate_name))
     if len(original_words) == 1 and len(original_words[0]) <= 3 and len(candidate_words) <= 1:
@@ -14752,27 +14995,53 @@ def ms_registry_name_is_safe(candidate_name: str, original_name: str, ein: str =
 
 def ms_preferred_search_variants(name: str, ein: str = "") -> list[str]:
     variants = []
+    ms_single_token_noise = {
+        "association",
+        "center",
+        "centre",
+        "charity",
+        "children",
+        "childrens",
+        "college",
+        "community",
+        "foundation",
+        "fund",
+        "hospital",
+        "hospitals",
+        "institute",
+        "international",
+        "medical",
+        "national",
+        "society",
+        "trust",
+        "university",
+    }
 
-    def add(value: str) -> None:
+    def add(value: str, *, allow_short_prefix: bool = False) -> None:
         cleaned = re.sub(r"\s+", " ", (value or "").strip(" ,;-"))
         if (
             cleaned
             and not ms_search_variant_too_broad(cleaned)
-            and not ms_short_prefix_name_mismatch(name, cleaned)
+            and (allow_short_prefix or not ms_short_prefix_name_mismatch(name, cleaned))
             and cleaned.lower() not in {item.lower() for item in variants}
         ):
             variants.append(cleaned)
 
     seeds = [*category_preferred_name_variants(name), name]
+    for token in re.findall(r"[A-Za-z0-9]+", name or ""):
+        lowered = token.lower()
+        if len(lowered) >= 8 and lowered not in LOW_SIGNAL_MATCH_TOKENS and lowered not in ms_single_token_noise:
+            add(token.title(), allow_short_prefix=True)
     for query in build_search_queries(
         name,
         ein,
         include_ein=False,
         include_ein_aliases=True,
         include_name_segments=True,
-        max_queries=18,
+        max_queries=24,
     ):
-        add(query)
+        add(query, allow_short_prefix=True)
+    shared_variant_count = len(variants)
     for alias in known_names_for_ein(ein):
         if compatible_ein_alias_for_name(name, alias):
             seeds.append(alias)
@@ -14848,8 +15117,10 @@ def ms_preferred_search_variants(name: str, ein: str = "") -> list[str]:
             bucket = 5
         return (bucket, -len(re.findall(r"[A-Za-z0-9]+", cleaned)), cleaned.lower())
 
-    variants.sort(key=priority)
-    return variants
+    shared_variants = variants[:shared_variant_count]
+    local_variants = variants[shared_variant_count:]
+    local_variants.sort(key=priority)
+    return [*shared_variants, *local_variants]
 
 
 def ms_result_row_cells(row) -> list[str]:
@@ -17501,7 +17772,14 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                         nj_due_date = nj_context.get("computed_due_date")
                         if nj_due_date:
                             result.status = status_from_calendar_date(nj_due_date)
-                            result.raw_status_text = f"{result.raw_status_text or 'Status not found'} | Next Filing Due: {format_date(nj_due_date)}"
+                            existing_raw = re.sub(
+                                r"\s*\|\s*NJ filing-period evidence not visible\b",
+                                "",
+                                result.raw_status_text or "Status not found",
+                                flags=re.I,
+                            ).strip()
+                            existing_raw = re.sub(r"\s*\|\s*Next Filing Due:\s*\d{1,2}/\d{1,2}/\d{4}\b", "", existing_raw, flags=re.I).strip()
+                            result.raw_status_text = f"{existing_raw or 'Status not found'} | Next Filing Due: {format_date(nj_due_date)}"
                             if nj_context.get("last_year_on_record"):
                                 result.last_year_on_record = nj_context["last_year_on_record"]
                             fiscal_end = nj_context.get("fiscal_year_end")
