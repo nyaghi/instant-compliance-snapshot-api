@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.16.234-staging"
+APP_VERSION = "2026.06.16.235-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -12974,7 +12974,16 @@ def true_status_from_body(result, body: str) -> str:
         ar_status = explicit_ar_registry_status(result)
         if ar_status:
             return ar_status
-    if state == "OK" and re.search(r"Oklahoma annual registration is tied to the Form 990 filing deadline", result.source_note or "", re.I):
+    if (
+        state == "OK"
+        and normalized in {"current", "upcoming filing", "delinquent"}
+        and re.search(
+            r"Oklahoma annual registration is tied to the Form 990 filing deadline|"
+            r"Oklahoma uses the latest filing-history entry to classify the annual registration cycle",
+            result.source_note or "",
+            re.I,
+        )
+    ):
         return base_status
     if state == "NH":
         _, effective_report_due = nh_effective_report_due_date(result, body)
