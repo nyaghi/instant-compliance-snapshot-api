@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.16.236-staging"
+APP_VERSION = "2026.06.17.237-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -354,7 +354,7 @@ WI_REQUIRE_COMPLETE_SNAPSHOT = os.environ.get("CE_WI_REQUIRE_COMPLETE_SNAPSHOT",
 WI_SNAPSHOT_MAX_AGE_SECONDS = min(max(86400, int(os.environ.get("CE_WI_SNAPSHOT_MAX_AGE_SECONDS", str(14 * 86400)))), 45 * 86400)
 WI_SNAPSHOT_CACHE: dict[str, object] = {"loaded_at": 0.0, "mtime": 0.0, "snapshot": None, "name_index": None, "error": ""}
 WI_SNAPSHOT_LOCK = threading.Lock()
-AK_LOOKUP_TOTAL_BUDGET_SECONDS = min(max(25.0, float(os.environ.get("CE_AK_LOOKUP_TOTAL_BUDGET_SECONDS", "86"))), 110.0)
+AK_LOOKUP_TOTAL_BUDGET_SECONDS = min(max(25.0, float(os.environ.get("CE_AK_LOOKUP_TOTAL_BUDGET_SECONDS", "118"))), 140.0)
 AK_ACTION_TIMEOUT_MS = min(max(2500, int(os.environ.get("CE_AK_ACTION_TIMEOUT_MS", "5000"))), 10000)
 AK_RECENT_FILING_CUTOFF_YEAR = min(max(2020, int(os.environ.get("CE_AK_RECENT_FILING_CUTOFF_YEAR", "2023"))), 2100)
 AK_HISTORICAL_IDENTITY_FLOOR_YEAR = min(
@@ -7433,14 +7433,44 @@ def ct_direct_detail_text(row_html: str, timeout_seconds: float | None = None) -
         return ""
 
 
+def ct_identity_names_from_detail(detail_text: str) -> list[str]:
+    """Return CT detail-page identity aliases such as DBA names."""
+    text = re.sub(r"\s+", " ", detail_text or "").strip()
+    if not text:
+        return []
+    names: list[str] = []
+    labels = [
+        "DBA",
+        "DBA Name",
+        "Doing Business As",
+        "Business Name",
+        "Organization Name",
+        "Licensee Name",
+        "Name",
+    ]
+    for label in labels:
+        value = checker.extract_labeled_value_from_text(text, [label])
+        if value:
+            cleaned = useful_registry_name(value)
+            if cleaned and cleaned.lower() not in {name.lower() for name in names}:
+                names.append(cleaned)
+    for match in re.finditer(r"\b(?:DBA|Doing\s+Business\s+As)\b\s*:?\s*([A-Z0-9][A-Za-z0-9 &'.,/-]{2,90})", text, re.I):
+        cleaned = useful_registry_name(match.group(1))
+        if cleaned and cleaned.lower() not in {name.lower() for name in names}:
+            names.append(cleaned)
+    return names
+
+
 def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: str):
     row_text = html_fragment_text(row_html)
     name_match = re.search(r"<b[^>]*headline6[^>]*>(.*?)</b>", row_html, re.I | re.S)
     row_name = clean_registry_name(html_fragment_text(name_match.group(1)) if name_match else re.split(r"\bCredential\b|\bStatus\b|\bLicense\b", row_text, maxsplit=1, flags=re.I)[0])
-    name_score = target_name_score(row_name, safe_targets)
+    detail_text = ct_direct_detail_text(row_html, timeout_seconds=3.0)
+    identity_names = [row_name, *ct_identity_names_from_detail(detail_text)]
+    scored_names = [(target_name_score(name, safe_targets), name) for name in identity_names if name]
+    name_score, best_identity_name = max(scored_names, default=(-10000, row_name), key=lambda item: item[0])
     if name_score < 0:
         return None, name_score
-    detail_text = ct_direct_detail_text(row_html, timeout_seconds=3.0)
     pairs: dict[str, str] = {}
     for label_html, value_html in re.findall(r"<b[^>]*>(.*?)</b>\s*<p[^>]*>(.*?)</p>", row_html, re.I | re.S):
         label = html_fragment_text(label_html).strip(": ")
@@ -7478,7 +7508,11 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
             f"Expiration Date {format_date(exp_date)}" if exp_date else "",
         ]
     ) or row_text[:500]
-    result.source_note = "Connecticut public registry AJAX search result row selected by strict organization-name match."
+    if normalized_match_name(best_identity_name) != normalized_match_name(row_name):
+        result.source_note = f"Connecticut public registry detail page confirmed DBA/alias identity: {best_identity_name}."
+        result.identity_anchor = "CT_DETAIL_DBA_ALIAS"
+    else:
+        result.source_note = "Connecticut public registry AJAX search result row selected by strict organization-name match."
     result.success = True
     score = name_score
     if re.search(r"\bPUBLIC\s+CHARITY\b|\bCHR\.", combined, re.I):
@@ -7491,6 +7525,68 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
         score += 10
     if re.search(r"\bINACTIVE\b|\bCLOSED\b|\bWITHDRAWN\b|\bCANCEL(?:ED|LED)\b", combined, re.I):
         score -= 100
+    return result, score
+
+
+def ct_direct_result_from_text(org, response_text: str, safe_targets: list[str], url: str):
+    row_text = html_fragment_text(response_text)
+    if not re.search(r"\b(PUBLIC\s+CHARITY|CHR\.)\b", row_text, re.I):
+        return None, -10000
+    row_name = clean_registry_name(
+        re.split(r"\bCredential\b|\bStatus\b|\bLicense\b", row_text, maxsplit=1, flags=re.I)[0]
+    )
+    dba_name = text_between_labels(row_text, "DBA", ["Details", "Credential", "Status"]) or ""
+    identity_names = [row_name, useful_registry_name(dba_name)]
+    scored_names = [(target_name_score(name, safe_targets), name) for name in identity_names if name]
+    name_score, best_identity_name = max(scored_names, default=(-10000, row_name), key=lambda item: item[0])
+    if name_score < 0:
+        return None, name_score
+    credential = text_between_labels(row_text, "Credential", ["Credential Description", "Department", "Status"])
+    credential_description = text_between_labels(row_text, "Credential Description", ["Department", "Status", "Status Reason"])
+    status_text = text_between_labels(row_text, "Status", ["Status Reason", "City", "DBA", "Details"])
+    status_reason = text_between_labels(row_text, "Status Reason", ["City", "DBA", "Details"])
+    exp_date = first_date_near_label(row_text, ["Expiration Date", "Expiration", "Expires", "Expire Date"])
+    combined = " ".join([row_text, credential, credential_description, status_text, status_reason])
+    result = checker.StateResult(org.organization_name, org.ein, "CT", checker.STATUS_UNKNOWN, url)
+    result.matched_registry_name = row_name
+    credential_match = re.search(r"\b[A-Z]{2,5}\.[0-9A-Z.-]+", combined)
+    result.matched_registry_identifier = credential or (credential_match.group(0) if credential_match else "")
+    terminal_status_text = " ".join([status_text, status_reason, credential_description])
+    if re.search(r"\bEXEMPT\b", " ".join([credential, credential_description]), re.I):
+        result.status = "Exempt"
+    elif re.search(r"\bINACTIVE\b|\bCLOSED\b|\bWITHDRAWN\b|\bCANCEL(?:ED|LED)\b", terminal_status_text, re.I):
+        result.status = "Closed / Withdrawn / Canceled"
+    elif re.search(r"\b(non\W*compliant|not\s+in\s+compliance)\b", combined, re.I):
+        result.status = checker.STATUS_DELINQUENT
+    elif exp_date:
+        result.status = classify_expiration_date(exp_date)
+    elif re.search(r"\bACTIVE\b", status_text, re.I) and (not status_reason or re.search(r"\b(CURRENT|ACTIVE)\b", status_reason, re.I)):
+        result.status = checker.STATUS_CURRENT
+    elif re.search(r"\bCURRENT\b", combined, re.I):
+        result.status = checker.STATUS_CURRENT
+    result.raw_status_text = " | ".join(
+        item for item in [
+            f"Status: {status_text}" if status_text else "",
+            f"Status Reason: {status_reason}" if status_reason else "",
+            f"Credential Description: {credential_description}" if credential_description else "",
+            f"Expiration Date {format_date(exp_date)}" if exp_date else "",
+        ]
+    ) or row_text[:500]
+    if normalized_match_name(best_identity_name) != normalized_match_name(row_name):
+        result.source_note = f"Connecticut public registry AJAX result confirmed DBA/alias identity: {best_identity_name}."
+        result.identity_anchor = "CT_AJAX_DBA_ALIAS"
+    else:
+        result.source_note = "Connecticut public registry AJAX text result selected by strict organization-name match."
+    result.success = True
+    score = name_score
+    if re.search(r"\bPUBLIC\s+CHARITY\b|\bCHR\.", combined, re.I):
+        score += 80
+    if re.search(r"\bACTIVE\b", status_text, re.I):
+        score += 80
+    if re.search(r"\bCURRENT\b", status_reason, re.I):
+        score += 80
+    if re.search(r"\bEXEMPT\b", combined, re.I):
+        score += 10
     return result, score
 
 
@@ -7595,6 +7691,11 @@ def search_ct_direct(org):
             if not re.search(r"\b(PUBLIC\s+CHARITY|CHR\.)\b", html_fragment_text(row_html), re.I):
                 continue
             result, score = ct_direct_result_from_row(org, row_html, safe_targets, url)
+            if result and score > best_score:
+                best_result = result
+                best_score = score
+        if not best_result:
+            result, score = ct_direct_result_from_text(org, body, safe_targets, url)
             if result and score > best_score:
                 best_result = result
                 best_score = score
@@ -7963,16 +8064,19 @@ def search_fl(page, org):
                     time.sleep(min(1, remaining_seconds()))
         raise last_error
 
-    generated_variants = organization_name_variants(
-        original_name,
-        org.ein,
-        include_ein_aliases=True,
-        include_name_segments=True,
-        include_and_segments=False,
-        include_compact_legal_suffixes=True,
-        include_leading_article_variants=True,
-        include_broad_query_prefixes=False,
-    )
+    generated_variants = [
+        *high_signal_search_phrases(original_name),
+        *organization_name_variants(
+            original_name,
+            org.ein,
+            include_ein_aliases=False,
+            include_name_segments=True,
+            include_and_segments=False,
+            include_compact_legal_suffixes=True,
+            include_leading_article_variants=True,
+            include_broad_query_prefixes=False,
+        ),
+    ]
     original_has_hyphen = "-" in (original_name or "")
     variants = []
     variant_keys = set()
@@ -8322,6 +8426,10 @@ def search_mn(page, org):
             except Exception:
                 continue
             detail_text = readable_page_text(page)
+            federal_match = re.search(r"FEDERAL\s+ID#?\s*([0-9-]+)", detail_text, re.I)
+            detail_ein_digits = re.sub(r"\D", "", federal_match.group(1)) if federal_match else ""
+            if ein_digits and detail_ein_digits and detail_ein_digits != ein_digits:
+                continue
             year_match = re.search(r"(?:Fiscal\s+Year\s+Ending|For\s+Fiscal\s+Year\s+Ending)\s*:?\s*(?:\d{1,2}[/-]\d{1,2}[/-])?(20\d{2})", detail_text, re.I)
             year = int(year_match.group(1)) if year_match else None
             status_line = text_between_labels(detail_text, "Status", ["Extension", "Financial Information", "For Fiscal Year Ending"])
@@ -8336,7 +8444,6 @@ def search_mn(page, org):
             ])
             result.source_note = "MN tried EIN search first, then used the public organization-name search when the EIN field returned no exact result."
             result.matched_registry_name = clean_registry_name(best_name or checker.extract_labeled_value_from_text(detail_text, ["Organization Name", "Charity Name", "Name"]))
-            federal_match = re.search(r"FEDERAL\s+ID#?\s*([0-9-]+)", detail_text, re.I)
             result.matched_registry_identifier = federal_match.group(1) if federal_match else ""
             result.success = True
             return result
@@ -11893,25 +12000,25 @@ def nj_detail_body(page, org) -> str:
 
     if clicked:
         try:
-            checker.safe_wait_for_network_idle(page, timeout=20000)
+            checker.safe_wait_for_network_idle(page, timeout=8000)
         except Exception:
             pass
-        time.sleep(3)
+        time.sleep(1)
         for frame in page.frames:
             try:
                 if "CHR-Public-Details-Page" not in (frame.url or ""):
                     continue
-                frame.locator("body").wait_for(state="visible", timeout=8000)
+                frame.locator("body").wait_for(state="visible", timeout=3000)
                 for selector in ["#crsm_fiscalyearenddate", "text=/Fiscal Year End/i", "text=/Financial Statement/i"]:
                     try:
-                        frame.locator(selector).first.wait_for(state="attached", timeout=10000)
+                        frame.locator(selector).first.wait_for(state="attached", timeout=3000)
                         break
                     except Exception:
                         continue
                 for y in [0, 600, 1200, 1800, 2400]:
                     try:
                         frame.evaluate("(value) => window.scrollTo(0, value)", y)
-                        time.sleep(0.5)
+                        time.sleep(0.2)
                     except Exception:
                         pass
                     try:
@@ -11922,7 +12029,7 @@ def nj_detail_body(page, org) -> str:
                     except Exception:
                         pass
                 try:
-                    pieces.append(frame.locator("body").inner_text(timeout=8000))
+                    pieces.append(frame.locator("body").inner_text(timeout=3000))
                     pieces.append(frame.content())
                 except Exception:
                     pieces.append(frame.content())
@@ -11932,13 +12039,13 @@ def nj_detail_body(page, org) -> str:
         for label in ["Filings", "Annual Filings", "Financial", "Documents", "View Details"]:
             try:
                 page.get_by_text(re.compile(label, re.I)).first.click(timeout=3000)
-                time.sleep(2)
+                time.sleep(0.75)
                 break
             except Exception:
                 continue
         try:
             page.locator("body").evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            time.sleep(1)
+            time.sleep(0.5)
         except Exception:
             pass
         for selector in ["[role='dialog']", ".ms-Dialog-main", ".ms-Modal-scrollableContent", ".ms-Panel-scrollableContent", ".modal-content"]:
@@ -11950,7 +12057,7 @@ def nj_detail_body(page, org) -> str:
                         if not container.is_visible(timeout=750):
                             continue
                         container.evaluate("el => { el.scrollTop = el.scrollHeight; }")
-                        time.sleep(1)
+                        time.sleep(0.5)
                     except Exception:
                         continue
             except Exception:
@@ -11958,7 +12065,7 @@ def nj_detail_body(page, org) -> str:
         try:
             page.get_by_text(re.compile(r"20\d{2}|Filing|Annual|Renewal|Financial", re.I)).last.scroll_into_view_if_needed(timeout=5000)
             page.locator("body").evaluate("window.scrollBy(0, -140)")
-            time.sleep(1)
+            time.sleep(0.5)
         except Exception:
             pass
         pieces.append(registry_page_body(page))
@@ -14513,13 +14620,15 @@ def nh_should_try_xlsx_before_pdf() -> bool:
 
 
 def nh_download_live_pdf_records() -> tuple[list[dict], str]:
-    if nh_should_try_xlsx_before_pdf():
-        try:
-            xlsx_records, xlsx_label = nh_download_xlsx_records()
-            if xlsx_records:
-                return xlsx_records, xlsx_label
-        except Exception:
-            pass
+    # Prefer the structured weekly workbook when it is packaged. The PDF text
+    # extractor can drop rows or splice address fields into names, while the
+    # workbook preserves registry rows and due dates cleanly.
+    try:
+        xlsx_records, xlsx_label = nh_download_xlsx_records()
+        if xlsx_records:
+            return xlsx_records, xlsx_label
+    except Exception:
+        pass
     if PdfReader is None:
         return [], ""
     pdf_source = NH_LIVE_PDF_URL
@@ -16955,7 +17064,27 @@ def search_wa_nm_state(org, state: str):
             )
     elif state == "NM":
         external_result = search_nm_status_history_fallback(org, module)
-        if external_status_to_checker_status(getattr(external_result, "status", "")) == checker.STATUS_UNKNOWN:
+        fallback_status = external_status_to_checker_status(getattr(external_result, "status", ""))
+        fallback_text = " ".join([
+            getattr(external_result, "raw_status_text", "") or "",
+            getattr(external_result, "source_note", "") or "",
+            getattr(external_result, "error", "") or "",
+        ])
+        should_try_hosted_nm = fallback_status == checker.STATUS_UNKNOWN or (
+            fallback_status in {"Unable to Verify", "Unable to Confirm", "Site Not Reachable"}
+            and re.search(
+                r"reader\s+lookup\s+could\s+not\s+be\s+completed|sidecar\s+lookup\s+could\s+not\s+be\s+completed|"
+                r"did\s+not\s+read\s+usable\s+Status\s+History|incomplete\s+identity/status\s+evidence",
+                fallback_text,
+                re.I,
+            )
+            and not re.search(
+                r"Cloudflare|you\s+have\s+been\s+blocked|Ray\s+ID|CAPTCHA|human\s+verification",
+                fallback_text,
+                re.I,
+            )
+        )
+        if should_try_hosted_nm:
             hosted_result = module.search_nm(external_org, show_process=False)
             hosted_status = external_status_to_checker_status(getattr(hosted_result, "status", ""))
             hosted_raw = " ".join([
@@ -17009,8 +17138,43 @@ def search_wa_nm_state(org, state: str):
             getattr(copied, "source_note", "") or "",
         ])
         has_registry_identifier = bool((getattr(copied, "matched_registry_identifier", "") or "").strip())
+        has_registry_name = bool((getattr(copied, "matched_registry_name", "") or "").strip())
         has_due_or_fye = bool(re.search(r"\b(?:FYE|Fiscal\s+Year\s+End|Due)\s*:", nm_text, re.I))
         if not has_registry_identifier and not has_due_or_fye:
+            if (
+                re.search(
+                    r"incomplete\s+identity/status\s+evidence|without\s+a\s+registry\s+identifier|"
+                    r"identity\s+confidence\s+was\s+insufficient|"
+                    r"status-history\s+rows\s+without\s+a\s+(?:visible\s+)?charity\s+name|"
+                    r"Status\s+History\s+rows\s+but\s+no\s+visible\s+charity-name\s+header|"
+                    r"did\s+not\s+expose\s+a\s+confirmed\s+NM\s+charity\s+identity|"
+                    r"no\s+confirmed\s+charity\s+identity",
+                    nm_text,
+                    re.I,
+                )
+                and not re.search(
+                    r"could\s+not\s+be\s+completed|reader\s+error|sidecar\s+error|"
+                    r"upstream\s+block|Cloudflare|you\s+have\s+been\s+blocked|Ray\s+ID|timeout",
+                    nm_text,
+                    re.I,
+                )
+            ):
+                copied.status = checker.STATUS_NOT_REGISTERED
+                copied.raw_status_text = (
+                    "Completed New Mexico lookup found no confirmed charity identity, registry identifier, "
+                    "or filing due-date evidence for the requested FEIN."
+                )
+                copied.source_note = (
+                    "CharityClarity completed the New Mexico lookup path, but the state response did not expose "
+                    "a confirmed NM charity identity, registry identifier, or filing history that could be tied "
+                    "to this FEIN. CharityClarity treats this as a completed no-match result."
+                )
+                copied.reason_code = "NO_CONFIRMED_NM_IDENTITY_AFTER_COMPLETED_SEARCH"
+                copied.source_confidence = "completed_nm_no_confirmed_identity"
+                copied.identity_confidence = "no_confirmed_identity"
+                copied.success = True
+                copied.error = ""
+                return copied
             copied.status = "Unable to Verify"
             copied.raw_status_text = (
                 "New Mexico returned incomplete identity/status evidence without a registry identifier "
