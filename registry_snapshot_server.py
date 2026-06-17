@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.17.237-staging"
+APP_VERSION = "2026.06.17.238-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -3490,6 +3490,8 @@ def registry_name_is_safe_against_targets(registry_name: str, targets: list[str]
         return False
     if named_jurisdiction_scope_conflict(original_name, registry_name):
         return False
+    if named_geographic_scope_conflict(original_name, registry_name):
+        return False
     if registry_name_is_safe_for_org(registry_name, original_name, ein):
         return True
     if (
@@ -3512,6 +3514,8 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
     if normalized_match_name(registry_name) == normalized_match_name(original_name):
         return True
     if named_jurisdiction_scope_conflict(original_name, registry_name):
+        return False
+    if named_geographic_scope_conflict(original_name, registry_name):
         return False
     if not has_sufficient_identity_overlap(original_name, registry_name, ein):
         return False
@@ -3589,6 +3593,45 @@ def named_jurisdiction_scope_conflict(original_name: str, registry_name: str) ->
     original_scope = scoped_phrase(original_norm)
     registry_scope = scoped_phrase(registry_norm)
     return bool(original_scope and registry_scope and original_scope != registry_scope)
+
+
+def named_geographic_scope_conflict(original_name: str, registry_name: str) -> bool:
+    """Reject broad parent records when the requested legal name has a named geographic scope."""
+    original_norm = normalized_match_name(original_name)
+    registry_norm = normalized_match_name(registry_name)
+    if not original_norm or not registry_norm or original_norm == registry_norm:
+        return False
+
+    scoped_phrases = {
+        "new york state": ("new york state", "new york", "ny"),
+        "new york": ("new york", "ny"),
+        "california": ("california", "ca"),
+        "florida": ("florida", "fl"),
+        "texas": ("texas", "tx"),
+        "virginia": ("virginia", "va"),
+        "west virginia": ("west virginia", "wv"),
+        "south carolina": ("south carolina", "sc"),
+        "north carolina": ("north carolina", "nc"),
+    }
+    generic_scope_words = {
+        "the", "a", "an", "of", "for", "and", "in", "to", "state", "states",
+        "inc", "incorporated", "corp", "corporation", "foundation", "fund",
+        "association", "associations", "organization", "organizations",
+        "committee", "committees", "council", "councils",
+    }
+    scope_markers = r"\b(?:of|for|in|state\s+of|associations?\s+of|committee\s+for|foundation\s+of)\b"
+    for phrase, acceptable_registry_phrases in scoped_phrases.items():
+        if phrase not in original_norm:
+            continue
+        if not re.search(scope_markers, original_norm):
+            continue
+        if any(accepted in registry_norm for accepted in acceptable_registry_phrases):
+            continue
+        original_words = [word for word in original_norm.split() if word not in generic_scope_words]
+        registry_words = [word for word in registry_norm.split() if word not in generic_scope_words]
+        if len(registry_words) <= max(3, len(original_words) - 2):
+            return True
+    return False
 
 
 def long_truncated_registry_name_match(original_name: str, registry_name: str) -> bool:
@@ -7602,6 +7645,8 @@ def ct_prioritized_name_variants(original_name: str, variants: list[str]) -> lis
             prioritized.append(cleaned)
 
     base = re.sub(r"\s+", " ", (original_name or "").strip())
+    for variant in variants:
+        add(variant)
     for variant in high_signal_search_phrases(base):
         add(variant)
     add(base)
@@ -7631,8 +7676,6 @@ def ct_prioritized_name_variants(original_name: str, variants: list[str]) -> lis
                 add(f"{without_suffix} {legal}")
                 add(f"{without_suffix}, {legal}")
         add(without_suffix)
-    for variant in variants:
-        add(variant)
     return prioritized
 
 
@@ -7647,13 +7690,15 @@ def search_ct_direct(org):
             for suffix in (f"{target} (THE)", f"{target}, THE", f"{target}, The"):
                 if suffix not in safe_targets:
                     safe_targets.append(suffix)
-    variants = ct_prioritized_name_variants(original_name, organization_name_variants(
+    variants = ct_prioritized_name_variants(original_name, build_search_queries(
         original_name,
         org.ein,
+        include_ein=False,
         include_ein_aliases=True,
         include_name_segments=True,
         include_compact_legal_suffixes=True,
         include_leading_article_variants=True,
+        max_queries=CT_NAME_VARIANT_LIMIT * 2,
     ))[:CT_NAME_VARIANT_LIMIT]
     best_result = None
     best_score = -10000
@@ -8350,14 +8395,15 @@ def search_mn(page, org):
             return result
         safe_targets = organization_match_target_variants(org.organization_name, org.ein)
         name_fallback_started = time.perf_counter()
-        for index, variant in enumerate(organization_name_variants(
+        for index, variant in enumerate(build_search_queries(
             org.organization_name,
             org.ein,
+            include_ein=False,
             include_ein_aliases=True,
             include_name_segments=True,
             include_compact_legal_suffixes=True,
             include_leading_article_variants=True,
-            include_broad_query_prefixes=False,
+            max_queries=MN_NAME_FALLBACK_MAX_VARIANTS,
         )[:MN_NAME_FALLBACK_MAX_VARIANTS]):
             if index > 0 and (time.perf_counter() - name_fallback_started) >= MN_NAME_FALLBACK_MAX_SECONDS:
                 break
@@ -12404,7 +12450,7 @@ def search_nj_with_name_fallback(page, org):
         include_name_segments=True,
         include_compact_legal_suffixes=True,
         include_leading_article_variants=True,
-        max_queries=6,
+        max_queries=int(os.environ.get("CE_NJ_NAME_FALLBACK_MAX_VARIANTS", "10")),
     ):
         if time.monotonic() - fallback_started > fallback_budget_seconds:
             result.source_note = (
@@ -12892,7 +12938,12 @@ def repair_ny_not_registered_with_due_date(org, result):
         ]).strip()
         result.success = True
         return result
-    due_match = re.search(r"\bDue\s*:?\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})", evidence_text, re.I)
+    due_match = re.search(
+        r"\b(?:Due|Filing\s+Due|Next\s+Filing\s+Due|Report\s+Due|Annual\s+Report\s+Due)\s*:?\s*"
+        r"(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+        evidence_text,
+        re.I,
+    )
     if not due_match:
         return result
     due_date = parse_due_date(due_match.group(1))
@@ -14620,30 +14671,25 @@ def nh_should_try_xlsx_before_pdf() -> bool:
 
 
 def nh_download_live_pdf_records() -> tuple[list[dict], str]:
-    # Prefer the structured weekly workbook when it is packaged. The PDF text
-    # extractor can drop rows or splice address fields into names, while the
-    # workbook preserves registry rows and due dates cleanly.
-    try:
-        xlsx_records, xlsx_label = nh_download_xlsx_records()
-        if xlsx_records:
-            return xlsx_records, xlsx_label
-    except Exception:
-        pass
+    if nh_should_try_xlsx_before_pdf():
+        try:
+            xlsx_records, xlsx_label = nh_download_xlsx_records()
+            if xlsx_records:
+                return xlsx_records, xlsx_label
+        except Exception:
+            pass
     if PdfReader is None:
         return [], ""
     pdf_source = NH_LIVE_PDF_URL
     try:
-        local_candidates = []
-        if NH_PREFER_ENV_PDF and NH_ENV_PDF_PATH is not None:
-            local_candidates.append(NH_ENV_PDF_PATH)
-        local_candidates.append(NH_BUNDLED_PDF_PATH)
-        if not NH_PREFER_ENV_PDF and NH_ENV_PDF_PATH is not None:
-            local_candidates.append(NH_ENV_PDF_PATH)
-        local_path = next((path for path in local_candidates if path.exists()), None)
-        if local_path is not None:
-            pdf_bytes = local_path.read_bytes()
-            pdf_source = str(local_path)
-        else:
+        local_path = None
+        if NH_PREFER_ENV_PDF:
+            local_candidates = []
+            if NH_ENV_PDF_PATH is not None:
+                local_candidates.append(NH_ENV_PDF_PATH)
+            local_candidates.append(NH_BUNDLED_PDF_PATH)
+            local_path = next((path for path in local_candidates if path.exists()), None)
+        if local_path is None:
             request = urllib.request.Request(
                 NH_LIVE_PDF_URL,
                 headers={
@@ -14657,6 +14703,9 @@ def nh_download_live_pdf_records() -> tuple[list[dict], str]:
             )
             with urllib.request.urlopen(request, timeout=30) as response:
                 pdf_bytes = response.read()
+        else:
+            pdf_bytes = local_path.read_bytes()
+            pdf_source = str(local_path)
     except Exception:
         if not NH_BUNDLED_PDF_PATH.exists():
             raise
@@ -14953,7 +15002,16 @@ def search_snapshot_or_embedded_state(org, state: str):
             max_queries=variant_limit,
         )
     elif state == "KS":
-        variants = organization_match_target_variants(original_name, org.ein)[:12]
+        variants = build_search_queries(
+            original_name,
+            org.ein,
+            include_ein=False,
+            include_ein_aliases=True,
+            include_name_segments=True,
+            include_compact_legal_suffixes=True,
+            include_leading_article_variants=True,
+            max_queries=12,
+        )
     else:
         variants = organization_name_variants(
             original_name,
@@ -14998,7 +15056,7 @@ def _search_snapshot_or_embedded_state_once(org, state: str):
         return search_nh_live_pdf(org)
     if state == "KS":
         module = load_ks_weekly_checker()
-        external_result = module.search_ks_snapshot(org.organization_name, ARTIFACTS_DIR / "KS")
+        external_result = module.search_ks_snapshot(org.organization_name, ARTIFACTS_DIR / "KS", org.ein)
         result = copy_external_result(org, state, external_result)
         if public_status(result) not in {"Not Registered", "Site Not Reachable"}:
             original_name = getattr(org, "original_organization_name", org.organization_name)

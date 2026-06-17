@@ -98,6 +98,7 @@ class KSRecord:
     city: str
     state: str
     zip_code: str
+    ein: str = ""
 
 
 @dataclass
@@ -523,6 +524,14 @@ def records_from_workbook_bytes(workbook_bytes: bytes) -> List[KSRecord]:
     city_idx = headers.get("city")
     state_idx = headers.get("state1")
     zip_idx = headers.get("zip")
+    ein_idx = next(
+        (
+            headers[key]
+            for key in ("ein", "fein", "federalein", "federalid", "taxid", "federaltaxid")
+            if key in headers
+        ),
+        None,
+    )
     if name_idx is None or status_idx is None:
         raise ValueError("Kansas workbook is missing expected Name/Status columns.")
 
@@ -542,6 +551,7 @@ def records_from_workbook_bytes(workbook_bytes: bytes) -> List[KSRecord]:
                 city=str(row[city_idx] or "").strip() if city_idx is not None and city_idx < len(row) else "",
                 state=str(row[state_idx] or "").strip() if state_idx is not None and state_idx < len(row) else "",
                 zip_code=str(row[zip_idx] or "").strip() if zip_idx is not None and zip_idx < len(row) else "",
+                ein=str(row[ein_idx] or "").strip() if ein_idx is not None and ein_idx < len(row) else "",
             )
         )
     return records
@@ -575,6 +585,23 @@ def find_best_match(records: Iterable[KSRecord], organization_name: str) -> Opti
     if not candidates:
         return None
     return max(candidates, key=lambda item: item[:3])[3]
+
+
+def find_ein_match(records: Iterable[KSRecord], ein: str) -> Optional[KSRecord]:
+    target = re.sub(r"\D", "", ein or "")
+    if not target:
+        return None
+    candidates: List[tuple[int, int, KSRecord]] = []
+    for record in records:
+        record_ein = re.sub(r"\D", "", record.ein or "")
+        if record_ein != target:
+            continue
+        status_rank = 1 if "REGISTERED" in (record.status or "").upper() else 0
+        expiration_rank = record.expire_date.toordinal() if record.expire_date else 0
+        candidates.append((status_rank, expiration_rank, record))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item[:2])[2]
 
 
 def make_snapshot_image(result: KSResult, artifacts_dir: Path) -> str:
@@ -776,7 +803,7 @@ def snapshot_metadata_note(page_url: str) -> str:
     return " ".join(parts)
 
 
-def search_ks_snapshot(organization_name: str, artifacts_dir: Optional[Path]) -> KSResult:
+def search_ks_snapshot(organization_name: str, artifacts_dir: Optional[Path], ein: str = "") -> KSResult:
     result = KSResult(
         organization_name=organization_name,
         status=STATUS_UNKNOWN,
@@ -794,7 +821,7 @@ def search_ks_snapshot(organization_name: str, artifacts_dir: Optional[Path]) ->
         return result
 
     result.source_url = workbook_url
-    match = find_best_match(records, organization_name)
+    match = find_ein_match(records, ein) or find_best_match(records, organization_name)
     if not match:
         result.status = STATUS_NOT_REGISTERED
         result.raw_status_text = "No matching organization row"
