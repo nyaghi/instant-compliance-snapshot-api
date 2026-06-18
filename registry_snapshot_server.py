@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.17.238-staging"
+APP_VERSION = "2026.06.18.239-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -354,13 +354,14 @@ WI_REQUIRE_COMPLETE_SNAPSHOT = os.environ.get("CE_WI_REQUIRE_COMPLETE_SNAPSHOT",
 WI_SNAPSHOT_MAX_AGE_SECONDS = min(max(86400, int(os.environ.get("CE_WI_SNAPSHOT_MAX_AGE_SECONDS", str(14 * 86400)))), 45 * 86400)
 WI_SNAPSHOT_CACHE: dict[str, object] = {"loaded_at": 0.0, "mtime": 0.0, "snapshot": None, "name_index": None, "error": ""}
 WI_SNAPSHOT_LOCK = threading.Lock()
-AK_LOOKUP_TOTAL_BUDGET_SECONDS = min(max(25.0, float(os.environ.get("CE_AK_LOOKUP_TOTAL_BUDGET_SECONDS", "118"))), 140.0)
+AK_LOOKUP_TOTAL_BUDGET_SECONDS = min(max(25.0, float(os.environ.get("CE_AK_LOOKUP_TOTAL_BUDGET_SECONDS", "76"))), 140.0)
 AK_ACTION_TIMEOUT_MS = min(max(2500, int(os.environ.get("CE_AK_ACTION_TIMEOUT_MS", "5000"))), 10000)
 AK_RECENT_FILING_CUTOFF_YEAR = min(max(2020, int(os.environ.get("CE_AK_RECENT_FILING_CUTOFF_YEAR", "2023"))), 2100)
 AK_HISTORICAL_IDENTITY_FLOOR_YEAR = min(
     AK_RECENT_FILING_CUTOFF_YEAR - 1,
     max(2015, int(os.environ.get("CE_AK_HISTORICAL_IDENTITY_FLOOR_YEAR", "2019"))),
 )
+AK_NAME_FALLBACK_AFTER_EIN_NO_ROWS = os.environ.get("CE_AK_NAME_FALLBACK_AFTER_EIN_NO_ROWS", "0").strip().lower() in {"1", "true", "yes"}
 NH_LIVE_PDF_URL = os.environ.get(
     "CE_NH_LIVE_PDF_URL",
     "https://mm.nh.gov/files/uploads/doj/remote-docs/registered-charities.pdf",
@@ -3492,6 +3493,8 @@ def registry_name_is_safe_against_targets(registry_name: str, targets: list[str]
         return False
     if named_geographic_scope_conflict(original_name, registry_name):
         return False
+    if embedded_institution_identity_conflict(original_name, registry_name):
+        return False
     if registry_name_is_safe_for_org(registry_name, original_name, ein):
         return True
     if (
@@ -3502,6 +3505,7 @@ def registry_name_is_safe_against_targets(registry_name: str, targets: list[str]
             related_affiliate_or_chapter_mismatch(original_name, registry_name)
             or broad_governance_name_mismatch(original_name, registry_name)
             or incompatible_institutional_prefix_expansion(original_name, registry_name)
+            or embedded_institution_identity_conflict(original_name, registry_name)
         )
     return False
 
@@ -3517,6 +3521,8 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
         return False
     if named_geographic_scope_conflict(original_name, registry_name):
         return False
+    if embedded_institution_identity_conflict(original_name, registry_name):
+        return False
     if not has_sufficient_identity_overlap(original_name, registry_name, ein):
         return False
     if related_affiliate_or_chapter_mismatch(original_name, registry_name):
@@ -3524,6 +3530,8 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
     if legal_trustee_entity_match(original_name, registry_name):
         return True
     if long_truncated_registry_name_match(original_name, registry_name):
+        return True
+    if institutional_wrapper_suffix_match(original_name, registry_name):
         return True
     if shared_distinctive_core_match(original_name, registry_name):
         return True
@@ -3634,6 +3642,60 @@ def named_geographic_scope_conflict(original_name: str, registry_name: str) -> b
     return False
 
 
+def embedded_institution_identity_conflict(original_name: str, registry_name: str) -> bool:
+    """Reject another institution that embeds the requested institution as a tail phrase."""
+    original_norm = normalized_match_name(original_name)
+    registry_norm = normalized_match_name(registry_name)
+    if not original_norm or not registry_norm or original_norm == registry_norm:
+        return False
+
+    original_norm = re.sub(r"^(?:the|a|an)\s+", "", original_norm).strip()
+    registry_norm = re.sub(r"^(?:the|a|an)\s+", "", registry_norm).strip()
+    if not original_norm or not registry_norm or original_norm == registry_norm:
+        return False
+
+    # Legal/support wrappers around the requested institution remain valid.
+    wrapper_pattern = (
+        r"^(?:foundation|fund|friends|trust|association|alumni|support(?:ing)?\s+organization)"
+        r"\s+(?:of|for)\s+(?:the\s+)?"
+        + re.escape(original_norm)
+        + r"(?:\s|$)"
+    )
+    if re.search(wrapper_pattern, registry_norm):
+        return False
+    if registry_norm.startswith(f"{original_norm} "):
+        suffix = registry_norm[len(original_norm):].strip()
+        allowed_suffix_words = {
+            "foundation", "fund", "trust", "association", "alumni", "inc", "incorporated",
+            "corp", "corporation", "llc", "ltd", "limited", "of", "at", "for", "the",
+            "colorado", "seminary",
+        }
+        suffix_words = suffix.split()
+        if suffix_words and all(word in allowed_suffix_words for word in suffix_words):
+            return False
+
+    marker = f" {original_norm} "
+    padded_registry = f" {registry_norm} "
+    if marker not in padded_registry:
+        return False
+    prefix = padded_registry.split(marker, 1)[0].strip()
+    prefix_words = [
+        word
+        for word in prefix.split()
+        if word not in {"the", "a", "an", "of", "for", "and", "at", "in"}
+    ]
+    if not prefix_words:
+        return False
+    identity_changing_prefixes = {
+        "metropolitan", "state", "county", "city", "regional", "local", "community",
+        "technical", "public", "private", "national", "international", "central",
+        "northern", "southern", "eastern", "western", "north", "south", "east", "west",
+        "college", "school", "university", "institute", "academy", "hospital", "medical",
+        "health", "system", "center", "centre", "department",
+    }
+    return any(word in identity_changing_prefixes for word in prefix_words)
+
+
 def long_truncated_registry_name_match(original_name: str, registry_name: str) -> bool:
     original_norm = normalized_match_name(original_name)
     registry_norm = normalized_match_name(registry_name)
@@ -3652,6 +3714,9 @@ def parenthetical_descriptor_match(original_name: str, registry_name: str) -> bo
     match = re.search(r"\(([^)]{2,80})\)\s*$", registry_name or "")
     if not match:
         return False
+    base_name = re.sub(r"\s*\([^)]{2,80}\)\s*$", "", registry_name or "").strip()
+    if normalized_match_name(base_name) == normalized_match_name(original_name):
+        return True
     descriptor_norm = normalized_match_name(match.group(1))
     if not descriptor_norm:
         return False
@@ -3662,7 +3727,6 @@ def parenthetical_descriptor_match(original_name: str, registry_name: str) -> bo
     }
     if any(word not in allowed_descriptor_words for word in descriptor_words):
         return False
-    base_name = re.sub(r"\s*\([^)]{2,80}\)\s*$", "", registry_name or "").strip()
     return normalized_match_name(base_name) == normalized_match_name(original_name)
 
 
@@ -3683,6 +3747,27 @@ def institutional_affiliation_suffix_match(original_name: str, registry_name: st
         return False
     blocked = {"chapter", "affiliate", "auxiliary", "alumni", "booster", "foundation", "fund"}
     return not any(word in blocked for word in suffix)
+
+
+def institutional_wrapper_suffix_match(original_name: str, registry_name: str) -> bool:
+    """Allow exact institution names followed only by legal/support wrapper words."""
+    original_norm = normalized_match_name(original_name)
+    registry_norm = normalized_match_name(registry_name)
+    if not original_norm or not registry_norm or original_norm == registry_norm:
+        return False
+    original_norm = re.sub(r"^(?:the|a|an)\s+", "", original_norm).strip()
+    registry_norm = re.sub(r"^(?:the|a|an)\s+", "", registry_norm).strip()
+    if not registry_norm.startswith(f"{original_norm} "):
+        return False
+    suffix_words = registry_norm[len(original_norm):].strip().split()
+    if not suffix_words or len(suffix_words) > 4:
+        return False
+    allowed_suffix_words = {
+        "foundation", "fund", "trust", "association", "alumni", "support",
+        "supporting", "organization", "inc", "incorporated", "corp",
+        "corporation", "llc", "ltd", "limited",
+    }
+    return all(word in allowed_suffix_words for word in suffix_words)
 
 
 def distinctive_core_words(value: str) -> list[str]:
@@ -3739,7 +3824,7 @@ def charitable_wrapper_short_name_match(original_name: str, registry_name: str) 
     wrapper_words = wrapper_target.split()
     if len(wrapper_words) < 2:
         return False
-    return original_norm.startswith(f"{wrapper_target} ")
+    return wrapper_target == original_norm or original_norm.startswith(f"{wrapper_target} ")
 
 
 def distinctive_prefix_core_match(original_name: str, registry_name: str) -> bool:
@@ -8083,6 +8168,12 @@ def search_fl(page, org):
         meaningful = [word for word in norm.split() if word not in generic]
         if not meaningful:
             return False
+        original_meaningful = [
+            word for word in normalized_match_name(original_name).split()
+            if word not in generic
+        ]
+        if len(meaningful) == 1 and len(original_meaningful) > 1:
+            return False
         if len(meaningful) == 1 and len(meaningful[0]) < 4:
             return False
         return True
@@ -8394,6 +8485,16 @@ def search_mn(page, org):
             result.success = True
             return result
         safe_targets = organization_match_target_variants(org.organization_name, org.ein)
+
+        def mn_safe_alias_row_match(row_text: str, primary_name: str = "") -> bool:
+            row_text = re.sub(r"\s+", " ", row_text or "").strip()
+            primary_name = re.sub(r"\s+", " ", primary_name or "").strip()
+            if not row_text:
+                return False
+            if primary_name and registry_name_is_safe_for_org(primary_name, org.organization_name, org.ein):
+                return True
+            return registry_name_is_safe_against_targets(row_text, safe_targets, org.organization_name, org.ein)
+
         name_fallback_started = time.perf_counter()
         for index, variant in enumerate(build_search_queries(
             org.organization_name,
@@ -8438,6 +8539,8 @@ def search_mn(page, org):
             best_index = None
             best_score = -10000
             best_name = ""
+            best_row_text = ""
+            best_alias_row_match = False
             safe_target_norms = [normalized_match_name(target) for target in safe_targets]
             short_exact_targets = {
                 target_norm for target_norm in safe_target_norms
@@ -8449,16 +8552,21 @@ def search_mn(page, org):
                 if short_exact_targets and normalized_match_name(link_text) not in short_exact_targets:
                     continue
                 score = target_name_score(link_text, safe_targets)
+                alias_row_match = mn_safe_alias_row_match(row_text, link_text)
                 try:
                     checker_score = checker.candidate_selection_score_for_targets(row_text, safe_targets, row_text)
                     if checker_score[0] >= 0:
                         score = max(score, 520 + checker_score[0] * 20 + checker_score[1])
                 except Exception:
                     pass
+                if alias_row_match:
+                    score = max(score, 650)
                 if score > best_score:
                     best_score = score
                     best_index = candidate.get("index")
                     best_name = candidate.get("linkText") or ""
+                    best_row_text = row_text
+                    best_alias_row_match = alias_row_match
             if best_index is None or best_score < 450:
                 continue
             try:
@@ -8474,7 +8582,12 @@ def search_mn(page, org):
             detail_text = readable_page_text(page)
             federal_match = re.search(r"FEDERAL\s+ID#?\s*([0-9-]+)", detail_text, re.I)
             detail_ein_digits = re.sub(r"\D", "", federal_match.group(1)) if federal_match else ""
-            if ein_digits and detail_ein_digits and detail_ein_digits != ein_digits:
+            if (
+                ein_digits
+                and detail_ein_digits
+                and detail_ein_digits != ein_digits
+                and not (best_alias_row_match or mn_safe_alias_row_match(best_row_text, best_name))
+            ):
                 continue
             year_match = re.search(r"(?:Fiscal\s+Year\s+Ending|For\s+Fiscal\s+Year\s+Ending)\s*:?\s*(?:\d{1,2}[/-]\d{1,2}[/-])?(20\d{2})", detail_text, re.I)
             year = int(year_match.group(1)) if year_match else None
@@ -8489,6 +8602,8 @@ def search_mn(page, org):
                 "Matched by organization name after EIN search returned no exact result",
             ])
             result.source_note = "MN tried EIN search first, then used the public organization-name search when the EIN field returned no exact result."
+            if best_alias_row_match:
+                result.source_note += " The Minnesota search-result row listed the requested organization as a safe alternate name/alias for the registry record."
             result.matched_registry_name = clean_registry_name(best_name or checker.extract_labeled_value_from_text(detail_text, ["Organization Name", "Charity Name", "Name"]))
             result.matched_registry_identifier = federal_match.group(1) if federal_match else ""
             result.success = True
@@ -9512,7 +9627,10 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
             return result, ""
         name_deadline = min(time.perf_counter() + 20.0, ak_deadline)
         name_fallback_years = ak_negative_checked_years
-        exact_ein_name_variants = ak_name_fallback_variants(original_name, org.ein)[:2]
+        exact_ein_name_variants = (
+            ak_name_fallback_variants(original_name, org.ein)[:2]
+            if AK_NAME_FALLBACK_AFTER_EIN_NO_ROWS else []
+        )
         ak_name_fallback_stopped = False
         for search_name in exact_ein_name_variants:
             if ak_budget_exhausted():
@@ -14873,25 +14991,40 @@ def search_nh_live_pdf(org):
     target_word_sets = [set(normalized_match_name(target).split()) for target in targets if normalized_match_name(target)]
     target_words = set().union(*target_word_sets) if target_word_sets else set()
     minimum_overlap = 1 if len(target_words) <= 2 else 2
-    best = None
-    best_score = (-1000, -1000)
-    for record in records:
-        registry_name = record.get("registry_name") or nh_registry_name_from_live_body(record.get("body", ""))
-        if not registry_name:
-            continue
-        registry_words = record.get("registry_words") or set(normalized_match_name(registry_name).split())
-        if target_words and len(registry_words & target_words) < minimum_overlap:
-            continue
-        score = target_name_score(registry_name, targets)
-        safe_match = registry_name_is_safe_against_targets(registry_name, targets, original_name, org.ein)
-        if score < 450 and not safe_match:
-            continue
-        if not safe_match:
-            continue
-        composite = (max(score, 450), len(normalized_match_name(registry_name).split()))
-        if composite > best_score:
-            best_score = composite
-            best = (record, registry_name)
+
+    def find_best_nh_record(candidate_records: list[dict]) -> tuple[dict, str] | None:
+        best_candidate = None
+        best_score = (-1000, -1000)
+        for record in candidate_records:
+            registry_name = record.get("registry_name") or nh_registry_name_from_live_body(record.get("body", ""))
+            if not registry_name:
+                continue
+            registry_words = record.get("registry_words") or set(normalized_match_name(registry_name).split())
+            if target_words and len(registry_words & target_words) < minimum_overlap:
+                continue
+            score = target_name_score(registry_name, targets)
+            safe_match = registry_name_is_safe_against_targets(registry_name, targets, original_name, org.ein)
+            if score < 450 and not safe_match:
+                continue
+            if not safe_match:
+                continue
+            composite = (max(score, 450), len(normalized_match_name(registry_name).split()))
+            if composite > best_score:
+                best_score = composite
+                best_candidate = (record, registry_name)
+        return best_candidate
+
+    best = find_best_nh_record(records)
+    if not best:
+        try:
+            xlsx_records, xlsx_label = nh_download_xlsx_records()
+        except Exception:
+            xlsx_records, xlsx_label = [], ""
+        if xlsx_records:
+            xlsx_best = find_best_nh_record(xlsx_records)
+            if xlsx_best:
+                best = xlsx_best
+                updated_label = xlsx_label or updated_label
     if not best:
         return result
 
@@ -18202,6 +18335,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                         include_leading_article_variants=True,
                         prioritize_institution_reductions=True,
                         preferred_variants=nd_preferred_variants,
+                        require_safe_registry_name=True,
                     )
 
                 def run_nd_confirmation_lookup():
@@ -18217,6 +18351,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                         include_leading_article_variants=True,
                         prioritize_institution_reductions=True,
                         preferred_variants=nd_preferred_variants,
+                        require_safe_registry_name=True,
                     )
 
                 result = run_nd_lookup()

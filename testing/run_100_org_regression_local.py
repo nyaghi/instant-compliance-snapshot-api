@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import multiprocessing as mp
+import random
 import re
 import sys
 import time
@@ -26,6 +28,16 @@ NS = {
 SUPPORTED_STATUS_DATE_MOVEMENT = {"current", "upcoming filing", "delinquent"}
 CONSERVATIVE_STATUSES = {"unable to verify", "unable to confirm", "needs review", "site not reachable"}
 ACCEPTED_SOURCE_CATEGORIES = {"fixture_expected_wrong", "source_truth_verified", "not_locally_verifiable"}
+
+
+def run_org_lookup_worker(name: str, ein: str, states: list[str], queue) -> None:
+    cc.BATCH_FANOUT_SINGLE_STATE_LOOKUPS = False
+    cc.BATCH_FANOUT_API_URLS = []
+    try:
+        results = cc.run_state_lookups_parallel([{"organization_name": name, "ein": ein}], states)
+        queue.put({"ok": True, "results": results})
+    except Exception as exc:
+        queue.put({"ok": False, "error": str(exc)})
 
 
 def normalize_status(value: str) -> str:
@@ -130,7 +142,7 @@ def read_workbook_cases(path: Path) -> tuple[list[dict], list[str]]:
         for header in headers
         if re.fullmatch(r"[A-Z]{2}", header or "") and header.upper() in set(cc.SUPPORTED_STATES)
     ]
-    org_idx = next((i for i, h in enumerate(headers) if h.lower() in {"organization name", "organization_name", "name"}), None)
+    org_idx = next((i for i, h in enumerate(headers) if h.lower() in {"organization name", "organization_name", "org name", "org_name", "name"}), None)
     ein_idx = next((i for i, h in enumerate(headers) if h.lower() == "ein"), None)
     if org_idx is None or ein_idx is None:
         raise ValueError(f"Could not find organization/ein headers in {path}")
@@ -230,6 +242,9 @@ def main() -> int:
     parser.add_argument("--xlsx", required=True)
     parser.add_argument("--label", default="local_100_xlsx")
     parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--sample", type=int, default=0)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--org-timeout", type=float, default=0.0)
     args = parser.parse_args()
 
     # This validation is intentionally local. Do not proxy to staging lanes.
@@ -238,6 +253,13 @@ def main() -> int:
 
     source_path = Path(args.xlsx)
     cases, states = read_workbook_cases(source_path)
+    cases = [
+        case for case in cases
+        if any(not status_is_skip(case["expected"].get(state, "")) for state in states)
+    ]
+    if args.sample:
+        rng = random.Random(args.seed or None)
+        cases = rng.sample(cases, min(args.sample, len(cases)))
     if args.limit:
         cases = cases[: args.limit]
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -263,7 +285,24 @@ def main() -> int:
         ein = case["ein"]
         log(f"{args.label} {org_index}/{len(cases)}: running {ein} {name}")
         try:
-            results = cc.run_state_lookups_parallel([{"organization_name": name, "ein": ein}], states)
+            if args.org_timeout:
+                queue = mp.Queue()
+                proc = mp.Process(target=run_org_lookup_worker, args=(name, ein, states, queue))
+                proc.start()
+                proc.join(args.org_timeout)
+                if proc.is_alive():
+                    proc.terminate()
+                    proc.join(5)
+                    raise TimeoutError(f"Local regression org batch exceeded {args.org_timeout:.0f}s")
+                try:
+                    payload = queue.get_nowait()
+                except Exception:
+                    payload = {"ok": False, "error": "Local regression org worker exited without a result payload"}
+                if not payload.get("ok"):
+                    raise RuntimeError(payload.get("error") or "Local regression org worker failed")
+                results = payload.get("results") or []
+            else:
+                results = cc.run_state_lookups_parallel([{"organization_name": name, "ein": ein}], states)
         except Exception as exc:
             log(f"{args.label} {org_index}/{len(cases)}: batch exception {exc}")
             results = []
@@ -274,7 +313,7 @@ def main() -> int:
                     "state": state,
                     "status": "Runner Timeout",
                     "runner_error": str(exc),
-                    "comments": "The local regression runner could not complete this state lookup.",
+                    "comments": "The local regression runner could not complete this state lookup within the bounded org budget.",
                 })
         batch_seconds = round(time.perf_counter() - org_start, 2)
         for result in results:
