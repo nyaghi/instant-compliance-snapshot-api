@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.18.241-staging"
+APP_VERSION = "2026.06.18.242-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -2034,6 +2034,13 @@ def ca_annual_renewal_years_from_text(body: str) -> dict:
 
 def fiscal_year_end_from_result(result) -> tuple[int, int] | None:
     """Prefer fiscal year ends that the state lookup itself exposed."""
+    structured_fye = getattr(result, "fiscal_year_end", "") or ""
+    structured_match = re.search(r"\b(\d{1,2})[/-](\d{1,2})(?:[/-]20\d{2})?\b", str(structured_fye))
+    if structured_match:
+        month = int(structured_match.group(1))
+        day = int(structured_match.group(2))
+        if 1 <= month <= 12:
+            return month, min(day, calendar.monthrange(2024, month)[1])
     text = " ".join([
         result.raw_status_text or "",
         result.source_note or "",
@@ -2052,6 +2059,12 @@ def fiscal_year_end_from_result(result) -> tuple[int, int] | None:
         year = int(match.group(3))
         if 1 <= month <= 12:
             return month, min(day, calendar.monthrange(year, month)[1])
+    match = re.search(r"Fiscal\s+Year\s+End\s*:?\s*(\d{1,2})[/-](\d{1,2})(?![/-]\d)", text, re.I)
+    if match:
+        month = int(match.group(1))
+        day = int(match.group(2))
+        if 1 <= month <= 12:
+            return month, min(day, calendar.monthrange(2024, month)[1])
     return None
 
 
@@ -2155,9 +2168,20 @@ def filing_context(result, body: str) -> dict:
         latest_year = period_end.year
     result_fiscal_end = fiscal_year_end_from_result(result)
     registry_fiscal_end = fiscal_year_end_from_body(body, state)
+    ma_visible_form_pc_year_only = bool(
+        state == "MA"
+        and latest_year is not None
+        and re.fullmatch(r"\s*20\d{2}\s*", result.raw_status_text or "")
+        and re.search(r"latest\s+visible\s+Form\s*PC|Annual\s+Filings", result.source_note or "", re.I)
+        and not result_fiscal_end
+        and not registry_fiscal_end
+    )
     profile_period = public_profile_latest_tax_period_for_ein(result.ein)
     profile_fiscal_end = profile_period[1] if profile_period else None
-    fiscal_end = result_fiscal_end or registry_fiscal_end or profile_fiscal_end or fiscal_year_end_for_ein(result.ein)
+    if ma_visible_form_pc_year_only:
+        fiscal_end = (6, 30)
+    else:
+        fiscal_end = result_fiscal_end or registry_fiscal_end or profile_fiscal_end or fiscal_year_end_for_ein(result.ein)
 
     if state == "NJ":
         registry_context = nj_filing_context_from_body(body)
@@ -2560,6 +2584,9 @@ def organization_name_variants(
         for number_source in [base, without_suffix, no_punctuation]:
             for number_variant in final_substantive_number_variants(number_source):
                 final_number_variants.append(number_variant)
+        singularized_variants = []
+        for singular_source in [without_suffix, no_punctuation, base]:
+            singularized_variants.extend(singularized_high_signal_name_variants(singular_source))
         ampersand_as_and = re.sub(r"\s*&\s*", " and ", base).strip()
         ampersand_removed = re.sub(r"\s*&\s*", " ", base).strip()
         apostrophe_removed = re.sub(r"[']", "", base).strip()
@@ -2667,6 +2694,7 @@ def organization_name_variants(
             *broad_query_prefixes,
             *broad_query_suffixes,
             *final_number_variants,
+            *singularized_variants,
             childrens_hospital,
             childrens_hospital_no_punctuation,
             *hyphenated_word_pairs,
@@ -3016,6 +3044,57 @@ def search_query_is_too_broad(value: str) -> bool:
     return False
 
 
+def singularized_high_signal_name_variants(name: str) -> list[str]:
+    """Generate conservative singular forms for plural distinctive tokens."""
+    base = re.sub(r"\s+", " ", (name or "").strip(" ,;-"))
+    if not base:
+        return []
+    base = re.sub(
+        r"(?:,\s*)?\b(?:inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\b\.?\s*$",
+        "",
+        base,
+        flags=re.I,
+    ).strip(" ,;-")
+    words = re.findall(r"[A-Za-z0-9]+", base)
+    if len(words) < 2:
+        return []
+    skip_tokens = {
+        "the", "a", "an", "of", "for", "and", "to", "in", "on", "at", "by",
+        "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited",
+        "foundation", "fund", "association", "organization", "center", "centre",
+        "charity", "charities", "society", "trust", "board", "boards",
+        "national", "international", "american", "community",
+    }
+    variants: list[str] = []
+
+    def replacement_for(token: str) -> str:
+        lower = token.lower()
+        if len(token) < 5 or lower in skip_tokens:
+            return ""
+        if lower.endswith("ies"):
+            return token[:-3] + ("Y" if token.isupper() else "y")
+        if lower.endswith(("ches", "shes", "xes", "zes", "ses")):
+            return token[:-2]
+        if lower.endswith("s") and not lower.endswith(("ss", "us")):
+            return token[:-1]
+        return ""
+
+    for index, token in enumerate(words):
+        replacement = replacement_for(token)
+        if not replacement:
+            continue
+        candidate_words = words[:]
+        candidate_words[index] = replacement
+        candidate = " ".join(candidate_words)
+        if (
+            candidate.lower() != base.lower()
+            and not search_query_is_too_broad(candidate)
+            and candidate.lower() not in {existing.lower() for existing in variants}
+        ):
+            variants.append(candidate)
+    return variants[:3]
+
+
 def high_signal_search_phrases(name: str) -> list[str]:
     """Build bounded name-only probes from distinctive legal-name pieces."""
     phrases: list[str] = []
@@ -3201,6 +3280,8 @@ def high_signal_search_phrases(name: str) -> list[str]:
     for variant in legal_holder_core_forms(no_suffix or base):
         add(variant, allow_single=True)
     for variant in connector_priority_core_forms(no_suffix or base):
+        add(variant)
+    for variant in singularized_high_signal_name_variants(no_suffix or base):
         add(variant)
     for variant in connector_preserved_prefixes(no_suffix or base):
         add(variant, allow_single=True)
@@ -4369,7 +4450,7 @@ def sc_official_detail_lookup(org) -> object | None:
         public_id = sc_regex_value(detail_text, r"\bPublic\s+Id\s*:?\s*(P\d+)\b") or f"P{best['id']}"
         raw_status = sc_regex_value(
             detail_text,
-            r"\bStatus\s*:?\s*(Registered|Expired|Delinquent|Suspended|Terminated|Withdrawn|Closed|Canceled|Cancelled|Revoked|Inactive|Not\s+Authorized|May\s+Not\s+Solicit)\b",
+            r"\bStatus\s*:?\s*(Registered|Exempt|Expired|Delinquent|Suspended|Terminated|Withdrawn|Closed|Canceled|Cancelled|Revoked|Inactive|Not\s+Authorized|May\s+Not\s+Solicit)\b",
         )
         due_raw = sc_regex_value(detail_text, r"\bDue\s+Date\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})")
         fiscal_year = sc_regex_value(
@@ -4382,7 +4463,9 @@ def sc_official_detail_lookup(org) -> object | None:
         )
         due_date = parse_due_date(due_raw) if due_raw else None
         status_text = " ".join([raw_status, due_raw, fiscal_year, next_report])
-        if re.search(r"\b(withdrawn|closed|cancel(?:ed|led)|inactive|terminated)\b", status_text, re.I):
+        if re.search(r"\bexempt\b", status_text, re.I):
+            interpreted = "Exempt"
+        elif re.search(r"\b(withdrawn|closed|cancel(?:ed|led)|inactive|terminated)\b", status_text, re.I):
             interpreted = "Closed / Withdrawn / Canceled"
         elif re.search(r"\b(suspended|revoked|not\s+authorized|may\s+not\s+solicit)\b", status_text, re.I):
             interpreted = "Suspended"
@@ -4412,7 +4495,12 @@ def sc_official_detail_lookup(org) -> object | None:
             matched_registry_identifier=public_id,
             success=interpreted not in {"Site Not Reachable", "Unknown", ""},
         )
-        if due_date:
+        if re.search(r"\bexempt\b", raw_status or "", re.I):
+            result.source_note = (
+                f"South Carolina returned safe registry match {registry_name} ({public_id}). "
+                "The detail page lists the organization as Exempt, so CharityClarity returns Exempt."
+            )
+        elif due_date:
             result.source_note = (
                 f"South Carolina returned safe registry match {registry_name} ({public_id}). "
                 f"The detail page lists due date {format_date(due_date)}, so CharityClarity interprets the status as {interpreted}."
@@ -6637,6 +6725,63 @@ def co_api_fallback_result(org):
     return result
 
 
+def mi_name_fallback_related_entity_mismatch(original_name: str, candidate_name: str, targets: list[str] | None = None) -> bool:
+    """Reject related-but-different Michigan name fallback records after EIN misses.
+
+    Michigan name fallback is intentionally stricter than the global identity
+    matcher because the EIN search already failed. A row that shares a broad
+    parent name but adds a different foundation/research/program identity is not
+    enough to classify the submitted organization as registered.
+    """
+    original_norm = normalized_match_name(original_name)
+    candidate_norm = normalized_match_name(candidate_name)
+    if not original_norm or not candidate_norm or original_norm == candidate_norm:
+        return False
+    descriptor_terms = {
+        "foundation", "fund", "research", "program", "programs", "service", "services",
+        "chapter", "auxiliary", "institute", "center", "centre", "council", "club",
+        "scholarship", "memorial", "committee", "trust", "society",
+    }
+    original_tokens = set(original_norm.split())
+    candidate_tokens = set(candidate_norm.split())
+    candidates_to_compare = [original_norm]
+    for target in targets or []:
+        target_norm = normalized_match_name(target)
+        if target_norm and target_norm not in candidates_to_compare:
+            candidates_to_compare.append(target_norm)
+
+    for target_norm in candidates_to_compare:
+        target_tokens = set(target_norm.split())
+        if len(target_tokens) < 3:
+            continue
+        if not candidate_norm.startswith(f"{target_norm} "):
+            continue
+        extra_tokens = [token for token in candidate_norm.split()[len(target_norm.split()):] if token]
+        distinctive_extra = [
+            token for token in extra_tokens
+            if token not in {
+                "the", "a", "an", "of", "for", "and", "to", "in", "on", "at", "by",
+                "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited",
+            }
+        ]
+        if len(distinctive_extra) < 2:
+            continue
+        added_descriptor_terms = (candidate_tokens - original_tokens) & descriptor_terms
+        if added_descriptor_terms:
+            return True
+    return False
+
+
+def mi_name_fallback_candidate_is_safe(candidate_name: str, original_name: str, ein: str, targets: list[str]) -> bool:
+    if not candidate_name:
+        return False
+    if not registry_name_is_safe_against_targets(candidate_name, targets, original_name, ein):
+        return False
+    if mi_name_fallback_related_entity_mismatch(original_name, candidate_name, targets):
+        return False
+    return True
+
+
 def search_mi_name_fallback(page, org):
     module = state_extension_module("MI")
     result = checker.StateResult(org.organization_name, org.ein, "MI", checker.STATUS_NOT_REGISTERED, "")
@@ -6723,6 +6868,8 @@ def search_mi_name_fallback(page, org):
             if not chosen:
                 continue
             _, clicked_name, link, href = chosen
+            if not mi_name_fallback_candidate_is_safe(clicked_name, org.organization_name, org.ein, safe_targets):
+                continue
             clicked_name_score = target_name_score(clicked_name, safe_targets)
             if clicked_name_score < 0:
                 try:
@@ -6766,6 +6913,8 @@ def search_mi_name_fallback(page, org):
             site_name = module.extract_legal_name(detail_frame) or clicked_name or org.organization_name
             ein_digits = re.sub(r"\D", "", org.ein or "")
             ein_confirmed = bool(ein_digits and ein_digits in re.sub(r"\D", "", detail_text))
+            if not ein_confirmed and not mi_name_fallback_candidate_is_safe(site_name, org.organization_name, org.ein, safe_targets):
+                continue
             if not ein_confirmed and clicked_name_score < 0 and target_name_score(site_name, safe_targets) < 0:
                 continue
             raw_status = module.extract_solicitation_status(detail_frame)
@@ -7895,13 +8044,15 @@ def search_ct(page, org):
                 if suffix not in safe_targets:
                     safe_targets.append(suffix)
     best_result = None
-    variants = ct_prioritized_name_variants(original_name, organization_name_variants(
+    variants = ct_prioritized_name_variants(original_name, build_search_queries(
         original_name,
         org.ein,
+        include_ein=False,
         include_ein_aliases=True,
         include_name_segments=True,
         include_compact_legal_suffixes=True,
         include_leading_article_variants=True,
+        max_queries=CT_NAME_VARIANT_LIMIT * 2,
     ))[:CT_NAME_VARIANT_LIMIT]
     last_error = ""
     for variant in variants:
@@ -8154,6 +8305,40 @@ def search_fl(page, org):
                     return True
         return False
 
+    def florida_missing_requested_wrapper_with_new_scope(row_name: str) -> bool:
+        row_norm = normalized_match_name(row_name)
+        original_norm = normalized_match_name(original_name)
+        target_norms = [normalized_match_name(target) for target in safe_targets]
+        if not row_norm or not original_norm:
+            return False
+        generic = {
+            "the", "a", "an", "of", "for", "and", "to", "in", "on", "at", "by",
+            "inc", "incorporated", "corp", "corporation", "llc", "ltd", "limited",
+            "co", "company",
+        }
+        requested_wrappers = {
+            "foundation", "fund", "trust", "association", "society", "center",
+            "centre", "institute", "hospital", "clinic", "academy",
+        }
+        original_words = set(original_norm.split())
+        row_words = set(row_norm.split())
+        missing_wrappers = (original_words & requested_wrappers) - row_words
+        if not missing_wrappers:
+            return False
+        for target_norm in target_norms:
+            target_words = set((target_norm or "").split())
+            if (
+                target_norm
+                and row_norm.startswith(target_norm + " ")
+                and target_words
+                and target_words < original_words
+                and not (target_words & requested_wrappers)
+            ):
+                extra_words = row_words - target_words - generic
+                if len(extra_words) >= 2:
+                    return True
+        return False
+
     def useful_fl_search_variant(variant: str) -> bool:
         norm = normalized_match_name(variant)
         if not norm:
@@ -8302,6 +8487,8 @@ def search_fl(page, org):
                     continue
                 if florida_related_entity_mismatch(row_name):
                     continue
+                if florida_missing_requested_wrapper_with_new_scope(row_name):
+                    continue
                 if florida_nested_unrelated_entity_mismatch(row_name):
                     continue
                 score = name_score
@@ -8394,7 +8581,38 @@ def search_fl(page, org):
     return checker.StateResult(original_name, org.ein, "FL", checker.STATUS_NOT_REGISTERED, url, raw_status_text="No matching organization record", source_note="Florida Check-A-Charity returned no matching record for the generated name variants.", success=True)
 
 
-def mn_next_filing_due_from_fiscal_year(year: int | None) -> date | None:
+def mn_latest_fiscal_year_end_from_text(text: str) -> date | None:
+    match = re.search(
+        r"(?:Fiscal\s+Year\s+Ending|For\s+Fiscal\s+Year\s+Ending)\s*:?\s*"
+        r"(\d{1,2})[/-](\d{1,2})[/-](20\d{2})",
+        text or "",
+        re.I,
+    )
+    if not match:
+        return None
+    month = int(match.group(1))
+    day = int(match.group(2))
+    year = int(match.group(3))
+    if not 1 <= month <= 12:
+        return None
+    try:
+        return date(year, month, min(day, calendar.monthrange(year, month)[1]))
+    except ValueError:
+        return None
+
+
+def mn_next_filing_due_from_fiscal_year(year: int | None, fiscal_year_end: date | None = None) -> date | None:
+    if fiscal_year_end:
+        next_required_period_year = fiscal_year_end.year + 1
+        due_month = fiscal_year_end.month + 7
+        due_year = next_required_period_year
+        while due_month > 12:
+            due_month -= 12
+            due_year += 1
+        try:
+            return date(due_year, due_month, 15)
+        except ValueError:
+            return None
     if not year:
         return None
     try:
@@ -8403,24 +8621,35 @@ def mn_next_filing_due_from_fiscal_year(year: int | None) -> date | None:
         return None
 
 
-def mn_status_from_fiscal_year(year: int | None) -> str:
-    next_report_due = mn_next_filing_due_from_fiscal_year(year)
+def mn_status_from_fiscal_year(year: int | None, fiscal_year_end: date | None = None) -> str:
+    next_report_due = mn_next_filing_due_from_fiscal_year(year, fiscal_year_end)
     if not next_report_due:
         return checker.STATUS_UNKNOWN
     return status_from_calendar_date(next_report_due)
 
 
-def apply_mn_fiscal_year_status(result, year: int | None) -> None:
-    next_report_due = mn_next_filing_due_from_fiscal_year(year)
-    result.status = mn_status_from_fiscal_year(year)
+def apply_mn_fiscal_year_status(result, year: int | None, fiscal_year_end: date | None = None) -> None:
+    next_report_due = mn_next_filing_due_from_fiscal_year(year, fiscal_year_end)
+    result.status = mn_status_from_fiscal_year(year, fiscal_year_end)
+    next_required_period = None
+    if fiscal_year_end:
+        try:
+            next_required_period = date(fiscal_year_end.year + 1, fiscal_year_end.month, min(fiscal_year_end.day, calendar.monthrange(fiscal_year_end.year + 1, fiscal_year_end.month)[1]))
+        except ValueError:
+            next_required_period = None
     result.raw_status_text = " | ".join(item for item in [
-        f"Fiscal Year Ending {year}" if year else "",
+        f"Fiscal Year Ending {format_date(fiscal_year_end)}" if fiscal_year_end else (f"Fiscal Year Ending {year}" if year else ""),
+        f"Next Required Period: {format_date(next_required_period)}" if next_required_period else "",
         f"Next Filing Due: {format_date(next_report_due)}" if next_report_due else "",
     ]) or "Minnesota registry record found"
     result.reason_code = "MN_STATUS_FROM_FISCAL_YEAR_DUE_DATE"
     result.status_reason = "MN_STATUS_FROM_FISCAL_YEAR_DUE_DATE"
     if year:
         result.last_year_on_record = str(year)
+    if fiscal_year_end:
+        result.fiscal_year_end = format_date(fiscal_year_end)
+    if next_required_period:
+        result.next_required_period = format_date(next_required_period)
     if next_report_due:
         result.computed_due_date = format_date(next_report_due)
 
@@ -8483,6 +8712,11 @@ def search_mn(page, org):
                 result.source_note = "Minnesota Attorney General charity search did not expose a matching FederalID detail link for the requested EIN."
                 result.success = True
                 continue
+            clicked_result_name = ""
+            try:
+                clicked_result_name = clean_registry_name(detail_link.inner_text(timeout=2500))
+            except Exception:
+                clicked_result_name = ""
             try:
                 detail_link.click(timeout=5000)
                 checker.safe_wait_for_network_idle(page, timeout=10000)
@@ -8496,11 +8730,18 @@ def search_mn(page, org):
                 result.source_note = "Minnesota search returned a possible record, but the public detail did not confirm the requested EIN."
                 result.success = True
                 continue
+            fiscal_year_end = mn_latest_fiscal_year_end_from_text(detail_text)
             year_match = re.search(r"(?:Fiscal\s+Year\s+Ending|For\s+Fiscal\s+Year\s+Ending)\s*:?\s*(?:\d{1,2}[/-]\d{1,2}[/-])?(20\d{2})", detail_text, re.I)
-            year = int(year_match.group(1)) if year_match else None
-            apply_mn_fiscal_year_status(result, year)
-            result.source_note = "MN uses the latest fiscal year ending shown by the Attorney General charity search and applies Minnesota's July 15 filing due date rule. CharityClarity tried both undashed and dashed EIN formats when needed."
-            result.matched_registry_name = useful_registry_name(checker.extract_labeled_value_from_text(detail_text, ["Organization Name", "Charity Name", "Name"]))
+            year = fiscal_year_end.year if fiscal_year_end else (int(year_match.group(1)) if year_match else None)
+            apply_mn_fiscal_year_status(result, year, fiscal_year_end)
+            result.source_note = "MN uses the latest fiscal year ending shown by the Attorney General charity search and derives the next filing due date from that fiscal year end. CharityClarity tried both undashed and dashed EIN formats when needed."
+            extracted_registry_name = useful_registry_name(checker.extract_labeled_value_from_text(detail_text, ["Organization Name", "Charity Name", "Name"]))
+            if extracted_registry_name and registry_name_is_safe_for_org(extracted_registry_name, org.organization_name, org.ein):
+                result.matched_registry_name = extracted_registry_name
+            elif clicked_result_name:
+                result.matched_registry_name = clicked_result_name
+            else:
+                result.matched_registry_name = extracted_registry_name
             result.matched_registry_identifier = checker.extract_registry_identifier_from_text(detail_text, org.ein) if hasattr(checker, "extract_registry_identifier_from_text") else ""
             result.success = True
             return result
@@ -8609,24 +8850,25 @@ def search_mn(page, org):
                 and not (best_alias_row_match or mn_safe_alias_row_match(best_row_text, best_name))
             ):
                 continue
+            fiscal_year_end = mn_latest_fiscal_year_end_from_text(detail_text)
             year_match = re.search(r"(?:Fiscal\s+Year\s+Ending|For\s+Fiscal\s+Year\s+Ending)\s*:?\s*(?:\d{1,2}[/-]\d{1,2}[/-])?(20\d{2})", detail_text, re.I)
-            year = int(year_match.group(1)) if year_match else None
+            year = fiscal_year_end.year if fiscal_year_end else (int(year_match.group(1)) if year_match else None)
             status_line = text_between_labels(detail_text, "Status", ["Extension", "Financial Information", "For Fiscal Year Ending"])
             if re.search(r"\binactive|closed|withdrawn|cancel", status_line or "", re.I):
                 result.status = "Closed / Withdrawn / Canceled"
                 result.raw_status_text = " | ".join(item for item in [
                     f"Status: {status_line}" if status_line else "",
-                    f"Fiscal Year Ending {year}" if year else "",
+                    f"Fiscal Year Ending {format_date(fiscal_year_end)}" if fiscal_year_end else (f"Fiscal Year Ending {year}" if year else ""),
                     "Matched by organization name after EIN search returned no exact result",
                 ])
             else:
-                apply_mn_fiscal_year_status(result, year)
+                apply_mn_fiscal_year_status(result, year, fiscal_year_end)
                 result.raw_status_text = " | ".join(item for item in [
                     f"Status: {status_line}" if status_line else "",
                     result.raw_status_text,
                     "Matched by organization name after EIN search returned no exact result",
                 ] if item)
-            result.source_note = "MN tried EIN search first, then used the public organization-name search when the EIN field returned no exact result. CharityClarity applies Minnesota's July 15 filing due date rule to the latest fiscal year ending shown by the registry."
+            result.source_note = "MN tried EIN search first, then used the public organization-name search when the EIN field returned no exact result. CharityClarity derives the next filing due date from the latest fiscal year ending shown by the registry."
             if best_alias_row_match:
                 result.source_note += " The Minnesota search-result row listed the requested organization as a safe alternate name/alias for the registry record."
             result.matched_registry_name = clean_registry_name(best_name or checker.extract_labeled_value_from_text(detail_text, ["Organization Name", "Charity Name", "Name"]))
@@ -8924,12 +9166,30 @@ def find_ak_result_row_relaxed(page, org):
     )
 
 
-def wait_ak_search_results(page, timeout: float = 3.5) -> None:
+def wait_ak_search_results(
+    page,
+    timeout: float = 5.0,
+    expected_year: int | None = None,
+    expected_ein: str = "",
+    expected_name: str = "",
+    previous_text: str = "",
+) -> None:
     deadline = time.perf_counter() + timeout
+    expected_ein_digits = re.sub(r"\D", "", expected_ein or "")
+    expected_name_norm = re.sub(r"[^A-Z0-9]", "", (expected_name or "").upper())
+    previous_norm = re.sub(r"\s+", " ", previous_text or "").strip()
     while time.perf_counter() < deadline:
         try:
             text = page.locator("#Dv-l").inner_text(timeout=600)
-            if re.search(r"\bPrint\b|There are no charitable organizations", text or "", re.I):
+            text_norm = re.sub(r"\s+", " ", text or "").strip()
+            text_digits = re.sub(r"\D", "", text_norm)
+            text_name_norm = re.sub(r"[^A-Z0-9]", "", text_norm.upper())
+            year_seen = not expected_year or re.search(rf"\b{expected_year}\b", text_norm)
+            ein_seen = bool(expected_ein_digits and expected_ein_digits in text_digits)
+            name_seen = bool(expected_name_norm and expected_name_norm in text_name_norm)
+            if year_seen and (ein_seen or name_seen) and re.search(r"\bPrint\b", text_norm, re.I):
+                return
+            if text_norm != previous_norm and re.search(r"\bPrint\b|There are no charitable organizations", text_norm, re.I):
                 return
         except Exception:
             pass
@@ -8982,8 +9242,18 @@ def fill_ak_search_form_ein_fast(page, org, year: int) -> None:
     search_button = page.locator("#Dq-c")
     if search_button.count() == 0:
         search_button = page.get_by_role("button", name=re.compile(r"^Search$", re.I)).first
+    previous_text = ""
+    try:
+        previous_text = page.locator("#Dv-l").inner_text(timeout=600)
+    except Exception:
+        pass
     search_button.click(timeout=AK_ACTION_TIMEOUT_MS, force=True)
-    wait_ak_search_results(page)
+    wait_ak_search_results(
+        page,
+        expected_year=year,
+        expected_ein=checker.format_ein_with_dash(org.ein),
+        previous_text=previous_text,
+    )
 
 
 def fill_ak_search_form_name_only(page, org, year: int, variant: str) -> None:
@@ -9043,8 +9313,18 @@ def fill_ak_search_form_name_only(page, org, year: int, variant: str) -> None:
     search_button = page.locator("#Dq-c")
     if search_button.count() == 0:
         search_button = page.get_by_role("button", name=re.compile(r"^Search$", re.I)).first
+    previous_text = ""
+    try:
+        previous_text = page.locator("#Dv-l").inner_text(timeout=600)
+    except Exception:
+        pass
     search_button.click(timeout=AK_ACTION_TIMEOUT_MS, force=True)
-    wait_ak_search_results(page)
+    wait_ak_search_results(
+        page,
+        expected_year=year,
+        expected_name=variant,
+        previous_text=previous_text,
+    )
 
 
 def ak_name_fallback_variants(original_name: str, ein: str = "") -> list[str]:
@@ -10056,6 +10336,39 @@ def validate_ma_positive_record(org, result, body: str):
     return result
 
 
+def annotate_ma_visible_form_pc_due(result):
+    latest_match = re.fullmatch(r"\s*(20\d{2})\s*", getattr(result, "raw_status_text", "") or "")
+    if not latest_match or (getattr(result, "state", "") or "").upper() != "MA":
+        return result
+    if not re.search(r"latest\s+visible\s+Form\s*PC|Annual\s+Filings", getattr(result, "source_note", "") or "", re.I):
+        return result
+    latest_year = int(latest_match.group(1))
+    fiscal_end = (6, 30)
+    next_report_year = latest_year + 1
+    due_options = filing_due_date_options("MA", next_report_year, fiscal_end)
+    due_date = due_options.get("effective_due")
+    if not due_date:
+        return result
+    next_period = date(next_report_year, fiscal_end[0], fiscal_end[1])
+    result.status = status_from_calendar_date(due_date)
+    result.raw_status_text = " | ".join([
+        f"Last Year on Record: {latest_year}",
+        f"Fiscal Year End: {fiscal_end[0]}/{fiscal_end[1]}",
+        f"Next Required Period: {format_date(next_period)}",
+        f"Next Filing Due: {format_date(due_date)}",
+    ])
+    result.computed_due_date = format_date(due_date)
+    result.fiscal_year_end = f"{fiscal_end[0]}/{fiscal_end[1]}"
+    result.last_year_on_record = latest_year
+    result.next_required_period = format_date(next_period)
+    result.source_note = (
+        "Massachusetts uses the latest visible Form PC year from Annual Filings. "
+        "When the portal does not expose a fiscal year end in the visible record, CharityClarity applies the Massachusetts "
+        "6/30 Form PC reporting-cycle assumption for due-date interpretation."
+    )
+    return result
+
+
 def search_hi_precise(page, org):
     url = "https://charity.ehawaii.gov/charity/new-search.html"
     result = checker.StateResult(org.organization_name, org.ein, "HI", checker.STATUS_UNKNOWN, url)
@@ -10379,6 +10692,21 @@ def wi_status_severity(detail_status: str) -> int:
 
 def wi_expiration_suffix(expiration_date: date | None) -> str:
     return f"; License current through {format_date(expiration_date)}" if expiration_date else ""
+
+
+def wi_effective_renewal_due_from_expiration(expiration_date: date | None) -> tuple[date | None, str]:
+    """Return the Wisconsin filing-cycle due date implied by the credential expiration."""
+    if not expiration_date:
+        return None, ""
+    today = date.today()
+    if expiration_date <= today + timedelta(days=366):
+        return expiration_date, "credential expiration date"
+    day = min(expiration_date.day, calendar.monthrange(today.year, expiration_date.month)[1])
+    renewal_due = date(today.year, expiration_date.month, day)
+    if renewal_due < today:
+        day = min(expiration_date.day, calendar.monthrange(today.year + 1, expiration_date.month)[1])
+        renewal_due = date(today.year + 1, expiration_date.month, day)
+    return renewal_due, "annual Wisconsin renewal due date inferred from the credential expiration cycle"
 
 
 def wi_request_headers(referer: str = WI_SEARCH_URL) -> dict[str, str]:
@@ -11597,16 +11925,26 @@ def search_wi(page, org, max_seconds: float | None = None):
             result.success = bool(detail_status_result)
             return result
 
-        result.status = status_from_calendar_date(expiration_date)
+        effective_due, due_source = wi_effective_renewal_due_from_expiration(expiration_date)
+        result.status = status_from_calendar_date(effective_due or expiration_date)
         result.raw_status_text = (
             f"{detail_status}; License current through {format_date(expiration_date)}"
             if detail_status
             else f"Expiration Date {format_date(expiration_date)}"
         )
+        if effective_due and effective_due != expiration_date:
+            result.raw_status_text = (
+                f"{result.raw_status_text}; Next WI annual renewal due {format_date(effective_due)}"
+            )
         result.source_note = (
             "Wisconsin DFI public registry shows a Charitable Organization credential "
             f"expiration date of {format_date(expiration_date)}."
         )
+        if effective_due and effective_due != expiration_date:
+            result.source_note = (
+                f"{result.source_note} CharityClarity uses the {format_date(effective_due)} "
+                f"{due_source} to interpret the current filing-cycle status as {result.status}."
+            )
         result.matched_registry_name = best_match["registry_name"]
         result.matched_registry_identifier = best_match["license_number"]
         result.success = True
@@ -13445,6 +13783,24 @@ def explicit_no_registration_status(result, body: str) -> bool:
     ))
 
 
+def ca_explicit_primary_registry_status(result) -> str:
+    """Return CA main Registry Status when it should trump page-history text."""
+    raw_status = re.sub(r"\s+", " ", getattr(result, "raw_status_text", "") or "").strip()
+    direct_status = re.sub(r"\s+", " ", getattr(result, "status", "") or "").strip()
+    primary = " ".join(part for part in [raw_status, direct_status] if part)
+    if not primary:
+        return ""
+    if re.search(r"\b(in\s+(?:process|progress)|pending)\b", primary, re.I):
+        return "Pending"
+    if re.search(r"\b(suspended|may\s+not\s+(?:solicit|operate|raise\s+funds)|not\s+authorized\s+to\s+solicit)\b", primary, re.I):
+        return "Suspended"
+    if re.search(r"\b(delinquent|non[-\s]?compliant)\b", primary, re.I):
+        return "Delinquent"
+    if re.search(r"\b(withdrawn|retired|terminated|cancel(?:ed|led)|closed|voluntar(?:y|ily)\s+(?:deactivat(?:ed|ion)|surrender(?:ed)?))\b", primary, re.I):
+        return "Closed / Withdrawn / Canceled"
+    return ""
+
+
 def true_status_from_body(result, body: str) -> str:
     base_status = public_status(result)
     normalized = base_status.lower()
@@ -13490,6 +13846,10 @@ def true_status_from_body(result, body: str) -> str:
         co_status = co_status_from_registry_evidence(result, result, body)
         if co_status:
             return co_status
+    if state == "CA":
+        ca_primary_status = ca_explicit_primary_registry_status(result)
+        if ca_primary_status:
+            return ca_primary_status
     if explicit_no_registration_status(result, combined):
         return "Not Registered"
     if state == "MS":
@@ -13528,12 +13888,9 @@ def true_status_from_body(result, body: str) -> str:
         registry_date = explicit_registry_date(result, combined)
         return status_from_calendar_date(registry_date) if registry_date else checker.STATUS_UNKNOWN
     if state == "CA":
-        ca_primary_status = " ".join([
-            result.status or "",
-            result.raw_status_text or "",
-        ])
-        if re.search(r"\bsuspended\b|may\s+not\s+(?:solicit|operate|raise\s+funds)|not\s+authorized\s+to\s+solicit", ca_primary_status, re.I):
-            return "Suspended"
+        ca_primary_status = ca_explicit_primary_registry_status(result)
+        if ca_primary_status:
+            return ca_primary_status
     if state == "CT":
         ct_status_fields = " ".join([
             result.raw_status_text or "",
@@ -13572,6 +13929,11 @@ def true_status_from_body(result, body: str) -> str:
             inferred_due = next_base_due_from_fiscal_end(state, early_context.get("fiscal_end"))
             if inferred_due:
                 return status_from_calendar_date(inferred_due)
+    if state == "LA" and getattr(result, "status_reason", "") == "LA_STATUS_FROM_OFFICIAL_EXCEL_EXPORT":
+        registered_through = parsed_result_date(getattr(result, "computed_due_date", "")) or explicit_registry_date(result, combined)
+        if registered_through:
+            return status_from_calendar_date(registered_through)
+        return base_status
     adverse_status = explicit_adverse_registry_status(result, combined)
     if adverse_status:
         return adverse_status
@@ -14543,6 +14905,8 @@ def ky_strict_name_score(registry_name: str, target_norms: set[str], original_na
 
 
 def ky_snapshot_registry_name_is_safe(registry_name: str, targets: list[str], original_name: str, ein: str = "") -> bool:
+    if ky_named_university_scope_conflict(original_name, registry_name):
+        return False
     if registry_name_is_safe_for_org(registry_name, original_name, ein):
         return True
     registry_norm = normalized_match_name(registry_name)
@@ -14559,6 +14923,51 @@ def ky_snapshot_registry_name_is_safe(registry_name: str, targets: list[str], or
             continue
         extra_words = registry_norm[len(target_norm):].strip().split()
         if extra_words and all(word in descriptive_tail_words for word in extra_words):
+            return True
+        if len(target_norm.split()) >= 3 and extra_words:
+            return True
+    return False
+
+
+def ky_named_university_scope_conflict(original_name: str, registry_name: str) -> bool:
+    """Reject same-state university foundations when the campus/scope changes."""
+    def scope(value: str) -> tuple[str, ...]:
+        norm = normalized_match_name(value)
+        match = re.search(
+            r"\buniversity\s+of\s+(.+?)\s+"
+            r"(?:foundation|fund|association|inc|incorporated|corp|corporation|llc|ltd|limited)\b",
+            norm,
+        )
+        if not match:
+            return ()
+        words = [
+            word for word in match.group(1).split()
+            if word not in {
+                "the", "a", "an", "inc", "incorporated", "corp", "corporation",
+                "foundation", "fund", "association",
+            }
+        ]
+        return tuple(words)
+
+    original_scope = scope(original_name)
+    registry_scope = scope(registry_name)
+    if not original_scope or not registry_scope:
+        return False
+    return original_scope != registry_scope
+
+
+def ky_candidate_passes_fast_prefilter(registry_norm: str, target_first_words: set[str], target_norms: set[str]) -> bool:
+    words = registry_norm.split()
+    if not words:
+        return False
+    if not target_first_words or words[0] in target_first_words:
+        return True
+    for target_norm in target_norms:
+        target_words = target_norm.split()
+        if len(target_words) >= 3 and target_norm in registry_norm:
+            return True
+        acronym = "".join(word[0] for word in target_words if word and word not in {"the", "a", "an", "of", "for", "and"})
+        if acronym and words[0] == acronym and len(set(target_words) & set(words)) >= max(2, min(4, len(target_words) - 1)):
             return True
     return False
 
@@ -14605,7 +15014,7 @@ def search_ky_strict_snapshot(org):
     best_score = (-1000, -1000, 0)
     for registry_id, registry_name, filed_year, record_text in load_ky_snapshot_records():
         registry_norm = normalized_match_name(registry_name)
-        if target_first_words and registry_norm.split() and registry_norm.split()[0] not in target_first_words:
+        if not ky_candidate_passes_fast_prefilter(registry_norm, target_first_words, target_norms):
             continue
         score = ky_strict_name_score(registry_name, target_norms, org.organization_name)
         match_score = target_name_score(registry_name, targets)
@@ -15150,6 +15559,22 @@ def search_snapshot_or_embedded_state(org, state: str):
         if public_status(result) == "Site Not Reachable":
             return result
         if public_status(result) != "Not Registered":
+            if state == "KY":
+                matched_name = getattr(result, "matched_registry_name", "") or ""
+                original_targets = [
+                    *category_preferred_name_variants(original_name),
+                    *organization_match_target_variants(original_name, getattr(org, "ein", "")),
+                ]
+                if matched_name and not ky_snapshot_registry_name_is_safe(matched_name, original_targets, original_name, getattr(org, "ein", "")):
+                    best_result = checker.StateResult(original_name, getattr(org, "ein", ""), state, checker.STATUS_NOT_REGISTERED, getattr(result, "source_url", "") or "")
+                    best_result.raw_status_text = "Kentucky registry row matched a generated variant but not the requested organization"
+                    best_result.source_note = (
+                        "Kentucky is checked from a downloadable public charity registration snapshot. "
+                        "CharityClarity rejected the closest row because it safely matched only a generated variant, "
+                        "not the requested organization."
+                    )
+                    best_result.success = True
+                    continue
             if variant != original_name:
                 result.source_note = " ".join(part for part in [
                     result.source_note or "",
@@ -17955,6 +18380,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 body = ma_detail_body(page)
                 result, body = repair_ma_false_not_registered(page, org, result, body)
                 result = validate_ma_positive_record(org, result, body)
+                result = annotate_ma_visible_form_pc_due(result)
             elif state == "MD":
                 result = checker.search_md(page, org)
                 result = ensure_state_result(result, org, "MD", source_note="Maryland checker returned a non-structured result.")
