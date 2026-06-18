@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.18.240-staging"
+APP_VERSION = "2026.06.18.241-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -8394,14 +8394,35 @@ def search_fl(page, org):
     return checker.StateResult(original_name, org.ein, "FL", checker.STATUS_NOT_REGISTERED, url, raw_status_text="No matching organization record", source_note="Florida Check-A-Charity returned no matching record for the generated name variants.", success=True)
 
 
-def mn_status_from_fiscal_year(year: int | None) -> str:
+def mn_next_filing_due_from_fiscal_year(year: int | None) -> date | None:
     if not year:
-        return checker.STATUS_UNKNOWN
+        return None
     try:
-        next_report_due = date(year + 1, 12, 31)
+        return date(year + 2, 7, 15)
     except ValueError:
+        return None
+
+
+def mn_status_from_fiscal_year(year: int | None) -> str:
+    next_report_due = mn_next_filing_due_from_fiscal_year(year)
+    if not next_report_due:
         return checker.STATUS_UNKNOWN
     return status_from_calendar_date(next_report_due)
+
+
+def apply_mn_fiscal_year_status(result, year: int | None) -> None:
+    next_report_due = mn_next_filing_due_from_fiscal_year(year)
+    result.status = mn_status_from_fiscal_year(year)
+    result.raw_status_text = " | ".join(item for item in [
+        f"Fiscal Year Ending {year}" if year else "",
+        f"Next Filing Due: {format_date(next_report_due)}" if next_report_due else "",
+    ]) or "Minnesota registry record found"
+    result.reason_code = "MN_STATUS_FROM_FISCAL_YEAR_DUE_DATE"
+    result.status_reason = "MN_STATUS_FROM_FISCAL_YEAR_DUE_DATE"
+    if year:
+        result.last_year_on_record = str(year)
+    if next_report_due:
+        result.computed_due_date = format_date(next_report_due)
 
 
 def search_mn(page, org):
@@ -8477,9 +8498,8 @@ def search_mn(page, org):
                 continue
             year_match = re.search(r"(?:Fiscal\s+Year\s+Ending|For\s+Fiscal\s+Year\s+Ending)\s*:?\s*(?:\d{1,2}[/-]\d{1,2}[/-])?(20\d{2})", detail_text, re.I)
             year = int(year_match.group(1)) if year_match else None
-            result.status = mn_status_from_fiscal_year(year)
-            result.raw_status_text = f"Fiscal Year Ending {year}" if year else "Minnesota registry record found"
-            result.source_note = "MN uses the latest fiscal year ending shown by the Attorney General charity search. CharityClarity tried both undashed and dashed EIN formats when needed."
+            apply_mn_fiscal_year_status(result, year)
+            result.source_note = "MN uses the latest fiscal year ending shown by the Attorney General charity search and applies Minnesota's July 15 filing due date rule. CharityClarity tried both undashed and dashed EIN formats when needed."
             result.matched_registry_name = useful_registry_name(checker.extract_labeled_value_from_text(detail_text, ["Organization Name", "Charity Name", "Name"]))
             result.matched_registry_identifier = checker.extract_registry_identifier_from_text(detail_text, org.ein) if hasattr(checker, "extract_registry_identifier_from_text") else ""
             result.success = True
@@ -8594,14 +8614,19 @@ def search_mn(page, org):
             status_line = text_between_labels(detail_text, "Status", ["Extension", "Financial Information", "For Fiscal Year Ending"])
             if re.search(r"\binactive|closed|withdrawn|cancel", status_line or "", re.I):
                 result.status = "Closed / Withdrawn / Canceled"
+                result.raw_status_text = " | ".join(item for item in [
+                    f"Status: {status_line}" if status_line else "",
+                    f"Fiscal Year Ending {year}" if year else "",
+                    "Matched by organization name after EIN search returned no exact result",
+                ])
             else:
-                result.status = mn_status_from_fiscal_year(year)
-            result.raw_status_text = " | ".join(item for item in [
-                f"Status: {status_line}" if status_line else "",
-                f"Fiscal Year Ending {year}" if year else "",
-                "Matched by organization name after EIN search returned no exact result",
-            ])
-            result.source_note = "MN tried EIN search first, then used the public organization-name search when the EIN field returned no exact result."
+                apply_mn_fiscal_year_status(result, year)
+                result.raw_status_text = " | ".join(item for item in [
+                    f"Status: {status_line}" if status_line else "",
+                    result.raw_status_text,
+                    "Matched by organization name after EIN search returned no exact result",
+                ] if item)
+            result.source_note = "MN tried EIN search first, then used the public organization-name search when the EIN field returned no exact result. CharityClarity applies Minnesota's July 15 filing due date rule to the latest fiscal year ending shown by the registry."
             if best_alias_row_match:
                 result.source_note += " The Minnesota search-result row listed the requested organization as a safe alternate name/alias for the registry record."
             result.matched_registry_name = clean_registry_name(best_name or checker.extract_labeled_value_from_text(detail_text, ["Organization Name", "Charity Name", "Name"]))
