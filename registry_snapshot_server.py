@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.19.244-staging"
+APP_VERSION = "2026.06.19.245-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -18760,17 +18760,17 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                         " ".join([result.raw_status_text or "", result.source_note or "", result.error or ""]),
                         re.I,
                     ))
+                mi_clean_no_results = bool(re.search(
+                    r"\bNo results found\b",
+                    " ".join([result.raw_status_text or "", result.source_note or ""]),
+                    re.I,
+                ))
                 if (
-                    MI_ENABLE_NAME_FALLBACK
-                    and public_status(result) == "Not Registered"
+                    public_status(result) == "Not Registered"
                     and not mi_incomplete_frame
                     and (
-                        mi_elapsed < (LOOKUP_SOFT_MAX_SECONDS - 6)
-                        or re.search(
-                            r"\bNo results found\b",
-                            " ".join([result.raw_status_text or "", result.source_note or ""]),
-                            re.I,
-                        )
+                        (MI_ENABLE_NAME_FALLBACK and mi_elapsed < (LOOKUP_SOFT_MAX_SECONDS - 6))
+                        or mi_clean_no_results
                     )
                 ):
                     fallback_result = search_mi_name_fallback(page, org)
