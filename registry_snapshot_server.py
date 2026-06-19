@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.19.243-staging"
+APP_VERSION = "2026.06.19.244-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -18764,7 +18764,14 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     MI_ENABLE_NAME_FALLBACK
                     and public_status(result) == "Not Registered"
                     and not mi_incomplete_frame
-                    and mi_elapsed < (LOOKUP_SOFT_MAX_SECONDS - 6)
+                    and (
+                        mi_elapsed < (LOOKUP_SOFT_MAX_SECONDS - 6)
+                        or re.search(
+                            r"\bNo results found\b",
+                            " ".join([result.raw_status_text or "", result.source_note or ""]),
+                            re.I,
+                        )
+                    )
                 ):
                     fallback_result = search_mi_name_fallback(page, org)
                     if public_status(fallback_result) != "Not Registered":
@@ -18937,6 +18944,31 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                             "A delayed confirmation lookup replaced an initial weaker North Dakota registry-name match.",
                         ]).strip()
                         result = confirmed_result
+                nd_body = registry_page_body(page)
+                nd_status_text = " ".join([
+                    result.raw_status_text or "",
+                    result.source_note or "",
+                    nd_body,
+                ])
+                if (
+                    public_status(result) != "Not Registered"
+                    and result.matched_registry_name
+                    and registry_name_is_safe_for_org(result.matched_registry_name, org.organization_name, org.ein)
+                    and re.search(
+                        r"\binactive\s*[-–—]?\s*involuntary\b|\binvoluntary\s+(?:inactive|dissolution|withdrawal|revocation|termination)\b",
+                        nd_status_text,
+                        re.I,
+                    )
+                ):
+                    result.status = "Closed / Withdrawn / Canceled"
+                    result.raw_status_text = "Inactive - Involuntary"
+                    result.source_note = (
+                        "North Dakota registry detail text shows Inactive - Involuntary; "
+                        "CharityClarity treats that as Closed / Withdrawn / Canceled."
+                    )
+                    result.success = True
+                    result.error = ""
+                    result.status_reason_code = "ND_STATUS_INACTIVE_INVOLUNTARY"
                 elapsed_before_nd_confirmation = time.perf_counter() - lookup_started
                 if (
                     public_status(result) == "Not Registered"
