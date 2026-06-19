@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.18.242-staging"
+APP_VERSION = "2026.06.19.243-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -354,8 +354,8 @@ WI_REQUIRE_COMPLETE_SNAPSHOT = os.environ.get("CE_WI_REQUIRE_COMPLETE_SNAPSHOT",
 WI_SNAPSHOT_MAX_AGE_SECONDS = min(max(86400, int(os.environ.get("CE_WI_SNAPSHOT_MAX_AGE_SECONDS", str(14 * 86400)))), 45 * 86400)
 WI_SNAPSHOT_CACHE: dict[str, object] = {"loaded_at": 0.0, "mtime": 0.0, "snapshot": None, "name_index": None, "error": ""}
 WI_SNAPSHOT_LOCK = threading.Lock()
-AK_LOOKUP_TOTAL_BUDGET_SECONDS = min(max(25.0, float(os.environ.get("CE_AK_LOOKUP_TOTAL_BUDGET_SECONDS", "76"))), 140.0)
-AK_ACTION_TIMEOUT_MS = min(max(2500, int(os.environ.get("CE_AK_ACTION_TIMEOUT_MS", "5000"))), 10000)
+AK_LOOKUP_TOTAL_BUDGET_SECONDS = min(max(25.0, float(os.environ.get("CE_AK_LOOKUP_TOTAL_BUDGET_SECONDS", "56"))), 85.0)
+AK_ACTION_TIMEOUT_MS = min(max(1800, int(os.environ.get("CE_AK_ACTION_TIMEOUT_MS", "3200"))), 8000)
 AK_RECENT_FILING_CUTOFF_YEAR = min(max(2020, int(os.environ.get("CE_AK_RECENT_FILING_CUTOFF_YEAR", "2023"))), 2100)
 AK_HISTORICAL_IDENTITY_FLOOR_YEAR = min(
     AK_RECENT_FILING_CUTOFF_YEAR - 1,
@@ -3044,6 +3044,28 @@ def search_query_is_too_broad(value: str) -> bool:
     return False
 
 
+def distinctive_acronym_core_probe(value: str) -> str:
+    """Return a distinctive all-caps acronym wrapped only by generic legal words."""
+    cleaned = re.sub(r"\([^)]*\)", " ", value or "")
+    cleaned = re.sub(r"^(?:the|a|an)\s+", "", cleaned.strip(), flags=re.I)
+    tokens = re.findall(r"[A-Za-z0-9]+", cleaned)
+    if not tokens:
+        return ""
+    noise = {
+        "foundation", "fund", "inc", "incorporated", "corp", "corporation",
+        "llc", "ltd", "limited", "association", "organization", "center", "centre",
+    }
+    distinctive = [token for token in tokens if token.lower() not in noise]
+    wrapper_count = len(tokens) - len(distinctive)
+    if (
+        len(distinctive) == 1
+        and wrapper_count >= 1
+        and re.fullmatch(r"[A-Z0-9]{2,6}", distinctive[0] or "")
+    ):
+        return distinctive[0]
+    return ""
+
+
 def singularized_high_signal_name_variants(name: str) -> list[str]:
     """Generate conservative singular forms for plural distinctive tokens."""
     base = re.sub(r"\s+", " ", (name or "").strip(" ,;-"))
@@ -3576,6 +3598,8 @@ def registry_name_is_safe_against_targets(registry_name: str, targets: list[str]
         return False
     if embedded_institution_identity_conflict(original_name, registry_name):
         return False
+    if institutional_subunit_identity_conflict(original_name, registry_name):
+        return False
     if registry_name_is_safe_for_org(registry_name, original_name, ein):
         return True
     if (
@@ -3587,6 +3611,7 @@ def registry_name_is_safe_against_targets(registry_name: str, targets: list[str]
             or broad_governance_name_mismatch(original_name, registry_name)
             or incompatible_institutional_prefix_expansion(original_name, registry_name)
             or embedded_institution_identity_conflict(original_name, registry_name)
+            or institutional_subunit_identity_conflict(original_name, registry_name)
         )
     return False
 
@@ -3603,6 +3628,8 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
     if named_geographic_scope_conflict(original_name, registry_name):
         return False
     if embedded_institution_identity_conflict(original_name, registry_name):
+        return False
+    if institutional_subunit_identity_conflict(original_name, registry_name):
         return False
     if not has_sufficient_identity_overlap(original_name, registry_name, ein):
         return False
@@ -3692,15 +3719,58 @@ def named_geographic_scope_conflict(original_name: str, registry_name: str) -> b
         return False
 
     scoped_phrases = {
+        "district of columbia": ("district of columbia", "dc"),
+        "new hampshire": ("new hampshire", "nh"),
+        "new jersey": ("new jersey", "nj"),
+        "new mexico": ("new mexico", "nm"),
         "new york state": ("new york state", "new york", "ny"),
         "new york": ("new york", "ny"),
-        "california": ("california", "ca"),
-        "florida": ("florida", "fl"),
-        "texas": ("texas", "tx"),
-        "virginia": ("virginia", "va"),
-        "west virginia": ("west virginia", "wv"),
-        "south carolina": ("south carolina", "sc"),
         "north carolina": ("north carolina", "nc"),
+        "north dakota": ("north dakota", "nd"),
+        "rhode island": ("rhode island", "ri"),
+        "south carolina": ("south carolina", "sc"),
+        "south dakota": ("south dakota", "sd"),
+        "west virginia": ("west virginia", "wv"),
+        "alabama": ("alabama", "al"),
+        "alaska": ("alaska", "ak"),
+        "arizona": ("arizona", "az"),
+        "arkansas": ("arkansas", "ar"),
+        "california": ("california", "ca"),
+        "colorado": ("colorado", "co"),
+        "connecticut": ("connecticut", "ct"),
+        "delaware": ("delaware", "de"),
+        "florida": ("florida", "fl"),
+        "georgia": ("georgia", "ga"),
+        "hawaii": ("hawaii", "hi"),
+        "idaho": ("idaho", "id"),
+        "illinois": ("illinois", "il"),
+        "indiana": ("indiana", "in"),
+        "iowa": ("iowa", "ia"),
+        "kansas": ("kansas", "ks"),
+        "kentucky": ("kentucky", "ky"),
+        "louisiana": ("louisiana", "la"),
+        "maine": ("maine", "me"),
+        "maryland": ("maryland", "md"),
+        "massachusetts": ("massachusetts", "ma"),
+        "michigan": ("michigan", "mi"),
+        "minnesota": ("minnesota", "mn"),
+        "mississippi": ("mississippi", "ms"),
+        "missouri": ("missouri", "mo"),
+        "montana": ("montana", "mt"),
+        "nebraska": ("nebraska", "ne"),
+        "nevada": ("nevada", "nv"),
+        "ohio": ("ohio", "oh"),
+        "oklahoma": ("oklahoma", "ok"),
+        "oregon": ("oregon", "or"),
+        "pennsylvania": ("pennsylvania", "pa"),
+        "tennessee": ("tennessee", "tn"),
+        "texas": ("texas", "tx"),
+        "utah": ("utah", "ut"),
+        "vermont": ("vermont", "vt"),
+        "virginia": ("virginia", "va"),
+        "washington": ("washington", "wa"),
+        "wisconsin": ("wisconsin", "wi"),
+        "wyoming": ("wyoming", "wy"),
     }
     generic_scope_words = {
         "the", "a", "an", "of", "for", "and", "in", "to", "state", "states",
@@ -3775,6 +3845,73 @@ def embedded_institution_identity_conflict(original_name: str, registry_name: st
         "health", "system", "center", "centre", "department",
     }
     return any(word in identity_changing_prefixes for word in prefix_words)
+
+
+def institutional_subunit_identity_conflict(original_name: str, registry_name: str) -> bool:
+    """Reject same-parent-institution matches when the named school/unit differs."""
+    original_norm = normalized_match_name(original_name)
+    registry_norm = normalized_match_name(registry_name)
+    if not original_norm or not registry_norm or original_norm == registry_norm:
+        return False
+
+    original_words = [
+        word for word in re.sub(r"^(?:the|a|an)\s+", "", original_norm).strip().split() if word
+    ]
+    registry_words = [
+        word for word in re.sub(r"^(?:the|a|an)\s+", "", registry_norm).strip().split() if word
+    ]
+    if len(original_words) < 4 or len(registry_words) < 4:
+        return False
+
+    common_len = 0
+    for original_word, registry_word in zip(original_words, registry_words):
+        if original_word != registry_word:
+            break
+        common_len += 1
+    if common_len < 2:
+        return False
+
+    common = original_words[:common_len]
+    common_text = " ".join(common)
+    shared_institution = (
+        len(common) >= 3 and common[0] == "university" and common[1] == "of"
+    ) or (
+        len(common) >= 2 and common[-1] in {"university", "college"}
+    ) or bool(re.search(r"\b(?:university|college|school|institute)\s+of\b", common_text))
+    if not shared_institution:
+        return False
+
+    legal_noise = {
+        "the", "a", "an", "of", "for", "and", "at", "in", "inc", "incorporated",
+        "corp", "corporation", "llc", "ltd", "limited", "foundation", "fund",
+        "trust", "association", "alumni", "support", "supporting", "organization",
+    }
+    unit_markers = {"school", "college", "institute", "center", "centre", "hospital"}
+
+    def unit_signature(remainder: list[str]) -> tuple[str, set[str]]:
+        cleaned = [word for word in remainder if word not in legal_noise]
+        for index, word in enumerate(cleaned):
+            if word not in unit_markers:
+                continue
+            left = [item for item in cleaned[max(0, index - 3):index] if item not in legal_noise]
+            right = [
+                item
+                for item in cleaned[index + 1:index + 4]
+                if item not in legal_noise and item not in unit_markers
+            ]
+            distinctive = {item for item in [*left, *right] if len(item) >= 3}
+            return word, distinctive
+        return "", set()
+
+    original_marker, original_unit = unit_signature(original_words[common_len:])
+    registry_marker, registry_unit = unit_signature(registry_words[common_len:])
+    if not original_marker or not registry_marker:
+        return False
+    if not original_unit or not registry_unit:
+        return False
+    if original_unit <= registry_unit or registry_unit <= original_unit:
+        return False
+    return True
 
 
 def long_truncated_registry_name_match(original_name: str, registry_name: str) -> bool:
@@ -9075,9 +9212,18 @@ def search_oh(page, org):
             result.raw_status_text += f" | Next Due: {format_date(due)}"
         elif re.search(r"\bregistered\b|\bin\s+compliance\b|\byes\b", registration_status or "", re.I):
             result.status = checker.STATUS_CURRENT
+        elif re.search(r"\b(?:N/A|none|no\s+annual\s+reports?)\b", filing_year_raw or "", re.I) or not filing_year_raw:
+            result.status = "Delinquent"
+            result.raw_status_text += " | Filing record not available"
+            result.source_note = (
+                "OH confirmed a matching organization record, but the public detail page did not show an exemption "
+                "or a usable annual-report filing year. CharityClarity treats confirmed non-exempt Ohio records "
+                "without filing evidence as Delinquent rather than Unknown."
+            )
         else:
             result.status = checker.STATUS_UNKNOWN
-        result.source_note = "OH uses EIN search first and computes the next base annual-report due date from the public detail page."
+        if not result.source_note:
+            result.source_note = "OH uses EIN search first and computes the next base annual-report due date from the public detail page."
         result.success = True
         return result
     except Exception as exc:
@@ -9168,7 +9314,7 @@ def find_ak_result_row_relaxed(page, org):
 
 def wait_ak_search_results(
     page,
-    timeout: float = 5.0,
+    timeout: float = 2.2,
     expected_year: int | None = None,
     expected_ein: str = "",
     expected_name: str = "",
@@ -9189,7 +9335,11 @@ def wait_ak_search_results(
             name_seen = bool(expected_name_norm and expected_name_norm in text_name_norm)
             if year_seen and (ein_seen or name_seen) and re.search(r"\bPrint\b", text_norm, re.I):
                 return
-            if text_norm != previous_norm and re.search(r"\bPrint\b|There are no charitable organizations", text_norm, re.I):
+            if text_norm != previous_norm and re.search(
+                r"\bPrint\b|There are no charitable organizations|No\s+(?:records?|results?)\s+(?:were\s+)?found|0\s+records?",
+                text_norm,
+                re.I,
+            ):
                 return
         except Exception:
             pass
@@ -9206,7 +9356,7 @@ def fill_ak_search_form_ein_fast(page, org, year: int) -> None:
         submission.dispatch_event("change")
     except Exception:
         pass
-    time.sleep(0.25)
+    time.sleep(0.08)
     year_select = page.locator("#Dq-9")
     if year_select.count() == 0:
         year_select = page.get_by_label(re.compile(r"Year", re.I)).first
@@ -9219,7 +9369,7 @@ def fill_ak_search_form_ein_fast(page, org, year: int) -> None:
         year_select.dispatch_event("change")
     except Exception:
         pass
-    time.sleep(0.25)
+    time.sleep(0.08)
     name_input = page.locator("#Dq-a")
     if name_input.count() == 0:
         name_input = page.get_by_label(re.compile(r"^Name$", re.I)).first
@@ -9238,7 +9388,7 @@ def fill_ak_search_form_ein_fast(page, org, year: int) -> None:
         fein_input.dispatch_event("change")
     except Exception:
         pass
-    time.sleep(0.2)
+    time.sleep(0.08)
     search_button = page.locator("#Dq-c")
     if search_button.count() == 0:
         search_button = page.get_by_role("button", name=re.compile(r"^Search$", re.I)).first
@@ -9266,7 +9416,7 @@ def fill_ak_search_form_name_only(page, org, year: int, variant: str) -> None:
         submission.dispatch_event("change")
     except Exception:
         pass
-    time.sleep(0.5)
+    time.sleep(0.08)
     year_select = page.locator("#Dq-9")
     if year_select.count() == 0:
         year_select = page.get_by_label(re.compile(r"Year", re.I)).first
@@ -9290,7 +9440,7 @@ def fill_ak_search_form_name_only(page, org, year: int, variant: str) -> None:
         year_select.dispatch_event("change")
     except Exception:
         pass
-    time.sleep(0.5)
+    time.sleep(0.08)
     name_input = page.locator("#Dq-a")
     if name_input.count() == 0:
         name_input = page.get_by_label(re.compile(r"^Name$", re.I)).first
@@ -9302,7 +9452,7 @@ def fill_ak_search_form_name_only(page, org, year: int, variant: str) -> None:
         name_input.dispatch_event("change")
     except Exception:
         pass
-    time.sleep(0.5)
+    time.sleep(0.08)
     fein_input = page.locator("#Dq-b")
     if fein_input.count() == 0:
         fein_input = page.get_by_label(re.compile(r"FEIN", re.I)).first
@@ -10698,15 +10848,7 @@ def wi_effective_renewal_due_from_expiration(expiration_date: date | None) -> tu
     """Return the Wisconsin filing-cycle due date implied by the credential expiration."""
     if not expiration_date:
         return None, ""
-    today = date.today()
-    if expiration_date <= today + timedelta(days=366):
-        return expiration_date, "credential expiration date"
-    day = min(expiration_date.day, calendar.monthrange(today.year, expiration_date.month)[1])
-    renewal_due = date(today.year, expiration_date.month, day)
-    if renewal_due < today:
-        day = min(expiration_date.day, calendar.monthrange(today.year + 1, expiration_date.month)[1])
-        renewal_due = date(today.year + 1, expiration_date.month, day)
-    return renewal_due, "annual Wisconsin renewal due date inferred from the credential expiration cycle"
+    return expiration_date, "credential expiration date"
 
 
 def wi_request_headers(referer: str = WI_SEARCH_URL) -> dict[str, str]:
@@ -13235,13 +13377,14 @@ def hi_indicates_exempt_registration(text: str) -> bool:
 
 def result_explicitly_exempt(result) -> bool:
     """Only trust exemption when it comes from the matched result fields."""
+    if re.fullmatch(r"\s*exempt\s*", result.status or "", re.I):
+        return True
     status_text = " ".join([
-        result.status or "",
         result.raw_status_text or "",
         result.source_note or "",
     ])
     return bool(re.search(
-        r"\b(exempt|exempt\s+registration|exempt\s+from\s+(?:charitable\s+|annual\s+)?registration)\b",
+        r"\b(?:exempt\s+registration|exempt\s+from\s+(?:charitable\s+|annual\s+)?registration|not\s+required\s+to\s+register)\b",
         status_text,
         re.I,
     ))
@@ -13796,7 +13939,7 @@ def ca_explicit_primary_registry_status(result) -> str:
         return "Suspended"
     if re.search(r"\b(delinquent|non[-\s]?compliant)\b", primary, re.I):
         return "Delinquent"
-    if re.search(r"\b(withdrawn|retired|terminated|cancel(?:ed|led)|closed|voluntar(?:y|ily)\s+(?:deactivat(?:ed|ion)|surrender(?:ed)?))\b", primary, re.I):
+    if re.search(r"\b(withdrawn|retired|terminated|dissolved|cancel(?:ed|led)|closed|voluntar(?:y|ily)\s+(?:deactivat(?:ed|ion)|surrender(?:ed)?))\b", primary, re.I):
         return "Closed / Withdrawn / Canceled"
     return ""
 
@@ -15350,11 +15493,11 @@ def nh_registry_name_from_live_body(body: str) -> str:
         rf"\s+{street_suffix}(?=\s|[A-Z]|$)"
     )
     numbered_street = (
-        rf"\d{{1,6}}\s+(?:\d+(?:st|nd|rd|th)|[A-Za-z][A-Za-z0-9.'#-]*)"
+        rf"\d{{1,6}}(?:-\d{{1,6}})?\s+(?:\d+(?:st|nd|rd|th)|[A-Za-z][A-Za-z0-9.'#-]*)"
         rf"(?:\s+[A-Za-z0-9][A-Za-z0-9.'#-]*){{0,3}}\s+{street_suffix}(?=\s|[A-Z]|$)"
     )
     cleaned = re.split(
-        rf"(?:\s+|(?<=[A-Za-z),.]))(?:P\.?\s*O\.?\s+Box|PO\s+Box|C/O|c/o|{word_number_street}|{numbered_street}|\d{{1,6}}\s+[A-Za-z][A-Za-z0-9.'#-]*(?:\s|$))",
+        rf"(?:\s+|(?<=[A-Za-z),.]))(?:P\.?\s*O\.?\s+Box|PO\s+Box|C/O|c/o|{word_number_street}|{numbered_street}|\d{{1,6}}(?:-\d{{1,6}})?\s+[A-Za-z][A-Za-z0-9.'#-]*(?:\s|$))",
         cleaned,
         maxsplit=1,
         flags=re.I,
@@ -15675,6 +15818,8 @@ def ms_short_prefix_name_mismatch(original_name: str, candidate_name: str) -> bo
 
 
 def ms_registry_name_is_safe(candidate_name: str, original_name: str, ein: str = "") -> bool:
+    if normalized_match_name(candidate_name) == normalized_match_name(original_name):
+        return True
     if ms_short_prefix_name_mismatch(original_name, candidate_name):
         return False
     original_words_for_acronym = [
@@ -15748,6 +15893,13 @@ def ms_preferred_search_variants(name: str, ein: str = "") -> list[str]:
     ):
         add(query, allow_short_prefix=True)
     shared_variant_count = len(variants)
+    acronym_probe = distinctive_acronym_core_probe(name)
+    if acronym_probe and acronym_probe.lower() not in ms_single_token_noise:
+        if acronym_probe.lower() in {item.lower() for item in variants}:
+            variants = [item for item in variants if item.lower() != acronym_probe.lower()]
+        insert_at = min(1, len(variants))
+        variants.insert(insert_at, acronym_probe)
+        shared_variant_count = max(shared_variant_count, insert_at + 1)
     for alias in known_names_for_ein(ein):
         if compatible_ein_alias_for_name(name, alias):
             seeds.append(alias)
@@ -16182,6 +16334,7 @@ def search_batch_browser_state(page, org, state: str):
         priority_variants = []
         for value in [
             org.organization_name,
+            distinctive_acronym_core_probe(org.organization_name),
             re.sub(
                 r"(?:,\s*)?\b(?:incorporated|inc\.?|corp\.?|corporation|llc|ltd\.?|limited)\b\.?\s*$",
                 "",
@@ -17168,6 +17321,13 @@ def ar_preferred_name_variants(org) -> list[str]:
             variants.insert(1, leading_probe)
         else:
             add(leading_probe, allow_broad=True)
+    acronym_probe = distinctive_acronym_core_probe(original)
+    if acronym_probe:
+        existing_index = next((index for index, existing in enumerate(variants) if existing.lower() == acronym_probe.lower()), None)
+        if existing_index is not None:
+            variants.pop(existing_index)
+        insert_at = 1 if variants else 0
+        variants.insert(insert_at, acronym_probe)
     compact = re.sub(r",\s*(incorporated|inc\.?|corporation|corp\.?|llc|ltd\.?)", r" \1", original, flags=re.I)
     no_punct_compact = re.sub(r"[^\w\s]", " ", compact)
     no_punct_compact = re.sub(r"\s+", " ", no_punct_compact).strip()
