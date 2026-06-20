@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.19.245-staging"
+APP_VERSION = "2026.06.20.246-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -10881,6 +10881,13 @@ def wi_search_names_for_org(org) -> list[str]:
     original_name = getattr(org, "organization_name", "")
     original_no_article = re.sub(r"^(?:the|a|an)\s+", "", original_name or "", flags=re.I).strip()
     wi_early_distinctive_tokens: set[str] = set()
+    wi_early_structural_rank: dict[str, int] = {}
+
+    def add_early_structural(value: str) -> None:
+        cleaned = re.sub(r"\s+", " ", (value or "").strip())
+        if cleaned:
+            wi_early_structural_rank.setdefault(cleaned.lower(), len(wi_early_structural_rank))
+            add_many([cleaned])
     if original_no_article and original_no_article.lower() != (original_name or "").strip().lower():
         original_no_article_no_suffix = re.sub(
             r"(?:,\s*)?\b(?:inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited|foundation|fund)\b\.?\s*$",
@@ -10889,6 +10896,17 @@ def wi_search_names_for_org(org) -> list[str]:
             flags=re.I,
         ).strip(" ,;-")
         add_many([original_no_article_no_suffix, original_no_article])
+    if ":" in (original_no_article or original_name or ""):
+        colon_core = re.sub(r"\s*:\s*", " ", original_no_article or original_name or "")
+        colon_core = re.sub(r"\s+", " ", colon_core).strip(" ,;-")
+        colon_core_no_suffix = re.sub(
+            r"(?:,\s*)?\b(?:inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited|foundation|fund)\b\.?\s*$",
+            "",
+            colon_core,
+            flags=re.I,
+        ).strip(" ,;-")
+        add_early_structural(colon_core_no_suffix)
+        add_early_structural(colon_core)
     wi_early_distinctive_skip = {
         "association", "center", "centre", "charity", "children", "childrens",
         "college", "community", "foundation", "fund", "hospital", "hospitals",
@@ -11142,6 +11160,9 @@ def wi_search_names_for_org(org) -> list[str]:
             return (-6, word_rank, cleaned.lower())
         if original_no_article and cleaned.lower() == original_no_article.lower():
             return (-6, word_rank + 1, cleaned.lower())
+        early_structural_index = wi_early_structural_rank.get(cleaned.lower())
+        if early_structural_index is not None:
+            return (-6, early_structural_index, cleaned.lower())
         if cleaned.lower() in wi_early_distinctive_tokens:
             return (-5, word_rank, cleaned.lower())
         if re.match(r"^US\s+", cleaned, re.I):
@@ -11890,6 +11911,7 @@ def search_wi(page, org, max_seconds: float | None = None):
     started = time.perf_counter()
     deadline = started + (max_seconds if max_seconds is not None else WI_LOOKUP_MAX_SECONDS)
     direct_names = searched_names[:WI_DIRECT_VARIANT_LIMIT]
+    result.queries_attempted = list(direct_names)
     original_name = getattr(org, "original_organization_name", org.organization_name)
     ein = getattr(org, "ein", "") or ""
 
@@ -12381,6 +12403,7 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
     normalize_registry_match_fields(result, org)
     if (getattr(result, "state", "") or "").upper() == "NY":
         result = normalize_ny_registry_match_metadata(org, result)
+        result = repair_ny_not_registered_with_due_date(org, result)
     if (
         (getattr(result, "state", "") or "").upper() == "WI"
         and public_status(result) != "Not Registered"
@@ -18944,31 +18967,6 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                             "A delayed confirmation lookup replaced an initial weaker North Dakota registry-name match.",
                         ]).strip()
                         result = confirmed_result
-                nd_body = registry_page_body(page)
-                nd_status_text = " ".join([
-                    result.raw_status_text or "",
-                    result.source_note or "",
-                    nd_body,
-                ])
-                if (
-                    public_status(result) != "Not Registered"
-                    and result.matched_registry_name
-                    and registry_name_is_safe_for_org(result.matched_registry_name, org.organization_name, org.ein)
-                    and re.search(
-                        r"\binactive\s*[-–—]?\s*involuntary\b|\binvoluntary\s+(?:inactive|dissolution|withdrawal|revocation|termination)\b",
-                        nd_status_text,
-                        re.I,
-                    )
-                ):
-                    result.status = "Closed / Withdrawn / Canceled"
-                    result.raw_status_text = "Inactive - Involuntary"
-                    result.source_note = (
-                        "North Dakota registry detail text shows Inactive - Involuntary; "
-                        "CharityClarity treats that as Closed / Withdrawn / Canceled."
-                    )
-                    result.success = True
-                    result.error = ""
-                    result.status_reason_code = "ND_STATUS_INACTIVE_INVOLUNTARY"
                 elapsed_before_nd_confirmation = time.perf_counter() - lookup_started
                 if (
                     public_status(result) == "Not Registered"
