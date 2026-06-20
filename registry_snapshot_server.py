@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.20.246-staging"
+APP_VERSION = "2026.06.20.247-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -11156,13 +11156,13 @@ def wi_search_names_for_org(org) -> list[str]:
         if "us_core_no_punct" in locals() and us_core_no_punct and cleaned.lower() == us_core_no_punct.lower():
             return (-7, 2, cleaned.lower())
         word_rank = -min(len(cleaned.split()), 8)
+        early_structural_index = wi_early_structural_rank.get(cleaned.lower())
+        if early_structural_index is not None:
+            return (-8, early_structural_index, cleaned.lower())
         if "original_no_article_no_suffix" in locals() and original_no_article_no_suffix and cleaned.lower() == original_no_article_no_suffix.lower():
             return (-6, word_rank, cleaned.lower())
         if original_no_article and cleaned.lower() == original_no_article.lower():
             return (-6, word_rank + 1, cleaned.lower())
-        early_structural_index = wi_early_structural_rank.get(cleaned.lower())
-        if early_structural_index is not None:
-            return (-6, early_structural_index, cleaned.lower())
         if cleaned.lower() in wi_early_distinctive_tokens:
             return (-5, word_rank, cleaned.lower())
         if re.match(r"^US\s+", cleaned, re.I):
