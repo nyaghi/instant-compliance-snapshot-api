@@ -1103,7 +1103,6 @@ def search_ny(page, org: Organization) -> StateResult:
             return result
 
         name_input.fill("")
-        name_input.fill(search_name_query_variants(org.organization_name, max_words=5)[0])
         ein_input.fill("")
         if formatted_ein:
             ein_input.fill(formatted_ein)
@@ -1128,11 +1127,8 @@ def search_ny(page, org: Organization) -> StateResult:
         if re.search(r"no rows available|no records|no results found|no results|not found|error fetching data", body, re.I) and org.organization_name.strip():
             try:
                 name_input.fill("")
+                name_input.fill(search_name_query_variants(org.organization_name, max_words=5)[0])
                 ein_input.fill("")
-                if formatted_ein:
-                    ein_input.fill(formatted_ein)
-                else:
-                    ein_input.fill(org.ein)
                 clicked = False
                 for label in ["Search", "Find"]:
                     try:
