@@ -1149,6 +1149,9 @@ def search_ny(page, org: Organization) -> StateResult:
             except Exception:
                 pass
         if re.search(r"no rows available|no records|no results found|no results|not found", body, re.I):
+            api_result = search_ny_api_exact_ein_fallback(org, url)
+            if api_result:
+                return api_result
             result.raw_status_text = "No results found"
             result.status = "Not Found"
             result.source_note = "New York search returned no results found."
@@ -1332,6 +1335,116 @@ def search_ny(page, org: Organization) -> StateResult:
     except Exception as e:
         result.error = f"NY error: {e}"
         return result
+
+
+def search_ny_api_exact_ein_fallback(org: Organization, source_url: str) -> Optional[StateResult]:
+    ein_digits = digits_only(org.ein)
+    if len(ein_digits) != 9:
+        return None
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json",
+        "Origin": "https://charities-search.ag.ny.gov",
+        "Referer": "https://charities-search.ag.ny.gov/RegistrySearch",
+    }
+    search_url = (
+        "https://charities-search-api.ag.ny.gov/api/FileNet/RegistrySearch?"
+        + urllib.parse.urlencode({"ein": format_ein_with_dash(ein_digits)})
+    )
+    try:
+        request = urllib.request.Request(search_url, headers=headers)
+        with urllib.request.urlopen(request, timeout=15) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    except Exception:
+        return None
+
+    rows = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return None
+    selected = None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if digits_only(str(row.get("ein") or "")) == ein_digits:
+            selected = row
+            break
+    if not selected:
+        return None
+
+    org_id = str(selected.get("orgID") or "").strip()
+    registry_name = str(selected.get("orgName") or "").strip()
+    result = StateResult(org.organization_name, org.ein, "NY", STATUS_UNKNOWN, source_url)
+    result.matched_registry_name = registry_name
+    result.matched_registry_identifier = org_id or ein_digits
+    if not org_id:
+        result.raw_status_text = "Exact EIN match found"
+        result.status = "Delinquent"
+        result.source_note = (
+            "New York official search API returned an exact EIN match, but no Organization ID was available to load filing detail."
+        )
+        result.success = True
+        return result
+
+    detail_headers = dict(headers)
+    detail_headers["Referer"] = f"https://charities-search.ag.ny.gov/RegistrySearch/{urllib.parse.quote(org_id)}"
+    detail_url = (
+        "https://charities-search-api.ag.ny.gov/api/FileNet/RegistryDetail?"
+        + urllib.parse.urlencode({"orgID": org_id})
+    )
+    try:
+        request = urllib.request.Request(detail_url, headers=detail_headers)
+        with urllib.request.urlopen(request, timeout=18) as response:
+            detail_payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    except Exception:
+        result.raw_status_text = "Exact EIN match found"
+        result.status = STATUS_UNKNOWN
+        result.source_note = (
+            "New York official search API returned an exact EIN match, but the detail API could not be read."
+        )
+        result.success = True
+        return result
+
+    data = detail_payload.get("data") if isinstance(detail_payload, dict) else None
+    if not isinstance(data, dict):
+        result.raw_status_text = "Exact EIN match found"
+        result.status = STATUS_UNKNOWN
+        result.source_note = "New York official detail API returned an unreadable response for an exact EIN match."
+        result.success = True
+        return result
+    if not registry_name:
+        result.matched_registry_name = str(data.get("orgName") or "").strip()
+    if digits_only(str(data.get("ein") or "")) and digits_only(str(data.get("ein") or "")) != ein_digits:
+        return reject_wrong_ein_result(result, "New York")
+
+    fye_dates = []
+    documents = data.get("documents") if isinstance(data.get("documents"), dict) else {}
+    annual_docs = documents.get("Annual Filing for Charitable Organizations") or []
+    if isinstance(annual_docs, list):
+        for doc in annual_docs:
+            if not isinstance(doc, dict):
+                continue
+            parsed = parse_date_value(str(doc.get("fiscalYearEnd") or ""))
+            if parsed:
+                fye_dates.append(parsed)
+    if not fye_dates:
+        result.raw_status_text = "Exact EIN match found; no filings found"
+        result.status = "Delinquent"
+        result.source_note = (
+            "New York official search API returned an exact EIN match, but the detail API did not expose Fiscal Year End values."
+        )
+        result.success = True
+        return result
+
+    latest_fye = max(set(fye_dates))
+    due_date = add_months(latest_fye, 6)
+    result.status = "Current" if date.today() <= due_date else "Delinquent"
+    result.raw_status_text = f"Latest FYE: {latest_fye.isoformat()} | Due: {due_date.isoformat()}"
+    result.source_note = (
+        "New York browser search returned no rows, so CharityClarity confirmed the organization through "
+        "New York's official search API by exact EIN and derived status from the most recent Fiscal Year End."
+    )
+    result.success = True
+    return result
 
 def search_nj(page, org: Organization) -> StateResult:
     url = "https://charportal.dca.njoag.gov/Charity-Registration/CHR-Public-Search-Page/"
@@ -3891,6 +4004,55 @@ def search_nd(page, org: Organization) -> StateResult:
     result = StateResult(org.organization_name, org.ein, "ND", STATUS_UNKNOWN, url)
     try:
         target_names = match_target_names(org)
+
+        def nd_row_terminal_status(row_text: str) -> tuple[str, str]:
+            compact = re.sub(r"\s+", " ", row_text or "").strip()
+            if re.search(r"\binactive\s*[-–—]?\s*involuntary\b", compact, re.I):
+                return "Closed / Withdrawn / Canceled", "Inactive - Involuntary"
+            if re.search(r"\binvoluntary\s+(?:inactive|dissolution|withdrawal|revocation|termination)\b", compact, re.I):
+                return "Closed / Withdrawn / Canceled", "Inactive - Involuntary"
+            return "", ""
+
+        def nd_registry_name_from_row(row_text: str, fallback: str) -> str:
+            compact = re.sub(r"\s+", " ", row_text or "").strip()
+            compact = re.sub(
+                r"(.+?\b(?:Foreign\s+)?(?:Nonprofit\s+Corporation|Corporation|"
+                r"Limited\s+Liability\s+Company|Limited\s+Partnership|"
+                r"Limited\s+Liability\s+Partnership))\s+\1\b",
+                r"\1 ",
+                compact,
+                flags=re.I,
+            )
+            entity_pattern = (
+                r"\s+(?:Foreign\s+)?(?:Nonprofit\s+Corporation|Corporation|"
+                r"Limited\s+Liability\s+Company|Limited\s+Partnership|"
+                r"Limited\s+Liability\s+Partnership)\s+\d{6,}"
+            )
+            match = re.match(rf"(.+?){entity_pattern}\b", compact, re.I)
+            if match:
+                return re.sub(r"\s+", " ", match.group(1)).strip(" ,;-")
+            return re.sub(r"\s+", " ", fallback or "").strip(" ,;-")
+
+        def nd_normalized_core(value: str) -> str:
+            core = re.sub(r"\([^)]*\)", " ", value or "")
+            core = re.sub(
+                r"\b(?:inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited|foundation|fund)\b",
+                " ",
+                core,
+                flags=re.I,
+            )
+            core = re.sub(r"[^a-z0-9]+", " ", core.lower())
+            return re.sub(r"\s+", " ", core).strip()
+
+        nd_target_cores = [
+            core for core in (nd_normalized_core(target) for target in target_names)
+            if len(core.split()) >= 2
+        ]
+
+        def nd_row_has_requested_core(row_text: str) -> bool:
+            row_core = nd_normalized_core(row_text)
+            return any(core and core in row_core for core in nd_target_cores)
+
         last_goto_error = None
         for goto_attempt in range(2):
             try:
@@ -3951,6 +4113,8 @@ def search_nd(page, org: Organization) -> StateResult:
         best_match_name = ""
         best_match_identifier = ""
         best_match_row_text = ""
+        best_row_terminal_status = ""
+        best_row_terminal_raw_status = ""
         candidate_scan_started = time.monotonic()
         candidate_scan_budget_seconds = ND_CANDIDATE_SCAN_SECONDS
         for selector in ['div.interactive-cell-button', 'div[role="button"]']:
@@ -3981,6 +4145,10 @@ def search_nd(page, org: Organization) -> StateResult:
                             continue
                         name_text = lines[0]
                         priority, status_score = candidate_selection_score_for_targets(name_text, target_names, combined_txt)
+                        row_terminal_status, row_terminal_raw_status = nd_row_terminal_status(combined_txt)
+                        if priority < 0 and row_terminal_status and nd_row_has_requested_core(combined_txt):
+                            priority = 0
+                            status_score = max(status_score, 100)
                         if (
                             priority >= 0
                             and (
@@ -3994,6 +4162,8 @@ def search_nd(page, org: Organization) -> StateResult:
                             best_match_name = name_text
                             best_match_row_text = combined_txt
                             best_match_identifier = extract_registry_identifier_from_text(combined_txt, org.ein)
+                            best_row_terminal_status = row_terminal_status
+                            best_row_terminal_raw_status = row_terminal_raw_status
                     except Exception:
                         continue
             except Exception:
@@ -4018,6 +4188,10 @@ def search_nd(page, org: Organization) -> StateResult:
                         if not name_text or text_has_wrong_ein_match(row_txt, org.ein):
                             continue
                         priority, status_score = candidate_selection_score_for_targets(name_text, target_names, row_txt)
+                        row_terminal_status, row_terminal_raw_status = nd_row_terminal_status(row_txt)
+                        if priority < 0 and row_terminal_status and nd_row_has_requested_core(row_txt):
+                            priority = 0
+                            status_score = max(status_score, 100)
                         if (
                             priority >= 0
                             and (
@@ -4034,6 +4208,8 @@ def search_nd(page, org: Organization) -> StateResult:
                             best_match_name = name_text
                             best_match_row_text = row_txt
                             best_match_identifier = extract_registry_identifier_from_text(row_txt, org.ein)
+                            best_row_terminal_status = row_terminal_status
+                            best_row_terminal_raw_status = row_terminal_raw_status
                     except Exception:
                         continue
             except Exception:
@@ -4113,6 +4289,10 @@ def search_nd(page, org: Organization) -> StateResult:
                                         continue
                                     name_text = lines[0]
                                     priority, status_score = candidate_selection_score_for_targets(name_text, target_names, combined_txt)
+                                    row_terminal_status, row_terminal_raw_status = nd_row_terminal_status(combined_txt)
+                                    if priority < 0 and row_terminal_status and nd_row_has_requested_core(combined_txt):
+                                        priority = 0
+                                        status_score = max(status_score, 100)
                                     if (
                                         priority >= 0
                                         and (
@@ -4126,6 +4306,8 @@ def search_nd(page, org: Organization) -> StateResult:
                                         best_match_name = name_text
                                         best_match_row_text = combined_txt
                                         best_match_identifier = extract_registry_identifier_from_text(combined_txt, org.ein)
+                                        best_row_terminal_status = row_terminal_status
+                                        best_row_terminal_raw_status = row_terminal_raw_status
                                 except Exception:
                                     continue
                         except Exception:
@@ -4149,6 +4331,10 @@ def search_nd(page, org: Organization) -> StateResult:
                                     if not name_text or text_has_wrong_ein_match(row_txt, org.ein):
                                         continue
                                     priority, status_score = candidate_selection_score_for_targets(name_text, target_names, row_txt)
+                                    row_terminal_status, row_terminal_raw_status = nd_row_terminal_status(row_txt)
+                                    if priority < 0 and row_terminal_status and nd_row_has_requested_core(row_txt):
+                                        priority = 0
+                                        status_score = max(status_score, 100)
                                     if (
                                         priority >= 0
                                         and (
@@ -4165,6 +4351,8 @@ def search_nd(page, org: Organization) -> StateResult:
                                         best_match_name = name_text
                                         best_match_row_text = row_txt
                                         best_match_identifier = extract_registry_identifier_from_text(row_txt, org.ein)
+                                        best_row_terminal_status = row_terminal_status
+                                        best_row_terminal_raw_status = row_terminal_raw_status
                                 except Exception:
                                     continue
                         except Exception:
@@ -4183,6 +4371,17 @@ def search_nd(page, org: Organization) -> StateResult:
 
         result.matched_registry_name = best_match_name
         result.matched_registry_identifier = best_match_identifier
+        row_terminal_status = best_row_terminal_status
+        row_terminal_raw_status = best_row_terminal_raw_status
+        if not row_terminal_status:
+            row_terminal_status, row_terminal_raw_status = nd_row_terminal_status(best_match_row_text)
+        row_registry_name = nd_registry_name_from_row(best_match_row_text, best_match_name)
+        if row_registry_name:
+            result.matched_registry_name = row_registry_name
+        if not result.matched_registry_identifier:
+            id_match = re.search(r"\b\d{7,10}\b", best_match_row_text or "")
+            if id_match:
+                result.matched_registry_identifier = id_match.group(0)
         best_button.click(timeout=5000)
         try:
             page.get_by_text("Registration Date", exact=True).wait_for(timeout=8000)
@@ -4194,6 +4393,15 @@ def search_nd(page, org: Organization) -> StateResult:
         detail_text = page.locator("body").inner_text(timeout=8000)
         if text_has_wrong_ein_match(detail_text, org.ein):
             return reject_wrong_ein_result(result, "North Dakota")
+        if row_terminal_status:
+            result.raw_status_text = row_terminal_raw_status
+            result.status = row_terminal_status
+            result.source_note = (
+                "North Dakota search result row shows a terminal registration status; "
+                "CharityClarity treats the selected row status as controlling when the detail page contains a generic active field."
+            )
+            result.success = True
+            return result
         if not result.matched_registry_name:
             result.matched_registry_name = extract_labeled_value_from_text(detail_text, ["Organization Name", "Charity Name", "Name"])
         if not result.matched_registry_identifier:

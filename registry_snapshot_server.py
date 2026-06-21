@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.20.247-staging"
+APP_VERSION = "2026.06.20.248-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -4812,6 +4812,35 @@ def search_with_name_variants(
                 prioritized.append(cleaned)
         variants = prioritized or variants
     safe_match_targets = organization_match_target_variants(original_name, org.ein)
+
+    def nd_terminal_row_match_allowed(result) -> bool:
+        if (getattr(result, "state", "") or "").upper() != "ND":
+            return False
+        if public_status(result) != "Closed / Withdrawn / Canceled":
+            return False
+        if not re.search(r"\binactive\s*[-–—]?\s*involuntary\b", getattr(result, "raw_status_text", "") or "", re.I):
+            return False
+        registry_name = getattr(result, "matched_registry_name", "") or ""
+        if not registry_name:
+            return False
+
+        def core(value: str) -> str:
+            value = re.sub(r"\([^)]*\)", " ", value or "")
+            value = re.sub(
+                r"\b(?:inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited|foundation|fund)\b",
+                " ",
+                value,
+                flags=re.I,
+            )
+            value = re.sub(r"[^a-z0-9]+", " ", value.lower())
+            return re.sub(r"\s+", " ", value).strip()
+
+        registry_core = core(registry_name)
+        return any(
+            target_core and len(target_core.split()) >= 2 and target_core in registry_core
+            for target_core in (core(target) for target in safe_match_targets)
+        )
+
     if max_variants:
         variants = variants[:max_variants]
     started = time.perf_counter()
@@ -4841,6 +4870,7 @@ def search_with_name_variants(
             require_safe_registry_name
             and public_status(result) not in {"Not Registered", "Site Not Reachable"}
             and (getattr(result, "matched_registry_name", "") or "").strip()
+            and not nd_terminal_row_match_allowed(result)
             and not registry_name_is_safe_against_targets(
                 getattr(result, "matched_registry_name", "") or "",
                 variant_targets,
