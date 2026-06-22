@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.22.258-staging"
+APP_VERSION = "2026.06.22.259-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -18587,18 +18587,25 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
     if state == "WI":
         wi_deadline = lookup_started + min(WI_LOOKUP_MAX_SECONDS, 60.0)
         result = search_wi(None, org, max_seconds=min(57.0, max(28.0, WI_LOOKUP_MAX_SECONDS)))
-        if public_status(result) == "Site Not Reachable" and time.perf_counter() < wi_deadline:
+        wi_direct_attempt = 1
+        while (
+            public_status(result) == "Site Not Reachable"
+            and time.perf_counter() < wi_deadline
+            and wi_direct_attempt < 3
+        ):
+            wi_direct_attempt += 1
             retry_result = search_wi(
                 None,
                 org,
-                max_seconds=min(45.0, max(20.0, wi_deadline - time.perf_counter())),
+                max_seconds=min(28.0, max(8.0, wi_deadline - time.perf_counter())),
             )
             if public_status(retry_result) != "Site Not Reachable":
                 retry_result.source_note = " ".join(part for part in [
                     getattr(retry_result, "source_note", "") or "",
-                    "A bounded Wisconsin retry replaced an initial unusable registry response.",
+                    f"A bounded Wisconsin retry attempt {wi_direct_attempt} replaced an initial unusable registry response.",
                 ]).strip()
                 result = retry_result
+                break
         if (
             public_status(result) == "Site Not Reachable"
             and WI_SIDECAR_URL
