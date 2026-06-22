@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.22.263-staging"
+APP_VERSION = "2026.06.22.264-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -18591,12 +18591,12 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
     proof_url = None
     if state == "WI":
         wi_deadline = lookup_started + min(WI_LOOKUP_MAX_SECONDS, 60.0)
-        result = search_wi(None, org, max_seconds=min(32.0, max(22.0, WI_LOOKUP_MAX_SECONDS / 2.0)))
+        result = search_wi(None, org, max_seconds=min(24.0, max(18.0, WI_LOOKUP_MAX_SECONDS / 2.5)))
         wi_direct_attempt = 1
         while (
             public_status(result) == "Site Not Reachable"
             and time.perf_counter() < wi_deadline
-            and wi_direct_attempt < 3
+            and wi_direct_attempt < 2
         ):
             wi_direct_attempt += 1
             if wi_direct_attempt > 1 and time.perf_counter() + 2.0 < wi_deadline:
@@ -18604,7 +18604,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             retry_result = search_wi(
                 None,
                 org,
-                max_seconds=min(28.0, max(8.0, wi_deadline - time.perf_counter())),
+                max_seconds=min(14.0, max(8.0, wi_deadline - time.perf_counter())),
             )
             if public_status(retry_result) != "Site Not Reachable":
                 retry_result.source_note = " ".join(part for part in [
@@ -18613,19 +18613,6 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 ]).strip()
                 result = retry_result
                 break
-        if (
-            public_status(result) == "Site Not Reachable"
-            and WI_SIDECAR_URL
-            and WI_LOOKUP_SECRET
-            and time.perf_counter() < wi_deadline
-        ):
-            sidecar_result = search_wi_sidecar(org)
-            if public_status(sidecar_result) not in {"Site Not Reachable", "Not Registered"}:
-                sidecar_result.source_note = " ".join(part for part in [
-                    getattr(sidecar_result, "source_note", "") or "",
-                    "A bounded Wisconsin sidecar retry replaced an unusable direct registry response.",
-                ]).strip()
-                result = sidecar_result
         if (
             public_status(result) == "Site Not Reachable"
             and time.perf_counter() < wi_deadline
@@ -18641,6 +18628,19 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     "A bounded Wisconsin backend-browser retry replaced an unusable direct registry response.",
                 ]).strip()
                 result = browser_result
+        if (
+            public_status(result) == "Site Not Reachable"
+            and WI_SIDECAR_URL
+            and WI_LOOKUP_SECRET
+            and time.perf_counter() < wi_deadline
+        ):
+            sidecar_result = search_wi_sidecar(org)
+            if public_status(sidecar_result) not in {"Site Not Reachable", "Not Registered"}:
+                sidecar_result.source_note = " ".join(part for part in [
+                    getattr(sidecar_result, "source_note", "") or "",
+                    "A bounded Wisconsin sidecar retry replaced an unusable direct registry response.",
+                ]).strip()
+                result = sidecar_result
         if public_status(result) == "Site Not Reachable":
             clean_no_results = wi_confirm_clean_no_results_page(org)
             if clean_no_results is not None:
