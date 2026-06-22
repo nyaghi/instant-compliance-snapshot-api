@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.22.253-staging"
+APP_VERSION = "2026.06.22.254-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -8016,6 +8016,16 @@ def ct_prioritized_name_variants(original_name: str, variants: list[str]) -> lis
             prioritized.append(cleaned)
 
     base = re.sub(r"\s+", " ", (original_name or "").strip())
+    colon_prefix_match = re.match(r"^(.{3,60}?):\s+(.+)$", base)
+    if colon_prefix_match:
+        prefix = re.sub(r"\s+", " ", colon_prefix_match.group(1).strip(" ,;-"))
+        if prefix:
+            # CT's eLicense search can fail on the full legal name while the
+            # branded prefix returns the correct row. Keep this query narrow
+            # to colon-separated names and let the existing identity gate
+            # decide whether any returned row is safe to accept.
+            add(prefix)
+            add(re.sub(r"^(?:the|a|an)\s+", "", prefix, flags=re.I).strip())
     for variant in variants:
         add(variant)
     for variant in high_signal_search_phrases(base):
