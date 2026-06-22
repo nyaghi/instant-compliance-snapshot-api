@@ -1102,52 +1102,58 @@ def search_ny(page, org: Organization) -> StateResult:
             result.error = "Could not find NY organization name and EIN inputs"
             return result
 
-        name_input.fill("")
-        ein_input.fill("")
-        if formatted_ein:
-            ein_input.fill(formatted_ein)
-        else:
-            ein_input.fill(org.ein)
+        def ny_no_results(text: str) -> bool:
+            return bool(re.search(r"no rows available|no records|no results found|no results|not found|error fetching data", text or "", re.I))
 
-        clicked = False
-        for label in ["Search", "Find"]:
-            try:
-                page.get_by_role("button", name=re.compile(label, re.I)).click(timeout=4000)
-                clicked = True
+        def submit_ny_search(search_name: str = "", search_ein: str = "") -> str:
+            name_input.fill("")
+            ein_input.fill("")
+            if search_name:
+                name_input.fill(search_name)
+            if search_ein:
+                ein_input.fill(search_ein)
+            clicked = False
+            for label in ["Search", "Find"]:
+                try:
+                    page.get_by_role("button", name=re.compile(label, re.I)).click(timeout=4000)
+                    clicked = True
+                    break
+                except Exception:
+                    pass
+            if not clicked:
+                page.keyboard.press("Enter")
+            safe_wait_for_network_idle(page, timeout=25000)
+            fast_sleep(3)
+            return page.locator("body").inner_text(timeout=12000)
+
+        search_bodies = []
+        ein_queries = []
+        for value in [formatted_ein, ein_digits, org.ein]:
+            clean_value = str(value or "").strip()
+            if clean_value and clean_value not in ein_queries:
+                ein_queries.append(clean_value)
+        for query in ein_queries:
+            body = submit_ny_search(search_ein=query)
+            search_bodies.append(body)
+            if not ny_no_results(body):
                 break
-            except Exception:
-                pass
-        if not clicked:
-            page.keyboard.press("Enter")
+        else:
+            body = search_bodies[-1] if search_bodies else ""
 
-        safe_wait_for_network_idle(page, timeout=25000)
-        fast_sleep(3)
-
-        body = page.locator("body").inner_text(timeout=12000)
-        if re.search(r"no rows available|no records|no results found|no results|not found|error fetching data", body, re.I) and org.organization_name.strip():
+        if ny_no_results(body) and org.organization_name.strip():
             try:
-                name_input.fill("")
-                name_input.fill(search_name_query_variants(org.organization_name, max_words=5)[0])
-                ein_input.fill("")
-                clicked = False
-                for label in ["Search", "Find"]:
-                    try:
-                        page.get_by_role("button", name=re.compile(label, re.I)).click(timeout=4000)
-                        clicked = True
+                name_variants = search_name_query_variants(org.organization_name, max_words=5)[:3]
+                for name_query in name_variants:
+                    body = submit_ny_search(search_name=name_query)
+                    search_bodies.append(body)
+                    if not ny_no_results(body):
                         break
-                    except Exception:
-                        pass
-                if not clicked:
-                    page.keyboard.press("Enter")
-                safe_wait_for_network_idle(page, timeout=25000)
-                fast_sleep(3)
-                body = page.locator("body").inner_text(timeout=12000)
             except Exception:
                 pass
-        if re.search(r"no rows available|no records|no results found|no results|not found", body, re.I):
+        if ny_no_results(body):
             result.raw_status_text = "No results found"
             result.status = "Not Found"
-            result.source_note = "New York search returned no results found."
+            result.source_note = "New York search returned no results found after EIN and name fallback searches."
             result.success = True
             return result
 
