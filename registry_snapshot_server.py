@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.22.254-staging"
+APP_VERSION = "2026.06.22.255-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -9102,9 +9102,7 @@ def search_oh(page, org):
                         if (match) return { pageName: match[1], id: match[2] };
                     }
                 }
-                const body = document.body ? document.body.innerHTML : '';
-                const match = body.match(/OpenDetailsLink\\('([^']+)','(\\d+)'\\)/i);
-                return match ? { pageName: match[1], id: match[2] } : null;
+                return null;
             }
             """,
             ein_digits,
@@ -9157,6 +9155,7 @@ def search_oh(page, org):
                                     score = Math.max(score, 500 + Math.min(rowNorm.length, target.length));
                                 }
                             }
+                            if (score < 0) continue;
                             if (score < bestScore) continue;
                             const link = Array.from(row.querySelectorAll('a')).find((a) => /View Details/i.test((a.innerText || a.textContent || '')));
                             const onclick = link ? (link.getAttribute('onclick') || '') : '';
@@ -9214,6 +9213,8 @@ def search_oh(page, org):
             result.status = "Exempt"
         elif re.search(r"\bpending\b", registration_status or "", re.I):
             result.status = "Pending"
+        elif re.search(r"\b(dissolved|closed|withdrawn|cancel(?:ed|led)|terminated|inactive)\b", registration_status or "", re.I):
+            result.status = "Closed / Withdrawn / Canceled"
         elif re.search(r"\b(revoked|suspended)\b", registration_status or "", re.I):
             result.status = registration_status.title()
         elif filing_year_match and fiscal_month:
