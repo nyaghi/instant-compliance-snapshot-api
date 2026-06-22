@@ -40,8 +40,9 @@ STATUS_UNKNOWN = "Unknown"
 AK_SEARCH_URL = "https://online-registrations-law.alaska.gov/TLP/WebDoc/?link=PubQry"
 AK_YEARS_TO_TRY_COUNT = max(2, min(int(os.environ.get("CE_AK_YEARS_TO_TRY_COUNT", "6")), 8))
 AK_YEARS_TO_TRY = list(range(date.today().year, date.today().year - AK_YEARS_TO_TRY_COUNT, -1))
-AK_NAME_FALLBACK_YEARS = max(2, min(int(os.environ.get("CE_AK_NAME_FALLBACK_YEARS", "4")), AK_YEARS_TO_TRY_COUNT))
-AK_NAME_FALLBACK_VARIANTS = max(2, min(int(os.environ.get("CE_AK_NAME_FALLBACK_VARIANTS", "7")), 10))
+AK_NAME_FALLBACK_YEARS = max(1, min(int(os.environ.get("CE_AK_NAME_FALLBACK_YEARS", "2")), AK_YEARS_TO_TRY_COUNT, 3))
+AK_NAME_FALLBACK_VARIANTS = max(1, min(int(os.environ.get("CE_AK_NAME_FALLBACK_VARIANTS", "3")), 5))
+AK_NAME_FALLBACK_MAX_SECONDS = max(5.0, min(float(os.environ.get("CE_AK_NAME_FALLBACK_MAX_SECONDS", "18")), 30.0))
 AK_LOOKUP_MAX_SECONDS = max(35.0, min(float(os.environ.get("CE_AK_LOOKUP_MAX_SECONDS", "78")), 90.0))
 AK_EIN_FIRST_YEARS = max(1, min(int(os.environ.get("CE_AK_EIN_FIRST_YEARS", "2")), AK_YEARS_TO_TRY_COUNT))
 FAST_WAIT_MAX_MS = max(750, min(int(os.environ.get("CE_FAST_WAIT_MAX_MS", "1500")), 2000))
@@ -514,13 +515,18 @@ def find_ak_print_link(page, org: Organization, target_names: Optional[List[str]
 
             for (const row of rows) {
                 const rowText = (row.innerText || row.textContent || '').trim().replace(/\\s+/g, ' ');
-                const rowDigits = rowText.replace(/\\D/g, '');
-                const rowNorm = normalize(rowText);
-                const einMatch = !!(einDigits && rowDigits.includes(einDigits));
-                const nameMatch = targets.some((target) => target.length >= 8 && rowNorm.includes(target));
-                if (!rowText.includes(ein) && !einMatch && !nameMatch) {
-                    continue;
-                }
+            const rowDigits = rowText.replace(/\\D/g, '');
+            const rowEinDigits = (rowText.match(/\\b\\d{2}-\\d{7}\\b/g) || []).map((value) => value.replace(/\\D/g, ''));
+            const rowNorm = normalize(rowText);
+            const einMatch = !!(einDigits && rowDigits.includes(einDigits));
+            const nameMatch = targets.some((target) => target.length >= 8 && rowNorm.includes(target));
+            const conflictingEin = !!(einDigits && rowEinDigits.length && !rowEinDigits.includes(einDigits));
+            if (!einMatch && nameMatch && conflictingEin) {
+                continue;
+            }
+            if (!rowText.includes(ein) && !einMatch && !nameMatch) {
+                continue;
+            }
 
                 const links = Array.from(row.querySelectorAll('a'));
                 for (const link of links) {
@@ -585,34 +591,50 @@ def ak_name_fallback_variants(name: str) -> List[str]:
 
     def add(value: str) -> None:
         cleaned = re.sub(r"\s+", " ", (value or "").strip(" ,;-"))
+        cleaned_words = cleaned.split()
+        if len(cleaned_words) == 1:
+            return
+        if len(cleaned) < 8:
+            return
         key = cleaned.lower()
         if cleaned and key not in seen_lower:
             seen_lower.add(key)
             prioritized.append(cleaned)
 
+    def add_core(value: str) -> None:
+        core = normalize_name(value or "")
+        if not core:
+            return
+        words = core.split()
+        stripped = [word for word in words if word not in {"foundation", "fund", "inc", "incorporated", "corp", "corporation", "llc", "ltd"}]
+        if len(stripped) >= 2:
+            add(" ".join(stripped[:5]).upper())
+        add(" ".join(words[:5]).upper())
+
+    add_core(name)
     if base_variants:
-        add(base_variants[0])
+        add_core(base_variants[0])
     if re.search(r"[/\\]", name or ""):
         for part in re.split(r"[/\\]+", name or ""):
-            add(part)
+            add_core(part)
         for variant in base_variants:
             if "/" not in variant and "\\" not in variant and re.search(r"\b[A-Za-z]{3,}\b", variant):
-                add(variant)
+                add_core(variant)
     hyphen_variants = [variant for variant in base_variants if "-" in variant]
     hyphen_variants.sort(key=lambda value: 1 if re.search(r"^\S+[-\u2010-\u2015]\S+", value or "") else 0)
     for variant in hyphen_variants:
-        add(variant)
+        add_core(variant)
     reduced = re.sub(
         r"\b(?:national\s+)?(?:medical\s+center|hospital\s+center|hospital)\b\.?\s*$",
         "",
         name or "",
         flags=re.I,
     ).strip(" ,;-")
-    add(reduced)
+    add_core(reduced)
     if reduced:
-        add(re.sub(r"[-\u2010-\u2015]+", " ", reduced))
+        add_core(re.sub(r"[-\u2010-\u2015]+", " ", reduced))
     for variant in base_variants:
-        add(variant)
+        add_core(variant)
     return prioritized[:AK_NAME_FALLBACK_VARIANTS]
 
 def read_ak_accounting_year_from_pdf(page, context, print_link) -> Optional[int]:
@@ -1514,11 +1536,15 @@ def search_ak(browser, org: Organization, artifacts_dir: Optional[Path] = None) 
 
         fallback_variants = ak_name_fallback_variants(org.organization_name)
         fallback_years = AK_YEARS_TO_TRY[:AK_NAME_FALLBACK_YEARS]
+        fallback_deadline = min(
+            started + AK_LOOKUP_MAX_SECONDS,
+            time.perf_counter() + AK_NAME_FALLBACK_MAX_SECONDS,
+        )
         for variant in fallback_variants:
-            if time.perf_counter() - started >= AK_LOOKUP_MAX_SECONDS:
+            if time.perf_counter() >= fallback_deadline:
                 break
             for year in fallback_years:
-                if time.perf_counter() - started >= AK_LOOKUP_MAX_SECONDS:
+                if time.perf_counter() >= fallback_deadline:
                     break
                 try:
                     matched = run_ak_query(year, query_name=variant, use_ein=False)
