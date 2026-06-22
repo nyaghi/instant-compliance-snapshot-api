@@ -255,6 +255,10 @@ def add_months(value: date, months: int) -> date:
     day = min(value.day, month_lengths[month - 1])
     return date(year, month, day)
 
+def fifteenth_day_after_fiscal_year_end(fy_end: date, months_after_end_month: int) -> date:
+    due_month = add_months(fy_end, months_after_end_month)
+    return due_month.replace(day=15)
+
 def parse_date_value(raw: str):
     txt = re.sub(r"\s+", " ", raw or "").strip()
     if not txt:
@@ -1343,14 +1347,21 @@ def search_ny(page, org: Organization) -> StateResult:
             result.raw_status_text = "No filings found"
             result.status = "Delinquent"
             result.source_note = "Annual Filing Documents did not expose any Fiscal Year End values."
+            result.status_reason = "NY_SAFE_MATCH_NO_FILINGS_DELINQUENT"
             result.success = True
             return result
 
         latest_fye = max(fye_dates)
-        due_date = add_months(latest_fye, 6)
-        result.status = "Current" if date.today() <= due_date else "Delinquent"
-        result.raw_status_text = f"Latest FYE: {latest_fye.isoformat()} | Due: {due_date.isoformat()}"
-        result.source_note = "New York status derived from the most recent Fiscal Year End in Annual Filing Documents."
+        next_fye = add_months(latest_fye, 12)
+        next_due = fifteenth_day_after_fiscal_year_end(next_fye, 5)
+        if next_due < date.today():
+            result.status = "Delinquent"
+        elif next_due <= date.today() + timedelta(days=183):
+            result.status = "Upcoming Filing"
+        else:
+            result.status = "Current"
+        result.raw_status_text = f"Latest FYE: {latest_fye.isoformat()} | Next Required Period: {next_fye.isoformat()} | Next Filing Due: {next_due.isoformat()}"
+        result.source_note = "New York status derived from the latest Fiscal Year End on record and the next CHAR500 annual filing cycle."
         result.success = True
         return result
     except Exception as e:

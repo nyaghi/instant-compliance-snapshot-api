@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.22.255-staging"
+APP_VERSION = "2026.06.22.256-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -12414,7 +12414,9 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
     normalize_registry_match_fields(result, org)
     if (getattr(result, "state", "") or "").upper() == "NY":
         result = normalize_ny_registry_match_metadata(org, result)
+        result = apply_ny_latest_fye_next_cycle_status(org, result, body)
         result = repair_ny_not_registered_with_due_date(org, result)
+        result = normalize_ny_registry_match_metadata(org, result)
     if (
         (getattr(result, "state", "") or "").upper() == "WI"
         and public_status(result) != "Not Registered"
@@ -13590,6 +13592,7 @@ def repair_ny_not_registered_with_due_date(org, result):
         result.matched_registry_identifier = requested_ein
     if re.search(r"\bNo\s+filings?\s+found\b", evidence_text, re.I) or annual_filings_absent(evidence_text):
         result.status = checker.STATUS_DELINQUENT
+        result.status_reason = "NY_SAFE_MATCH_NO_FILINGS_DELINQUENT"
         existing_note = re.sub(
             r"\bNew York search returned no results found after EIN and name fallback searches\.?\s*",
             "",
@@ -13623,6 +13626,90 @@ def repair_ny_not_registered_with_due_date(org, result):
     result.source_note = " ".join(part for part in [
         existing_note,
         "New York returned a safe matching organization row with an annual-report due date; CharityClarity classified the status from that due date.",
+    ]).strip()
+    result.success = True
+    return result
+
+
+def ny_latest_fye_from_evidence_text(text: str) -> date | None:
+    match = re.search(
+        r"\bLatest\s+FYE\s*:?\s*"
+        r"(\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+        text or "",
+        re.I,
+    )
+    return parse_due_date(match.group(1)) if match else None
+
+
+def ny_safe_identity_from_evidence(org, result, evidence_text: str) -> bool:
+    registry_name = clean_registry_name(getattr(result, "matched_registry_name", "") or "")
+    registry_identity_name = re.split(
+        r"\b(?:Registration\s+type|Registration\s+category|Federal\s+tax\s+ID|County)\b",
+        registry_name,
+        maxsplit=1,
+        flags=re.I,
+    )[0].strip()
+    requested_ein = re.sub(r"\D", "", getattr(org, "ein", "") or getattr(result, "ein", "") or "")
+    identifier = getattr(result, "matched_registry_identifier", "") or ""
+    evidence_digits = re.sub(r"\D", "", evidence_text or "")
+    if requested_ein and (requested_ein in re.sub(r"\D", "", identifier) or requested_ein in evidence_digits):
+        return True
+    requested_name = getattr(org, "organization_name", "") or getattr(result, "organization_name", "")
+    return bool(
+        registry_name
+        and (
+            registry_name_is_safe_for_org(registry_name, requested_name, requested_ein)
+            or (
+                registry_identity_name
+                and registry_name_is_safe_for_org(registry_identity_name, requested_name, requested_ein)
+            )
+        )
+    )
+
+
+def apply_ny_latest_fye_next_cycle_status(org, result, body: str = ""):
+    """Use the latest NY FYE row as filed evidence, then classify the next filing cycle."""
+    if (getattr(result, "state", "") or "").upper() != "NY":
+        return result
+    if public_status(result) in {"Exempt", "Pending", "Suspended", "Revoked", "Closed / Withdrawn / Canceled"}:
+        return result
+    evidence_text = " ".join(part for part in [
+        getattr(result, "matched_registry_name", "") or "",
+        getattr(result, "matched_registry_identifier", "") or "",
+        getattr(result, "raw_status_text", "") or "",
+        getattr(result, "source_note", "") or "",
+        body or "",
+    ] if part)
+    latest_fye = ny_latest_fye_from_evidence_text(evidence_text)
+    if not latest_fye or not ny_safe_identity_from_evidence(org, result, evidence_text):
+        return result
+    next_fye = add_months(latest_fye, 12)
+    next_due = fifteenth_day_after_fiscal_year_end(next_fye, 5)
+    result.status = status_from_calendar_date(next_due)
+    result.raw_status_text = re.sub(
+        r"\s*\|\s*Due\s*:?\s*(?:\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+        "",
+        getattr(result, "raw_status_text", "") or "",
+        flags=re.I,
+    ).strip()
+    if "Next Filing Due" not in result.raw_status_text:
+        result.raw_status_text = " | ".join(part for part in [
+            result.raw_status_text or f"Latest FYE: {latest_fye.isoformat()}",
+            f"Next Required Period: {next_fye.isoformat()}",
+            f"Next Filing Due: {format_date(next_due)}",
+        ] if part)
+    result.last_year_on_record = str(latest_fye.year)
+    result.fiscal_year_end = format_date(latest_fye)
+    result.next_required_period = format_date(next_fye)
+    result.computed_due_date = format_date(next_due)
+    result.status_reason = "NY_STATUS_FROM_LATEST_FYE_NEXT_CYCLE"
+    result.source_note = " ".join(part for part in [
+        getattr(result, "source_note", "") or "",
+        (
+            f"New York shows the latest fiscal year end on record as {format_date(latest_fye)}. "
+            f"CharityClarity calculated the next NY CHAR500 filing for FY ending {format_date(next_fye)} "
+            f"as due {format_date(next_due)}."
+        ),
     ]).strip()
     result.success = True
     return result
@@ -13674,6 +13761,10 @@ def ny_safe_due_status_from_evidence(org, result, body: str = "") -> str:
     )
     if not safe_identity:
         return ""
+    latest_fye = ny_latest_fye_from_evidence_text(evidence_text)
+    if latest_fye:
+        next_due = fifteenth_day_after_fiscal_year_end(add_months(latest_fye, 12), 5)
+        return status_from_calendar_date(next_due)
     due_match = re.search(
         r"\b(?:Due|Filing\s+Due|Next\s+Filing\s+Due|Report\s+Due|Annual\s+Report\s+Due)\s*:?\s*"
         r"(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
@@ -14076,6 +14167,9 @@ def true_status_from_body(result, body: str) -> str:
     if result_explicitly_exempt(result):
         return "Exempt"
     if state == "NY":
+        cycle_result = apply_ny_latest_fye_next_cycle_status(result, result, body)
+        if getattr(cycle_result, "status_reason", "") == "NY_STATUS_FROM_LATEST_FYE_NEXT_CYCLE":
+            return public_status(cycle_result)
         ny_safe_status = ny_safe_due_status_from_evidence(result, result, body)
         if ny_safe_status:
             return ny_safe_status
@@ -14477,6 +14571,21 @@ def concise_status_rationale_comment(result, body: str, public_facing_status: st
                 f"Official Alaska registry evidence shows the next charitable registration renewal is due "
                 f"{format_date(ak_due)}{timing_text}, so the status is {public_facing_status}."
             )
+
+    if state == "NY" and status_reason == "NY_SAFE_MATCH_NO_FILINGS_DELINQUENT":
+        return (
+            "New York returned a safe matching organization record, but the Annual Filing Documents section did not "
+            "expose any fiscal year end filings. CharityClarity treats the non-exempt matched New York record as Delinquent."
+        )
+
+    if state == "NY" and status_reason == "NY_STATUS_FROM_LATEST_FYE_NEXT_CYCLE" and computed_due:
+        timing = status_timing_phrase(public_facing_status)
+        timing_text = f", which is {timing}" if timing else ""
+        return (
+            f"Official New York records show the latest fiscal year end on record as {fiscal_year_end or 'not identified'}. "
+            f"The next CHAR500 filing period ends {next_period or 'not identified'} and is due "
+            f"{format_date(computed_due)}{timing_text}, so the status is {public_facing_status}."
+        )
 
     if normalized_status in {"current", "upcoming filing", "delinquent"} and computed_due:
         timing = status_timing_phrase(public_facing_status)
@@ -18791,6 +18900,8 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                             "Confirmed on a second NY public-registry pass after the first pass returned no record.",
                         ]).strip()
                         result = confirmed_result
+                result = normalize_ny_registry_match_metadata(org, result)
+                result = apply_ny_latest_fye_next_cycle_status(org, result)
                 result = repair_ny_not_registered_with_due_date(org, result)
                 result = normalize_ny_registry_match_metadata(org, result)
             elif state == "NJ":
