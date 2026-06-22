@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.22.252-staging"
+APP_VERSION = "2026.06.22.253-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -285,7 +285,7 @@ NAME_SEARCH_PREFLIGHT_URLS = {
 }
 AR_SEARCH_URL = "https://sos-corp-search.ark.org/index.php/charity"
 WV_SEARCH_URL = "https://erls.wvsos.gov/OnlineCharitiesSearch/Search"
-WV_GOTO_TIMEOUT_MS = min(max(4000, int(os.environ.get("CE_WV_GOTO_TIMEOUT_MS", "6000"))), 8000)
+WV_GOTO_TIMEOUT_MS = min(max(6000, int(os.environ.get("CE_WV_GOTO_TIMEOUT_MS", "10000"))), 12000)
 WV_NETWORK_IDLE_TIMEOUT_MS = min(max(1000, int(os.environ.get("CE_WV_NETWORK_IDLE_TIMEOUT_MS", "1500"))), 3000)
 WV_SEARCH_IDLE_TIMEOUT_MS = min(max(1000, int(os.environ.get("CE_WV_SEARCH_IDLE_TIMEOUT_MS", "1500"))), 3000)
 WV_LOOKUP_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_WV_LOOKUP_MAX_SECONDS", "25"))), 40.0)
@@ -13579,8 +13579,14 @@ def repair_ny_not_registered_with_due_date(org, result):
         result.matched_registry_identifier = requested_ein
     if re.search(r"\bNo\s+filings?\s+found\b", evidence_text, re.I) or annual_filings_absent(evidence_text):
         result.status = checker.STATUS_DELINQUENT
-        result.source_note = " ".join(part for part in [
+        existing_note = re.sub(
+            r"\bNew York search returned no results found after EIN and name fallback searches\.?\s*",
+            "",
             getattr(result, "source_note", "") or "",
+            flags=re.I,
+        ).strip()
+        result.source_note = " ".join(part for part in [
+            existing_note,
             "New York returned a safe matching organization row but no annual filings were exposed; CharityClarity treats the non-exempt matched record as Delinquent.",
         ]).strip()
         result.success = True
@@ -13597,12 +13603,76 @@ def repair_ny_not_registered_with_due_date(org, result):
     if not due_date:
         return result
     result.status = status_from_calendar_date(due_date)
-    result.source_note = " ".join(part for part in [
+    existing_note = re.sub(
+        r"\bNew York search returned no results found after EIN and name fallback searches\.?\s*",
+        "",
         getattr(result, "source_note", "") or "",
+        flags=re.I,
+    ).strip()
+    result.source_note = " ".join(part for part in [
+        existing_note,
         "New York returned a safe matching organization row with an annual-report due date; CharityClarity classified the status from that due date.",
     ]).strip()
     result.success = True
     return result
+
+
+def ny_safe_due_status_from_evidence(org, result, body: str = "") -> str:
+    """Return NY interpreted status when safe identity and filing due evidence exist."""
+    if (getattr(result, "state", "") or "").upper() != "NY":
+        return ""
+    registry_name = clean_registry_name(getattr(result, "matched_registry_name", "") or "")
+    registry_identity_name = re.split(
+        r"\b(?:Registration\s+type|Registration\s+category|Federal\s+tax\s+ID|County)\b",
+        registry_name,
+        maxsplit=1,
+        flags=re.I,
+    )[0].strip()
+    identifier = getattr(result, "matched_registry_identifier", "") or ""
+    evidence_text = " ".join(part for part in [
+        registry_name,
+        identifier,
+        getattr(result, "raw_status_text", "") or "",
+        getattr(result, "source_note", "") or "",
+        body or "",
+    ] if part)
+    requested_ein = re.sub(r"\D", "", getattr(org, "ein", "") or getattr(result, "ein", "") or "")
+    evidence_digits = re.sub(r"\D", "", evidence_text)
+    safe_identity = bool(
+        (
+            requested_ein
+            and (
+                requested_ein in re.sub(r"\D", "", identifier)
+                or requested_ein in evidence_digits
+            )
+        )
+        or (
+            registry_name
+            and (
+                registry_name_is_safe_for_org(registry_name, getattr(org, "organization_name", "") or getattr(result, "organization_name", ""), requested_ein)
+                or (
+                    registry_identity_name
+                    and registry_name_is_safe_for_org(
+                        registry_identity_name,
+                        getattr(org, "organization_name", "") or getattr(result, "organization_name", ""),
+                        requested_ein,
+                    )
+                )
+            )
+        )
+    )
+    if not safe_identity:
+        return ""
+    due_match = re.search(
+        r"\b(?:Due|Filing\s+Due|Next\s+Filing\s+Due|Report\s+Due|Annual\s+Report\s+Due)\s*:?\s*"
+        r"(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+        evidence_text,
+        re.I,
+    )
+    if not due_match:
+        return checker.STATUS_DELINQUENT if annual_filings_absent(evidence_text) else ""
+    due_date = parse_due_date(due_match.group(1))
+    return status_from_calendar_date(due_date) if due_date else ""
 
 
 def normalize_ny_registry_match_metadata(org, result):
@@ -13994,6 +14064,10 @@ def true_status_from_body(result, body: str) -> str:
         return status_from_calendar_date(registry_date) if registry_date else base_status
     if result_explicitly_exempt(result):
         return "Exempt"
+    if state == "NY":
+        ny_safe_status = ny_safe_due_status_from_evidence(result, result, body)
+        if ny_safe_status:
+            return ny_safe_status
     if (
         state == "NY"
         and annual_filings_absent(combined)
@@ -18869,35 +18943,42 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 body = registry_page_body(page)
             elif state == "WV":
                 reachable, _, preflight_result = preflight_name_search_registry(org, "WV")
-                if not reachable:
-                    result = preflight_result
-                else:
-                    result = search_wv_precise(page, org)
-                    elapsed_before_wv_confirmation = time.perf_counter() - lookup_started
-                    wv_retry_count = 0
-                    while wv_transient_portal_failure_result(result) and elapsed_before_wv_confirmation < 55.0 and wv_retry_count < 2:
-                        time.sleep(1.0)
-                        wv_retry_count += 1
-                        retried_result = search_wv_precise(page, org)
-                        if not wv_transient_portal_failure_result(retried_result):
-                            retried_result.source_note = " ".join(part for part in [
-                                retried_result.source_note or "",
-                                "A quick retry replaced an initial West Virginia transient lookup failure.",
-                            ]).strip()
-                            result = retried_result
-                            break
+                result = search_wv_precise(page, org)
+                if not reachable and not wv_transient_portal_failure_result(result):
+                    result.source_note = " ".join(part for part in [
+                        result.source_note or "",
+                        "CharityClarity ignored an initial West Virginia preflight timeout because the browser lookup completed successfully.",
+                    ]).strip()
+                elif not reachable and wv_transient_portal_failure_result(result):
+                    result.source_note = " ".join(part for part in [
+                        getattr(preflight_result, "source_note", "") or "",
+                        result.source_note or "",
+                    ]).strip()
+                elapsed_before_wv_confirmation = time.perf_counter() - lookup_started
+                wv_retry_count = 0
+                while wv_transient_portal_failure_result(result) and elapsed_before_wv_confirmation < 55.0 and wv_retry_count < 2:
+                    time.sleep(1.0)
+                    wv_retry_count += 1
+                    retried_result = search_wv_precise(page, org)
+                    if not wv_transient_portal_failure_result(retried_result):
+                        retried_result.source_note = " ".join(part for part in [
+                            retried_result.source_note or "",
+                            "A quick retry replaced an initial West Virginia transient lookup failure.",
+                        ]).strip()
                         result = retried_result
-                        elapsed_before_wv_confirmation = time.perf_counter() - lookup_started
-                    confirm_wv_no_match = os.environ.get("CE_WV_CONFIRM_SINGLE_NO_MATCH", "0").strip().lower() in {"1", "true", "yes"}
-                    if confirm_single_no_match and confirm_wv_no_match and public_status(result) == "Not Registered" and elapsed_before_wv_confirmation < 40.0:
-                        time.sleep(2.0)
-                        confirmed_result = search_wv_precise(page, org)
-                        if public_status(confirmed_result) not in {"Not Registered", "Site Not Reachable", checker.STATUS_UNKNOWN}:
-                            confirmed_result.source_note = " ".join(part for part in [
-                                confirmed_result.source_note or "",
-                                "A delayed confirmation lookup replaced an initial West Virginia no-record response.",
-                            ]).strip()
-                            result = confirmed_result
+                        break
+                    result = retried_result
+                    elapsed_before_wv_confirmation = time.perf_counter() - lookup_started
+                confirm_wv_no_match = os.environ.get("CE_WV_CONFIRM_SINGLE_NO_MATCH", "0").strip().lower() in {"1", "true", "yes"}
+                if confirm_single_no_match and confirm_wv_no_match and public_status(result) == "Not Registered" and elapsed_before_wv_confirmation < 40.0:
+                    time.sleep(2.0)
+                    confirmed_result = search_wv_precise(page, org)
+                    if public_status(confirmed_result) not in {"Not Registered", "Site Not Reachable", checker.STATUS_UNKNOWN}:
+                        confirmed_result.source_note = " ".join(part for part in [
+                            confirmed_result.source_note or "",
+                            "A delayed confirmation lookup replaced an initial West Virginia no-record response.",
+                        ]).strip()
+                        result = confirmed_result
                 body = registry_page_body(page)
             elif state == "WI":
                 result = search_wi(page, org)
