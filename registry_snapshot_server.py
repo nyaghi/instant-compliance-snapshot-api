@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.22.262-staging"
+APP_VERSION = "2026.06.22.263-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -18591,7 +18591,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
     proof_url = None
     if state == "WI":
         wi_deadline = lookup_started + min(WI_LOOKUP_MAX_SECONDS, 60.0)
-        result = search_wi(None, org, max_seconds=min(57.0, max(28.0, WI_LOOKUP_MAX_SECONDS)))
+        result = search_wi(None, org, max_seconds=min(32.0, max(22.0, WI_LOOKUP_MAX_SECONDS / 2.0)))
         wi_direct_attempt = 1
         while (
             public_status(result) == "Site Not Reachable"
