@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.22.256-staging"
+APP_VERSION = "2026.06.22.257-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -12355,7 +12355,7 @@ def _search_wi_sidecar_unlocked(org):
     return result
 
 
-def search_wi_backend_browser_fallback(org):
+def search_wi_backend_browser_fallback(org, max_seconds: float | None = None):
     acquired = WI_BACKEND_BROWSER_SEMAPHORE.acquire(timeout=WI_BACKEND_BROWSER_ACQUIRE_SECONDS)
     if not acquired:
         result = checker.StateResult(org.organization_name, org.ein, "WI", "Site Not Reachable", WI_SEARCH_URL)
@@ -12373,9 +12373,9 @@ def search_wi_backend_browser_fallback(org):
             page = context.new_page()
             global WI_BROWSER_VARIANT_LIMIT
             previous_browser_variant_limit = WI_BROWSER_VARIANT_LIMIT
-            WI_BROWSER_VARIANT_LIMIT = max(previous_browser_variant_limit, 3)
+            WI_BROWSER_VARIANT_LIMIT = max(previous_browser_variant_limit, 6)
             try:
-                return search_wi(page, org)
+                return search_wi(page, org, max_seconds=max_seconds)
             finally:
                 WI_BROWSER_VARIANT_LIMIT = previous_browser_variant_limit
         except Exception as exc:
@@ -13154,6 +13154,17 @@ def search_pa_with_name_fallback(page, org):
         include_leading_article_variants=True,
         max_queries=8,
     )
+    pa_priority_queries: list[str] = []
+    core_words = distinctive_core_words(org.organization_name)
+    if len(core_words) >= 2:
+        pa_priority_queries.append(" ".join(core_words[:2]))
+    if len(core_words) >= 3:
+        pa_priority_queries.append(" ".join(core_words[:3]))
+    for variant in [*pa_priority_queries, *high_signal_search_phrases(org.organization_name), *variants]:
+        cleaned = re.sub(r"\s+", " ", (variant or "").strip())
+        if cleaned and cleaned.lower() not in {existing.lower() for existing in pa_priority_queries}:
+            pa_priority_queries.append(cleaned)
+    variants = pa_priority_queries[:10]
     for variant in variants:
         if time.monotonic() - fallback_started > fallback_budget_seconds:
             result.source_note = (
@@ -18601,6 +18612,21 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     "A bounded Wisconsin sidecar retry replaced an unusable direct registry response.",
                 ]).strip()
                 result = sidecar_result
+        if (
+            public_status(result) == "Site Not Reachable"
+            and time.perf_counter() < wi_deadline
+        ):
+            remaining = max(5.0, wi_deadline - time.perf_counter())
+            browser_result = search_wi_backend_browser_fallback(
+                org,
+                max_seconds=min(30.0, remaining),
+            )
+            if public_status(browser_result) != "Site Not Reachable":
+                browser_result.source_note = " ".join(part for part in [
+                    getattr(browser_result, "source_note", "") or "",
+                    "A bounded Wisconsin backend-browser retry replaced an unusable direct registry response.",
+                ]).strip()
+                result = browser_result
         if public_status(result) == "Site Not Reachable":
             clean_no_results = wi_confirm_clean_no_results_page(org)
             if clean_no_results is not None:
