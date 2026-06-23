@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.22.267-staging"
+APP_VERSION = "2026.06.22.268-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -19695,6 +19695,26 @@ def nm_tax_year_open_no_match_result(result: dict) -> bool:
     return bool(re.search(r"\bTax\s+Year\s+Registration\s+Open\b", transient_negative_text(result), re.I))
 
 
+def nm_tax_year_open_detail_result(result: dict) -> dict:
+    updated = dict(result)
+    updated["status"] = checker.STATUS_DELINQUENT
+    updated["matched_registry_identifier"] = updated.get("matched_registry_identifier") or format_ein(updated.get("ein") or "")
+    updated["raw_status_text"] = transient_negative_text(result) or "Tax Year Registration Open"
+    note = (
+        "New Mexico's FEIN-specific detail response exposed an open registration year for the requested EIN, "
+        "but did not expose submitted filing rows during this lookup. CharityClarity treats a confirmed FEIN "
+        "detail record with only an open required registration year as Delinquent rather than Not Registered "
+        "or Unable to Confirm."
+    )
+    updated["comments"] = "\n\n".join(part for part in [updated.get("comments") or "", note] if part)
+    updated["source_note"] = " ".join(part for part in [updated.get("source_note") or "", note] if part).strip()
+    updated["reason_code"] = "NM_FEIN_DETAIL_TAX_YEAR_OPEN_ONLY"
+    updated["source_confidence"] = "confirmed_fein_detail_open_registration_year"
+    updated["success"] = True
+    updated["error"] = ""
+    return updated
+
+
 def ak_batch_result_needs_confirmation(result: dict) -> bool:
     """AK historical EIN searches can miss current evidence under batch pressure; confirm risky negatives."""
     state = (result.get("state") or "").upper()
@@ -19865,6 +19885,8 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
         best_reachable_result["semantic_attempts"] = result.get("semantic_attempts", best_reachable_result.get("semantic_attempts"))
         best_reachable_result["wa_retry_fallback"] = "kept reachable result after later retry timed out"
         return best_reachable_result
+    if result and state == "NM" and nm_tax_year_open_no_match_result(result):
+        return nm_tax_year_open_detail_result(result)
     if result and is_incomplete_no_match_result(state, (result.get("status") or "").strip().lower(), result):
         return conservative_incomplete_lookup_result(result, state)
     return result or run_state_lookup(organization_name, ein, state)
