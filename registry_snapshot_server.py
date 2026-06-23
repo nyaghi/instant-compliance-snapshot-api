@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.22.266-staging"
+APP_VERSION = "2026.06.22.267-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -18084,7 +18084,7 @@ def search_wa_nm_state(org, state: str):
             if hosted_status == "Not Registered" and re.search(r"\bTax\s+Year\s+Registration\s+Open\b", hosted_raw, re.I):
                 retry_result = search_nm_status_history_reader(org, module)
                 retry_status = external_status_to_checker_status(getattr(retry_result, "status", ""))
-                if retry_status not in {checker.STATUS_UNKNOWN, "Not Registered"}:
+                if retry_status not in {checker.STATUS_UNKNOWN, "Not Registered", "Unable to Confirm", "Unable to Verify", "Site Not Reachable"}:
                     external_result = retry_result
                 else:
                     sidecar_result = search_nm_status_history_sidecar(
@@ -18094,7 +18094,7 @@ def search_wa_nm_state(org, state: str):
                     )
                     sidecar_result = nm_retry_identity_missing_sidecar(org, module, sidecar_result)
                     sidecar_status = external_status_to_checker_status(getattr(sidecar_result, "status", ""))
-                    if sidecar_status not in {checker.STATUS_UNKNOWN, "Not Registered"}:
+                    if sidecar_status not in {checker.STATUS_UNKNOWN, "Not Registered", "Unable to Confirm", "Unable to Verify", "Site Not Reachable"}:
                         external_result = sidecar_result
                     else:
                         clean_no_match = nm_completed_clean_no_match_result(
