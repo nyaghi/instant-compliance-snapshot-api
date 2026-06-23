@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.22.264-staging"
+APP_VERSION = "2026.06.22.265-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -18290,6 +18290,26 @@ def nm_status_history_rows_from_text_master(*texts: str) -> list[tuple[int, str,
     return rows
 
 
+def nm_reader_identity_name_from_text(text: str, formatted_ein: str) -> str:
+    if not text or not formatted_ein:
+        return ""
+    ein_pattern = re.escape(formatted_ein)
+    patterns = [
+        rf"Markdown Content:\s*([^\n\r]+?)\s*\({ein_pattern}\)",
+        rf"^\s*([A-Z][^\n\r]{{3,180}}?)\s*\({ein_pattern}\)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, re.I | re.M)
+        if not match:
+            continue
+        candidate = re.sub(r"\s+", " ", match.group(1)).strip(" -|\t")
+        candidate = re.sub(r"\s+(?:https?://|www\.).*$", "", candidate, flags=re.I).strip()
+        candidate = useful_registry_name(candidate)
+        if candidate:
+            return candidate
+    return ""
+
+
 def search_nm_status_history_reader(org, module):
     formatted_ein = format_ein(org.ein)
     detail_url = f"https://secure.nmdoj.gov/CharitySearch/CharityDetail.aspx?FEIN={quote(formatted_ein, safe='')}"
@@ -18339,9 +18359,10 @@ def search_nm_status_history_reader(org, module):
         result.success = True
         return result
 
-    name_match = re.search(r"Markdown Content:\s*([^\n\r]+?)\s*\(" + re.escape(formatted_ein) + r"\)", text, re.I)
-    if name_match:
-        result.matched_registry_name = re.sub(r"\s+", " ", name_match.group(1)).strip()
+    registry_name = nm_reader_identity_name_from_text(text, formatted_ein)
+    if registry_name:
+        result.matched_registry_name = registry_name
+        result.matched_registry_identifier = formatted_ein
     rows = nm_status_history_rows_from_text_master(text)
     if not rows:
         result.raw_status_text = "NM reader page reached, but Status History rows were not parsed"
