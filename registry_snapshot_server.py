@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.22.268-staging"
+APP_VERSION = "2026.06.22.269-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -19697,7 +19697,7 @@ def nm_tax_year_open_no_match_result(result: dict) -> bool:
 
 def nm_tax_year_open_detail_result(result: dict) -> dict:
     updated = dict(result)
-    updated["status"] = checker.STATUS_DELINQUENT
+    updated["status"] = "Delinquent"
     updated["matched_registry_identifier"] = updated.get("matched_registry_identifier") or format_ein(updated.get("ein") or "")
     updated["raw_status_text"] = transient_negative_text(result) or "Tax Year Registration Open"
     note = (
