@@ -2,13 +2,130 @@ services:
   - type: web
     name: instant-compliance-snapshot-api
     runtime: python
-    plan: starter
-    buildCommand: pip install -r requirements.txt && python -m playwright install chromium
+    plan: standard
+    buildCommand: pip install -r requirements.txt && PLAYWRIGHT_BROWSERS_PATH=0 python -m playwright install chromium
     startCommand: python registry_snapshot_server.py
+    healthCheckPath: /healthz
     envVars:
       - key: HOST
         value: 0.0.0.0
       - key: PUBLIC_BASE_URL
-        sync: false
+        value: https://instant-compliance-snapshot-api.onrender.com
+      - key: CE_STAGING_ACCESS_REQUIRED
+        value: "0"
+      - key: CE_ENABLE_WI_STATE
+        value: "1"
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: "0"
       - key: PYTHONUNBUFFERED
         value: "1"
+      - key: CE_MAX_PARALLEL_LOOKUPS
+        value: "16"
+      - key: CE_MAX_BROWSER_LOOKUPS
+        value: "16"
+      - key: CE_CONFIRM_FRAGILE_BATCH_RESULTS
+        value: "0"
+      - key: CE_BATCH_CONFIRMATION_WORKERS
+        value: "8"
+      - key: CE_BATCH_ISOLATED_STATES
+        value: "AR,ME,OR,FL,WI,VA,SC,ND,WA,NM,MS,OK,WV"
+      - key: CE_BATCH_ISOLATED_WORKERS
+        value: "8"
+      - key: CE_BATCH_STATE_LOOKUP_TIMEOUT_SECONDS
+        value: "87"
+      - key: CE_BATCH_FANOUT_SINGLE_STATE_LOOKUPS
+        value: "1"
+      - key: CE_BATCH_FANOUT_API_URL
+        value: https://instant-compliance-snapshot-api.onrender.com/api/check
+      - key: CE_BATCH_FANOUT_API_URLS
+        value: https://instant-compliance-snapshot-api.onrender.com/api/check
+      - key: CE_BATCH_FANOUT_MAX_WORKERS
+        value: "30"
+      - key: CE_BATCH_FANOUT_STATE_TIMEOUT_SECONDS
+        value: "87"
+      - key: CE_BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS
+        value: "1"
+      - key: CE_ME_LOOKUP_MIN_INTERVAL_SECONDS
+        value: "1"
+      - key: CE_ME_CONFIRM_NOT_REGISTERED
+        value: "1"
+      - key: CE_ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS
+        value: "1"
+      - key: CE_ME_FAST_DIRECT_CONFIRMATION_MAX_VARIANTS
+        value: "3"
+      - key: CE_MI_ENABLE_NAME_FALLBACK
+        value: "1"
+      - key: CE_ENABLE_CROSS_STATE_NAME_RETRY
+        value: "0"
+      - key: CE_LOOKUP_SOFT_MAX_SECONDS
+        value: "59"
+      - key: CE_NAME_SEARCH_VARIANT_MAX_SECONDS
+        value: "35"
+      - key: CE_CT_NAME_VARIANT_MAX_SECONDS
+        value: "28"
+      - key: CE_CT_NAME_VARIANT_LIMIT
+        value: "8"
+      - key: CE_SINGLE_STATE_SEMANTIC_RETRY_ATTEMPTS
+        value: "2"
+      - key: CE_SINGLE_STATE_SEMANTIC_RETRY_DELAY_SECONDS
+        value: "1"
+      - key: CE_SINGLE_STATE_SEMANTIC_RETRY_STATES
+        value: "AK,AR,CA,CO,CT,FL,HI,KS,KY,LA,MA,MD,ME,MI,MN,MS,ND,NH,NJ,NM,NY,OH,OK,OR,PA,SC,VA,WA,WI,WV"
+      - key: CE_SINGLE_STATE_MAX_CONCURRENT
+        value: "20"
+      - key: CE_SINGLE_STATE_MAX_CONCURRENT_CAP
+        value: "40"
+      - key: CE_SINGLE_STATE_QUEUE_TIMEOUT_SECONDS
+        value: "35"
+      - key: CE_SINGLE_STATE_RETRY_AFTER_SECONDS
+        value: "3"
+      - key: CE_SINGLE_STATE_OVERFLOW_API_URL
+        value: https://instant-compliance-snapshot-api.onrender.com/api/check
+      - key: CE_SINGLE_STATE_OVERFLOW_API_URLS
+        value: https://instant-compliance-snapshot-api.onrender.com/api/check
+      - key: CE_SINGLE_STATE_OVERFLOW_TIMEOUT_SECONDS
+        value: "88"
+      - key: CE_SINGLE_STATE_LOCAL_ADMIT_TIMEOUT_SECONDS
+        value: "1"
+      - key: CE_FL_LOOKUP_MAX_SECONDS
+        value: "45"
+      - key: CE_FL_LOOKUP_LANES
+        value: "3"
+      - key: CE_FL_LOOKUP_ACQUIRE_SECONDS
+        value: "12"
+      - key: CE_SC_NAME_VARIANT_MAX_SECONDS
+        value: "25"
+      - key: CE_AR_NAME_SEARCH_MAX_SECONDS
+        value: "40"
+      - key: CE_AR_NAME_SEARCH_MAX_VARIANTS
+        value: "12"
+      - key: CE_WV_LOOKUP_MAX_SECONDS
+        value: "24"
+      - key: CE_WV_QUERY_LIMIT
+        value: "6"
+      - key: CE_WI_BROWSER_VARIANT_LIMIT
+        value: "0"
+      - key: CE_WI_DIRECT_VARIANT_LIMIT
+        value: "18"
+      - key: CE_WI_LOOKUP_MAX_SECONDS
+        value: "60"
+      - key: CE_WI_SIDECAR_ATTEMPTS
+        value: "1"
+      - key: CE_WI_SIDECAR_LANES
+        value: "2"
+      - key: CE_WI_SIDECAR_ACQUIRE_SECONDS
+        value: "85"
+      - key: CE_WI_SIDECAR_TIMEOUT_SECONDS
+        value: "55"
+      - key: CE_WI_READER_TIMEOUT_SECONDS
+        value: "16"
+      - key: CE_WI_USE_SNAPSHOT
+        value: "0"
+      - key: CE_WI_REQUIRE_COMPLETE_SNAPSHOT
+        value: "1"
+      - key: CE_WI_CONFIRM_SIDECAR_NO_MATCH
+        value: "0"
+      - key: CE_WI_NO_MATCH_CONFIRMATION_ATTEMPTS
+        value: "0"
+      - key: CE_WI_USE_BACKEND_BROWSER_FALLBACK
+        value: "0"

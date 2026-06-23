@@ -1,0 +1,31 @@
+case_id,objective,organization_name,ein,state,expected_status,expect_not_status,expected_variant,forbidden_registry_name,notes
+apostrophe_ct,name_variant,BATTEN'S DISEASE SUPPORT AND RESEARCH ASSOCIATION,911397792,CT,,,BATTENS DISEASE SUPPORT AND RESEARCH ASSOCIATION,,Apostrophe variant must not block a legitimate match.
+us_dots_ct,name_variant,U.S. NATIONAL COMMITTEE FOR UN WOMEN,541244401,CT,,,US NATIONAL COMMITTEE FOR UN WOMEN,,U.S. and US variants must both be generated.
+slash_alias_ar,name_variant,"HOPE RESOURCE CENTER/Sav-A-Life of Lucedale, Inc.",581592223,AR,,,Sav-A-Life of Lucedale Inc,,Slash-separated aliases must be searched independently.
+parenthetical_alias_ar,name_variant,THE OPHELIA J. BERRY FUND INC. (PATHWAYS TO COLLEGE),260060754,AR,,,PATHWAYS TO COLLEGE,,Parenthetical alias must be available as a query variant.
+leading_the_ar,name_variant,THE INTERNATIONAL CENTRE FOR MISSING AND EXPLOITED CHILDREN,223630133,AR,,,INTERNATIONAL CENTRE FOR MISSING AND EXPLOITED CHILDREN,,Leading article variant must be generated.
+synthetic_article_middle_initial,name_variant,THE JOHN A. SMITH FUND INC. (COMMUNITY SCHOLARS),000000000,AR,,,JOHN A SMITH FUND,,Leading article and middle-initial punctuation should be normalized without organization-specific logic.
+synthetic_parenthetical_alias,name_variant,THE MARY L. JONES FOUNDATION (READING PARTNERS),000000000,AR,,,READING PARTNERS,,Parenthetical aliases should be generated for any safe multi-token alias.
+dash_hyphen_va,name_variant,Winston Salem State University Foundation Incorporated,560989620,VA,,,Winston-Salem State University Foundation Incorporated,,Dash and hyphen variants must be generated.
+synthetic_dash_hyphen,name_variant,Wilkes Barre Community Foundation,000000000,VA,,,Wilkes-Barre Community Foundation,,Space versus hyphen compound-name handling must be general.
+synthetic_dash_hyphen_second,name_variant,Smith Jones Educational Foundation,000000000,VA,,,Smith-Jones Educational Foundation,,Compound first-two-word hyphen handling must be general.
+comma_inc_ct,name_variant,"Cair-Foundation, Inc.",770646756,CT,,,Cair Foundation,,Comma and Inc punctuation must not block matching.
+synthetic_comma_inc,name_variant,Community Health Defense Inc,000000000,KY,,,"Community Health Defense, Inc.",,Comma/no-comma before Inc should be generated generally.
+synthetic_inc_period,name_variant,Public Safety Education Fund Inc.,000000000,KY,,,Public Safety Education Fund,,Inc./Inc/Incorporated suffix removal must be general.
+synthetic_incorporated_to_inc,name_variant,Public Safety Education Fund Incorporated,000000000,KY,,,Public Safety Education Fund Inc,,Incorporated should generate Inc variants generally.
+synthetic_possessive,name_variant,CHILDREN'S HEALTH FUND,000000000,WI,,,CHILDRENS HEALTH FUND,,Possessive apostrophe removal should work beyond Batten's.
+ak_ein_first_blessings,ein_first,BLESSINGS THROUGH ACTION INC.,832260054,AK,No Confirmed Match,,,,AK must complete EIN-first path before any negative result.
+ak_ein_first_chc,ein_first,COMMUNITY HEALTH CHARITIES LOCAL,850258784,AK,No Confirmed Match,,,,AK must complete EIN-first path before any negative result.
+ak_ein_first_funeral,ein_first,FUNERAL SERVICE FOUNDATION INC.,391831612,AK,No Confirmed Match,,,,AK must complete EIN-first path before any negative result.
+ak_ein_first_make_my_donation,ein_first,Make My Donation Inc,474068817,AK,No Confirmed Match,,,,AK must complete EIN-first path before any negative result.
+ak_ein_first_un_women,ein_first,U.S. NATIONAL COMMITTEE FOR UN WOMEN,541244401,AK,No Confirmed Match,,,,AK must complete EIN-first path before any negative result.
+co_ein_name_fallback,ein_first,TRUE THE VOTE,272860095,CO,No Confirmed Match,,,,CO must not finalize Not Registered when FEIN path is incomplete and name fallback is not confirmed.
+wi_bad_positive_bmw,false_positive_guard,BMW CAR CLUB OF AMERICA FOUNDATION,030437428,WI,,,,"America Inc",Generic America Inc must not be accepted as a match.
+wi_bad_positive_outreach,false_positive_guard,CHRISTIAN WORLD OUTREACH,841445744,WI,,,,"OUTREACH INC",Generic Outreach Inc must not be accepted as a match.
+nh_bad_positive_fai,false_positive_guard,FRIENDS OF FAI - THE ITALIAN ENVIRONMENT FOUNDATION INC.,133599581,NH,,,,"Friends of Italian Americans Foundation",Weak overlap with Friends/Foundation must not be accepted.
+nj_deadline_uses_filing_year,deadline_interpretation,USEA FOUNDATION,046700121,NJ,,Current,,,Last year 11/30/2024 with next filing due 05/31/2026 must not stay Current after due date.
+wa_deadline_uses_renewal_due,deadline_interpretation,Thousand Currents,770071852,WA,,Current,,,WA renewal due 05/31/2026 must not remain Current after due date.
+or_stale_year_guard,deadline_interpretation,Idaho Youth Ranch Inc,820253346,OR,,Upcoming Filing,,,A stale 2023 Oregon filing year must not be classified as Upcoming Filing.
+nm_open_cycle_not_submitted,deadline_interpretation,U.S. NATIONAL COMMITTEE FOR UN WOMEN,541244401,NM,Delinquent,Upcoming Filing,,,A Registration Open row is not a submitted filing.
+nm_extension_upcoming,deadline_interpretation,Give2Asia,943373670,NM,Upcoming Filing,Current,,,An NM extension due date inside the upcoming window must classify as Upcoming Filing.
+sc_missing_filing_data,deadline_interpretation,Foot Soldiers Park Inc,861479452,SC,Delinquent,Current,,,Safe raw Registered without usable filing data should classify as Delinquent.

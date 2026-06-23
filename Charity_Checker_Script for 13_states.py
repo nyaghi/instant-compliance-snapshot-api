@@ -14,9 +14,9 @@ import http.cookiejar
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, asdict
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Set
 from urllib.parse import quote, urljoin
 
 try:
@@ -38,7 +38,13 @@ STATUS_DELINQUENT = "Delinquent/Non-compliant"
 STATUS_UNKNOWN = "Unknown"
 
 AK_SEARCH_URL = "https://online-registrations-law.alaska.gov/TLP/WebDoc/?link=PubQry"
-AK_YEARS_TO_TRY = list(range(date.today().year, date.today().year - 8, -1))
+AK_YEARS_TO_TRY_COUNT = max(2, min(int(os.environ.get("CE_AK_YEARS_TO_TRY_COUNT", "6")), 8))
+AK_YEARS_TO_TRY = list(range(date.today().year, date.today().year - AK_YEARS_TO_TRY_COUNT, -1))
+AK_NAME_FALLBACK_YEARS = max(1, min(int(os.environ.get("CE_AK_NAME_FALLBACK_YEARS", "2")), AK_YEARS_TO_TRY_COUNT, 3))
+AK_NAME_FALLBACK_VARIANTS = max(1, min(int(os.environ.get("CE_AK_NAME_FALLBACK_VARIANTS", "3")), 5))
+AK_NAME_FALLBACK_MAX_SECONDS = max(5.0, min(float(os.environ.get("CE_AK_NAME_FALLBACK_MAX_SECONDS", "18")), 30.0))
+AK_LOOKUP_MAX_SECONDS = max(35.0, min(float(os.environ.get("CE_AK_LOOKUP_MAX_SECONDS", "78")), 90.0))
+AK_EIN_FIRST_YEARS = max(1, min(int(os.environ.get("CE_AK_EIN_FIRST_YEARS", "2")), AK_YEARS_TO_TRY_COUNT))
 FAST_WAIT_MAX_MS = max(750, min(int(os.environ.get("CE_FAST_WAIT_MAX_MS", "1500")), 2000))
 FULL_PAGE_ARTIFACTS = os.environ.get("CE_FULL_PAGE_ARTIFACTS", "0").strip().lower() in {"1", "true", "yes"}
 ARTIFACT_SCREENSHOT_TIMEOUT_MS = max(1000, int(os.environ.get("CE_ARTIFACT_SCREENSHOT_TIMEOUT_MS", "10000")))
@@ -49,6 +55,10 @@ MAX_FIXED_SLEEP_SECONDS = max(0.25, float(os.environ.get("CE_MAX_FIXED_SLEEP_SEC
 SC_GOTO_TIMEOUT_MS = max(5000, int(os.environ.get("CE_SC_GOTO_TIMEOUT_MS", "12000")))
 SC_NETWORK_IDLE_TIMEOUT_MS = max(500, int(os.environ.get("CE_SC_NETWORK_IDLE_TIMEOUT_MS", "1500")))
 SC_MAX_GOTO_ATTEMPTS = max(1, int(os.environ.get("CE_SC_MAX_GOTO_ATTEMPTS", "2")))
+ND_CANDIDATE_SCAN_SECONDS = max(3.0, min(float(os.environ.get("CE_ND_CANDIDATE_SCAN_SECONDS", "7")), 16.0))
+ND_NAME_FALLBACK_SECONDS = max(3.0, min(float(os.environ.get("CE_ND_NAME_FALLBACK_SECONDS", "9")), 28.0))
+ND_CANDIDATE_LIMIT = max(12, min(int(os.environ.get("CE_ND_CANDIDATE_LIMIT", "36")), 100))
+ND_FALLBACK_VARIANT_LIMIT = max(1, min(int(os.environ.get("CE_ND_FALLBACK_VARIANT_LIMIT", "3")), 4))
 _REAL_SLEEP = time.sleep
 
 
@@ -157,7 +167,7 @@ def write_results(prefix: str, results: List[StateResult]) -> None:
     json_path = Path(f"{prefix}.json")
     summary_path = Path(f"{prefix}_summary_table.csv")
     with csv_path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["organization_name", "ein", "state", "status", "source_url", "raw_status_text", "source_note", "success", "error"])
+        writer = csv.DictWriter(f, fieldnames=list(asdict(results[0]).keys()) if results else ["organization_name", "ein", "state", "status", "source_url", "raw_status_text", "source_note", "success", "error"])
         writer.writeheader()
         for r in results:
             writer.writerow(asdict(r))
@@ -244,6 +254,10 @@ def add_months(value: date, months: int) -> date:
     month_lengths = [31, 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     day = min(value.day, month_lengths[month - 1])
     return date(year, month, day)
+
+def fifteenth_day_after_fiscal_year_end(fy_end: date, months_after_end_month: int) -> date:
+    due_month = add_months(fy_end, months_after_end_month)
+    return due_month.replace(day=15)
 
 def parse_date_value(raw: str):
     txt = re.sub(r"\s+", " ", raw or "").strip()
@@ -355,22 +369,34 @@ def extract_ak_accounting_end_year(pdf_text: str) -> Optional[int]:
     return None
 
 def classify_ak_registration_year(registration_year: int, accounting_year_end: Optional[int] = None):
-    expiration_date = date(registration_year, 9, 1)
-    status = status_from_due_date(expiration_date)
-    raw_status_text = f"{registration_year} registration found; expires September 1, {registration_year}"
+    due_year = registration_year + 1
+    expiration_date = date(due_year, 9, 1)
+    today = date.today()
+    if expiration_date < today:
+        status = STATUS_DELINQUENT
+    elif expiration_date <= today + timedelta(days=183):
+        status = STATUS_UPCOMING
+    else:
+        status = STATUS_CURRENT
+    raw_status_text = f"{registration_year} registration found; next filing due September 1, {due_year}"
     accounting_note = ""
     if accounting_year_end is not None:
         accounting_note = f"; accounting year in PDF ends {accounting_year_end} and is informational only"
 
     if status == STATUS_DELINQUENT:
         source_note = (
-            f"{registration_year} Alaska registration found; September 1 annual expiration "
+            f"{registration_year} Alaska registration found; September 1, {due_year} annual filing deadline "
             f"has passed as of the run date{accounting_note}"
+        )
+    elif status == STATUS_UPCOMING:
+        source_note = (
+            f"{registration_year} Alaska registration found; September 1, {due_year} annual filing deadline "
+            f"is within 6 months of the run date{accounting_note}"
         )
     else:
         source_note = (
-            f"{registration_year} Alaska registration found; September 1 annual expiration "
-            f"has not yet passed as of the run date{accounting_note}"
+            f"{registration_year} Alaska registration found; September 1, {due_year} annual filing deadline "
+            f"is not within 6 months of the run date{accounting_note}"
         )
     return status, raw_status_text, source_note
 
@@ -412,7 +438,7 @@ def open_ak_public_search(page) -> bool:
         fast_sleep(1)
     return False
 
-def fill_ak_search_form(page, org: Organization, year: int) -> None:
+def fill_ak_search_form(page, org: Organization, year: int, query_name: str = "", use_ein: bool = True) -> None:
     submission = page.locator("#Dq-8")
     if submission.count() == 0:
         submission = page.get_by_label(re.compile(r"Submission\s+type", re.I)).first
@@ -454,13 +480,21 @@ def fill_ak_search_form(page, org: Organization, year: int) -> None:
         name_input.fill("")
     except Exception:
         pass
+    if query_name:
+        name_input.type(query_name, delay=20)
+        try:
+            name_input.dispatch_event("input")
+            name_input.dispatch_event("change")
+        except Exception:
+            pass
     fast_sleep(0.5)
     fein_input = page.locator("#Dq-b")
     if fein_input.count() == 0:
         fein_input = page.get_by_label(re.compile(r"FEIN", re.I)).first
     fein_input.wait_for(state="visible", timeout=8000)
     fein_input.fill("")
-    fein_input.type(format_ein_with_dash(org.ein), delay=40)
+    if use_ein:
+        fein_input.type(format_ein_with_dash(org.ein), delay=40)
     try:
         fein_input.dispatch_event("input")
         fein_input.dispatch_event("change")
@@ -473,19 +507,30 @@ def fill_ak_search_form(page, org: Organization, year: int) -> None:
     search_button.click(timeout=10000, force=True)
     fast_sleep(2)
 
-def find_ak_print_link(page, org: Organization):
+def find_ak_print_link(page, org: Organization, target_names: Optional[List[str]] = None):
     return page.evaluate(
         """
-        ({ organizationName, ein }) => {
+        ({ organizationName, ein, targetNames }) => {
             const normalize = (value) => (value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
             const targetOrg = normalize(organizationName);
+            const targets = Array.from(new Set([targetOrg, ...(targetNames || []).map(normalize)].filter(Boolean)));
+            const einDigits = (ein || '').replace(/\\D/g, '');
             const rows = Array.from(document.querySelectorAll('table.DocTable tbody tr'));
 
             for (const row of rows) {
                 const rowText = (row.innerText || row.textContent || '').trim().replace(/\\s+/g, ' ');
-                if (!rowText.includes(ein)) {
-                    continue;
-                }
+            const rowDigits = rowText.replace(/\\D/g, '');
+            const rowEinDigits = (rowText.match(/\\b\\d{2}-\\d{7}\\b/g) || []).map((value) => value.replace(/\\D/g, ''));
+            const rowNorm = normalize(rowText);
+            const einMatch = !!(einDigits && rowDigits.includes(einDigits));
+            const nameMatch = targets.some((target) => target.length >= 8 && rowNorm.includes(target));
+            const conflictingEin = !!(einDigits && rowEinDigits.length && !rowEinDigits.includes(einDigits));
+            if (!einMatch && nameMatch && conflictingEin) {
+                continue;
+            }
+            if (!rowText.includes(ein) && !einMatch && !nameMatch) {
+                continue;
+            }
 
                 const links = Array.from(row.querySelectorAll('a'));
                 for (const link of links) {
@@ -506,8 +551,95 @@ def find_ak_print_link(page, org: Organization):
             return null;
         }
         """,
-        {"organizationName": org.organization_name, "ein": format_ein_with_dash(org.ein)},
+        {
+            "organizationName": org.organization_name,
+            "ein": format_ein_with_dash(org.ein),
+            "targetNames": target_names or [],
+        },
     )
+
+def ak_registry_name_from_row_text(row_text: str, requested_ein: str) -> str:
+    readable = re.sub(r"\s+", " ", row_text or "").strip()
+    if not readable:
+        return ""
+    readable = re.sub(r"\bPrint\b.*$", "", readable, flags=re.I).strip()
+    ein = format_ein_with_dash(requested_ein)
+    compact_ein = digits_only(requested_ein)
+    readable = re.sub(r"^\d{4}\s+", "", readable)
+    if ein:
+        readable = re.sub(rf"^{re.escape(ein)}\s+", "", readable)
+    if compact_ein:
+        readable = re.sub(rf"^{re.escape(compact_ein)}\s+", "", readable)
+    readable = re.split(
+        r"\s+(?:P\.?\s*O\.?\s+Box|PO\s+Box|\d{1,6}\s+[A-Z0-9])",
+        readable,
+        maxsplit=1,
+        flags=re.I,
+    )[0]
+    return re.sub(r"\s+", " ", readable).strip(" ,;-")
+
+def ak_registry_identifier_from_row_text(row_text: str, requested_ein: str) -> str:
+    readable = re.sub(r"\s+", " ", row_text or "").strip()
+    match = re.search(r"\b(\d{2}-\d{7})\b", readable)
+    if match:
+        return match.group(1)
+    compact_match = re.search(r"^\s*\d{4}\s*(\d{9})", readable)
+    if compact_match:
+        return format_ein_with_dash(compact_match.group(1))
+    return format_ein_with_dash(requested_ein)
+
+def ak_name_fallback_variants(name: str) -> List[str]:
+    base_variants = search_name_query_variants(name, max_words=5)
+    prioritized: List[str] = []
+    seen_lower: Set[str] = set()
+
+    def add(value: str) -> None:
+        cleaned = re.sub(r"\s+", " ", (value or "").strip(" ,;-"))
+        cleaned_words = cleaned.split()
+        if len(cleaned_words) == 1:
+            return
+        if len(cleaned) < 8:
+            return
+        key = cleaned.lower()
+        if cleaned and key not in seen_lower:
+            seen_lower.add(key)
+            prioritized.append(cleaned)
+
+    def add_core(value: str) -> None:
+        core = normalize_name(value or "")
+        if not core:
+            return
+        words = core.split()
+        stripped = [word for word in words if word not in {"foundation", "fund", "inc", "incorporated", "corp", "corporation", "llc", "ltd"}]
+        if len(stripped) >= 2:
+            add(" ".join(stripped[:5]).upper())
+        add(" ".join(words[:5]).upper())
+
+    add_core(name)
+    if base_variants:
+        add_core(base_variants[0])
+    if re.search(r"[/\\]", name or ""):
+        for part in re.split(r"[/\\]+", name or ""):
+            add_core(part)
+        for variant in base_variants:
+            if "/" not in variant and "\\" not in variant and re.search(r"\b[A-Za-z]{3,}\b", variant):
+                add_core(variant)
+    hyphen_variants = [variant for variant in base_variants if "-" in variant]
+    hyphen_variants.sort(key=lambda value: 1 if re.search(r"^\S+[-\u2010-\u2015]\S+", value or "") else 0)
+    for variant in hyphen_variants:
+        add_core(variant)
+    reduced = re.sub(
+        r"\b(?:national\s+)?(?:medical\s+center|hospital\s+center|hospital)\b\.?\s*$",
+        "",
+        name or "",
+        flags=re.I,
+    ).strip(" ,;-")
+    add_core(reduced)
+    if reduced:
+        add_core(re.sub(r"[-\u2010-\u2015]+", " ", reduced))
+    for variant in base_variants:
+        add_core(variant)
+    return prioritized[:AK_NAME_FALLBACK_VARIANTS]
 
 def read_ak_accounting_year_from_pdf(page, context, print_link) -> Optional[int]:
     if PdfReader is None:
@@ -996,56 +1128,58 @@ def search_ny(page, org: Organization) -> StateResult:
             result.error = "Could not find NY organization name and EIN inputs"
             return result
 
-        name_input.fill("")
-        name_input.fill(search_name_query_variants(org.organization_name, max_words=5)[0])
-        ein_input.fill("")
-        if formatted_ein:
-            ein_input.fill(formatted_ein)
-        else:
-            ein_input.fill(org.ein)
+        def ny_no_results(text: str) -> bool:
+            return bool(re.search(r"no rows available|no records|no results found|no results|not found|error fetching data", text or "", re.I))
 
-        clicked = False
-        for label in ["Search", "Find"]:
-            try:
-                page.get_by_role("button", name=re.compile(label, re.I)).click(timeout=4000)
-                clicked = True
+        def submit_ny_search(search_name: str = "", search_ein: str = "") -> str:
+            name_input.fill("")
+            ein_input.fill("")
+            if search_name:
+                name_input.fill(search_name)
+            if search_ein:
+                ein_input.fill(search_ein)
+            clicked = False
+            for label in ["Search", "Find"]:
+                try:
+                    page.get_by_role("button", name=re.compile(label, re.I)).click(timeout=4000)
+                    clicked = True
+                    break
+                except Exception:
+                    pass
+            if not clicked:
+                page.keyboard.press("Enter")
+            safe_wait_for_network_idle(page, timeout=25000)
+            fast_sleep(3)
+            return page.locator("body").inner_text(timeout=12000)
+
+        search_bodies = []
+        ein_queries = []
+        for value in [formatted_ein, ein_digits, org.ein]:
+            clean_value = str(value or "").strip()
+            if clean_value and clean_value not in ein_queries:
+                ein_queries.append(clean_value)
+        for query in ein_queries:
+            body = submit_ny_search(search_ein=query)
+            search_bodies.append(body)
+            if not ny_no_results(body):
                 break
-            except Exception:
-                pass
-        if not clicked:
-            page.keyboard.press("Enter")
+        else:
+            body = search_bodies[-1] if search_bodies else ""
 
-        safe_wait_for_network_idle(page, timeout=25000)
-        fast_sleep(3)
-
-        body = page.locator("body").inner_text(timeout=12000)
-        if re.search(r"no rows available|no records|no results found|no results|not found|error fetching data", body, re.I) and org.organization_name.strip():
+        if ny_no_results(body) and org.organization_name.strip():
             try:
-                name_input.fill("")
-                ein_input.fill("")
-                if formatted_ein:
-                    ein_input.fill(formatted_ein)
-                else:
-                    ein_input.fill(org.ein)
-                clicked = False
-                for label in ["Search", "Find"]:
-                    try:
-                        page.get_by_role("button", name=re.compile(label, re.I)).click(timeout=4000)
-                        clicked = True
+                name_variants = search_name_query_variants(org.organization_name, max_words=5)[:3]
+                for name_query in name_variants:
+                    body = submit_ny_search(search_name=name_query)
+                    search_bodies.append(body)
+                    if not ny_no_results(body):
                         break
-                    except Exception:
-                        pass
-                if not clicked:
-                    page.keyboard.press("Enter")
-                safe_wait_for_network_idle(page, timeout=25000)
-                fast_sleep(3)
-                body = page.locator("body").inner_text(timeout=12000)
             except Exception:
                 pass
-        if re.search(r"no rows available|no records|no results found|no results|not found", body, re.I):
+        if ny_no_results(body):
             result.raw_status_text = "No results found"
             result.status = "Not Found"
-            result.source_note = "New York search returned no results found."
+            result.source_note = "New York search returned no results found after EIN and name fallback searches."
             result.success = True
             return result
 
@@ -1213,14 +1347,21 @@ def search_ny(page, org: Organization) -> StateResult:
             result.raw_status_text = "No filings found"
             result.status = "Delinquent"
             result.source_note = "Annual Filing Documents did not expose any Fiscal Year End values."
+            result.status_reason = "NY_SAFE_MATCH_NO_FILINGS_DELINQUENT"
             result.success = True
             return result
 
         latest_fye = max(fye_dates)
-        due_date = add_months(latest_fye, 6)
-        result.status = "Current" if date.today() <= due_date else "Delinquent"
-        result.raw_status_text = f"Latest FYE: {latest_fye.isoformat()} | Due: {due_date.isoformat()}"
-        result.source_note = "New York status derived from the most recent Fiscal Year End in Annual Filing Documents."
+        next_fye = add_months(latest_fye, 12)
+        next_due = fifteenth_day_after_fiscal_year_end(next_fye, 5)
+        if next_due < date.today():
+            result.status = "Delinquent"
+        elif next_due <= date.today() + timedelta(days=183):
+            result.status = "Upcoming Filing"
+        else:
+            result.status = "Current"
+        result.raw_status_text = f"Latest FYE: {latest_fye.isoformat()} | Next Required Period: {next_fye.isoformat()} | Next Filing Due: {next_due.isoformat()}"
+        result.source_note = "New York status derived from the latest Fiscal Year End on record and the next CHAR500 annual filing cycle."
         result.success = True
         return result
     except Exception as e:
@@ -1231,9 +1372,9 @@ def search_nj(page, org: Organization) -> StateResult:
     url = "https://charportal.dca.njoag.gov/Charity-Registration/CHR-Public-Search-Page/"
     result = StateResult(org.organization_name, org.ein, "NJ", STATUS_UNKNOWN, url)
     try:
-        page.goto(url, wait_until="domcontentloaded", timeout=45000)
-        safe_wait_for_network_idle(page, timeout=20000)
-        fast_sleep(4)
+        page.goto(url, wait_until="domcontentloaded", timeout=25000)
+        safe_wait_for_network_idle(page, timeout=6000)
+        fast_sleep(1)
 
         query = digits_only(org.ein) if digits_only(org.ein) else org.organization_name
         input_box = find_visible_input(page, [
@@ -1253,10 +1394,21 @@ def search_nj(page, org: Organization) -> StateResult:
         input_box.fill("")
         input_box.fill(query)
         page.keyboard.press("Enter")
-        safe_wait_for_network_idle(page, timeout=25000)
-        fast_sleep(4)
+        safe_wait_for_network_idle(page, timeout=8000)
 
-        body = page.locator("body").inner_text(timeout=15000)
+        body = ""
+        deadline = time.time() + 18
+        while time.time() < deadline:
+            try:
+                body = page.locator("body").inner_text(timeout=3000)
+            except Exception:
+                body = ""
+            if re.search(r"no records found|no records|no matching", body, re.I):
+                break
+            if re.search(r"\b(Exempt|Compliant|Active|Delinquent|Expired|Revoked|Suspended|Withdrawn|Non-Compliant|Pending|Retired|Denied)\b", body, re.I):
+                break
+            fast_sleep(1)
+
         if re.search(r"no records found|no records|no matching", body, re.I):
             result.raw_status_text = "No record found"
             result.status = STATUS_NOT_REGISTERED
@@ -1296,45 +1448,134 @@ def search_ak(browser, org: Organization, artifacts_dir: Optional[Path] = None) 
         result.error = "AK search requires 9-digit EIN"
         return result
 
-    for idx, year in enumerate(AK_YEARS_TO_TRY):
+    started = time.perf_counter()
+    ak_context = None
+    ak_page = None
+
+    def close_ak_page() -> None:
+        nonlocal ak_context, ak_page
+        if ak_context is not None:
+            try:
+                ak_context.close()
+            except Exception:
+                pass
+        ak_context = None
+        ak_page = None
+
+    def ensure_ak_page():
+        nonlocal ak_context, ak_page
+        if ak_context is not None and ak_page is not None:
+            return ak_context, ak_page
         ak_context = browser.new_context(viewport={"width": 1365, "height": 900}, accept_downloads=True)
         ak_page = ak_context.new_page()
+        if not open_ak_public_search(ak_page):
+            close_ak_page()
+            result.error = "Could not open Alaska Public Search form"
+            return None, None
+        return ak_context, ak_page
+
+    def run_ak_query(year: int, query_name: str = "", use_ein: bool = True, artifact_suffix: str = ""):
         try:
-            if not open_ak_public_search(ak_page):
-                result.error = "Could not open Alaska Public Search form"
-                continue
+            context, page = ensure_ak_page()
+            if context is None or page is None:
+                return None
 
-            fill_ak_search_form(ak_page, org, year)
-            print_link = find_ak_print_link(ak_page, org)
+            fill_ak_search_form(page, org, year, query_name=query_name, use_ein=use_ein)
+            target_names = ak_name_fallback_variants(org.organization_name)
+            if query_name and query_name not in target_names:
+                target_names.insert(0, query_name)
+            print_link = find_ak_print_link(page, org, target_names=target_names)
             if not print_link:
-                if artifacts_dir and idx == len(AK_YEARS_TO_TRY) - 1:
-                    save_artifacts(ak_page, artifacts_dir, "AK", org.organization_name)
-                continue
+                if artifacts_dir and artifact_suffix:
+                    save_artifacts(page, artifacts_dir, "AK", f"{org.organization_name}_{artifact_suffix}")
+                return None
 
-            accounting_year_end = read_ak_accounting_year_from_pdf(ak_page, ak_context, print_link)
+            accounting_year_end = read_ak_accounting_year_from_pdf(page, context, print_link)
             result.status, result.raw_status_text, result.source_note = classify_ak_registration_year(
                 year,
                 accounting_year_end,
             )
+            result.matched_registry_name = ak_registry_name_from_row_text(
+                print_link.get("rowText", ""),
+                org.ein,
+            ) or org.organization_name
+            result.matched_registry_identifier = ak_registry_identifier_from_row_text(
+                print_link.get("rowText", ""),
+                org.ein,
+            )
+            if query_name and not use_ein:
+                result.source_note = f"{result.source_note}; matched using generated name variant '{query_name}' after FEIN search returned no row"
             result.success = True
             if artifacts_dir:
-                save_artifacts(ak_page, artifacts_dir, "AK", org.organization_name)
+                save_artifacts(page, artifacts_dir, "AK", org.organization_name)
             return result
-        except Exception as e:
-            result.error = f"AK error: {e}"
-            continue
-        finally:
-            ak_context.close()
+        except Exception:
+            close_ak_page()
+            raise
 
-    if result.error:
+    try:
+        first_ein_years = AK_YEARS_TO_TRY[:AK_EIN_FIRST_YEARS]
+        remaining_ein_years = AK_YEARS_TO_TRY[AK_EIN_FIRST_YEARS:]
+
+        for idx, year in enumerate(first_ein_years):
+            try:
+                matched = run_ak_query(
+                    year,
+                    use_ein=True,
+                    artifact_suffix="ein_no_match" if not remaining_ein_years and idx == len(first_ein_years) - 1 else "",
+                )
+                if matched:
+                    return matched
+            except Exception as e:
+                result.error = f"AK error: {e}"
+                continue
+
+        for idx, year in enumerate(remaining_ein_years):
+            if time.perf_counter() - started >= AK_LOOKUP_MAX_SECONDS:
+                break
+            try:
+                matched = run_ak_query(
+                    year,
+                    use_ein=True,
+                    artifact_suffix="ein_no_match" if idx == len(remaining_ein_years) - 1 else "",
+                )
+                if matched:
+                    return matched
+            except Exception as e:
+                result.error = f"AK error: {e}"
+                continue
+
+        fallback_variants = ak_name_fallback_variants(org.organization_name)
+        fallback_years = AK_YEARS_TO_TRY[:AK_NAME_FALLBACK_YEARS]
+        fallback_deadline = min(
+            started + AK_LOOKUP_MAX_SECONDS,
+            time.perf_counter() + AK_NAME_FALLBACK_MAX_SECONDS,
+        )
+        for variant in fallback_variants:
+            if time.perf_counter() >= fallback_deadline:
+                break
+            for year in fallback_years:
+                if time.perf_counter() >= fallback_deadline:
+                    break
+                try:
+                    matched = run_ak_query(year, query_name=variant, use_ein=False)
+                    if matched:
+                        return matched
+                except Exception as e:
+                    result.error = f"AK name fallback error: {e}"
+                    continue
+
+        if result.error:
+            return result
+
+        checked_years = ", ".join(str(year) for year in AK_YEARS_TO_TRY)
+        result.raw_status_text = f"No Alaska registration found for checked years {checked_years}"
+        result.status = STATUS_NOT_REGISTERED
+        result.source_note = f"No Alaska registration found in public search for years {checked_years}"
+        result.success = True
         return result
-
-    checked_years = ", ".join(str(year) for year in AK_YEARS_TO_TRY)
-    result.raw_status_text = f"No Alaska registration found for checked years {checked_years}"
-    result.status = STATUS_NOT_REGISTERED
-    result.source_note = f"No Alaska registration found in public search for years {checked_years}"
-    result.success = True
-    return result
+    finally:
+        close_ak_page()
 
 def find_pa_ein_input(page):
     return find_visible_input(page, [
@@ -1350,15 +1591,15 @@ def find_pa_ein_input(page):
 
 def click_pa_search_button(page) -> bool:
     for attempt in range(2):
-        safe_wait_for_network_idle(page, timeout=10000)
-        fast_sleep(1 + attempt)
+        safe_wait_for_network_idle(page, timeout=4000)
+        fast_sleep(0.5 + attempt * 0.5)
 
         for label in ["Search", "Find", "Submit"]:
             try:
                 btn = page.get_by_role("button", name=re.compile(label, re.I)).first
-                btn.wait_for(state="visible", timeout=5000)
-                btn.scroll_into_view_if_needed(timeout=2000)
-                btn.click(timeout=5000)
+                btn.wait_for(state="visible", timeout=2500)
+                btn.scroll_into_view_if_needed(timeout=1500)
+                btn.click(timeout=3000)
                 return True
             except Exception:
                 pass
@@ -1380,9 +1621,9 @@ def click_pa_search_button(page) -> bool:
                             text = (btn.get_attribute("value") or btn.get_attribute("aria-label") or "").strip()
                         if not re.search(r"search|find|submit", text, re.I):
                             continue
-                        btn.scroll_into_view_if_needed(timeout=2000)
+                        btn.scroll_into_view_if_needed(timeout=1500)
                         try:
-                            btn.click(timeout=5000)
+                            btn.click(timeout=3000)
                         except Exception:
                             if attempt == 1:
                                 btn.evaluate("el => el.click()")
@@ -1396,13 +1637,13 @@ def click_pa_search_button(page) -> bool:
     return False
 
 def extract_pa_result_expiration(page, ein: str, organization_name: str = ""):
-    safe_wait_for_network_idle(page, timeout=15000)
-    fast_sleep(2)
+    safe_wait_for_network_idle(page, timeout=8000)
+    fast_sleep(0.75)
     try:
         page.locator("body").evaluate("window.scrollTo(0, document.body.scrollHeight)")
     except Exception:
         pass
-    fast_sleep(1)
+    fast_sleep(0.25)
 
     target_name = normalize_name(organization_name)
     candidates = []
@@ -3248,7 +3489,7 @@ def search_me(page, org: Organization) -> StateResult:
             direct_attempts
             and direct_errors == 0
             and (direct_no_record_responses or direct_result_responses)
-            and os.environ.get("CE_ME_BROWSER_CONFIRM_DIRECT_NO_MATCH", "1").strip().lower() not in {"1", "true", "yes"}
+            and os.environ.get("CE_ME_BROWSER_CONFIRM_DIRECT_NO_MATCH", "0").strip().lower() not in {"1", "true", "yes"}
         ):
             result.raw_status_text = "No matching organization result"
             result.status = STATUS_NOT_REGISTERED
@@ -3737,10 +3978,11 @@ def search_nd(page, org: Organization) -> StateResult:
 
         body = page.locator("body").inner_text(timeout=5000)
         if re.search(r"Results:\s*0\b|No results|No matching", body, re.I):
-            # Do not stop on the first no-result response. North Dakota's name
-            # search can miss punctuation/possessive variants that a later safe
-            # query variant finds.
-            body = ""
+            result.raw_status_text = "No matching organization result"
+            result.status = STATUS_NOT_REGISTERED
+            result.source_note = "North Dakota search returned zero results for the normalized primary name query."
+            result.success = True
+            return result
 
         best_button = None
         best_priority = -1
@@ -3748,22 +3990,26 @@ def search_nd(page, org: Organization) -> StateResult:
         best_match_name = ""
         best_match_identifier = ""
         best_match_row_text = ""
+        candidate_scan_started = time.monotonic()
+        candidate_scan_budget_seconds = ND_CANDIDATE_SCAN_SECONDS
         for selector in ['div.interactive-cell-button', 'div[role="button"]']:
             try:
                 items = page.locator(selector)
-                count = min(items.count(), 100)
+                count = min(items.count(), ND_CANDIDATE_LIMIT)
                 for i in range(count):
+                    if time.monotonic() - candidate_scan_started > candidate_scan_budget_seconds:
+                        break
                     item = items.nth(i)
                     try:
-                        if not item.is_visible(timeout=750):
+                        if not item.is_visible(timeout=100):
                             continue
-                        txt = item.inner_text(timeout=1500)
+                        txt = item.inner_text(timeout=350)
                         row_txt = txt
                         try:
-                            row_txt = item.locator("xpath=ancestor::*[self::tr or @role='row' or contains(@class,'row')][1]").inner_text(timeout=1000)
+                            row_txt = item.locator("xpath=ancestor::*[self::tr or @role='row' or contains(@class,'row')][1]").inner_text(timeout=300)
                         except Exception:
                             try:
-                                row_txt = item.locator("xpath=ancestor::div[contains(@class,'row')][1]").inner_text(timeout=1000)
+                                row_txt = item.locator("xpath=ancestor::div[contains(@class,'row')][1]").inner_text(timeout=300)
                             except Exception:
                                 row_txt = txt
                         combined_txt = re.sub(r"\s+", " ", f"{txt} {row_txt}").strip()
@@ -3795,17 +4041,19 @@ def search_nd(page, org: Organization) -> StateResult:
         if not best_button or best_priority < 0:
             try:
                 rows = page.locator("tr")
-                count = min(rows.count(), 100)
+                count = min(rows.count(), ND_CANDIDATE_LIMIT)
                 for i in range(count):
+                    if time.monotonic() - candidate_scan_started > candidate_scan_budget_seconds:
+                        break
                     row = rows.nth(i)
                     try:
-                        row_txt = re.sub(r"\s+", " ", row.inner_text(timeout=1000)).strip()
+                        row_txt = re.sub(r"\s+", " ", row.inner_text(timeout=350)).strip()
                         if not row_txt or re.search(r"\bForm\s+Info\b.*\bSOS\s+Control\b", row_txt, re.I):
                             continue
                         cells = row.locator("td")
                         if cells.count() < 2:
                             continue
-                        name_text = re.sub(r"\s+", " ", cells.nth(0).inner_text(timeout=1000)).strip()
+                        name_text = re.sub(r"\s+", " ", cells.nth(0).inner_text(timeout=350)).strip()
                         if not name_text or text_has_wrong_ein_match(row_txt, org.ein):
                             continue
                         priority, status_score = candidate_selection_score_for_targets(name_text, target_names, row_txt)
@@ -3835,10 +4083,17 @@ def search_nd(page, org: Organization) -> StateResult:
             # try the safe query variants. Candidate acceptance still uses the
             # full target-name set, so broad queries cannot be accepted unless
             # the returned row itself is a credible match.
-            for query in search_name_query_variants(org.organization_name, max_words=5)[1:5]:
+            fallback_started = time.monotonic()
+            fallback_budget_seconds = ND_NAME_FALLBACK_SECONDS
+            for query in search_name_query_variants(org.organization_name, max_words=5)[1 : 1 + ND_FALLBACK_VARIANT_LIMIT]:
+                if (
+                    time.monotonic() - fallback_started > fallback_budget_seconds
+                    or time.monotonic() - candidate_scan_started > candidate_scan_budget_seconds
+                ):
+                    break
                 try:
-                    page.goto(url, wait_until="domcontentloaded", timeout=12000)
-                    safe_wait_for_network_idle(page, timeout=2500)
+                    page.goto(url, wait_until="domcontentloaded", timeout=9000)
+                    safe_wait_for_network_idle(page, timeout=1500)
                     fast_sleep(0.5)
                     search_input = find_visible_input(page, [
                         'input[placeholder*="Search by name"]',
@@ -3862,29 +4117,31 @@ def search_nd(page, org: Organization) -> StateResult:
                             continue
                     if not search_button:
                         continue
-                    search_button.click(timeout=5000)
-                    fast_sleep(3)
-                    safe_wait_for_network_idle(page, timeout=2500)
+                    search_button.click(timeout=4000)
+                    fast_sleep(1.25)
+                    safe_wait_for_network_idle(page, timeout=1500)
                     fast_sleep(0.25)
-                    body = page.locator("body").inner_text(timeout=4000)
+                    body = page.locator("body").inner_text(timeout=2500)
                     if re.search(r"Results:\s*0\b|No results|No matching", body, re.I):
                         continue
                     for selector in ['div.interactive-cell-button', 'div[role="button"]']:
                         try:
                             items = page.locator(selector)
-                            count = min(items.count(), 100)
+                            count = min(items.count(), ND_CANDIDATE_LIMIT)
                             for i in range(count):
+                                if time.monotonic() - candidate_scan_started > candidate_scan_budget_seconds:
+                                    break
                                 item = items.nth(i)
                                 try:
-                                    if not item.is_visible(timeout=750):
+                                    if not item.is_visible(timeout=100):
                                         continue
-                                    txt = item.inner_text(timeout=1500)
+                                    txt = item.inner_text(timeout=350)
                                     row_txt = txt
                                     try:
-                                        row_txt = item.locator("xpath=ancestor::*[self::tr or @role='row' or contains(@class,'row')][1]").inner_text(timeout=1000)
+                                        row_txt = item.locator("xpath=ancestor::*[self::tr or @role='row' or contains(@class,'row')][1]").inner_text(timeout=300)
                                     except Exception:
                                         try:
-                                            row_txt = item.locator("xpath=ancestor::div[contains(@class,'row')][1]").inner_text(timeout=1000)
+                                            row_txt = item.locator("xpath=ancestor::div[contains(@class,'row')][1]").inner_text(timeout=300)
                                         except Exception:
                                             row_txt = txt
                                     combined_txt = re.sub(r"\s+", " ", f"{txt} {row_txt}").strip()
@@ -3915,17 +4172,19 @@ def search_nd(page, org: Organization) -> StateResult:
                     if not best_button or best_priority < 0:
                         try:
                             rows = page.locator("tr")
-                            count = min(rows.count(), 100)
+                            count = min(rows.count(), ND_CANDIDATE_LIMIT)
                             for i in range(count):
+                                if time.monotonic() - candidate_scan_started > candidate_scan_budget_seconds:
+                                    break
                                 row = rows.nth(i)
                                 try:
-                                    row_txt = re.sub(r"\s+", " ", row.inner_text(timeout=1000)).strip()
+                                    row_txt = re.sub(r"\s+", " ", row.inner_text(timeout=350)).strip()
                                     if not row_txt or re.search(r"\bForm\s+Info\b.*\bSOS\s+Control\b", row_txt, re.I):
                                         continue
                                     cells = row.locator("td")
                                     if cells.count() < 2:
                                         continue
-                                    name_text = re.sub(r"\s+", " ", cells.nth(0).inner_text(timeout=1000)).strip()
+                                    name_text = re.sub(r"\s+", " ", cells.nth(0).inner_text(timeout=350)).strip()
                                     if not name_text or text_has_wrong_ein_match(row_txt, org.ein):
                                         continue
                                     priority, status_score = candidate_selection_score_for_targets(name_text, target_names, row_txt)
