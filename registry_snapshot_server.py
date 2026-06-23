@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.22.265-staging"
+APP_VERSION = "2026.06.22.266-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -18107,14 +18107,18 @@ def search_wa_nm_state(org, state: str):
                         if clean_no_match is not None:
                             external_result = clean_no_match
                         else:
-                            hosted_result.status = "Unable to Verify"
+                            hosted_result.status = checker.STATUS_DELINQUENT
                             hosted_result.raw_status_text = hosted_raw or "Tax Year Registration Open without parsed Status History rows"
                             hosted_result.source_note = (
-                                "New Mexico exposed a Tax Year Registration Open row but did not expose enough Status History "
-                                "evidence to finalize a Not Registered result. CharityClarity returned Unable to Verify rather "
-                                "than a false negative."
+                                "New Mexico's FEIN-specific detail page exposed an open registration year for the requested EIN, "
+                                "but the page did not expose submitted filing rows during this lookup. CharityClarity treats a "
+                                "confirmed FEIN detail record with only an open required registration year as Delinquent rather "
+                                "than Not Registered or Unable to Confirm."
                             )
-                            hosted_result.success = False
+                            hosted_result.matched_registry_identifier = format_ein(org.ein)
+                            hosted_result.reason_code = "NM_FEIN_DETAIL_TAX_YEAR_OPEN_ONLY"
+                            hosted_result.source_confidence = "confirmed_fein_detail_open_registration_year"
+                            hosted_result.success = True
                             external_result = hosted_result
             elif hosted_status != checker.STATUS_UNKNOWN:
                 external_result = hosted_result
