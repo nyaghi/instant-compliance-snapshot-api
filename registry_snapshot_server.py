@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.23.1"
+APP_VERSION = "2026.06.23.2"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -178,6 +178,19 @@ SINGLE_STATE_LOCAL_ADMIT_TIMEOUT_SECONDS = min(
     SINGLE_STATE_QUEUE_TIMEOUT_SECONDS,
 )
 SINGLE_STATE_REQUEST_SEMAPHORE = threading.BoundedSemaphore(SINGLE_STATE_MAX_CONCURRENT)
+BATCH_REQUEST_MAX_CONCURRENT = min(
+    max(1, int(os.environ.get("CE_BATCH_REQUEST_MAX_CONCURRENT", "2"))),
+    12,
+)
+BATCH_REQUEST_QUEUE_TIMEOUT_SECONDS = min(
+    max(0.0, float(os.environ.get("CE_BATCH_REQUEST_QUEUE_TIMEOUT_SECONDS", "3"))),
+    30.0,
+)
+BATCH_REQUEST_RETRY_AFTER_SECONDS = min(
+    max(1, int(os.environ.get("CE_BATCH_REQUEST_RETRY_AFTER_SECONDS", "20"))),
+    120,
+)
+BATCH_REQUEST_SEMAPHORE = threading.BoundedSemaphore(BATCH_REQUEST_MAX_CONCURRENT)
 BLOCK_HEAVY_BROWSER_RESOURCES = os.environ.get("CE_BLOCK_HEAVY_BROWSER_RESOURCES", "1").strip().lower() not in {"0", "false", "no"}
 EAGER_EVIDENCE_PDF = os.environ.get("CE_EAGER_EVIDENCE_PDF", "0").strip().lower() in {"1", "true", "yes"}
 CAPTURE_EVIDENCE_SCREENSHOTS = os.environ.get("CE_CAPTURE_EVIDENCE_SCREENSHOTS", "0").strip().lower() in {"1", "true", "yes"}
@@ -20431,8 +20444,26 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
                 self._send_json(429, {"error": "A complimentary snapshot was already requested from this browser."})
                 return
 
+            batch_admitted = False
             single_state_admitted = False
             is_single_state_request = len(organizations) == 1 and len(states) == 1
+            is_multi_lookup_request = len(organizations) * len(states) > 1
+            if is_multi_lookup_request:
+                batch_admitted = BATCH_REQUEST_SEMAPHORE.acquire(
+                    timeout=BATCH_REQUEST_QUEUE_TIMEOUT_SECONDS
+                )
+                if not batch_admitted:
+                    self._send_json(
+                        429,
+                        {
+                            "error": "Batch lookup capacity is busy. Retry this snapshot shortly.",
+                            "retry_after_seconds": BATCH_REQUEST_RETRY_AFTER_SECONDS,
+                            "app_version": APP_VERSION,
+                        },
+                        {"Retry-After": str(BATCH_REQUEST_RETRY_AFTER_SECONDS)},
+                    )
+                    return
+
             if is_single_state_request:
                 single_state_admitted = SINGLE_STATE_REQUEST_SEMAPHORE.acquire(
                     timeout=(
@@ -20494,6 +20525,8 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
             finally:
                 if single_state_admitted:
                     SINGLE_STATE_REQUEST_SEMAPHORE.release()
+                if batch_admitted:
+                    BATCH_REQUEST_SEMAPHORE.release()
         except BaseException as exc:
             log_error(f"POST /api/check failed: {exc}")
             self._send_json(500, {"error": str(exc)})
