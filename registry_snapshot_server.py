@@ -18621,6 +18621,383 @@ def browser_capacity_busy_result(organization_name: str, ein: str, state: str, u
     return result
 
 
+EXPANSION_STATE_SOURCES = {
+    "AL": {
+        "name": "Alabama Attorney General Business Lookup",
+        "url": "https://ago.igovsolution.net/online/Lookups/Business.aspx",
+        "search": "name",
+        "blocker": "verification_code",
+    },
+    "DC": {
+        "name": "District of Columbia Scout business license lookup",
+        "url": "https://scout.dcra.dc.gov/",
+        "search": "license",
+        "blocker": "login_required",
+    },
+    "GA": {
+        "name": "Georgia Secretary of State charity verification",
+        "url": "https://verify.sos.ga.gov/Verification",
+        "search": "name",
+        "blocker": "cloudflare_verification",
+    },
+    "IL": {
+        "name": "Illinois Attorney General Charities Search",
+        "url": "https://charitable.illinoisattorneygeneral.gov/search",
+        "search": "ein,name",
+        "blocker": "turnstile_verification",
+    },
+    "MO": {
+        "name": "Missouri Attorney General charity resources",
+        "url": "https://ago.mo.gov/get-help/programs-services-from-a-z/charity/",
+        "search": "none_public_confirmed",
+        "blocker": "no_public_lookup_identified",
+    },
+    "NC": {
+        "name": "North Carolina Secretary of State Charitable Solicitation Licensing search",
+        "url": "https://www.sosnc.gov/search/index/csl",
+        "search": "name",
+        "blocker": "public_search_unavailable",
+    },
+    "NV": {
+        "name": "Nevada Secretary of State public database registry searches",
+        "url": "https://www.nvsos.gov/online-services/public-database-registry-searches",
+        "search": "name",
+        "blocker": "incapsula_verification",
+    },
+    "RI": {
+        "name": "Rhode Island DBR Public Search",
+        "url": "https://ridbrprod-search.state-reg-eastern.tylerapp.com/",
+        "search": "name",
+        "blocker": "",
+    },
+    "TN": {
+        "name": "Tennessee Secretary of State Charitable Entity Search",
+        "url": "https://tncabtest.tnsos.gov/registered-charities-search",
+        "search": "name",
+        "blocker": "cloudflare_access_login",
+    },
+    "UT": {
+        "name": "Utah Division of Consumer Protection Registered Charities Search",
+        "url": "https://db.dcp.utah.gov/businesses/charities.html",
+        "search": "name",
+        "blocker": "",
+    },
+}
+EXPANSION_NAME_VARIANT_LIMIT = max(2, min(int(os.environ.get("CE_EXPANSION_NAME_VARIANT_LIMIT", "3")), 8))
+
+
+def expansion_query_ladder(org, limit: int | None = None) -> list[str]:
+    limit = limit or EXPANSION_NAME_VARIANT_LIMIT
+    variants: list[str] = []
+
+    def add(value: str) -> None:
+        value = re.sub(r"\s+", " ", (value or "").strip(" ,;-"))
+        if not value or search_query_is_too_broad(value):
+            return
+        if value.lower() not in {item.lower() for item in variants}:
+            variants.append(value)
+
+    name = getattr(org, "organization_name", "") or ""
+    for value in high_signal_search_phrases(name):
+        add(value)
+    for value in organization_name_variants(name, getattr(org, "ein", ""), include_ein_aliases=True):
+        add(value)
+    return variants[:limit]
+
+
+def expansion_new_result(org, state: str, status: str, source_url: str):
+    return checker.StateResult(
+        getattr(org, "organization_name", "") or f"EIN {format_ein(getattr(org, 'ein', ''))}",
+        format_ein(getattr(org, "ein", "")),
+        state.upper(),
+        status,
+        source_url,
+    )
+
+
+def expansion_source_limited_result(org, state: str, reason_code: str = ""):
+    state = state.upper()
+    spec = EXPANSION_STATE_SOURCES.get(state, {})
+    source_name = spec.get("name", f"{state} public registry")
+    blocker = reason_code or spec.get("blocker") or "SOURCE_LIMITATION"
+    result = expansion_new_result(org, state, "Unable to Confirm", spec.get("url", ""))
+    result.raw_status_text = f"{source_name} could not be searched automatically in the expansion lab: {blocker.replace('_', ' ')}."
+    result.source_note = (
+        f"{state} is wired into the 10-state expansion lab, but the public source currently requires "
+        "human verification, login, or another non-automatable step from this runtime. CharityClarity "
+        "did not infer a registered or not-registered status from an incomplete lookup."
+    )
+    result.success = False
+    result.reason_code = blocker.upper()
+    result.source_confidence = "expansion_source_limited"
+    return result
+
+
+def expansion_not_registered_result(org, state: str, source_url: str, query: str = "", note: str = ""):
+    result = expansion_new_result(org, state, checker.STATUS_NOT_REGISTERED, source_url)
+    result.raw_status_text = "No matching records found"
+    result.source_note = note or (
+        f"CharityClarity completed a bounded {state.upper()} public-registry search"
+        f"{f' for {query!r}' if query else ''} and did not find a safe matching charitable registration record."
+    )
+    result.success = True
+    result.reason_code = "NO_CANDIDATES_AFTER_COMPLETED_SEARCH"
+    result.source_confidence = "expansion_completed_no_match"
+    result.attempted_queries = [query] if query else []
+    return result
+
+
+def expansion_status_from_text(text: str) -> str:
+    readable = re.sub(r"\s+", " ", text or "").strip()
+    if not readable:
+        return checker.STATUS_UNKNOWN
+    if re.search(r"\b(?:withdrawn|retired|terminated|cancelled|canceled|closed|dissolved|inactive)\b", readable, re.I):
+        return "Closed / Withdrawn / Canceled"
+    if re.search(r"\brevoked\b", readable, re.I):
+        return "Revoked"
+    if re.search(r"\bsuspended|not\s+authorized|may\s+not\s+solicit\b", readable, re.I):
+        return "Suspended"
+    if re.search(r"\bexempt\b", readable, re.I):
+        return "Exempt"
+    if re.search(r"\bpending|in\s+(?:process|progress)\b", readable, re.I):
+        return "Pending"
+    due = first_date_near_label(readable, [
+        "Expiration Date",
+        "Expiration",
+        "Expires",
+        "Renewal Date",
+        "Renewal Due",
+        "Due Date",
+        "Due",
+    ])
+    if due:
+        return status_from_calendar_date(due)
+    if re.search(r"\b(?:delinquent|non\W*compliant|expired|overdue|not\s+current)\b", readable, re.I):
+        return checker.STATUS_DELINQUENT
+    if re.search(r"\b(?:active|current|compliant|good\s+standing)\b", readable, re.I):
+        return checker.STATUS_CURRENT
+    return checker.STATUS_UNKNOWN
+
+
+def expansion_candidate_is_safe(org, candidate_name: str, candidate_ein: str = "") -> tuple[bool, dict]:
+    decision = score_candidate(
+        getattr(org, "organization_name", ""),
+        getattr(org, "ein", ""),
+        {"name": candidate_name, "ein": candidate_ein},
+    )
+    return decision.get("decision") == "accepted", decision
+
+
+def search_ut_expansion(page, org):
+    state = "UT"
+    source_url = EXPANSION_STATE_SOURCES[state]["url"]
+    attempted_queries: list[str] = []
+    rejected_candidates: list[str] = []
+    last_body = ""
+    page.goto(source_url, wait_until="domcontentloaded", timeout=25000)
+    safe_wait_for_network_idle(page, timeout=8000)
+    for query in expansion_query_ladder(org):
+        attempted_queries.append(query)
+        try:
+            page.fill("#inputName", query, timeout=6000)
+            page.click("#btnCharitySearch", timeout=6000)
+            safe_wait_for_network_idle(page, timeout=8000)
+            page.wait_for_timeout(700)
+            body = readable_page_text(page)
+            last_body = body
+        except Exception as exc:
+            result = expansion_source_limited_result(org, state, "STATE_RESPONSE_UNREADABLE")
+            result.error = str(exc)
+            result.attempted_queries = attempted_queries
+            return result, registry_page_body(page)
+        if no_registry_results_seen(body):
+            try:
+                page.goto(source_url, wait_until="domcontentloaded", timeout=15000)
+            except Exception:
+                pass
+            continue
+        candidates = re.findall(r"(?im)^\s*([A-Z0-9][A-Z0-9 &'.,()/-]{4,120})\s*$", body or "")
+        for candidate_name in candidates[:10]:
+            safe, identity = expansion_candidate_is_safe(org, candidate_name)
+            if not safe:
+                continue
+            result = expansion_new_result(org, state, expansion_status_from_text(body), source_url)
+            result.raw_status_text = re.sub(r"\s+", " ", body).strip()[:2000]
+            result.matched_registry_name = clean_registry_name(candidate_name)
+            result.source_note = (
+                "Utah DCP public charity search returned a safe matching name. "
+                "CharityClarity interpreted the visible registry status/date text from the completed result."
+            )
+            result.success = True
+            result.reason_code = identity.get("reason", "MATCH_NAME")
+            result.identity_confidence = identity
+            result.attempted_queries = attempted_queries
+            return result, body
+        rejected_candidates.extend(clean_registry_name(name) for name in candidates[:10])
+        try:
+            page.goto(source_url, wait_until="domcontentloaded", timeout=15000)
+        except Exception:
+            pass
+    result = expansion_not_registered_result(
+        org,
+        state,
+        source_url,
+        attempted_queries[-1] if attempted_queries else "",
+        "CharityClarity completed bounded Utah DCP charity name searches and did not find a safe matching active registry record. Utah's public page is name-search only.",
+    )
+    result.attempted_queries = attempted_queries
+    if rejected_candidates:
+        result.reason_code = "NO_CONFIRMED_MATCH_AFTER_WEAK_CANDIDATES"
+        result.rejected_candidates = sorted(set(rejected_candidates))[:10]
+        result.raw_status_text = re.sub(r"\s+", " ", last_body).strip()[:2000] or result.raw_status_text
+    return result, "No Results Found"
+
+
+def search_ri_expansion(page, org):
+    state = "RI"
+    source_url = EXPANSION_STATE_SOURCES[state]["url"]
+    attempted_queries: list[str] = []
+    rejected_candidates: list[str] = []
+    last_body = ""
+    page.goto(source_url, wait_until="domcontentloaded", timeout=30000)
+    safe_wait_for_network_idle(page, timeout=8000)
+    for query in expansion_query_ladder(org):
+        attempted_queries.append(query)
+        try:
+            page.locator('input[type="text"]').nth(2).fill(query, timeout=8000)
+            page.get_by_text("Search", exact=True).click(timeout=8000)
+            safe_wait_for_network_idle(page, timeout=4000)
+            page.wait_for_timeout(700)
+            body = readable_page_text(page)
+            last_body = body
+        except Exception as exc:
+            result = expansion_source_limited_result(org, state, "STATE_RESPONSE_UNREADABLE")
+            result.error = str(exc)
+            result.attempted_queries = attempted_queries
+            return result, registry_page_body(page)
+        if no_registry_results_seen(body) or re.search(r"\b0\s+results?\b", body or "", re.I):
+            try:
+                page.get_by_text("Search Again", exact=True).click(timeout=5000)
+                page.wait_for_timeout(700)
+            except Exception:
+                try:
+                    page.goto(source_url, wait_until="domcontentloaded", timeout=15000)
+                except Exception:
+                    pass
+            continue
+        card_texts = []
+        try:
+            card_texts = page.locator('[class*="MuiCard-root"]').evaluate_all(
+                "els => els.map(e => (e.innerText || '').trim()).filter(Boolean).slice(0, 12)"
+            )
+        except Exception:
+            card_texts = []
+        for card_text in card_texts:
+            lines = [line.strip() for line in (card_text or "").splitlines() if line.strip()]
+            if not lines:
+                continue
+            candidate_name = clean_registry_name(lines[0])
+            safe, identity = expansion_candidate_is_safe(org, candidate_name)
+            if not safe:
+                continue
+            status = expansion_status_from_text(card_text)
+            result = expansion_new_result(org, state, status, source_url)
+            result.raw_status_text = re.sub(r"\s+", " ", card_text).strip()[:2000]
+            result.matched_registry_name = candidate_name
+            identifier = ""
+            id_match = re.search(r"\b(CO\.\d+|CH\.\d+|[A-Z]{1,4}\.\d+|\d{6,})\b", card_text, re.I)
+            if id_match:
+                identifier = id_match.group(1)
+            result.matched_registry_identifier = identifier
+            result.source_note = (
+                "Rhode Island DBR public search returned a safe matching charitable-organization credential. "
+                "CharityClarity interpreted the visible credential status/date text from the completed result."
+            )
+            result.success = True
+            result.reason_code = identity.get("reason", "MATCH_NAME")
+            result.identity_confidence = identity
+            result.attempted_queries = attempted_queries
+            return result, body
+        if card_texts:
+            rejected_candidates.extend([
+                clean_registry_name((text or "").splitlines()[0]) for text in card_texts[:5] if (text or "").splitlines()
+            ])
+        try:
+            page.get_by_text("Search Again", exact=True).click(timeout=5000)
+            page.wait_for_timeout(700)
+        except Exception:
+            try:
+                page.goto(source_url, wait_until="domcontentloaded", timeout=15000)
+            except Exception:
+                pass
+    result = expansion_not_registered_result(
+        org,
+        state,
+        source_url,
+        attempted_queries[-1] if attempted_queries else "",
+        "CharityClarity completed bounded Rhode Island DBR organization-name searches and did not find a safe matching charitable-organization credential.",
+    )
+    result.attempted_queries = attempted_queries
+    if rejected_candidates:
+        result.reason_code = "NO_CONFIRMED_MATCH_AFTER_WEAK_CANDIDATES"
+        result.raw_status_text = "Rejected candidates: " + "; ".join(sorted(set(rejected_candidates))[:10])
+        result.rejected_candidates = sorted(set(rejected_candidates))[:10]
+    return result, "No matching Rhode Island result"
+
+
+def search_expansion_lab_state(org, state: str):
+    state = (state or "").upper()
+    if state not in EXPANSION_LAB_STATES:
+        return expansion_lab_placeholder_result(getattr(org, "organization_name", ""), getattr(org, "ein", ""), state), ""
+    if state not in {"RI", "UT"}:
+        result = expansion_source_limited_result(org, state)
+        body = " ".join([result.raw_status_text or "", result.source_note or ""]).strip()
+        return result, body
+    acquired = BROWSER_LOOKUP_SEMAPHORE.acquire(timeout=BROWSER_LOOKUP_ACQUIRE_SECONDS)
+    if not acquired:
+        result = browser_capacity_busy_result(
+            getattr(org, "organization_name", ""),
+            getattr(org, "ein", ""),
+            state,
+            EXPANSION_STATE_SOURCES[state]["url"],
+        )
+        result.status = "Unable to Confirm"
+        result.reason_code = "BROWSER_CAPACITY_BUSY"
+        return result, result.raw_status_text
+    try:
+        with checker.sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(ignore_https_errors=True)
+            # The expansion lab's React/Tyler portals can fail to hydrate when
+            # shared heavy-resource blocking is applied. Keep the mature-state
+            # browser policy unchanged and allow full resources only here.
+            page = context.new_page()
+            page.set_default_timeout(15000)
+            try:
+                if state == "RI":
+                    return search_ri_expansion(page, org)
+                if state == "UT":
+                    return search_ut_expansion(page, org)
+            finally:
+                try:
+                    context.close()
+                except Exception:
+                    pass
+                try:
+                    browser.close()
+                except Exception:
+                    pass
+    except Exception as exc:
+        result = expansion_source_limited_result(org, state, "PORTAL_ERROR")
+        result.error = str(exc)
+        result.raw_status_text = f"{state} expansion lookup failed before a completed registry search."
+        return result, result.raw_status_text
+    finally:
+        BROWSER_LOOKUP_SEMAPHORE.release()
+    result = expansion_source_limited_result(org, state, "STATE_RESPONSE_UNREADABLE")
+    return result, result.raw_status_text
+
+
 def expansion_lab_placeholder_result(organization_name: str, ein: str, state: str):
     result = checker.StateResult(
         organization_name or f"EIN {format_ein(ein)}",
@@ -18652,11 +19029,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
     body = ""
     proof_url = None
     if state in EXPANSION_LAB_STATES and state not in DEFAULT_SUPPORTED_STATES:
-        result = expansion_lab_placeholder_result(organization_name, ein, state)
-        body = " ".join(part for part in [
-            result.raw_status_text or "",
-            result.source_note or "",
-        ]).strip()
+        result, body = search_expansion_lab_state(org, state)
         return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
 
     if state == "WI":
