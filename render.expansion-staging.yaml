@@ -10,7 +10,7 @@ services:
       - key: HOST
         value: 0.0.0.0
       - key: PUBLIC_BASE_URL
-        value: https://instant-compliance-snapshot-api-expansion-staging.onrender.com
+        value: https://instant-compliance-snapshot-api-hn4v.onrender.com
       - key: CE_APP_VERSION
         value: 2026.06.24.001-expansion-staging
       - key: CE_STAGING_ACCESS_REQUIRED
