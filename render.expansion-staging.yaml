@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: instant-compliance-snapshot-api-expansion-staging
+    runtime: python
+    plan: standard
+    buildCommand: pip install -r requirements.txt && PLAYWRIGHT_BROWSERS_PATH=0 python -m playwright install chromium
+    startCommand: python registry_snapshot_server.py
+    healthCheckPath: /healthz
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: PUBLIC_BASE_URL
+        value: https://instant-compliance-snapshot-api-expansion-staging.onrender.com
+      - key: CE_APP_VERSION
+        value: 2026.06.24.001-expansion-staging
+      - key: CE_STAGING_ACCESS_REQUIRED
+        value: "1"
+      - key: CE_SUPPORTED_STATES
+        value: AL,DC,GA,IL,MO,NC,NV,RI,TN,UT
+      - key: CE_LANDING_PAGE_PATH
+        value: registry-snapshot-index.expansion-staging.html
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: "0"
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: CE_MAX_PARALLEL_LOOKUPS
+        value: "10"
+      - key: CE_MAX_BROWSER_LOOKUPS
+        value: "10"
+      - key: CE_SINGLE_STATE_MAX_CONCURRENT
+        value: "20"
+      - key: CE_SINGLE_STATE_MAX_CONCURRENT_CAP
+        value: "40"
+      - key: CE_SINGLE_STATE_QUEUE_TIMEOUT_SECONDS
+        value: "35"
+      - key: CE_SINGLE_STATE_RETRY_AFTER_SECONDS
+        value: "3"
+      - key: CE_LOOKUP_SOFT_MAX_SECONDS
+        value: "74"
+      - key: CE_NAME_SEARCH_VARIANT_MAX_SECONDS
+        value: "44"

@@ -96,7 +96,15 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = "2026.06.22.269-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.06.22.269-staging").strip() or "2026.06.22.269-staging"
+
+
+def env_state_list(name: str) -> list[str]:
+    return [
+        state.strip().upper()
+        for state in os.environ.get(name, "").replace(";", ",").split(",")
+        if state.strip()
+    ]
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -131,11 +139,13 @@ def preferred_lane_index(state: str, ein: str, lane_count: int) -> int:
         state_index = sum(ord(char) for char in (state or ""))
     ein_tail = int((re.sub(r"\D", "", ein or "") or "0")[-2:] or "0")
     return (state_index + ein_tail) % lane_count
-SUPPORTED_STATES = [
+DEFAULT_SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
     "NY", "OH", "OK", "OR", "PA", "SC", "VA", "WA", "WI", "WV",
 ]
+EXPANSION_LAB_STATES = ["AL", "DC", "GA", "IL", "MO", "NC", "NV", "RI", "TN", "UT"]
+SUPPORTED_STATES = env_state_list("CE_SUPPORTED_STATES") or DEFAULT_SUPPORTED_STATES
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
 
@@ -14493,6 +14503,12 @@ def concise_status_rationale_comment(result, body: str, public_facing_status: st
     next_period = str(getattr(result, "next_required_period", "") or "").strip()
     last_year = str(getattr(result, "last_year_on_record", "") or "").strip()
 
+    if source_confidence == "expansion_lab_placeholder":
+        return (
+            f"{state} is enabled in the CharityClarity 10-state expansion lab, but the public registry checker "
+            "has not been wired yet. CharityClarity returns Needs Review and does not infer a registration status."
+        )
+
     if normalized_status in {"unable to verify", "unable to confirm", "needs review"}:
         if state == "NM" and re.search(
             r"incomplete\s+identity|did\s+not\s+complete\s+enough\s+registry\s+evidence|"
@@ -18605,6 +18621,27 @@ def browser_capacity_busy_result(organization_name: str, ein: str, state: str, u
     return result
 
 
+def expansion_lab_placeholder_result(organization_name: str, ein: str, state: str):
+    result = checker.StateResult(
+        organization_name or f"EIN {format_ein(ein)}",
+        format_ein(ein),
+        state,
+        "Needs Review",
+        "",
+    )
+    result.raw_status_text = "Expansion lab checker not implemented"
+    result.source_note = (
+        f"{state} is enabled only in the CharityClarity 10-state expansion lab. "
+        "The master backend recognizes the state, but its public registry checker has not been wired yet; "
+        "CharityClarity is not inferring a registration status from this placeholder."
+    )
+    result.success = True
+    result.error = ""
+    result.reason_code = "EXPANSION_STATE_NOT_IMPLEMENTED"
+    result.source_confidence = "expansion_lab_placeholder"
+    return result
+
+
 def run_state_lookup(organization_name: str, ein: str, state: str, capture_source_snapshot: bool = False, confirm_single_no_match: bool = True) -> dict:
     lookup_started = time.perf_counter()
     artifact_name = organization_name or f"EIN {format_ein(ein)}"
@@ -18614,6 +18651,14 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
         org.evidence_mode = capture_source_snapshot
     body = ""
     proof_url = None
+    if state in EXPANSION_LAB_STATES and state not in DEFAULT_SUPPORTED_STATES:
+        result = expansion_lab_placeholder_result(organization_name, ein, state)
+        body = " ".join(part for part in [
+            result.raw_status_text or "",
+            result.source_note or "",
+        ]).strip()
+        return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
+
     if state == "WI":
         wi_deadline = lookup_started + min(WI_LOOKUP_MAX_SECONDS, 60.0)
         result = search_wi(None, org, max_seconds=min(24.0, max(18.0, WI_LOOKUP_MAX_SECONDS / 2.5)))
@@ -20304,7 +20349,10 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
         return True
 
     def _send_landing_page(self, include_body: bool = True) -> None:
-        page_path = Path(__file__).with_name("registry-snapshot-index.html")
+        configured_page = os.environ.get("CE_LANDING_PAGE_PATH", "registry-snapshot-index.html").strip()
+        page_path = Path(configured_page)
+        if not page_path.is_absolute():
+            page_path = Path(__file__).with_name(configured_page)
         if page_path.exists():
             body = page_path.read_bytes()
             content_type = "text/html; charset=utf-8"
