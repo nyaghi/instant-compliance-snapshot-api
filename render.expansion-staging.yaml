@@ -12,7 +12,7 @@ services:
       - key: PUBLIC_BASE_URL
         value: https://instant-compliance-snapshot-api-hn4v.onrender.com
       - key: CE_APP_VERSION
-        value: 2026.06.24.002-expansion-staging
+        value: 2026.06.24.003-expansion-staging
       - key: CE_STAGING_ACCESS_REQUIRED
         value: "1"
       - key: CE_SUPPORTED_STATES

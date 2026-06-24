@@ -18867,7 +18867,17 @@ def search_ri_expansion(page, org):
             page.locator('input[type="text"]').nth(2).fill(query, timeout=8000)
             page.get_by_text("Search", exact=True).click(timeout=8000)
             safe_wait_for_network_idle(page, timeout=4000)
-            page.wait_for_timeout(700)
+            try:
+                page.wait_for_function(
+                    """() => {
+                        const body = document.body?.innerText || '';
+                        return document.querySelector('[class*="MuiCard-root"]')
+                            || /No\\s+Results|0\\s+results?|\\b\\d+\\s+results?\\b/i.test(body);
+                    }""",
+                    timeout=6500,
+                )
+            except Exception:
+                page.wait_for_timeout(1200)
             body = readable_page_text(page)
             last_body = body
         except Exception as exc:
