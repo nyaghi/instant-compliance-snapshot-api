@@ -18629,10 +18629,10 @@ EXPANSION_STATE_SOURCES = {
         "blocker": "verification_code",
     },
     "DC": {
-        "name": "District of Columbia Scout business license lookup",
-        "url": "https://scout.dcra.dc.gov/",
-        "search": "license",
-        "blocker": "login_required",
+        "name": "District of Columbia Basic Business License Open Data",
+        "url": "https://maps2.dcgis.dc.gov/dcgis/rest/services/FEEDS/DCRA/FeatureServer/0/query",
+        "search": "name",
+        "blocker": "",
     },
     "GA": {
         "name": "Georgia Secretary of State charity verification",
@@ -18684,6 +18684,11 @@ EXPANSION_STATE_SOURCES = {
     },
 }
 EXPANSION_NAME_VARIANT_LIMIT = max(2, min(int(os.environ.get("CE_EXPANSION_NAME_VARIANT_LIMIT", "3")), 8))
+DC_ARCGIS_FIELDS = (
+    "CUSTOMERNUMBER,LICENSESTATUS,LICENSETYPE,LICENSESUBTYPE,LICENSESTATUSDATE,"
+    "LICENSESTARTDATE,LICENSEENDDATE,INITIALISSUEDATE,PRIMARYACTIVITY,BUSINESSACTIVITY,"
+    "ENTITYNAME,ENTITYTRADENAME,BILLINGENTITY,DATAREFRESHEDON"
+)
 
 
 def expansion_query_ladder(org, limit: int | None = None) -> list[str]:
@@ -18786,6 +18791,181 @@ def expansion_candidate_is_safe(org, candidate_name: str, candidate_ein: str = "
         {"name": candidate_name, "ein": candidate_ein},
     )
     return decision.get("decision") == "accepted", decision
+
+
+def dc_arcgis_date(value) -> date | None:
+    if value in (None, ""):
+        return None
+    try:
+        numeric = float(value)
+    except Exception:
+        return parse_due_date(str(value))
+    if numeric > 10_000_000_000:
+        numeric = numeric / 1000.0
+    try:
+        return datetime.utcfromtimestamp(numeric).date()
+    except Exception:
+        return None
+
+
+def dc_status_from_attrs(attrs: dict) -> str:
+    raw_status = str(attrs.get("LICENSESTATUS") or "")
+    activity = " ".join(str(attrs.get(key) or "") for key in ("PRIMARYACTIVITY", "BUSINESSACTIVITY"))
+    if re.search(r"\b(?:closed|cancelled|canceled|withdrawn|terminated|dissolved|inactive)\b", raw_status, re.I):
+        return "Closed / Withdrawn / Canceled"
+    if re.search(r"\brevoked\b", raw_status, re.I):
+        return "Revoked"
+    if re.search(r"\bsuspended|not\s+authorized|may\s+not\s+solicit\b", raw_status, re.I):
+        return "Suspended"
+    if re.search(r"\breferred\s+to\s+enforcement|expired|delinquent|not\s+current|overdue\b", raw_status, re.I):
+        return checker.STATUS_DELINQUENT
+    if re.search(r"\bcharitable\s+exempt\b", activity, re.I):
+        return "Exempt"
+    end_date = dc_arcgis_date(attrs.get("LICENSEENDDATE"))
+    if end_date:
+        return status_from_calendar_date(end_date)
+    if re.search(r"\bactive|current|compliant|good\s+standing\b", raw_status, re.I):
+        return checker.STATUS_CURRENT
+    return expansion_status_from_text(" ".join(str(value or "") for value in attrs.values()))
+
+
+def dc_attrs_raw_text(attrs: dict) -> str:
+    labels = {
+        "ENTITYNAME": "Entity Name",
+        "ENTITYTRADENAME": "Trade Name",
+        "BILLINGENTITY": "Billing Entity",
+        "CUSTOMERNUMBER": "Customer Number",
+        "LICENSESTATUS": "License Status",
+        "PRIMARYACTIVITY": "Primary Activity",
+        "BUSINESSACTIVITY": "Business Activity",
+    }
+    parts = []
+    for key, label in labels.items():
+        value = attrs.get(key)
+        if value not in (None, ""):
+            parts.append(f"{label}: {value}")
+    for key, label in [
+        ("LICENSESTARTDATE", "License Start Date"),
+        ("LICENSEENDDATE", "License End Date"),
+        ("LICENSESTATUSDATE", "License Status Date"),
+        ("DATAREFRESHEDON", "Data Refreshed On"),
+    ]:
+        parsed = dc_arcgis_date(attrs.get(key))
+        if parsed:
+            parts.append(f"{label}: {parsed.isoformat()}")
+    return "; ".join(parts)
+
+
+def dc_like_literal(value: str) -> str:
+    cleaned = re.sub(r"\s+", " ", value or "").strip()
+    cleaned = cleaned.replace("'", "''")
+    return f"'%{cleaned.upper()}%'"
+
+
+def search_dc_expansion(org):
+    state = "DC"
+    source_url = EXPANSION_STATE_SOURCES[state]["url"]
+    attempted_queries: list[str] = []
+    rejected_candidates: list[str] = []
+    completed_any_query = False
+    last_error = ""
+    for query in expansion_query_ladder(org, limit=5):
+        attempted_queries.append(query)
+        literal = dc_like_literal(query)
+        where = (
+            "UPPER(PRIMARYACTIVITY) LIKE '%CHARITABLE%' AND "
+            f"(UPPER(ENTITYNAME) LIKE {literal} OR "
+            f"UPPER(ENTITYTRADENAME) LIKE {literal} OR "
+            f"UPPER(BILLINGENTITY) LIKE {literal})"
+        )
+        params = {
+            "f": "json",
+            "where": where,
+            "outFields": DC_ARCGIS_FIELDS,
+            "resultRecordCount": "25",
+            "returnGeometry": "false",
+        }
+        request_url = f"{source_url}?{urlencode(params)}"
+        try:
+            request = urllib.request.Request(
+                request_url,
+                headers={"User-Agent": f"CharityClarity/{APP_VERSION}"},
+            )
+            with urllib.request.urlopen(request, timeout=18) as response:
+                payload = json.loads(response.read().decode("utf-8", "replace"))
+            completed_any_query = True
+        except Exception as exc:
+            last_error = str(exc)
+            continue
+        if payload.get("error"):
+            last_error = json.dumps(payload.get("error"), ensure_ascii=True)[:500]
+            continue
+        features = payload.get("features") or []
+        if not features:
+            continue
+        best: tuple[int, dict, str, dict] | None = None
+        for feature in features[:25]:
+            attrs = feature.get("attributes") or {}
+            names = [
+                clean_registry_name(str(attrs.get(key) or ""))
+                for key in ("ENTITYNAME", "ENTITYTRADENAME", "BILLINGENTITY")
+                if attrs.get(key)
+            ]
+            candidate_best: tuple[int, str, dict] | None = None
+            for candidate_name in names:
+                decision = score_candidate(
+                    getattr(org, "organization_name", ""),
+                    getattr(org, "ein", ""),
+                    {"name": candidate_name},
+                )
+                if decision.get("decision") == "accepted":
+                    candidate_score = int(decision.get("score") or 0)
+                    if candidate_best is None or candidate_score > candidate_best[0]:
+                        candidate_best = (candidate_score, candidate_name, decision)
+            if candidate_best:
+                if best is None or candidate_best[0] > best[0]:
+                    best = (candidate_best[0], attrs, candidate_best[1], candidate_best[2])
+            elif names:
+                rejected_candidates.extend(names[:3])
+        if best:
+            _score, attrs, matched_name, identity = best
+            result = expansion_new_result(org, state, dc_status_from_attrs(attrs), source_url)
+            result.raw_status_text = dc_attrs_raw_text(attrs)
+            result.matched_registry_name = matched_name
+            result.matched_registry_identifier = str(attrs.get("CUSTOMERNUMBER") or "")
+            refresh = dc_arcgis_date(attrs.get("DATAREFRESHEDON"))
+            end_date = dc_arcgis_date(attrs.get("LICENSEENDDATE"))
+            result.source_note = (
+                "District of Columbia official Basic Business License open data returned a safe matching "
+                f"charitable license record. Raw license status is {attrs.get('LICENSESTATUS') or 'not shown'}"
+                f"{f'; license end date is {end_date.isoformat()}' if end_date else ''}. "
+                f"CharityClarity interpreted that evidence as {result.status}."
+                f"{f' Source data refreshed {refresh.isoformat()}.' if refresh else ''}"
+            )
+            result.success = True
+            result.reason_code = identity.get("reason", "MATCH_NAME")
+            result.identity_confidence = identity
+            result.attempted_queries = attempted_queries
+            result.source_confidence = "dc_official_open_data"
+            return result, result.raw_status_text
+    if not completed_any_query:
+        result = expansion_source_limited_result(org, state, "STATE_RESPONSE_UNREADABLE")
+        result.error = last_error
+        result.attempted_queries = attempted_queries
+        return result, result.raw_status_text
+    result = expansion_not_registered_result(
+        org,
+        state,
+        source_url,
+        attempted_queries[-1] if attempted_queries else "",
+        "CharityClarity completed bounded District of Columbia official Basic Business License open-data searches and did not find a safe matching charitable registration/license record.",
+    )
+    result.attempted_queries = attempted_queries
+    if rejected_candidates:
+        result.reason_code = "NO_CONFIRMED_MATCH_AFTER_WEAK_CANDIDATES"
+        result.rejected_candidates = sorted(set(rejected_candidates))[:10]
+        result.raw_status_text = "Rejected candidates: " + "; ".join(result.rejected_candidates)
+    return result, result.raw_status_text
 
 
 def search_ut_expansion(page, org):
@@ -18959,6 +19139,8 @@ def search_expansion_lab_state(org, state: str):
     state = (state or "").upper()
     if state not in EXPANSION_LAB_STATES:
         return expansion_lab_placeholder_result(getattr(org, "organization_name", ""), getattr(org, "ein", ""), state), ""
+    if state == "DC":
+        return search_dc_expansion(org)
     if state not in {"RI", "UT"}:
         result = expansion_source_limited_result(org, state)
         body = " ".join([result.raw_status_text or "", result.source_note or ""]).strip()
