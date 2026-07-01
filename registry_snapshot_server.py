@@ -15,6 +15,7 @@ import re
 import secrets
 import smtplib
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -18666,7 +18667,7 @@ EXPANSION_STATE_SOURCES = {
     },
     "RI": {
         "name": "Rhode Island DBR Public Search",
-        "url": "https://ridbrprod-search.state-reg-eastern.tylerapp.com/",
+        "url": "https://ridbrprod-search.state-reg-eastern.tylerapp.com/search",
         "search": "name",
         "blocker": "",
     },
@@ -18677,8 +18678,8 @@ EXPANSION_STATE_SOURCES = {
         "blocker": "cloudflare_access_login",
     },
     "UT": {
-        "name": "Utah Division of Consumer Protection Registered Charities Search",
-        "url": "https://db.dcp.utah.gov/businesses/charities.html",
+        "name": "Utah Division of Corporations and Commercial Code Business Search",
+        "url": "https://businessregistration.utah.gov/EntitySearch/OnlineEntitySearch",
         "search": "name",
         "blocker": "",
     },
@@ -18687,8 +18688,14 @@ EXPANSION_NAME_VARIANT_LIMIT = max(2, min(int(os.environ.get("CE_EXPANSION_NAME_
 DC_ARCGIS_FIELDS = (
     "CUSTOMERNUMBER,LICENSESTATUS,LICENSETYPE,LICENSESUBTYPE,LICENSESTATUSDATE,"
     "LICENSESTARTDATE,LICENSEENDDATE,INITIALISSUEDATE,PRIMARYACTIVITY,BUSINESSACTIVITY,"
-    "ENTITYNAME,ENTITYTRADENAME,BILLINGENTITY,DATAREFRESHEDON"
+    "ENTITYNAME,ENTITYTRADENAME,ENTITYTYPE,BILLINGENTITY,DATAREFRESHEDON"
 )
+DC_BBL_CSV_URL = "https://opendata.dc.gov/api/download/v1/items/85bf98d3915f412c8a4de706f2d13513/csv?layers=0"
+DC_CSV_DOWNLOAD_SECONDS = 150
+DC_CSV_MIN_BYTES = 10_000_000
+RI_TOKEN_URL = "https://ridbrprod-search.state-reg-eastern.tylerapp.com/api/auth/token"
+RI_API_BASE = "https://ridbrprod.state-reg-eastern.tylerapp.com/licensing/api/endpoints/v1"
+RI_API_TIMEOUT_SECONDS = 120
 
 
 def expansion_query_ladder(org, limit: int | None = None) -> list[str]:
@@ -18707,6 +18714,68 @@ def expansion_query_ladder(org, limit: int | None = None) -> list[str]:
         add(value)
     for value in organization_name_variants(name, getattr(org, "ein", ""), include_ein_aliases=True):
         add(value)
+    return variants[:limit]
+
+
+def expansion_collapse_acronym_periods(value: str) -> str:
+    return re.sub(r"\b(?:[A-Za-z]\.){2,}", lambda match: match.group(0).replace(".", ""), value or "")
+
+
+def expansion_portal_name_variants(value: str, limit: int = 12) -> list[str]:
+    base = re.sub(r"\s+", " ", value or "").strip()
+    variants: list[str] = []
+    seen: set[str] = set()
+
+    def add(candidate: str) -> None:
+        candidate = re.sub(r"\s+", " ", candidate or "").strip(" ,.;:-")
+        key = normalized_match_name(candidate)
+        if candidate and key and key not in seen and not search_query_is_too_broad(candidate):
+            variants.append(candidate)
+            seen.add(key)
+
+    def remove_leading_the(candidate: str) -> str:
+        return re.sub(r"^the\s+", "", candidate or "", flags=re.I).strip()
+
+    def remove_trailing_suffix(candidate: str) -> str:
+        return re.sub(
+            r"\s+(?:incorporated|inc|corp|corporation|co|company|llc|ltd|limited)\.?\s*$",
+            "",
+            candidate or "",
+            flags=re.I,
+        ).strip(" ,.;:-")
+
+    def remove_generic_tail(candidate: str) -> str:
+        words = re.sub(r"\s+", " ", candidate or "").strip().split()
+        generic_tails = {
+            "association",
+            "board",
+            "center",
+            "centre",
+            "college",
+            "foundation",
+            "fund",
+            "institute",
+            "society",
+            "trust",
+            "university",
+        }
+        if len(words) >= 2 and normalized_match_name(words[-1]) in generic_tails:
+            return " ".join(words[:-1])
+        return ""
+
+    add(base)
+    without_parenthetical = re.sub(r"\s*\([^)]*\)", " ", base)
+    add(without_parenthetical)
+    add(remove_leading_the(base))
+    add(remove_leading_the(without_parenthetical))
+    for candidate in list(variants):
+        add(remove_trailing_suffix(candidate))
+        add(expansion_collapse_acronym_periods(candidate))
+        add(remove_trailing_suffix(expansion_collapse_acronym_periods(candidate)))
+    for candidate in list(variants):
+        add(remove_generic_tail(candidate))
+    for candidate in organization_name_variants(base, include_ein_aliases=False):
+        add(candidate)
     return variants[:limit]
 
 
@@ -18750,6 +18819,35 @@ def expansion_not_registered_result(org, state: str, source_url: str, query: str
     result.source_confidence = "expansion_completed_no_match"
     result.attempted_queries = [query] if query else []
     return result
+
+
+def expansion_json_request(url: str, *, method: str = "GET", payload=None, headers: dict | None = None, timeout: int = 18):
+    data = None
+    request_headers = {
+        "User-Agent": f"CharityClarity/{APP_VERSION}",
+        "Accept": "application/json, text/plain, */*",
+    }
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        request_headers["Content-Type"] = "application/json"
+    if headers:
+        request_headers.update(headers)
+    request = urllib.request.Request(url, data=data, headers=request_headers, method=method)
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8", "replace"))
+
+
+def expansion_parse_date(value: str) -> date | None:
+    parsed = parse_due_date(value or "")
+    if parsed:
+        return parsed
+    cleaned = re.sub(r"\s+", " ", value or "").strip().replace(".", "")
+    for fmt in ("%B %d %Y", "%b %d %Y", "%Y/%m/%d", "%Y/%m/%d %H:%M:%S+00"):
+        try:
+            return datetime.strptime(cleaned, fmt).date()
+        except ValueError:
+            continue
+    return None
 
 
 def expansion_status_from_text(text: str) -> str:
@@ -18799,7 +18897,7 @@ def dc_arcgis_date(value) -> date | None:
     try:
         numeric = float(value)
     except Exception:
-        return parse_due_date(str(value))
+        return expansion_parse_date(str(value))
     if numeric > 10_000_000_000:
         numeric = numeric / 1000.0
     try:
@@ -18836,8 +18934,11 @@ def dc_attrs_raw_text(attrs: dict) -> str:
         "BILLINGENTITY": "Billing Entity",
         "CUSTOMERNUMBER": "Customer Number",
         "LICENSESTATUS": "License Status",
+        "LICENSETYPE": "License Type",
+        "LICENSESUBTYPE": "License Subtype",
         "PRIMARYACTIVITY": "Primary Activity",
         "BUSINESSACTIVITY": "Business Activity",
+        "ENTITYTYPE": "Entity Type",
     }
     parts = []
     for key, label in labels.items():
@@ -18862,6 +18963,171 @@ def dc_like_literal(value: str) -> str:
     return f"'%{cleaned.upper()}%'"
 
 
+def dc_candidate_names_from_attrs(attrs: dict) -> list[str]:
+    return [
+        clean_registry_name(str(attrs.get(key) or ""))
+        for key in ("ENTITYNAME", "ENTITYTRADENAME", "BILLINGENTITY")
+        if attrs.get(key)
+    ]
+
+
+def dc_candidate_score(org, attrs: dict) -> tuple[int, str, dict]:
+    best_score = 0
+    best_name = ""
+    best_identity = {}
+    for candidate_name in dc_candidate_names_from_attrs(attrs):
+        identity = score_candidate(
+            getattr(org, "organization_name", ""),
+            getattr(org, "ein", ""),
+            {"name": candidate_name},
+        )
+        if identity.get("decision") != "accepted":
+            continue
+        score = int(identity.get("score") or 0)
+        if score > best_score:
+            best_score = score
+            best_name = candidate_name
+            best_identity = identity
+    return best_score, best_name, best_identity
+
+
+def dc_status_rank(attrs: dict) -> int:
+    order = {
+        checker.STATUS_CURRENT: 0,
+        checker.STATUS_UPCOMING: 1,
+        "Pending": 2,
+        checker.STATUS_DELINQUENT: 3,
+        "Suspended": 4,
+        "Revoked": 5,
+        "Closed / Withdrawn / Canceled": 6,
+        checker.STATUS_UNKNOWN: 7,
+    }
+    return order.get(dc_status_from_attrs(attrs), 7)
+
+
+def dc_candidate_key(score: int, attrs: dict) -> tuple[int, int, int]:
+    end_date = dc_arcgis_date(attrs.get("LICENSEENDDATE")) or date.min
+    return (-dc_status_rank(attrs), score, end_date.toordinal())
+
+
+def row_is_dc_charity(attrs: dict) -> bool:
+    text = " ".join(
+        str(attrs.get(key) or "")
+        for key in ("PRIMARYACTIVITY", "BUSINESSACTIVITY", "LICENSESUBTYPE", "LICENSETYPE")
+    )
+    return bool(re.search(r"\bcharit", text, re.I))
+
+
+def row_is_dc_nonprofit(attrs: dict) -> bool:
+    return bool(re.search(r"non[\s-]*profit", str(attrs.get("ENTITYTYPE") or ""), re.I))
+
+
+def dc_csv_cache_path() -> Path:
+    return Path(tempfile.gettempdir()) / "charityclarity_dc_basic_business_licenses.csv"
+
+
+def dc_csv_cache_is_fresh(path: Path) -> bool:
+    try:
+        return (
+            path.exists()
+            and path.stat().st_size >= DC_CSV_MIN_BYTES
+            and datetime.fromtimestamp(path.stat().st_mtime).date() == date.today()
+        )
+    except OSError:
+        return False
+
+
+def ensure_dc_csv_file() -> Path:
+    path = dc_csv_cache_path()
+    if dc_csv_cache_is_fresh(path):
+        return path
+
+    tmp_path = path.with_suffix(f"{path.suffix}.download")
+    try:
+        tmp_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+    request = urllib.request.Request(
+        DC_BBL_CSV_URL,
+        headers={
+            "User-Agent": f"CharityClarity/{APP_VERSION}",
+            "Accept": "text/csv,application/octet-stream,*/*",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=DC_CSV_DOWNLOAD_SECONDS) as response:
+        with tmp_path.open("wb") as stream:
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                stream.write(chunk)
+    if not tmp_path.exists() or tmp_path.stat().st_size < DC_CSV_MIN_BYTES:
+        raise RuntimeError("DC CSV download completed but the file was incomplete.")
+    os.replace(tmp_path, path)
+    return path
+
+
+def search_dc_csv_fallback(org):
+    state = "DC"
+    result = expansion_new_result(org, state, checker.STATUS_UNKNOWN, DC_BBL_CSV_URL)
+    wanted_terms = {normalized_match_name(value) for value in expansion_query_ladder(org, limit=12)}
+    wanted_terms = {value for value in wanted_terms if value}
+    best: tuple[int, dict, str, dict] | None = None
+    rows_seen = 0
+
+    try:
+        csv_path = ensure_dc_csv_file()
+        with csv_path.open(encoding="utf-8-sig", newline="") as stream:
+            for row in csv.DictReader(stream):
+                rows_seen += 1
+                name_blob = normalized_match_name(
+                    " ".join(str(row.get(key) or "") for key in ("ENTITYNAME", "ENTITYTRADENAME", "BILLINGENTITY"))
+                )
+                if not any(term in name_blob or name_blob in term for term in wanted_terms):
+                    continue
+                score, matched_name, identity = dc_candidate_score(org, row)
+                if not score:
+                    continue
+                if not row_is_dc_charity(row) and not (score >= 80 and row_is_dc_nonprofit(row)):
+                    continue
+                if best is None or dc_candidate_key(score, row) > dc_candidate_key(best[0], best[1]):
+                    best = (score, row, matched_name, identity)
+    except Exception as exc:
+        result.status = "Site Not Reachable"
+        result.raw_status_text = "DC Open Data CSV fallback could not be reached or parsed."
+        result.source_note = "No status was inferred because both official DC Open Data lookup routes failed."
+        result.error = str(exc)
+        result.reason_code = "STATE_RESPONSE_UNREADABLE"
+        result.source_confidence = "dc_official_open_data_csv_unreadable"
+        return result
+
+    if best:
+        _score, attrs, matched_name, identity = best
+        result.status = dc_status_from_attrs(attrs)
+        result.raw_status_text = dc_attrs_raw_text(attrs)
+        result.matched_registry_name = matched_name
+        result.matched_registry_identifier = str(attrs.get("CUSTOMERNUMBER") or "")
+        result.source_note = (
+            "The checker used the official DC Open Data CSV fallback. It matched a charitable "
+            "or nonprofit Basic Business License record by organization name and classified by "
+            "license status/end date."
+        )
+        result.success = True
+        result.reason_code = identity.get("reason", "MATCH_NAME")
+        result.identity_confidence = identity
+        result.source_confidence = "dc_official_open_data_csv"
+        return result
+
+    result.status = checker.STATUS_NOT_REGISTERED
+    result.raw_status_text = "No matching DC charitable Basic Business License record found in Open Data CSV."
+    result.source_note = f"Scanned up to {rows_seen} DC Open Data CSV rows after FeatureServer lookup failed."
+    result.success = True
+    result.reason_code = "NO_CANDIDATES_AFTER_COMPLETED_SEARCH"
+    result.source_confidence = "dc_official_open_data_csv_completed_no_match"
+    return result
+
+
 def search_dc_expansion(org):
     state = "DC"
     source_url = EXPANSION_STATE_SOURCES[state]["url"]
@@ -18869,11 +19135,14 @@ def search_dc_expansion(org):
     rejected_candidates: list[str] = []
     completed_any_query = False
     last_error = ""
-    for query in expansion_query_ladder(org, limit=5):
+    best: tuple[int, dict, str, dict] | None = None
+    for query in expansion_query_ladder(org, limit=12):
         attempted_queries.append(query)
         literal = dc_like_literal(query)
         where = (
-            "UPPER(PRIMARYACTIVITY) LIKE '%CHARITABLE%' AND "
+            "(UPPER(PRIMARYACTIVITY) LIKE '%CHARIT%' OR "
+            "UPPER(BUSINESSACTIVITY) LIKE '%CHARIT%' OR "
+            "UPPER(ENTITYTYPE) LIKE '%NON%PROFIT%') AND "
             f"(UPPER(ENTITYNAME) LIKE {literal} OR "
             f"UPPER(ENTITYTRADENAME) LIKE {literal} OR "
             f"UPPER(BILLINGENTITY) LIKE {literal})"
@@ -18903,56 +19172,48 @@ def search_dc_expansion(org):
         features = payload.get("features") or []
         if not features:
             continue
-        best: tuple[int, dict, str, dict] | None = None
         for feature in features[:25]:
             attrs = feature.get("attributes") or {}
-            names = [
-                clean_registry_name(str(attrs.get(key) or ""))
-                for key in ("ENTITYNAME", "ENTITYTRADENAME", "BILLINGENTITY")
-                if attrs.get(key)
-            ]
-            candidate_best: tuple[int, str, dict] | None = None
-            for candidate_name in names:
-                decision = score_candidate(
-                    getattr(org, "organization_name", ""),
-                    getattr(org, "ein", ""),
-                    {"name": candidate_name},
-                )
-                if decision.get("decision") == "accepted":
-                    candidate_score = int(decision.get("score") or 0)
-                    if candidate_best is None or candidate_score > candidate_best[0]:
-                        candidate_best = (candidate_score, candidate_name, decision)
-            if candidate_best:
-                if best is None or candidate_best[0] > best[0]:
-                    best = (candidate_best[0], attrs, candidate_best[1], candidate_best[2])
-            elif names:
-                rejected_candidates.extend(names[:3])
-        if best:
-            _score, attrs, matched_name, identity = best
-            result = expansion_new_result(org, state, dc_status_from_attrs(attrs), source_url)
-            result.raw_status_text = dc_attrs_raw_text(attrs)
-            result.matched_registry_name = matched_name
-            result.matched_registry_identifier = str(attrs.get("CUSTOMERNUMBER") or "")
-            refresh = dc_arcgis_date(attrs.get("DATAREFRESHEDON"))
-            end_date = dc_arcgis_date(attrs.get("LICENSEENDDATE"))
-            result.source_note = (
-                "District of Columbia official Basic Business License open data returned a safe matching "
-                f"charitable license record. Raw license status is {attrs.get('LICENSESTATUS') or 'not shown'}"
-                f"{f'; license end date is {end_date.isoformat()}' if end_date else ''}. "
-                f"CharityClarity interpreted that evidence as {result.status}."
-                f"{f' Source data refreshed {refresh.isoformat()}.' if refresh else ''}"
-            )
-            result.success = True
-            result.reason_code = identity.get("reason", "MATCH_NAME")
-            result.identity_confidence = identity
-            result.attempted_queries = attempted_queries
-            result.source_confidence = "dc_official_open_data"
-            return result, result.raw_status_text
+            score, matched_name, identity = dc_candidate_score(org, attrs)
+            if score and (row_is_dc_charity(attrs) or (score >= 80 and row_is_dc_nonprofit(attrs))):
+                if best is None or dc_candidate_key(score, attrs) > dc_candidate_key(best[0], best[1]):
+                    best = (score, attrs, matched_name, identity)
+            else:
+                rejected_candidates.extend(dc_candidate_names_from_attrs(attrs)[:3])
+    if best:
+        _score, attrs, matched_name, identity = best
+        result = expansion_new_result(org, state, dc_status_from_attrs(attrs), source_url)
+        result.raw_status_text = dc_attrs_raw_text(attrs)
+        result.matched_registry_name = matched_name
+        result.matched_registry_identifier = str(attrs.get("CUSTOMERNUMBER") or "")
+        refresh = dc_arcgis_date(attrs.get("DATAREFRESHEDON"))
+        end_date = dc_arcgis_date(attrs.get("LICENSEENDDATE"))
+        result.source_note = (
+            "District of Columbia official Basic Business License open data returned a safe matching "
+            f"charitable or nonprofit license record. Raw license status is {attrs.get('LICENSESTATUS') or 'not shown'}"
+            f"{f'; license end date is {end_date.isoformat()}' if end_date else ''}. "
+            f"CharityClarity interpreted that evidence as {result.status}."
+            f"{f' Source data refreshed {refresh.isoformat()}.' if refresh else ''}"
+        )
+        result.success = True
+        result.reason_code = identity.get("reason", "MATCH_NAME")
+        result.identity_confidence = identity
+        result.attempted_queries = attempted_queries
+        result.source_confidence = "dc_official_open_data"
+        return result, result.raw_status_text
     if not completed_any_query:
+        csv_result = search_dc_csv_fallback(org)
+        if csv_result.status != "Site Not Reachable":
+            csv_result.attempted_queries = attempted_queries
+            return csv_result, csv_result.raw_status_text
         result = expansion_source_limited_result(org, state, "STATE_RESPONSE_UNREADABLE")
         result.error = last_error
         result.attempted_queries = attempted_queries
         return result, result.raw_status_text
+    csv_result = search_dc_csv_fallback(org)
+    if csv_result.status != "Site Not Reachable":
+        csv_result.attempted_queries = attempted_queries
+        return csv_result, csv_result.raw_status_text
     result = expansion_not_registered_result(
         org,
         state,
@@ -18960,6 +19221,10 @@ def search_dc_expansion(org):
         attempted_queries[-1] if attempted_queries else "",
         "CharityClarity completed bounded District of Columbia official Basic Business License open-data searches and did not find a safe matching charitable registration/license record.",
     )
+    if csv_result.error:
+        result.source_note = (
+            f"{result.source_note} DC CSV fallback also did not complete: {csv_result.raw_status_text}"
+        )
     result.attempted_queries = attempted_queries
     if rejected_candidates:
         result.reason_code = "NO_CONFIRMED_MATCH_AFTER_WEAK_CANDIDATES"
@@ -18968,69 +19233,109 @@ def search_dc_expansion(org):
     return result, result.raw_status_text
 
 
-def search_ut_expansion(page, org):
-    state = "UT"
-    source_url = EXPANSION_STATE_SOURCES[state]["url"]
-    attempted_queries: list[str] = []
-    rejected_candidates: list[str] = []
-    last_body = ""
-    page.goto(source_url, wait_until="domcontentloaded", timeout=25000)
-    safe_wait_for_network_idle(page, timeout=8000)
-    for query in expansion_query_ladder(org):
-        attempted_queries.append(query)
-        try:
-            page.fill("#inputName", query, timeout=6000)
-            page.click("#btnCharitySearch", timeout=6000)
-            safe_wait_for_network_idle(page, timeout=8000)
-            page.wait_for_timeout(700)
-            body = readable_page_text(page)
-            last_body = body
-        except Exception as exc:
-            result = expansion_source_limited_result(org, state, "STATE_RESPONSE_UNREADABLE")
-            result.error = str(exc)
-            result.attempted_queries = attempted_queries
-            return result, registry_page_body(page)
-        if no_registry_results_seen(body):
-            try:
-                page.goto(source_url, wait_until="domcontentloaded", timeout=15000)
-            except Exception:
-                pass
-            continue
-        candidates = re.findall(r"(?im)^\s*([A-Z0-9][A-Z0-9 &'.,()/-]{4,120})\s*$", body or "")
-        for candidate_name in candidates[:10]:
-            safe, identity = expansion_candidate_is_safe(org, candidate_name)
-            if not safe:
-                continue
-            result = expansion_new_result(org, state, expansion_status_from_text(body), source_url)
-            result.raw_status_text = re.sub(r"\s+", " ", body).strip()[:2000]
-            result.matched_registry_name = clean_registry_name(candidate_name)
-            result.source_note = (
-                "Utah DCP public charity search returned a safe matching name. "
-                "CharityClarity interpreted the visible registry status/date text from the completed result."
-            )
-            result.success = True
-            result.reason_code = identity.get("reason", "MATCH_NAME")
-            result.identity_confidence = identity
-            result.attempted_queries = attempted_queries
-            return result, body
-        rejected_candidates.extend(clean_registry_name(name) for name in candidates[:10])
-        try:
-            page.goto(source_url, wait_until="domcontentloaded", timeout=15000)
-        except Exception:
-            pass
-    result = expansion_not_registered_result(
-        org,
-        state,
-        source_url,
-        attempted_queries[-1] if attempted_queries else "",
-        "CharityClarity completed bounded Utah DCP charity name searches and did not find a safe matching active registry record. Utah's public page is name-search only.",
+def ri_scalar_values(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        values: list[str] = []
+        for item in value:
+            values.extend(ri_scalar_values(item))
+        return values
+    if isinstance(value, dict):
+        values: list[str] = []
+        for item in value.values():
+            values.extend(ri_scalar_values(item))
+        return values
+    text = re.sub(r"\s+", " ", str(value)).strip()
+    return [text] if text else []
+
+
+def ri_walk_label_values(node):
+    if isinstance(node, dict):
+        label = node.get("label")
+        if isinstance(label, str):
+            values = node.get("value", node.get("values", node.get("data")))
+            flattened = ri_scalar_values(values)
+            if flattened:
+                yield label, flattened
+        for value in node.values():
+            yield from ri_walk_label_values(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from ri_walk_label_values(item)
+
+
+def ri_get_token() -> str:
+    token_data = expansion_json_request(
+        RI_TOKEN_URL,
+        method="POST",
+        payload={},
+        headers={
+            "Origin": "https://ridbrprod-search.state-reg-eastern.tylerapp.com",
+            "Referer": EXPANSION_STATE_SOURCES["RI"]["url"],
+        },
+        timeout=RI_API_TIMEOUT_SECONDS,
     )
-    result.attempted_queries = attempted_queries
-    if rejected_candidates:
-        result.reason_code = "NO_CONFIRMED_MATCH_AFTER_WEAK_CANDIDATES"
-        result.rejected_candidates = sorted(set(rejected_candidates))[:10]
-        result.raw_status_text = re.sub(r"\s+", " ", last_body).strip()[:2000] or result.raw_status_text
-    return result, "No Results Found"
+    token = token_data.get("access_token") or token_data.get("token")
+    if not token:
+        raise RuntimeError("RI token endpoint did not return an access token")
+    return token
+
+
+def ri_api_headers(token: str) -> dict:
+    return {
+        "Authorization": f"Bearer {token}",
+        "Origin": "https://ridbrprod-search.state-reg-eastern.tylerapp.com",
+        "Referer": EXPANSION_STATE_SOURCES["RI"]["url"],
+    }
+
+
+def ri_result_values(result: dict) -> list[str]:
+    values: list[str] = []
+    for detail in result.get("details") or []:
+        values.extend(ri_scalar_values(detail.get("value")))
+        values.extend(ri_scalar_values(detail.get("values")))
+    return values
+
+
+def ri_row_status(values: list[str]) -> str:
+    cleaned = [re.sub(r"\s+", " ", value or "").strip() for value in values if re.sub(r"\s+", " ", value or "").strip()]
+    if len(cleaned) >= 3:
+        return cleaned[2]
+    return ""
+
+
+def ri_row_expiration(values: list[str]) -> str:
+    cleaned = [re.sub(r"\s+", " ", value or "").strip() for value in values if re.sub(r"\s+", " ", value or "").strip()]
+    if len(cleaned) >= 4 and expansion_parse_date(cleaned[3]):
+        return cleaned[3]
+    return ""
+
+
+def classify_ri_from_row(row_status: str, exp_date: date | None) -> str:
+    raw = re.sub(r"\s+", " ", row_status or "").strip().lower()
+    if raw == "active pending renewal" or "pending renewal" in raw:
+        return "Pending"
+    if raw == "inactive" or re.search(r"\binactive\b", raw):
+        return "Closed / Withdrawn / Canceled"
+    if raw == "active" or re.search(r"\bactive\b", raw):
+        return classify_expiration_date(exp_date)
+    return expansion_status_from_text(row_status) if not exp_date else classify_expiration_date(exp_date)
+
+
+def ri_match_rank(result: dict) -> tuple[int, date]:
+    values = ri_result_values(result)
+    row_status = ri_row_status(values).lower()
+    exp_date = expansion_parse_date(ri_row_expiration(values)) or date.min
+    if row_status == "active":
+        status_rank = 0
+    elif "active pending renewal" in row_status or "pending renewal" in row_status:
+        status_rank = 1
+    elif "inactive" in row_status:
+        status_rank = 3
+    else:
+        status_rank = 2
+    return (status_rank, date.max - (exp_date - date.min))
 
 
 def search_ri_expansion(page, org):
@@ -19038,101 +19343,356 @@ def search_ri_expansion(page, org):
     source_url = EXPANSION_STATE_SOURCES[state]["url"]
     attempted_queries: list[str] = []
     rejected_candidates: list[str] = []
-    last_body = ""
-    page.goto(source_url, wait_until="domcontentloaded", timeout=30000)
-    safe_wait_for_network_idle(page, timeout=8000)
-    for query in expansion_query_ladder(org):
-        attempted_queries.append(query)
-        try:
-            page.locator('input[type="text"]').nth(2).fill(query, timeout=8000)
-            page.get_by_text("Search", exact=True).click(timeout=8000)
-            safe_wait_for_network_idle(page, timeout=4000)
-            try:
-                page.wait_for_function(
-                    """() => {
-                        const body = document.body?.innerText || '';
-                        return document.querySelector('[class*="MuiCard-root"]')
-                            || /No\\s+Results|0\\s+results?|\\b\\d+\\s+results?\\b/i.test(body);
-                    }""",
-                    timeout=6500,
-                )
-            except Exception:
-                page.wait_for_timeout(1200)
-            body = readable_page_text(page)
-            last_body = body
-        except Exception as exc:
-            result = expansion_source_limited_result(org, state, "STATE_RESPONSE_UNREADABLE")
-            result.error = str(exc)
-            result.attempted_queries = attempted_queries
-            return result, registry_page_body(page)
-        if no_registry_results_seen(body) or re.search(r"\b0\s+results?\b", body or "", re.I):
-            try:
-                page.get_by_text("Search Again", exact=True).click(timeout=5000)
-                page.wait_for_timeout(700)
-            except Exception:
-                try:
-                    page.goto(source_url, wait_until="domcontentloaded", timeout=15000)
-                except Exception:
-                    pass
-            continue
-        card_texts = []
-        try:
-            card_texts = page.locator('[class*="MuiCard-root"]').evaluate_all(
-                "els => els.map(e => (e.innerText || '').trim()).filter(Boolean).slice(0, 12)"
+    try:
+        token = ri_get_token()
+        matches: list[dict] = []
+        search_name_used = getattr(org, "organization_name", "")
+        for search_name in expansion_portal_name_variants(getattr(org, "organization_name", "")):
+            attempted_queries.append(search_name)
+            search_data = expansion_json_request(
+                f"{RI_API_BASE}/portal/search",
+                method="POST",
+                payload={
+                    "appliedFilters": None,
+                    "highlight": "true",
+                    "formRequest": None,
+                    "lookupString": search_name,
+                    "rows": 100,
+                    "start": 0,
+                    "type": "credential",
+                },
+                headers=ri_api_headers(token),
+                timeout=RI_API_TIMEOUT_SECONDS,
             )
-        except Exception:
-            card_texts = []
-        for card_text in card_texts:
-            lines = [line.strip() for line in (card_text or "").splitlines() if line.strip()]
-            if not lines:
-                continue
-            candidate_name = clean_registry_name(lines[0])
-            safe, identity = expansion_candidate_is_safe(org, candidate_name)
-            if not safe:
-                continue
-            status = expansion_status_from_text(card_text)
-            result = expansion_new_result(org, state, status, source_url)
-            result.raw_status_text = re.sub(r"\s+", " ", card_text).strip()[:2000]
-            result.matched_registry_name = candidate_name
-            identifier = ""
-            id_match = re.search(r"\b(CO\.\d+|CH\.\d+|[A-Z]{1,4}\.\d+|\d{6,})\b", card_text, re.I)
-            if id_match:
-                identifier = id_match.group(1)
-            result.matched_registry_identifier = identifier
-            result.source_note = (
-                "Rhode Island DBR public search returned a safe matching charitable-organization credential. "
-                "CharityClarity interpreted the visible credential status/date text from the completed result."
+            matches = []
+            for item in search_data.get("results") or []:
+                title = clean_registry_name(str(item.get("title") or ""))
+                all_values = " ".join(ri_result_values(item)).lower()
+                safe, identity = expansion_candidate_is_safe(org, title)
+                if safe and "charitable organization" in all_values:
+                    item["_identity_confidence"] = identity
+                    matches.append(item)
+                elif title:
+                    rejected_candidates.append(title)
+            if matches:
+                search_name_used = search_name
+                break
+        if not matches:
+            result = expansion_not_registered_result(
+                org,
+                state,
+                source_url,
+                attempted_queries[-1] if attempted_queries else "",
+                "CharityClarity completed Rhode Island DBR credential API searches and did not find a safe matching charitable-organization credential.",
             )
-            result.success = True
-            result.reason_code = identity.get("reason", "MATCH_NAME")
-            result.identity_confidence = identity
             result.attempted_queries = attempted_queries
-            return result, body
-        if card_texts:
-            rejected_candidates.extend([
-                clean_registry_name((text or "").splitlines()[0]) for text in card_texts[:5] if (text or "").splitlines()
-            ])
-        try:
-            page.get_by_text("Search Again", exact=True).click(timeout=5000)
-            page.wait_for_timeout(700)
-        except Exception:
-            try:
-                page.goto(source_url, wait_until="domcontentloaded", timeout=15000)
-            except Exception:
-                pass
-    result = expansion_not_registered_result(
-        org,
-        state,
-        source_url,
-        attempted_queries[-1] if attempted_queries else "",
-        "CharityClarity completed bounded Rhode Island DBR organization-name searches and did not find a safe matching charitable-organization credential.",
+            if rejected_candidates:
+                result.reason_code = "NO_CONFIRMED_MATCH_AFTER_WEAK_CANDIDATES"
+                result.rejected_candidates = sorted(set(rejected_candidates))[:10]
+                result.raw_status_text = "Rejected candidates: " + "; ".join(result.rejected_candidates)
+            return result, result.raw_status_text
+
+        match = sorted(matches, key=ri_match_rank)[0]
+        identity = match.get("_identity_confidence") or {}
+        detail_id = match.get("id")
+        detail_data = {}
+        if detail_id:
+            detail_data = expansion_json_request(
+                f"{RI_API_BASE}/portal/search/{detail_id}/details",
+                headers=ri_api_headers(token),
+                timeout=RI_API_TIMEOUT_SECONDS,
+            )
+        label_map: dict[str, list[str]] = {}
+        for label, values in ri_walk_label_values(detail_data):
+            key = normalized_match_name(label)
+            label_map.setdefault(key, []).extend(values)
+
+        row_values = ri_result_values(match)
+        row_status_text = ri_row_status(row_values)
+        row_expiration_text = ri_row_expiration(row_values)
+        status_text = row_status_text or " ".join(label_map.get("status", [])) or " ".join(
+            value for value in row_values if re.search(r"active|pending|expired|inactive|revoked|suspended|withdrawn", value, re.I)
+        )
+        expiration_text = row_expiration_text or " ".join(label_map.get("expiration date", []))
+        credential_values = label_map.get("credential", [])
+        credential = credential_values[0] if credential_values else (row_values[1] if len(row_values) > 1 else "")
+        credential_type = credential_values[1] if len(credential_values) > 1 else (row_values[0] if row_values else "Charitable Organization")
+        exp_date = expansion_parse_date(expiration_text)
+
+        result = expansion_new_result(org, state, classify_ri_from_row(status_text, exp_date), source_url)
+        result.matched_registry_name = clean_registry_name(str(match.get("title") or ""))
+        result.matched_registry_identifier = credential or str(detail_id or "")
+        result.raw_status_text = (
+            f"RI 3rd Row Status: {status_text or 'Not shown'} | "
+            f"RI 4th Row Expiration Date: {expiration_text or 'Not shown'} | "
+            f"Credential: {credential or detail_id or 'Not shown'} | "
+            f"Type: {credential_type} | "
+            f"Search Name Used: {search_name_used}"
+        )
+        result.source_note = (
+            "RI rule: use the 3rd visible row first. ACTIVE uses the expiration date; "
+            "INACTIVE is Closed/Withdrawn; ACTIVE PENDING RENEWAL is Pending. "
+            "If the original name does not produce a charitable organization match, the checker also tries bounded name variants."
+        )
+        result.success = True
+        result.reason_code = identity.get("reason", "MATCH_NAME")
+        result.identity_confidence = identity
+        result.attempted_queries = attempted_queries
+        result.source_confidence = "ri_official_tyler_api"
+        return result, result.raw_status_text
+    except Exception as exc:
+        result = expansion_source_limited_result(org, state, "STATE_RESPONSE_UNREADABLE")
+        result.error = str(exc)
+        result.attempted_queries = attempted_queries
+        result.raw_status_text = "RI public search could not be reached or parsed."
+        return result, result.raw_status_text
+
+
+def classify_ut_business_status(status: str, status_details: str, renew_by_date: date | None = None) -> str:
+    raw = re.sub(r"\s+", " ", f"{status or ''} {status_details or ''}").strip().lower()
+    if not raw:
+        return checker.STATUS_UNKNOWN
+    if "exempt" in raw:
+        return "Exempt"
+    if "pending" in raw:
+        return "Pending"
+    if "revoked" in raw:
+        return "Revoked"
+    if "suspended" in raw:
+        return "Suspended"
+    if "delinquent" in raw or "expired" in raw or "failure to file" in raw:
+        return checker.STATUS_DELINQUENT
+    if any(word in raw for word in ("withdrawn", "terminated", "closed", "cancelled", "canceled", "dissolved", "inactive")):
+        return "Closed / Withdrawn / Canceled"
+    if renew_by_date:
+        return status_from_calendar_date(renew_by_date)
+    if "current" in raw or "active" in raw or "good standing" in raw:
+        return checker.STATUS_CURRENT
+    return checker.STATUS_UNKNOWN
+
+
+def ut_is_nonprofit_record(record: dict) -> bool:
+    entity_number = record.get("entity_number", "")
+    entity_type = record.get("type", "")
+    return bool(re.search(r"-014[01]\b", entity_number) or re.search(r"nonprofit|non-profit", entity_type, re.I))
+
+
+def ut_status_rank(record: dict) -> int:
+    status = re.sub(r"\s+", " ", f"{record.get('status', '')} {record.get('status_details', '')}").strip().lower()
+    if "active" in status and "current" in status:
+        return 0
+    if "active" in status:
+        return 1
+    if "pending" in status:
+        return 2
+    if "delinquent" in status or "expired" in status:
+        return 3
+    return 4
+
+
+def ut_record_rank(record: dict) -> tuple[int, int, int]:
+    identity = record.get("_identity_confidence") or {}
+    return (0 if ut_is_nonprofit_record(record) else 1, -int(identity.get("score") or 0), ut_status_rank(record))
+
+
+def parse_ut_result_rows(page) -> list[dict]:
+    rows = page.evaluate(
+        """() => Array.from(document.querySelectorAll('table tr, .table tr, [role="row"]')).map((tr) => {
+            const cells = Array.from(tr.querySelectorAll('td, th')).map((cell) =>
+                (cell.innerText || '').replace(/\\s+/g, ' ').trim()
+            );
+            return cells;
+        }).filter((cells) => cells.length > 0)"""
     )
-    result.attempted_queries = attempted_queries
-    if rejected_candidates:
-        result.reason_code = "NO_CONFIRMED_MATCH_AFTER_WEAK_CANDIDATES"
-        result.raw_status_text = "Rejected candidates: " + "; ".join(sorted(set(rejected_candidates))[:10])
-        result.rejected_candidates = sorted(set(rejected_candidates))[:10]
-    return result, "No matching Rhode Island result"
+    parsed: list[dict] = []
+    for cells in rows:
+        if len(cells) < 9:
+            continue
+        if normalized_match_name(cells[0]) == "name":
+            continue
+        name = re.sub(r"\s+", " ", cells[0] or "").strip()
+        if not name:
+            continue
+        parsed.append({
+            "name": name,
+            "other_name": re.sub(r"\s+", " ", cells[1] or "").strip(),
+            "filing_datetime": re.sub(r"\s+", " ", cells[2] or "").strip(),
+            "status": re.sub(r"\s+", " ", cells[3] or "").strip(),
+            "status_details": re.sub(r"\s+", " ", cells[4] or "").strip(),
+            "file_date": re.sub(r"\s+", " ", cells[5] or "").strip(),
+            "type": re.sub(r"\s+", " ", cells[6] or "").strip(),
+            "subtype": re.sub(r"\s+", " ", cells[7] or "").strip(),
+            "entity_number": re.sub(r"\s+", " ", cells[8] or "").strip(),
+        })
+    return parsed
+
+
+def ut_wait_for_business_search(page) -> bool:
+    for _ in range(8):
+        page.wait_for_timeout(5000)
+        try:
+            if page.locator("#BusinessSearch_Index_txtEntityName").count():
+                return True
+            if page.get_by_text("Search Business Entity Records", exact=True).count():
+                page.get_by_text("Search Business Entity Records", exact=True).click(timeout=8000)
+                page.wait_for_timeout(3000)
+                if page.locator("#BusinessSearch_Index_txtEntityName").count():
+                    return True
+        except Exception:
+            pass
+    return False
+
+
+def ut_search_once(page, query: str) -> tuple[list[dict], str]:
+    source_url = EXPANSION_STATE_SOURCES["UT"]["url"]
+    page.goto(source_url, wait_until="domcontentloaded", timeout=60000)
+    if not ut_wait_for_business_search(page):
+        body = readable_page_text(page)
+        raise RuntimeError(f"Utah business search controls were not found. Page text: {body[:500]}")
+    try:
+        page.locator("#BusinessSearch_Index_rdContains").check(timeout=5000)
+    except Exception:
+        pass
+    page.locator("#BusinessSearch_Index_txtEntityName").fill("", timeout=8000)
+    page.locator("#BusinessSearch_Index_txtEntityName").fill(query, timeout=8000)
+    page.locator("#btnSearch").click(timeout=10000)
+    safe_wait_for_network_idle(page, timeout=8000)
+    page.wait_for_timeout(8000)
+    body = readable_page_text(page)
+    if re.search(r"no records|no results|not found|0 results", body, re.I):
+        return [], body
+    return parse_ut_result_rows(page), body
+
+
+def ut_detail_values(page) -> dict:
+    body = readable_page_text(page)
+    lines = [re.sub(r"\s+", " ", line).strip() for line in body.splitlines() if re.sub(r"\s+", " ", line).strip()]
+    wanted_labels = {
+        "entity name",
+        "entity number",
+        "entity type",
+        "entity subtype",
+        "entity status",
+        "renew by date",
+        "entity status details",
+        "last renewed date",
+        "status updated on",
+        "expiration date",
+    }
+    values: dict[str, str] = {}
+    for index, line in enumerate(lines[:-1]):
+        key = normalized_match_name(line.rstrip(":"))
+        if key in wanted_labels and key not in values:
+            values[key] = lines[index + 1]
+    return values
+
+
+def ut_open_record_detail(page, record: dict) -> dict:
+    name = record.get("name", "")
+    if not name:
+        return {}
+    page.get_by_role("link", name=name, exact=True).click(timeout=10000)
+    page.wait_for_timeout(5000)
+    return ut_detail_values(page)
+
+
+def search_ut_expansion(page, org):
+    state = "UT"
+    source_url = EXPANSION_STATE_SOURCES[state]["url"]
+    attempted_queries: list[str] = []
+    rejected_candidates: list[str] = []
+    last_body = ""
+    try:
+        best_rows: list[dict] = []
+        for query in expansion_portal_name_variants(getattr(org, "organization_name", "")):
+            attempted_queries.append(query)
+            rows, body = ut_search_once(page, query)
+            last_body = body
+            exact_rows: list[dict] = []
+            for row in rows:
+                safe, identity = expansion_candidate_is_safe(org, row.get("name", ""))
+                if safe:
+                    row["_identity_confidence"] = identity
+                    exact_rows.append(row)
+                elif row.get("name"):
+                    rejected_candidates.append(clean_registry_name(row.get("name", "")))
+            nonprofit_rows = [row for row in exact_rows if ut_is_nonprofit_record(row)]
+            if nonprofit_rows:
+                best_rows = nonprofit_rows
+                break
+            if exact_rows and not best_rows:
+                best_rows = exact_rows
+
+        if not best_rows:
+            result = expansion_not_registered_result(
+                org,
+                state,
+                source_url,
+                attempted_queries[-1] if attempted_queries else "",
+                "No exact Utah nonprofit business registration match found. UT DCCC business registration search was searched by organization name.",
+            )
+            result.raw_status_text = (
+                "No exact Utah nonprofit business registration match found. "
+                f"Searched name variants: {', '.join(attempted_queries)}"
+            )
+            result.attempted_queries = attempted_queries
+            if rejected_candidates:
+                result.reason_code = "NO_CONFIRMED_MATCH_AFTER_WEAK_CANDIDATES"
+                result.rejected_candidates = sorted(set(rejected_candidates))[:10]
+            return result, last_body or result.raw_status_text
+
+        record = sorted(best_rows, key=ut_record_rank)[0]
+        detail_values: dict[str, str] = {}
+        try:
+            detail_values = ut_open_record_detail(page, record)
+        except Exception:
+            detail_values = {}
+
+        detail_status = detail_values.get("entity status", "")
+        detail_status_details = detail_values.get("entity status details", "")
+        renew_by_text = detail_values.get("renew by date", "")
+        expiration_text = detail_values.get("expiration date", "")
+        renew_by_date = expansion_parse_date(renew_by_text)
+        status_text = detail_status or record.get("status", "")
+        status_detail_text = detail_status_details or record.get("status_details", "")
+        identity = record.get("_identity_confidence") or {}
+
+        result = expansion_new_result(
+            org,
+            state,
+            classify_ut_business_status(status_text, status_detail_text, renew_by_date),
+            source_url,
+        )
+        result.raw_status_text = (
+            f"Name: {record.get('name', '')} | "
+            f"Status: {status_text} | "
+            f"Status Details: {status_detail_text} | "
+            f"Renew By Date: {renew_by_text or 'Not shown'} | "
+            f"Expiration Date: {expiration_text or 'Not shown'} | "
+            f"Type: {record.get('type', '')} | "
+            f"Entity Number: {record.get('entity_number', '')}"
+        )
+        if not ut_is_nonprofit_record(record):
+            result.raw_status_text += " | Note: exact match was found, but it was not a nonprofit corporation record."
+        result.matched_registry_name = record.get("name", "")
+        result.matched_registry_identifier = record.get("entity_number", "")
+        result.source_note = (
+            "UT uses the Utah Division of Corporations and Commercial Code business registration search. "
+            "DCP says Utah charity registration moved to DCCC nonprofit registration/annual 990 uploads effective 01/01/2025. "
+            "For active records, the checker uses the entity detail page Renew By Date for Current/Upcoming/Delinquent."
+        )
+        result.success = True
+        result.reason_code = identity.get("reason", "MATCH_NAME")
+        result.identity_confidence = identity
+        result.attempted_queries = attempted_queries
+        result.source_confidence = "ut_dccc_business_search"
+        return result, result.raw_status_text
+    except Exception as exc:
+        result = expansion_source_limited_result(org, state, "STATE_RESPONSE_UNREADABLE")
+        result.error = str(exc)
+        result.attempted_queries = attempted_queries
+        result.raw_status_text = "Utah business registration search could not be reached or parsed."
+        return result, registry_page_body(page)
 
 
 def search_expansion_lab_state(org, state: str):
@@ -19141,7 +19701,9 @@ def search_expansion_lab_state(org, state: str):
         return expansion_lab_placeholder_result(getattr(org, "organization_name", ""), getattr(org, "ein", ""), state), ""
     if state == "DC":
         return search_dc_expansion(org)
-    if state not in {"RI", "UT"}:
+    if state == "RI":
+        return search_ri_expansion(None, org)
+    if state != "UT":
         result = expansion_source_limited_result(org, state)
         body = " ".join([result.raw_status_text or "", result.source_note or ""]).strip()
         return result, body
@@ -19159,15 +19721,13 @@ def search_expansion_lab_state(org, state: str):
     try:
         with checker.sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            context = browser.new_context(ignore_https_errors=True)
+            context = browser.new_context(ignore_https_errors=True, user_agent=BROWSER_USER_AGENT, locale="en-US")
             # The expansion lab's React/Tyler portals can fail to hydrate when
             # shared heavy-resource blocking is applied. Keep the mature-state
             # browser policy unchanged and allow full resources only here.
             page = context.new_page()
             page.set_default_timeout(15000)
             try:
-                if state == "RI":
-                    return search_ri_expansion(page, org)
                 if state == "UT":
                     return search_ut_expansion(page, org)
             finally:
