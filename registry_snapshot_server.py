@@ -14218,6 +14218,9 @@ def true_status_from_body(result, body: str) -> str:
         co_status = co_status_from_registry_evidence(result, result, body)
         if co_status:
             return co_status
+    if state == "DC":
+        # DC expansion records are Basic Business License rows, not annual-filing rows.
+        return base_status
     if state == "CA":
         ca_primary_status = ca_explicit_primary_registry_status(result)
         if ca_primary_status:
@@ -14548,6 +14551,11 @@ def concise_status_rationale_comment(result, body: str, public_facing_status: st
 
     if normalized_status == "exempt":
         return "Official state records indicate this organization is exempt from charitable registration or not required to register in this state."
+
+    if state == "DC" and normalized_status in {"current", "upcoming filing", "delinquent", "revoked", "suspended", "closed / withdrawn / canceled"}:
+        dc_comment = dc_license_evidence_comment(result, body, public_facing_status)
+        if dc_comment:
+            return dc_comment
 
     if state == "NJ" and status_reason == "NJ_STATUS_FROM_REGISTRY_FILING_PERIOD" and computed_due:
         next_period_date = parse_due_date(next_period)
@@ -18717,6 +18725,93 @@ def expansion_query_ladder(org, limit: int | None = None) -> list[str]:
     return variants[:limit]
 
 
+def dc_query_variants(org, limit: int = 12) -> list[str]:
+    """DC BBL accepts exact phrase probes for short acronym-like names."""
+    variants: list[str] = []
+    seen: set[str] = set()
+    name = getattr(org, "organization_name", "") or ""
+
+    def safe_dc_query(value: str) -> bool:
+        cleaned = re.sub(r"\s+", " ", (value or "").strip(" ,;-"))
+        if not cleaned or len(cleaned) < 3:
+            return False
+        if not search_query_is_too_broad(cleaned):
+            return True
+        # The shared broad-query guard drops names like "KIPP FOUNDATION"
+        # because only a short distinctive token remains after generic words.
+        # For DC, keep the full phrase probe and let strict row scoring decide.
+        if len(re.findall(r"[A-Za-z0-9]+", cleaned)) < 2:
+            return False
+        return bool(distinctive_match_tokens(cleaned))
+
+    def add(value: str) -> None:
+        cleaned = re.sub(r"\s+", " ", (value or "").strip(" ,;-"))
+        key = cleaned.lower()
+        if safe_dc_query(cleaned) and key not in seen:
+            variants.append(cleaned)
+            seen.add(key)
+
+    def remove_leading_the(value: str) -> str:
+        return re.sub(r"^\s*the\s+", "", value or "", flags=re.I)
+
+    def split_alias_prefix(value: str) -> str:
+        return re.split(
+            r"\b(?:d\s*/\s*b\s*/\s*a|dba|aka|fka)\b\s*:?",
+            value or "",
+            maxsplit=1,
+            flags=re.I,
+        )[0]
+
+    def long_prefix_before_for(value: str) -> str:
+        pieces = re.split(r"\s+for\s+", re.sub(r"\s+", " ", value or "").strip(), maxsplit=1, flags=re.I)
+        if len(pieces) != 2:
+            return ""
+        prefix_words = normalized_match_name(pieces[0]).split()
+        suffix_words = normalized_match_name(pieces[1]).split()
+        if len(prefix_words) >= 3 and len(suffix_words) >= 2:
+            return pieces[0]
+        return ""
+
+    def remove_hyphen(value: str) -> str:
+        return re.sub(r"\s+", " ", (value or "").replace("-", " "))
+
+    def loose_legal_name(value: str) -> str:
+        tokens = normalized_match_name(value).split()
+        while tokens and tokens[-1] in {"inc", "incorporated", "corp", "corporation", "co", "company", "llc", "ltd", "limited"}:
+            tokens.pop()
+        return " ".join(tokens)
+
+    for value in expansion_query_ladder(org, limit=limit):
+        add(value)
+
+    without_parenthetical = re.sub(r"\s*\([^)]*\)", " ", name)
+    without_the = remove_leading_the(name)
+    alias_prefix = split_alias_prefix(name)
+    for candidate in [
+        name,
+        without_parenthetical,
+        without_the,
+        remove_leading_the(without_parenthetical),
+        alias_prefix,
+        remove_leading_the(alias_prefix),
+        long_prefix_before_for(name),
+        long_prefix_before_for(without_the),
+        long_prefix_before_for(without_parenthetical),
+        remove_hyphen(name),
+        remove_hyphen(without_the),
+        expansion_collapse_acronym_periods(name),
+        expansion_collapse_acronym_periods(without_the),
+        expansion_collapse_acronym_periods(without_parenthetical),
+        expansion_collapse_acronym_periods(remove_leading_the(without_parenthetical)),
+        loose_legal_name(name),
+    ]:
+        add(candidate)
+    for sep in ("/", " dba ", " aka ", " fka "):
+        if sep in name.lower():
+            add(re.split(re.escape(sep), name, flags=re.I)[0])
+    return variants[:limit]
+
+
 def expansion_collapse_acronym_periods(value: str) -> str:
     return re.sub(r"\b(?:[A-Za-z]\.){2,}", lambda match: match.group(0).replace(".", ""), value or "")
 
@@ -18957,6 +19052,31 @@ def dc_attrs_raw_text(attrs: dict) -> str:
     return "; ".join(parts)
 
 
+def dc_license_evidence_comment(result, body: str, public_facing_status: str) -> str:
+    text = " ".join([
+        getattr(result, "raw_status_text", "") or "",
+        body or "",
+    ])
+    status_match = re.search(r"\bLicense\s+Status\s*:\s*([^;|]+)", text, re.I)
+    end_match = re.search(
+        r"\bLicense\s+End\s+Date\s*:\s*"
+        r"(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+        text,
+        re.I,
+    )
+    evidence = []
+    if status_match:
+        evidence.append(f"License Status: {status_match.group(1).strip()}")
+    if end_match:
+        evidence.append(f"License End Date: {end_match.group(1).strip()}")
+    if not evidence:
+        return ""
+    return (
+        f"The DC Basic Business License record shows {'; '.join(evidence)}, "
+        f"so CharityClarity returns {public_facing_status}."
+    )
+
+
 def dc_like_literal(value: str) -> str:
     cleaned = re.sub(r"\s+", " ", value or "").strip()
     cleaned = cleaned.replace("'", "''")
@@ -19071,7 +19191,7 @@ def ensure_dc_csv_file() -> Path:
 def search_dc_csv_fallback(org):
     state = "DC"
     result = expansion_new_result(org, state, checker.STATUS_UNKNOWN, DC_BBL_CSV_URL)
-    wanted_terms = {normalized_match_name(value) for value in expansion_query_ladder(org, limit=12)}
+    wanted_terms = {normalized_match_name(value) for value in dc_query_variants(org, limit=12)}
     wanted_terms = {value for value in wanted_terms if value}
     best: tuple[int, dict, str, dict] | None = None
     rows_seen = 0
@@ -19136,7 +19256,7 @@ def search_dc_expansion(org):
     completed_any_query = False
     last_error = ""
     best: tuple[int, dict, str, dict] | None = None
-    for query in expansion_query_ladder(org, limit=12):
+    for query in dc_query_variants(org, limit=12):
         attempted_queries.append(query)
         literal = dc_like_literal(query)
         where = (
@@ -19527,6 +19647,242 @@ def parse_ut_result_rows(page) -> list[dict]:
     return parsed
 
 
+UT_BUSINESS_HOME_URL = "https://businessregistration.utah.gov/"
+UT_BUSINESS_RESULT_URL = "https://businessregistration.utah.gov/EntitySearch/OnlineBusinessAndMarkSearchResult"
+UT_BUSINESS_DETAIL_URL = "https://businessregistration.utah.gov/EntitySearch/BusinessInformation"
+UT_DIRECT_TIMEOUT_SECONDS = 30
+
+
+def ut_visible_html_text(source: str) -> str:
+    source = re.sub(r"<(?:script|style)\b[\s\S]*?</(?:script|style)>", " ", source or "", flags=re.I)
+    return html_to_text(source)
+
+
+def parse_ut_result_rows_from_html(source: str) -> list[dict]:
+    parsed: list[dict] = []
+    for row_match in re.finditer(r"<tr\b[^>]*>([\s\S]*?)</tr>", source or "", re.I):
+        row_html = row_match.group(1)
+        cells = html_table_cells(row_html)
+        if len(cells) < 9:
+            continue
+        if normalized_match_name(cells[0]) == "name":
+            continue
+        name = re.sub(r"\s+", " ", cells[0] or "").strip()
+        if not name:
+            continue
+        detail_match = re.search(
+            r"GetBusinessSearchResultById\(\s*[\"'](\d+)[\"']\s*,\s*[\"']([^\"']*)[\"']\s*\)",
+            row_html,
+            re.I,
+        )
+        parsed.append({
+            "name": name,
+            "other_name": re.sub(r"\s+", " ", cells[1] or "").strip(),
+            "filing_datetime": re.sub(r"\s+", " ", cells[2] or "").strip(),
+            "status": re.sub(r"\s+", " ", cells[3] or "").strip(),
+            "status_details": re.sub(r"\s+", " ", cells[4] or "").strip(),
+            "file_date": re.sub(r"\s+", " ", cells[5] or "").strip(),
+            "type": re.sub(r"\s+", " ", cells[6] or "").strip(),
+            "subtype": re.sub(r"\s+", " ", cells[7] or "").strip(),
+            "entity_number": re.sub(r"\s+", " ", cells[8] or "").strip(),
+            "detail_business_id": detail_match.group(1) if detail_match else "",
+            "detail_reservation_id": detail_match.group(2) if detail_match else "0",
+        })
+    return parsed
+
+
+def ut_direct_search_payload(query: str) -> dict[str, str]:
+    return {
+        "QuickSearch.BusinessId": "",
+        "QuickSearch.NVBusinessNumber": "",
+        "QuickSearch.StartsWith": "false",
+        "QuickSearch.Contains": "true",
+        "QuickSearch.ExactMatch": "false",
+        "QuickSearch.Allwords": "",
+        "QuickSearch.BusinessName": query,
+        "QuickSearch.PrincipalName": "",
+        "QuickSearch.DomicileName": "",
+        "QuickSearch.AssumedName": "",
+        "QuickSearch.AgentName": "",
+        "QuickSearch.MarkNumber": "",
+        "QuickSearch.Classification": "",
+        "QuickSearch.FilingNumber": "",
+        "QuickSearch.Goods": "",
+        "QuickSearch.ApplicantName": "",
+        "QuickSearch.All": "",
+        "QuickSearch.EntitySearch": "true",
+        "QuickSearch.MarkSearch": "",
+        "QuickSearch.SeqNo": "0",
+        "AdvancedSearch.BusinessTypeID": "",
+        "AdvancedSearch.BusinessTypes": "",
+        "AdvancedSearch.BusinessStatusID": "0",
+        "AdvancedSearch.StatusDetails": "",
+        "AdvancedSearch.BusinessSubTypes": "",
+        "AdvancedSearch.JurdisctionTypeID": "",
+        "AdvancedSearch.IncludeInactive": "false",
+        "AdvancedSearch.EntityDateFrom": "",
+        "AdvancedSearch.EntityDateTo": "",
+        "AdvancedSearch.StatusDateFrom": "",
+        "AdvancedSearch.StatusDateTo": "",
+    }
+
+
+def ut_query_variants(value: str, limit: int = 12) -> list[str]:
+    base = re.sub(r"\s+", " ", value or "").strip()
+    variants: list[str] = []
+    seen: set[str] = set()
+
+    def add(candidate: str) -> None:
+        candidate = re.sub(r"\s+", " ", candidate or "").strip(" ,.;:-")
+        key = normalized_match_name(candidate)
+        if candidate and key and key not in seen:
+            variants.append(candidate)
+            seen.add(key)
+
+    def remove_leading_the(candidate: str) -> str:
+        return re.sub(r"^the\s+", "", candidate or "", flags=re.I).strip()
+
+    def remove_trailing_suffix(candidate: str) -> str:
+        return re.sub(
+            r"\s+(?:incorporated|inc|corp|corporation|co|company|llc|ltd|limited)\.?\s*$",
+            "",
+            candidate or "",
+            flags=re.I,
+        ).strip(" ,.;:-")
+
+    def remove_generic_tail(candidate: str) -> str:
+        words = re.sub(r"\s+", " ", candidate or "").strip().split()
+        generic_tails = {
+            "association",
+            "board",
+            "center",
+            "centre",
+            "college",
+            "foundation",
+            "fund",
+            "institute",
+            "society",
+            "trust",
+            "university",
+        }
+        if len(words) >= 2 and normalized_match_name(words[-1]) in generic_tails:
+            return " ".join(words[:-1])
+        return ""
+
+    add(base)
+    without_parenthetical = re.sub(r"\s*\([^)]*\)", " ", base)
+    add(without_parenthetical)
+    add(remove_leading_the(base))
+    add(remove_leading_the(without_parenthetical))
+    for candidate in list(variants):
+        add(remove_trailing_suffix(candidate))
+        add(expansion_collapse_acronym_periods(candidate))
+        add(remove_trailing_suffix(expansion_collapse_acronym_periods(candidate)))
+    for candidate in list(variants):
+        add(remove_generic_tail(candidate))
+    return variants[:limit]
+
+
+def ut_direct_session():
+    if curl_requests is None:
+        raise RuntimeError("curl_cffi is not installed; Utah direct business search requires Chrome-impersonated HTTP.")
+    session = curl_requests.Session(impersonate="chrome136")
+    session.headers.update({
+        "User-Agent": BROWSER_USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Upgrade-Insecure-Requests": "1",
+    })
+    return session
+
+
+def ut_prepare_direct_session(session, source_url: str) -> None:
+    home_response = session.get(UT_BUSINESS_HOME_URL, timeout=UT_DIRECT_TIMEOUT_SECONDS)
+    home_response.raise_for_status()
+    search_response = session.get(
+        source_url,
+        timeout=UT_DIRECT_TIMEOUT_SECONDS,
+        headers={"Referer": UT_BUSINESS_HOME_URL},
+    )
+    search_response.raise_for_status()
+
+
+def ut_search_once_http(session, query: str, source_url: str) -> tuple[list[dict], str]:
+    response = session.post(
+        UT_BUSINESS_RESULT_URL,
+        data=ut_direct_search_payload(query),
+        timeout=UT_DIRECT_TIMEOUT_SECONDS,
+        headers={
+            "Referer": source_url,
+            "Origin": "https://businessregistration.utah.gov",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+    )
+    response.raise_for_status()
+    body = ut_visible_html_text(response.text or "")
+    if re.search(r"no records|no results|not found|0 results", body, re.I):
+        return [], body
+    return parse_ut_result_rows_from_html(response.text or ""), body
+
+
+def ut_detail_values_from_html(source: str) -> dict[str, str]:
+    labels = [
+        "entity name",
+        "entity number",
+        "entity type",
+        "entity subtype",
+        "entity status",
+        "renew by date",
+        "entity status details",
+        "last renewed date",
+        "status updated on",
+        "expiration date",
+    ]
+    stop_labels = labels + [
+        "registered agent information",
+        "principal information",
+        "address information",
+        "service of process information",
+        "filing history",
+        "name history",
+    ]
+    label_pattern = "|".join(re.escape(label) for label in sorted(labels, key=len, reverse=True))
+    stop_pattern = "|".join(re.escape(label) for label in sorted(stop_labels, key=len, reverse=True))
+    values: dict[str, str] = {}
+    text = ut_visible_html_text(source)
+    for match in re.finditer(
+        rf"\b({label_pattern})\s*:\s*(.*?)\s*(?=\b(?:{stop_pattern})(?:\s*:|\b)|$)",
+        text,
+        re.I,
+    ):
+        key = normalized_match_name(match.group(1))
+        value = re.sub(r"\s+", " ", match.group(2) or "").strip()
+        if key in labels and value and key not in values:
+            values[key] = value
+    return values
+
+
+def ut_direct_detail_values(session, record: dict) -> dict:
+    business_id = record.get("detail_business_id", "")
+    if not business_id:
+        return {}
+    response = session.post(
+        UT_BUSINESS_DETAIL_URL,
+        data={
+            "businessId": business_id,
+            "businessReservationNumber": record.get("detail_reservation_id", "0") or "0",
+        },
+        timeout=UT_DIRECT_TIMEOUT_SECONDS,
+        headers={
+            "Referer": UT_BUSINESS_RESULT_URL,
+            "Origin": "https://businessregistration.utah.gov",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+    )
+    response.raise_for_status()
+    return ut_detail_values_from_html(response.text or "")
+
+
 def ut_wait_for_business_search(page) -> bool:
     for _ in range(8):
         page.wait_for_timeout(5000)
@@ -19603,10 +19959,12 @@ def search_ut_expansion(page, org):
     rejected_candidates: list[str] = []
     last_body = ""
     try:
+        session = ut_direct_session()
+        ut_prepare_direct_session(session, source_url)
         best_rows: list[dict] = []
-        for query in expansion_portal_name_variants(getattr(org, "organization_name", "")):
+        for query in ut_query_variants(getattr(org, "organization_name", "")):
             attempted_queries.append(query)
-            rows, body = ut_search_once(page, query)
+            rows, body = ut_search_once_http(session, query, source_url)
             last_body = body
             exact_rows: list[dict] = []
             for row in rows:
@@ -19644,7 +20002,7 @@ def search_ut_expansion(page, org):
         record = sorted(best_rows, key=ut_record_rank)[0]
         detail_values: dict[str, str] = {}
         try:
-            detail_values = ut_open_record_detail(page, record)
+            detail_values = ut_direct_detail_values(session, record)
         except Exception:
             detail_values = {}
 
@@ -19692,7 +20050,7 @@ def search_ut_expansion(page, org):
         result.error = str(exc)
         result.attempted_queries = attempted_queries
         result.raw_status_text = "Utah business registration search could not be reached or parsed."
-        return result, registry_page_body(page)
+        return result, last_body or result.raw_status_text
 
 
 def search_expansion_lab_state(org, state: str):
@@ -19707,47 +20065,7 @@ def search_expansion_lab_state(org, state: str):
         result = expansion_source_limited_result(org, state)
         body = " ".join([result.raw_status_text or "", result.source_note or ""]).strip()
         return result, body
-    acquired = BROWSER_LOOKUP_SEMAPHORE.acquire(timeout=BROWSER_LOOKUP_ACQUIRE_SECONDS)
-    if not acquired:
-        result = browser_capacity_busy_result(
-            getattr(org, "organization_name", ""),
-            getattr(org, "ein", ""),
-            state,
-            EXPANSION_STATE_SOURCES[state]["url"],
-        )
-        result.status = "Unable to Confirm"
-        result.reason_code = "BROWSER_CAPACITY_BUSY"
-        return result, result.raw_status_text
-    try:
-        with checker.sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(ignore_https_errors=True, user_agent=BROWSER_USER_AGENT, locale="en-US")
-            # The expansion lab's React/Tyler portals can fail to hydrate when
-            # shared heavy-resource blocking is applied. Keep the mature-state
-            # browser policy unchanged and allow full resources only here.
-            page = context.new_page()
-            page.set_default_timeout(15000)
-            try:
-                if state == "UT":
-                    return search_ut_expansion(page, org)
-            finally:
-                try:
-                    context.close()
-                except Exception:
-                    pass
-                try:
-                    browser.close()
-                except Exception:
-                    pass
-    except Exception as exc:
-        result = expansion_source_limited_result(org, state, "PORTAL_ERROR")
-        result.error = str(exc)
-        result.raw_status_text = f"{state} expansion lookup failed before a completed registry search."
-        return result, result.raw_status_text
-    finally:
-        BROWSER_LOOKUP_SEMAPHORE.release()
-    result = expansion_source_limited_result(org, state, "STATE_RESPONSE_UNREADABLE")
-    return result, result.raw_status_text
+    return search_ut_expansion(None, org)
 
 
 def expansion_lab_placeholder_result(organization_name: str, ein: str, state: str):
