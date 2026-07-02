@@ -18698,7 +18698,7 @@ EXPANSION_STATE_SOURCES = {
     },
     "MO": {
         "name": "Missouri Attorney General charity resources",
-        "url": "https://ago.mo.gov/get-help/programs-services-from-a-z/charity/",
+        "url": "https://ago.mo.gov/",
         "search": "none_public_confirmed",
         "blocker": "no_public_lookup_identified",
     },
@@ -19026,6 +19026,26 @@ def expansion_not_registered_result(org, state: str, source_url: str, query: str
     result.source_confidence = "expansion_completed_no_match"
     result.attempted_queries = [query] if query else []
     return result
+
+
+def search_mo_expansion(org):
+    state = "MO"
+    source_url = EXPANSION_STATE_SOURCES[state]["url"]
+    contact_email = "sunshinerequest@ago.mo.gov"
+    result = expansion_new_result(org, state, "Manual follow up", source_url)
+    result.raw_status_text = (
+        "State of MO does not publish registration information. "
+        f"For registration status, send an email to {contact_email}."
+    )
+    result.source_note = (
+        "Missouri requires manual follow-up because the state does not publish "
+        "a public charity-registration status lookup suitable for automated status checks."
+    )
+    result.success = True
+    result.error = ""
+    result.reason_code = "MO_MANUAL_FOLLOW_UP_REQUIRED"
+    result.source_confidence = "manual_follow_up"
+    return result, result.raw_status_text
 
 
 def expansion_json_request(url: str, *, method: str = "GET", payload=None, headers: dict | None = None, timeout: int = 18):
@@ -20558,6 +20578,8 @@ def search_expansion_lab_state(org, state: str):
         return search_dc_expansion(org)
     if state == "RI":
         return search_ri_expansion(None, org)
+    if state == "MO":
+        return search_mo_expansion(org)
     if state != "UT":
         result = expansion_source_limited_result(org, state)
         body = " ".join([result.raw_status_text or "", result.source_note or ""]).strip()
