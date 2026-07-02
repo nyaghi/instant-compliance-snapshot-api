@@ -14677,6 +14677,45 @@ def concise_status_rationale_comment(result, body: str, public_facing_status: st
     return ""
 
 
+def ut_site_not_reachable_diagnostic_comment(result) -> str:
+    attempts = getattr(result, "source_attempts", []) or []
+    if not attempts:
+        return (
+            "Public registry site could not be reached at the time of the CharityClarity check. "
+            "UT diagnostic: no source_attempts were returned, so confirm the deployed build includes the browser-only diagnostic code."
+        )
+    stage_parts = []
+    error_attempt = None
+    for attempt in attempts:
+        if not isinstance(attempt, dict):
+            continue
+        method = re.sub(r"\s+", " ", str(attempt.get("method") or "")).strip()
+        stage = re.sub(r"\s+", " ", str(attempt.get("stage") or "")).strip()
+        status = re.sub(r"\s+", " ", str(attempt.get("status") or "")).strip()
+        if method or stage or status:
+            stage_parts.append(".".join(part for part in [method, stage] if part) + (f"={status}" if status else ""))
+        if status == "error" or attempt.get("error"):
+            error_attempt = attempt
+    stage_summary = ", ".join(stage_parts[-8:]) or "no browser stages recorded"
+    if not error_attempt:
+        return (
+            "Public registry site could not be reached at the time of the CharityClarity check. "
+            f"UT diagnostic: browser stages completed without a captured error: {stage_summary}."
+        )
+    method = re.sub(r"\s+", " ", str(error_attempt.get("method") or "")).strip()
+    stage = re.sub(r"\s+", " ", str(error_attempt.get("stage") or "")).strip()
+    error = re.sub(r"\s+", " ", str(error_attempt.get("error") or "")).strip()
+    if len(error) > 260:
+        error = error[:257].rstrip() + "..."
+    failing_stage = ".".join(part for part in [method, stage] if part) or "unknown stage"
+    return (
+        "Public registry site could not be reached at the time of the CharityClarity check. "
+        f"UT diagnostic: last failing stage was {failing_stage}. "
+        f"Stages: {stage_summary}. "
+        f"Error: {error or 'not provided'}"
+    )
+
+
 def comments_for_result_base(result, body: str, public_facing_status: str) -> str:
     normalized_status = public_facing_status.lower()
     state = (result.state or "the selected state").upper()
@@ -14745,6 +14784,8 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
     if rationale:
         return rationale
     if normalized_status == "site not reachable":
+        if state == "UT":
+            return ut_site_not_reachable_diagnostic_comment(result)
         technical_error = " ".join([result.error or "", result.source_note or "", result.raw_status_text or ""])
         if re.search(r"ERR_NAME_NOT_RESOLVED|remote name could not be resolved|getaddrinfo failed|Name or service not known", technical_error, re.I):
             return "Local DNS/network resolution failed while trying to reach the public registry host. This is usually a local network/DNS issue; rerun CharityClarity after the connection stabilizes."
