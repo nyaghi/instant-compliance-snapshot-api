@@ -20153,26 +20153,52 @@ def ut_direct_detail_values(session, record: dict, source_attempts: list[dict] |
         raise RuntimeError(ut_exception_summary("detail_post", exc)) from exc
 
 
-def ut_wait_for_business_search(page) -> bool:
-    for _ in range(8):
-        page.wait_for_timeout(5000)
+def ut_search_form_ready(page) -> bool:
+    try:
+        return bool(page.locator("#BusinessSearch_Index_txtEntityName").count())
+    except Exception:
+        return False
+
+
+def ut_click_business_search_link(page, source_url: str) -> bool:
+    link_attempts = [
+        lambda: page.get_by_role("link", name="Search Business Entity Records", exact=True),
+        lambda: page.get_by_text("Search Business Entity Records", exact=True),
+        lambda: page.get_by_role("link", name="Business Entity", exact=True),
+    ]
+    for link_factory in link_attempts:
         try:
-            if page.locator("#BusinessSearch_Index_txtEntityName").count():
-                return True
-            if page.get_by_text("Search Business Entity Records", exact=True).count():
-                page.get_by_text("Search Business Entity Records", exact=True).click(timeout=8000)
+            link = link_factory()
+            if link.count():
+                link.click(timeout=10000)
                 page.wait_for_timeout(3000)
-                if page.locator("#BusinessSearch_Index_txtEntityName").count():
+                if ut_search_form_ready(page):
                     return True
         except Exception:
             pass
+    try:
+        page.goto(source_url, wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(3000)
+        return ut_search_form_ready(page)
+    except Exception:
+        return False
+
+
+def ut_wait_for_business_search(page, source_url: str | None = None) -> bool:
+    source_url = source_url or EXPANSION_STATE_SOURCES["UT"]["url"]
+    for _ in range(8):
+        page.wait_for_timeout(2500)
+        if ut_search_form_ready(page):
+            return True
+        if ut_click_business_search_link(page, source_url):
+            return True
     return False
 
 
 def ut_search_once(page, query: str) -> tuple[list[dict], str]:
     source_url = EXPANSION_STATE_SOURCES["UT"]["url"]
-    page.goto(source_url, wait_until="domcontentloaded", timeout=60000)
-    if not ut_wait_for_business_search(page):
+    page.goto(UT_BUSINESS_HOME_URL, wait_until="domcontentloaded", timeout=60000)
+    if not ut_wait_for_business_search(page, source_url):
         body = readable_page_text(page)
         raise RuntimeError(f"Utah business search controls were not found. Page text: {body[:500]}")
     try:
@@ -20339,7 +20365,22 @@ def search_ut_browser_fallback(page, org, source_url: str, attempted_queries: li
                     headless=True,
                     args=["--no-sandbox", "--disable-dev-shm-usage"],
                 )
-                context = browser.new_context(user_agent=BROWSER_USER_AGENT, locale="en-US")
+                context = browser.new_context(
+                    user_agent=BROWSER_USER_AGENT,
+                    locale="en-US",
+                    viewport={"width": 1366, "height": 768},
+                    timezone_id="America/Denver",
+                )
+                context.add_init_script(
+                    """
+Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+window.chrome = window.chrome || {};
+window.chrome.runtime = window.chrome.runtime || {};
+Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+"""
+                )
+                configure_browser_context(context)
                 page = context.new_page()
             except Exception:
                 playwright.stop()
