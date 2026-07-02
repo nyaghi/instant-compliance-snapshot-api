@@ -20347,7 +20347,7 @@ def ut_registered_result_from_record(org, record: dict, detail_values: dict, sou
     return result
 
 
-def search_ut_browser_fallback(page, org, source_url: str, attempted_queries: list[str], rejected_candidates: list[str], source_attempts: list[dict]):
+def search_ut_browser_fallback(page, org, source_url: str, attempted_queries: list[str], rejected_candidates: list[str], source_attempts: list[dict], method_label: str = "browser_fallback"):
     owns_browser = page is None
     browser_admitted = False
     playwright = None
@@ -20359,12 +20359,15 @@ def search_ut_browser_fallback(page, org, source_url: str, attempted_queries: li
             browser_admitted = BROWSER_LOOKUP_SEMAPHORE.acquire(timeout=BROWSER_LOOKUP_ACQUIRE_SECONDS)
             if not browser_admitted:
                 raise RuntimeError("Utah browser fallback could not start because browser capacity was busy.")
+            ut_note_attempt(source_attempts, method_label, "capacity_acquire", "ok")
             playwright = checker.sync_playwright().start()
+            ut_note_attempt(source_attempts, method_label, "playwright_start", "ok")
             try:
                 browser = playwright.chromium.launch(
                     headless=True,
                     args=["--no-sandbox", "--disable-dev-shm-usage"],
                 )
+                ut_note_attempt(source_attempts, method_label, "chromium_launch", "ok")
                 context = browser.new_context(
                     user_agent=BROWSER_USER_AGENT,
                     locale="en-US",
@@ -20382,16 +20385,19 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 )
                 configure_browser_context(context)
                 page = context.new_page()
-            except Exception:
-                playwright.stop()
+                ut_note_attempt(source_attempts, method_label, "context_new_page", "ok")
+            except Exception as exc:
+                ut_note_attempt(source_attempts, method_label, "browser_start", "error", error=ut_exception_summary("browser_start", exc))
+                if playwright is not None:
+                    playwright.stop()
                 raise
             page.set_default_timeout(15000)
-        ut_note_attempt(source_attempts, "browser_fallback", "browser_start", "ok", owned=owns_browser)
+        ut_note_attempt(source_attempts, method_label, "browser_start", "ok", owned=owns_browser)
 
         def browser_search_once(query: str) -> tuple[list[dict], str]:
             try:
                 rows, body = ut_search_once(page, query)
-                ut_note_attempt(source_attempts, "browser_fallback", "search", "ok", query=query, rows=len(rows))
+                ut_note_attempt(source_attempts, method_label, "search", "ok", query=query, rows=len(rows))
                 return rows, body
             except Exception as exc:
                 body = ""
@@ -20400,7 +20406,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 except Exception:
                     body = ""
                 error = ut_exception_summary("browser_search", exc, body)
-                ut_note_attempt(source_attempts, "browser_fallback", "search", "error", query=query, error=error)
+                ut_note_attempt(source_attempts, method_label, "search", "error", query=query, error=error)
                 raise RuntimeError(error) from exc
 
         best_rows, last_body = ut_find_best_rows(
@@ -20409,7 +20415,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
             attempted_queries,
             rejected_candidates,
             source_attempts,
-            "browser_fallback",
+            method_label,
         )
         if not best_rows:
             result = ut_not_registered_result(org, source_url, attempted_queries, rejected_candidates, source_attempts)
@@ -20419,10 +20425,10 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
         detail_values: dict[str, str] = {}
         try:
             detail_values = ut_open_record_detail(page, record)
-            ut_note_attempt(source_attempts, "browser_fallback", "detail", "ok", fields=len(detail_values))
+            ut_note_attempt(source_attempts, method_label, "detail", "ok", fields=len(detail_values))
         except Exception as exc:
             error = ut_exception_summary("browser_detail", exc)
-            ut_note_attempt(source_attempts, "browser_fallback", "detail", "error", error=error)
+            ut_note_attempt(source_attempts, method_label, "detail", "error", error=error)
         result = ut_registered_result_from_record(
             org,
             record,
@@ -20430,7 +20436,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
             source_url,
             attempted_queries,
             source_attempts,
-            "browser_fallback",
+            method_label,
         )
         return result, result.raw_status_text
     finally:
@@ -20461,43 +20467,14 @@ def search_ut_expansion(page, org):
     rejected_candidates: list[str] = []
     source_attempts: list[dict] = []
     last_body = ""
-    direct_error = ""
-    try:
-        session = ut_direct_session(source_attempts)
-        ut_prepare_direct_session(session, source_url, source_attempts)
-        best_rows, last_body = ut_find_best_rows(
-            org,
-            lambda query: ut_search_once_http(session, query, source_url, source_attempts),
-            attempted_queries,
-            rejected_candidates,
-            source_attempts,
-            "direct_http",
-        )
-
-        if not best_rows:
-            result = ut_not_registered_result(org, source_url, attempted_queries, rejected_candidates, source_attempts)
-            return result, last_body or result.raw_status_text
-
-        record = sorted(best_rows, key=ut_record_rank)[0]
-        detail_values: dict[str, str] = {}
-        try:
-            detail_values = ut_direct_detail_values(session, record, source_attempts)
-        except Exception:
-            detail_values = {}
-        result = ut_registered_result_from_record(
-            org,
-            record,
-            detail_values,
-            source_url,
-            attempted_queries,
-            source_attempts,
-            "direct_http",
-        )
-        return result, result.raw_status_text
-    except Exception as exc:
-        direct_error = ut_exception_summary("direct_http", exc, last_body)
-        ut_note_attempt(source_attempts, "direct_http", "lookup", "error", error=direct_error)
-
+    browser_error = ""
+    ut_note_attempt(
+        source_attempts,
+        "browser_only",
+        "mode",
+        "ok",
+        reason="Direct HTTP skipped so Render uses the current Utah DCCC search through a browser flow.",
+    )
     try:
         result, body = search_ut_browser_fallback(
             page,
@@ -20506,29 +20483,28 @@ def search_ut_expansion(page, org):
             attempted_queries,
             rejected_candidates,
             source_attempts,
+            "browser_only",
         )
-        if direct_error:
-            result.source_note = " ".join(part for part in [
-                getattr(result, "source_note", "") or "",
-                "Direct HTTP failed first, so CharityClarity used the bounded Utah browser fallback.",
-            ]).strip()
+        result.source_note = " ".join(part for part in [
+            getattr(result, "source_note", "") or "",
+            "CharityClarity used Utah's current DCCC business entity search through a browser-only flow.",
+        ]).strip()
         return result, body
     except Exception as exc:
-        browser_error = ut_exception_summary("browser_fallback", exc, last_body)
-        ut_note_attempt(source_attempts, "browser_fallback", "lookup", "error", error=browser_error)
+        browser_error = ut_exception_summary("browser_only", exc, last_body)
+        ut_note_attempt(source_attempts, "browser_only", "lookup", "error", error=browser_error)
 
     result = expansion_source_limited_result(org, state, "STATE_RESPONSE_UNREADABLE")
     result.error = " | ".join(part for part in [
-        f"direct_http: {direct_error}" if direct_error else "",
-        f"browser_fallback: {browser_error}" if "browser_error" in locals() and browser_error else "",
+        f"browser_only: {browser_error}" if browser_error else "",
     ] if part)
     result.attempted_queries = attempted_queries
     result.source_attempts = source_attempts
-    result.raw_status_text = "Utah business registration search could not be reached or parsed. " + result.error
+    result.raw_status_text = "Utah DCCC browser-only business registration search could not be reached or parsed. " + result.error
     result.source_note = (
         "UT uses the Utah Division of Corporations and Commercial Code business registration search. "
-        "Direct HTTP and bounded browser fallback could not produce a readable search result; "
-        "source_attempts shows the exact failing stage."
+        "Direct HTTP is intentionally skipped for this browser-only Render test; "
+        "source_attempts shows the exact failing browser stage."
     )
     return result, last_body or result.raw_status_text
 
