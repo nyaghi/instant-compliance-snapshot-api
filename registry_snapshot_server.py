@@ -18816,6 +18816,77 @@ def expansion_collapse_acronym_periods(value: str) -> str:
     return re.sub(r"\b(?:[A-Za-z]\.){2,}", lambda match: match.group(0).replace(".", ""), value or "")
 
 
+def expansion_relaxed_portal_name_variants(value: str, limit: int = 12, include_first_token: bool = False) -> list[str]:
+    base = re.sub(r"\s+", " ", value or "").strip()
+    variants: list[str] = []
+    seen: set[str] = set()
+
+    def add(candidate: str) -> None:
+        candidate = re.sub(r"\s+", " ", candidate or "").strip(" ,.;:-")
+        normalized = normalized_match_name(candidate)
+        key = candidate.lower()
+        if candidate and normalized and key not in seen:
+            variants.append(candidate)
+            seen.add(key)
+
+    def remove_leading_the(candidate: str) -> str:
+        return re.sub(r"^the\s+", "", candidate or "", flags=re.I).strip()
+
+    def remove_trailing_suffix(candidate: str) -> str:
+        return re.sub(
+            r"\s+(?:incorporated|inc|corp|corporation|co|company|llc|ltd|limited)\.?\s*$",
+            "",
+            candidate or "",
+            flags=re.I,
+        ).strip(" ,.;:-")
+
+    def remove_generic_tail(candidate: str) -> str:
+        words = re.sub(r"\s+", " ", candidate or "").strip().split()
+        generic_tails = {
+            "association",
+            "board",
+            "center",
+            "centre",
+            "college",
+            "foundation",
+            "fund",
+            "institute",
+            "society",
+            "trust",
+            "university",
+        }
+        if len(words) >= 2 and normalized_match_name(words[-1]) in generic_tails:
+            return " ".join(words[:-1])
+        return ""
+
+    def remove_hyphen(candidate: str) -> str:
+        return re.sub(r"\s+", " ", (candidate or "").replace("-", " "))
+
+    add(base)
+    without_parenthetical = re.sub(r"\s*\([^)]*\)", " ", base)
+    add(without_parenthetical)
+    add(remove_leading_the(base))
+    add(remove_leading_the(without_parenthetical))
+    for candidate in list(variants):
+        collapsed = expansion_collapse_acronym_periods(candidate)
+        hyphenless = remove_hyphen(candidate)
+        add(remove_trailing_suffix(candidate))
+        add(collapsed)
+        add(remove_trailing_suffix(collapsed))
+        add(hyphenless)
+        add(remove_trailing_suffix(hyphenless))
+        add(expansion_collapse_acronym_periods(hyphenless))
+    for candidate in list(variants):
+        add(remove_generic_tail(candidate))
+    if include_first_token:
+        distinctive = distinctive_match_tokens(base)
+        for token in normalized_match_name(base).split():
+            if token in distinctive:
+                add(token)
+                break
+    return variants[:limit]
+
+
 def expansion_portal_name_variants(value: str, limit: int = 12) -> list[str]:
     base = re.sub(r"\s+", " ", value or "").strip()
     variants: list[str] = []
@@ -19004,6 +19075,7 @@ def dc_arcgis_date(value) -> date | None:
 def dc_status_from_attrs(attrs: dict) -> str:
     raw_status = str(attrs.get("LICENSESTATUS") or "")
     activity = " ".join(str(attrs.get(key) or "") for key in ("PRIMARYACTIVITY", "BUSINESSACTIVITY"))
+    end_date = dc_arcgis_date(attrs.get("LICENSEENDDATE"))
     if re.search(r"\b(?:closed|cancelled|canceled|withdrawn|terminated|dissolved|inactive)\b", raw_status, re.I):
         return "Closed / Withdrawn / Canceled"
     if re.search(r"\brevoked\b", raw_status, re.I):
@@ -19012,13 +19084,14 @@ def dc_status_from_attrs(attrs: dict) -> str:
         return "Suspended"
     if re.search(r"\breferred\s+to\s+enforcement|expired|delinquent|not\s+current|overdue\b", raw_status, re.I):
         return checker.STATUS_DELINQUENT
+    if re.search(r"\bactive|current|compliant|good\s+standing\b", raw_status, re.I):
+        if end_date:
+            return status_from_calendar_date(end_date)
+        return checker.STATUS_CURRENT
     if re.search(r"\bcharitable\s+exempt\b", activity, re.I):
         return "Exempt"
-    end_date = dc_arcgis_date(attrs.get("LICENSEENDDATE"))
     if end_date:
         return status_from_calendar_date(end_date)
-    if re.search(r"\bactive|current|compliant|good\s+standing\b", raw_status, re.I):
-        return checker.STATUS_CURRENT
     return expansion_status_from_text(" ".join(str(value or "") for value in attrs.values()))
 
 
@@ -19114,6 +19187,7 @@ def dc_candidate_score(org, attrs: dict) -> tuple[int, str, dict]:
 def dc_status_rank(attrs: dict) -> int:
     order = {
         checker.STATUS_CURRENT: 0,
+        "Exempt": 0,
         checker.STATUS_UPCOMING: 1,
         "Pending": 2,
         checker.STATUS_DELINQUENT: 3,
@@ -19443,6 +19517,57 @@ def classify_ri_from_row(row_status: str, exp_date: date | None) -> str:
     return expansion_status_from_text(row_status) if not exp_date else classify_expiration_date(exp_date)
 
 
+def ri_query_variants(value: str, limit: int = 12) -> list[str]:
+    return expansion_relaxed_portal_name_variants(value, limit=limit, include_first_token=True)
+
+
+def ri_title_identity_candidates(title: str) -> list[str]:
+    variants: list[str] = []
+    seen: set[str] = set()
+
+    def add(candidate: str) -> None:
+        candidate = re.sub(r"\s+", " ", candidate or "").strip(" ,.;:-")
+        key = normalized_match_name(candidate)
+        if candidate and key and key not in seen:
+            variants.append(candidate)
+            seen.add(key)
+
+    add(title)
+    add(re.sub(r"\s*\([^)]*\)", " ", title or ""))
+    for candidate in list(variants):
+        add(expansion_collapse_acronym_periods(candidate))
+        add(re.split(
+            r"\b(?:aka|dba|fka|formerly\s+known\s+as|doing\s+business\s+as)\b\s*:?",
+            candidate,
+            maxsplit=1,
+            flags=re.I,
+        )[0])
+    return variants
+
+
+def ri_candidate_is_safe(org, title: str) -> tuple[bool, dict]:
+    wanted_variants = {
+        normalized_match_name(value)
+        for value in ri_query_variants(getattr(org, "organization_name", ""), limit=20)
+    }
+    wanted_variants = {value for value in wanted_variants if value}
+    for candidate in ri_title_identity_candidates(title):
+        safe, identity = expansion_candidate_is_safe(org, candidate)
+        if safe:
+            identity = dict(identity)
+            identity["matched_title_variant"] = candidate
+            return True, identity
+        candidate_key = normalized_match_name(candidate)
+        if candidate_key and candidate_key in wanted_variants:
+            return True, {
+                "score": 80,
+                "decision": "accepted",
+                "reason": "MATCH_NAME_VARIANT_EXACT",
+                "matched_title_variant": candidate,
+            }
+    return False, {"score": 0, "decision": "rejected", "reason": "REJECT_WEAK_IDENTITY"}
+
+
 def ri_match_rank(result: dict) -> tuple[int, date]:
     values = ri_result_values(result)
     row_status = ri_row_status(values).lower()
@@ -19467,7 +19592,7 @@ def search_ri_expansion(page, org):
         token = ri_get_token()
         matches: list[dict] = []
         search_name_used = getattr(org, "organization_name", "")
-        for search_name in expansion_portal_name_variants(getattr(org, "organization_name", "")):
+        for search_name in ri_query_variants(getattr(org, "organization_name", "")):
             attempted_queries.append(search_name)
             search_data = expansion_json_request(
                 f"{RI_API_BASE}/portal/search",
@@ -19488,7 +19613,7 @@ def search_ri_expansion(page, org):
             for item in search_data.get("results") or []:
                 title = clean_registry_name(str(item.get("title") or ""))
                 all_values = " ".join(ri_result_values(item)).lower()
-                safe, identity = expansion_candidate_is_safe(org, title)
+                safe, identity = ri_candidate_is_safe(org, title)
                 if safe and "charitable organization" in all_values:
                     item["_identity_confidence"] = identity
                     matches.append(item)
@@ -19651,11 +19776,68 @@ UT_BUSINESS_HOME_URL = "https://businessregistration.utah.gov/"
 UT_BUSINESS_RESULT_URL = "https://businessregistration.utah.gov/EntitySearch/OnlineBusinessAndMarkSearchResult"
 UT_BUSINESS_DETAIL_URL = "https://businessregistration.utah.gov/EntitySearch/BusinessInformation"
 UT_DIRECT_TIMEOUT_SECONDS = 30
+UT_DIRECT_IMPERSONATIONS = ("chrome136", "chrome124", "chrome120", "chrome")
+UT_SEARCH_FORM_MARKERS = (
+    "BusinessSearch_Index_txtEntityName",
+    "OnlineBusinessAndMarkSearchResult",
+    "Search Business Entity Records",
+)
 
 
 def ut_visible_html_text(source: str) -> str:
     source = re.sub(r"<(?:script|style)\b[\s\S]*?</(?:script|style)>", " ", source or "", flags=re.I)
     return html_to_text(source)
+
+
+def ut_page_hint(source: str, limit: int = 260) -> str:
+    text = re.sub(r"\s+", " ", ut_visible_html_text(source or "")).strip()
+    if not text:
+        return ""
+    if re.search(r"\bforbidden|access\s+denied|not\s+authorized\b", text, re.I):
+        return "blocked page: " + text[:limit]
+    if any(marker in (source or "") for marker in UT_SEARCH_FORM_MARKERS):
+        return "search form present"
+    if re.search(r"\bLOGIN\b.*\bSearch Business Entity Records\b", text, re.I):
+        return "Utah splash/login page"
+    return text[:limit]
+
+
+def ut_response_summary(response) -> str:
+    if response is None:
+        return ""
+    status = getattr(response, "status_code", "")
+    url = getattr(response, "url", "")
+    parts = []
+    if status:
+        parts.append(f"status={status}")
+    if url:
+        parts.append(f"url={url}")
+    return "; ".join(parts)
+
+
+def ut_exception_summary(stage: str, exc: Exception, body: str = "") -> str:
+    response = getattr(exc, "response", None)
+    response_text = body or getattr(response, "text", "") or ""
+    response_note = ut_response_summary(response)
+    hint = ut_page_hint(response_text)
+    parts = [stage, f"{type(exc).__name__}: {exc}"]
+    if response_note:
+        parts.append(response_note)
+    if hint:
+        parts.append(f"page={hint}")
+    return " | ".join(parts)
+
+
+def ut_note_attempt(source_attempts: list[dict], method: str, stage: str, status: str, **extra) -> None:
+    attempt = {"method": method, "stage": stage, "status": status}
+    for key, value in extra.items():
+        if value not in (None, "", []):
+            attempt[key] = value
+    source_attempts.append(attempt)
+
+
+def ut_search_form_loaded(source: str) -> bool:
+    return any(marker in (source or "") for marker in UT_SEARCH_FORM_MARKERS)
 
 
 def parse_ut_result_rows_from_html(source: str) -> list[dict]:
@@ -19783,46 +19965,124 @@ def ut_query_variants(value: str, limit: int = 12) -> list[str]:
     return variants[:limit]
 
 
-def ut_direct_session():
+def ut_direct_session(source_attempts: list[dict] | None = None):
     if curl_requests is None:
         raise RuntimeError("curl_cffi is not installed; Utah direct business search requires Chrome-impersonated HTTP.")
-    session = curl_requests.Session(impersonate="chrome136")
-    session.headers.update({
-        "User-Agent": BROWSER_USER_AGENT,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Upgrade-Insecure-Requests": "1",
-    })
-    return session
+    errors = []
+    for impersonation in UT_DIRECT_IMPERSONATIONS:
+        try:
+            session = curl_requests.Session(impersonate=impersonation)
+            session.headers.update({
+                "User-Agent": BROWSER_USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Upgrade-Insecure-Requests": "1",
+            })
+            if source_attempts is not None:
+                ut_note_attempt(source_attempts, "direct_http", "session", "ok", impersonation=impersonation)
+            return session
+        except Exception as exc:
+            errors.append(f"{impersonation}: {type(exc).__name__}: {exc}")
+            if source_attempts is not None:
+                ut_note_attempt(source_attempts, "direct_http", "session", "error", impersonation=impersonation, error=str(exc))
+    raise RuntimeError("curl_cffi could not create a Utah Chrome-impersonated session. Attempts: " + "; ".join(errors))
 
 
-def ut_prepare_direct_session(session, source_url: str) -> None:
-    home_response = session.get(UT_BUSINESS_HOME_URL, timeout=UT_DIRECT_TIMEOUT_SECONDS)
-    home_response.raise_for_status()
-    search_response = session.get(
-        source_url,
-        timeout=UT_DIRECT_TIMEOUT_SECONDS,
-        headers={"Referer": UT_BUSINESS_HOME_URL},
-    )
-    search_response.raise_for_status()
+def ut_prepare_direct_session(session, source_url: str, source_attempts: list[dict] | None = None) -> None:
+    try:
+        home_response = session.get(UT_BUSINESS_HOME_URL, timeout=UT_DIRECT_TIMEOUT_SECONDS)
+        home_response.raise_for_status()
+        if source_attempts is not None:
+            ut_note_attempt(
+                source_attempts,
+                "direct_http",
+                "home_get",
+                "ok",
+                response=ut_response_summary(home_response),
+                page=ut_page_hint(home_response.text or ""),
+            )
+    except Exception as exc:
+        if source_attempts is not None:
+            ut_note_attempt(source_attempts, "direct_http", "home_get", "error", error=ut_exception_summary("home_get", exc))
+        raise RuntimeError(ut_exception_summary("home_get", exc)) from exc
+    try:
+        search_response = session.get(
+            source_url,
+            timeout=UT_DIRECT_TIMEOUT_SECONDS,
+            headers={"Referer": UT_BUSINESS_HOME_URL},
+        )
+        search_response.raise_for_status()
+        if not ut_search_form_loaded(search_response.text or ""):
+            raise RuntimeError(
+                "Utah search form markers were not found after loading the official search page. "
+                + ut_response_summary(search_response)
+                + " | page="
+                + ut_page_hint(search_response.text or "")
+            )
+        if source_attempts is not None:
+            ut_note_attempt(
+                source_attempts,
+                "direct_http",
+                "search_form_get",
+                "ok",
+                response=ut_response_summary(search_response),
+                page=ut_page_hint(search_response.text or ""),
+            )
+    except Exception as exc:
+        if source_attempts is not None:
+            ut_note_attempt(source_attempts, "direct_http", "search_form_get", "error", error=ut_exception_summary("search_form_get", exc))
+        raise RuntimeError(ut_exception_summary("search_form_get", exc)) from exc
 
 
-def ut_search_once_http(session, query: str, source_url: str) -> tuple[list[dict], str]:
-    response = session.post(
-        UT_BUSINESS_RESULT_URL,
-        data=ut_direct_search_payload(query),
-        timeout=UT_DIRECT_TIMEOUT_SECONDS,
-        headers={
-            "Referer": source_url,
-            "Origin": "https://businessregistration.utah.gov",
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-    )
-    response.raise_for_status()
+def ut_search_once_http(session, query: str, source_url: str, source_attempts: list[dict] | None = None) -> tuple[list[dict], str]:
+    try:
+        response = session.post(
+            UT_BUSINESS_RESULT_URL,
+            data=ut_direct_search_payload(query),
+            timeout=UT_DIRECT_TIMEOUT_SECONDS,
+            headers={
+                "Referer": source_url,
+                "Origin": "https://businessregistration.utah.gov",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        if source_attempts is not None:
+            ut_note_attempt(source_attempts, "direct_http", "search_post", "error", query=query, error=ut_exception_summary("search_post", exc))
+        raise RuntimeError(ut_exception_summary("search_post", exc)) from exc
     body = ut_visible_html_text(response.text or "")
-    if re.search(r"no records|no results|not found|0 results", body, re.I):
+    if re.search(r"no records|no results|not found|0 results|no matching records|no data available", body, re.I):
+        if source_attempts is not None:
+            ut_note_attempt(source_attempts, "direct_http", "search_post", "ok", query=query, rows=0, response=ut_response_summary(response))
         return [], body
-    return parse_ut_result_rows_from_html(response.text or ""), body
+    rows = parse_ut_result_rows_from_html(response.text or "")
+    if not rows:
+        if ut_search_form_loaded(response.text or ""):
+            if source_attempts is not None:
+                ut_note_attempt(
+                    source_attempts,
+                    "direct_http",
+                    "search_post",
+                    "ok",
+                    query=query,
+                    rows=0,
+                    response=ut_response_summary(response),
+                    page=ut_page_hint(response.text or ""),
+                )
+            return [], body
+        message = (
+            "Utah search result rows were not found after POST. "
+            + ut_response_summary(response)
+            + " | page="
+            + ut_page_hint(response.text or "")
+        )
+        if source_attempts is not None:
+            ut_note_attempt(source_attempts, "direct_http", "search_post", "error", query=query, error=message)
+        raise RuntimeError(message)
+    if source_attempts is not None:
+        ut_note_attempt(source_attempts, "direct_http", "search_post", "ok", query=query, rows=len(rows), response=ut_response_summary(response))
+    return rows, body
 
 
 def ut_detail_values_from_html(source: str) -> dict[str, str]:
@@ -19862,25 +20122,35 @@ def ut_detail_values_from_html(source: str) -> dict[str, str]:
     return values
 
 
-def ut_direct_detail_values(session, record: dict) -> dict:
+def ut_direct_detail_values(session, record: dict, source_attempts: list[dict] | None = None) -> dict:
     business_id = record.get("detail_business_id", "")
     if not business_id:
+        if source_attempts is not None:
+            ut_note_attempt(source_attempts, "direct_http", "detail_post", "skipped", reason="missing_detail_business_id")
         return {}
-    response = session.post(
-        UT_BUSINESS_DETAIL_URL,
-        data={
-            "businessId": business_id,
-            "businessReservationNumber": record.get("detail_reservation_id", "0") or "0",
-        },
-        timeout=UT_DIRECT_TIMEOUT_SECONDS,
-        headers={
-            "Referer": UT_BUSINESS_RESULT_URL,
-            "Origin": "https://businessregistration.utah.gov",
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-    )
-    response.raise_for_status()
-    return ut_detail_values_from_html(response.text or "")
+    try:
+        response = session.post(
+            UT_BUSINESS_DETAIL_URL,
+            data={
+                "businessId": business_id,
+                "businessReservationNumber": record.get("detail_reservation_id", "0") or "0",
+            },
+            timeout=UT_DIRECT_TIMEOUT_SECONDS,
+            headers={
+                "Referer": UT_BUSINESS_RESULT_URL,
+                "Origin": "https://businessregistration.utah.gov",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+        )
+        response.raise_for_status()
+        values = ut_detail_values_from_html(response.text or "")
+        if source_attempts is not None:
+            ut_note_attempt(source_attempts, "direct_http", "detail_post", "ok", response=ut_response_summary(response), fields=len(values))
+        return values
+    except Exception as exc:
+        if source_attempts is not None:
+            ut_note_attempt(source_attempts, "direct_http", "detail_post", "error", error=ut_exception_summary("detail_post", exc))
+        raise RuntimeError(ut_exception_summary("detail_post", exc)) from exc
 
 
 def ut_wait_for_business_search(page) -> bool:
@@ -19952,105 +20222,274 @@ def ut_open_record_detail(page, record: dict) -> dict:
     return ut_detail_values(page)
 
 
-def search_ut_expansion(page, org):
-    state = "UT"
-    source_url = EXPANSION_STATE_SOURCES[state]["url"]
-    attempted_queries: list[str] = []
-    rejected_candidates: list[str] = []
+def ut_find_best_rows(org, search_once, attempted_queries: list[str], rejected_candidates: list[str], source_attempts: list[dict], method: str) -> tuple[list[dict], str]:
+    best_rows: list[dict] = []
+    last_body = ""
+    for query in ut_query_variants(getattr(org, "organization_name", "")):
+        if query not in attempted_queries:
+            attempted_queries.append(query)
+        rows, body = search_once(query)
+        last_body = body
+        exact_rows: list[dict] = []
+        for row in rows:
+            safe, identity = expansion_candidate_is_safe(org, row.get("name", ""))
+            if safe:
+                row["_identity_confidence"] = identity
+                exact_rows.append(row)
+            elif row.get("name"):
+                rejected_candidates.append(clean_registry_name(row.get("name", "")))
+        nonprofit_rows = [row for row in exact_rows if ut_is_nonprofit_record(row)]
+        ut_note_attempt(
+            source_attempts,
+            method,
+            "identity_filter",
+            "ok",
+            query=query,
+            rows=len(rows),
+            safe_rows=len(exact_rows),
+            nonprofit_rows=len(nonprofit_rows),
+        )
+        if nonprofit_rows:
+            best_rows = nonprofit_rows
+            break
+        if exact_rows and not best_rows:
+            best_rows = exact_rows
+    return best_rows, last_body
+
+
+def ut_not_registered_result(org, source_url: str, attempted_queries: list[str], rejected_candidates: list[str], source_attempts: list[dict]):
+    result = expansion_not_registered_result(
+        org,
+        "UT",
+        source_url,
+        attempted_queries[-1] if attempted_queries else "",
+        "No exact Utah nonprofit business registration match found. UT DCCC business registration search was searched by organization name.",
+    )
+    result.raw_status_text = (
+        "No exact Utah nonprofit business registration match found. "
+        f"Searched name variants: {', '.join(attempted_queries)}"
+    )
+    result.attempted_queries = attempted_queries
+    result.source_attempts = source_attempts
+    if rejected_candidates:
+        result.reason_code = "NO_CONFIRMED_MATCH_AFTER_WEAK_CANDIDATES"
+        result.rejected_candidates = sorted(set(rejected_candidates))[:10]
+    return result
+
+
+def ut_registered_result_from_record(org, record: dict, detail_values: dict, source_url: str, attempted_queries: list[str], source_attempts: list[dict], lookup_method: str):
+    detail_status = detail_values.get("entity status", "")
+    detail_status_details = detail_values.get("entity status details", "")
+    renew_by_text = detail_values.get("renew by date", "")
+    expiration_text = detail_values.get("expiration date", "")
+    renew_by_date = expansion_parse_date(renew_by_text)
+    status_text = detail_status or record.get("status", "")
+    status_detail_text = detail_status_details or record.get("status_details", "")
+    identity = record.get("_identity_confidence") or {}
+
+    result = expansion_new_result(
+        org,
+        "UT",
+        classify_ut_business_status(status_text, status_detail_text, renew_by_date),
+        source_url,
+    )
+    result.raw_status_text = (
+        f"Name: {record.get('name', '')} | "
+        f"Status: {status_text} | "
+        f"Status Details: {status_detail_text} | "
+        f"Renew By Date: {renew_by_text or 'Not shown'} | "
+        f"Expiration Date: {expiration_text or 'Not shown'} | "
+        f"Type: {record.get('type', '')} | "
+        f"Entity Number: {record.get('entity_number', '')}"
+    )
+    if not ut_is_nonprofit_record(record):
+        result.raw_status_text += " | Note: exact match was found, but it was not a nonprofit corporation record."
+    result.matched_registry_name = record.get("name", "")
+    result.matched_registry_identifier = record.get("entity_number", "")
+    result.source_note = (
+        "UT uses the Utah Division of Corporations and Commercial Code business registration search. "
+        "DCP says Utah charity registration moved to DCCC nonprofit registration/annual 990 uploads effective 01/01/2025. "
+        "For active records, the checker uses the entity detail page Renew By Date for Current/Upcoming/Delinquent. "
+        f"Lookup method: {lookup_method}."
+    )
+    result.success = True
+    result.reason_code = identity.get("reason", "MATCH_NAME")
+    result.identity_confidence = identity
+    result.attempted_queries = attempted_queries
+    result.source_attempts = source_attempts
+    result.source_confidence = "ut_dccc_business_search"
+    return result
+
+
+def search_ut_browser_fallback(page, org, source_url: str, attempted_queries: list[str], rejected_candidates: list[str], source_attempts: list[dict]):
+    owns_browser = page is None
+    browser_admitted = False
+    playwright = None
+    browser = None
+    context = None
     last_body = ""
     try:
-        session = ut_direct_session()
-        ut_prepare_direct_session(session, source_url)
-        best_rows: list[dict] = []
-        for query in ut_query_variants(getattr(org, "organization_name", "")):
-            attempted_queries.append(query)
-            rows, body = ut_search_once_http(session, query, source_url)
-            last_body = body
-            exact_rows: list[dict] = []
-            for row in rows:
-                safe, identity = expansion_candidate_is_safe(org, row.get("name", ""))
-                if safe:
-                    row["_identity_confidence"] = identity
-                    exact_rows.append(row)
-                elif row.get("name"):
-                    rejected_candidates.append(clean_registry_name(row.get("name", "")))
-            nonprofit_rows = [row for row in exact_rows if ut_is_nonprofit_record(row)]
-            if nonprofit_rows:
-                best_rows = nonprofit_rows
-                break
-            if exact_rows and not best_rows:
-                best_rows = exact_rows
+        if owns_browser:
+            browser_admitted = BROWSER_LOOKUP_SEMAPHORE.acquire(timeout=BROWSER_LOOKUP_ACQUIRE_SECONDS)
+            if not browser_admitted:
+                raise RuntimeError("Utah browser fallback could not start because browser capacity was busy.")
+            playwright = checker.sync_playwright().start()
+            try:
+                browser = playwright.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-dev-shm-usage"],
+                )
+                context = browser.new_context(user_agent=BROWSER_USER_AGENT, locale="en-US")
+                page = context.new_page()
+            except Exception:
+                playwright.stop()
+                raise
+            page.set_default_timeout(15000)
+        ut_note_attempt(source_attempts, "browser_fallback", "browser_start", "ok", owned=owns_browser)
 
+        def browser_search_once(query: str) -> tuple[list[dict], str]:
+            try:
+                rows, body = ut_search_once(page, query)
+                ut_note_attempt(source_attempts, "browser_fallback", "search", "ok", query=query, rows=len(rows))
+                return rows, body
+            except Exception as exc:
+                body = ""
+                try:
+                    body = readable_page_text(page)
+                except Exception:
+                    body = ""
+                error = ut_exception_summary("browser_search", exc, body)
+                ut_note_attempt(source_attempts, "browser_fallback", "search", "error", query=query, error=error)
+                raise RuntimeError(error) from exc
+
+        best_rows, last_body = ut_find_best_rows(
+            org,
+            browser_search_once,
+            attempted_queries,
+            rejected_candidates,
+            source_attempts,
+            "browser_fallback",
+        )
         if not best_rows:
-            result = expansion_not_registered_result(
-                org,
-                state,
-                source_url,
-                attempted_queries[-1] if attempted_queries else "",
-                "No exact Utah nonprofit business registration match found. UT DCCC business registration search was searched by organization name.",
-            )
-            result.raw_status_text = (
-                "No exact Utah nonprofit business registration match found. "
-                f"Searched name variants: {', '.join(attempted_queries)}"
-            )
-            result.attempted_queries = attempted_queries
-            if rejected_candidates:
-                result.reason_code = "NO_CONFIRMED_MATCH_AFTER_WEAK_CANDIDATES"
-                result.rejected_candidates = sorted(set(rejected_candidates))[:10]
+            result = ut_not_registered_result(org, source_url, attempted_queries, rejected_candidates, source_attempts)
             return result, last_body or result.raw_status_text
 
         record = sorted(best_rows, key=ut_record_rank)[0]
         detail_values: dict[str, str] = {}
         try:
-            detail_values = ut_direct_detail_values(session, record)
+            detail_values = ut_open_record_detail(page, record)
+            ut_note_attempt(source_attempts, "browser_fallback", "detail", "ok", fields=len(detail_values))
+        except Exception as exc:
+            error = ut_exception_summary("browser_detail", exc)
+            ut_note_attempt(source_attempts, "browser_fallback", "detail", "error", error=error)
+        result = ut_registered_result_from_record(
+            org,
+            record,
+            detail_values,
+            source_url,
+            attempted_queries,
+            source_attempts,
+            "browser_fallback",
+        )
+        return result, result.raw_status_text
+    finally:
+        if owns_browser:
+            try:
+                if context is not None:
+                    context.close()
+            except Exception:
+                pass
+            try:
+                if browser is not None:
+                    browser.close()
+            except Exception:
+                pass
+            try:
+                if playwright is not None:
+                    playwright.stop()
+            except Exception:
+                pass
+            if browser_admitted:
+                BROWSER_LOOKUP_SEMAPHORE.release()
+
+
+def search_ut_expansion(page, org):
+    state = "UT"
+    source_url = EXPANSION_STATE_SOURCES[state]["url"]
+    attempted_queries: list[str] = []
+    rejected_candidates: list[str] = []
+    source_attempts: list[dict] = []
+    last_body = ""
+    direct_error = ""
+    try:
+        session = ut_direct_session(source_attempts)
+        ut_prepare_direct_session(session, source_url, source_attempts)
+        best_rows, last_body = ut_find_best_rows(
+            org,
+            lambda query: ut_search_once_http(session, query, source_url, source_attempts),
+            attempted_queries,
+            rejected_candidates,
+            source_attempts,
+            "direct_http",
+        )
+
+        if not best_rows:
+            result = ut_not_registered_result(org, source_url, attempted_queries, rejected_candidates, source_attempts)
+            return result, last_body or result.raw_status_text
+
+        record = sorted(best_rows, key=ut_record_rank)[0]
+        detail_values: dict[str, str] = {}
+        try:
+            detail_values = ut_direct_detail_values(session, record, source_attempts)
         except Exception:
             detail_values = {}
-
-        detail_status = detail_values.get("entity status", "")
-        detail_status_details = detail_values.get("entity status details", "")
-        renew_by_text = detail_values.get("renew by date", "")
-        expiration_text = detail_values.get("expiration date", "")
-        renew_by_date = expansion_parse_date(renew_by_text)
-        status_text = detail_status or record.get("status", "")
-        status_detail_text = detail_status_details or record.get("status_details", "")
-        identity = record.get("_identity_confidence") or {}
-
-        result = expansion_new_result(
+        result = ut_registered_result_from_record(
             org,
-            state,
-            classify_ut_business_status(status_text, status_detail_text, renew_by_date),
+            record,
+            detail_values,
             source_url,
+            attempted_queries,
+            source_attempts,
+            "direct_http",
         )
-        result.raw_status_text = (
-            f"Name: {record.get('name', '')} | "
-            f"Status: {status_text} | "
-            f"Status Details: {status_detail_text} | "
-            f"Renew By Date: {renew_by_text or 'Not shown'} | "
-            f"Expiration Date: {expiration_text or 'Not shown'} | "
-            f"Type: {record.get('type', '')} | "
-            f"Entity Number: {record.get('entity_number', '')}"
-        )
-        if not ut_is_nonprofit_record(record):
-            result.raw_status_text += " | Note: exact match was found, but it was not a nonprofit corporation record."
-        result.matched_registry_name = record.get("name", "")
-        result.matched_registry_identifier = record.get("entity_number", "")
-        result.source_note = (
-            "UT uses the Utah Division of Corporations and Commercial Code business registration search. "
-            "DCP says Utah charity registration moved to DCCC nonprofit registration/annual 990 uploads effective 01/01/2025. "
-            "For active records, the checker uses the entity detail page Renew By Date for Current/Upcoming/Delinquent."
-        )
-        result.success = True
-        result.reason_code = identity.get("reason", "MATCH_NAME")
-        result.identity_confidence = identity
-        result.attempted_queries = attempted_queries
-        result.source_confidence = "ut_dccc_business_search"
         return result, result.raw_status_text
     except Exception as exc:
-        result = expansion_source_limited_result(org, state, "STATE_RESPONSE_UNREADABLE")
-        result.error = str(exc)
-        result.attempted_queries = attempted_queries
-        result.raw_status_text = "Utah business registration search could not be reached or parsed."
-        return result, last_body or result.raw_status_text
+        direct_error = ut_exception_summary("direct_http", exc, last_body)
+        ut_note_attempt(source_attempts, "direct_http", "lookup", "error", error=direct_error)
+
+    try:
+        result, body = search_ut_browser_fallback(
+            page,
+            org,
+            source_url,
+            attempted_queries,
+            rejected_candidates,
+            source_attempts,
+        )
+        if direct_error:
+            result.source_note = " ".join(part for part in [
+                getattr(result, "source_note", "") or "",
+                "Direct HTTP failed first, so CharityClarity used the bounded Utah browser fallback.",
+            ]).strip()
+        return result, body
+    except Exception as exc:
+        browser_error = ut_exception_summary("browser_fallback", exc, last_body)
+        ut_note_attempt(source_attempts, "browser_fallback", "lookup", "error", error=browser_error)
+
+    result = expansion_source_limited_result(org, state, "STATE_RESPONSE_UNREADABLE")
+    result.error = " | ".join(part for part in [
+        f"direct_http: {direct_error}" if direct_error else "",
+        f"browser_fallback: {browser_error}" if "browser_error" in locals() and browser_error else "",
+    ] if part)
+    result.attempted_queries = attempted_queries
+    result.source_attempts = source_attempts
+    result.raw_status_text = "Utah business registration search could not be reached or parsed. " + result.error
+    result.source_note = (
+        "UT uses the Utah Division of Corporations and Commercial Code business registration search. "
+        "Direct HTTP and bounded browser fallback could not produce a readable search result; "
+        "source_attempts shows the exact failing stage."
+    )
+    return result, last_body or result.raw_status_text
 
 
 def search_expansion_lab_state(org, state: str):
