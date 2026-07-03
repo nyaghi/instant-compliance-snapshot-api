@@ -12425,9 +12425,13 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
     correction_body = apply_confirmed_feedback_correction(result)
     if correction_body:
         body = " ".join(part for part in [body or "", correction_body] if part)
-    if public_status(result) not in {"Not Registered", "Site Not Reachable", "Unable to Verify", "Unable to Confirm", "Needs Review"}:
+    result_state = (getattr(result, "state", "") or state or "").upper()
+    if result_state != "MO" and public_status(result) not in {"Not Registered", "Site Not Reachable", "Unable to Verify", "Unable to Confirm", "Needs Review"}:
         fill_registry_match_from_text(result, body, org)
     normalize_registry_match_fields(result, org)
+    if result_state == "MO":
+        result.matched_registry_name = ""
+        result.matched_registry_identifier = ""
     if (getattr(result, "state", "") or "").upper() == "NY":
         result = normalize_ny_registry_match_metadata(org, result)
         result = apply_ny_latest_fye_next_cycle_status(org, result, body)
@@ -14720,6 +14724,8 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
     normalized_status = public_facing_status.lower()
     state = (result.state or "the selected state").upper()
     context = filing_context(result, body)
+    if state == "MO":
+        return "State of MO does not publish registration information, for registration status, send an email to sunshinerequest@ago.mo.gov."
     if state == "CA" and normalized_status in {"current", "upcoming filing", "delinquent"}:
         ca_years = ca_annual_renewal_years_from_text(body)
         latest_submitted_year = ca_years.get("latest_submitted_year")
@@ -15176,6 +15182,8 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
 
 
 def append_registry_match_comment(result, comment: str, public_facing_status: str) -> str:
+    if (getattr(result, "state", "") or "").upper() == "MO":
+        return comment
     match_name = useful_registry_name(getattr(result, "matched_registry_name", ""))
     match_identifier = (getattr(result, "matched_registry_identifier", "") or "").strip()
     if public_facing_status.lower() in {"not registered", "site not reachable"}:
@@ -19838,6 +19846,8 @@ UT_BUSINESS_RESULT_URL = "https://businessregistration.utah.gov/EntitySearch/Onl
 UT_BUSINESS_DETAIL_URL = "https://businessregistration.utah.gov/EntitySearch/BusinessInformation"
 UT_DIRECT_TIMEOUT_SECONDS = 30
 UT_DIRECT_IMPERSONATIONS = ("chrome136", "chrome124", "chrome120", "chrome")
+UT_BROWSER_CHALLENGE_WAIT_SECONDS = min(max(8.0, float(os.environ.get("CE_UT_BROWSER_CHALLENGE_WAIT_SECONDS", "28"))), 45.0)
+UT_BLOCK_HEAVY_BROWSER_RESOURCES = os.environ.get("CE_UT_BLOCK_HEAVY_BROWSER_RESOURCES", "0").strip().lower() not in {"0", "false", "no"}
 UT_SEARCH_FORM_MARKERS = (
     "BusinessSearch_Index_txtEntityName",
     "OnlineBusinessAndMarkSearchResult",
@@ -19854,6 +19864,8 @@ def ut_page_hint(source: str, limit: int = 260) -> str:
     text = re.sub(r"\s+", " ", ut_visible_html_text(source or "")).strip()
     if not text:
         return ""
+    if ut_security_challenge_visible(text):
+        return "security verification page: " + text[:limit]
     if re.search(r"\bforbidden|access\s+denied|not\s+authorized\b", text, re.I):
         return "blocked page: " + text[:limit]
     if any(marker in (source or "") for marker in UT_SEARCH_FORM_MARKERS):
@@ -19861,6 +19873,14 @@ def ut_page_hint(source: str, limit: int = 260) -> str:
     if re.search(r"\bLOGIN\b.*\bSearch Business Entity Records\b", text, re.I):
         return "Utah splash/login page"
     return text[:limit]
+
+
+def ut_security_challenge_visible(text: str) -> bool:
+    return bool(re.search(
+        r"security verification|security service|malicious bots|verify you are human|checking your browser|just a moment",
+        text or "",
+        re.I,
+    ))
 
 
 def ut_response_summary(response) -> str:
@@ -20221,7 +20241,62 @@ def ut_search_form_ready(page) -> bool:
         return False
 
 
-def ut_click_business_search_link(page, source_url: str) -> bool:
+def ut_read_page_text(page) -> str:
+    try:
+        return readable_page_text(page)
+    except Exception:
+        return ""
+
+
+def ut_capture_browser_diagnostic(page, source_attempts: list[dict] | None, method: str, stage: str, status: str = "diagnostic") -> None:
+    if source_attempts is None:
+        return
+    try:
+        page_text = ut_read_page_text(page)
+        page_html = page.content()
+        ut_note_attempt(
+            source_attempts,
+            method,
+            stage,
+            status,
+            url=getattr(page, "url", ""),
+            title=page.title(),
+            page=ut_page_hint(page_text),
+            page_text=page_text[:1800],
+            html_snippet=page_html[:3000],
+        )
+    except Exception as exc:
+        ut_note_attempt(source_attempts, method, stage, "error", error=f"diagnostic_capture_failed: {type(exc).__name__}: {exc}")
+
+
+def ut_wait_for_security_challenge(page, source_attempts: list[dict] | None, method: str, stage: str) -> bool:
+    challenge_seen = False
+    deadline = time.perf_counter() + UT_BROWSER_CHALLENGE_WAIT_SECONDS
+    while time.perf_counter() < deadline:
+        if ut_search_form_ready(page):
+            if challenge_seen and source_attempts is not None:
+                ut_note_attempt(source_attempts, method, stage, "ok", challenge="cleared")
+            return True
+        body = ut_read_page_text(page)
+        if ut_security_challenge_visible(body):
+            if not challenge_seen and source_attempts is not None:
+                ut_note_attempt(source_attempts, method, stage, "waiting", challenge="security_verification", page=ut_page_hint(body))
+            challenge_seen = True
+            try:
+                page.mouse.move(320, 240)
+            except Exception:
+                pass
+        elif body and challenge_seen:
+            if source_attempts is not None:
+                ut_note_attempt(source_attempts, method, stage, "waiting", challenge="changed", page=ut_page_hint(body))
+        page.wait_for_timeout(1500)
+    if challenge_seen and source_attempts is not None:
+        ut_note_attempt(source_attempts, method, stage, "blocked", challenge="security_verification", page=ut_page_hint(ut_read_page_text(page)))
+        ut_capture_browser_diagnostic(page, source_attempts, method, f"{stage}_page_snapshot")
+    return ut_search_form_ready(page)
+
+
+def ut_click_business_search_link(page, source_url: str, source_attempts: list[dict] | None = None, method: str = "browser") -> bool:
     link_attempts = [
         lambda: page.get_by_role("link", name="Search Business Entity Records", exact=True),
         lambda: page.get_by_text("Search Business Entity Records", exact=True),
@@ -20232,46 +20307,67 @@ def ut_click_business_search_link(page, source_url: str) -> bool:
             link = link_factory()
             if link.count():
                 link.click(timeout=10000)
-                page.wait_for_timeout(3000)
+                ut_wait_for_security_challenge(page, source_attempts, method, "search_link_challenge")
+                page.wait_for_timeout(1500)
                 if ut_search_form_ready(page):
                     return True
         except Exception:
             pass
     try:
         page.goto(source_url, wait_until="domcontentloaded", timeout=60000)
-        page.wait_for_timeout(3000)
+        ut_wait_for_security_challenge(page, source_attempts, method, "search_form_challenge")
+        page.wait_for_timeout(1500)
         return ut_search_form_ready(page)
     except Exception:
         return False
 
 
-def ut_wait_for_business_search(page, source_url: str | None = None) -> bool:
+def ut_wait_for_business_search(page, source_url: str | None = None, source_attempts: list[dict] | None = None, method: str = "browser") -> bool:
     source_url = source_url or EXPANSION_STATE_SOURCES["UT"]["url"]
     for _ in range(8):
         page.wait_for_timeout(2500)
         if ut_search_form_ready(page):
             return True
-        if ut_click_business_search_link(page, source_url):
+        if ut_click_business_search_link(page, source_url, source_attempts, method):
             return True
+        if ut_security_challenge_visible(ut_read_page_text(page)):
+            return False
     return False
 
 
-def ut_search_once(page, query: str) -> tuple[list[dict], str]:
+def ut_search_once(page, query: str, source_attempts: list[dict] | None = None, method: str = "browser") -> tuple[list[dict], str]:
     source_url = EXPANSION_STATE_SOURCES["UT"]["url"]
-    page.goto(UT_BUSINESS_HOME_URL, wait_until="domcontentloaded", timeout=60000)
-    if not ut_wait_for_business_search(page, source_url):
-        body = readable_page_text(page)
+    page.goto(source_url, wait_until="domcontentloaded", timeout=60000)
+    if source_attempts is not None:
+        ut_note_attempt(source_attempts, method, "search_url_get", "ok", url=source_url)
+    ut_wait_for_security_challenge(page, source_attempts, method, "search_url_security_challenge")
+    body = ut_read_page_text(page)
+    if ut_security_challenge_visible(body) and not ut_search_form_ready(page):
+        ut_capture_browser_diagnostic(page, source_attempts, method, "search_url_security_page", "blocked")
+        raise RuntimeError(f"Utah security verification did not clear in Render browser. Page text: {body[:500]}")
+    if not ut_wait_for_business_search(page, source_url, source_attempts, method):
+        body = ut_read_page_text(page)
+        if ut_security_challenge_visible(body):
+            ut_capture_browser_diagnostic(page, source_attempts, method, "business_search_security_page", "blocked")
+            raise RuntimeError(f"Utah security verification did not clear in Render browser. Page text: {body[:500]}")
+        ut_capture_browser_diagnostic(page, source_attempts, method, "business_search_missing_controls", "error")
         raise RuntimeError(f"Utah business search controls were not found. Page text: {body[:500]}")
     try:
         page.locator("#BusinessSearch_Index_rdContains").check(timeout=5000)
     except Exception:
         pass
+    try:
+        page.mouse.move(540, 390)
+        page.wait_for_timeout(350)
+    except Exception:
+        pass
     page.locator("#BusinessSearch_Index_txtEntityName").fill("", timeout=8000)
     page.locator("#BusinessSearch_Index_txtEntityName").fill(query, timeout=8000)
+    page.wait_for_timeout(450)
     page.locator("#btnSearch").click(timeout=10000)
     safe_wait_for_network_idle(page, timeout=8000)
     page.wait_for_timeout(8000)
-    body = readable_page_text(page)
+    body = ut_read_page_text(page)
     if re.search(r"no records|no results|not found|0 results", body, re.I):
         return [], body
     return parse_ut_result_rows(page), body
@@ -20426,14 +20522,27 @@ def search_ut_browser_fallback(page, org, source_url: str, attempted_queries: li
             try:
                 browser = playwright.chromium.launch(
                     headless=True,
-                    args=["--no-sandbox", "--disable-dev-shm-usage"],
+                    args=[
+                        "--no-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-infobars",
+                        "--window-size=1366,768",
+                    ],
                 )
                 ut_note_attempt(source_attempts, method_label, "chromium_launch", "ok")
                 context = browser.new_context(
                     user_agent=BROWSER_USER_AGENT,
                     locale="en-US",
                     viewport={"width": 1366, "height": 768},
+                    screen={"width": 1366, "height": 768},
                     timezone_id="America/Denver",
+                    java_script_enabled=True,
+                    ignore_https_errors=True,
+                    extra_http_headers={
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Upgrade-Insecure-Requests": "1",
+                    },
                 )
                 context.add_init_script(
                     """
@@ -20442,9 +20551,16 @@ window.chrome = window.chrome || {};
 window.chrome.runtime = window.chrome.runtime || {};
 Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
 Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});
+Object.defineProperty(navigator, 'deviceMemory', {get: () => 8});
+Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});
 """
                 )
-                configure_browser_context(context)
+                if UT_BLOCK_HEAVY_BROWSER_RESOURCES:
+                    configure_browser_context(context)
+                    ut_note_attempt(source_attempts, method_label, "resource_blocking", "ok")
+                else:
+                    ut_note_attempt(source_attempts, method_label, "resource_blocking", "skipped", reason="UT security verification is allowed to load full browser resources.")
                 page = context.new_page()
                 ut_note_attempt(source_attempts, method_label, "context_new_page", "ok")
             except Exception as exc:
@@ -20453,11 +20569,12 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     playwright.stop()
                 raise
             page.set_default_timeout(15000)
+            page.set_default_navigation_timeout(75000)
         ut_note_attempt(source_attempts, method_label, "browser_start", "ok", owned=owns_browser)
 
         def browser_search_once(query: str) -> tuple[list[dict], str]:
             try:
-                rows, body = ut_search_once(page, query)
+                rows, body = ut_search_once(page, query, source_attempts, method_label)
                 ut_note_attempt(source_attempts, method_label, "search", "ok", query=query, rows=len(rows))
                 return rows, body
             except Exception as exc:
