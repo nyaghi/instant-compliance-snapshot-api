@@ -18694,7 +18694,7 @@ EXPANSION_STATE_SOURCES = {
     },
     "GA": {
         "name": "Georgia Secretary of State charity verification",
-        "url": "https://verify.sos.ga.gov/Verification",
+        "url": "https://verify.sos.ga.gov/verification/Search.aspx?SubmitComplaint=Y&facility=Y",
         "search": "name",
         "blocker": "cloudflare_verification",
     },
@@ -19054,6 +19054,323 @@ def search_mo_expansion(org):
     result.reason_code = "MO_MANUAL_FOLLOW_UP_REQUIRED"
     result.source_confidence = "manual_follow_up"
     return result, result.raw_status_text
+
+
+GA_CHARITY_LICENSE_TYPES = [
+    "Charity",
+    "Exempt Charity",
+    "Nonprofit",
+    "Paid Solicitor",
+    "Private Foundations",
+]
+GA_SEARCH_TIMEOUT_MS = int(os.environ.get("CE_GA_SEARCH_TIMEOUT_MS", "45000"))
+GA_MAX_RESULT_ROWS = max(1, min(int(os.environ.get("CE_GA_MAX_RESULT_ROWS", "10")), 25))
+
+
+def ga_compact_text(value: str) -> str:
+    return re.sub(r"\s+", " ", value or "").strip()
+
+
+def ga_field_between(text: str, label: str, next_labels: list[str]) -> str:
+    start = text.find(label)
+    if start < 0:
+        return ""
+    start += len(label)
+    end = len(text)
+    for next_label in next_labels:
+        pos = text.find(next_label, start)
+        if pos >= 0:
+            end = min(end, pos)
+    return text[start:end].strip()
+
+
+def ga_is_cloudflare_challenge(page) -> bool:
+    try:
+        title = page.title()
+        body = ga_compact_text(page.locator("body").inner_text(timeout=2000))
+    except Exception:
+        return False
+    return "Just a moment" in title or "Enable JavaScript and cookies" in body
+
+
+def ga_wait_past_cloudflare(page, timeout_ms: int) -> None:
+    if not ga_is_cloudflare_challenge(page):
+        return
+    page.wait_for_function(
+        """() => {
+            const body = document.body ? document.body.innerText : '';
+            return !document.title.includes('Just a moment') &&
+                   !body.includes('Enable JavaScript and cookies');
+        }""",
+        timeout=timeout_ms,
+    )
+    page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+
+
+def ga_has_search_form(page) -> bool:
+    try:
+        return page.locator("#t_web_lookup__profession_name").count() > 0
+    except Exception:
+        return False
+
+
+def ga_ensure_search_page(page, source_url: str, timeout_ms: int) -> None:
+    page.goto(source_url, wait_until="domcontentloaded", timeout=timeout_ms)
+    ga_wait_past_cloudflare(page, timeout_ms)
+    try:
+        page.wait_for_selector("#t_web_lookup__profession_name", timeout=timeout_ms)
+    except Exception as exc:
+        title = ""
+        try:
+            title = page.title()
+        except Exception:
+            pass
+        raise RuntimeError(f"Georgia search form did not load. Page title: {title!r}") from exc
+
+
+def ga_fill_search_form(page, name: str, license_number: str, license_type: str, timeout_ms: int) -> None:
+    page.wait_for_selector("#t_web_lookup__license_type_name", timeout=timeout_ms)
+    page.evaluate(
+        """({ name, licenseNumber, licenseType }) => {
+            document.querySelector('#t_web_lookup__profession_name').value = 'Charities';
+            document.querySelector('#t_web_lookup__license_type_name').value = licenseType || '';
+            document.querySelector('#t_web_lookup__full_name').value = name || '';
+            document.querySelector('#t_web_lookup__license_no').value = licenseNumber || '';
+        }""",
+        {
+            "name": name,
+            "licenseNumber": license_number,
+            "licenseType": license_type,
+        },
+    )
+
+
+def ga_run_search(page, source_url: str, name: str, license_type: str, timeout_ms: int) -> list[dict[str, str]]:
+    ga_ensure_search_page(page, source_url, timeout_ms)
+    for attempt in range(2):
+        ga_fill_search_form(page, name, "", license_type, timeout_ms)
+        with page.expect_navigation(wait_until="domcontentloaded", timeout=timeout_ms):
+            page.click("#sch_button", timeout=timeout_ms)
+        page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+        ga_wait_past_cloudflare(page, timeout_ms)
+        if attempt == 0 and ga_has_search_form(page):
+            continue
+        break
+    if ga_is_cloudflare_challenge(page):
+        raise RuntimeError("Georgia SOS Cloudflare challenge did not clear.")
+    return page.evaluate(
+        """() => {
+            const table = document.querySelector('#datagrid_results') ||
+                Array.from(document.querySelectorAll('table')).find((candidate) => {
+                    const txt = candidate.innerText || '';
+                    return (txt.includes('License #') || txt.includes('License Number')) &&
+                           (txt.includes('Status') || txt.includes('License Status'));
+                });
+            if (!table) return [];
+            const rows = Array.from(table.querySelectorAll('tr')).filter((row) =>
+                !row.querySelector('th') && row.querySelector('a[href^="Details.aspx"]')
+            );
+            return rows.map((row) => {
+                const cells = Array.from(row.children).map((cell) => (cell.innerText || '').trim());
+                const detailLink = row.querySelector('a[href^="Details.aspx"]');
+                const licenseType = row.querySelector('span[id$="_license_type"]');
+                return {
+                    name: cells[0] || '',
+                    license_number: cells[1] || '',
+                    profession: cells[2] || '',
+                    license_type: licenseType ? licenseType.innerText.trim() : (cells[3] || '').split('\\n')[0],
+                    status: cells[4] || '',
+                    address: cells[5] || '',
+                    city: cells[6] || '',
+                    state_on_record: cells[7] || '',
+                    detail_url: detailLink ? new URL(detailLink.getAttribute('href'), location.href).href : ''
+                };
+            }).filter((row) => row.name || row.license_number || row.status);
+        }"""
+    )[:GA_MAX_RESULT_ROWS]
+
+
+def ga_enrich_detail(page, row: dict[str, str], timeout_ms: int) -> dict[str, str]:
+    detail_url = row.get("detail_url", "")
+    if not detail_url:
+        return {}
+    page.goto(detail_url, wait_until="domcontentloaded", timeout=timeout_ms)
+    ga_wait_past_cloudflare(page, timeout_ms)
+    page.wait_for_selector("body", timeout=timeout_ms)
+    text = ga_compact_text(page.locator("body").inner_text(timeout=timeout_ms))
+    values = {
+        "issued_date": ga_field_between(text, "Issued:", ["Expires:", "Last Renewal Date:", "Associated Licenses"]),
+        "expiration_date": ga_field_between(text, "Expires:", ["Last Renewal Date:", "Associated Licenses"]),
+        "last_renewal_date": ga_field_between(text, "Last Renewal Date:", ["Associated Licenses", "Public Board Orders"]),
+        "data_current_as_of": ga_field_between(text, "Data current as of:", ["This website", "Close Window"]),
+        "status": ga_field_between(text, "Status:", ["Issued:", "Expires:", "Last Renewal Date:"]),
+    }
+    return {key: value for key, value in values.items() if value}
+
+
+def classify_ga_status(status: str, expiration_text: str) -> str:
+    status_text = ga_compact_text(status)
+    normalized = status_text.lower()
+    expiration_date = expansion_parse_date(expiration_text)
+    if expiration_date:
+        return status_from_calendar_date(expiration_date)
+    if normalized == "exempt":
+        return "Exempt"
+    if "pending" in normalized:
+        return "Pending"
+    if "revoked" in normalized:
+        return "Revoked"
+    if "suspended" in normalized:
+        return "Suspended"
+    if "expired" in normalized or "delinquent" in normalized:
+        return checker.STATUS_DELINQUENT
+    if re.search(r"\b(inactive|closed|withdrawn|cancelled|canceled)\b", normalized):
+        return "Closed / Withdrawn / Canceled"
+    if normalized == "active":
+        return checker.STATUS_CURRENT
+    return checker.STATUS_UNKNOWN
+
+
+def ga_row_rank(row: dict[str, str]) -> tuple[int, int, str]:
+    status = ga_compact_text(row.get("status", "")).lower()
+    license_type = ga_compact_text(row.get("license_type", "")).lower()
+    status_rank = 0 if status == "active" else 1 if "pending" in status else 2
+    type_rank = 0 if license_type == "charity" else 1 if "exempt" in license_type else 2
+    return status_rank, type_rank, row.get("name", "")
+
+
+def ga_result_from_row(org, row: dict[str, str], detail: dict[str, str], source_url: str, attempted_queries: list[str]):
+    detail_status = detail.get("status", "")
+    status_text = detail_status or row.get("status", "")
+    expiration_text = detail.get("expiration_date", "")
+    result = expansion_new_result(org, "GA", classify_ga_status(status_text, expiration_text), source_url)
+    result.matched_registry_name = clean_registry_name(row.get("name", ""))
+    result.matched_registry_identifier = row.get("license_number", "")
+    result.raw_status_text = (
+        f"Name: {row.get('name', '')} | "
+        f"License Number: {row.get('license_number', '') or 'Not shown'} | "
+        f"License Type: {row.get('license_type', '') or 'Not shown'} | "
+        f"Status: {status_text or 'Not shown'} | "
+        f"Issued: {detail.get('issued_date', '') or 'Not shown'} | "
+        f"Expires: {expiration_text or 'Not shown'} | "
+        f"Last Renewal Date: {detail.get('last_renewal_date', '') or 'Not shown'} | "
+        f"Data Current As Of: {detail.get('data_current_as_of', '') or 'Not shown'} | "
+        f"City: {row.get('city', '') or 'Not shown'} | "
+        f"State: {row.get('state_on_record', '') or 'Not shown'}"
+    )
+    result.source_note = (
+        "GA uses the Georgia Secretary of State verification site with profession set to Charities. "
+        "When a detail page is available, the checker uses the Expires date for Current/Upcoming/Delinquent."
+    )
+    result.success = True
+    result.error = ""
+    result.reason_code = "MATCH_NAME"
+    result.source_confidence = "ga_sos_verification"
+    result.attempted_queries = attempted_queries
+    return result, result.raw_status_text
+
+
+def search_ga_expansion(page, org):
+    state = "GA"
+    source_url = EXPANSION_STATE_SOURCES[state]["url"]
+    attempted_queries: list[str] = []
+    rejected_candidates: list[str] = []
+    browser_admitted = False
+    owns_browser = page is None
+    playwright = None
+    browser = None
+    context = None
+    try:
+        if owns_browser:
+            browser_admitted = BROWSER_LOOKUP_SEMAPHORE.acquire(timeout=BROWSER_LOOKUP_ACQUIRE_SECONDS)
+            if not browser_admitted:
+                return browser_capacity_busy_result(org, state, source_url), "Browser lookup capacity busy"
+            playwright = checker.sync_playwright().start()
+            browser = playwright.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
+            )
+            context = browser.new_context(
+                viewport={"width": 1280, "height": 900},
+                user_agent=BROWSER_USER_AGENT,
+                locale="en-US",
+            )
+            page = context.new_page()
+        page.set_default_timeout(GA_SEARCH_TIMEOUT_MS)
+        page.set_default_navigation_timeout(max(GA_SEARCH_TIMEOUT_MS, 60000))
+
+        best_rows: list[dict[str, str]] = []
+        for query in expansion_portal_name_variants(getattr(org, "organization_name", ""), limit=8):
+            attempted_queries.append(query)
+            rows = ga_run_search(page, source_url, query, "Charity", GA_SEARCH_TIMEOUT_MS)
+            safe_rows: list[dict[str, str]] = []
+            for row in rows:
+                safe, identity = expansion_candidate_is_safe(org, row.get("name", ""))
+                if safe:
+                    row["_identity_confidence"] = identity
+                    safe_rows.append(row)
+                elif row.get("name"):
+                    rejected_candidates.append(clean_registry_name(row.get("name", "")))
+            if safe_rows:
+                best_rows = safe_rows
+                break
+
+        if not best_rows:
+            result = expansion_not_registered_result(
+                org,
+                state,
+                source_url,
+                attempted_queries[-1] if attempted_queries else "",
+                "No exact Georgia charitable organization match found. GA SOS verification was searched by organization name.",
+            )
+            result.attempted_queries = attempted_queries
+            if rejected_candidates:
+                result.reason_code = "NO_CONFIRMED_MATCH_AFTER_WEAK_CANDIDATES"
+                result.rejected_candidates = sorted(set(rejected_candidates))[:10]
+            return result, result.raw_status_text
+
+        row = sorted(best_rows, key=ga_row_rank)[0]
+        detail: dict[str, str] = {}
+        try:
+            detail = ga_enrich_detail(page, row, GA_SEARCH_TIMEOUT_MS)
+        except Exception as exc:
+            row["detail_error"] = f"{type(exc).__name__}: {exc}"
+        result, body = ga_result_from_row(org, row, detail, source_url, attempted_queries)
+        identity = row.get("_identity_confidence") or {}
+        result.reason_code = identity.get("reason", "MATCH_NAME")
+        result.identity_confidence = identity
+        if row.get("detail_error"):
+            result.raw_status_text += f" | Detail Error: {row['detail_error']}"
+        return result, body
+    except Exception as exc:
+        result = expansion_source_limited_result(org, state, "STATE_RESPONSE_UNREADABLE")
+        result.error = str(exc)
+        result.attempted_queries = attempted_queries
+        result.raw_status_text = "Georgia SOS charity verification search could not be reached or parsed."
+        result.source_note = (
+            "GA uses the Georgia Secretary of State verification site. "
+            "The lookup did not infer a status because the search response could not be read."
+        )
+        return result, result.raw_status_text
+    finally:
+        if owns_browser:
+            try:
+                if context is not None:
+                    context.close()
+            except Exception:
+                pass
+            try:
+                if browser is not None:
+                    browser.close()
+            except Exception:
+                pass
+            try:
+                if playwright is not None:
+                    playwright.stop()
+            except Exception:
+                pass
+            if browser_admitted:
+                BROWSER_LOOKUP_SEMAPHORE.release()
 
 
 def expansion_json_request(url: str, *, method: str = "GET", payload=None, headers: dict | None = None, timeout: int = 18):
@@ -20697,6 +21014,8 @@ def search_expansion_lab_state(org, state: str):
         return search_ri_expansion(None, org)
     if state == "MO":
         return search_mo_expansion(org)
+    if state == "GA":
+        return search_ga_expansion(None, org)
     if state != "UT":
         result = expansion_source_limited_result(org, state)
         body = " ".join([result.raw_status_text or "", result.source_note or ""]).strip()
