@@ -365,6 +365,16 @@ NM_SIDECAR_URL = os.environ.get(
     "https://staging.compliance-express.com/.netlify/functions/nm-status",
 ).strip()
 NM_SIDECAR_TIMEOUT_SECONDS = min(max(8.0, float(os.environ.get("CE_NM_SIDECAR_TIMEOUT_SECONDS", "30"))), 56.0)
+PROTECTED_STATE_SIDECAR_URL = os.environ.get("CE_PROTECTED_STATE_SIDECAR_URL", "").strip()
+PROTECTED_STATE_SIDECAR_TOKEN = os.environ.get("CE_PROTECTED_STATE_SIDECAR_TOKEN", "").strip()
+PROTECTED_STATE_SIDECAR_TIMEOUT_SECONDS = min(
+    max(8.0, float(os.environ.get("CE_PROTECTED_STATE_SIDECAR_TIMEOUT_SECONDS", "45"))),
+    90.0,
+)
+PROTECTED_STATE_SIDECAR_DISABLED = os.environ.get(
+    "CE_PROTECTED_STATE_SIDECAR_DISABLE",
+    "",
+).strip().lower() in {"1", "true", "yes"}
 WI_USE_SNAPSHOT = False
 WI_REQUIRE_COMPLETE_SNAPSHOT = os.environ.get("CE_WI_REQUIRE_COMPLETE_SNAPSHOT", "1").strip().lower() in {"1", "true", "yes"}
 WI_SNAPSHOT_MAX_AGE_SECONDS = min(max(86400, int(os.environ.get("CE_WI_SNAPSHOT_MAX_AGE_SECONDS", str(14 * 86400)))), 45 * 86400)
@@ -19036,6 +19046,103 @@ def expansion_not_registered_result(org, state: str, source_url: str, query: str
     return result
 
 
+def protected_state_sidecar_url(state: str) -> str:
+    state = (state or "").upper()
+    if state == "GA":
+        return os.environ.get("CE_GA_SIDECAR_URL", PROTECTED_STATE_SIDECAR_URL).strip()
+    if state == "UT":
+        return os.environ.get("CE_UT_SIDECAR_URL", PROTECTED_STATE_SIDECAR_URL).strip()
+    return ""
+
+
+def protected_state_sidecar_token(state: str) -> str:
+    state = (state or "").upper()
+    if state == "GA":
+        return os.environ.get("CE_GA_SIDECAR_TOKEN", PROTECTED_STATE_SIDECAR_TOKEN).strip()
+    if state == "UT":
+        return os.environ.get("CE_UT_SIDECAR_TOKEN", PROTECTED_STATE_SIDECAR_TOKEN).strip()
+    return ""
+
+
+def result_from_protected_state_sidecar(org, state: str, source_url: str, data: dict):
+    result = expansion_new_result(
+        org,
+        state,
+        data.get("status") or "Site Not Reachable",
+        data.get("source_url") or source_url,
+    )
+    result.raw_status_text = data.get("raw_status_text") or result.status
+    result.source_note = data.get("source_note") or (
+        f"{state.upper()} lookup was performed through the CharityClarity protected-state sidecar."
+    )
+    result.matched_registry_name = data.get("matched_registry_name") or ""
+    result.matched_registry_identifier = data.get("matched_registry_identifier") or ""
+    result.error = data.get("error") or ""
+    result.success = bool(data.get("success", public_status(result) != "Site Not Reachable"))
+    for key in [
+        "attempted_queries",
+        "source_attempts",
+        "rejected_candidates",
+        "reason_code",
+        "source_confidence",
+        "identity_confidence",
+    ]:
+        if key in data:
+            setattr(result, key, data.get(key))
+    result.source_confidence = getattr(result, "source_confidence", "") or "protected_state_sidecar"
+    return result
+
+
+def search_protected_state_sidecar(org, state: str, source_url: str):
+    state = (state or "").upper()
+    sidecar_url = protected_state_sidecar_url(state)
+    if PROTECTED_STATE_SIDECAR_DISABLED or not sidecar_url or state not in {"GA", "UT"}:
+        return None
+    payload = {
+        "state": state,
+        "organization_name": getattr(org, "organization_name", ""),
+        "ein": getattr(org, "ein", ""),
+        "source_url": source_url,
+        "app_version": APP_VERSION,
+        "max_seconds": PROTECTED_STATE_SIDECAR_TIMEOUT_SECONDS,
+    }
+    token = protected_state_sidecar_token(state)
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": f"CharityClarity/{APP_VERSION}",
+    }
+    if token:
+        headers["X-CE-Protected-State-Sidecar-Token"] = token
+    try:
+        request = urllib.request.Request(
+            sidecar_url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=PROTECTED_STATE_SIDECAR_TIMEOUT_SECONDS + 5) as response:
+            response_body = response.read().decode("utf-8", errors="replace")
+        data = json.loads(response_body)
+    except Exception as exc:
+        result = expansion_source_limited_result(org, state, "PROTECTED_STATE_SIDECAR_ERROR")
+        result.source_url = sidecar_url
+        result.raw_status_text = f"{state} protected-state sidecar lookup could not be completed"
+        result.source_note = (
+            f"{state} protected-state sidecar was configured, but CharityClarity could not read a sidecar response. "
+            "The lookup will continue with the normal backend path."
+        )
+        result.error = f"{type(exc).__name__}: {exc}"
+        result.success = False
+        return result
+    return result_from_protected_state_sidecar(org, state, source_url, data)
+
+
+def protected_state_browser_headless() -> bool:
+    value = os.environ.get("CE_PROTECTED_STATE_SIDECAR_HEADLESS", "1").strip().lower()
+    return value not in {"0", "false", "no", "headed", "visible"}
+
+
 def search_mo_expansion(org):
     state = "MO"
     source_url = EXPANSION_STATE_SOURCES[state]["url"]
@@ -19358,6 +19465,15 @@ def ga_result_from_row(org, row: dict[str, str], detail: dict[str, str], source_
 def search_ga_expansion(page, org):
     state = "GA"
     source_url = EXPANSION_STATE_SOURCES[state]["url"]
+    sidecar_result = search_protected_state_sidecar(org, state, source_url)
+    sidecar_note = ""
+    if sidecar_result is not None:
+        if public_status(sidecar_result) != "Site Not Reachable":
+            return sidecar_result, sidecar_result.raw_status_text
+        sidecar_note = " ".join([
+            getattr(sidecar_result, "raw_status_text", "") or "",
+            getattr(sidecar_result, "error", "") or "",
+        ]).strip()
     attempted_queries: list[str] = []
     rejected_candidates: list[str] = []
     browser_admitted = False
@@ -19377,7 +19493,7 @@ def search_ga_expansion(page, org):
                 ), "Browser lookup capacity busy"
             playwright = checker.sync_playwright().start()
             browser = playwright.chromium.launch(
-                headless=True,
+                headless=protected_state_browser_headless(),
                 args=[
                     "--no-sandbox",
                     "--disable-dev-shm-usage",
@@ -19397,7 +19513,10 @@ def search_ga_expansion(page, org):
         page.set_default_navigation_timeout(max(GA_SEARCH_TIMEOUT_MS, 60000))
 
         best_rows: list[dict[str, str]] = []
-        for query in expansion_portal_name_variants(getattr(org, "organization_name", ""), limit=8):
+        ga_queries = expansion_portal_name_variants(getattr(org, "organization_name", ""), limit=8)
+        if not ga_queries and getattr(org, "organization_name", ""):
+            ga_queries = [getattr(org, "organization_name", "")]
+        for query in ga_queries:
             for license_type in GA_LICENSE_TYPE_SEARCH_ORDER:
                 attempted_queries.append(f"{query} [{license_type}]")
                 rows = ga_run_search(page, source_url, query, license_type, GA_SEARCH_TIMEOUT_MS)
@@ -19455,6 +19574,8 @@ def search_ga_expansion(page, org):
             f"GA diagnostic: attempted {len(attempted_queries)} search step(s). "
             f"Last error: {type(exc).__name__}: {exc}"
         )
+        if sidecar_note:
+            result.source_note += f" Protected-state sidecar also failed or returned no usable GA result: {sidecar_note}"
         return result, result.raw_status_text
     finally:
         if owns_browser:
@@ -20942,7 +21063,7 @@ def search_ut_browser_fallback(page, org, source_url: str, attempted_queries: li
             ut_note_attempt(source_attempts, method_label, "playwright_start", "ok")
             try:
                 browser = playwright.chromium.launch(
-                    headless=True,
+                    headless=protected_state_browser_headless(),
                     args=[
                         "--no-sandbox",
                         "--disable-dev-shm-usage",
@@ -21062,6 +21183,15 @@ Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});
 def search_ut_expansion(page, org):
     state = "UT"
     source_url = EXPANSION_STATE_SOURCES[state]["url"]
+    sidecar_result = search_protected_state_sidecar(org, state, source_url)
+    sidecar_note = ""
+    if sidecar_result is not None:
+        if public_status(sidecar_result) != "Site Not Reachable":
+            return sidecar_result, sidecar_result.raw_status_text
+        sidecar_note = " ".join([
+            getattr(sidecar_result, "raw_status_text", "") or "",
+            getattr(sidecar_result, "error", "") or "",
+        ]).strip()
     attempted_queries: list[str] = []
     rejected_candidates: list[str] = []
     source_attempts: list[dict] = []
@@ -21105,6 +21235,8 @@ def search_ut_expansion(page, org):
         "Direct HTTP is intentionally skipped for this browser-only Render test; "
         "source_attempts shows the exact failing browser stage."
     )
+    if sidecar_note:
+        result.source_note += f" Protected-state sidecar also failed or returned no usable UT result: {sidecar_note}"
     return result, last_body or result.raw_status_text
 
 
