@@ -19065,6 +19065,14 @@ GA_CHARITY_LICENSE_TYPES = [
 ]
 GA_SEARCH_TIMEOUT_MS = int(os.environ.get("CE_GA_SEARCH_TIMEOUT_MS", "45000"))
 GA_MAX_RESULT_ROWS = max(1, min(int(os.environ.get("CE_GA_MAX_RESULT_ROWS", "10")), 25))
+GA_LICENSE_TYPE_SEARCH_ORDER = [
+    "Charity",
+    "Exempt Charity",
+    "Nonprofit",
+    "Private Foundations",
+    "Paid Solicitor",
+]
+GA_PAGE_EXCERPT_CHARS = 260
 
 
 def ga_compact_text(value: str) -> str:
@@ -19084,80 +19092,143 @@ def ga_field_between(text: str, label: str, next_labels: list[str]) -> str:
     return text[start:end].strip()
 
 
+def ga_page_excerpt(page, limit: int = GA_PAGE_EXCERPT_CHARS) -> str:
+    try:
+        text = ga_compact_text(page.locator("body").inner_text(timeout=3000))
+    except Exception as exc:
+        return f"Page text unavailable: {type(exc).__name__}: {exc}"
+    if len(text) > limit:
+        return f"{text[:limit]}..."
+    return text
+
+
 def ga_is_cloudflare_challenge(page) -> bool:
     try:
         title = page.title()
         body = ga_compact_text(page.locator("body").inner_text(timeout=2000))
     except Exception:
         return False
-    return "Just a moment" in title or "Enable JavaScript and cookies" in body
+    haystack = f"{title} {body}"
+    return bool(re.search(
+        r"Just a moment|Enable JavaScript and cookies|Checking if the site connection is secure|"
+        r"verify you are human|Cloudflare|cf-turnstile|cf-chl|security verification|security service",
+        haystack,
+        re.I,
+    ))
 
 
 def ga_wait_past_cloudflare(page, timeout_ms: int) -> None:
     if not ga_is_cloudflare_challenge(page):
         return
-    page.wait_for_function(
-        """() => {
-            const body = document.body ? document.body.innerText : '';
-            return !document.title.includes('Just a moment') &&
-                   !body.includes('Enable JavaScript and cookies');
-        }""",
-        timeout=timeout_ms,
-    )
+    try:
+        page.wait_for_function(
+            """() => {
+                const body = document.body ? document.body.innerText : '';
+                const text = `${document.title || ''} ${body || ''}`;
+                return !/Just a moment|Enable JavaScript and cookies|Checking if the site connection is secure|verify you are human|security verification|security service/i.test(text);
+            }""",
+            timeout=timeout_ms,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Georgia SOS security verification did not clear. "
+            f"Page text: {ga_page_excerpt(page)}"
+        ) from exc
     page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
 
 
 def ga_has_search_form(page) -> bool:
     try:
-        return page.locator("#t_web_lookup__profession_name").count() > 0
+        return (
+            page.locator("#t_web_lookup__profession_name").count() > 0
+            and page.locator("#sch_button").count() > 0
+        )
     except Exception:
         return False
 
 
 def ga_ensure_search_page(page, source_url: str, timeout_ms: int) -> None:
-    page.goto(source_url, wait_until="domcontentloaded", timeout=timeout_ms)
-    ga_wait_past_cloudflare(page, timeout_ms)
-    try:
-        page.wait_for_selector("#t_web_lookup__profession_name", timeout=timeout_ms)
-    except Exception as exc:
-        title = ""
+    last_error = ""
+    for _attempt in range(2):
+        page.goto(source_url, wait_until="domcontentloaded", timeout=timeout_ms)
         try:
-            title = page.title()
+            ga_wait_past_cloudflare(page, timeout_ms)
+            page.wait_for_selector("#t_web_lookup__profession_name", timeout=timeout_ms)
+            if ga_has_search_form(page):
+                return
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+        try:
+            page.wait_for_timeout(1000)
         except Exception:
             pass
-        raise RuntimeError(f"Georgia search form did not load. Page title: {title!r}") from exc
-
-
-def ga_fill_search_form(page, name: str, license_number: str, license_type: str, timeout_ms: int) -> None:
-    page.wait_for_selector("#t_web_lookup__license_type_name", timeout=timeout_ms)
-    page.evaluate(
-        """({ name, licenseNumber, licenseType }) => {
-            document.querySelector('#t_web_lookup__profession_name').value = 'Charities';
-            document.querySelector('#t_web_lookup__license_type_name').value = licenseType || '';
-            document.querySelector('#t_web_lookup__full_name').value = name || '';
-            document.querySelector('#t_web_lookup__license_no').value = licenseNumber || '';
-        }""",
-        {
-            "name": name,
-            "licenseNumber": license_number,
-            "licenseType": license_type,
-        },
+    title = ""
+    try:
+        title = page.title()
+    except Exception:
+        pass
+    raise RuntimeError(
+        f"Georgia search form did not load. Page title: {title!r}. "
+        f"Page text: {ga_page_excerpt(page)}. Last error: {last_error}"
     )
 
 
-def ga_run_search(page, source_url: str, name: str, license_type: str, timeout_ms: int) -> list[dict[str, str]]:
-    ga_ensure_search_page(page, source_url, timeout_ms)
-    for attempt in range(2):
-        ga_fill_search_form(page, name, "", license_type, timeout_ms)
+def ga_select_option(page, selector: str, visible_text: str, timeout_ms: int) -> None:
+    page.locator(selector).wait_for(state="attached", timeout=timeout_ms)
+    option_value = page.evaluate(
+        """({ selector, visibleText }) => {
+            const select = document.querySelector(selector);
+            if (!select) return null;
+            const normalize = (value) => (value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+            const wanted = normalize(visibleText);
+            const options = Array.from(select.options || []);
+            const exact = options.find((option) =>
+                normalize(option.textContent) === wanted || normalize(option.value) === wanted
+            );
+            if (exact) return exact.value;
+            const contains = options.find((option) =>
+                wanted && (normalize(option.textContent).includes(wanted) || normalize(option.value).includes(wanted))
+            );
+            return contains ? contains.value : null;
+        }""",
+        {"selector": selector, "visibleText": visible_text},
+    )
+    if option_value is None:
+        raise RuntimeError(f"Georgia search option {visible_text!r} was not found for {selector}.")
+    page.select_option(selector, option_value, timeout=timeout_ms)
+
+
+def ga_fill_search_form(page, name: str, license_number: str, license_type: str, timeout_ms: int) -> None:
+    ga_select_option(page, "#t_web_lookup__profession_name", "Charities", timeout_ms)
+    try:
+        page.wait_for_timeout(250)
+    except Exception:
+        pass
+    ga_select_option(page, "#t_web_lookup__license_type_name", license_type, timeout_ms)
+    name_box = page.locator("#t_web_lookup__full_name")
+    license_box = page.locator("#t_web_lookup__license_no")
+    name_box.click(timeout=timeout_ms)
+    name_box.fill(name or "", timeout=timeout_ms)
+    license_box.fill(license_number or "", timeout=timeout_ms)
+
+
+def ga_submit_search(page, timeout_ms: int) -> None:
+    button = page.locator("#sch_button")
+    button.scroll_into_view_if_needed(timeout=timeout_ms)
+    try:
         with page.expect_navigation(wait_until="domcontentloaded", timeout=timeout_ms):
-            page.click("#sch_button", timeout=timeout_ms)
-        page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
-        ga_wait_past_cloudflare(page, timeout_ms)
-        if attempt == 0 and ga_has_search_form(page):
-            continue
-        break
+            button.click(timeout=timeout_ms)
+    except Exception:
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+        except Exception:
+            pass
+    ga_wait_past_cloudflare(page, timeout_ms)
+
+
+def ga_extract_rows(page) -> list[dict[str, str]]:
     if ga_is_cloudflare_challenge(page):
-        raise RuntimeError("Georgia SOS Cloudflare challenge did not clear.")
+        raise RuntimeError(f"Georgia SOS security verification page is still showing. Page text: {ga_page_excerpt(page)}")
     return page.evaluate(
         """() => {
             const table = document.querySelector('#datagrid_results') ||
@@ -19188,6 +19259,20 @@ def ga_run_search(page, source_url: str, name: str, license_type: str, timeout_m
             }).filter((row) => row.name || row.license_number || row.status);
         }"""
     )[:GA_MAX_RESULT_ROWS]
+
+
+def ga_run_search(page, source_url: str, name: str, license_type: str, timeout_ms: int) -> list[dict[str, str]]:
+    ga_ensure_search_page(page, source_url, timeout_ms)
+    for attempt in range(2):
+        ga_fill_search_form(page, name, "", license_type, timeout_ms)
+        ga_submit_search(page, timeout_ms)
+        rows = ga_extract_rows(page)
+        if rows:
+            return rows
+        if attempt == 0 and ga_has_search_form(page):
+            continue
+        break
+    return ga_extract_rows(page)
 
 
 def ga_enrich_detail(page, row: dict[str, str], timeout_ms: int) -> dict[str, str]:
@@ -19284,16 +19369,28 @@ def search_ga_expansion(page, org):
         if owns_browser:
             browser_admitted = BROWSER_LOOKUP_SEMAPHORE.acquire(timeout=BROWSER_LOOKUP_ACQUIRE_SECONDS)
             if not browser_admitted:
-                return browser_capacity_busy_result(org, state, source_url), "Browser lookup capacity busy"
+                return browser_capacity_busy_result(
+                    getattr(org, "organization_name", ""),
+                    getattr(org, "ein", ""),
+                    state,
+                    source_url,
+                ), "Browser lookup capacity busy"
             playwright = checker.sync_playwright().start()
             browser = playwright.chromium.launch(
                 headless=True,
-                args=["--no-sandbox", "--disable-dev-shm-usage"],
+                args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--window-size=1280,900",
+                ],
             )
             context = browser.new_context(
                 viewport={"width": 1280, "height": 900},
                 user_agent=BROWSER_USER_AGENT,
                 locale="en-US",
+                timezone_id="America/New_York",
+                extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
             )
             page = context.new_page()
         page.set_default_timeout(GA_SEARCH_TIMEOUT_MS)
@@ -19301,18 +19398,23 @@ def search_ga_expansion(page, org):
 
         best_rows: list[dict[str, str]] = []
         for query in expansion_portal_name_variants(getattr(org, "organization_name", ""), limit=8):
-            attempted_queries.append(query)
-            rows = ga_run_search(page, source_url, query, "Charity", GA_SEARCH_TIMEOUT_MS)
-            safe_rows: list[dict[str, str]] = []
-            for row in rows:
-                safe, identity = expansion_candidate_is_safe(org, row.get("name", ""))
-                if safe:
-                    row["_identity_confidence"] = identity
-                    safe_rows.append(row)
-                elif row.get("name"):
-                    rejected_candidates.append(clean_registry_name(row.get("name", "")))
-            if safe_rows:
-                best_rows = safe_rows
+            for license_type in GA_LICENSE_TYPE_SEARCH_ORDER:
+                attempted_queries.append(f"{query} [{license_type}]")
+                rows = ga_run_search(page, source_url, query, license_type, GA_SEARCH_TIMEOUT_MS)
+                safe_rows: list[dict[str, str]] = []
+                for row in rows:
+                    row["_searched_query"] = query
+                    row["_searched_license_type"] = license_type
+                    safe, identity = expansion_candidate_is_safe(org, row.get("name", ""))
+                    if safe:
+                        row["_identity_confidence"] = identity
+                        safe_rows.append(row)
+                    elif row.get("name"):
+                        rejected_candidates.append(clean_registry_name(row.get("name", "")))
+                if safe_rows:
+                    best_rows = safe_rows
+                    break
+            if best_rows:
                 break
 
         if not best_rows:
@@ -19344,12 +19446,14 @@ def search_ga_expansion(page, org):
         return result, body
     except Exception as exc:
         result = expansion_source_limited_result(org, state, "STATE_RESPONSE_UNREADABLE")
-        result.error = str(exc)
+        result.error = f"{type(exc).__name__}: {exc}"
         result.attempted_queries = attempted_queries
         result.raw_status_text = "Georgia SOS charity verification search could not be reached or parsed."
         result.source_note = (
             "GA uses the Georgia Secretary of State verification site. "
-            "The lookup did not infer a status because the search response could not be read."
+            "The lookup did not infer a status because the search response could not be read. "
+            f"GA diagnostic: attempted {len(attempted_queries)} search step(s). "
+            f"Last error: {type(exc).__name__}: {exc}"
         )
         return result, result.raw_status_text
     finally:
