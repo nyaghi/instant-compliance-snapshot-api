@@ -20542,8 +20542,9 @@ def ut_query_variants(value: str, limit: int = 12) -> list[str]:
 
     def add(candidate: str) -> None:
         candidate = re.sub(r"\s+", " ", candidate or "").strip(" ,.;:-")
-        key = normalized_match_name(candidate)
-        if candidate and key and key not in seen:
+        normalized = normalized_match_name(candidate)
+        key = candidate.lower()
+        if candidate and normalized and key not in seen:
             variants.append(candidate)
             seen.add(key)
 
@@ -20557,6 +20558,14 @@ def ut_query_variants(value: str, limit: int = 12) -> list[str]:
             candidate or "",
             flags=re.I,
         ).strip(" ,.;:-")
+
+    def business_search_core(candidate: str) -> str:
+        candidate = re.sub(r"\s*\([^)]*\)", " ", candidate or "")
+        candidate = expansion_collapse_acronym_periods(candidate)
+        candidate = re.sub(r"[-/]+", " ", candidate)
+        candidate = remove_leading_the(candidate)
+        candidate = remove_trailing_suffix(candidate)
+        return re.sub(r"\s+", " ", candidate).strip(" ,.;:-")
 
     def remove_generic_tail(candidate: str) -> str:
         words = re.sub(r"\s+", " ", candidate or "").strip().split()
@@ -20582,10 +20591,13 @@ def ut_query_variants(value: str, limit: int = 12) -> list[str]:
     add(without_parenthetical)
     add(remove_leading_the(base))
     add(remove_leading_the(without_parenthetical))
+    add(business_search_core(base))
+    add(business_search_core(without_parenthetical))
     for candidate in list(variants):
         add(remove_trailing_suffix(candidate))
         add(expansion_collapse_acronym_periods(candidate))
         add(remove_trailing_suffix(expansion_collapse_acronym_periods(candidate)))
+        add(business_search_core(candidate))
     for candidate in list(variants):
         add(remove_generic_tail(candidate))
     return variants[:limit]
