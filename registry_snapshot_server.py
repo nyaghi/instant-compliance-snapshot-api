@@ -14235,6 +14235,9 @@ def true_status_from_body(result, body: str) -> str:
     if state == "DC":
         # DC expansion records are Basic Business License rows, not annual-filing rows.
         return base_status
+    if state == "UT":
+        # UT DCCC records are already classified from the official Renew By Date.
+        return base_status
     if state == "CA":
         ca_primary_status = ca_explicit_primary_registry_status(result)
         if ca_primary_status:
