@@ -33,6 +33,8 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from zoneinfo import ZoneInfo
 
+from utah_csv_lookup import UTAH_CSV_LOOKUP
+
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "0")
 
 from PIL import Image, ImageDraw, ImageFont
@@ -12432,13 +12434,15 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         result.source_note = "Public registry lookup could not produce a result."
         result.error = "No result"
         result.success = False
-    correction_body = apply_confirmed_feedback_correction(result)
+    utah_csv_literal_fields = bool(getattr(result, "_utah_csv_literal_fields", False))
+    correction_body = "" if utah_csv_literal_fields else apply_confirmed_feedback_correction(result)
     if correction_body:
         body = " ".join(part for part in [body or "", correction_body] if part)
     result_state = (getattr(result, "state", "") or state or "").upper()
-    if result_state != "MO" and public_status(result) not in {"Not Registered", "Site Not Reachable", "Unable to Verify", "Unable to Confirm", "Needs Review"}:
+    if result_state != "MO" and not utah_csv_literal_fields and public_status(result) not in {"Not Registered", "Site Not Reachable", "Unable to Verify", "Unable to Confirm", "Needs Review"}:
         fill_registry_match_from_text(result, body, org)
-    normalize_registry_match_fields(result, org)
+    if not utah_csv_literal_fields:
+        normalize_registry_match_fields(result, org)
     if result_state == "MO":
         result.matched_registry_name = ""
         result.matched_registry_identifier = ""
@@ -12473,7 +12477,10 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
             body = result.raw_status_text
     result.source_note = source_note_for_result(result)
     data = checker.asdict(result)
-    if organization_name:
+    if utah_csv_literal_fields:
+        data["organization_name"] = result.organization_name
+        data["ein"] = result.ein
+    elif organization_name:
         data["organization_name"] = organization_name
         result.organization_name = organization_name
     elif (data.get("matched_registry_name") or "").strip():
@@ -12482,8 +12489,8 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
     elif not (data.get("organization_name") or "").strip():
         data["organization_name"] = "Organization not identified"
         result.organization_name = data["organization_name"]
-    data["status"] = true_status_from_body(result, body)
-    data["comments"] = comments_for_result(result, body, data["status"])
+    data["status"] = result.status if utah_csv_literal_fields else true_status_from_body(result, body)
+    data["comments"] = result.source_note if utah_csv_literal_fields else comments_for_result(result, body, data["status"])
     data["evidence_url"] = ""
     data["lookup_seconds"] = round(time.perf_counter() - lookup_started, 2)
     data["checked_at_epoch"] = int(time.time())
@@ -12505,6 +12512,8 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         "next_required_period",
         "computed_due_date",
         "source_truth_conflict",
+        "expiration_date",
+        "last_date_checked",
     ]:
         evidence_value = getattr(result, evidence_key, None)
         if evidence_value is not None:
@@ -18748,9 +18757,9 @@ EXPANSION_STATE_SOURCES = {
         "blocker": "cloudflare_access_login",
     },
     "UT": {
-        "name": "Utah Division of Corporations and Commercial Code Business Search",
-        "url": "https://businessregistration.utah.gov/EntitySearch/OnlineEntitySearch",
-        "search": "name",
+        "name": "Utah weekly status CSV",
+        "url": "",
+        "search": "ein_then_name",
         "blocker": "",
     },
 }
@@ -21195,64 +21204,77 @@ Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});
                 BROWSER_LOOKUP_SEMAPHORE.release()
 
 
-def search_ut_expansion(page, org):
+def search_ut_expansion(org):
     state = "UT"
-    source_url = EXPANSION_STATE_SOURCES[state]["url"]
-    sidecar_result = search_protected_state_sidecar(org, state, source_url)
-    sidecar_note = ""
-    if sidecar_result is not None:
-        if public_status(sidecar_result) != "Site Not Reachable":
-            return sidecar_result, sidecar_result.raw_status_text
-        sidecar_note = " ".join([
-            getattr(sidecar_result, "raw_status_text", "") or "",
-            getattr(sidecar_result, "error", "") or "",
-        ]).strip()
-    attempted_queries: list[str] = []
-    rejected_candidates: list[str] = []
-    source_attempts: list[dict] = []
-    last_body = ""
-    browser_error = ""
-    ut_note_attempt(
-        source_attempts,
-        "browser_only",
-        "mode",
-        "ok",
-        reason="Direct HTTP skipped so Render uses the current Utah DCCC search through a browser flow.",
+    source_path = str(UTAH_CSV_LOOKUP.csv_path)
+    lookup = UTAH_CSV_LOOKUP.lookup(
+        getattr(org, "organization_name", "") or "",
+        getattr(org, "ein", "") or "",
     )
-    try:
-        result, body = search_ut_browser_fallback(
-            page,
-            org,
-            source_url,
-            attempted_queries,
-            rejected_candidates,
-            source_attempts,
-            "browser_only",
-        )
-        result.source_note = " ".join(part for part in [
-            getattr(result, "source_note", "") or "",
-            "CharityClarity used Utah's current DCCC business entity search through a browser-only flow.",
-        ]).strip()
-        return result, body
-    except Exception as exc:
-        browser_error = ut_exception_summary("browser_only", exc, last_body)
-        ut_note_attempt(source_attempts, "browser_only", "lookup", "error", error=browser_error)
+    outcome = lookup.get("outcome")
 
-    result = expansion_source_limited_result(org, state, "STATE_RESPONSE_UNREADABLE")
-    result.error = " | ".join(part for part in [
-        f"browser_only: {browser_error}" if browser_error else "",
-    ] if part)
-    result.attempted_queries = attempted_queries
-    result.source_attempts = source_attempts
-    result.raw_status_text = "Utah DCCC browser-only business registration search could not be reached or parsed. " + result.error
-    result.source_note = (
-        "UT uses the Utah Division of Corporations and Commercial Code business registration search. "
-        "Direct HTTP is intentionally skipped for this browser-only Render test; "
-        "source_attempts shows the exact failing browser stage."
+    if outcome == "error":
+        result = expansion_new_result(org, state, "Unable to Confirm", source_path)
+        result.raw_status_text = lookup.get("error", "Utah status CSV could not be loaded.")
+        result.source_note = "Utah lookup uses the configured weekly CSV and does not scrape or reinterpret Utah registry data."
+        result.success = False
+        result.error = lookup.get("error", "")
+        result.reason_code = lookup.get("error_code", "UTAH_CSV_READ_ERROR")
+        result.source_confidence = "utah_csv_configuration_error"
+        return result, result.raw_status_text
+
+    if outcome == "ambiguous":
+        result = expansion_new_result(org, state, "Unable to Confirm", source_path)
+        result.raw_status_text = (
+            f"Utah weekly CSV contains {lookup.get('candidate_count', 0)} exact "
+            f"{lookup.get('matched_by', 'organization')} matches."
+        )
+        result.source_note = "Utah lookup returned an ambiguous exact CSV match rather than guessing between duplicate rows."
+        result.success = False
+        result.reason_code = "UTAH_CSV_AMBIGUOUS_MATCH"
+        result.source_confidence = "utah_weekly_csv"
+        result.rejected_candidates = lookup.get("candidates", [])
+        return result, result.raw_status_text
+
+    if outcome == "not_found":
+        result = expansion_not_registered_result(
+            org,
+            state,
+            source_path,
+            note="Utah weekly CSV was loaded successfully, but no exact normalized EIN or organization-name row matched.",
+        )
+        result.raw_status_text = "No matching row found in Utah weekly CSV"
+        result.source_confidence = "utah_weekly_csv"
+        return result, result.raw_status_text
+
+    result = checker.StateResult(
+        lookup["organization_name"],
+        lookup["ein"],
+        state,
+        lookup["status"],
+        source_path,
     )
-    if sidecar_note:
-        result.source_note += f" Protected-state sidecar also failed or returned no usable UT result: {sidecar_note}"
-    return result, last_body or result.raw_status_text
+    result.raw_status_text = "Utah weekly CSV row matched without status or date interpretation."
+    result.source_note = (
+        "Utah lookup matched the configured weekly CSV and copied the organization name, EIN, status, "
+        "expiration date, and last date checked directly from that row."
+    )
+    result.matched_registry_name = lookup["organization_name"]
+    result.matched_registry_identifier = lookup["ein"]
+    result.success = True
+    result.reason_code = "MATCH_EIN" if lookup["matched_by"] == "ein" else "MATCH_NORMALIZED_NAME"
+    result.source_confidence = "utah_weekly_csv"
+    result.expiration_date = lookup["expiration_date"]
+    result.last_date_checked = lookup["last_date_checked"]
+    result._utah_csv_literal_fields = True
+    body = " | ".join([
+        lookup["organization_name"],
+        lookup["ein"],
+        lookup["status"],
+        lookup["expiration_date"],
+        lookup["last_date_checked"],
+    ])
+    return result, body
 
 
 def search_expansion_lab_state(org, state: str):
@@ -21271,7 +21293,7 @@ def search_expansion_lab_state(org, state: str):
         result = expansion_source_limited_result(org, state)
         body = " ".join([result.raw_status_text or "", result.source_note or ""]).strip()
         return result, body
-    return search_ut_expansion(None, org)
+    return search_ut_expansion(org)
 
 
 def expansion_lab_placeholder_result(organization_name: str, ein: str, state: str):
