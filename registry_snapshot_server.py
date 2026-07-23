@@ -33,6 +33,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from zoneinfo import ZoneInfo
 
+from ga_csv_lookup import GA_CSV_LOOKUP
 from utah_csv_lookup import UTAH_CSV_LOOKUP
 
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "0")
@@ -12439,14 +12440,17 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         # Utah staging is backed exclusively by the weekly CSV. A legacy or
         # remote lookup path must not leak a registry-site failure to users.
         result, body = search_ut_expansion(org)
-    utah_csv_literal_fields = bool(getattr(result, "_utah_csv_literal_fields", False))
-    correction_body = "" if utah_csv_literal_fields else apply_confirmed_feedback_correction(result)
+    csv_literal_fields = bool(
+        getattr(result, "_utah_csv_literal_fields", False)
+        or getattr(result, "_georgia_csv_literal_fields", False)
+    )
+    correction_body = "" if csv_literal_fields else apply_confirmed_feedback_correction(result)
     if correction_body:
         body = " ".join(part for part in [body or "", correction_body] if part)
     result_state = (getattr(result, "state", "") or state or "").upper()
-    if result_state != "MO" and not utah_csv_literal_fields and public_status(result) not in {"Not Registered", "Site Not Reachable", "Unable to Verify", "Unable to Confirm", "Needs Review"}:
+    if result_state != "MO" and not csv_literal_fields and public_status(result) not in {"Not Registered", "Site Not Reachable", "Unable to Verify", "Unable to Confirm", "Needs Review"}:
         fill_registry_match_from_text(result, body, org)
-    if not utah_csv_literal_fields:
+    if not csv_literal_fields:
         normalize_registry_match_fields(result, org)
     if result_state == "MO":
         result.matched_registry_name = ""
@@ -12482,7 +12486,7 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
             body = result.raw_status_text
     result.source_note = source_note_for_result(result)
     data = checker.asdict(result)
-    if utah_csv_literal_fields:
+    if csv_literal_fields:
         data["organization_name"] = result.organization_name
         data["ein"] = result.ein
     elif organization_name:
@@ -12494,8 +12498,8 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
     elif not (data.get("organization_name") or "").strip():
         data["organization_name"] = "Organization not identified"
         result.organization_name = data["organization_name"]
-    data["status"] = result.status if utah_csv_literal_fields else true_status_from_body(result, body)
-    data["comments"] = result.source_note if utah_csv_literal_fields else comments_for_result(result, body, data["status"])
+    data["status"] = result.status if csv_literal_fields else true_status_from_body(result, body)
+    data["comments"] = result.source_note if csv_literal_fields else comments_for_result(result, body, data["status"])
     data["evidence_url"] = ""
     data["lookup_seconds"] = round(time.perf_counter() - lookup_started, 2)
     data["checked_at_epoch"] = int(time.time())
@@ -14545,9 +14549,13 @@ def concise_status_rationale_comment(result, body: str, public_facing_status: st
         )
 
     if normalized_status in {"unable to verify", "unable to confirm", "needs review"}:
-        if state == "UT" and getattr(result, "reason_code", "") == "UTAH_CSV_NOT_IN_LIST":
+        if state in {"UT", "GA"} and getattr(result, "reason_code", "") in {
+            "UTAH_CSV_NOT_IN_LIST",
+            "GA_CSV_NOT_IN_LIST",
+        }:
+            state_name = "Utah" if state == "UT" else "Georgia"
             return (
-                "No such organization name or EIN was found in the current Utah list. "
+                f"No such organization name or EIN was found in the current {state_name} list. "
                 "This organization is absent from the current weekly CSV snapshot, so CharityClarity "
                 "returns Unable to Confirm rather than treating it as Not Registered."
             )
@@ -21301,6 +21309,90 @@ def search_ut_expansion(org):
     return result, body
 
 
+def search_ga_csv_expansion(org):
+    state = "GA"
+    source_path = str(GA_CSV_LOOKUP.csv_path)
+    lookup = GA_CSV_LOOKUP.lookup(
+        getattr(org, "organization_name", "") or "",
+        getattr(org, "ein", "") or "",
+    )
+    outcome = lookup.get("outcome")
+
+    if outcome == "error":
+        result = expansion_new_result(org, state, "Unable to Confirm", source_path)
+        result.raw_status_text = lookup.get("error", "Georgia status CSV could not be loaded.")
+        result.source_note = "Georgia staging uses the refreshed weekly CSV and does not run the Georgia registry lookup."
+        result.success = False
+        result.error = lookup.get("error", "")
+        result.reason_code = lookup.get("error_code", "GA_CSV_READ_ERROR")
+        result.source_confidence = "georgia_weekly_csv"
+        return result, result.raw_status_text
+
+    if outcome == "ambiguous":
+        result = expansion_new_result(org, state, "Unable to Confirm", source_path)
+        result.raw_status_text = (
+            f"Georgia weekly CSV contains {lookup.get('candidate_count', 0)} exact "
+            f"{lookup.get('matched_by', 'organization')} matches."
+        )
+        result.source_note = "Georgia staging returned an ambiguous exact CSV match rather than guessing."
+        result.success = False
+        result.reason_code = "GA_CSV_AMBIGUOUS_MATCH"
+        result.source_confidence = "georgia_weekly_csv"
+        result.rejected_candidates = lookup.get("candidates", [])
+        return result, result.raw_status_text
+
+    if outcome == "not_found":
+        result = expansion_new_result(
+            org,
+            state,
+            "Unable to Confirm",
+            source_path,
+        )
+        result.raw_status_text = "There is no such organization name or EIN in the current Georgia list."
+        result.source_note = (
+            "No such organization name or EIN was found in the current Georgia weekly CSV list. "
+            "This means the organization is absent from this snapshot; it does not prove that the organization "
+            "is not registered in Georgia."
+        )
+        result.success = False
+        result.error = ""
+        result.reason_code = "GA_CSV_NOT_IN_LIST"
+        result.source_confidence = "georgia_weekly_csv"
+        return result, result.raw_status_text
+
+    result = checker.StateResult(
+        lookup["organization_name"],
+        lookup["ein"],
+        state,
+        lookup["status"],
+        source_path,
+    )
+    result.raw_status_text = "Georgia weekly CSV row matched without status or date interpretation."
+    expiration_display = lookup["expiration_date"] or "Not provided in the Georgia list"
+    checked_display = lookup["last_date_checked"] or "Not provided in the Georgia list"
+    result.source_note = (
+        "Georgia lookup matched the configured weekly CSV. "
+        f"Expiration date: {expiration_display}. "
+        f"Last date checked: {checked_display}."
+    )
+    result.matched_registry_name = lookup["organization_name"]
+    result.matched_registry_identifier = lookup["ein"]
+    result.success = True
+    result.reason_code = "MATCH_EIN" if lookup["matched_by"] == "ein" else "MATCH_NORMALIZED_NAME"
+    result.source_confidence = "georgia_weekly_csv"
+    result.expiration_date = lookup["expiration_date"]
+    result.last_date_checked = lookup["last_date_checked"]
+    result._georgia_csv_literal_fields = True
+    body = " | ".join([
+        lookup["organization_name"],
+        lookup["ein"],
+        lookup["status"],
+        lookup["expiration_date"],
+        lookup["last_date_checked"],
+    ])
+    return result, body
+
+
 def search_expansion_lab_state(org, state: str):
     state = (state or "").upper()
     if state not in EXPANSION_LAB_STATES:
@@ -21312,6 +21404,8 @@ def search_expansion_lab_state(org, state: str):
     if state == "MO":
         return search_mo_expansion(org)
     if state == "GA":
+        if os.environ.get("CE_GA_STATUS_CSV_PATH"):
+            return search_ga_csv_expansion(org)
         return search_ga_expansion(None, org)
     if state != "UT":
         result = expansion_source_limited_result(org, state)
