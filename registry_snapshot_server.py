@@ -21237,13 +21237,21 @@ def search_ut_expansion(org):
         return result, result.raw_status_text
 
     if outcome == "not_found":
-        result = expansion_not_registered_result(
+        result = expansion_new_result(
             org,
             state,
+            "Unable to Confirm",
             source_path,
-            note="Utah weekly CSV was loaded successfully, but no exact normalized EIN or organization-name row matched.",
         )
-        result.raw_status_text = "No matching row found in Utah weekly CSV"
+        result.raw_status_text = "There is no such organization name or EIN in the current Utah list."
+        result.source_note = (
+            "No such organization name or EIN was found in the current Utah weekly CSV list. "
+            "This means the organization is absent from this snapshot; it does not prove that the organization "
+            "is not registered in Utah."
+        )
+        result.success = False
+        result.error = "No matching Utah list row"
+        result.reason_code = "UTAH_CSV_NOT_IN_LIST"
         result.source_confidence = "utah_weekly_csv"
         return result, result.raw_status_text
 
@@ -21255,9 +21263,12 @@ def search_ut_expansion(org):
         source_path,
     )
     result.raw_status_text = "Utah weekly CSV row matched without status or date interpretation."
+    expiration_display = lookup["expiration_date"] or "Not provided in the Utah list"
+    checked_display = lookup["last_date_checked"] or "Not provided in the Utah list"
     result.source_note = (
-        "Utah lookup matched the configured weekly CSV and copied the organization name, EIN, status, "
-        "expiration date, and last date checked directly from that row."
+        "Utah lookup matched the configured weekly CSV. "
+        f"Expiration date: {expiration_display}. "
+        f"Last date checked: {checked_display}."
     )
     result.matched_registry_name = lookup["organization_name"]
     result.matched_registry_identifier = lookup["ein"]
