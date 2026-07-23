@@ -14540,6 +14540,12 @@ def concise_status_rationale_comment(result, body: str, public_facing_status: st
         )
 
     if normalized_status in {"unable to verify", "unable to confirm", "needs review"}:
+        if state == "UT" and getattr(result, "reason_code", "") == "UTAH_CSV_NOT_IN_LIST":
+            return (
+                "No such organization name or EIN was found in the current Utah list. "
+                "This organization is absent from the current weekly CSV snapshot, so CharityClarity "
+                "returns Unable to Confirm rather than treating it as Not Registered."
+            )
         if state == "NM" and re.search(
             r"incomplete\s+identity|did\s+not\s+complete\s+enough\s+registry\s+evidence|"
             r"without\s+(?:a\s+)?(?:visible\s+)?(?:charity\s+)?identity|"
@@ -22248,6 +22254,11 @@ def run_state_lookup_for_batch(
 
 
 def run_fanout_state_lookup_for_batch(organization_name: str, ein: str, state: str) -> dict:
+    if (state or "").strip().upper() == "UT":
+        # Utah staging is CSV-only. Keep it on this deployment so a fan-out
+        # service cannot fall back to the legacy Utah registry browser checker.
+        return run_state_lookup(organization_name, ein, "UT")
+
     payload = {
         "organization_name": organization_name,
         "ein": ein,
