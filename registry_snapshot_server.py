@@ -12434,6 +12434,11 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         result.source_note = "Public registry lookup could not produce a result."
         result.error = "No result"
         result.success = False
+    result_state = (getattr(result, "state", "") or state or "").upper()
+    if result_state == "UT" and public_status(result) == "Site Not Reachable":
+        # Utah staging is backed exclusively by the weekly CSV. A legacy or
+        # remote lookup path must not leak a registry-site failure to users.
+        result, body = search_ut_expansion(org)
     utah_csv_literal_fields = bool(getattr(result, "_utah_csv_literal_fields", False))
     correction_body = "" if utah_csv_literal_fields else apply_confirmed_feedback_correction(result)
     if correction_body:
