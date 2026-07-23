@@ -21404,9 +21404,7 @@ def search_expansion_lab_state(org, state: str):
     if state == "MO":
         return search_mo_expansion(org)
     if state == "GA":
-        if os.environ.get("CE_GA_STATUS_CSV_PATH"):
-            return search_ga_csv_expansion(org)
-        return search_ga_expansion(None, org)
+        return search_ga_csv_expansion(org)
     if state != "UT":
         result = expansion_source_limited_result(org, state)
         body = " ".join([result.raw_status_text or "", result.source_note or ""]).strip()
