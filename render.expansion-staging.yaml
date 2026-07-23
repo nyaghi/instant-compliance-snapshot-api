@@ -19,6 +19,10 @@ services:
         value: AL,DC,GA,IL,MO,NC,NV,RI,TN,UT
       - key: CE_LANDING_PAGE_PATH
         value: registry-snapshot-index.expansion-staging.html
+      - key: CE_UTAH_STATUS_CSV_PATH
+        value: /opt/render/project/src/state_data/utah/UTAH_STATUS_LIST_copy_paste_batches.csv
+      - key: CE_GA_STATUS_CSV_PATH
+        value: /opt/render/project/src/state_data/ga/GA_STATUS_LIST_copy_paste_batches.csv
       - key: PLAYWRIGHT_BROWSERS_PATH
         value: "0"
       - key: PYTHONUNBUFFERED

@@ -11,7 +11,8 @@ from pathlib import Path
 
 
 UTAH_CSV_PATH_ENV = "CE_UTAH_STATUS_CSV_PATH"
-DEFAULT_UTAH_CSV_PATH = Path.home() / "Desktop" / "UTAH_STATUS_LIST_copy_paste_batches.csv"
+BASE_DIR = Path(__file__).resolve().parent
+DEFAULT_UTAH_CSV_PATH = BASE_DIR / "state_data" / "utah" / "UTAH_STATUS_LIST_copy_paste_batches.csv"
 REQUIRED_COLUMNS = (
     "DATE CHECKED",
     "ORG NAME",
@@ -52,9 +53,17 @@ def decode_csv_bytes(raw: bytes) -> tuple[str, str]:
 
 
 class UtahCsvLookup:
-    def __init__(self, csv_path: str | Path | None = None):
+    def __init__(
+        self,
+        csv_path: str | Path | None = None,
+        *,
+        state_name: str = "Utah",
+        error_prefix: str = "UTAH",
+    ):
         configured_path = csv_path or os.environ.get(UTAH_CSV_PATH_ENV) or DEFAULT_UTAH_CSV_PATH
         self.csv_path = Path(configured_path).expanduser()
+        self.state_name = state_name
+        self.error_prefix = error_prefix
         self.encoding = ""
         self.headers: list[str] = []
         self.rows: list[dict[str, str]] = []
@@ -68,31 +77,30 @@ class UtahCsvLookup:
         try:
             raw = self.csv_path.read_bytes()
         except FileNotFoundError:
-            self.error_code = "UTAH_CSV_FILE_NOT_FOUND"
+            self.error_code = f"{self.error_prefix}_CSV_FILE_NOT_FOUND"
             self.error = (
-                f"Utah status CSV not found: {self.csv_path}. "
-                f"Place the weekly file at the default path or configure {UTAH_CSV_PATH_ENV}."
+                f"{self.state_name} status CSV not found: {self.csv_path}."
             )
             return
         except OSError as exc:
-            self.error_code = "UTAH_CSV_READ_ERROR"
-            self.error = f"Utah status CSV could not be read at {self.csv_path}: {exc}"
+            self.error_code = f"{self.error_prefix}_CSV_READ_ERROR"
+            self.error = f"{self.state_name} status CSV could not be read at {self.csv_path}: {exc}"
             return
 
         try:
             text, self.encoding = decode_csv_bytes(raw)
         except UnicodeError as exc:
-            self.error_code = "UTAH_CSV_ENCODING_ERROR"
-            self.error = f"Utah status CSV encoding could not be decoded safely at {self.csv_path}: {exc}"
+            self.error_code = f"{self.error_prefix}_CSV_ENCODING_ERROR"
+            self.error = f"{self.state_name} status CSV encoding could not be decoded safely at {self.csv_path}: {exc}"
             return
 
         reader = csv.DictReader(io.StringIO(text, newline=""))
         self.headers = list(reader.fieldnames or [])
         missing = [column for column in REQUIRED_COLUMNS if column not in self.headers]
         if missing:
-            self.error_code = "UTAH_CSV_MISSING_COLUMNS"
+            self.error_code = f"{self.error_prefix}_CSV_MISSING_COLUMNS"
             self.error = (
-                "Utah status CSV is missing required columns: "
+                f"{self.state_name} status CSV is missing required columns: "
                 f"{', '.join(missing)}. Found columns: {', '.join(self.headers) or '(none)'}."
             )
             return
