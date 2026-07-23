@@ -21261,7 +21261,9 @@ def search_ut_expansion(org):
             "is not registered in Utah."
         )
         result.success = False
-        result.error = "No matching Utah list row"
+        # A confirmed CSV miss is a lookup outcome, not a site/network error.
+        # public_status() maps any non-empty error field to Site Not Reachable.
+        result.error = ""
         result.reason_code = "UTAH_CSV_NOT_IN_LIST"
         result.source_confidence = "utah_weekly_csv"
         return result, result.raw_status_text
