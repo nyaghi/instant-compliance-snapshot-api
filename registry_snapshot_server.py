@@ -33,6 +33,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from zoneinfo import ZoneInfo
 
+from charityclarity_funnel import FunnelStore, clean_attribution
 from ga_csv_lookup import GA_CSV_LOOKUP
 from utah_csv_lookup import UTAH_CSV_LOOKUP
 
@@ -416,6 +417,8 @@ EXEMPT_EMAIL_DOMAIN = "compliance-express.com"
 EXEMPT_EMAIL_ADDRESSES = {"nyaghi17@gmail.com"}
 DOMAIN_LIMIT_PATH = Path(__file__).with_name("registry_snapshot_domain_limits.json")
 DEVICE_LIMIT_PATH = Path(__file__).with_name("registry_snapshot_device_limits.json")
+FUNNEL_DB_PATH = Path(os.environ.get("CE_FUNNEL_DB_PATH") or Path(__file__).with_name("charityclarity_funnel.sqlite3"))
+FUNNEL_STORE = FunnelStore(FUNNEL_DB_PATH)
 try:
     EASTERN_TZ = ZoneInfo("America/New_York")
 except Exception:
@@ -22985,20 +22988,26 @@ def normalize_organization_requests(payload: dict, privileged: bool) -> list[dic
             if not isinstance(item, dict):
                 continue
             ein = format_ein(item.get("ein") or "")
-            if len(re.sub(r"\D", "", ein)) != 9:
+            ein_digits = re.sub(r"\D", "", ein)
+            if ein_digits and len(ein_digits) != 9:
                 continue
-            name = resolved_organization_name(ein, item.get("organization_name") or organization_name)
+            name = (item.get("organization_name") or organization_name or "").strip()
+            if not name:
+                continue
+            if ein_digits:
+                name = resolved_organization_name(ein, name)
             organizations.append({"organization_name": name, "ein": ein})
     else:
         ein = format_ein(payload.get("ein") or "")
-        if len(re.sub(r"\D", "", ein)) == 9:
-            name = resolved_organization_name(ein, organization_name)
+        ein_digits = re.sub(r"\D", "", ein)
+        if organization_name and (not ein_digits or len(ein_digits) == 9):
+            name = resolved_organization_name(ein, organization_name) if ein_digits else organization_name
             organizations.append({"organization_name": name, "ein": ein})
 
     deduped = []
     seen = set()
     for org in organizations:
-        key = re.sub(r"\D", "", org["ein"])
+        key = re.sub(r"\D", "", org["ein"]) or re.sub(r"\W+", " ", org["organization_name"].lower()).strip()
         if key in seen:
             continue
         seen.add(key)
@@ -23013,15 +23022,11 @@ def payload_missing_required_organization_name(payload: dict) -> bool:
         for item in raw_organizations:
             if not isinstance(item, dict):
                 continue
-            if len(re.sub(r"\D", "", format_ein(item.get("ein") or ""))) != 9:
-                continue
             item_name = (item.get("organization_name") or organization_name).strip()
             if not item_name:
                 return True
         return False
-    if len(re.sub(r"\D", "", format_ein(payload.get("ein") or ""))) == 9:
-        return not organization_name
-    return False
+    return not organization_name
 
 
 class RegistrySnapshotHandler(BaseHTTPRequestHandler):
@@ -23140,6 +23145,58 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         return True
 
+    def _send_funnel_report(self, include_body: bool = True) -> bool:
+        parsed = urlparse(self.path)
+        if parsed.path != "/admin/funnel.json":
+            return False
+        query = parse_qs(parsed.query)
+        email = normalize_email((query.get("email") or [""])[0])
+        passcode = (query.get("passcode") or [""])[0]
+        if not is_verified_internal_passcode(email, passcode):
+            self._send_json(403, {"error": "Verified Compliance Express email required."})
+            return True
+        now = int(time.time())
+        try:
+            start_epoch = int((query.get("start_epoch") or [str(now - 30 * 86400)])[0])
+            end_epoch = int((query.get("end_epoch") or [str(now + 1)])[0])
+        except ValueError:
+            self._send_json(400, {"error": "start_epoch and end_epoch must be integers."})
+            return True
+        report = FUNNEL_STORE.report(start_epoch, end_epoch)
+        if include_body:
+            self._send_json(200, report)
+        else:
+            body = json.dumps(report).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+        return True
+
+    def _record_funnel_event(self) -> None:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("JSON object required")
+            inserted = FUNNEL_STORE.record_event(
+                str(payload.get("event_name") or ""),
+                str(payload.get("event_id") or ""),
+                session_id=str(payload.get("session_id") or ""),
+                request_id=str(payload.get("request_id") or ""),
+                state=str(payload.get("state") or ""),
+                status=str(payload.get("status") or ""),
+                error_category=str(payload.get("error_category") or ""),
+                attribution=payload.get("attribution"),
+            )
+            self._send_json(200, {"ok": True, "recorded": inserted})
+        except ValueError as exc:
+            self._send_json(400, {"error": str(exc)})
+        except BaseException as exc:
+            log_error(f"Funnel event failed: {exc}")
+            self._send_json(500, {"error": "Funnel event could not be recorded."})
+
     def _send_landing_page(self, include_body: bool = True) -> None:
         configured_page = os.environ.get("CE_LANDING_PAGE_PATH", "registry-snapshot-index.html").strip()
         page_path = Path(configured_page)
@@ -23180,6 +23237,9 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
         if self._send_lead_log(include_body=False):
             return
 
+        if self._send_funnel_report(include_body=False):
+            return
+
         if self._send_evidence_pdf(include_body=False):
             return
 
@@ -23197,6 +23257,9 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
         if self._send_lead_log(include_body=True):
             return
 
+        if self._send_funnel_report(include_body=True):
+            return
+
         if self._send_evidence_pdf(include_body=True):
             return
 
@@ -23207,7 +23270,11 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
         self._send_json(404, {"error": "Open http://127.0.0.1:8765/ to use the registry snapshot page."})
 
     def do_POST(self) -> None:
-        if self.path != "/api/check":
+        parsed_path = urlparse(self.path).path
+        if parsed_path == "/api/funnel/event":
+            self._record_funnel_event()
+            return
+        if parsed_path != "/api/check":
             self._send_json(404, {"error": "Not found"})
             return
 
@@ -23217,6 +23284,7 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
             email = normalize_email(payload.get("email") or "")
             device_id = normalize_device_id(payload.get("device_id") or "")
             audit_context = request_audit_context(self, payload)
+            attribution = clean_attribution(payload.get("attribution"))
 
             requested_states = payload.get("states")
             state = (payload.get("state") or "").strip().upper()
@@ -23246,7 +23314,7 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
             states = sorted(states)
 
             if not organizations or not states or any(st not in set(SUPPORTED_STATES) for st in states):
-                self._send_json(400, {"error": "Enter a valid 9-digit EIN and select one supported state."})
+                self._send_json(400, {"error": "Enter an organization name and select one supported state. If provided, the EIN must contain 9 digits."})
                 return
 
             if PUBLIC_SINGLE_STATE_ONLY and (len(states) > 1 or len(organizations) > 1):
@@ -23262,14 +23330,7 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": f"This email can submit up to {org_limit} organization{'s' if org_limit != 1 else ''} at a time."})
                 return
 
-            limit_ein = organizations[0]["ein"] if organizations else ""
             is_batch = isinstance(requested_states, list)
-            if is_batch and not privileged and domain_is_limited(domain, limit_ein):
-                self._send_json(429, {"error": "A complimentary snapshot was already requested for this email domain."})
-                return
-            if is_batch and not privileged and device_is_limited(device_id, limit_ein):
-                self._send_json(429, {"error": "A complimentary snapshot was already requested from this browser."})
-                return
 
             single_state_admitted = False
             is_single_state_request = len(organizations) == 1 and len(states) == 1
@@ -23303,14 +23364,74 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
                     return
 
             try:
+                free_request_id = ""
+                if not privileged:
+                    decision = FUNNEL_STORE.reserve_free_search(
+                        email,
+                        payload.get("email") or "",
+                        organizations[0]["organization_name"],
+                        organizations[0]["ein"],
+                        states[0],
+                        attribution,
+                    )
+                    if not decision.eligible:
+                        if decision.reason == "already_used":
+                            try:
+                                FUNNEL_STORE.record_event(
+                                    "free_search_repeat_rejected",
+                                    f"repeat:{email}:{int(time.time() // 60)}",
+                                    session_id=attribution.get("session_id", ""),
+                                    state=states[0],
+                                    attribution=attribution,
+                                )
+                            except Exception:
+                                pass
+                            self._send_json(429, {
+                                "error": "You have already used your complimentary state check. You can get access covering up to 30 states for 30 days for $49.",
+                                "code": "free_search_already_used",
+                            })
+                        else:
+                            self._send_json(409, {
+                                "error": "A complimentary state check for this email is already in progress. Please wait for it to finish.",
+                                "code": "free_search_in_progress",
+                            })
+                        return
+                    free_request_id = decision.request_id
                 append_submission_log(email, organizations, states, audit_context)
                 results = run_state_lookups_parallel(organizations, states)
                 append_lead_log(email, results, audit_context)
+                usable_result = should_record_domain_check(results)
+                if free_request_id:
+                    if usable_result:
+                        result_status = str(results[0].get("status") or "") if results else ""
+                        FUNNEL_STORE.complete_free_search(free_request_id, result_status)
+                        FUNNEL_STORE.record_event(
+                            "free_search_completed",
+                            f"completed:{free_request_id}",
+                            session_id=attribution.get("session_id", ""),
+                            request_id=free_request_id,
+                            state=states[0],
+                            status=result_status,
+                            attribution=attribution,
+                        )
+                    else:
+                        FUNNEL_STORE.fail_free_search(free_request_id, "registry_unavailable")
+                        FUNNEL_STORE.record_event(
+                            "search_error",
+                            f"error:{free_request_id}",
+                            session_id=attribution.get("session_id", ""),
+                            request_id=free_request_id,
+                            state=states[0],
+                            error_category="registry_unavailable",
+                            attribution=attribution,
+                        )
                 if is_batch:
-                    if not privileged and should_record_domain_check(results):
-                        record_domain_check(domain, limit_ein)
-                        record_device_check(device_id, limit_ein)
-                    self._send_json(200, {"results": results, "checked_at_epoch": int(time.time())})
+                    self._send_json(200, {
+                        "results": results,
+                        "checked_at_epoch": int(time.time()),
+                        "request_id": free_request_id,
+                        "allowance_consumed": bool(free_request_id and usable_result),
+                    })
                 else:
                     if (
                         is_single_state_request
@@ -23335,6 +23456,12 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
                 if single_state_admitted:
                     SINGLE_STATE_REQUEST_SEMAPHORE.release()
         except BaseException as exc:
+            pending_request_id = locals().get("free_request_id", "")
+            if pending_request_id:
+                try:
+                    FUNNEL_STORE.fail_free_search(pending_request_id, "system_error")
+                except Exception:
+                    pass
             log_error(f"POST /api/check failed: {exc}")
             self._send_json(500, {"error": str(exc)})
 
