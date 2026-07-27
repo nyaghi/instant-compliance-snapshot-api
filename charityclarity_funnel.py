@@ -257,17 +257,47 @@ class FunnelStore:
                    GROUP BY source, campaign ORDER BY count DESC LIMIT 100""",
                 (int(start_epoch), int(end_epoch)),
             ).fetchall()
+            states = connection.execute(
+                """SELECT state, event_name, COUNT(*) AS count FROM funnel_events
+                   WHERE occurred_at >= ? AND occurred_at < ? AND state <> ''
+                   GROUP BY state, event_name ORDER BY state, event_name""",
+                (int(start_epoch), int(end_epoch)),
+            ).fetchall()
+            errors = connection.execute(
+                """SELECT error_category, COUNT(*) AS count FROM funnel_events
+                   WHERE occurred_at >= ? AND occurred_at < ?
+                     AND event_name IN ('search_error', 'checkout_error')
+                   GROUP BY error_category ORDER BY count DESC""",
+                (int(start_epoch), int(end_epoch)),
+            ).fetchall()
         counts = {name: 0 for name in FUNNEL_EVENTS}
         revenue_cents = 0
         for row in rows:
             counts[row["event_name"]] = int(row["count"] or 0)
             if row["event_name"] == "purchase_completed":
                 revenue_cents = int(row["revenue_cents"] or 0)
+        stages = [
+            "landing_page_viewed",
+            "free_search_form_started",
+            "free_search_form_submitted",
+            "free_search_completed",
+            "free_result_viewed",
+            "paid_offer_viewed",
+            "stripe_checkout_started",
+            "purchase_completed",
+        ]
+        conversion_rates = {}
+        for prior, current in zip(stages, stages[1:]):
+            denominator = counts[prior]
+            conversion_rates[f"{prior}_to_{current}"] = round(counts[current] / denominator, 4) if denominator else None
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "start_epoch": int(start_epoch),
             "end_epoch": int(end_epoch),
             "events": counts,
+            "conversion_rates": conversion_rates,
             "revenue_cents": revenue_cents,
             "source_campaign_breakdown": [dict(row) for row in sources],
+            "state_breakdown": [dict(row) for row in states],
+            "error_category_breakdown": [dict(row) for row in errors],
         }
