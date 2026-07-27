@@ -1,5 +1,7 @@
 param(
-    [string]$WeeklyCheckerDirectory = "C:\Users\Dell\Desktop\UTAH\UT_Weekly_Status_Checker",
+    [string]$WeeklyCheckerDirectory = "$env:USERPROFILE\Desktop\UTAH\UT_Weekly_Status_Checker",
+    [string]$PythonExecutable = "$env:LOCALAPPDATA\Python\bin\python.exe",
+    [string]$ChromeDebugUrl = "http://127.0.0.1:9229",
     [switch]$RunWeeklyChecker
 )
 
@@ -26,7 +28,14 @@ if ($RunWeeklyChecker) {
     if (-not (Test-Path -LiteralPath $weeklyScript -PathType Leaf)) {
         throw "Weekly Utah checker not found: $weeklyScript"
     }
-    & python $weeklyScript
+    if (-not (Test-Path -LiteralPath $PythonExecutable -PathType Leaf)) {
+        throw "Python executable not found: $PythonExecutable"
+    }
+    $weeklyArguments = @($weeklyScript)
+    if ($ChromeDebugUrl) {
+        $weeklyArguments += @("--chrome-debug-url", $ChromeDebugUrl)
+    }
+    & $PythonExecutable @weeklyArguments
     if ($LASTEXITCODE -ne 0) {
         throw "The weekly Utah checker failed. The repository CSV was not refreshed."
     }
