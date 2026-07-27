@@ -19,6 +19,7 @@ import tempfile
 import threading
 import time
 import traceback
+import uuid
 import zipfile
 import zlib
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
@@ -34,6 +35,12 @@ import xml.etree.ElementTree as ET
 from zoneinfo import ZoneInfo
 
 from charityclarity_funnel import FunnelStore, clean_attribution
+from charityclarity_payments import (
+    StripeCheckoutError,
+    checkout_session_form,
+    create_checkout_session,
+    verify_stripe_signature,
+)
 from ga_csv_lookup import GA_CSV_LOOKUP
 from utah_csv_lookup import UTAH_CSV_LOOKUP
 
@@ -419,6 +426,26 @@ DOMAIN_LIMIT_PATH = Path(__file__).with_name("registry_snapshot_domain_limits.js
 DEVICE_LIMIT_PATH = Path(__file__).with_name("registry_snapshot_device_limits.json")
 FUNNEL_DB_PATH = Path(os.environ.get("CE_FUNNEL_DB_PATH") or Path(__file__).with_name("charityclarity_funnel.sqlite3"))
 FUNNEL_STORE = FunnelStore(FUNNEL_DB_PATH)
+STRIPE_API_KEY = (
+    os.environ.get("CE_STRIPE_RESTRICTED_KEY")
+    or os.environ.get("CE_STRIPE_SECRET_KEY")
+    or os.environ.get("STRIPE_SECRET_KEY")
+    or ""
+).strip()
+STRIPE_PRICE_ID = os.environ.get("CE_STRIPE_PRICE_ID", "").strip()
+STRIPE_WEBHOOK_SECRET = os.environ.get("CE_STRIPE_WEBHOOK_SECRET", "").strip()
+STRIPE_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_STRIPE_TIMEOUT_SECONDS", "12"))), 20.0)
+PAID_OFFER_REVENUE_CENTS = max(0, int(os.environ.get("CE_PAID_OFFER_REVENUE_CENTS", "4900")))
+PAID_OFFER_LABEL = os.environ.get("CE_PAID_OFFER_LABEL", "Continue with paid review").strip()
+PAID_OFFER_DESCRIPTION = os.environ.get(
+    "CE_PAID_OFFER_DESCRIPTION",
+    "Request a deeper Compliance Clarity Report when you need more than a single-state snapshot.",
+).strip()
+STRIPE_SUCCESS_URL = os.environ.get(
+    "CE_STRIPE_SUCCESS_URL",
+    f"{PUBLIC_BASE_URL}/?checkout=success&session_id={{CHECKOUT_SESSION_ID}}",
+).strip()
+STRIPE_CANCEL_URL = os.environ.get("CE_STRIPE_CANCEL_URL", f"{PUBLIC_BASE_URL}/?checkout=cancel").strip()
 try:
     EASTERN_TZ = ZoneInfo("America/New_York")
 except Exception:
@@ -23046,6 +23073,55 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self) -> None:
         self._send_json(200, {"ok": True})
 
+    def _send_config(self, include_body: bool = True) -> bool:
+        parsed = urlparse(self.path)
+        if parsed.path != "/api/config":
+            return False
+        payload = {
+            "app_version": APP_VERSION,
+            "supported_states": SUPPORTED_STATES,
+            "public_single_state_only": PUBLIC_SINGLE_STATE_ONLY,
+            "stripe_checkout_configured": bool(STRIPE_API_KEY and STRIPE_PRICE_ID),
+            "paid_offer_label": PAID_OFFER_LABEL,
+            "paid_offer_description": PAID_OFFER_DESCRIPTION,
+            "company": "Compliance Express",
+            "website": "www.compliance-express.com",
+            "email": "info@compliance-express.com",
+        }
+        if include_body:
+            self._send_json(200, payload)
+        else:
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+        return True
+
+    def _send_asset(self, include_body: bool = True) -> bool:
+        parsed = urlparse(self.path)
+        if not parsed.path.startswith("/assets/"):
+            return False
+        filename = Path(unquote(parsed.path.removeprefix("/assets/"))).name
+        if not filename:
+            self._send_json(404, {"error": "Not found"})
+            return True
+        asset_path = Path(__file__).with_name("assets") / filename
+        if not asset_path.exists() or not asset_path.is_file():
+            self._send_json(404, {"error": "Not found"})
+            return True
+        content_type = "image/png" if asset_path.suffix.lower() == ".png" else "application/octet-stream"
+        body = asset_path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "public, max-age=3600")
+        self.send_header("Content-Length", str(len(body) if include_body else 0))
+        self.end_headers()
+        if include_body:
+            self.wfile.write(body)
+        return True
+
     def _send_evidence_pdf(self, include_body: bool = True) -> bool:
         if not self.path.startswith("/evidence/"):
             return False
@@ -23180,9 +23256,13 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
             if not isinstance(payload, dict):
                 raise ValueError("JSON object required")
+            event_name = str(payload.get("event_name") or payload.get("event_type") or payload.get("type") or "")
+            event_id = str(payload.get("event_id") or "").strip()
+            if not event_id and event_name:
+                event_id = f"server:{event_name}:{uuid.uuid4().hex}"
             inserted = FUNNEL_STORE.record_event(
-                str(payload.get("event_name") or ""),
-                str(payload.get("event_id") or ""),
+                event_name,
+                event_id,
                 session_id=str(payload.get("session_id") or ""),
                 request_id=str(payload.get("request_id") or ""),
                 state=str(payload.get("state") or ""),
@@ -23196,6 +23276,98 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
         except BaseException as exc:
             log_error(f"Funnel event failed: {exc}")
             self._send_json(500, {"error": "Funnel event could not be recorded."})
+
+    def _start_stripe_checkout(self) -> None:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("JSON object required")
+            attribution = clean_attribution(payload.get("attribution"))
+            email = normalize_email(payload.get("email") or "")
+            request_id = str(payload.get("request_id") or "").strip()[:160]
+            session_id = str(payload.get("session_id") or attribution.get("session_id") or "").strip()[:160]
+            state = str(payload.get("state") or "").strip().upper()[:2]
+            if not STRIPE_API_KEY or not STRIPE_PRICE_ID:
+                try:
+                    FUNNEL_STORE.record_event(
+                        "checkout_error",
+                        f"checkout-config:{session_id or request_id}:{int(time.time() // 60)}",
+                        session_id=session_id,
+                        request_id=request_id,
+                        state=state,
+                        error_category="not_configured",
+                        attribution=attribution,
+                    )
+                except Exception:
+                    pass
+                self._send_json(503, {"error": "Payment checkout is not configured on this environment."})
+                return
+            metadata = {
+                "request_id": request_id,
+                "session_id": session_id,
+                "state": state,
+                "utm_source": attribution.get("utm_source", ""),
+                "utm_campaign": attribution.get("utm_campaign", ""),
+                "gclid": attribution.get("gclid", ""),
+            }
+            form = checkout_session_form(
+                price_id=STRIPE_PRICE_ID,
+                success_url=STRIPE_SUCCESS_URL,
+                cancel_url=STRIPE_CANCEL_URL,
+                customer_email=email,
+                client_reference_id=request_id or session_id,
+                metadata=metadata,
+            )
+            session = create_checkout_session(STRIPE_API_KEY, form, timeout_seconds=STRIPE_TIMEOUT_SECONDS)
+            checkout_url = str(session.get("url") or "")
+            if not checkout_url:
+                raise StripeCheckoutError("Stripe did not return a checkout URL.")
+            FUNNEL_STORE.record_event(
+                "stripe_checkout_started",
+                f"stripe-started:{session.get('id') or secrets.token_urlsafe(12)}",
+                session_id=session_id,
+                request_id=request_id,
+                state=state,
+                attribution=attribution,
+            )
+            self._send_json(200, {"checkout_url": checkout_url, "checkout_session_id": session.get("id", "")})
+        except ValueError as exc:
+            self._send_json(400, {"error": str(exc)})
+        except StripeCheckoutError as exc:
+            log_error(f"Stripe checkout failed: {exc}")
+            self._send_json(502, {"error": "Payment checkout could not be started."})
+        except BaseException as exc:
+            log_error(f"Checkout endpoint failed: {exc}")
+            self._send_json(500, {"error": "Payment checkout could not be started."})
+
+    def _handle_stripe_webhook(self) -> None:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            payload_bytes = self.rfile.read(length)
+            signature = self.headers.get("Stripe-Signature", "")
+            if not STRIPE_WEBHOOK_SECRET or not verify_stripe_signature(payload_bytes, signature, STRIPE_WEBHOOK_SECRET):
+                self._send_json(400, {"error": "Invalid Stripe webhook signature."})
+                return
+            event = json.loads(payload_bytes.decode("utf-8"))
+            event_type = str(event.get("type") or "")
+            if event_type == "checkout.session.completed":
+                session = event.get("data", {}).get("object", {})
+                metadata = session.get("metadata") or {}
+                amount_total = int(session.get("amount_total") or PAID_OFFER_REVENUE_CENTS)
+                FUNNEL_STORE.record_event(
+                    "purchase_completed",
+                    f"stripe:{event.get('id')}",
+                    session_id=str(metadata.get("session_id") or ""),
+                    request_id=str(metadata.get("request_id") or session.get("client_reference_id") or ""),
+                    state=str(metadata.get("state") or ""),
+                    attribution=metadata,
+                    revenue_cents=amount_total,
+                )
+            self._send_json(200, {"ok": True})
+        except BaseException as exc:
+            log_error(f"Stripe webhook failed: {exc}")
+            self._send_json(400, {"error": "Stripe webhook could not be processed."})
 
     def _send_landing_page(self, include_body: bool = True) -> None:
         configured_page = os.environ.get("CE_LANDING_PAGE_PATH", "registry-snapshot-index.html").strip()
@@ -23240,6 +23412,12 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
         if self._send_funnel_report(include_body=False):
             return
 
+        if self._send_config(include_body=False):
+            return
+
+        if self._send_asset(include_body=False):
+            return
+
         if self._send_evidence_pdf(include_body=False):
             return
 
@@ -23260,6 +23438,12 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
         if self._send_funnel_report(include_body=True):
             return
 
+        if self._send_config(include_body=True):
+            return
+
+        if self._send_asset(include_body=True):
+            return
+
         if self._send_evidence_pdf(include_body=True):
             return
 
@@ -23273,6 +23457,12 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
         parsed_path = urlparse(self.path).path
         if parsed_path == "/api/funnel/event":
             self._record_funnel_event()
+            return
+        if parsed_path == "/api/checkout":
+            self._start_stripe_checkout()
+            return
+        if parsed_path == "/api/stripe/webhook":
+            self._handle_stripe_webhook()
             return
         if parsed_path != "/api/check":
             self._send_json(404, {"error": "Not found"})
@@ -23451,7 +23641,10 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
                             ):
                                 self._send_json(status_code, overflow_payload, overflow_headers)
                                 return
-                    self._send_json(200, results[0])
+                    response_payload = dict(results[0])
+                    response_payload["request_id"] = free_request_id
+                    response_payload["allowance_consumed"] = bool(free_request_id and usable_result)
+                    self._send_json(200, response_payload)
             finally:
                 if single_state_admitted:
                     SINGLE_STATE_REQUEST_SEMAPHORE.release()

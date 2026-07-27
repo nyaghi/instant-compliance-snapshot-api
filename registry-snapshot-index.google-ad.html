@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CharityClarity State Charity Registration Check</title>
+  <style>
+    :root {
+      --blue: #0b2a5b;
+      --red: #c62828;
+      --ink: #172033;
+      --slate: #45556f;
+      --line: #d8e0ec;
+      --soft: #f6f8fb;
+      --mint: #e8f5ef;
+      --gold: #f9efd0;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      color: var(--ink);
+      background: #f8fafc;
+    }
+    header {
+      background: white;
+      border-bottom: 1px solid var(--line);
+    }
+    .topbar {
+      max-width: 1160px;
+      margin: 0 auto;
+      padding: 14px clamp(16px, 4vw, 36px);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-width: 0;
+    }
+    .brand img {
+      display: block;
+      height: 42px;
+      width: auto;
+      object-fit: contain;
+    }
+    .contact {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 10px 18px;
+      font-size: 13px;
+      color: var(--slate);
+    }
+    main {
+      max-width: 1160px;
+      margin: 0 auto;
+      padding: 24px clamp(16px, 4vw, 36px) 42px;
+    }
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(320px, .95fr);
+      gap: 24px;
+      align-items: start;
+    }
+    .intro {
+      padding: 18px 0 0;
+    }
+    h1 {
+      margin: 0;
+      max-width: 760px;
+      color: var(--blue);
+      font-size: clamp(34px, 5vw, 58px);
+      line-height: 1.02;
+      letter-spacing: 0;
+    }
+    .subhead {
+      margin: 18px 0 0;
+      max-width: 680px;
+      font-size: clamp(17px, 2vw, 21px);
+      line-height: 1.45;
+      color: var(--slate);
+    }
+    .signals {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 22px;
+      max-width: 720px;
+    }
+    .signal {
+      border: 1px solid var(--line);
+      background: white;
+      border-radius: 8px;
+      padding: 12px;
+      min-height: 84px;
+    }
+    .signal strong {
+      display: block;
+      color: var(--blue);
+      font-size: 14px;
+      margin-bottom: 6px;
+    }
+    .signal span {
+      display: block;
+      color: var(--slate);
+      font-size: 13px;
+      line-height: 1.35;
+    }
+    .panel {
+      background: white;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+      box-shadow: 0 14px 36px rgba(15, 23, 42, .08);
+    }
+    .panel h2 {
+      margin: 0 0 14px;
+      color: var(--blue);
+      font-size: 21px;
+      letter-spacing: 0;
+    }
+    label {
+      display: block;
+      margin-bottom: 6px;
+      color: #1e293b;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .field { margin-bottom: 13px; }
+    input, select {
+      width: 100%;
+      min-height: 42px;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      padding: 9px 11px;
+      color: var(--ink);
+      background: white;
+      font-size: 14px;
+    }
+    button {
+      min-height: 44px;
+      border: 1px solid var(--red);
+      border-radius: 6px;
+      padding: 10px 15px;
+      color: white;
+      background: var(--red);
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button.secondary {
+      border-color: var(--blue);
+      color: var(--blue);
+      background: white;
+    }
+    button:disabled { opacity: .68; cursor: wait; }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin-top: 8px;
+    }
+    .fine {
+      margin: 12px 0 0;
+      color: #64748b;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .result {
+      margin-top: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      background: var(--soft);
+    }
+    .result[hidden], .offer[hidden], .error[hidden] { display: none; }
+    .result-status {
+      display: inline-block;
+      margin-bottom: 8px;
+      border-radius: 6px;
+      padding: 7px 9px;
+      background: var(--mint);
+      color: #116149;
+      font-weight: 700;
+    }
+    .result-status.review {
+      background: var(--gold);
+      color: #72520d;
+    }
+    .result p {
+      margin: 8px 0 0;
+      color: var(--slate);
+      line-height: 1.45;
+      font-size: 14px;
+    }
+    .offer {
+      margin-top: 14px;
+      border: 1px solid #f1c5c5;
+      border-radius: 8px;
+      padding: 14px;
+      background: #fff8f8;
+    }
+    .offer strong {
+      display: block;
+      color: var(--blue);
+      margin-bottom: 5px;
+    }
+    .offer p {
+      margin: 0 0 12px;
+      color: var(--slate);
+      line-height: 1.45;
+      font-size: 14px;
+    }
+    .error {
+      margin-top: 12px;
+      border: 1px solid #fecaca;
+      border-radius: 8px;
+      padding: 11px;
+      color: #991b1b;
+      background: #fff1f2;
+      font-weight: 700;
+      line-height: 1.35;
+    }
+    .trust-band {
+      margin-top: 28px;
+      padding: 18px 0 0;
+      border-top: 1px solid var(--line);
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+      color: var(--slate);
+      font-size: 14px;
+      line-height: 1.45;
+    }
+    .trust-band strong {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--ink);
+    }
+    @media (max-width: 860px) {
+      .topbar { align-items: flex-start; flex-direction: column; }
+      .contact { justify-content: flex-start; }
+      .hero { grid-template-columns: 1fr; }
+      .signals, .trust-band { grid-template-columns: 1fr; }
+      .brand img { max-width: 72vw; height: auto; max-height: 44px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="topbar">
+      <div class="brand">
+        <img src="/assets/CharityClarity.png" alt="CharityClarity by Compliance Express" />
+      </div>
+      <div class="contact">
+        <span>www.compliance-express.com</span>
+        <span>info@compliance-express.com</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="hero">
+      <section class="intro">
+        <h1>Check a charity registration status signal before fundraising.</h1>
+        <p class="subhead">CharityClarity gives a plain-English state snapshot for one organization and one supported state, with conservative language when a registry cannot be confirmed.</p>
+        <div class="signals" aria-label="CharityClarity signals">
+          <div class="signal"><strong>Fast first look</strong><span>Run one complimentary state check from the ad page.</span></div>
+          <div class="signal"><strong>Careful status terms</strong><span>Unavailable registries are not treated as negative results.</span></div>
+          <div class="signal"><strong>Follow-up path</strong><span>Request a deeper Compliance Clarity Report when more review is needed.</span></div>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="lookupTitle">
+        <h2 id="lookupTitle">Complimentary state check</h2>
+        <form id="lookupForm">
+          <div class="field">
+            <label for="organizationName">Organization name</label>
+            <input id="organizationName" name="organization_name" type="text" autocomplete="organization" required placeholder="Example Charity Inc." />
+          </div>
+          <div class="field">
+            <label for="ein">EIN</label>
+            <input id="ein" name="ein" type="text" inputmode="numeric" required placeholder="01-2345678" />
+          </div>
+          <div class="field">
+            <label for="state">State</label>
+            <select id="state" name="state" required>
+              <option value="">Loading supported states...</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="email">Email address</label>
+            <input id="email" name="email" type="email" autocomplete="email" required placeholder="you@example.com" />
+          </div>
+          <div class="actions">
+            <button id="submitButton" type="submit">Run check</button>
+          </div>
+          <p class="fine">CharityClarity is a practical starting point, not legal advice or a complete compliance review.</p>
+        </form>
+        <div id="error" class="error" hidden></div>
+        <div id="result" class="result" hidden></div>
+        <div id="offer" class="offer" hidden>
+          <strong id="offerLabel">Continue with paid review</strong>
+          <p id="offerDescription">Request a deeper Compliance Clarity Report when you need more than a single-state snapshot.</p>
+          <button id="checkoutButton" type="button">Continue to checkout</button>
+        </div>
+      </section>
+    </div>
+
+    <section class="trust-band" aria-label="Compliance Express standards">
+      <div><strong>Compliance Express</strong>Built for nonprofit registration and fundraising compliance review workflows.</div>
+      <div><strong>Conservative output</strong>Ambiguous matches, blocked sites, and source limits are surfaced for review.</div>
+      <div><strong>Real source context</strong>Where available, snapshots include state comments, registry match signals, and evidence links.</div>
+    </section>
+  </main>
+
+  <script>
+    const form = document.getElementById("lookupForm");
+    const button = document.getElementById("submitButton");
+    const errorBox = document.getElementById("error");
+    const resultBox = document.getElementById("result");
+    const offerBox = document.getElementById("offer");
+    const checkoutButton = document.getElementById("checkoutButton");
+    const stateSelect = document.getElementById("state");
+    const offerLabel = document.getElementById("offerLabel");
+    const offerDescription = document.getElementById("offerDescription");
+    const stateNames = {
+      AK: "Alaska", AL: "Alabama", AR: "Arkansas", CA: "California", CO: "Colorado",
+      CT: "Connecticut", DC: "District of Columbia", FL: "Florida", GA: "Georgia",
+      HI: "Hawaii", IL: "Illinois", KS: "Kansas", KY: "Kentucky", LA: "Louisiana",
+      MA: "Massachusetts", MD: "Maryland", ME: "Maine", MI: "Michigan", MN: "Minnesota",
+      MO: "Missouri", MS: "Mississippi", NC: "North Carolina", ND: "North Dakota",
+      NH: "New Hampshire", NJ: "New Jersey", NM: "New Mexico", NV: "Nevada",
+      NY: "New York", OH: "Ohio", OK: "Oklahoma", OR: "Oregon", PA: "Pennsylvania",
+      RI: "Rhode Island", SC: "South Carolina", TN: "Tennessee", UT: "Utah",
+      VA: "Virginia", WA: "Washington", WI: "Wisconsin", WV: "West Virginia"
+    };
+    let attribution = {};
+    let latestRequestId = "";
+    let latestState = "";
+    let formStarted = false;
+
+    function html(value) {
+      return String(value || "").replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+      }[char]));
+    }
+
+    function sessionId() {
+      let value = localStorage.getItem("cc_session_id");
+      if (!value) {
+        value = crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2);
+        localStorage.setItem("cc_session_id", value);
+      }
+      return value;
+    }
+
+    function collectAttribution() {
+      const params = new URLSearchParams(window.location.search);
+      const keys = ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term", "gclid", "source", "medium", "campaign", "ad_group", "keyword", "match_type"];
+      const collected = {};
+      keys.forEach((key) => {
+        const value = params.get(key);
+        if (value) collected[key] = value;
+      });
+      collected.referrer = document.referrer || "";
+      collected.landing_page = window.location.href;
+      collected.session_id = sessionId();
+      return collected;
+    }
+
+    async function recordEvent(eventName, extra = {}) {
+      const eventId = `${eventName}:${attribution.session_id}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+      try {
+        await fetch("/api/funnel/event", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            event_name: eventName,
+            event_id: eventId,
+            session_id: attribution.session_id,
+            request_id: latestRequestId,
+            state: latestState,
+            attribution,
+            ...extra
+          })
+        });
+      } catch (_) {}
+    }
+
+    async function loadConfig() {
+      const response = await fetch("/api/config", {headers: {"Accept": "application/json"}});
+      const config = await response.json();
+      const states = Array.isArray(config.supported_states) ? config.supported_states : [];
+      stateSelect.innerHTML = '<option value="">Select a supported state</option>' + states.map((code) => {
+        const label = stateNames[code] ? `${stateNames[code]} (${code})` : code;
+        return `<option value="${html(code)}">${html(label)}</option>`;
+      }).join("");
+      offerLabel.textContent = config.paid_offer_label || offerLabel.textContent;
+      offerDescription.textContent = config.paid_offer_description || offerDescription.textContent;
+    }
+
+    function showError(message) {
+      errorBox.textContent = message;
+      errorBox.hidden = false;
+    }
+
+    function showOffer() {
+      offerBox.hidden = false;
+      recordEvent("paid_offer_viewed");
+    }
+
+    function showResult(result) {
+      const status = String(result.status || "Needs Review");
+      const reviewClass = /review|unable|reachable|confirm|no confirmed/i.test(status) ? " review" : "";
+      latestRequestId = result.request_id || latestRequestId;
+      latestState = result.state || latestState;
+      resultBox.innerHTML = `
+        <span class="result-status${reviewClass}">${html(status)}</span>
+        <p><strong>${html(result.state || "")}</strong> ${html(result.matched_registry_name || result.matched_registry_identifier || "")}</p>
+        <p>${html(result.comments || result.source_note || result.raw_status_text || "No additional registry comment was returned.")}</p>
+      `;
+      resultBox.hidden = false;
+      recordEvent("free_result_viewed", {status});
+      showOffer();
+    }
+
+    form.addEventListener("input", () => {
+      if (!formStarted) {
+        formStarted = true;
+        recordEvent("free_search_form_started");
+      }
+    });
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      errorBox.hidden = true;
+      resultBox.hidden = true;
+      offerBox.hidden = true;
+      latestState = stateSelect.value;
+      const payload = {
+        organization_name: document.getElementById("organizationName").value.trim(),
+        ein: document.getElementById("ein").value.trim(),
+        email: document.getElementById("email").value.trim(),
+        state: latestState,
+        attribution
+      };
+      button.disabled = true;
+      button.textContent = "Checking...";
+      await recordEvent("free_search_form_submitted", {state: latestState});
+      try {
+        const response = await fetch("/api/check", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          showError(data.error || "Lookup failed.");
+          if (data.code === "free_search_already_used") showOffer();
+          return;
+        }
+        latestRequestId = data.request_id || "";
+        showResult(data);
+      } catch (error) {
+        showError(error.message || String(error));
+      } finally {
+        button.disabled = false;
+        button.textContent = "Run check";
+      }
+    });
+
+    checkoutButton.addEventListener("click", async () => {
+      errorBox.hidden = true;
+      checkoutButton.disabled = true;
+      checkoutButton.textContent = "Opening checkout...";
+      try {
+        const response = await fetch("/api/checkout", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            email: document.getElementById("email").value.trim(),
+            request_id: latestRequestId,
+            session_id: attribution.session_id,
+            state: latestState,
+            attribution
+          })
+        });
+        const data = await response.json();
+        if (!response.ok || !data.checkout_url) throw new Error(data.error || "Checkout could not be started.");
+        window.location.href = data.checkout_url;
+      } catch (error) {
+        showError(error.message || String(error));
+        checkoutButton.disabled = false;
+        checkoutButton.textContent = "Continue to checkout";
+      }
+    });
+
+    attribution = collectAttribution();
+    loadConfig().catch(() => {
+      stateSelect.innerHTML = '<option value="">Supported states unavailable</option>';
+      showError("Supported states could not be loaded. Please try again shortly.");
+    });
+    recordEvent("landing_page_viewed");
+  </script>
+</body>
+</html>
