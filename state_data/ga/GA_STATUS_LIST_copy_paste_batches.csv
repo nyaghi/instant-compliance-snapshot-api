@@ -1,13 +1,13 @@
-﻿DATE CHECKED,ORG NAME,EIN,STATUS,EXPIRATION DATE,SOURCE,NOTES
+DATE CHECKED,ORG NAME,EIN,STATUS,EXPIRATION DATE,SOURCE,NOTES
 7/17/2026,Northside Hospital Inc,581954432,Closed,2/17/1998,Georgia SOS Charity Search,exact normalized name match
 7/17/2026,Emory University,580566256,Exempt,,Georgia SOS Charity Search,exact normalized name match
 7/17/2026,Emory — Group Return,900790361,Not Registered,,Georgia SOS Charity Search,No safe Georgia match
-7/17/2026,National Christian Charitable Foundation ,581493949,Not Registered,,Georgia SOS Charity Search,No safe Georgia match
-7/17/2026,Childrens Healthcare Of Atlanta Inc ,900779996,Not Registered,,Georgia SOS Charity Search,No safe Georgia match
+7/17/2026,National Christian Charitable Foundation,581493949,Not Registered,,Georgia SOS Charity Search,No safe Georgia match
+7/17/2026,Childrens Healthcare Of Atlanta Inc,900779996,Not Registered,,Georgia SOS Charity Search,No safe Georgia match
 7/24/2026,Piedmont Healthcare Inc,580566213,Current,4/20/2028,Georgia SOS Charity Search,exact normalized name match
 7/17/2026,Map International,362586390,Current,6/30/2027,Georgia SOS Charity Search,exact normalized name match
 7/17/2026,Cobb Hospital,580968382,Not Registered,,Georgia SOS Charity Search,No safe Georgia match
-7/17/2026,Delta Account Based Medical Tr ,753261600,Not Registered,,Georgia SOS Charity Search,No safe Georgia match
+7/17/2026,Delta Account Based Medical Tr,753261600,Not Registered,,Georgia SOS Charity Search,No safe Georgia match
 7/17/2026,United Parcel Service Veba Ups Health And Welfare Plan,222899653,Not Registered,,Georgia SOS Charity Search,No safe Georgia match
 7/17/2026,The Medical Center Inc,581685139,Current,6/11/2027,Georgia SOS Charity Search,name containment 2/2
 7/17/2026,Jackson Electric Membership Corp,580301471,Not Registered,,Georgia SOS Charity Search,No safe Georgia match
@@ -5765,7 +5765,7 @@
 7/18/2026,St Marys Sacred Heart Hospital Inc,473752176,Not Registered,,Georgia SOS Charity Search,No safe Georgia match
 7/18/2026,St Marys Medical Group Inc,261858563,Not Registered,,Georgia SOS Charity Search,No safe Georgia match
 7/20/2026,Ninth District Opportunity Inc,580974656,Delinquent,6/18/2020,https://verify.sos.ga.gov/verification/Details.aspx?result=16357d58-dcad-47e1-a72f-d281c5c68b56,"Georgia status: Expired; matched name: Ninth District Opportunity, Inc."
-,,,,,,
+
 7/20/2026,Goodwill Industries Of Middle Georgia Inc,581249683,Delinquent,4/27/2019,https://verify.sos.ga.gov/verification/Details.aspx?result=8cd611c1-c63d-4229-aaec-99da8dde10af,"Georgia status: Expired; matched name: Goodwill Industries Of Middle Georgia, Inc."
 7/20/2026,Reinhardt University,580603153,Not Registered,,https://verify.sos.ga.gov/verification/Search.aspx?facility=Y&SubmitComplaint=Y,No Georgia result; tried=Reinhardt University
 7/20/2026,Visiting Nurse Health System Inc — Hospice Atlanta,580566250,Not Registered,,https://verify.sos.ga.gov/verification/Search.aspx?facility=Y&SubmitComplaint=Y,No Georgia result; tried=Visiting Nurse Health System Inc — Hospice Atlanta
@@ -7350,7 +7350,7 @@
 7/21/2026,Jesses House Inc,582516541,Not Registered,,https://verify.sos.ga.gov/verification/Search.aspx?facility=Y&SubmitComplaint=Y,No Georgia result; tried=Jesses House Inc / Jesses House
 7/21/2026,Kicklighter Resource Center Inc,580666453,Not Registered,,https://verify.sos.ga.gov/verification/Search.aspx?facility=Y&SubmitComplaint=Y,No Georgia result; tried=Kicklighter Resource Center Inc / Kicklighter Resource Center
 7/21/2026,Creative Arts Guild Incorporated,586046790,Not Registered,,https://verify.sos.ga.gov/verification/Search.aspx?facility=Y&SubmitComplaint=Y,No Georgia result; tried=Creative Arts Guild Incorporated / Creative Arts Guild
-7/21/2026,Disability Action Center Of Georgia,582400240,Not Registered,,https://verify.sos.ga.gov/verification/Search.aspx?facility=Y&SubmitComplaint=Y,No Georgia result; tried=Disability Action Center Of Georgia
+07/27/2026,Disability Action Center Of Georgia,582400240,Delinquent,9/15/2025,https://verify.sos.ga.gov/verification/Details.aspx?result=1a76f5c7-d0b4-43f2-b0e2-1ae019a82a2e,"Georgia status: Active; matched name: Disability Action Center of Ga, Inc., dba disABILITY LINK"
 7/21/2026,Sri Ram Samsthan Inc,465058826,Not Registered,,https://verify.sos.ga.gov/verification/Search.aspx?facility=Y&SubmitComplaint=Y,No Georgia result; tried=Sri Ram Samsthan Inc / Sri Ram Samsthan
 7/21/2026,Primerica Foundation Inc,274689647,Not Registered,,https://verify.sos.ga.gov/verification/Search.aspx?facility=Y&SubmitComplaint=Y,No Georgia result; tried=Primerica Foundation Inc / Primerica Foundation
 7/21/2026,Good Mews Animal Foundation Inc,581790828,Current,7/6/2027,https://verify.sos.ga.gov/verification/Details.aspx?result=4de14ca7-a4fc-4774-8f9f-82183b7fe56a,"Georgia status: Active; matched name: Good Mews Animal Foundation, Inc."
