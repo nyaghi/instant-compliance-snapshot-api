@@ -1,7 +1,8 @@
 param(
     [string]$WeeklyCheckerDirectory = "$env:USERPROFILE\Desktop\UTAH\UT_Weekly_Status_Checker",
-    [string]$PythonExecutable = "$env:LOCALAPPDATA\Python\bin\python.exe",
+    [string]$PythonExecutable = "",
     [string]$ChromeDebugUrl = "http://127.0.0.1:9229",
+    [switch]$OnlyRecheckRequired,
     [switch]$RunWeeklyChecker
 )
 
@@ -28,12 +29,31 @@ if ($RunWeeklyChecker) {
     if (-not (Test-Path -LiteralPath $weeklyScript -PathType Leaf)) {
         throw "Weekly Utah checker not found: $weeklyScript"
     }
-    if (-not (Test-Path -LiteralPath $PythonExecutable -PathType Leaf)) {
-        throw "Python executable not found: $PythonExecutable"
+    if (-not $PythonExecutable) {
+        $pythonCandidates = @(
+            "$env:LOCALAPPDATA\Python\bin\python.exe"
+        )
+        $pythonPrograms = Get-ChildItem -Path "$env:LOCALAPPDATA\Programs\Python\Python*\python.exe" `
+            -ErrorAction SilentlyContinue | Sort-Object FullName -Descending
+        $pythonCandidates += @($pythonPrograms.FullName)
+        $pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
+        if ($pythonCommand -and $pythonCommand.Source -notlike "*\Microsoft\WindowsApps\*") {
+            $pythonCandidates += $pythonCommand.Source
+        }
+        $PythonExecutable = $pythonCandidates | Where-Object {
+            $_ -and (Test-Path -LiteralPath $_ -PathType Leaf)
+        } | Select-Object -First 1
     }
+    if (-not $PythonExecutable -or -not (Test-Path -LiteralPath $PythonExecutable -PathType Leaf)) {
+        throw "A working Python executable was not found. Install Python or pass -PythonExecutable with its full path."
+    }
+
     $weeklyArguments = @($weeklyScript)
     if ($ChromeDebugUrl) {
         $weeklyArguments += @("--chrome-debug-url", $ChromeDebugUrl)
+    }
+    if ($OnlyRecheckRequired) {
+        $weeklyArguments += "--only-recheck-required"
     }
     & $PythonExecutable @weeklyArguments
     if ($LASTEXITCODE -ne 0) {
