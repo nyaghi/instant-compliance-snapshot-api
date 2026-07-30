@@ -18776,8 +18776,8 @@ EXPANSION_STATE_SOURCES = {
         "blocker": "cloudflare_access_login",
     },
     "UT": {
-        "name": "Utah weekly status CSV",
-        "url": "",
+        "name": "Utah Division of Corporations and Commercial Code business search",
+        "url": "https://businessregistration.utah.gov/EntitySearch/OnlineEntitySearch",
         "search": "ein_then_name",
         "blocker": "",
     },
@@ -20415,10 +20415,12 @@ def parse_ut_result_rows(page) -> list[dict]:
 
 
 UT_BUSINESS_HOME_URL = "https://businessregistration.utah.gov/"
+UT_BUSINESS_SEARCH_URL = "https://businessregistration.utah.gov/EntitySearch/OnlineEntitySearch"
 UT_BUSINESS_RESULT_URL = "https://businessregistration.utah.gov/EntitySearch/OnlineBusinessAndMarkSearchResult"
 UT_BUSINESS_DETAIL_URL = "https://businessregistration.utah.gov/EntitySearch/BusinessInformation"
 UT_DIRECT_TIMEOUT_SECONDS = 30
 UT_DIRECT_IMPERSONATIONS = ("chrome136", "chrome124", "chrome120", "chrome")
+UT_USE_DCCC_LOOKUP = os.environ.get("CE_UT_USE_DCCC_LOOKUP", "0").strip().lower() in {"1", "true", "yes"}
 UT_BROWSER_CHALLENGE_WAIT_SECONDS = min(max(8.0, float(os.environ.get("CE_UT_BROWSER_CHALLENGE_WAIT_SECONDS", "28"))), 45.0)
 UT_BLOCK_HEAVY_BROWSER_RESOURCES = os.environ.get("CE_UT_BLOCK_HEAVY_BROWSER_RESOURCES", "0").strip().lower() not in {"0", "false", "no"}
 UT_SEARCH_FORM_MARKERS = (
@@ -21223,7 +21225,89 @@ Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});
                 BROWSER_LOOKUP_SEMAPHORE.release()
 
 
+def search_ut_dccc_expansion(org):
+    state = "UT"
+    source_url = UT_BUSINESS_SEARCH_URL
+    attempted_queries: list[str] = []
+    rejected_candidates: list[str] = []
+    source_attempts: list[dict] = []
+    last_body = ""
+    direct_error = ""
+
+    try:
+        session = ut_direct_session(source_attempts)
+        ut_prepare_direct_session(session, source_url, source_attempts)
+
+        def direct_search_once(query: str) -> tuple[list[dict], str]:
+            return ut_search_once_http(session, query, source_url, source_attempts)
+
+        best_rows, last_body = ut_find_best_rows(
+            org,
+            direct_search_once,
+            attempted_queries,
+            rejected_candidates,
+            source_attempts,
+            "direct_http",
+        )
+        if best_rows:
+            record = sorted(best_rows, key=ut_record_rank)[0]
+            detail_values: dict[str, str] = {}
+            try:
+                detail_values = ut_direct_detail_values(session, record, source_attempts)
+            except Exception as exc:
+                ut_note_attempt(source_attempts, "direct_http", "detail", "error", error=ut_exception_summary("detail", exc))
+            result = ut_registered_result_from_record(
+                org,
+                record,
+                detail_values,
+                source_url,
+                attempted_queries,
+                source_attempts,
+                "direct_http",
+            )
+            return result, result.raw_status_text
+        return ut_not_registered_result(org, source_url, attempted_queries, rejected_candidates, source_attempts), last_body
+    except Exception as exc:
+        direct_error = ut_exception_summary("direct_http", exc, last_body)
+        ut_note_attempt(source_attempts, "direct_http", "lookup", "error", error=direct_error)
+
+    try:
+        result, body = search_ut_browser_fallback(
+            None,
+            org,
+            source_url,
+            attempted_queries,
+            rejected_candidates,
+            source_attempts,
+            "browser_fallback",
+        )
+        if public_status(result) != "Site Not Reachable":
+            result.source_note = " ".join(part for part in [
+                getattr(result, "source_note", "") or "",
+                "A browser fallback replaced an unusable Utah DCCC direct response during staging feasibility testing.",
+            ]).strip()
+            return result, body
+    except Exception as exc:
+        ut_note_attempt(source_attempts, "browser_fallback", "lookup", "error", error=ut_exception_summary("browser_fallback", exc))
+
+    result = expansion_new_result(org, state, "Unable to Confirm", source_url)
+    result.raw_status_text = "Utah DCCC business search could not be reached or parsed from this runtime."
+    result.source_note = (
+        "Utah DCCC lookup was attempted for staging feasibility testing, but the registry response was blocked, "
+        "unreadable, or otherwise unavailable. CharityClarity did not infer a negative Utah result."
+    )
+    result.success = False
+    result.error = direct_error or "Utah DCCC lookup failed."
+    result.reason_code = "UT_DCCC_LOOKUP_UNAVAILABLE"
+    result.source_attempts = source_attempts
+    result.source_confidence = "ut_dccc_business_search_unavailable"
+    return result, result.raw_status_text
+
+
 def search_ut_expansion(org):
+    if UT_USE_DCCC_LOOKUP:
+        return search_ut_dccc_expansion(org)
+
     state = "UT"
     source_path = str(UTAH_CSV_LOOKUP.csv_path)
     lookup = UTAH_CSV_LOOKUP.lookup(
