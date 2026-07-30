@@ -161,10 +161,6 @@
           <label for="email">Email address</label>
           <input id="email" name="email" type="email" autocomplete="email" required placeholder="you@example.com" />
         </div>
-        <div class="field">
-          <label for="adminPasscode">Compliance Express passcode</label>
-          <input id="adminPasscode" name="admin_passcode" type="password" autocomplete="off" />
-        </div>
         <fieldset>
           <legend>Expansion states</legend>
           <div class="states">
@@ -239,7 +235,7 @@
         organization_name: document.getElementById("organizationName").value.trim(),
         ein: document.getElementById("ein").value.trim(),
         email: document.getElementById("email").value.trim(),
-        admin_passcode: document.getElementById("adminPasscode").value.trim(),
+        admin_passcode: "",
         states
       };
       button.disabled = true;
