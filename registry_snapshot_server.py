@@ -14548,13 +14548,22 @@ def concise_status_rationale_comment(result, body: str, public_facing_status: st
             "has not been wired yet. CharityClarity returns Needs Review and does not infer a registration status."
         )
 
-    if normalized_status in {"unable to verify", "unable to confirm", "needs review"}:
+    if normalized_status in {"unable to verify", "unable to confirm", "outside coverage", "needs review"}:
         if state in {"UT", "GA"} and getattr(result, "reason_code", "") in {
+            "UTAH_CSV_OUTSIDE_COVERAGE",
             "UTAH_CSV_NOT_IN_LIST",
             "GA_CSV_NOT_IN_LIST",
         }:
             state_name = "Utah" if state == "UT" else "Georgia"
             snapshot_name = "configured CSV snapshot" if state == "UT" else "current weekly CSV snapshot"
+            if state == "UT":
+                return (
+                    "This organization is outside the current CharityClarity Utah coverage list. "
+                    "Coverage is focused on IRS-recognized 501(c)(3) organizations with reported income "
+                    "above $1 million that are regular Form 990/990-EZ filers. Smaller organizations, "
+                    "churches, religious organizations not required to file Form 990, state-only entities, "
+                    "and other non-regular filers may not be included."
+                )
             return (
                 f"No such organization name or EIN was found in the current {state_name} list. "
                 f"This organization is absent from the {snapshot_name}, so CharityClarity "
@@ -21311,6 +21320,21 @@ def search_ut_expansion(org):
 
     state = "UT"
     source_path = str(UTAH_CSV_LOOKUP.csv_path)
+    coverage_comment = (
+        "Coverage is focused on IRS-recognized 501(c)(3) organizations with reported income above $1 million "
+        "that are regular Form 990/990-EZ filers. Smaller organizations, churches, religious organizations "
+        "not required to file Form 990, state-only entities, and other non-regular filers may not be included."
+    )
+    no_confirmed_match_comment = (
+        "CharityClarity searched Utah DCCC for this organization as part of the current Utah coverage list "
+        "and did not find a safe matching nonprofit corporation record. Similar names, if any, were not "
+        "treated as confirmed matches."
+    )
+    unable_to_confirm_comment = (
+        "CharityClarity could not complete the Utah source check because the configured source data was "
+        "unavailable, unreadable, or ambiguous at the time of lookup. This should not be interpreted as "
+        "not registered."
+    )
     lookup = UTAH_CSV_LOOKUP.lookup(
         getattr(org, "organization_name", "") or "",
         getattr(org, "ein", "") or "",
@@ -21320,11 +21344,12 @@ def search_ut_expansion(org):
     if outcome == "error":
         result = expansion_new_result(org, state, "Unable to Confirm", source_path)
         result.raw_status_text = lookup.get("error", "Utah status CSV could not be loaded.")
-        result.source_note = "Utah lookup uses the configured CSV snapshot and does not scrape or reinterpret Utah registry data at request time."
+        result.source_note = unable_to_confirm_comment
         result.success = False
         result.error = lookup.get("error", "")
         result.reason_code = lookup.get("error_code", "UTAH_CSV_READ_ERROR")
         result.source_confidence = "utah_csv_configuration_error"
+        result._utah_csv_literal_fields = True
         return result, result.raw_status_text
 
     if outcome == "ambiguous":
@@ -21333,32 +21358,33 @@ def search_ut_expansion(org):
             f"Utah CSV snapshot contains {lookup.get('candidate_count', 0)} exact "
             f"{lookup.get('matched_by', 'organization')} matches."
         )
-        result.source_note = "Utah lookup returned an ambiguous exact CSV snapshot match rather than guessing between duplicate rows."
+        result.source_note = unable_to_confirm_comment
         result.success = False
         result.reason_code = "UTAH_CSV_AMBIGUOUS_MATCH"
         result.source_confidence = "utah_csv_snapshot"
         result.rejected_candidates = lookup.get("candidates", [])
+        result._utah_csv_literal_fields = True
         return result, result.raw_status_text
 
     if outcome == "not_found":
         result = expansion_new_result(
             org,
             state,
-            "Unable to Confirm",
+            "Outside Coverage",
             source_path,
         )
-        result.raw_status_text = "There is no such organization name or EIN in the current Utah list."
+        result.raw_status_text = "Organization is outside the current CharityClarity Utah coverage list."
         result.source_note = (
-            "No such organization name or EIN was found in the configured Utah CSV snapshot. "
-            "This means the organization is absent from this snapshot; it does not prove that the organization "
-            "is not registered in Utah."
+            "This organization is outside the current CharityClarity Utah coverage list. "
+            f"{coverage_comment}"
         )
         result.success = False
         # A confirmed CSV miss is a lookup outcome, not a site/network error.
         # public_status() maps any non-empty error field to Site Not Reachable.
         result.error = ""
-        result.reason_code = "UTAH_CSV_NOT_IN_LIST"
+        result.reason_code = "UTAH_CSV_OUTSIDE_COVERAGE"
         result.source_confidence = "utah_csv_snapshot"
+        result._utah_csv_literal_fields = True
         return result, result.raw_status_text
 
     result = checker.StateResult(
@@ -21369,7 +21395,11 @@ def search_ut_expansion(org):
         lookup.get("source_url") or source_path,
     )
     row_note = lookup.get("source_note", "")
-    result.raw_status_text = row_note or "Utah CSV snapshot row matched without status or date interpretation."
+    if (lookup["status"] or "").strip().lower() == "no confirmed match":
+        result.raw_status_text = "No safe matching Utah nonprofit corporation record was confirmed."
+        row_note = no_confirmed_match_comment
+    else:
+        result.raw_status_text = row_note or "Utah CSV snapshot row matched without status or date interpretation."
     expiration_display = lookup["expiration_date"] or "Not provided in the Utah list"
     checked_display = lookup["last_date_checked"] or "Not provided in the Utah list"
     result.source_note = " ".join(part for part in [
