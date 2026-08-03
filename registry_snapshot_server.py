@@ -21327,8 +21327,8 @@ def search_ut_expansion(org):
     )
     no_confirmed_match_comment = (
         "CharityClarity searched Utah DCCC for this organization as part of the current Utah coverage list "
-        "and did not find a safe matching nonprofit corporation record. Similar names, if any, were not "
-        "treated as confirmed matches."
+        "and did not find a safe matching nonprofit corporation record. Similar names were not treated as "
+        "confirmed matches."
     )
     unable_to_confirm_comment = (
         "CharityClarity could not complete the Utah source check because the configured source data was "
