@@ -12437,7 +12437,7 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         result.success = False
     result_state = (getattr(result, "state", "") or state or "").upper()
     if result_state == "UT" and public_status(result) == "Site Not Reachable":
-        # Utah staging is backed exclusively by the weekly CSV. A legacy or
+        # Utah staging is backed exclusively by the configured CSV snapshot. A legacy or
         # remote lookup path must not leak a registry-site failure to users.
         result, body = search_ut_expansion(org)
     csv_literal_fields = bool(
@@ -14554,9 +14554,10 @@ def concise_status_rationale_comment(result, body: str, public_facing_status: st
             "GA_CSV_NOT_IN_LIST",
         }:
             state_name = "Utah" if state == "UT" else "Georgia"
+            snapshot_name = "configured CSV snapshot" if state == "UT" else "current weekly CSV snapshot"
             return (
                 f"No such organization name or EIN was found in the current {state_name} list. "
-                "This organization is absent from the current weekly CSV snapshot, so CharityClarity "
+                f"This organization is absent from the {snapshot_name}, so CharityClarity "
                 "returns Unable to Confirm rather than treating it as Not Registered."
             )
         if state == "NM" and re.search(
@@ -21319,7 +21320,7 @@ def search_ut_expansion(org):
     if outcome == "error":
         result = expansion_new_result(org, state, "Unable to Confirm", source_path)
         result.raw_status_text = lookup.get("error", "Utah status CSV could not be loaded.")
-        result.source_note = "Utah lookup uses the configured weekly CSV and does not scrape or reinterpret Utah registry data."
+        result.source_note = "Utah lookup uses the configured CSV snapshot and does not scrape or reinterpret Utah registry data at request time."
         result.success = False
         result.error = lookup.get("error", "")
         result.reason_code = lookup.get("error_code", "UTAH_CSV_READ_ERROR")
@@ -21329,13 +21330,13 @@ def search_ut_expansion(org):
     if outcome == "ambiguous":
         result = expansion_new_result(org, state, "Unable to Confirm", source_path)
         result.raw_status_text = (
-            f"Utah weekly CSV contains {lookup.get('candidate_count', 0)} exact "
+            f"Utah CSV snapshot contains {lookup.get('candidate_count', 0)} exact "
             f"{lookup.get('matched_by', 'organization')} matches."
         )
-        result.source_note = "Utah lookup returned an ambiguous exact CSV match rather than guessing between duplicate rows."
+        result.source_note = "Utah lookup returned an ambiguous exact CSV snapshot match rather than guessing between duplicate rows."
         result.success = False
         result.reason_code = "UTAH_CSV_AMBIGUOUS_MATCH"
-        result.source_confidence = "utah_weekly_csv"
+        result.source_confidence = "utah_csv_snapshot"
         result.rejected_candidates = lookup.get("candidates", [])
         return result, result.raw_status_text
 
@@ -21348,7 +21349,7 @@ def search_ut_expansion(org):
         )
         result.raw_status_text = "There is no such organization name or EIN in the current Utah list."
         result.source_note = (
-            "No such organization name or EIN was found in the current Utah weekly CSV list. "
+            "No such organization name or EIN was found in the configured Utah CSV snapshot. "
             "This means the organization is absent from this snapshot; it does not prove that the organization "
             "is not registered in Utah."
         )
@@ -21357,7 +21358,7 @@ def search_ut_expansion(org):
         # public_status() maps any non-empty error field to Site Not Reachable.
         result.error = ""
         result.reason_code = "UTAH_CSV_NOT_IN_LIST"
-        result.source_confidence = "utah_weekly_csv"
+        result.source_confidence = "utah_csv_snapshot"
         return result, result.raw_status_text
 
     result = checker.StateResult(
@@ -21365,21 +21366,23 @@ def search_ut_expansion(org):
         lookup["ein"],
         state,
         lookup["status"],
-        source_path,
+        lookup.get("source_url") or source_path,
     )
-    result.raw_status_text = "Utah weekly CSV row matched without status or date interpretation."
+    row_note = lookup.get("source_note", "")
+    result.raw_status_text = row_note or "Utah CSV snapshot row matched without status or date interpretation."
     expiration_display = lookup["expiration_date"] or "Not provided in the Utah list"
     checked_display = lookup["last_date_checked"] or "Not provided in the Utah list"
-    result.source_note = (
-        "Utah lookup matched the configured weekly CSV. "
+    result.source_note = " ".join(part for part in [
+        "Utah lookup matched the configured CSV snapshot.",
         f"Expiration date: {expiration_display}. "
-        f"Last date checked: {checked_display}."
-    )
+        f"Last date checked: {checked_display}.",
+        row_note,
+    ] if part).strip()
     result.matched_registry_name = lookup["organization_name"]
     result.matched_registry_identifier = lookup["ein"]
     result.success = True
     result.reason_code = "MATCH_EIN" if lookup["matched_by"] == "ein" else "MATCH_NORMALIZED_NAME"
-    result.source_confidence = "utah_weekly_csv"
+    result.source_confidence = "utah_csv_snapshot"
     result.expiration_date = lookup["expiration_date"]
     result.last_date_checked = lookup["last_date_checked"]
     result._utah_csv_literal_fields = True

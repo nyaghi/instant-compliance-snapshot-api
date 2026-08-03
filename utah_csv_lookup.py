@@ -20,6 +20,8 @@ REQUIRED_COLUMNS = (
     "STATUS",
     "EXPIRATION DATE",
 )
+OPTIONAL_SOURCE_COLUMNS = ("SOURCE", "SOURCE URL")
+OPTIONAL_NOTE_COLUMNS = ("NOTES", "COMMENTS", "SOURCE NOTE")
 
 
 def normalize_ein(value: str) -> str:
@@ -119,6 +121,8 @@ class UtahCsvLookup:
 
     @staticmethod
     def _matched(row: dict[str, str], matched_by: str) -> dict:
+        source_url = next((row.get(column, "") for column in OPTIONAL_SOURCE_COLUMNS if row.get(column)), "")
+        source_note = next((row.get(column, "") for column in OPTIONAL_NOTE_COLUMNS if row.get(column)), "")
         return {
             "outcome": "matched",
             "matched_by": matched_by,
@@ -127,6 +131,8 @@ class UtahCsvLookup:
             "status": row["STATUS"],
             "expiration_date": row["EXPIRATION DATE"],
             "last_date_checked": row["DATE CHECKED"],
+            "source_url": source_url,
+            "source_note": source_note,
             "row": dict(row),
         }
 
