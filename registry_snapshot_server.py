@@ -21385,20 +21385,15 @@ def search_ut_expansion(org):
         result.raw_status_text = "No safe matching Utah nonprofit corporation record was confirmed."
         row_note = no_confirmed_match_comment
     else:
-        result.raw_status_text = row_note or "Utah CSV snapshot row matched without status or date interpretation."
-    expiration_display = lookup["expiration_date"] or "Not provided in the Utah list"
-    checked_display = lookup["last_date_checked"] or "Not provided in the Utah list"
+        result.raw_status_text = row_note or f"Utah status: {lookup['status']}"
     if is_no_confirmed_match:
         result.source_note = row_note
         result.matched_registry_name = ""
         result.matched_registry_identifier = ""
     else:
-        result.source_note = " ".join(part for part in [
-            "Organization found in CharityClarity coverage list.",
-            f"Expiration date: {expiration_display}. "
-            f"Last date checked: {checked_display}.",
-            row_note,
-        ] if part).strip()
+        result.source_note = f"Organization found in CharityClarity coverage list. Utah status: {lookup['status']}."
+        if lookup["expiration_date"]:
+            result.source_note += f" Renewal or expiration date: {lookup['expiration_date']}."
         result.matched_registry_name = lookup["organization_name"]
         result.matched_registry_identifier = lookup["ein"]
     result.success = True
