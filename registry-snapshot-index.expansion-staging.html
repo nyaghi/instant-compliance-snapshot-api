@@ -11,6 +11,18 @@
       --slate: #334155;
       --line: #dbe3ee;
       --soft: #f6f8fb;
+      --green: #166534;
+      --green-soft: #dcfce7;
+      --blue-soft: #dbeafe;
+      --blue-text: #1d4ed8;
+      --amber: #92400e;
+      --amber-soft: #fef3c7;
+      --rose: #991b1b;
+      --rose-soft: #fee2e2;
+      --gray: #475569;
+      --gray-soft: #e2e8f0;
+      --teal: #0f766e;
+      --teal-soft: #ccfbf1;
     }
     * { box-sizing: border-box; }
     body {
@@ -110,7 +122,6 @@
     }
     .status-key dt {
       font-weight: 700;
-      color: #0f172a;
     }
     .status-key dd {
       margin: 0;
@@ -164,6 +175,58 @@
     }
     th { color: #0f172a; background: var(--soft); }
     .status { font-weight: 700; }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      width: fit-content;
+      max-width: 100%;
+      min-height: 22px;
+      border-radius: 999px;
+      padding: 3px 8px;
+      border: 1px solid transparent;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.2;
+      white-space: normal;
+    }
+    .status-current,
+    .status-registered,
+    .status-exempt {
+      color: var(--green);
+      background: var(--green-soft);
+      border-color: #86efac;
+    }
+    .status-upcoming-filing,
+    .status-pending-filing-pending {
+      color: var(--blue-text);
+      background: var(--blue-soft);
+      border-color: #93c5fd;
+    }
+    .status-delinquent,
+    .status-failed-to-renew,
+    .status-no-confirmed-match,
+    .status-outside-coverage {
+      color: var(--amber);
+      background: var(--amber-soft);
+      border-color: #fcd34d;
+    }
+    .status-suspended,
+    .status-revoked,
+    .status-not-registered {
+      color: var(--rose);
+      background: var(--rose-soft);
+      border-color: #fecaca;
+    }
+    .status-closed-withdrawn-canceled {
+      color: var(--gray);
+      background: var(--gray-soft);
+      border-color: #cbd5e1;
+    }
+    .status-unable-to-confirm {
+      color: var(--teal);
+      background: var(--teal-soft);
+      border-color: #5eead4;
+    }
     .error {
       margin-top: 12px;
       color: #991b1b;
@@ -215,38 +278,34 @@
           <div class="status-key" aria-label="Status key">
             <h2>Status key</h2>
             <dl>
-              <dt>Current</dt>
+              <dt><span class="status-badge status-current">Current</span></dt>
               <dd>Registration appears active/current based on the state source or CharityClarity coverage data.</dd>
-              <dt>Upcoming Filing</dt>
+              <dt><span class="status-badge status-upcoming-filing">Upcoming Filing</span></dt>
               <dd>Registration appears current, with a filing or renewal due soon.</dd>
-              <dt>Pending / Filing Pending</dt>
+              <dt><span class="status-badge status-pending-filing-pending">Pending / Filing Pending</span></dt>
               <dd>The state source shows a pending registration, filing, or renewal.</dd>
-              <dt>Registered</dt>
+              <dt><span class="status-badge status-registered">Registered</span></dt>
               <dd>The state source confirms registration, but CharityClarity could not determine a more specific current or filing-cycle status.</dd>
-              <dt>Delinquent</dt>
+              <dt><span class="status-badge status-delinquent">Delinquent</span></dt>
               <dd>The state source indicates the registration or required filing is late, expired, overdue, or not current.</dd>
-              <dt>Failed to Renew</dt>
+              <dt><span class="status-badge status-failed-to-renew">Failed to Renew</span></dt>
               <dd>The state source indicates the organization did not renew or did not complete a required renewal.</dd>
-              <dt>Suspended</dt>
+              <dt><span class="status-badge status-suspended">Suspended</span></dt>
               <dd>The state source indicates the organization is suspended or not authorized to solicit.</dd>
-              <dt>Revoked</dt>
+              <dt><span class="status-badge status-revoked">Revoked</span></dt>
               <dd>The state source indicates the registration or exemption has been revoked.</dd>
-              <dt>Closed / Withdrawn / Canceled</dt>
+              <dt><span class="status-badge status-closed-withdrawn-canceled">Closed / Withdrawn / Canceled</span></dt>
               <dd>The state source indicates the registration or entity record is closed, withdrawn, inactive, canceled, or terminated.</dd>
-              <dt>Exempt</dt>
+              <dt><span class="status-badge status-exempt">Exempt</span></dt>
               <dd>The state source indicates the organization is exempt from registration.</dd>
-              <dt>Not Registered</dt>
+              <dt><span class="status-badge status-not-registered">Not Registered</span></dt>
               <dd>The state search completed and no qualifying registration record was found.</dd>
-              <dt>No Confirmed Match</dt>
+              <dt><span class="status-badge status-no-confirmed-match">No Confirmed Match</span></dt>
               <dd>Organization found in CharityClarity coverage list; CharityClarity searched the state source and did not find a safe matching nonprofit record.</dd>
-              <dt>Outside Coverage</dt>
+              <dt><span class="status-badge status-outside-coverage">Outside Coverage</span></dt>
               <dd>The organization is not in the current CharityClarity coverage list for that state.</dd>
-              <dt>Unable to Confirm</dt>
-              <dd>CharityClarity could not complete or trust the source check because the source data was unavailable, unreadable, blocked, or ambiguous.</dd>
-              <dt>Needs Review</dt>
-              <dd>The source evidence was incomplete or unusual enough that CharityClarity did not infer a final status.</dd>
-              <dt>Site Not Reachable</dt>
-              <dd>The state source could not be reached or completed during the lookup.</dd>
+              <dt><span class="status-badge status-unable-to-confirm">Unable to Confirm</span></dt>
+              <dd>CharityClarity could not complete or trust the source check because the source was unavailable, unreachable, blocked, ambiguous, or did not provide enough evidence.</dd>
             </dl>
             <p class="coverage-footnote">
               Coverage list means the state-specific organizations CharityClarity has included in this staging source set. For Utah, the current coverage list is focused on IRS-recognized 501(c)(3) organizations with reported income above $1 million that are regular Form 990/990-EZ filers; smaller organizations, churches, religious organizations not required to file Form 990, state-only entities, and other non-regular filers may not be included.
@@ -299,6 +358,20 @@
       }[char]));
     }
 
+    function displayStatus(status) {
+      const value = String(status || "").trim();
+      const normalized = value.toLowerCase();
+      if (["unable to confirm", "unable to verify", "needs review", "site not reachable"].includes(normalized)) {
+        return "Unable to Confirm";
+      }
+      return value;
+    }
+
+    function statusClass(status) {
+      const slug = displayStatus(status).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+      return `status-badge status-${slug || "unknown"}`;
+    }
+
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       errorBox.hidden = true;
@@ -327,14 +400,17 @@
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "Lookup failed.");
         const results = Array.isArray(data.results) ? data.results : [data];
-        resultsBody.innerHTML = results.map((result) => `
-          <tr>
-            <td>${html(result.state)}</td>
-            <td class="status">${html(result.status)}</td>
-            <td>${html(result.matched_registry_name || result.matched_registry_identifier || "")}</td>
-            <td>${html(result.comments || result.source_note || result.raw_status_text || "")}</td>
-          </tr>
-        `).join("");
+        resultsBody.innerHTML = results.map((result) => {
+          const shownStatus = displayStatus(result.status);
+          return `
+            <tr>
+              <td>${html(result.state)}</td>
+              <td class="status"><span class="${statusClass(shownStatus)}">${html(shownStatus)}</span></td>
+              <td>${html(result.matched_registry_name || result.matched_registry_identifier || "")}</td>
+              <td>${html(result.comments || result.source_note || result.raw_status_text || "")}</td>
+            </tr>
+          `;
+        }).join("");
       } catch (error) {
         errorBox.textContent = error.message || String(error);
         errorBox.hidden = false;

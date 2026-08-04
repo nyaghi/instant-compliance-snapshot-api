@@ -149,6 +149,12 @@ DEFAULT_SUPPORTED_STATES = [
     "NY", "OH", "OK", "OR", "PA", "SC", "VA", "WA", "WI", "WV",
 ]
 EXPANSION_LAB_STATES = ["AL", "DC", "GA", "IL", "MO", "NC", "NV", "RI", "TN", "UT"]
+EXPANSION_PUBLIC_UNABLE_TO_CONFIRM_STATUSES = {
+    "Needs Review",
+    "Site Not Reachable",
+    "Unable to Confirm",
+    "Unable to Verify",
+}
 SUPPORTED_STATES = env_state_list("CE_SUPPORTED_STATES") or DEFAULT_SUPPORTED_STATES
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -12499,6 +12505,8 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         data["organization_name"] = "Organization not identified"
         result.organization_name = data["organization_name"]
     data["status"] = result.status if csv_literal_fields else true_status_from_body(result, body)
+    if result_state in EXPANSION_LAB_STATES and data["status"] in EXPANSION_PUBLIC_UNABLE_TO_CONFIRM_STATUSES:
+        data["status"] = "Unable to Confirm"
     data["comments"] = result.source_note if csv_literal_fields else comments_for_result(result, body, data["status"])
     data["evidence_url"] = ""
     data["lookup_seconds"] = round(time.perf_counter() - lookup_started, 2)
@@ -14545,7 +14553,7 @@ def concise_status_rationale_comment(result, body: str, public_facing_status: st
     if source_confidence == "expansion_lab_placeholder":
         return (
             f"{state} is enabled in the CharityClarity 10-state expansion lab, but the public registry checker "
-            "has not been wired yet. CharityClarity returns Needs Review and does not infer a registration status."
+            "has not been wired yet. CharityClarity returns Unable to Confirm and does not infer a registration status."
         )
 
     if normalized_status in {"unable to verify", "unable to confirm", "outside coverage", "needs review"}:
