@@ -21326,9 +21326,8 @@ def search_ut_expansion(org):
         "not required to file Form 990, state-only entities, and other non-regular filers may not be included."
     )
     no_confirmed_match_comment = (
-        "CharityClarity searched Utah DCCC for this organization as part of the current Utah coverage list "
-        "and did not find a safe matching nonprofit corporation record. Similar names were not treated as "
-        "confirmed matches."
+        "Organization found in CharityClarity coverage list. CharityClarity searched Utah DCCC for this "
+        "organization and did not find a safe matching nonprofit corporation record."
     )
     unable_to_confirm_comment = (
         "CharityClarity could not complete the Utah source check because the configured source data was "
@@ -21395,23 +21394,29 @@ def search_ut_expansion(org):
         lookup.get("source_url") or source_path,
     )
     row_note = lookup.get("source_note", "")
-    if (lookup["status"] or "").strip().lower() == "no confirmed match":
+    is_no_confirmed_match = (lookup["status"] or "").strip().lower() == "no confirmed match"
+    if is_no_confirmed_match:
         result.raw_status_text = "No safe matching Utah nonprofit corporation record was confirmed."
         row_note = no_confirmed_match_comment
     else:
         result.raw_status_text = row_note or "Utah CSV snapshot row matched without status or date interpretation."
     expiration_display = lookup["expiration_date"] or "Not provided in the Utah list"
     checked_display = lookup["last_date_checked"] or "Not provided in the Utah list"
-    result.source_note = " ".join(part for part in [
-        "Utah lookup matched the configured CSV snapshot.",
-        f"Expiration date: {expiration_display}. "
-        f"Last date checked: {checked_display}.",
-        row_note,
-    ] if part).strip()
-    result.matched_registry_name = lookup["organization_name"]
-    result.matched_registry_identifier = lookup["ein"]
+    if is_no_confirmed_match:
+        result.source_note = row_note
+        result.matched_registry_name = ""
+        result.matched_registry_identifier = ""
+    else:
+        result.source_note = " ".join(part for part in [
+            "Organization found in CharityClarity coverage list.",
+            f"Expiration date: {expiration_display}. "
+            f"Last date checked: {checked_display}.",
+            row_note,
+        ] if part).strip()
+        result.matched_registry_name = lookup["organization_name"]
+        result.matched_registry_identifier = lookup["ein"]
     result.success = True
-    result.reason_code = "MATCH_EIN" if lookup["matched_by"] == "ein" else "MATCH_NORMALIZED_NAME"
+    result.reason_code = "NO_CONFIRMED_MATCH" if is_no_confirmed_match else ("MATCH_EIN" if lookup["matched_by"] == "ein" else "MATCH_NORMALIZED_NAME")
     result.source_confidence = "utah_csv_snapshot"
     result.expiration_date = lookup["expiration_date"]
     result.last_date_checked = lookup["last_date_checked"]
