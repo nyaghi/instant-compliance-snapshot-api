@@ -14557,13 +14557,7 @@ def concise_status_rationale_comment(result, body: str, public_facing_status: st
             state_name = "Utah" if state == "UT" else "Georgia"
             snapshot_name = "configured CSV snapshot" if state == "UT" else "current weekly CSV snapshot"
             if state == "UT":
-                return (
-                    "This organization is outside the current CharityClarity Utah coverage list. "
-                    "Coverage is focused on IRS-recognized 501(c)(3) organizations with reported income "
-                    "above $1 million that are regular Form 990/990-EZ filers. Smaller organizations, "
-                    "churches, religious organizations not required to file Form 990, state-only entities, "
-                    "and other non-regular filers may not be included."
-                )
+                return "This organization is outside the current CharityClarity Utah coverage list."
             return (
                 f"No such organization name or EIN was found in the current {state_name} list. "
                 f"This organization is absent from the {snapshot_name}, so CharityClarity "
@@ -21320,11 +21314,6 @@ def search_ut_expansion(org):
 
     state = "UT"
     source_path = str(UTAH_CSV_LOOKUP.csv_path)
-    coverage_comment = (
-        "Coverage is focused on IRS-recognized 501(c)(3) organizations with reported income above $1 million "
-        "that are regular Form 990/990-EZ filers. Smaller organizations, churches, religious organizations "
-        "not required to file Form 990, state-only entities, and other non-regular filers may not be included."
-    )
     no_confirmed_match_comment = (
         "Organization found in CharityClarity coverage list. CharityClarity searched Utah DCCC for this "
         "organization and did not find a safe matching nonprofit corporation record."
@@ -21373,10 +21362,7 @@ def search_ut_expansion(org):
             source_path,
         )
         result.raw_status_text = "Organization is outside the current CharityClarity Utah coverage list."
-        result.source_note = (
-            "This organization is outside the current CharityClarity Utah coverage list. "
-            f"{coverage_comment}"
-        )
+        result.source_note = "This organization is outside the current CharityClarity Utah coverage list."
         result.success = False
         # A confirmed CSV miss is a lookup outcome, not a site/network error.
         # public_status() maps any non-empty error field to Site Not Reachable.
