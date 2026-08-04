@@ -174,6 +174,40 @@
       vertical-align: top;
     }
     th { color: #0f172a; background: var(--soft); }
+    .data-access {
+      margin-top: 18px;
+      padding-top: 16px;
+      border-top: 1px solid var(--line);
+      overflow-x: auto;
+    }
+    .data-access h2 {
+      margin: 0 0 8px;
+      color: #1e293b;
+      font-size: 16px;
+      line-height: 1.25;
+    }
+    .data-access p {
+      margin: 0 0 12px;
+      color: #64748b;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .data-access table {
+      min-width: 680px;
+      font-size: 12px;
+    }
+    .data-access th:nth-child(2),
+    .data-access td:nth-child(2) {
+      width: 96px;
+    }
+    .data-access a {
+      color: var(--blue-text);
+      font-weight: 700;
+      text-decoration: none;
+    }
+    .data-access a:hover {
+      text-decoration: underline;
+    }
     .status { font-weight: 700; }
     .status-badge {
       display: inline-flex;
@@ -335,6 +369,72 @@
             <tr><td colspan="4">No lookup run yet.</td></tr>
           </tbody>
         </table>
+        <div class="data-access" aria-label="Expansion state data access options">
+          <h2>Data access options</h2>
+          <p>These notes track whether each remaining expansion state appears to offer a paid data path. General business-entity data may not confirm charitable solicitation registration by itself.</p>
+          <table>
+            <thead>
+              <tr>
+                <th>State</th>
+                <th>Paid Data?</th>
+                <th>Data Type</th>
+                <th>Price</th>
+                <th>Request Link</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Alabama</td>
+                <td>No</td>
+                <td>No published charity bulk data or subscription found. Public lookup/registration portal only.</td>
+                <td>N/A</td>
+                <td><a href="https://www.alabamaag.gov/licensing-registration/charitable-organizations/" target="_blank" rel="noopener">AL AG Charities</a></td>
+              </tr>
+              <tr>
+                <td>Georgia</td>
+                <td>Charity: No<br />Business: Yes</td>
+                <td>General corporations bulk data, not specifically charity registration data. One-time purchase or monthly FTP.</td>
+                <td>$1,000 one-time; or $100 setup + $500/month</td>
+                <td><a href="https://georgia.gov/bulk-corporations-data" target="_blank" rel="noopener">GA Bulk Corporations</a></td>
+              </tr>
+              <tr>
+                <td>Illinois</td>
+                <td>No</td>
+                <td>No published bulk/subscription found. Public charity search plus copies by request.</td>
+                <td>Copies: $0.15/page</td>
+                <td><a href="https://charitable.illinoisattorneygeneral.gov/search" target="_blank" rel="noopener">IL Charity Search</a></td>
+              </tr>
+              <tr>
+                <td>Missouri</td>
+                <td>No published bulk product</td>
+                <td>Sunshine/public records request only, not a standing charity data feed.</td>
+                <td>Up to $0.10/page + clerical/research costs</td>
+                <td><a href="https://ago.mo.gov/get-help/programs-services-from-a-z/sunshine-law/" target="_blank" rel="noopener">MO Sunshine Requests</a></td>
+              </tr>
+              <tr>
+                <td>North Carolina</td>
+                <td>Yes</td>
+                <td>Data subscription, including Charitable Solicitation Licensing Files.</td>
+                <td>$2,400 + $750 one-time setup fee</td>
+                <td><a href="https://www.sosnc.gov/fees/by_title/_data_subscriptions" target="_blank" rel="noopener">NC Data Subscription Fees</a></td>
+              </tr>
+              <tr>
+                <td>Nevada</td>
+                <td>Yes</td>
+                <td>Secretary of State bulk data reporting; confirm charitable solicitation fields before purchase.</td>
+                <td>$500/month for unlimited data reporting</td>
+                <td><a href="https://www.nvsos.gov/sosservices/anonymousaccess/pricingguide.aspx" target="_blank" rel="noopener">NV Pricing Guide</a></td>
+              </tr>
+              <tr>
+                <td>Tennessee</td>
+                <td>Charity: No<br />Business: Yes</td>
+                <td>Business Entity Database download, not clearly a charity-registration bulk file.</td>
+                <td>Price not posted publicly; likely requires TNCaB portal/account</td>
+                <td><a href="https://sos.tn.gov/businesses/services/purchase-database-downloads" target="_blank" rel="noopener">TN Database Downloads</a></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </section>
     </form>
   </main>
