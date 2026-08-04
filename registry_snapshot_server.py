@@ -21399,7 +21399,7 @@ def search_ut_expansion(org):
         result.matched_registry_name = ""
         result.matched_registry_identifier = ""
     else:
-        result.source_note = f"Organization found in CharityClarity coverage list. Utah status: {lookup['status']}."
+        result.source_note = "Organization found in CharityClarity coverage list."
         if lookup["expiration_date"]:
             result.source_note += f" Renewal or expiration date: {lookup['expiration_date']}."
         result.matched_registry_name = lookup["organization_name"]
