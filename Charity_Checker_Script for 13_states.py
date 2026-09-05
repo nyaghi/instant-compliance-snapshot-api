@@ -679,214 +679,166 @@ def read_ak_accounting_year_from_pdf(page, context, print_link) -> Optional[int]
             except Exception:
                 pass
 
-CA_EVOKE_PUBLIC_PORTAL_URL = "https://ca-rcf.evokeplatform.com/app/publicPortal/verification"
-CA_EVOKE_API_ROOT = os.environ.get("CE_CA_EVOKE_API_ROOT", "https://ca-rcf.evokeplatform.com/api").rstrip("/")
-CA_EVOKE_TIMEOUT_SECONDS = max(6.0, min(float(os.environ.get("CE_CA_EVOKE_TIMEOUT_SECONDS", "18")), 30.0))
-
-
-def ca_evoke_api_get(path: str, filter_payload: dict | None = None):
-    url = f"{CA_EVOKE_API_ROOT}{path}"
-    if filter_payload is not None:
-        url = f"{url}?{urllib.parse.urlencode({'filter': json.dumps(filter_payload, separators=(',', ':'))})}"
-    request = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
-            "Accept": "application/json,text/plain,*/*",
-            "Referer": CA_EVOKE_PUBLIC_PORTAL_URL,
-        },
-    )
-    with urllib.request.urlopen(request, timeout=CA_EVOKE_TIMEOUT_SECONDS) as response:
-        charset = response.headers.get_content_charset() or "utf-8"
-        return json.loads(response.read().decode(charset, errors="replace"))
-
-
-def ca_evoke_entity_search_by_ein(ein: str) -> list[dict]:
-    formatted = format_ein_with_dash(ein)
-    if not re.fullmatch(r"\d{2}-\d{7}", formatted or "") or digits_only(formatted) == "000000000":
-        return []
-    return ca_evoke_api_get(
-        "/data/objects/entity/instances",
-        {
-            "where": {
-                "and": [
-                    {"entityStatus": {"neq": "Not Listed"}},
-                    {"fein": formatted},
-                ]
-            },
-            "limit": 20,
-        },
-    )
-
-
-def ca_evoke_entity_search_by_name(name: str) -> list[dict]:
-    query = re.sub(r"\s+", " ", (name or "").strip())
-    if not query:
-        return []
-    return ca_evoke_api_get(
-        "/data/objects/entity/instances",
-        {
-            "where": {
-                "and": [
-                    {"entityStatus": {"neq": "Not Listed"}},
-                    {
-                        "or": [
-                            {"entityName": {"like": query, "options": "i"}},
-                            {"legalName": {"like": query, "options": "i"}},
-                            {"dba": {"like": query, "options": "i"}},
-                            {"name": {"like": query, "options": "i"}},
-                        ]
-                    },
-                ]
-            },
-            "limit": 50,
-        },
-    )
-
-
-def ca_evoke_registrations_for_entity(entity_id: str) -> list[dict]:
-    if not entity_id:
-        return []
-    return ca_evoke_api_get(
-        "/data/objects/registrations/instances",
-        {"where": {"entityRelated.id": str(entity_id)}, "limit": 200},
-    )
-
-
-def ca_status_from_expiration_date(expiration_date: date) -> str:
-    today = date.today()
-    if expiration_date < today:
-        return STATUS_DELINQUENT
-    if expiration_date <= today + timedelta(days=183):
-        return STATUS_UPCOMING
-    return STATUS_CURRENT
-
-
-def ca_evoke_display_name(entity: dict) -> str:
-    return str(entity.get("entityName") or entity.get("legalName") or entity.get("name") or "").strip()
-
-
-def ca_evoke_entity_matches(entity: dict, org: Organization, allow_name_match: bool) -> bool:
-    requested_ein = digits_only(org.ein)
-    entity_ein = digits_only(str(entity.get("fein") or ""))
-    if requested_ein and entity_ein == requested_ein:
-        return True
-    if not allow_name_match:
-        return False
-    candidate_names = [
-        ca_evoke_display_name(entity),
-        str(entity.get("legalName") or ""),
-        str(entity.get("dba") or ""),
-    ]
-    return any(name_match_priority(candidate, org.organization_name) >= 2 for candidate in candidate_names if candidate)
-
-
-def ca_evoke_status_from_record(entity: dict, registrations: list[dict]) -> tuple[str, str, str, date | None]:
-    entity_status = str(entity.get("entityStatus") or "")
-    relevant_registrations = [
-        reg for reg in registrations or []
-        if re.search(r"\bcharitable\s+organization\b", str(reg.get("registrationType") or ""), re.I)
-    ] or list(registrations or [])
-    selected = None
-    selected_date = None
-    for reg in relevant_registrations:
-        reg_date = (
-            parse_date_value(str(reg.get("currentExpirationDate") or ""))
-            or parse_date_value(str(reg.get("renewalEvaluationDate") or ""))
-            or parse_date_value(str(reg.get("currentIssuanceDate") or ""))
-            or parse_date_value(str(reg.get("initialRegistrationDate") or ""))
-        )
-        if selected is None or (reg_date or date.min) > (selected_date or date.min):
-            selected = reg
-            selected_date = reg_date
-    reg = selected or {}
-    registration_status = str(reg.get("registrationStatus") or "")
-    reporting_status = str(reg.get("reportingStatus") or "")
-    registration_type = str(reg.get("registrationType") or "")
-    expiration_date = parse_date_value(str(reg.get("currentExpirationDate") or ""))
-    renewal_evaluation_date = parse_date_value(str(reg.get("renewalEvaluationDate") or ""))
-    combined = " | ".join(part for part in [entity_status, registration_type, registration_status, reporting_status] if part)
-
-    if re.search(r"\b(cease\s+and\s+desist|suspended|enforcement)\b", combined, re.I):
-        status = "Suspended"
-    elif re.search(r"\b(revoked)\b", combined, re.I):
-        status = "Revoked"
-    elif re.search(r"\b(withdrawn|terminated|dissolved|merged\s+out|closed)\b", combined, re.I):
-        status = "Closed / Withdrawn / Canceled"
-    elif re.search(r"\b(exempt|registration\s+not\s+required)\b", combined, re.I):
-        status = "Exempt"
-    elif expiration_date:
-        status = ca_status_from_expiration_date(expiration_date)
-    elif re.search(r"\b(delinquent|expired|past\s+due|non.?compliant)\b", combined, re.I):
-        status = STATUS_DELINQUENT
-    elif re.search(r"\bregistered\b", combined, re.I):
-        status = STATUS_CURRENT
-    else:
-        status = STATUS_UNKNOWN
-
-    raw_status = " | ".join(
-        part
-        for part in [
-            f"Entity Status: {entity_status}" if entity_status else "",
-            f"Registration Type: {registration_type}" if registration_type else "",
-            f"Registration Status: {registration_status}" if registration_status else "",
-            f"Reporting Status: {reporting_status}" if reporting_status else "",
-            f"Registration Number: {reg.get('registrationNumber')}" if reg.get("registrationNumber") else "",
-            f"Current Expiration Date: {expiration_date.isoformat()}" if expiration_date else "",
-            f"Renewal Evaluation Date: {renewal_evaluation_date.isoformat()}" if renewal_evaluation_date else "",
-        ]
-        if part
-    )
-    return status, raw_status, str(reg.get("registrationNumber") or entity.get("registrations") or entity.get("id") or ""), expiration_date
-
-
 def search_ca(page, org: Organization) -> StateResult:
-    result = StateResult(org.organization_name, org.ein, "CA", STATUS_UNKNOWN, CA_EVOKE_PUBLIC_PORTAL_URL)
-    last_error = ""
-    candidates: list[tuple[dict, str]] = []
-    api_completed = False
+    url = "https://rct.doj.ca.gov/Verification/Web/Search.aspx?facility=Y"
+    result = StateResult(org.organization_name, org.ein, "CA", STATUS_UNKNOWN, url)
     try:
-        for entity in ca_evoke_entity_search_by_ein(org.ein):
-            if ca_evoke_entity_matches(entity, org, allow_name_match=False):
-                candidates.append((entity, "exact FEIN"))
-        api_completed = True
-        if not candidates and not digits_only(org.ein):
-            for entity in ca_evoke_entity_search_by_name(org.organization_name):
-                if ca_evoke_entity_matches(entity, org, allow_name_match=True):
-                    candidates.append((entity, "safe name match"))
-        if not candidates:
-            result.raw_status_text = "No matching California organization record"
+        page.goto(url, wait_until="domcontentloaded", timeout=45000)
+        safe_wait_for_network_idle(page, timeout=8000)
+        fast_sleep(0.75)
+
+        query = digits_only(org.ein) if digits_only(org.ein) else org.organization_name
+        filled = False
+        for label in [r"FEIN \(numbers only\)", r"FEIN", r"Federal Employer Identification Number"]:
+            try:
+                page.get_by_label(re.compile(label, re.I)).fill(query, timeout=3000)
+                filled = True
+                break
+            except Exception:
+                pass
+        if not filled:
+            inp = find_visible_input(page, [
+                'input[name*="fein" i]',
+                'input[id*="fein" i]',
+                'input[placeholder*="fein" i]',
+                'input[name*="ein" i]',
+                'input[id*="ein" i]',
+                'input[type="text"]',
+                'input[type="search"]',
+            ])
+            if not inp:
+                result.error = "Could not find CA FEIN input"
+                return result
+            inp.fill(query)
+
+        clicked = False
+        for label in ["Search", "Find", "Submit"]:
+            try:
+                page.get_by_role("button", name=re.compile(label, re.I)).click(timeout=4000)
+                clicked = True
+                break
+            except Exception:
+                pass
+        if not clicked:
+            page.keyboard.press("Enter")
+
+        safe_wait_for_network_idle(page, timeout=8000)
+        fast_sleep(0.75)
+        body = page.locator("body").inner_text(timeout=10000)
+        if re.search(r"no records|no results|not registered", body, re.I):
+            result.raw_status_text = "No record found"
             result.status = STATUS_NOT_REGISTERED
-            result.source_note = "California Evoke public registry API search completed and found no confirmed organization record."
+            result.source_note = "California Registry Search returned no matching record."
             result.success = True
             return result
 
-        accepted = []
-        for entity, match_basis in candidates:
-            registrations = ca_evoke_registrations_for_entity(str(entity.get("id") or ""))
-            status, raw_status, identifier, expiration_date = ca_evoke_status_from_record(entity, registrations)
-            accepted.append((expiration_date or date.min, identifier, status, raw_status, entity, match_basis))
-        _, identifier, status, raw_status, entity, match_basis = max(accepted, key=lambda item: (item[0], item[1]))
-        result.status = status
-        result.raw_status_text = raw_status or f"Entity Status: {entity.get('entityStatus') or ''}"
-        result.source_note = (
-            f"California Evoke public registry was searched by {match_basis}; "
-            "CharityClarity classified status from the Current Expiration Date when available."
-        )
-        result.matched_registry_name = ca_evoke_display_name(entity)
-        result.matched_registry_identifier = identifier
+        ca_statuses = [
+            "Not Registered - Cease and Desist Order",
+            "Subject to Cease and Desist Order",
+            "Delinquent - Late Fees Due",
+            "Suspended",
+            "Revoked",
+            "Withdrawn",
+            "Dissolved",
+            "Delinquent",
+            "Closed - Registration Not Required",
+            "Closed",
+            "Current - Reporting Incomplete",
+            "Current - Awaiting Reporting",
+            "Current - Probationary Registration",
+            "Current - In Process",
+            "Dissolution Waiver Issued",
+            "Dissolution Pending",
+            "Registered - Corporate Trustee",
+            "Exempt - Form 990-PF Required",
+            "Exempt - Facility Financing",
+            "Not Registered",
+            "Exempt - Religious",
+            "Exempt",
+            "Current",
+        ]
+
+        raw = ""
+        try:
+            ein_digits = digits_only(org.ein)
+            wanted_name = normalize_name(org.organization_name)
+            best_row = ("", -999)
+            rows = page.locator("tr")
+            for i in range(min(rows.count(), 120)):
+                row = rows.nth(i)
+                try:
+                    row_text = re.sub(r"\s+", " ", row.inner_text(timeout=1500)).strip()
+                    if not row_text:
+                        continue
+                    row_digits = digits_only(row_text)
+                    if ein_digits and ein_digits not in row_digits:
+                        continue
+                    row_name = normalize_name(row_text)
+                    row_status = ""
+                    for status_text in ca_statuses:
+                        if status_text.lower() in row_text.lower():
+                            row_status = status_text
+                            break
+                    if not row_status:
+                        continue
+                    score = 10
+                    if re.search(r"\bcharity\s+registration\b", row_text, re.I):
+                        score += 6
+                    if wanted_name and wanted_name in row_name:
+                        score += 4
+                    score += active_row_priority(row_text) // 5
+                    if re.search(r"\bcharity\s+registration\b", row_text, re.I) and re.search(r"\bcurrent\b", row_text, re.I):
+                        score += 4
+                    if re.search(r"\b(merged\s+out|withdrawn|dissolved|closed|retired|inactive|terminated|cancelled|canceled)\b", row_text, re.I):
+                        score -= 15
+                    if score > best_row[1]:
+                        best_row = (row_status, score)
+                except Exception:
+                    continue
+            if best_row[0]:
+                raw = best_row[0]
+        except Exception:
+            pass
+
+        try:
+            tables = page.locator("table")
+            for ti in range(tables.count()):
+                if raw:
+                    break
+                table_text = tables.nth(ti).inner_text(timeout=2000)
+                if "REGISTRY STATUS" not in table_text.upper():
+                    continue
+                m = re.search(
+                    r"REGISTRY STATUS\s+([A-Za-z][A-Za-z /-]+?)(?:\s+(?:RCT NUMBER|REGISTRATION NUMBER|CT\d|[A-Z]{2}\d))",
+                    table_text,
+                    re.I | re.S,
+                )
+                if m:
+                    raw = re.sub(r"\s+", " ", m.group(1)).strip()
+                    break
+        except Exception:
+            pass
+
+        if not raw:
+            for status_text in ca_statuses:
+                if status_text.lower() in body.lower():
+                    raw = status_text
+                    break
+
+        if not raw:
+            result.raw_status_text = "Registry Status not found"
+            result.status = STATUS_UNKNOWN
+            result.source_note = "California detail page did not expose a recognizable Registry Status."
+            result.success = True
+            return result
+
+        result.raw_status_text = raw
+        result.status = raw
+        result.source_note = "California uses the exact Registry Status shown in the Registry Search Tool."
         result.success = True
         return result
     except Exception as e:
-        last_error = str(e)
-        if api_completed and candidates:
-            result.raw_status_text = "California entity matched, but registration detail retrieval did not complete."
-        else:
-            result.raw_status_text = "California Evoke public registry API lookup did not complete."
-        result.status = STATUS_UNKNOWN
-        result.source_note = f"California public registry lookup could not be completed. Last error: {last_error[:160]}"
-        result.success = False
-        result.error = f"CA error: {last_error[:220]}"
+        result.error = f"CA error: {e}"
         return result
 
 def search_co(page, org: Organization) -> StateResult:
