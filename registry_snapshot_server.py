@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.05.2-staging").strip() or "2026.09.05.2-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.05.3-staging").strip() or "2026.09.05.3-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -3598,6 +3598,10 @@ def score_candidate(expected_name: str, expected_ein: str | None, candidate: dic
             score += 80
             decision = "accepted"
             reason = "MATCH_NAME_EXACT" if reason != "MATCH_EIN_EXACT" else reason
+        elif explicit_acronym_alias_matches_registry(expected_name, candidate_name):
+            score += 80
+            decision = "accepted"
+            reason = "MATCH_EXPLICIT_ACRONYM_ALIAS" if reason != "MATCH_EIN_EXACT" else reason
         elif registry_name_is_safe_for_org(candidate_name, expected_name, expected_digits):
             score += 55
             if score >= 70:
@@ -3674,6 +3678,8 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
         return False
     if institutional_subunit_identity_conflict(original_name, registry_name):
         return False
+    if explicit_acronym_alias_matches_registry(original_name, registry_name):
+        return True
     if not has_sufficient_identity_overlap(original_name, registry_name, ein):
         return False
     if related_affiliate_or_chapter_mismatch(original_name, registry_name):
@@ -7602,6 +7608,8 @@ def target_name_score(row_name: str, targets: list[str]) -> int:
             best = max(best, 1000)
         if row_norm == target_norm:
             best = max(best, 1000)
+        elif explicit_acronym_alias_matches_registry(target, row_name):
+            best = max(best, 850)
         elif not distinctive_overlap_is_sufficient(row_norm, target_norm):
             continue
         elif single_plural_token_variant_match(row_norm, target_norm):
@@ -11771,7 +11779,7 @@ def explicit_acronym_alias_matches_registry(original_name: str, registry_name: s
     if initials not in acronyms:
         return False
     original_words = set().union(*(set(normalized_match_name(part).split()) for part in parts if part not in acronyms))
-    return len((set(words) & original_words) - ignored) >= 3
+    return len((set(words) & original_words) - ignored) >= 3 and set(words[:-1]).issubset(original_words)
 
 
 def wi_live_candidate_name_is_safe(registry_name: str, target_names: list[str], original_name: str, ein: str) -> bool:
@@ -16107,6 +16115,13 @@ def _search_snapshot_or_embedded_state_once(org, state: str):
     if state == "KS":
         module = load_ks_weekly_checker()
         external_result = module.search_ks_snapshot(org.organization_name, ARTIFACTS_DIR / "KS", org.ein)
+        original_name = getattr(org, "original_organization_name", org.organization_name)
+        if external_result.status == module.STATUS_NOT_REGISTERED and re.search(r"[/|]\s*[A-Z]{3,8}\b", original_name):
+            records, _, _ = module.load_live_records()
+            aliases = [row for row in records if explicit_acronym_alias_matches_registry(original_name, row.name)
+                       and (not row.ein or re.sub(r"\D", "", row.ein) == re.sub(r"\D", "", org.ein))]
+            if len(aliases) == 1:
+                external_result = module.search_ks_snapshot(aliases[0].name, ARTIFACTS_DIR / "KS", org.ein)
         result = copy_external_result(org, state, external_result)
         if public_status(result) not in {"Not Registered", "Site Not Reachable"}:
             original_name = getattr(org, "original_organization_name", org.organization_name)
@@ -17111,39 +17126,67 @@ def ok_terminal_closed_text(*texts: str) -> bool:
 
 
 _OK_CERTIFICATE_OCR = None
+_OK_CERTIFICATE_OCR_DETAIL = None
 _OK_CERTIFICATE_OCR_LOCK = threading.Lock()
+
+
+def ok_certificate_date_from_text(text: str, registry_name: str) -> date | None:
+    if not re.search(r"CERTIFICATE\s+OF\s+REGISTRATION", text, re.I):
+        return None
+    name_match = re.search(r"Registration\s*of\s+(.+?)\s+has\s+been\s+filed", text, re.I | re.S)
+    if not name_match or re.sub(r"[^a-z0-9]", "", normalized_match_name(name_match.group(1))) != re.sub(r"[^a-z0-9]", "", normalized_match_name(registry_name)):
+        return None
+    dates = re.findall(r"will\s+expire\s+on\s+([A-Za-z]+\s+\d{1,2}(?:,\s*|\s+)\d{4})", text, re.I)
+    if len(dates) == 1:
+        date_text = dates[0]
+        # OCR can confuse italic n/m in a spelled month. Repair only a unique
+        # one-letter substitution to a full month name; never change day/year digits.
+        month = re.match(r"[A-Za-z]+", date_text).group(0)
+        months = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December")
+        if month.lower() not in {value.lower() for value in months}:
+            candidates = [value for value in months if len(value) == len(month)
+                          and sum(a != b for a, b in zip(value.lower(), month.lower())) == 1]
+            if len(candidates) == 1:
+                date_text = candidates[0] + date_text[len(month):]
+        due = parse_due_date(re.sub(r",\s*", ", ", date_text))
+        if due:
+            return due
+    return None
 
 
 def ok_certificate_expiration(pdf_bytes: bytes, registry_name: str) -> tuple[date | None, str]:
     """Read the date printed on the matched entity's actual registration certificate."""
     from pypdf import PdfReader
-    global _OK_CERTIFICATE_OCR
+    global _OK_CERTIFICATE_OCR, _OK_CERTIFICATE_OCR_DETAIL
     if len(pdf_bytes) > 20_000_000:
         return None, "Certificate exceeds the bounded document size."
     reader = PdfReader(io.BytesIO(pdf_bytes))
     for pdf_page in list(reader.pages)[:2]:
         text = pdf_page.extract_text() or ""
-        if not re.search(r"will\s+expire\s+on", text, re.I):
-            images = list(pdf_page.images)
-            if not images:
-                continue
-            image = max(images, key=lambda item: item.image.width * item.image.height).image
-            with _OK_CERTIFICATE_OCR_LOCK:
-                if _OK_CERTIFICATE_OCR is None:
-                    from rapidocr_onnxruntime import RapidOCR
-                    _OK_CERTIFICATE_OCR = RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1)
-                lines, _ = _OK_CERTIFICATE_OCR(image)
-            text = "\n".join(str(row[1]) for row in lines or [] if float(row[2]) >= 0.90)
-        if not re.search(r"CERTIFICATE\s+OF\s+REGISTRATION", text, re.I):
+        due = ok_certificate_date_from_text(text, registry_name)
+        if due:
+            return due, text
+        images = list(pdf_page.images)
+        if not images:
             continue
-        name_match = re.search(r"Registration\s*of\s+(.+?)\s+has\s+been\s+filed", text, re.I | re.S)
-        if not name_match or re.sub(r"[^a-z0-9]", "", normalized_match_name(name_match.group(1))) != re.sub(r"[^a-z0-9]", "", normalized_match_name(registry_name)):
-            continue
-        dates = re.findall(r"will\s+expire\s+on\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4})", text, re.I)
-        if len(dates) == 1:
-            due = parse_due_date(dates[0])
-            if due:
-                return due, text
+        image = max(images, key=lambda item: item.image.width * item.image.height).image
+        # Retain the fast established pass. A higher-resolution pass is only used
+        # when the certificate's full name and expiration were not both readable.
+        with _OK_CERTIFICATE_OCR_LOCK:
+            from rapidocr_onnxruntime import RapidOCR
+            if _OK_CERTIFICATE_OCR is None:
+                _OK_CERTIFICATE_OCR = RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1)
+            for detailed in (False, True):
+                engine = _OK_CERTIFICATE_OCR
+                if detailed:
+                    if _OK_CERTIFICATE_OCR_DETAIL is None:
+                        _OK_CERTIFICATE_OCR_DETAIL = RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1, det_limit_side_len=1600)
+                    engine = _OK_CERTIFICATE_OCR_DETAIL
+                lines, _ = engine(image)
+                text = "\n".join(str(row[1]) for row in lines or [] if float(row[2]) >= 0.90)
+                due = ok_certificate_date_from_text(text, registry_name)
+                if due:
+                    return due, text
     return None, "The certificate's identity and stated expiration could not both be confirmed."
 
 
@@ -17152,9 +17195,16 @@ def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: s
     if not document_id:
         return None, "The registration document number could not be identified."
     try:
-        with page.expect_download(timeout=15000) as event:
-            page.get_by_role("link", name=document_id.group(1), exact=True).click(timeout=5000)
-        download = event.value
+        for attempt in range(2):
+            try:
+                with page.expect_download(timeout=15000) as event:
+                    page.get_by_role("link", name=document_id.group(1), exact=True).click(timeout=5000)
+                download = event.value
+                break
+            except Exception as exc:
+                if attempt or type(exc).__name__ != "TimeoutError":
+                    raise
+        # Retry only a failed download; successful registry checks incur no extra request.
         path = download.path()
         if not path:
             return None, "The registration certificate could not be downloaded."

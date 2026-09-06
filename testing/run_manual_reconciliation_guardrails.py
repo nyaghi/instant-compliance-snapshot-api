@@ -51,6 +51,7 @@ class ReconciliationTests(unittest.TestCase):
     def test_oklahoma_certificate_requires_correct_entity_and_one_expiration(self):
         text = "CERTIFICATE OF REGISTRATION Registration of READING IS FUNDAMENTAL INC has been filed. This registration will expire on March 12, 2027."
         page = Mock()
+        page.images = []
         page.extract_text.return_value = text
         reader = Mock()
         reader.pages = [page]
@@ -59,6 +60,16 @@ class ReconciliationTests(unittest.TestCase):
             self.assertIsNone(cc.ok_certificate_expiration(b"fixture", "Junior Achievement USA")[0])
             page.extract_text.return_value = text + " Another registration will expire on March 13, 2027."
             self.assertIsNone(cc.ok_certificate_expiration(b"fixture", "Reading Is Fundamental Inc")[0])
+
+    def test_certificate_ocr_month_and_spacing_are_bounded(self):
+        page = Mock()
+        page.images = []
+        reader = Mock()
+        reader.pages = [page]
+        with patch("pypdf.PdfReader", return_value=reader):
+            for month, expected in [("Jamuary", date(2027, 1, 28)), ("Juny", None)]:
+                page.extract_text.return_value = f"CERTIFICATE OF REGISTRATION Registrationof RONALD MCDONALD HOUSE CHARITIES INC has been filed. This registration will expire on {month} 28,2027."
+                self.assertEqual(cc.ok_certificate_expiration(b"fixture", "Ronald McDonald House Charities Inc")[0], expected)
 
     def test_failed_detail_is_not_negative_from_prior_query(self):
         r = cc.checker.StateResult("Reading Is Fundamental", "520976257", "NY", cc.checker.STATUS_UNKNOWN, "")
@@ -101,6 +112,17 @@ class ReconciliationTests(unittest.TestCase):
                 self.assertEqual(candidate["expiration_date"], date(2026, 7, 31))
         self.assertFalse(cc.explicit_acronym_alias_matches_registry(name, "Ronald McDonald House Cleveland"))
         self.assertFalse(cc.explicit_acronym_alias_matches_registry(name, rows[1][1]))
+
+    def test_shared_explicit_acronym_requires_full_identity(self):
+        name = "Ronald McDonald House Global / RMHC"
+        registry_name = "Ronald McDonald House Charities Inc."
+        self.assertTrue(cc.registry_name_is_safe_for_org(registry_name, name, "362934689"))
+        self.assertEqual(cc.target_name_score(registry_name, [name]), 850)
+        self.assertEqual(cc.score_candidate(name, "362934689", {"name": registry_name})["decision"], "accepted")
+        self.assertEqual(cc.score_candidate(name, "362934689", {"name": registry_name, "ein": "123456789"})["decision"], "rejected")
+        for other in ["Ronald McDonald House Cleveland", "Ronald McDonald House Charities of Greater Houston", "RMHC"]:
+            self.assertFalse(cc.explicit_acronym_alias_matches_registry(name, other))
+        self.assertFalse(cc.explicit_acronym_alias_matches_registry("Good Health National Foundation / GHNF", "Good Health Nevada Foundation"))
 
     def test_wisconsin_final_response_preserves_confirmed_alias(self):
         name = "Ronald McDonald House Global / RMHC"
