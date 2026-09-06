@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.06.6-staging").strip() or "2026.09.06.6-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.06.7-staging").strip() or "2026.09.06.7-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -15474,6 +15474,10 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         public_facing_status,
     )
     source_state = (getattr(result, "state", "") or "").upper()
+    if source_state == "OK":
+        freshness = re.search(r"Certificate freshness note:.*", getattr(result, "source_note", "") or "")
+        if freshness and freshness.group(0) not in comment:
+            comment = "\n\n".join([comment, freshness.group(0)])
     footer = DOWNLOADABLE_DATA_COMMENT_FOOTERS.get(source_state, "")
     if source_state in {"KS", "KY", "LA", "NH", "OR"}:
         info = downloadable_data_info(source_state)
@@ -17384,6 +17388,11 @@ def ok_certificate_expiration(pdf_bytes: bytes, registry_name: str) -> tuple[dat
     return None, "The certificate's identity and stated expiration could not both be confirmed."
 
 
+OK_CERTIFICATE_CACHE_TTL_SECONDS = 24 * 60 * 60
+_ok_certificate_cache: dict[tuple[str, str, str], tuple[float, date]] = {}
+_ok_certificate_cache_lock = threading.Lock()
+
+
 def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: str) -> tuple[date | None, str]:
     """Read the selected certificate; recover non-PDF responses without blind download waits."""
     document_id = re.match(r"^\s*(\d+)\b", latest_filing or "")
@@ -17392,18 +17401,34 @@ def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: s
     document_number = document_id.group(1)
     detail_url = page.url
     direct_note = ""
+    cache_key = (detail_url, document_number, registry_name)
+    live_action_confirmed = False
 
     def read_certificate(pdf_bytes):
         try:
-            return ok_certificate_expiration(pdf_bytes, registry_name)
+            due, note = ok_certificate_expiration(pdf_bytes, registry_name)
         except Exception as exc:
-            return None, f"The returned certificate could not be read ({type(exc).__name__}); its expiration was not inferred."
+            due, note = None, f"The returned certificate could not be read ({type(exc).__name__}); its expiration was not inferred."
+        with _ok_certificate_cache_lock:
+            _ok_certificate_cache.pop(cache_key, None)
+            if due:
+                # Process-local verified evidence only: restarts start cold. Never
+                # seed from filing dates, user expectations, or failed PDF parsing.
+                now = time.time()
+                for key, (retrieved, _) in list(_ok_certificate_cache.items()):
+                    if not 0 <= now - retrieved < OK_CERTIFICATE_CACHE_TTL_SECONDS:
+                        del _ok_certificate_cache[key]
+                if len(_ok_certificate_cache) >= 256:
+                    del _ok_certificate_cache[min(_ok_certificate_cache, key=lambda key: _ok_certificate_cache[key][0])]
+                _ok_certificate_cache[cache_key] = (now, due)
+        return due, note
 
     try:
         link = page.get_by_role("link", name=document_number, exact=True)
         postback = re.search(r"__doPostBack\('([^']+)'", link.get_attribute("href") or "")
         if not postback or not re.fullmatch(r"ctl00\$DefaultContent\$grdFilingList\$ctl\d+\$lnkAction", postback.group(1)):
             return None, "The selected registration document did not expose a valid registry action."
+        live_action_confirmed = True
         fields = page.locator("form").first.evaluate(
             '(form) => Object.fromEntries(Array.from(new FormData(form).entries()).filter(([k,v]) => typeof v === "string"))'
         )
@@ -17419,6 +17444,19 @@ def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: s
                        f"{len(pdf_bytes)} bytes; no PDF received.")
     except Exception as exc:
         direct_note = f"Primary certificate request failed ({type(exc).__name__})."
+    # The caller selected this latest filing from the live matched record. Reuse
+    # only after a transport failure, with the same live document action present.
+    if live_action_confirmed:
+        with _ok_certificate_cache_lock:
+            cached = _ok_certificate_cache.get(cache_key)
+            if cached and not 0 <= time.time() - cached[0] < OK_CERTIFICATE_CACHE_TTL_SECONDS:
+                _ok_certificate_cache.pop(cache_key, None)
+                cached = None
+        if cached:
+            retrieved = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(cached[0]))
+            return cached[1], (direct_note + f" Certificate freshness note: reused the verified certificate retrieved {retrieved} "
+                               f"(less than 24 hours old). The live registry still lists the same selected filing document {document_number}. "
+                               "Confirm time-sensitive decisions directly with the state registry.")
     try:
         # The API request can return an error/document page instead of an attachment.
         # Refresh its form state, then inspect the browser's actual response bytes.
@@ -17701,6 +17739,7 @@ def search_ok_precise(page, org, module):
                 "Oklahoma's latest qualifying registration certificate names the matched organization and explicitly "
                 f"states that registration expires on {format_date(certificate_due)}. "
                 "CharityClarity classifies registration status using that certificate date; it does not infer a deadline from unrelated filing activity."
+                + (" " + certificate_note if "Certificate freshness note:" in certificate_note else "")
             )
             result.success = True
             return result
