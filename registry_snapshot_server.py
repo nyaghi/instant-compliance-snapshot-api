@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.06.9-staging").strip() or "2026.09.06.9-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.06.10-staging").strip() or "2026.09.06.10-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -14805,650 +14805,245 @@ def status_timing_phrase(public_facing_status: str) -> str:
     return ""
 
 
-def concise_status_rationale_comment(result, body: str, public_facing_status: str) -> str:
-    normalized_status = (public_facing_status or "").strip().lower()
-    state = (getattr(result, "state", "") or "the selected state").upper()
-    status_reason = getattr(result, "status_reason", "") or ""
-    source_confidence = getattr(result, "source_confidence", "") or ""
-    raw_text = " ".join([
-        getattr(result, "raw_status_text", "") or "",
-        getattr(result, "source_note", "") or "",
-        body or "",
-    ])
-    computed_due = parsed_result_date(getattr(result, "computed_due_date", ""))
-    fiscal_year_end = str(getattr(result, "fiscal_year_end", "") or "").strip()
-    next_period = str(getattr(result, "next_required_period", "") or "").strip()
-    last_year = str(getattr(result, "last_year_on_record", "") or "").strip()
+def comment_labeled_date(text: str, labels: str) -> date | None:
+    """Read only a named evidence field; never treat an arbitrary page date as a deadline."""
+    date_text = r"(\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{4}|[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})"
+    match = re.search(r"(?:" + labels + r")\s*:?\s*" + date_text, text or "", re.I)
+    return parsed_result_date(match.group(1)) if match else None
 
-    if normalized_status in {"unable to verify", "unable to confirm", "needs review"}:
-        if state == "NM" and re.search(
-            r"incomplete\s+identity|did\s+not\s+complete\s+enough\s+registry\s+evidence|"
-            r"without\s+(?:a\s+)?(?:visible\s+)?(?:charity\s+)?identity|"
-            r"without\s+a\s+registry\s+identifier|Status\s+History\s+rows",
-            raw_text,
-            re.I,
-        ):
-            return (
-                "New Mexico returned incomplete identity/status evidence, but did not expose a registry identifier, "
-                "confirmed EIN/name identity anchor, fiscal year end, or computed due date that CharityClarity could "
-                "safely tie to this organization. CharityClarity returned Unable to Verify instead of classifying "
-                "the organization as registered or not registered."
-            )
-        return (
-            f"CharityClarity could not safely verify this {state} status from the official state source, "
-            "so no definitive registration status was returned."
-        )
 
-    if normalized_status == "not registered":
-        if status_reason == "LA_EXPORT_NO_SAFE_MATCH" or source_confidence == "official_downloaded_spreadsheet":
-            return (
-                "CharityClarity searched the current official Louisiana registered charities export using exact and normalized "
-                "organization identifiers and did not find a safe matching registration record."
-            )
-        return (
-            "CharityClarity searched the official state source using exact and normalized organization identifiers "
-            "and did not find a safe matching registration record."
-        )
+def comment_date_conclusion(due: date, status: str) -> str:
+    """Describe actual calendar timing, never infer the timing from the status label."""
+    if due < date.today():
+        timing = "has passed"
+    elif due == date.today():
+        timing = "is today"
+    elif due <= add_months(date.today(), 6):
+        timing = "is within the next six months"
+    else:
+        timing = "is more than six months away"
+    if status_from_calendar_date(due) == status:
+        return f"This date {timing}, so CharityClarity classifies the status as {status}."
+    return f"This date {timing}. The displayed {status} status also depends on the registry's filing or registration status."
 
-    if normalized_status in {"closed", "withdrawn", "closed / withdrawn / canceled"}:
-        return "Official state records show the registration is closed, withdrawn, canceled, or no longer active."
 
-    if normalized_status in {"revoked", "suspended"}:
-        return "Official state records show the registration is suspended, revoked, or administratively inactive."
-
-    if normalized_status == "exempt":
-        return "Official state records indicate this organization is exempt from charitable registration or not required to register in this state."
-
-    if state == "NJ" and status_reason == "NJ_STATUS_FROM_REGISTRY_FILING_PERIOD" and computed_due:
-        next_period_date = parse_due_date(next_period)
-        latest_period_date = add_months_preserving_end_of_month(next_period_date, -12) if next_period_date else None
-        fiscal_text = (
-            f": {format_date(latest_period_date)}"
-            if latest_period_date else
-            (f" as {fiscal_year_end}" if fiscal_year_end else "")
-        )
-        next_period_text = (
-            f" The next required fiscal year ends {format_date(next_period_date)}."
-            if next_period_date else
-            (f" The next required filing period is {next_period}." if next_period else "")
-        )
-        return (
-            f"New Jersey records show the latest fiscal year end on file{fiscal_text}. "
-            f"The next filing was due {format_date(computed_due)}.{next_period_text} "
-            f"CharityClarity therefore returns {public_facing_status}."
-        )
-
-    if state == "OR" and status_reason == "OR_STATUS_FROM_EXACT_EIN_EXPORT_PERIOD_END" and computed_due:
-        period_text = f" ended {next_period}" if next_period else ""
-        fiscal_text = f" with fiscal year end {fiscal_year_end}" if fiscal_year_end else ""
-        last_text = f" last period year {last_year}" if last_year else " the latest period on record"
-        return (
-            f"Official Oregon export records show{last_text}{fiscal_text}. "
-            f"The next Oregon filing period{period_text} is due {format_date(computed_due)}, "
-            f"so the status is {public_facing_status}."
-        )
-
-    if state == "LA" and status_reason == "LA_STATUS_FROM_OFFICIAL_EXCEL_EXPORT":
-        registered_through = parsed_result_date(getattr(result, "computed_due_date", "")) or explicit_registry_date(result, body)
-        if registered_through:
-            return (
-                f"Official Louisiana export records show the registration is valid through {format_date(registered_through)}, "
-                f"so the status is {public_facing_status}."
-            )
-        return f"Official Louisiana export records contain a safe matching registration record, so the status is {public_facing_status}."
-
-    if state == "KY" and normalized_status in {"current", "upcoming filing", "delinquent"} and useful_registry_name(getattr(result, "matched_registry_name", "") or ""):
-        due_text = f" The computed filing due date is {format_date(computed_due)}." if computed_due else ""
-        year_text = f" The most recent filing year identified is {last_year}." if last_year else ""
-        return (
-            f"The Kentucky downloadable registry snapshot includes a confirmed-safe match for {result.matched_registry_name}."
-            f"{year_text}{due_text} CharityClarity therefore returns {public_facing_status}."
-        )
-
-    if state == "AK" and normalized_status in {"current", "upcoming filing", "delinquent"}:
-        ak_due = ak_next_filing_due_from_result(result)
-        if ak_due:
-            timing = status_timing_phrase(public_facing_status)
-            timing_text = f", which is {timing}" if timing else ""
-            return (
-                f"Official Alaska registry evidence shows the next charitable registration renewal is due "
-                f"{format_date(ak_due)}{timing_text}, so the status is {public_facing_status}."
-            )
-
-    if state == "NY" and status_reason == "NY_SAFE_MATCH_NO_FILINGS_DELINQUENT":
-        return (
-            "New York returned a safe matching organization record, but the Annual Filing Documents section did not "
-            "expose any fiscal year end filings. CharityClarity treats the non-exempt matched New York record as Delinquent."
-        )
-
-    if state == "NY" and status_reason == "NY_STATUS_FROM_LATEST_FYE_NEXT_CYCLE" and computed_due:
-        timing = status_timing_phrase(public_facing_status)
-        timing_text = f", which is {timing}" if timing else ""
-        return (
-            f"Official New York records show the latest fiscal year end on record as {fiscal_year_end or 'not identified'}. "
-            f"The next CHAR500 filing period ends {next_period or 'not identified'} and is due "
-            f"{format_date(computed_due)}{timing_text}, so the status is {public_facing_status}."
-        )
-
-    if normalized_status in {"current", "upcoming filing", "delinquent"} and computed_due:
-        timing = status_timing_phrase(public_facing_status)
-        timing_text = f", which is {timing}" if timing else ""
-        evidence_bits = []
-        if last_year:
-            evidence_bits.append(f"last year on record as {last_year}")
-        if fiscal_year_end:
-            evidence_bits.append(f"fiscal year end as {fiscal_year_end}")
-        evidence_text = ""
-        if evidence_bits:
-            evidence_text = " show " + " and ".join(evidence_bits)
-        return (
-            f"Official {state} records{evidence_text}. The next filing or renewal date used by CharityClarity is "
-            f"{format_date(computed_due)}{timing_text}, so the status is {public_facing_status}."
-        )
-
-    if normalized_status in {"current", "upcoming filing", "delinquent"}:
-        explicit_due = explicit_due_date_from_result_text(result, body)
-        if explicit_due:
-            due_status = status_from_calendar_date(explicit_due)
-            due_status_lower = due_status.strip().lower()
-            if due_status_lower == "upcoming filing":
-                timing = "within the upcoming filing window"
-            elif due_status_lower == "delinquent":
-                timing = "past due"
-            else:
-                timing = "not within the upcoming filing window"
-            if due_status_lower == normalized_status:
-                return (
-                    f"Official {state} records show a due or expiration date of {format_date(explicit_due)}, "
-                    f"which is {timing}, so the status is {public_facing_status}."
-                )
-            return (
-                f"Official {state} records include a due or expiration date of {format_date(explicit_due)}. "
-                f"CharityClarity also considered the registry status text and returns {public_facing_status}."
-            )
-
-    if normalized_status == "current":
-        return "Official state records show active registration or current filing evidence, so the status is Current."
-
-    if normalized_status == "upcoming filing":
-        return "Official state records show a filing or renewal is approaching, so the status is Upcoming Filing."
-
-    if normalized_status == "delinquent":
-        return "Official state records show an overdue, expired, noncompliant, or stale filing condition, so the status is Delinquent."
-
-    return ""
+def comment_registry_status(raw: str, status: str) -> str:
+    """Select the specific observed label, without copying debug text or status glossaries."""
+    patterns = {
+        "Suspended": r"not authorized to solicit|may not solicit|suspended",
+        "Revoked": r"revoked",
+        "Pending": r"renewal in progress|registration pending|in process|in review|pending",
+        "Failed to Renew": r"failed to renew",
+        "Closed / Withdrawn / Canceled": r"inactive\s*-\s*involuntary|withdrawn/terminated by licensee|voluntarily deactivated|closed/withdrawn|withdrawn|cancell?ed|terminated|inactive|\bclosed?\b",
+        "Delinquent": r"not current|non[- ]?compliant|expired/lapsed|delinquent|expired|lapsed|overdue",
+        "Current": r"in compliance\s*:\s*yes|current|good standing|compliant|\bactive\b|\bregistered\b|in existence",
+        "Exempt": r"exempt charity|exempt|not required to register",
+    }
+    pattern = patterns.get(status)
+    match = re.search(pattern, raw or "", re.I) if pattern else None
+    return match.group(0) if match else ""
 
 
 def comments_for_result_base(result, body: str, public_facing_status: str) -> str:
-    normalized_status = public_facing_status.lower()
-    state = (result.state or "the selected state").upper()
-    context = filing_context(result, body)
-    if state == "OK" and (normalized_status == "needs review" or "Certificate Expiration Date:" in (result.raw_status_text or "") or "Calculated Registration Expiration:" in (result.raw_status_text or "")):
-        return result.source_note or "Oklahoma certificate expiration could not be confirmed from the available record."
-    if state == "OH" and "Detail page unavailable" in (result.raw_status_text or ""):
-        return result.source_note
-    if (
-        state == "MD" and context.get("due_date")
-        and context.get("due_date") == context.get("extended_due_date")
-        and re.match(r"^\s*Current\b", result.raw_status_text or "", re.I)
-    ):
-        return (
-            f"Maryland lists the registration as Current with {context['represented_year']} as the year represented. "
-            f"The next annual filing's base due date is {format_date(context['base_due_date'])}; "
-            f"Maryland's automatic extension for current registrations runs through {format_date(context['due_date'])}. "
-            f"CharityClarity uses that extended deadline to classify the result as {public_facing_status}."
-        )
-    if state == "CA" and normalized_status in {"current", "upcoming filing", "delinquent"}:
-        ca_years = ca_annual_renewal_years_from_text(body)
-        latest_submitted_year = ca_years.get("latest_submitted_year")
-        latest_not_submitted_year = ca_years.get("latest_not_submitted_year")
-        latest_pending_year = ca_years.get("latest_pending_year")
-        ca_has_newer_nonfinal_renewal = bool(
-            (latest_pending_year and (not latest_submitted_year or latest_pending_year > latest_submitted_year))
-            or (latest_not_submitted_year and (not latest_submitted_year or latest_not_submitted_year > latest_submitted_year))
-        )
-        if (
-            normalized_status == "delinquent"
-            and latest_not_submitted_year
-            and (not latest_submitted_year or latest_not_submitted_year > latest_submitted_year)
-        ):
-            fiscal_end = context.get("fiscal_end") or fiscal_year_end_for_ein(result.ein)
-            submitted_sentence = (
-                f" The latest accepted annual renewal year identified is {latest_submitted_year}."
-                if latest_submitted_year else
-                " CharityClarity did not identify a later accepted annual renewal year."
-            )
-            due_sentence = ""
-            if fiscal_end:
-                due_options = filing_due_date_options("CA", latest_not_submitted_year, fiscal_end)
-                due_date = due_options.get("base_due") or due_options.get("effective_due")
-                if due_date:
-                    due_status = status_from_calendar_date(due_date)
-                    timing = (
-                        "within 6 months"
-                        if due_status == "Upcoming Filing"
-                        else ("overdue" if due_status == "Delinquent" else "not within the next 6 months")
-                    )
-                    due_sentence = (
-                        f" Based on a {fiscal_end[0]}/{fiscal_end[1]} fiscal year end, the "
-                        f"{latest_not_submitted_year} annual renewal is due {format_date(due_date)}, which is {timing}."
-                    )
-            latest_not_submitted_status = ca_years.get("latest_not_submitted_status") or "Not Submitted"
-            return (
-                f"The CA Annual Renewal Data shows the {latest_not_submitted_year} annual renewal with Status of Filing: "
-                f"{latest_not_submitted_status}.{submitted_sentence}{due_sentence} "
-                "CharityClarity treats the organization as Delinquent."
-            )
-        if (
-            not ca_has_newer_nonfinal_renewal
-            and context.get("represented_year")
-            and context.get("fiscal_end")
-            and context.get("due_date")
-        ):
-            due_status = status_from_calendar_date(context["due_date"])
-            timing = (
-                "within 6 months"
-                if due_status == "Upcoming Filing"
-                else ("overdue" if due_status == "Delinquent" else "not within the next 6 months")
-            )
-            fiscal_end = context["fiscal_end"]
-            return (
-                f"The CA Annual Renewal Data shows {context['represented_year']} as the latest accepted annual renewal year. "
-                f"Based on a {fiscal_end[0]}/{fiscal_end[1]} fiscal year end, the {context['next_report_year']} "
-                f"annual renewal is due {format_date(context['due_date'])}, which is {timing}. "
-                f"CharityClarity treats the organization as {public_facing_status}."
-            )
-    rationale = concise_status_rationale_comment(result, body, public_facing_status)
-    if rationale:
-        return rationale
-    if normalized_status == "site not reachable":
-        technical_error = " ".join([result.error or "", result.source_note or "", result.raw_status_text or ""])
-        if re.search(r"ERR_NAME_NOT_RESOLVED|remote name could not be resolved|getaddrinfo failed|Name or service not known", technical_error, re.I):
-            return "Local DNS/network resolution failed while trying to reach the public registry host. This is usually a local network/DNS issue; rerun CharityClarity after the connection stabilizes."
-        if re.search(r"timed out|timeout", technical_error, re.I):
-            return "The public registry did not respond before the lookup timed out. Rerun CharityClarity to confirm whether this was temporary."
-        return "Public registry site could not be reached at the time of the CharityClarity check."
-    if normalized_status == "not registered":
-        return (
-            "CharityClarity was not able to locate this organization in the state registry using the name and EIN entered. "
-            "The organization may appear under another legal name, DBA, or prior name."
-        )
-    if normalized_status == "unknown":
-        if state == "ME" and re.search(r"\bACTIVE\b", " ".join([result.status or "", result.raw_status_text or ""]), re.I):
-            return "The ME public registry returned an active matching organization record, but CharityClarity did not identify an expiration or renewal date needed for the interpreted status."
-        if state == "PA" and organization_record_confirmed(result, combined_result_text(result, body)):
-            return "The PA public registry returned a matching record, but CharityClarity did not identify a usable expiration date or final interpreted status from the available page."
-        return f"The {state} public registry was reachable, but CharityClarity could not confirm a final interpreted status from the available registry page."
-    if normalized_status == "exempt":
-        return f"The {state} public registry indicates the organization is exempt from charitable registration or annual filing requirements in that state."
-    if normalized_status == "revoked":
-        return f"The {state} public registry shows the organization registration status as Revoked, which CharityClarity treats as an adverse status."
-    if normalized_status == "suspended":
-        if state == "VA" and re.search(r"not\s+authorized\s+to\s+solicit", combined_result_text(result, body), re.I):
-            return "The VA public registry shows the organization is not authorized to solicit in Virginia, which CharityClarity treats as Suspended."
-        return f"The {state} public registry shows the organization registration status as Suspended."
-    if normalized_status in {"withdrawn", "closed", "closed / withdrawn / canceled"}:
-        if re.search(r"voluntar(?:y|ily)\s+deactivat(?:ed|ion)", combined_result_text(result, body), re.I):
-            return (
-                f"The {state} public registry shows the organization registration status as Voluntarily Deactivated. "
-                "CharityClarity treats that as Closed / Withdrawn / Canceled instead of calculating status from older annual filing records."
-            )
-        if re.search(r"\bcancell?ed\b", combined_result_text(result, body), re.I):
-            return (
-                f"The {state} public registry shows the organization registration status as Canceled. "
-                "CharityClarity treats that as Closed / Withdrawn / Canceled instead of calculating status from older annual filing records."
-            )
-        return (
-            f"The {state} public registry shows the organization registration status as Closed, Withdrawn, Canceled, or inactive. "
-            "CharityClarity uses that registry status instead of calculating status from older annual filing records."
-        )
-    if state == "CA" and normalized_status == "current" and not context.get("due_date"):
-        return "The CA public registry shows Registry Status Current. CharityClarity did not identify a delinquency in this quick check."
-    if state == "CA" and normalized_status == "pending":
-        ca_years = ca_annual_renewal_years_from_text(body)
-        latest_pending_year = ca_years.get("latest_pending_year")
-        latest_pending_status = ca_years.get("latest_pending_status") or "In Process"
-        latest_submitted_year = ca_years.get("latest_submitted_year")
-        submitted_sentence = (
-            f" The latest accepted annual renewal year identified is {latest_submitted_year}."
-            if latest_submitted_year else
-            " CharityClarity did not identify a later accepted annual renewal year."
-        )
-        if latest_pending_year:
-            return (
-                f"The CA Annual Renewal Data shows the {latest_pending_year} annual renewal with Status of Filing: {latest_pending_status}. "
-                f"CharityClarity treats that as Pending because the public registry indicates the filing is still being processed.{submitted_sentence}"
-            )
-        return (
-            "The CA public registry shows an In Process or Pending registration/filing status. "
-            "CharityClarity treats that registry status as Pending because the filing appears to still be under review."
-        )
-    if normalized_status == "pending":
-        return (
-            f"The {state} public registry shows the organization registration status as Pending. "
-            "CharityClarity uses that registry status instead of calculating status from annual filing records."
-        )
-    if normalized_status == "failed to renew":
-        return (
-            f"The {state} public registry shows the organization registration status as Failed to Renew. "
-            "CharityClarity uses that registry status instead of calculating status from annual filing records."
-        )
-    if state == "KY" and normalized_status in {"current", "upcoming filing", "delinquent"} and useful_registry_name(result.matched_registry_name or ""):
-        identifier = f" (ID: {result.matched_registry_identifier})" if result.matched_registry_identifier else ""
-        filed_year = context.get("represented_year")
-        filed_text = f" The most recent filing year identified in that row is {filed_year}." if filed_year else ""
-        return (
-            f"The KY downloadable registry snapshot includes a strict name match for {result.matched_registry_name}{identifier}. "
-            "The Kentucky source does not expose EIN in the downloaded public list, so CharityClarity accepts only exact or confirmed-safe name matches for KY."
-            f"{filed_text}"
-        )
-    if state == "NH" and normalized_status in {"current", "upcoming filing", "delinquent"}:
-        base_due, effective_due = nh_effective_report_due_date(result, body)
-        if base_due and effective_due:
-            timing = "within 6 months" if normalized_status == "upcoming filing" else ("overdue" if normalized_status == "delinquent" else "not within the next 6 months")
-            if effective_due != base_due:
-                return (
-                    f"The NH public registry shows Good Standing with base report due date {format_date(base_due)}. "
-                    f"CharityClarity applies the six-month extension window and uses {format_date(effective_due)}, which is {timing}."
-                )
-            return f"The NH public registry shows Good Standing with report due date {format_date(base_due)}, which is {timing}."
-    if state == "NJ" and normalized_status in {"current", "upcoming filing", "delinquent"}:
-        nj_context = nj_filing_context_from_body(body or result.raw_status_text or "")
-        last_period_end = nj_context.get("last_period_end")
-        next_required_period = nj_context.get("next_required_period")
-        due_date = nj_context.get("computed_due_date")
-        if last_period_end and next_required_period and due_date:
-            timing = "within 6 months" if normalized_status == "upcoming filing" else ("overdue" if normalized_status == "delinquent" else "not within the next 6 months")
-            return (
-                f"The NJ public registry filing evidence shows latest fiscal year on file: {format_date(last_period_end)}. "
-                f"The next required fiscal year ends {format_date(next_required_period)} and is due {format_date(due_date)}, "
-                f"which is {timing}."
-            )
-    if state == "SC" and normalized_status == "current" and re.search(r"^\s*Registered\b", " ".join([result.status or "", result.raw_status_text or ""]), re.I):
-        return "The SC public registry shows the organization registration status as Registered. CharityClarity treats that as Current."
-    if state == "CT" and normalized_status == "delinquent":
-        registry_date = explicit_registry_date(result, body)
-        if registry_date:
-            return f"The CT public registry shows an expiration date of {format_date(registry_date)}, which is overdue."
-    if state == "MD" and normalized_status == "current" and not context.get("represented_year"):
-        return (
-            "The MD public registry shows Registration Status: Current. CharityClarity did not identify a Maryland filing-year value "
-            "from the public snapshot, so this quick check treats the registry status as Current without citing a specific annual filing year."
-        )
-    if normalized_status == "delinquent" and re.search(r"\b(closed|inactive)\b", " ".join([result.status or "", result.raw_status_text or ""]), re.I):
-        return f"The {state} public registry shows a found organization record with a closed or inactive registration status."
-    if normalized_status == "delinquent" and state == "VA" and re.search(r"not\s+authorized\s+to\s+solicit", " ".join([result.status or "", result.raw_status_text or "", result.source_note or ""]), re.I):
-        return "The VA public registry shows the organization is not authorized to solicit in Virginia, which CharityClarity treats as Delinquent."
-    if state == "AK" and normalized_status in {"upcoming filing", "current", "delinquent"}:
-        ak_next_due = ak_next_filing_due_from_result(result)
-        if ak_next_due:
-            timing = "within 6 months" if normalized_status == "upcoming filing" else ("overdue" if normalized_status == "delinquent" else "not within the next 6 months")
-            return f"The AK public registry shows the next Alaska charitable registration renewal is due {format_date(ak_next_due)}, which is {timing}."
-        registry_date = explicit_registry_date(result, body)
-        if registry_date:
-            timing = "within 6 months" if normalized_status == "upcoming filing" else ("overdue" if normalized_status == "delinquent" else "not within the next 6 months")
-            return f"The AK public registry shows a charitable registration expiration date of {format_date(registry_date)}, which is {timing}."
-        if context.get("represented_year") and context.get("due_date"):
-            timing = "within 6 months" if normalized_status == "upcoming filing" else ("overdue" if normalized_status == "delinquent" else "not within the next 6 months")
-            return (
-                f"The AK public registry shows the {context['represented_year']} charitable organization registration/renewal is on file. "
-                f"The next Alaska charitable registration renewal is due {format_date(context.get('due_date'))}, which is {timing}."
-            )
-    registry_noncompliant_text = " ".join([result.raw_status_text or "", result.source_note or "", body or ""])
-    if normalized_status == "delinquent" and re.search(r"\bnon\W*compliant\b", registry_noncompliant_text, re.I):
-        return f"The {state} public registry shows a Noncompliant status, which CharityClarity treats as Delinquent."
-    registry_status_text = " ".join([result.raw_status_text or "", result.source_note or ""])
-    if normalized_status == "delinquent" and re.search(r"\bexpired\b", registry_status_text, re.I):
-        return f"The {state} public registry shows the organization registration status as Expired, which CharityClarity treats as Delinquent."
-    if normalized_status == "delinquent" and state == "PA" and organization_record_confirmed(result, combined_result_text(result, body)) and not explicit_registry_date(result, body):
-        return "The PA public registry returned a matching organization record but did not show a current usable expiration date, so CharityClarity treats the record as Delinquent."
-    if state == "CO" and normalized_status == "delinquent" and re.search(r"\b(expired|may not solicit)\b", combined_result_text(result, body), re.I):
-        registry_date = explicit_registry_date(result, body)
-        if registry_date:
-            return f"The CO public registry shows an expiration date of {format_date(registry_date)}, which is overdue."
-        return "The CO public registry shows an expired registration status, which CharityClarity treats as Delinquent."
-    if (
-        state == "NY"
-        and normalized_status == "delinquent"
-        and re.search(r"Annual\s+Filing\s+Documents\s+did\s+not\s+expose\s+any\s+Fiscal\s+Year\s+End\s+values", combined_result_text(result, body), re.I)
-    ):
-        return (
-            "The NY public registry detail page shows the organization record, but the annual filing section shows no annual filings available. "
-            "Because the record does not show an exempt registration status, CharityClarity treats the organization as Delinquent."
-        )
-    if state == "CA" and normalized_status == "delinquent":
+    """Explain the existing decision from its evidence; never change a result or query a registry."""
+    status = public_facing_status.strip()
+    state = (getattr(result, "state", "") or "").upper()
+    raw = getattr(result, "raw_status_text", "") or ""
+    note = getattr(result, "source_note", "") or ""
+    reason = getattr(result, "status_reason", "") or ""
+    combined = " ".join([raw, note, body or ""])
+    source = "The state's downloadable charity list" if state in {"KS", "KY", "LA", "NH", "OR"} else "The state registry"
+    observed = comment_registry_status(raw, status)
+    matched = bool(getattr(result, "matched_registry_name", "") or getattr(result, "matched_registry_identifier", ""))
+
+    if status == "Site Not Reachable":
+        if state == "OK" and "certificate" in combined.lower() and matched:
+            return "The organization was found, but its registration certificate could not be retrieved and the available filing history did not support a calculated expiration. CharityClarity reports Site Not Reachable because registration status could not be confirmed."
+        failure = "did not respond in time" if re.search(r"timeout|timed out", combined + " " + (getattr(result, "error", "") or ""), re.I) else "could not be accessed"
+        return f"{source} {failure}, so CharityClarity could not complete the check and reports Site Not Reachable. This does not mean the organization is unregistered or delinquent."
+    if status in {"Needs Review", "Unable to Verify", "Unable to Confirm", "Unknown", "No Confirmed Match"}:
+        if state == "OK" and "certificate" in combined.lower():
+            evidence = "The organization was found, but the certificate's organization name and expiration date could not both be confirmed"
+        elif re.search(r"ambiguous|multiple|identity|match", combined, re.I) and not matched:
+            evidence = "The available registry records could not be reliably matched to this organization"
+        elif matched:
+            evidence = "The organization was found, but the available registration or filing information was insufficient to determine its status"
+        else:
+            evidence = "The registry check did not provide enough information to confirm the organization's registration status"
+        return f"{evidence}, so CharityClarity reports {status}. Missing information alone does not establish delinquency or non-registration."
+    if status == "Not Registered":
+        if getattr(result, "success", True) is False or re.search(r"ambiguous|human verification|captcha|search incomplete", raw, re.I):
+            return "CharityClarity returned Not Registered, but the search evidence is incomplete or ambiguous. Non-registration could not be confirmed from this check; the result needs verification."
+        if state == "NM" and re.search(r"detail shell|did not expose a charity name|no .*charity registration name", combined, re.I):
+            return "The state search returned a page for the EIN, but it did not identify a charitable registration for this organization. CharityClarity classifies the result as Not Registered because no qualifying charity record was confirmed."
+        if re.search(r"first rejected|rejected .*candidate|none safely matched|no safely matching|no safe confirmed|no safe matching", combined, re.I):
+            return f"The search of {source.lower()} completed, but no registration record could be reliably matched to this organization. CharityClarity therefore classifies the result as Not Registered for the organization searched."
+        return f"The search of {source.lower()} completed without finding a qualifying registration for this organization, so CharityClarity classifies the result as Not Registered."
+
+    if state == "CA" and status in {"Pending", "Delinquent"} and "Current Expiration Date:" not in raw:
+        years = ca_annual_renewal_years_from_text(body)
+        key = "latest_pending_year" if status == "Pending" else "latest_not_submitted_year"
+        year = years.get(key)
+        if year and year > (years.get("latest_submitted_year") or 0):
+            filing_status = years.get("latest_pending_status" if status == "Pending" else "latest_not_submitted_status") or ("In Process" if status == "Pending" else "Not Submitted")
+            basis = "the filing is still being processed" if status == "Pending" else "that annual renewal has not been submitted"
+            return f'The state annual renewal history lists the {year} filing as "{filing_status}". Because {basis}, CharityClarity classifies the status as {status}.'
+
+    # Explicit statuses take precedence over a future date, and retain their distinct meaning.
+    if status in {"Suspended", "Revoked", "Pending", "Failed to Renew", "Closed / Withdrawn / Canceled", "Exempt"}:
+        if not observed:
+            return f"CharityClarity returned {status}, but the available record does not include the specific state status supporting that classification. Confirmation with the state is needed."
+        explanation = {
+            "Suspended": "That restriction controls the result even if a renewal or expiration date is later",
+            "Revoked": "That registration status controls the result",
+            "Pending": "The registration or renewal has not reached a final status in the registry",
+            "Failed to Renew": "The registry identifies a renewal lapse",
+            "Closed / Withdrawn / Canceled": "The registration is no longer active",
+            "Exempt": "The result is based on the exemption recorded by the state",
+        }[status]
+        text = f'{source} lists the organization as "{observed}". {explanation}, so CharityClarity classifies the status as {status}.'
+        if state == "MI" and status == "Pending" and "able to continue to solicit" in note:
+            text += " Michigan states that organizations with Registration Pending may continue to solicit."
+        return text
+
+    # Oklahoma uses certificate evidence or the specifically authorized anniversary fallback.
+    if state == "OK":
+        calculated = comment_labeled_date(raw, r"Calculated Registration Expiration")
+        certificate = comment_labeled_date(raw, r"Certificate Expiration Date")
+        if calculated:
+            filing = re.search(r"(?:Renewal Registration(?:\s*-\s*EZ)?|Application for Registration)\s+([A-Za-z]+\s+\d{1,2},\s+\d{4})", raw, re.I)
+            filed = parsed_result_date(filing.group(1)) if filing else None
+            basis = f"the completed renewal filed on {format_date(filed)}" if filed else "the completed registration filing"
+            return (f"Calculated registration expiration: {format_date(calculated)} (certificate unavailable; not certificate-confirmed). "
+                    f"The date is one year after {basis}. {comment_date_conclusion(calculated, status)} "
+                    "This calculation concerns registration expiration; a separate Form 990-based filing deadline was not determined.")
+        if certificate:
+            return f"The registration certificate shows an expiration date of {format_date(certificate)}. {comment_date_conclusion(certificate, status)}"
+
+    if state == "OH" and "Detail page unavailable" in raw:
+        return ('The state registry lists the organization as "In Compliance: Yes", so CharityClarity classifies the status as Current. '
+                "The detailed filing record was unavailable, so a next filing date could not be confirmed.")
+
+    # Prefer the precise date already used by the lookup, with its source clearly identified.
+    due = parsed_result_date(getattr(result, "computed_due_date", ""))
+    calculated_states = {"AK", "KY", "MA", "MD", "MN", "NJ", "NM", "NY", "OH", "OR"}
+    calculated = bool(due and state in calculated_states)
+    label = "next filing due date"
+    if state == "LA":
+        due = comment_labeled_date(raw, r"Registered Through") or due
+        label = "registration expiration date"
+    if state == "PA" and re.fullmatch(r"\s*\d{1,2}/\d{1,2}/\d{4}\s*", raw):
+        due = parsed_result_date(raw)
+        label = "expiration date (including any automatic extension shown)"
+    if state == "CA":
+        due = comment_labeled_date(raw, r"Current Expiration Date") or due
+        label = "current expiration date"
+    elif state == "VA":
+        # Explain the date actually used by the master, exposing conflicting extension evidence.
+        base = comment_labeled_date(raw, r"Expiration Date")
+        extension = comment_labeled_date(raw, r"Extension Date|Registration Extended Until")
+        if base and extension and status_from_calendar_date(base) == status and status_from_calendar_date(extension) != status:
+            return (f"CharityClarity uses the registration expiration of {format_date(base)}. {comment_date_conclusion(base, status)} "
+                    f"The record also lists an extension to {format_date(extension)}, which is not reflected in this status. That difference requires confirmation before relying on the result.")
+        due = extension or base or due
+        label = "extended registration expiration date" if extension else "registration expiration date"
+    if state == "MS":
+        inferred = comment_labeled_date(raw, r"annual renewal date used")
+        if inferred:
+            return (f"The registry lists the organization as Current/Registered but does not show an expiration date. "
+                    f"CharityClarity uses the annual renewal date of {format_date(inferred)} under its Mississippi rule. "
+                    f"{comment_date_conclusion(inferred, status)} This date is calculated, not an expiration date shown by the state.")
+    if not due:
+        due = comment_labeled_date(raw, r"Next Filing Due|Next Due|Report Due|Due Date|\bDue")
+        calculated = bool(due and state in calculated_states)
+    if not due:
+        due = comment_labeled_date(raw, r"License / Registration Expiration|Expiration Date|Renewal Date|Expires on|License current through|Registration Expiration")
+        label = "renewal date" if "Renewal Date" in raw else "expiration date"
+    if state == "ND" and not due:
+        due = comment_labeled_date(body, r"AR Extended Due Date") or comment_labeled_date(body, r"AR Due Date")
+        label = "annual report due date"
+    # Some mature runners retain filing detail in body rather than the summary fields.
+    context = {}
+    if state in {"CA", "HI", "MA", "MD", "NJ"} and re.sub(r"\D", "", getattr(result, "ein", "") or "") in PUBLIC_PROFILE_CACHE:
+        # The status pass has already loaded this context. Comment generation must not
+        # start a profile request merely to improve prose, especially on error paths.
         context = filing_context(result, body)
-        ca_years = ca_annual_renewal_years_from_text(body)
-        latest_not_submitted_year = ca_years.get("latest_not_submitted_year")
-        latest_not_submitted_status = ca_years.get("latest_not_submitted_status") or "Not Submitted"
-        latest_submitted_year = ca_years.get("latest_submitted_year")
-        if latest_not_submitted_year and (not latest_submitted_year or latest_not_submitted_year > latest_submitted_year):
-            fiscal_end = context.get("fiscal_end") or fiscal_year_end_for_ein(result.ein)
-            due_sentence = ""
-            if fiscal_end:
-                due_options = filing_due_date_options("CA", latest_not_submitted_year, fiscal_end)
-                base_due = due_options.get("base_due") or due_options.get("effective_due")
-                extended_due = due_options.get("extended_due")
-                if base_due:
-                    due_sentence = (
-                        f" Based on a {fiscal_end[0]}/{fiscal_end[1]} fiscal year end, the "
-                        f"{latest_not_submitted_year} annual renewal initial due date is {format_date(base_due)}."
-                    )
-                if extended_due:
-                    extended_status = status_from_calendar_date(extended_due)
-                    due_sentence += (
-                        f" If a six-month extension was applied for and approved, the due date becomes "
-                        f"{format_date(extended_due)} and the status becomes {extended_status}."
-                    )
-            submitted_sentence = (
-                f" The latest accepted annual renewal year identified is {latest_submitted_year}."
-                if latest_submitted_year else
-                " CharityClarity did not identify a later accepted annual renewal year."
-            )
-            return (
-                f"The CA Annual Renewal Data shows the {latest_not_submitted_year} annual renewal with Status of Filing: {latest_not_submitted_status}."
-                f"{submitted_sentence}{due_sentence} CharityClarity treats the organization as Delinquent."
-            )
-    if normalized_status == "delinquent" and not context.get("represented_year") and annual_filings_absent(combined_result_text(result, body)):
-        return (
-            f"The {state} public registry detail page shows the organization record, but the annual filing section shows no annual filings available "
-            "and the CharityClarity check does not show an exempt registration status."
-        )
-    if normalized_status == "delinquent" and state == "HI" and not context.get("represented_year"):
-        return (
-            "The HI public registry shows an active organization record, but CharityClarity did not identify a visible annual filing year "
-            "from the annual filing/document section and the record does not show an exempt registration status."
-        )
-    if normalized_status == "delinquent" and stale_represented_year_is_delinquent(context.get("represented_year")) and not context.get("due_date"):
-        return (
-            f"The {state} public registry detail page shows the organization record and the most recent fiscal/filing year identified is "
-            f"{context.get('represented_year')}. The available CharityClarity check did not provide enough fiscal year-end information to calculate a precise due date, "
-            "but the filing record appears more than one annual cycle behind."
-        )
-    registry_date = explicit_registry_date(result, body)
-    use_registry_date = bool(
-        registry_date
-        and (
-            state in {"AK", "CO", "PA", "VA"}
-            or re.search(r"due date|next report|renewal|expiration|expires|automatic extension", " ".join([result.raw_status_text or "", result.source_note or ""]), re.I)
-        )
-    )
-    if state == "PA" and use_registry_date and normalized_status in {"upcoming filing", "current", "delinquent"}:
-        registry_status = status_from_calendar_date(registry_date).lower()
-        if registry_status == "upcoming filing":
-            return f"The PA public registry shows an expiration date of {format_date(registry_date)}, which is within 6 months."
-        if registry_status == "current":
-            return f"The PA public registry shows an expiration date of {format_date(registry_date)}, which is not within the next 6 months."
-        return f"The PA public registry shows an expiration date of {format_date(registry_date)}, which is overdue."
-    if normalized_status == "current" and current_cycle_already_filed(state, context.get("represented_year"), registry_date):
-        if state == "AK":
-            return (
-                f"The AK public registry shows the {context['represented_year']} charitable organization registration/renewal is on file. "
-                f"The next Alaska charitable registration renewal is due {format_date(context.get('due_date'))}, which is not within the next 6 months."
-            )
-        filing_label = "annual filing"
-        if state == "MA":
-            filing_label = "Form PC"
-        elif state == "MD":
-            filing_label = "annual filing"
-        elif state == "CA":
-            filing_label = "annual renewal"
-        elif state == "HI":
-            filing_label = "annual filing"
-        if context.get("due_date") and context.get("fiscal_end"):
-            extension_sentence = ""
-            extended_due = context.get("extended_due_date")
-            if extended_due:
-                extended_status = status_from_calendar_date(extended_due)
-                if state == "MD":
-                    extension_sentence = f" If Maryland's automatic extension applies, the due date becomes {format_date(extended_due)} and the status becomes {extended_status}."
-                elif state in EXTENSION_SCENARIO_STATES:
-                    extension_sentence = f" If a six-month extension was applied for and approved, the due date becomes {format_date(extended_due)} and the status becomes {extended_status}."
-            due_label = "extended due date" if state == "MA" and context.get("uses_extension_scenario") else "initial due date"
-            return (
-                f"{context['represented_year']} appears to be the most recent {state} {filing_label} year identified in the CharityClarity check. "
-                f"Based on a {context['fiscal_end'][0]}/{context['fiscal_end'][1]} fiscal year end, the {context['next_report_year']} {filing_label} due date used by CharityClarity is {format_date(context['due_date'])}. "
-                f"CE Status is Current based on the {due_label}.{extension_sentence}"
-            )
-        return (
-            f"The {state} public registry shows a {context['represented_year']} {filing_label} on record. "
-            f"Based on the filing year identified in this CharityClarity check, no {state} charitable filing appears overdue for the period reviewed, so CharityClarity treats the organization as Current."
-        )
-    if normalized_status == "upcoming filing" and current_cycle_already_filed(state, context.get("represented_year"), registry_date) and context.get("due_date"):
-        extension_sentence = ""
-        extended_due = context.get("extended_due_date")
-        if extended_due:
-            extended_status = status_from_calendar_date(extended_due)
-            if state == "MD":
-                extension_sentence = f" If Maryland's automatic extension applies, the due date becomes {format_date(extended_due)} and the status becomes {extended_status}."
-            elif state in EXTENSION_SCENARIO_STATES:
-                extension_sentence = f" If a six-month extension was applied for and approved, the due date becomes {format_date(extended_due)} and the status becomes {extended_status}."
-        if state == "AK":
-            return (
-                f"The AK public registry shows the {context['represented_year']} charitable organization registration/renewal is on file. "
-                f"The next Alaska charitable registration renewal is due {format_date(context.get('due_date'))}, which is within 6 months."
-            )
-        return (
-            f"The {state} public registry shows a {context.get('represented_year')} filing or renewal on record. "
-            f"The next required filing is due {format_date(context.get('due_date'))}, which is within 6 months.{extension_sentence}"
-        )
-    if use_registry_date and normalized_status in {"upcoming filing", "current", "delinquent"}:
-        descriptor = "expiration or renewal date"
-        if state == "AK":
-            descriptor = "registration expiration date"
-        elif state == "VA":
-            descriptor = "registration extended-until date" if re.search(r"Registration\s+Extended\s+Until", result.source_note or "", re.I) else "registration expiration date"
-        elif state in {"CO", "PA", "WI"}:
-            descriptor = "expiration date"
-        elif re.search(r"due date|next report", result.source_note or "", re.I):
-            descriptor = "due date"
-        article = "an" if descriptor[0].lower() in "aeiou" else "a"
-        if normalized_status == "upcoming filing":
-            return f"The {state} public registry shows {article} {descriptor} of {format_date(registry_date)}, which is within 6 months."
-        if normalized_status == "current":
-            return f"The {state} public registry shows {article} {descriptor} of {format_date(registry_date)}, which is not within the next 6 months."
-        return f"The {state} public registry shows {article} {descriptor} of {format_date(registry_date)}, which is overdue."
-    labeled_dates = [] if state == "CA" else labeled_due_dates_from_text(combined_result_text(result, body))
-    if labeled_dates and normalized_status in {"upcoming filing", "current", "delinquent"}:
-        due_date = labeled_dates[0]
-        if normalized_status == "upcoming filing":
-            return f"The {state} public registry shows a due or expiration date of {format_date(due_date)}, which is within 6 months."
-        if normalized_status == "current":
-            return f"The {state} public registry shows a due or expiration date of {format_date(due_date)}, which is not within the next 6 months."
-        return f"The {state} public registry shows a due or expiration date of {format_date(due_date)}, which is overdue."
-    if result.state in SUPPORTED_STATES:
-        if context.get("due_date"):
-            if context.get("uses_extension_scenario"):
-                base_due = context.get("base_due_date")
-                extended_due = context.get("extended_due_date")
-                base_status = status_from_calendar_date(base_due) if base_due else "Unknown"
-                extended_status = status_from_calendar_date(extended_due) if extended_due else public_facing_status
-                filing_name = "annual filing"
-                if state == "MA":
-                    filing_name = "Form PC"
-                elif state == "NY":
-                    filing_name = "CHAR500 annual filing"
-                elif state == "PA":
-                    filing_name = "annual renewal"
-                if state == "NJ":
-                    nj_status = status_from_calendar_date(base_due)
-                    fiscal_end = context["fiscal_end"]
-                    report_year = context["next_report_year"]
-                    fy_end = date(report_year, fiscal_end[0], fiscal_end[1])
-                    return (
-                        f"{context['represented_year']} appears to be the most recent New Jersey filing year identified in the CharityClarity check. "
-                        f"Based on a {fiscal_end[0]}/{fiscal_end[1]} fiscal year end, the next New Jersey annual filing is for FY ending {format_date(fy_end)} "
-                        f"and is due {format_date(base_due)}. CE Status is {nj_status}."
-                    )
-                if state == "MD":
-                    extension_label = "Maryland automatic extension"
-                elif state == "MA":
-                    extension_label = "Massachusetts six-month extension"
-                else:
-                    extension_label = "six-month extension"
-                if state == "MD":
-                    status_sentence = (
-                        f"CE Status is {base_status} based on the initial due date. "
-                        f"If Maryland's automatic extension was processed, the due date would be {format_date(extended_due)} "
-                        f"and the status would be {extended_status} under that extension scenario."
-                    )
-                elif state == "NY":
-                    status_sentence = (
-                        f"CE Status is {base_status} based on the base due date. "
-                        f"If the {extension_label} was granted, the extended deadline would be {format_date(extended_due)} and the status would be {extended_status}."
-                    )
-                else:
-                    status_sentence = (
-                        f"CE Status is {base_status} based on the base due date. "
-                        f"If the {extension_label} was granted, the extended deadline would be {format_date(extended_due)} and the status would be {extended_status}."
-                    )
-                return (
-                    f"{context['represented_year']} appears to be the most recent {state} filing year identified in the CharityClarity check. "
-                    f"Based on a {context['fiscal_end'][0]}/{context['fiscal_end'][1]} fiscal year end, the {context['next_report_year']} {filing_name} initial due date is {format_date(base_due)}. "
-                    f"{status_sentence}"
-                )
+    if state == "MD" and context.get("extended_due_date") == context.get("due_date") and context.get("due_date") and re.match(r"\s*Current\b", raw, re.I):
+        due = context["due_date"]
+        return (f"The registry lists the registration as Current. The next annual filing's base due date is {format_date(context['base_due_date'])}; "
+                f"Maryland's automatic extension runs through {format_date(due)}. {comment_date_conclusion(due, status)}")
+    if state == "NH":
+        base, effective = nh_effective_report_due_date(result, body)
+        if effective and effective != base:
+            return f"The state list shows a report due date of {format_date(base)}. The extension used for this check moves that date to {format_date(effective)}. {comment_date_conclusion(effective, status)}"
+    if not due and context.get("due_date") and context.get("represented_year"):
+        due = context["due_date"]
+        calculated = True
+        label = "calculated filing due date"
+    if not due:
+        due = comment_labeled_date(body, r"Next Filing Due|Next Due|Report Due|Due Date|Expiration Date|Renewal Date")
+
+    last_year = str(getattr(result, "last_year_on_record", "") or "")
+    if not last_year:
+        match = re.search(r"(?:Last Year on Record|Yr Last Filed|Most Recent Report Filing Year|Latest Fiscal Period End Year)\s*:\s*(20\d{2})", raw, re.I)
+        last_year = match.group(1) if match else ""
+    period = str(getattr(result, "next_required_period", "") or "")
+    if not period:
+        match = re.search(r"Next Required (?:Period|FYE)\s*:\s*([^|]+)", raw, re.I)
+        period = match.group(1).strip() if match else ""
+    fye = comment_labeled_date(raw, r"Latest FYE|Fiscal Year Ending|Fiscal Period End")
+    if not last_year and fye:
+        last_year = str(fye.year)
+
+    if due and status in {"Current", "Upcoming Filing", "Delinquent"}:
+        if status_from_calendar_date(due) != status:
+            # Do not manufacture a timing explanation that contradicts an explicit adverse label.
+            adverse = comment_registry_status(raw, "Delinquent") if status == "Delinquent" else ""
+            if adverse:
+                return f'{source} lists the registration or filing as "{adverse}", so CharityClarity classifies the status as {status}. The record also lists {label} of {format_date(due)}; that date does not override the recorded status.'
+            return f"{source} lists {label} of {format_date(due)}. {comment_date_conclusion(due, status)} The available evidence does not fully explain that difference; confirm it with the state."
+        if calculated:
+            year_evidence = f"{source} shows {last_year} as the last filing year on record. " if last_year else ""
+            if fye:
+                year_evidence = f"{source} shows the latest filed fiscal year ended {format_date(fye)}. "
+            if not year_evidence and context.get("represented_year"):
+                year_evidence = f"The latest filing year identified is {context['represented_year']}. "
+            period_text = f" for the period ending {period}" if period else ""
+            extra_basis = ""
+            if state == "AK":
+                extra_basis = "Alaska's annual cycle requires renewal on September 1 of the following year. "
+            elif state == "NM" and "Registration Submitted" in raw:
+                extra_basis = "The previous registration was submitted, so the next filing cycle is used. "
+            text = f"{year_evidence}{extra_basis}Under the state renewal rules, the next filing{period_text} is due {format_date(due)}. {comment_date_conclusion(due, status)}"
             if state == "MA":
-                fiscal_end = context["fiscal_end"]
-                report_year = context["next_report_year"]
-                fy_end = date(report_year, fiscal_end[0], fiscal_end[1])
-                base_due = fifteenth_day_after_fiscal_year_end(fy_end, 5)
-                extended_due = add_months(base_due, 6)
-                return (
-                    f"{context['represented_year']} Form PC appears to be the most recent annual charity filing on record. "
-                    f"Based on a {fiscal_end[0]}/{fiscal_end[1]} fiscal year end, the {report_year} Form PC base due date is {format_date(base_due)}. "
-                    f"If the organization remains registered and in compliance, Massachusetts generally allows a 6 month extension, "
-                    f"making the extended deadline {format_date(extended_due)}."
-                )
-            if state == "NY":
-                fiscal_end = context["fiscal_end"]
-                report_year = context["next_report_year"]
-                fy_end = date(report_year, fiscal_end[0], fiscal_end[1])
-                base_due = fifteenth_day_after_fiscal_year_end(fy_end, 5)
-                extended_due = add_months(base_due, 6)
-                return (
-                    f"{context['represented_year']} appears to be the most recent New York annual filing on record. "
-                    f"Based on a {fiscal_end[0]}/{fiscal_end[1]} fiscal year end, the {report_year} CHAR500 annual filing base due date is {format_date(base_due)}. "
-                    f"If an extension applies, the extended deadline is approximately {format_date(extended_due)}."
-                )
-            if state == "NJ":
-                due_date = context["due_date"]
-                calculated_status = status_from_calendar_date(due_date)
-                fiscal_end = context["fiscal_end"]
-                report_year = context["next_report_year"]
-                fy_end = date(report_year, fiscal_end[0], fiscal_end[1])
-                return (
-                    f"{context['represented_year']} appears to be the most recent New Jersey filing year identified in the CharityClarity check. "
-                    f"Based on a {fiscal_end[0]}/{fiscal_end[1]} fiscal year end, the next New Jersey annual filing is for FY ending {format_date(fy_end)} "
-                    f"and is due {format_date(due_date)}. CE Status is {calculated_status}."
-                )
-            return context["comment"]
-    if normalized_status == "upcoming filing":
-        return "A filing or renewal appears to be due soon based on the CharityClarity check."
-    if normalized_status == "current":
-        return "No delinquency was identified in the CharityClarity check."
-    if "delinquent" in normalized_status or "non-compliant" in normalized_status:
-        return "The CharityClarity check indicates a delinquency."
-    return "Review the CharityClarity result for additional details."
+                text += " The calculation uses the fiscal year end available to CharityClarity; any applicable extension should be confirmed."
+            elif context.get("uses_extension_scenario"):
+                text += " An extension was not confirmed; an approved extension may change the due date."
+            return text
+        article = "an" if label[0] in "aeiou" else "a"
+        return f"{source} shows {article} {label} of {format_date(due)}. {comment_date_conclusion(due, status)}"
+
+    if status == "Delinquent":
+        if observed:
+            return f'{source} lists the registration or filing as "{observed}", so CharityClarity classifies the status as Delinquent.'
+        if re.search(r"annual\s+filings?\s+not\s+visible", raw, re.I):
+            return "The organization was found, but its annual filing information was not visible. CharityClarity infers Delinquent from that missing information; this does not establish that the state has no filings or independently confirm an overdue obligation."
+        if state == "NY" and reason == "NY_SAFE_MATCH_NO_FILINGS_DELINQUENT":
+            return "The organization was found, but the completed annual-filing search returned no filings and no exemption was shown. CharityClarity infers Delinquent from that missing filing history; the state did not explicitly label the record delinquent."
+        if annual_filings_absent(combined):
+            return "The organization was found, but the registry shows no annual filings and no exemption was identified. CharityClarity's filing-history rule infers Delinquent from that absence; a specific overdue deadline was not confirmed."
+        year = last_year or context.get("represented_year")
+        if year and stale_represented_year_is_delinquent(int(year)):
+            return f"The most recent filing year identified is {year}, more than one annual cycle behind. CharityClarity infers Delinquent from the age of that filing record; a precise due date could not be confirmed."
+        if state in {"HI", "PA", "MA", "SC"}:
+            missing = "a usable registration expiration date" if state == "PA" else "an annual filing year"
+            return f"The organization was found, but {missing} could not be identified. CharityClarity infers Delinquent from the missing filing information; the available evidence does not independently confirm an overdue obligation."
+        return "CharityClarity returned Delinquent, but the available record does not identify the overdue filing, expiration date or explicit state delinquency supporting that result. Confirmation with the state is needed."
+    if status == "Current" and observed:
+        return f'{source} lists the organization as "{observed}", so CharityClarity classifies the status as Current. No separate renewal deadline was available for this check.'
+    if status == "Current" and (last_year or context.get("represented_year")):
+        return f"The latest filing year identified is {last_year or context['represented_year']}. CharityClarity's annual-cycle rule treats that filing as covering the period reviewed, so the status is Current; a precise next deadline was not available."
+    return f"CharityClarity returned {status}, but the available record does not include enough supporting detail to explain that status. Confirmation with the state is needed."
 
 
 def append_registry_match_comment(result, comment: str, public_facing_status: str) -> str:
