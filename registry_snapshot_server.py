@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.06.3-staging").strip() or "2026.09.06.3-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.06.4-staging").strip() or "2026.09.06.4-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -17042,6 +17042,7 @@ def search_ok_with_variants(page, org, module):
         result = search_ok_precise(page, variant_org, module)
         result.queries_attempted = list(attempted_variants)
         result.source_attempts = [
+            *(getattr(result, "source_attempts", []) or []),
             f"Oklahoma attempted bounded name/alias queries: {', '.join(attempted_variants[:OK_QUERY_LIMIT])}."
         ]
         if getattr(result, "organization_name", "") != original_name:
@@ -17383,56 +17384,82 @@ def ok_certificate_expiration(pdf_bytes: bytes, registry_name: str) -> tuple[dat
 
 
 def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: str) -> tuple[date | None, str]:
+    """Read the selected certificate; recover non-PDF responses without blind download waits."""
     document_id = re.match(r"^\s*(\d+)\b", latest_filing or "")
     if not document_id:
         return None, "The registration document number could not be identified."
+    document_number = document_id.group(1)
+    detail_url = page.url
     direct_note = ""
     try:
-        link = page.get_by_role("link", name=document_id.group(1), exact=True)
+        link = page.get_by_role("link", name=document_number, exact=True)
         postback = re.search(r"__doPostBack\('([^']+)'", link.get_attribute("href") or "")
-        if postback and re.fullmatch(r"ctl00\$DefaultContent\$grdFilingList\$ctl\d+\$lnkAction", postback.group(1)):
-            # Submit the same public document-view postback with the browser's
-            # session. A PDF response does not require a browser download event.
-            fields = page.locator("form").first.evaluate(
-                '(form) => Object.fromEntries(Array.from(new FormData(form).entries()).filter(([k,v]) => typeof v === "string"))'
-            )
-            fields["__EVENTTARGET"] = postback.group(1)
-            fields["__EVENTARGUMENT"] = ""
-            response = page.request.post(page.url, form=fields, timeout=15000)
-            if response.ok:
-                pdf_bytes = response.body()
-                if pdf_bytes.startswith(b"%PDF"):
-                    return ok_certificate_expiration(pdf_bytes, registry_name)
-            diagnostic_body = response.body()
-            diagnostic_text = diagnostic_body[:200000].decode("utf-8", errors="replace")
-            diagnostic_text = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", "", diagnostic_text, flags=re.I | re.S)
-            diagnostic_text = re.sub(r"<[^>]+>", " ", diagnostic_text)
-            diagnostic_text = re.sub(r"\s+", " ", diagnostic_text).strip()[:600]
-            direct_note = (f"The certificate endpoint returned HTTP {response.status}, "
-                           f"{response.headers.get('content-type', 'unspecified content type')}, "
-                           f"{len(diagnostic_body)} bytes instead of a PDF. Response: {diagnostic_text}. ")
+        if not postback or not re.fullmatch(r"ctl00\$DefaultContent\$grdFilingList\$ctl\d+\$lnkAction", postback.group(1)):
+            return None, "The selected registration document did not expose a valid registry action."
+        fields = page.locator("form").first.evaluate(
+            '(form) => Object.fromEntries(Array.from(new FormData(form).entries()).filter(([k,v]) => typeof v === "string"))'
+        )
+        fields["__EVENTTARGET"] = postback.group(1)
+        fields["__EVENTARGUMENT"] = ""
+        response = page.request.post(detail_url, form=fields, timeout=15000)
+        pdf_bytes = response.body()
+        if response.ok and pdf_bytes.startswith(b"%PDF"):
+            due, note = ok_certificate_expiration(pdf_bytes, registry_name)
+            return due, "Certificate retrieval: primary request returned a verified PDF." if due else note
+        direct_note = (f"Primary certificate response: HTTP {response.status}, "
+                       f"{response.headers.get('content-type', 'unspecified content type')}, "
+                       f"{len(pdf_bytes)} bytes; no PDF received.")
     except Exception as exc:
-        direct_note = f"Direct certificate retrieval could not be completed ({type(exc).__name__}). "
+        direct_note = f"Primary certificate request failed ({type(exc).__name__})."
     try:
-        for attempt in range(2):
-            try:
-                with page.expect_download(timeout=30000 if attempt == 0 else 15000) as event:
-                    page.get_by_role("link", name=document_id.group(1), exact=True).click(timeout=5000)
-                download = event.value
-                break
-            except Exception as exc:
-                if attempt or type(exc).__name__ != "TimeoutError":
-                    raise
-        # Retry only a failed download; successful registry checks incur no extra request.
-        path = download.path()
-        if not path:
-            return None, "The registration certificate could not be downloaded."
-        try:
-            return ok_certificate_expiration(Path(path).read_bytes(), registry_name)
-        finally:
-            download.delete()
+        # The API request can return an error/document page instead of an attachment.
+        # Refresh its form state, then inspect the browser's actual response bytes.
+        # This replaces two download-event waits (30s + 15s), not the normal fast path.
+        page.goto(detail_url, wait_until="domcontentloaded", timeout=12000)
+        link = page.get_by_role("link", name=document_number, exact=True)
+        link.wait_for(state="visible", timeout=5000)
+        browser_response = page.evaluate(
+            r"""async (documentNumber) => {
+                const link = Array.from(document.querySelectorAll('a')).find(a => a.textContent.trim() === documentNumber);
+                const target = (link?.getAttribute('href') || '').match(/__doPostBack\('([^']+)'/);
+                if (!target || !/^ctl00\$DefaultContent\$grdFilingList\$ctl\d+\$lnkAction$/.test(target[1]))
+                    throw new Error('Selected certificate action is unavailable on the refreshed record');
+                const form = link.closest('form');
+                if (!form) throw new Error('Registry form is missing');
+                const fields = new URLSearchParams();
+                for (const [key, value] of new FormData(form)) if (typeof value === 'string') fields.append(key, value);
+                fields.set('__EVENTTARGET', target[1]); fields.set('__EVENTARGUMENT', '');
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), 12000);
+                try {
+                    const response = await fetch(form.action || location.href, {
+                        method: 'POST', body: fields, credentials: 'same-origin', signal: controller.signal
+                    });
+                    if (Number(response.headers.get('content-length') || 0) > 20000000)
+                        throw new Error('Certificate exceeds the document size limit');
+                    const bytes = new Uint8Array(await response.arrayBuffer());
+                    if (bytes.length > 20000000) throw new Error('Certificate exceeds the document size limit');
+                    const pdf = bytes.length >= 4 && bytes[0] === 37 && bytes[1] === 80 && bytes[2] === 68 && bytes[3] === 70;
+                    let binary = '';
+                    if (response.ok && pdf) for (let i = 0; i < bytes.length; i += 32768)
+                        binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
+                    return {ok: response.ok, status: response.status, content_type: response.headers.get('content-type'),
+                            size: bytes.length, pdf_base64: binary ? btoa(binary) : ''};
+                } finally { clearTimeout(timer); }
+            }""",
+            document_number,
+        )
+        if browser_response.get("ok") and browser_response.get("pdf_base64"):
+            pdf_bytes = base64.b64decode(browser_response["pdf_base64"], validate=True)
+            due, note = ok_certificate_expiration(pdf_bytes, registry_name)
+            if due:
+                return due, direct_note + " Certificate retrieval: one refreshed browser request returned a verified PDF."
+            return None, direct_note + " " + note
+        unavailable = "Oklahoma certificate service unavailable. " if int(browser_response.get("status") or 0) >= 400 else ""
+        return None, (unavailable + direct_note + f" Refreshed browser certificate response: HTTP {browser_response.get('status')}, "
+                      f"{browser_response.get('content_type')}; no PDF received.")
     except Exception as exc:
-        return None, direct_note + f"Registration certificate lookup could not be completed ({type(exc).__name__})."
+        return None, "Oklahoma certificate service unavailable. " + direct_note + f" Refreshed browser certificate request failed ({type(exc).__name__})."
 
 
 def ok_status_from_latest_filing_date(latest_filing_date: date) -> tuple[str, date | None]:
@@ -17658,6 +17685,7 @@ def search_ok_precise(page, org, module):
             return result
 
         certificate_due, certificate_note = ok_fetch_registration_certificate(page, latest_filing, matched_name)
+        result.source_attempts = [certificate_note]
         if certificate_due:
             result.status = status_from_calendar_date(certificate_due)
             result.raw_status_text = f"{latest_filing} | Certificate Expiration Date: {format_date(certificate_due)}"
@@ -17667,6 +17695,12 @@ def search_ok_precise(page, org, module):
                 "CharityClarity classifies registration status using that certificate date; it does not infer a deadline from unrelated filing activity."
             )
             result.success = True
+            return result
+        if certificate_note.startswith("Oklahoma certificate service unavailable."):
+            result.status = "Site Not Reachable"
+            result.raw_status_text = latest_filing
+            result.source_note = certificate_note + " The matched organization was found, but the state certificate could not be retrieved; no deadline was inferred."
+            result.success = False
             return result
         latest_filing_date = module.parse_ok_filing_date(latest_filing)
         if latest_filing_date:
