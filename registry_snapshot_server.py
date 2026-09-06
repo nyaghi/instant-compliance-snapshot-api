@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.06.7-staging").strip() or "2026.09.06.7-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.06.8-staging").strip() or "2026.09.06.8-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -17381,7 +17381,13 @@ def ok_certificate_expiration(pdf_bytes: bytes, registry_name: str) -> tuple[dat
                         _OK_CERTIFICATE_OCR_DETAIL = RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1, det_limit_side_len=1600)
                     engine = _OK_CERTIFICATE_OCR_DETAIL
                 lines, _ = engine(image)
-                text = "\n".join(str(row[1]) for row in lines or [] if float(row[2]) >= 0.90)
+                # OCR casing can depress a correctly read name's score. Retain
+                # only an exact full registry-name line below the usual cutoff;
+                # headings, expiration text and digits keep the 0.90 requirement.
+                identity_key = re.sub(r"[^a-z0-9]", "", normalized_match_name(registry_name))
+                text = "\n".join(str(row[1]) for row in lines or []
+                                 if float(row[2]) >= 0.90 or
+                                 (identity_key and re.sub(r"[^a-z0-9]", "", normalized_match_name(str(row[1]))) == identity_key))
                 due = ok_certificate_date_from_text(text, registry_name)
                 if due:
                     return due, text

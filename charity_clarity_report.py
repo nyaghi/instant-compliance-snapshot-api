@@ -13,7 +13,7 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.utils import ImageReader
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
 
-REPORT_VERSION = "1.0.1"
+REPORT_VERSION = "1.0.2"
 NAVY = colors.HexColor("#0B2A5B")
 INK = colors.HexColor("#172B45")
 MUTED = colors.HexColor("#536274")
@@ -238,6 +238,11 @@ def generate_report(payload, supported_states):
                 pass
             story.append(p(f"{state}: scheduled download {when}. State source date: {source_date}.", "small"))
         story.append(p("Downloads may lag registry changes. Confirm time-sensitive decisions directly with the state. These dates are from the checked results; generating this report does not refresh the data.", "small"))
+    for row in rows:
+        if row["state"] == "OK":
+            cached = re.search(r"Certificate freshness note: reused the verified certificate retrieved (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC)", row["comments"] + " " + row["source_note"])
+            if cached:
+                story.append(p(f"OK certificate: verified copy retrieved {cached.group(1)} and reused within 24 hours at lookup. The live record still listed the same filing document. Report generation does not refresh this evidence.", "small"))
     story.extend([Spacer(1, 7), p("Basis and limits", "h3"), p("This report summarizes CharityClarity output for the listed organization and states. It does not independently verify the output, determine where registration is legally required, or replace a complete compliance review. Evidence excerpts are shortened; linked registry records and the full snapshot comments provide the supporting detail.", "small")])
     for start in range(0, len(rows), 10):
         section = rows[start:start+10]

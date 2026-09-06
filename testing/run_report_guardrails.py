@@ -80,6 +80,15 @@ class ReportTests(unittest.TestCase):
         _, text = self.pdf([row("OR")])
         self.assertIn("scheduled download not supplied in this snapshot", text)
 
+    def test_ok_certificate_retrieval_time_survives_excerpt_shortening(self):
+        statuses = sorted(report.HIGH | report.MODERATE | report.INCOMPLETE | report.LOW)
+        rows = [row(s, statuses[i % len(statuses)]) for i, s in enumerate(sorted(cc.SUPPORTED_STATES))]
+        ok = next(r for r in rows if r["state"] == "OK")
+        ok["comments"] = "Long registry evidence. " * 30 + "Certificate freshness note: reused the verified certificate retrieved 2026-09-06 12:34:56 UTC (less than 24 hours old)."
+        reader, text = self.pdf(rows)
+        self.assertEqual(len(reader.pages), 5)
+        self.assertIn("OK certificate: verified copy retrieved 2026-09-06 12:34:56 UTC", text)
+
     def test_duplicate_state_rejected(self):
         with self.assertRaises(ValueError): self.pdf([row(), row()])
 

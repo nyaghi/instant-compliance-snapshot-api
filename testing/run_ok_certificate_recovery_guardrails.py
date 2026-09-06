@@ -50,6 +50,27 @@ class OklahomaCertificateRecoveryTests(unittest.TestCase):
         comments = cc.comments_for_result(result, "Certificate Expiration Date: March 12, 2027", "Current")
         self.assertIn(result.source_note, comments)
 
+    def test_low_confidence_exact_name_does_not_relax_dates_or_identity(self):
+        pdf_page = Mock()
+        pdf_page.extract_text.return_value = ""
+        pdf_page.images = [Mock(image=Mock(width=100, height=100))]
+        for printed_name, date_confidence, expected in (
+            (self.name, .98, date(2027, 1, 28)),
+            ("Other National Foundation", .98, None),
+            (self.name, .80, None),
+        ):
+            with self.subTest(name=printed_name, date_confidence=date_confidence):
+                lines = [[[], "CERTIFICATE OF REGISTRATION", .99],
+                         [[], "WHEREAS,theRenewalRegistrationof", .99],
+                         [[], printed_name, .78], [[], "has been filed", .99],
+                         [[], "will expire on January 28, 2027", date_confidence]]
+                engine = Mock(return_value=(lines, None))
+                with patch("pypdf.PdfReader", return_value=Mock(pages=[pdf_page])), \
+                     patch.object(cc, "_OK_CERTIFICATE_OCR", engine), \
+                     patch.object(cc, "_OK_CERTIFICATE_OCR_DETAIL", engine):
+                    due, _ = cc.ok_certificate_expiration(b"%PDF-fixture", self.name)
+                self.assertEqual(due, expected)
+
     def test_expired_and_future_cache_not_reused(self):
         for age in (86400, 86401, -100):
             with self.subTest(age=age):
