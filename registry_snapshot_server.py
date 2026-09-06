@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.06.2-staging").strip() or "2026.09.06.2-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.06.3-staging").strip() or "2026.09.06.3-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -17403,7 +17403,14 @@ def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: s
                 pdf_bytes = response.body()
                 if pdf_bytes.startswith(b"%PDF"):
                     return ok_certificate_expiration(pdf_bytes, registry_name)
-            direct_note = "The direct document response did not contain a PDF. "
+            diagnostic_body = response.body()
+            diagnostic_text = diagnostic_body[:200000].decode("utf-8", errors="replace")
+            diagnostic_text = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", "", diagnostic_text, flags=re.I | re.S)
+            diagnostic_text = re.sub(r"<[^>]+>", " ", diagnostic_text)
+            diagnostic_text = re.sub(r"\s+", " ", diagnostic_text).strip()[:600]
+            direct_note = (f"The certificate endpoint returned HTTP {response.status}, "
+                           f"{response.headers.get('content-type', 'unspecified content type')}, "
+                           f"{len(diagnostic_body)} bytes instead of a PDF. Response: {diagnostic_text}. ")
     except Exception as exc:
         direct_note = f"Direct certificate retrieval could not be completed ({type(exc).__name__}). "
     try:
