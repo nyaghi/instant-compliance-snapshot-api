@@ -9,6 +9,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import registry_snapshot_server as cc
 
 class WeeklyDataTests(unittest.TestCase):
+    def test_la_and_or_comments_always_include_result_freshness(self):
+        for state in ("LA", "OR"):
+            for status in ("Current", "Not Registered", "Site Not Reachable"):
+                result = cc.checker.StateResult("Example", "98-7654320", state, status, "https://example.org")
+                comment = cc.comments_for_result(result, "", status)
+                self.assertIn("Data freshness note:", comment)
+                self.assertIn(f"Scheduled {state} dataset last downloaded:", comment)
+                self.assertIn("confirm time-sensitive decisions directly with the state", comment)
+
     def test_all_five_deployed_assets_verified(self):
         for state in ("KS", "KY", "LA", "NH", "OR"):
             self.assertTrue(cc.downloadable_data_info(state)["usable"], state)

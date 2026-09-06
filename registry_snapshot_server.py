@@ -96,7 +96,8 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.06.4-staging").strip() or "2026.09.06.4-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.06.5-staging").strip() or "2026.09.06.5-staging"
+REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -20719,6 +20720,49 @@ def payload_missing_required_organization_name(payload: dict) -> bool:
 
 
 class RegistrySnapshotHandler(BaseHTTPRequestHandler):
+    def _send_snapshot_report(self) -> None:
+        # Report rendering is independent of state lookup capacity and performs no registry calls.
+        if not APP_VERSION.endswith("-staging"):
+            self._send_json(404, {"error": "Not found"})
+            return
+        admitted = False
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= 524288:
+                self._send_json(413, {"error": "Report input must be between 1 byte and 512 KB."})
+                return
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("Invalid report request.")
+            email = normalize_email(payload.get("email") or "")
+            passcode = str(payload.get("admin_passcode") or "").strip()
+            access_error = staging_access_error(email, passcode)
+            if access_error or not is_exempt_domain(email_domain(email)) or passcode != ADMIN_PASSCODE:
+                self._send_json(403, {"error": access_error or "Unlock staging internal tools to generate a report."})
+                return
+            admitted = REPORT_REQUEST_SEMAPHORE.acquire(blocking=False)
+            if not admitted:
+                self._send_json(429, {"error": "Report generation is busy. Try again shortly."})
+                return
+            from charity_clarity_report import generate_report
+            pdf = generate_report(payload, SUPPORTED_STATES)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/pdf")
+            self.send_header("Content-Disposition", 'attachment; filename="CharityClarity-report.pdf"')
+            self.send_header("Content-Length", str(len(pdf)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(pdf)
+        except (ValueError, TypeError, UnicodeError) as exc:
+            self._send_json(400, {"error": str(exc)})
+        except Exception as exc:
+            log_error(f"POST /api/report failed: {type(exc).__name__}")
+            self._send_json(500, {"error": "The report could not be generated. Your state results have been retained."})
+        finally:
+            if admitted:
+                REPORT_REQUEST_SEMAPHORE.release()
+
     def _send_json(self, status_code: int, payload: dict, extra_headers: dict[str, str] | None = None) -> None:
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status_code)
@@ -20898,6 +20942,9 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
         self._send_json(404, {"error": "Open http://127.0.0.1:8765/ to use the registry snapshot page."})
 
     def do_POST(self) -> None:
+        if self.path == "/api/report":
+            self._send_snapshot_report()
+            return
         if self.path != "/api/check":
             self._send_json(404, {"error": "Not found"})
             return

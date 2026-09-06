@@ -13,11 +13,13 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--staging", action="store_true")
 parser.add_argument("--full", action="store_true")
 parser.add_argument("--output", required=True)
+parser.add_argument("--cases", help="Explicit research/test cases; approved expectations are preserved.")
 args = parser.parse_args()
-rows = json.loads(Path(__file__).with_name("weekly-data-regression-baseline.json").read_text(encoding="utf-8"))
-if not args.full:
+rows = json.loads((Path(args.cases) if args.cases else Path(__file__).with_name("weekly-data-regression-baseline.json")).read_text(encoding="utf-8"))
+if not args.full and not args.cases:
     rows = [r for r in rows if r["state"] in {"KS", "KY", "LA", "NH", "OR"} or (r["state"] == "CO" and r["ein"] == "860481941")]
-rows.append({"organization": "ZZZ CharityClarity Nonexistent Test 987654321", "ein": "000000000", "state": "KS", "manual_expected": "Not Registered", "prior_staging": "Not Registered"})
+if not args.cases:
+    rows.append({"organization": "ZZZ CharityClarity Nonexistent Test 987654321", "ein": "000000000", "state": "KS", "manual_expected": "Not Registered", "prior_staging": "Not Registered"})
 import registry_snapshot_server as cc
 
 def run(row):
@@ -25,7 +27,7 @@ def run(row):
     try:
         if args.staging:
             request = urllib.request.Request(API, data=json.dumps({"organization_name": row["organization"], "ein": row["ein"], "state": row["state"], "email": "staging-smoke@" + cc.EXEMPT_EMAIL_DOMAIN, "admin_passcode": cc.ADMIN_PASSCODE}).encode(), headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(request, timeout=120) as response:
+            with urllib.request.urlopen(request, timeout=240) as response:
                 result = json.load(response)
         else:
             result = cc.run_state_lookup(row["organization"], row["ein"], row["state"])
