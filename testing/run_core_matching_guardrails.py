@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import csv
+from datetime import date
+from unittest.mock import patch
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -138,6 +140,17 @@ def assert_state_specific_variant_order(failures: list[str]) -> None:
 
 
 def assert_deadline_helpers(failures: list[str]) -> None:
+    # The approved scenarios describe June 2026. Freeze their clock rather than
+    # letting an unchanged expected Upcoming result expire as wall time passes.
+    class FixtureDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 6, 25)
+    with patch.object(nm_checker, "date", FixtureDate):
+        _assert_deadline_helpers_at_fixture_date(failures)
+
+
+def _assert_deadline_helpers_at_fixture_date(failures: list[str]) -> None:
     give2asia = nm_checker.SearchResult(
         "Give2Asia",
         "943373670",

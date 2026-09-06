@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.05.1-staging").strip() or "2026.09.05.1-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.05.2-staging").strip() or "2026.09.05.2-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -554,6 +554,11 @@ def load_wa_nm_module():
             )
         else:
             STATE_WA_NM_MODULE = load_module_from_path("charity_wa_nm_checker", STATE_WA_NM_PATH)
+        module = STATE_WA_NM_MODULE
+        module.original_nm_apply_status_history = module.apply_nm_rows_to_result
+        module.apply_nm_rows_to_result = lambda result, rows, fye_text="", context=None: nm_apply_status_history_master(
+            module, result, rows, fye_text=fye_text, context=context
+        )
     return STATE_WA_NM_MODULE
 
 
@@ -1327,6 +1332,12 @@ def public_status(result) -> str:
         return "Site Not Reachable"
 
     normalized = status.lower()
+    # A prior empty query does not prove a negative after an incomplete fallback.
+    if normalized == "unknown" and re.search(
+        r"detail page not reached|detail page was not reached|detail.*could not be|timed? out|human verification|captcha|invalid request",
+        result.raw_status_text or "", re.I,
+    ):
+        return "Unable to Confirm"
     if normalized == "unknown":
         no_record_text = " ".join([
             result.raw_status_text or "",
@@ -2220,6 +2231,19 @@ def filing_context(result, body: str) -> dict:
 
     next_report_year = latest_year + 1
     due_options = filing_due_date_options(result.state, next_report_year, fiscal_end)
+    if (
+        state == "MD"
+        and re.search(r"^\s*Current\b", result.raw_status_text or "", re.I)
+        and due_options.get("base_due")
+        and due_options["base_due"] < date.today()
+        and due_options.get("extended_due")
+    ):
+        due_options["effective_due"] = due_options["extended_due"]
+        due_options["uses_extension_scenario"] = False
+        due_options["rule_note"] = (
+            "Maryland's automatic extension applies to a current registration through "
+            "the 15th day of the 11th month after fiscal year end"
+        )
     due_date = due_options["effective_due"]
     rule_note = due_options["rule_note"]
     if due_date is None:
@@ -3630,6 +3654,7 @@ def registry_name_is_safe_against_targets(registry_name: str, targets: list[str]
             or incompatible_institutional_prefix_expansion(original_name, registry_name)
             or embedded_institution_identity_conflict(original_name, registry_name)
             or institutional_subunit_identity_conflict(original_name, registry_name)
+            or distinctive_entity_extension_mismatch(original_name, registry_name)
         )
     return False
 
@@ -4575,7 +4600,10 @@ def sc_official_detail_lookup(org) -> object | None:
             candidate_name = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", match.group("name")))).strip()
             if not candidate_id or not candidate_name:
                 continue
-            safe_candidate_name = registry_name_is_safe_against_targets(candidate_name, targets, original_name, getattr(org, "ein", ""))
+            safe_candidate_name = (
+                registry_name_is_safe_against_targets(candidate_name, targets, original_name, getattr(org, "ein", ""))
+                and not distinctive_entity_extension_mismatch(original_name, candidate_name)
+            )
             if not safe_candidate_name:
                 continue
             score = target_name_score(candidate_name, targets)
@@ -4717,6 +4745,10 @@ def search_sc_resilient(page, org):
     )
     if not reachable and public_status(result) in {"Site Not Reachable", "Unknown", ""}:
         return preflight_result
+    if result and distinctive_entity_extension_mismatch(org.organization_name, getattr(result, "matched_registry_name", "") or ""):
+        result.status = "Needs Review"
+        result.source_note = "South Carolina returned a related entity whose identity could not be confirmed as the requested organization."
+        result.success = False
     if official_result and (
         public_status(official_result) != "Not Registered"
         or public_status(result) in {"Not Registered", "Unknown", "Site Not Reachable"}
@@ -5139,10 +5171,10 @@ def va_evoke_status_from_entity_and_registrations(entity: dict, registrations: l
     renewal_status = str(reg.get("renewalStatus") or "")
     expiration_date = parse_due_date(str(reg.get("expirationDate") or ""))
     extension_date = parse_due_date(str(reg.get("extensionDate") or ""))
-    effective_date = expiration_date
+    effective_date = max((d for d in (expiration_date, extension_date) if d), default=None)
     combined = " | ".join(part for part in [entity_status, reg_status, reg_type, form_name, renewal_status] if part)
 
-    if re.search(r"\bunregistered\b", entity_status, re.I):
+    if re.search(r"\bunregistered\b", entity_status, re.I) and selected is None:
         status = checker.STATUS_NOT_REGISTERED
     elif re.search(r"\bpending|in\s+(?:process|progress)\b", combined, re.I):
         status = "Pending"
@@ -7840,7 +7872,7 @@ def ct_direct_query(search_name: str, timeout_seconds: float | None = None) -> s
         raise RuntimeError(f"Connecticut direct HTTP query failed: {exc}") from exc
 
 
-def ct_direct_detail_text(row_html: str, timeout_seconds: float | None = None) -> str:
+def ct_direct_detail_text(row_html: str, timeout_seconds: float | None = None, session=None) -> str:
     match = re.search(r"DisplayLicenceDetail\((?:&#39;|')(.+?)(?:&#39;|')\)", row_html or "", re.I | re.S)
     if not match:
         return ""
@@ -7858,8 +7890,14 @@ def ct_direct_detail_text(row_html: str, timeout_seconds: float | None = None) -
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             },
         )
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            detail_html = response.read().decode("utf-8", errors="replace")
+        if session is not None:
+            response = session.get(url, headers=dict(request.header_items()), timeout=timeout)
+            response.raise_for_status()
+            detail_html = response.text
+        else:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                detail_html = response.read().decode("utf-8", errors="replace")
+        detail_html = re.sub(r"<script\b[^>]*>.*?</script>|<style\b[^>]*>.*?</style>", "", detail_html, flags=re.I | re.S)
         return html_fragment_text(detail_html)
     except Exception:
         return ""
@@ -7893,11 +7931,11 @@ def ct_identity_names_from_detail(detail_text: str) -> list[str]:
     return names
 
 
-def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: str):
+def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: str, session=None):
     row_text = html_fragment_text(row_html)
     name_match = re.search(r"<b[^>]*headline6[^>]*>(.*?)</b>", row_html, re.I | re.S)
     row_name = clean_registry_name(html_fragment_text(name_match.group(1)) if name_match else re.split(r"\bCredential\b|\bStatus\b|\bLicense\b", row_text, maxsplit=1, flags=re.I)[0])
-    detail_text = ct_direct_detail_text(row_html, timeout_seconds=3.0)
+    detail_text = ct_direct_detail_text(row_html, timeout_seconds=CT_DIRECT_TIMEOUT_SECONDS, session=session)
     identity_names = [row_name, *ct_identity_names_from_detail(detail_text)]
     scored_names = [(target_name_score(name, safe_targets), name) for name in identity_names if name]
     name_score, best_identity_name = max(scored_names, default=(-10000, row_name), key=lambda item: item[0])
@@ -8134,7 +8172,7 @@ def search_ct_direct(org):
             row_html = row_match.group(0)
             if not re.search(r"\b(PUBLIC\s+CHARITY|CHR\.)\b", html_fragment_text(row_html), re.I):
                 continue
-            result, score = ct_direct_result_from_row(org, row_html, safe_targets, url)
+            result, score = ct_direct_result_from_row(org, row_html, safe_targets, url, session=session)
             if result and score > best_score:
                 best_result = result
                 best_score = score
@@ -9117,7 +9155,10 @@ def search_oh(page, org):
                     for (const link of links) {
                         const onclick = link.getAttribute('onclick') || '';
                         const match = onclick.match(/OpenDetailsLink\\('([^']+)','(\\d+)'\\)/i);
-                        if (match) return { pageName: match[1], id: match[2] };
+                        if (match) {
+                            const cells = Array.from(row.querySelectorAll('td')).map(c => (c.innerText || c.textContent || '').trim());
+                            return { pageName: match[1], id: match[2], registryName: cells[0] || '', inCompliance: cells[8] || '', einConfirmed: true };
+                        }
                     }
                 }
                 return null;
@@ -9204,10 +9245,26 @@ def search_oh(page, org):
         time.sleep(1)
         detail_text = readable_page_text(page)
         if ein_digits not in re.sub(r"\D", "", detail_text):
-            result.status = checker.STATUS_NOT_REGISTERED
-            result.raw_status_text = "No matching EIN result"
-            result.source_note = "Ohio detail page did not confirm the requested EIN."
-            result.success = True
+            # A matched search row followed by a broken detail page is not a negative search.
+            page.goto(detail_url, wait_until="domcontentloaded", timeout=20000)
+            checker.safe_wait_for_network_idle(page, timeout=5000)
+            detail_text = readable_page_text(page)
+        if ein_digits not in re.sub(r"\D", "", detail_text):
+            result.matched_registry_identifier = detail_id
+            result.matched_registry_name = clean_registry_name(detail_ref.get("registryName", ""))
+            if detail_ref.get("einConfirmed") and str(detail_ref.get("inCompliance", "")).strip().lower() == "yes":
+                result.status = checker.STATUS_CURRENT
+                result.raw_status_text = "Ohio exact-EIN search: In Compliance: Yes | Detail page unavailable"
+                result.source_note = (
+                    "Ohio's exact-EIN search lists this organization as In Compliance: Yes. "
+                    "The state detail page could not be loaded after a retry, so a filing deadline was not inferred."
+                )
+                result.success = True
+            else:
+                result.status = "Unable to Confirm"
+                result.raw_status_text = "Ohio matched search record; detail page did not confirm the EIN"
+                result.source_note = "Ohio returned a matching search record, but its detail page was unavailable or incomplete after a retry."
+                result.success = False
             return result
         site_name = text_between_labels(detail_text, "Organization Name", ["Organization Phone", "EIN", "Registration Status"])
         registration_status = text_between_labels(detail_text, "Registration Status", ["Annual Reports Filed", "Most Recent Report Filing Year", "Fiscal Year End"])
@@ -11699,7 +11756,31 @@ def wi_contains_full_target_name(registry_name: str, target_names: list[str]) ->
     return False
 
 
+def explicit_acronym_alias_matches_registry(original_name: str, registry_name: str) -> bool:
+    """Accept an explicit supplied acronym only with a full initialism and shared identity words."""
+    parts = [part.strip() for part in re.split(r"[/|]", original_name or "") if part.strip()]
+    acronyms = [part for part in parts if re.fullmatch(r"[A-Z]{3,8}", part)]
+    if not acronyms:
+        return False
+    ignored = {"the", "a", "an", "of", "for", "and", "inc", "incorporated", "corp", "corporation", "llc", "ltd"}
+    words = [word for word in normalized_match_name(registry_name).split() if word not in ignored]
+    # A location sharing the last initial is not an organization-type expansion.
+    if not words or words[-1] not in {"charity", "charities", "foundation", "association", "society", "organization", "council", "committee", "institute", "fund"}:
+        return False
+    initials = "".join(word[0] for word in words).upper()
+    if initials not in acronyms:
+        return False
+    original_words = set().union(*(set(normalized_match_name(part).split()) for part in parts if part not in acronyms))
+    return len((set(words) & original_words) - ignored) >= 3
+
+
 def wi_live_candidate_name_is_safe(registry_name: str, target_names: list[str], original_name: str, ein: str) -> bool:
+    # A shared acronym alone cannot replace the full organization identity.
+    explicit_acronyms = [part.strip() for part in re.split(r"[/|]", original_name or "") if re.fullmatch(r"[A-Z]{3,8}", part.strip())]
+    if normalized_match_name(registry_name).upper() in explicit_acronyms and len(normalized_match_name(original_name).split()) >= 3:
+        return False
+    if explicit_acronym_alias_matches_registry(original_name, registry_name):
+        return True
     if wi_snapshot_name_is_safe(registry_name, target_names, original_name, ein):
         return True
     candidate_tokens = distinctive_match_tokens(registry_name or "")
@@ -11725,6 +11806,8 @@ def wi_candidate_from_row_html(row_html: str, target_names: list[str], original_
     if not wi_live_candidate_name_is_safe(registry_name, target_names, original_name, ein):
         return None
     score = checker.name_match_priority_for_targets(registry_name, target_names)
+    if explicit_acronym_alias_matches_registry(original_name, registry_name):
+        score = max(score, 4)
     if score < 4 and not wi_contains_full_target_name(registry_name, target_names):
         return None
     href_match = re.search(r"<a[^>]+href=[\"']([^\"']+)[\"']", row_html, re.I)
@@ -11758,6 +11841,8 @@ def wi_candidate_from_markdown_row(row_text: str, target_names: list[str], origi
     if not wi_live_candidate_name_is_safe(registry_name, target_names, original_name, ein):
         return None
     score = checker.name_match_priority_for_targets(registry_name, target_names)
+    if explicit_acronym_alias_matches_registry(original_name, registry_name):
+        score = max(score, 4)
     if score < 4 and not wi_contains_full_target_name(registry_name, target_names):
         return None
     expiration_date = parse_due_date(expiration_text)
@@ -11807,6 +11892,19 @@ def wi_is_decisive_candidate(candidate: dict | None) -> bool:
     return bool(wi_status_from_detail_status(candidate.get("detail_status", "")))
 
 
+def wi_related_chapter_license_ids(names_by_license, target_names, original_name, ein):
+    return {
+        license_id for license_id, names in names_by_license.items()
+        if any(
+            distinctive_entity_extension_mismatch(short, full)
+            and (distinctive_entity_extension_mismatch(original_name, full)
+                 or not wi_live_candidate_name_is_safe(full, target_names, original_name, ein))
+            for short in names for full in names
+            if len(normalized_match_name(full)) > len(normalized_match_name(short))
+        )
+    }
+
+
 def wi_best_match_from_html(result_html: str, target_names: list[str], best_match: dict | None = None, original_name: str = "", ein: str = "") -> dict | None:
     table_match = re.search(
         r"<table[^>]+id=[\"']ctl00_cphMainContent_OrgCredentialSearch_gvCredentialSearchResults[\"'][^>]*>([\s\S]*?)</table>",
@@ -11816,19 +11914,54 @@ def wi_best_match_from_html(result_html: str, target_names: list[str], best_matc
     if not table_match:
         return best_match
 
-    for row_match in re.finditer(r"<tr[^>]*>([\s\S]*?)</tr>", table_match.group(1), re.I):
+    rows = list(re.finditer(r"<tr[^>]*>([\s\S]*?)</tr>", table_match.group(1), re.I))
+    names_by_license = {}
+    for row in rows:
+        cells = html_table_cells(row.group(1))
+        if len(cells) >= 6:
+            names_by_license.setdefault(cells[0], set()).add(cells[2])
+    related_ids = wi_related_chapter_license_ids(names_by_license, target_names, original_name, ein)
+    if best_match and best_match.get("license_number") in related_ids:
+        best_match = None
+    qualifying_ids = set()
+    for row_match in rows:
         row_html = row_match.group(1)
         if re.search(r"<th\b", row_html, re.I):
             continue
+        cells = html_table_cells(row_html)
+        if cells and cells[0] in related_ids:
+            continue
         candidate = wi_candidate_from_row_html(row_html, target_names, original_name, ein)
-        if candidate and wi_better_candidate(candidate, best_match):
-            best_match = candidate
+        if candidate:
+            qualifying_ids.add(candidate["license_number"])
+            if wi_better_candidate(candidate, best_match):
+                best_match = candidate
+    if best_match:
+        best_match["unique_full_identity"] = (
+            len(qualifying_ids) == 1 and best_match["license_number"] in qualifying_ids
+            and (int(best_match.get("score") or 0) >= 5
+                 or explicit_acronym_alias_matches_registry(original_name, best_match.get("registry_name", "")))
+        )
     return best_match
 
 
 def wi_best_match_from_markdown(result_text: str, target_names: list[str], best_match: dict | None = None, original_name: str = "", ein: str = "") -> dict | None:
+    rows = []
+    names_by_license = {}
     for line in (result_text or "").splitlines():
         if not line.strip().startswith("|"):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 6:
+            continue
+        registry_name, _ = wi_markdown_link_parts(cells[2])
+        names_by_license.setdefault(cells[0], set()).add(registry_name)
+        rows.append((cells[0], line))
+    related_ids = wi_related_chapter_license_ids(names_by_license, target_names, original_name, ein)
+    if best_match and best_match.get("license_number") in related_ids:
+        best_match = None
+    for license_id, line in rows:
+        if license_id in related_ids:
             continue
         candidate = wi_candidate_from_markdown_row(line, target_names, original_name, ein)
         if candidate and wi_better_candidate(candidate, best_match):
@@ -11902,6 +12035,8 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str], 
                 continue
             http_reached = True
             best_match = wi_best_match_from_html(result_html, target_names, best_match, original_name, ein)
+            if best_match and best_match.get("unique_full_identity") and best_match.get("expiration_date"):
+                return best_match, http_reached
         except Exception:
             pass
 
@@ -11950,9 +12085,9 @@ def search_wi(page, org, max_seconds: float | None = None):
     wi_http_reached = False
     target_names = organization_match_target_variants(org.organization_name, org.ein)
     try:
-        best_match, wi_reader_reached = wi_reader_search_best_match(direct_names, target_names, deadline, original_name=original_name, ein=ein)
+        best_match, wi_http_reached = wi_http_search_best_match(direct_names, target_names, deadline, original_name=original_name, ein=ein)
         if not best_match:
-            best_match, wi_http_reached = wi_http_search_best_match(direct_names, target_names, deadline, original_name=original_name, ein=ein)
+            best_match, wi_reader_reached = wi_reader_search_best_match(direct_names, target_names, deadline, original_name=original_name, ein=ein)
 
         if not best_match and page is not None and time.perf_counter() < deadline and WI_BROWSER_VARIANT_LIMIT > 0:
             for search_name in searched_names[:WI_BROWSER_VARIANT_LIMIT]:
@@ -11991,47 +12126,9 @@ def search_wi(page, org, max_seconds: float | None = None):
                     pass
                 last_body = registry_page_body(page)
 
-                rows = page.locator("#ctl00_cphMainContent_OrgCredentialSearch_gvCredentialSearchResults tr")
-                for i in range(1, min(rows.count(), 100)):
-                    cells = rows.nth(i).locator("th,td")
-                    if cells.count() < 6:
-                        continue
-                    values = [
-                        re.sub(r"\s+", " ", cells.nth(index).inner_text(timeout=1500)).strip()
-                        for index in range(6)
-                    ]
-                    license_number, profession, registry_name, location, granted_date, expiration_text = values
-                    if not re.search(r"Charitable\s+Organization", profession, re.I):
-                        continue
-                    if not wi_live_candidate_name_is_safe(registry_name, target_names, original_name, ein):
-                        continue
-                    score = checker.name_match_priority_for_targets(registry_name, target_names)
-                    if score < 4 and not wi_contains_full_target_name(registry_name, target_names):
-                        continue
-                    href = ""
-                    try:
-                        href = rows.nth(i).locator("a").first.get_attribute("href") or ""
-                    except Exception:
-                        href = ""
-                    expiration_date = parse_due_date(expiration_text)
-                    detail_status = wi_http_detail_status(href)
-                    if not expiration_date and not wi_status_from_detail_status(detail_status):
-                        continue
-                    candidate = {
-                        "score": score,
-                        "expiration_date": expiration_date,
-                        "license_number": license_number,
-                        "registry_name": registry_name,
-                        "location": location,
-                        "granted_date": granted_date,
-                        "detail_href": href,
-                        "detail_status": detail_status,
-                    }
-                    if (
-                        not best_match
-                        or wi_better_candidate(candidate, best_match)
-                    ):
-                        best_match = candidate
+                best_match = wi_best_match_from_html(
+                    page.content(), target_names, best_match, original_name, ein
+                )
 
         if not best_match and time.perf_counter() < deadline:
             retry_names = direct_names[: min(5, len(direct_names))]
@@ -12445,7 +12542,9 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
             getattr(result, "ein", "") or getattr(org, "ein", ""),
             {"name": getattr(result, "matched_registry_name", "")},
         )
-        if identity_decision.get("decision") == "rejected":
+        if identity_decision.get("decision") == "rejected" and not explicit_acronym_alias_matches_registry(
+            getattr(org, "organization_name", ""), getattr(result, "matched_registry_name", "")
+        ):
             rejected_name = getattr(result, "matched_registry_name", "")
             result.status = checker.STATUS_NOT_REGISTERED
             result.reason_code = str(identity_decision.get("reason") or "REJECT_WEAK_IDENTITY")
@@ -13514,7 +13613,7 @@ def md_detail_page_matched(result, text: str) -> bool:
 
 def status_from_calendar_date(value: date) -> str:
     today = date.today()
-    upcoming_cutoff = today + timedelta(days=183)
+    upcoming_cutoff = add_months(today, 6)
     if value < today:
         return "Delinquent"
     if value <= upcoming_cutoff:
@@ -14180,6 +14279,8 @@ def true_status_from_body(result, body: str) -> str:
     confirmed_status = getattr(result, "_cc_confirmed_feedback_status", "")
     if confirmed_status:
         return confirmed_status
+    if state == "ME" and re.match(r"^\s*Failed\s+to\s+Renew\b", result.raw_status_text or "", re.I):
+        return "Failed to Renew"
     if state == "MI":
         solicitation_status = classify_mi_solicitation_status(mi_solicitation_raw_from_combined(result.raw_status_text or ""))
         if solicitation_status:
@@ -14290,6 +14391,12 @@ def true_status_from_body(result, body: str) -> str:
     early_context = filing_context(result, body) if state == "MD" else None
     if state == "MD" and md_detail_page_matched(result, combined) and early_context:
         early_due_date = early_context["due_date"]
+        if (
+            early_due_date
+            and re.match(r"^\s*Current\b", result.raw_status_text or "", re.I)
+            and early_context.get("extended_due_date") == early_due_date
+        ):
+            return status_from_calendar_date(early_due_date)
         early_represented_year = early_context["represented_year"]
         early_registry_date = explicit_registry_date(result, combined)
         early_filed_cycle_status = status_for_filed_cycle(state, early_context, early_registry_date)
@@ -14669,6 +14776,21 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
     normalized_status = public_facing_status.lower()
     state = (result.state or "the selected state").upper()
     context = filing_context(result, body)
+    if state == "OK" and (normalized_status == "needs review" or "Certificate Expiration Date:" in (result.raw_status_text or "")):
+        return result.source_note or "Oklahoma certificate expiration could not be confirmed from the available record."
+    if state == "OH" and "Detail page unavailable" in (result.raw_status_text or ""):
+        return result.source_note
+    if (
+        state == "MD" and context.get("due_date")
+        and context.get("due_date") == context.get("extended_due_date")
+        and re.match(r"^\s*Current\b", result.raw_status_text or "", re.I)
+    ):
+        return (
+            f"Maryland lists the registration as Current with {context['represented_year']} as the year represented. "
+            f"The next annual filing's base due date is {format_date(context['base_due_date'])}; "
+            f"Maryland's automatic extension for current registrations runs through {format_date(context['due_date'])}. "
+            f"CharityClarity uses that extended deadline to classify the result as {public_facing_status}."
+        )
     if state == "CA" and normalized_status in {"current", "upcoming filing", "delinquent"}:
         ca_years = ca_annual_renewal_years_from_text(body)
         latest_submitted_year = ca_years.get("latest_submitted_year")
@@ -16688,9 +16810,17 @@ def search_ok_with_variants(page, org, module):
         if cleaned.lower() not in {existing.lower() for existing in filtered_variants}:
             filtered_variants.append(cleaned)
     variants = filtered_variants or variants[:3]
+    # Oklahoma's multiword search can return many unrelated phonetic matches.
+    # A bounded distinctive-token probe improves retrieval; acceptance still
+    # requires the full original organization identity.
+    probe_tokens = [token for token in distinctive_core_words(original_name)
+                    if len(token) >= 4 and token.lower() not in {"america", "american", "global", "national", "international", "worldwide", "house", "make"}]
+    probes = sorted(dict.fromkeys(probe_tokens), key=len, reverse=True)[:2]
+    variants = list(dict.fromkeys([*probes, *variants]))
     best_result = None
     started = time.perf_counter()
     attempted_variants: list[str] = []
+    completed_no_match_variants: list[str] = []
     planned_variants = (variants[:OK_QUERY_LIMIT] or [original_name])
     exhausted_budget = False
     for variant in planned_variants:
@@ -16700,7 +16830,6 @@ def search_ok_with_variants(page, org, module):
         variant_org = org_with_name(org, variant)
         variant_org.match_target_names = list(dict.fromkeys([
             *organization_match_target_variants(original_name, getattr(org, "ein", "") or ""),
-            *organization_match_target_variants(variant, getattr(org, "ein", "") or ""),
         ]))
         attempted_variants.append(variant)
         result = search_ok_precise(page, variant_org, module)
@@ -16730,6 +16859,9 @@ def search_ok_with_variants(page, org, module):
                 result = retry_result
         if public_status(result) == "Site Not Reachable":
             return result
+        if public_status(result) == "Unable to Confirm" and not getattr(result, "matched_registry_name", ""):
+            best_result = best_result or result
+            continue
         if public_status(result) != "Not Registered":
             matched_name = getattr(result, "matched_registry_name", "") or ""
             if matched_name and not registry_name_is_safe_for_org(matched_name, original_name, getattr(org, "ein", "")):
@@ -16759,6 +16891,7 @@ def search_ok_with_variants(page, org, module):
                     f"Matched using generated name/DBA variant: {variant}.",
                 ]).strip()
             return result
+        completed_no_match_variants.append(variant)
         best_result = result
     if best_result and exhausted_budget:
         clean_no_match_text = " ".join([
@@ -16767,13 +16900,13 @@ def search_ok_with_variants(page, org, module):
         ])
         if (
             public_status(best_result) == "Not Registered"
-            and len(attempted_variants) >= 2
+            and len(completed_no_match_variants) >= 2
             and re.search(r"\b(?:no results found|no safely matching|no matching entity|no matching filing)\b", clean_no_match_text, re.I)
         ):
             best_result.raw_status_text = " ".join(part for part in [
                 getattr(best_result, "raw_status_text", "") or "",
                 (
-                    f"Oklahoma bounded search completed {len(attempted_variants)} high-signal name/alias variants "
+                    f"Oklahoma bounded search completed {len(completed_no_match_variants)} high-signal name/alias variants "
                     f"before the state budget; no safe registry row was found."
                 ),
             ]).strip()
@@ -16784,7 +16917,7 @@ def search_ok_with_variants(page, org, module):
             best_result.success = True
             best_result.queries_attempted = list(attempted_variants)
             best_result.source_attempts = [
-                f"Oklahoma completed bounded high-signal name/alias queries: {', '.join(attempted_variants[:OK_QUERY_LIMIT])}."
+                f"Oklahoma completed bounded high-signal name/alias queries: {', '.join(completed_no_match_variants[:OK_QUERY_LIMIT])}."
             ]
             best_result.reason_code = "NO_CONFIRMED_MATCH_AFTER_COMPLETED_HIGH_SIGNAL_SEARCH"
             return best_result
@@ -16850,7 +16983,7 @@ def ok_singular_plural_name_variants(name: str) -> list[str]:
     return variants[:3]
 
 
-def ok_choose_safe_result_row(page, org, module):
+def ok_choose_safe_result_row_on_page(page, org, module):
     safe_targets = getattr(org, "match_target_names", None) or organization_match_target_variants(
         getattr(org, "organization_name", ""),
         getattr(org, "ein", ""),
@@ -16920,9 +17053,31 @@ def ok_choose_safe_result_row(page, org, module):
 
     if not best or best_score < 450:
         return None
-    if not registry_name_is_safe_for_org(best[2], getattr(org, "organization_name", ""), getattr(org, "ein", "")):
+    if not registry_name_is_safe_for_org(best[2], getattr(org, "original_organization_name", getattr(org, "organization_name", "")), getattr(org, "ein", "")):
         return None
     return best
+
+
+def ok_choose_safe_result_row(page, org, module):
+    """Inspect bounded result pages; an unvisited page is not a completed negative."""
+    org.ok_search_incomplete = False
+    for page_number in range(1, 11):
+        selected = ok_choose_safe_result_row_on_page(page, org, module)
+        if selected is not None:
+            return selected
+        next_link = page.locator(f'a[href*="Page${page_number + 1}\'"]').first
+        if not next_link.count():
+            return None
+        if page_number == 10:
+            org.ok_search_incomplete = True
+            return None
+        try:
+            next_link.click(timeout=5000)
+            page.wait_for_load_state("domcontentloaded", timeout=10000)
+        except Exception:
+            org.ok_search_incomplete = True
+            return None
+    return None
 
 
 def ok_latest_filing_from_candidates(candidates: list[str], module) -> str:
@@ -16932,8 +17087,10 @@ def ok_latest_filing_from_candidates(candidates: list[str], module) -> str:
         cleaned = re.sub(r"\s+", " ", candidate or "").strip()
         if not cleaned:
             continue
+        if not re.search(r"\b(?:Renewal Registration|Application for Registration)\b", cleaned, re.I):
+            continue
         parsed = module.parse_ok_filing_date(cleaned)
-        if parsed:
+        if parsed and parsed <= date.today():
             dated.append((parsed, cleaned))
         else:
             undated.append(cleaned)
@@ -16953,12 +17110,66 @@ def ok_terminal_closed_text(*texts: str) -> bool:
     )
 
 
+_OK_CERTIFICATE_OCR = None
+_OK_CERTIFICATE_OCR_LOCK = threading.Lock()
+
+
+def ok_certificate_expiration(pdf_bytes: bytes, registry_name: str) -> tuple[date | None, str]:
+    """Read the date printed on the matched entity's actual registration certificate."""
+    from pypdf import PdfReader
+    global _OK_CERTIFICATE_OCR
+    if len(pdf_bytes) > 20_000_000:
+        return None, "Certificate exceeds the bounded document size."
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    for pdf_page in list(reader.pages)[:2]:
+        text = pdf_page.extract_text() or ""
+        if not re.search(r"will\s+expire\s+on", text, re.I):
+            images = list(pdf_page.images)
+            if not images:
+                continue
+            image = max(images, key=lambda item: item.image.width * item.image.height).image
+            with _OK_CERTIFICATE_OCR_LOCK:
+                if _OK_CERTIFICATE_OCR is None:
+                    from rapidocr_onnxruntime import RapidOCR
+                    _OK_CERTIFICATE_OCR = RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1)
+                lines, _ = _OK_CERTIFICATE_OCR(image)
+            text = "\n".join(str(row[1]) for row in lines or [] if float(row[2]) >= 0.90)
+        if not re.search(r"CERTIFICATE\s+OF\s+REGISTRATION", text, re.I):
+            continue
+        name_match = re.search(r"Registration\s*of\s+(.+?)\s+has\s+been\s+filed", text, re.I | re.S)
+        if not name_match or re.sub(r"[^a-z0-9]", "", normalized_match_name(name_match.group(1))) != re.sub(r"[^a-z0-9]", "", normalized_match_name(registry_name)):
+            continue
+        dates = re.findall(r"will\s+expire\s+on\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4})", text, re.I)
+        if len(dates) == 1:
+            due = parse_due_date(dates[0])
+            if due:
+                return due, text
+    return None, "The certificate's identity and stated expiration could not both be confirmed."
+
+
+def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: str) -> tuple[date | None, str]:
+    document_id = re.match(r"^\s*(\d+)\b", latest_filing or "")
+    if not document_id:
+        return None, "The registration document number could not be identified."
+    try:
+        with page.expect_download(timeout=15000) as event:
+            page.get_by_role("link", name=document_id.group(1), exact=True).click(timeout=5000)
+        download = event.value
+        path = download.path()
+        if not path:
+            return None, "The registration certificate could not be downloaded."
+        try:
+            return ok_certificate_expiration(Path(path).read_bytes(), registry_name)
+        finally:
+            download.delete()
+    except Exception as exc:
+        return None, f"Registration certificate lookup could not be completed ({type(exc).__name__})."
+
+
 def ok_status_from_latest_filing_date(latest_filing_date: date) -> tuple[str, date | None]:
-    today = date.today()
-    if latest_filing_date.year >= today.year:
-        return "Current", None
-    assumed_due_date = date(latest_filing_date.year + 1, 9, 1)
-    return status_from_calendar_date(assumed_due_date), assumed_due_date
+    # Filing history alone does not establish the 990 filing/deadline required by
+    # 18 O.S. 552.3(A). Neither a calendar-year shortcut nor an anniversary proves compliance.
+    return "Needs Review", None
 
 
 def ok_search_name_for_org(org) -> str:
@@ -17106,10 +17317,17 @@ def search_ok_precise(page, org, module):
 
         selected = ok_choose_safe_result_row(page, org, module)
         if selected is None:
-            result.status = module.STATUS_NOT_FOUND
-            result.raw_status_text = "No safely matching filing number link"
+            result.status = "Unable to Confirm" if getattr(org, "ok_search_incomplete", False) else module.STATUS_NOT_FOUND
+            result.raw_status_text = (
+                "Oklahoma result pagination could not be completed" if getattr(org, "ok_search_incomplete", False)
+                else "No safely matching filing number link"
+            )
             result.success = True
-            result.source_note = "Oklahoma results did not contain a safe matching organization row."
+            result.source_note = (
+                "Oklahoma returned additional result pages that could not all be checked; no negative registration conclusion was made."
+                if getattr(org, "ok_search_incomplete", False)
+                else "Oklahoma results did not contain a safe matching organization row."
+            )
             return result
 
         _, selected_filing_link, matched_name, filing_number = selected
@@ -17170,18 +17388,24 @@ def search_ok_precise(page, org, module):
             )
             return result
 
+        certificate_due, certificate_note = ok_fetch_registration_certificate(page, latest_filing, matched_name)
+        if certificate_due:
+            result.status = status_from_calendar_date(certificate_due)
+            result.raw_status_text = f"{latest_filing} | Certificate Expiration Date: {format_date(certificate_due)}"
+            result.source_note = (
+                "Oklahoma's latest qualifying registration certificate names the matched organization and explicitly "
+                f"states that registration expires on {format_date(certificate_due)}. "
+                "CharityClarity classifies registration status using that certificate date; it does not infer a deadline from unrelated filing activity."
+            )
+            result.success = True
+            return result
         latest_filing_date = module.parse_ok_filing_date(latest_filing)
         if latest_filing_date:
             result.status, assumed_due_date = ok_status_from_latest_filing_date(latest_filing_date)
-            due_note = (
-                f" For prior-year filing activity, CharityClarity uses Oklahoma's next annual renewal deadline ({format_date(assumed_due_date)}) to classify status."
-                if assumed_due_date
-                else " Current-year Oklahoma filing-history activity is treated as satisfying the current annual registration cycle."
-            )
             result.source_note = (
-                "Oklahoma uses the latest filing-history entry to classify the annual registration cycle. "
-                f"{due_note} "
-                "The accepted row safely matched the requested organization."
+                f"Latest qualifying Oklahoma registration filing: {format_date(latest_filing_date)}. "
+                "The state-issued registration certificate expiration could not be confirmed. "
+                f"{certificate_note} CharityClarity did not substitute an unrelated filing date for the certificate expiration."
             )
         else:
             result.status = status_text
@@ -18263,6 +18487,55 @@ def nm_completed_clean_no_match_result(org, module, *attempt_results):
     return result
 
 
+def nm_apply_status_history_master(module, result, rows, fye_text="", context=None):
+    """Use completed filings and the actual cycle dates before inherited year-label rules."""
+    inherited_parser = getattr(module, "original_nm_apply_status_history", module.apply_nm_rows_to_result)
+    result = inherited_parser(result, rows, fye_text=fye_text, context=context)
+    submitted = module.nm_latest_submitted(rows)
+    if not submitted:
+        return result
+    submitted_year, _, submitted_on = submitted
+    submitted_date = module.parse_date(submitted_on)
+    if not submitted_date:
+        return result
+    latest_year = max(year for year, _, _ in rows)
+    latest_rows = [(year, detail, when) for year, detail, when in rows if year == latest_year]
+    later_adverse = any(
+        re.search(r"\bdelinquent\b", detail, re.I)
+        and (module.parse_date(when) or date.min) > submitted_date
+        for _, detail, when in latest_rows
+    )
+    if later_adverse:
+        return result
+    cycle_fye = None
+    if submitted_year == latest_year:
+        filed_fye = module.parse_date(fye_text)
+        if filed_fye:
+            cycle_fye = add_months(filed_fye, 12)
+    elif latest_year == submitted_year + 1 and all(
+        detail.startswith("Tax Year Registration Open") for _, detail, _ in latest_rows
+    ):
+        opened_dates = {module.parse_date(when) for _, _, when in latest_rows}
+        opened_dates.discard(None)
+        if len(opened_dates) == 1:
+            cycle_fye = next(iter(opened_dates)) - timedelta(days=1)
+    if not cycle_fye:
+        return result
+    due = module.nm_due_date_from_fye(cycle_fye, False)
+    result.status = status_from_calendar_date(due)
+    result.raw_status_text = (
+        f"Tax Year {submitted_year} | Registration Submitted {submitted_on} | "
+        f"Next Required FYE: {cycle_fye.strftime('%m/%d/%Y')} | Due: {due.strftime('%m/%d/%Y')}"
+    )
+    result.source_note = (
+        f"New Mexico records show the prior registration was submitted on {submitted_on}. "
+        "CharityClarity uses the next filing cycle; an earlier extension or delinquency event "
+        "does not make an already submitted filing outstanding."
+    )
+    result.success = True
+    return result
+
+
 def nm_status_history_rows_from_text_master(*texts: str) -> list[tuple[int, str, str]]:
     combined = "\n".join(text for text in texts if text)
     if not combined:
@@ -18399,7 +18672,7 @@ def search_nm_status_history_reader(org, module):
         text,
         preferred_year=latest_submitted[0] if latest_submitted else None,
     )
-    return module.apply_nm_rows_to_result(result, rows, fye_text=fye_text)
+    return nm_apply_status_history_master(module, result, rows, fye_text=fye_text)
 
 
 def search_nm_status_history_sidecar(org, module, note: str = ""):
@@ -18595,7 +18868,7 @@ def search_nm_status_history_fallback(org, module):
             html,
             preferred_year=latest_submitted[0] if latest_submitted else None,
         )
-        return module.apply_nm_rows_to_result(result, rows, fye_text=fye_text)
+        return nm_apply_status_history_master(module, result, rows, fye_text=fye_text)
     except Exception as exc:
         result.error = f"NM master Status History fallback error: {exc}"
         return result
