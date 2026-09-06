@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.05.3-staging").strip() or "2026.09.05.3-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.05.4-staging").strip() or "2026.09.05.4-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -13767,6 +13767,32 @@ def repair_ny_not_registered_with_due_date(org, result):
     return result
 
 
+def ny_reject_unconfirmed_ein_negative(org, result, detail_text: str):
+    """A rejected detail's EIN is not proof that the completed search has no record."""
+    if public_status(result) != "Not Registered" or not re.search(r"did not match the requested EIN", result.source_note or "", re.I):
+        return result
+    requested = canonical_ein_digits(org.ein)
+    observed = re.findall(r"(?:Federal\s+tax\s+ID\s*\(EIN\)|EIN|FEIN)\s*:?\s*(\d{2}[- ]?\d{7})\b", detail_text or "", re.I)
+    if requested and requested in {canonical_ein_digits(value) for value in observed}:
+        name_match = re.search(r"Organization name\s*:\s*([^\n\r]+)", detail_text, re.I)
+        dates = [parse_due_date(value) for value in re.findall(r"Annual Filing for Charitable Organizations\s+(\d{1,2}/\d{1,2}/\d{4})", detail_text, re.I)]
+        dates = [value for value in dates if value]
+        if name_match and dates and registry_name_is_safe_for_org(name_match.group(1), org.organization_name, org.ein):
+            result.matched_registry_name = name_match.group(1).strip()
+            result.matched_registry_identifier = requested
+            result.status = checker.STATUS_UNKNOWN
+            result.raw_status_text = f"Latest FYE: {max(dates).isoformat()}"
+            result.source_note = "The New York detail page finished loading with the exact requested EIN and annual filing rows."
+            return apply_ny_latest_fye_next_cycle_status(org, result)
+        result.raw_status_text = "New York detail identity loaded after the initial check"
+    else:
+        result.raw_status_text = "New York detail identity could not be confirmed"
+    result.status = checker.STATUS_UNKNOWN
+    result.source_note = "The New York search reached a possible record, but its detail identity was not confirmed at the initial check. This is not a completed no-record search."
+    result.success = False
+    return result
+
+
 def ny_latest_fye_from_evidence_text(text: str) -> date | None:
     match = re.search(
         r"\bLatest\s+FYE\s*:?\s*"
@@ -17197,7 +17223,7 @@ def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: s
     try:
         for attempt in range(2):
             try:
-                with page.expect_download(timeout=15000) as event:
+                with page.expect_download(timeout=30000 if attempt == 0 else 15000) as event:
                     page.get_by_role("link", name=document_id.group(1), exact=True).click(timeout=5000)
                 download = event.value
                 break
@@ -19301,6 +19327,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                             "Confirmed on a second NY public-registry pass after the first pass returned no record.",
                         ]).strip()
                         result = confirmed_result
+                result = ny_reject_unconfirmed_ein_negative(org, result, registry_page_body(page))
                 result = normalize_ny_registry_match_metadata(org, result)
                 result = apply_ny_latest_fye_next_cycle_status(org, result)
                 result = repair_ny_not_registered_with_due_date(org, result)

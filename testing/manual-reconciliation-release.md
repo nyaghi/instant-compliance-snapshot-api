@@ -57,3 +57,12 @@ The first 150-case staging run exposed additional legacy-name false negatives fo
 Oklahoma's Ronald McDonald certificate explicitly expires January 28, 2027. A fallback OCR pass at higher resolution handles its scanned legal name without lowering the 90% confidence threshold. Month spelling permits only an unambiguous one-letter substitution to a full month, retaining all date digits. The original fast OCR pass remains first and all four actual certificates were revalidated. A download timeout gets one bounded retry; successful checks add no request.
 
 Local gates: 13 targeted tests, 30 existing matching fixtures, compilation, and diff whitespace checks passed. Live-source final local smoke returned Ronald McDonald Oklahoma Upcoming Filing (52.37 seconds), Prevent Child Abuse Oklahoma Upcoming Filing (28.23 seconds), Make-A-Wish Florida Suspended (7.04 seconds), and Junior Achievement USA Oklahoma Not Registered with chapter candidates rejected. Connecticut national legacy record is Upcoming Filing; Kansas national legacy record is Delinquent. Final staging regression must use version 2026.09.05.3 after its deployment.
+
+
+## Final retrieval safeguards (2026.09.05.4)
+
+The version 3 diagnostic run was stopped after a recurring Oklahoma certificate timeout and a version 2 New York false negative were investigated. A rejected or incompletely loaded New York detail no longer proves Not Registered. When the detail has finished loading with the exact EIN, a safe organization name, and annual filing rows, the master recovers the existing filing-cycle interpretation. Otherwise the response remains explicitly unconfirmed; a completed empty search still remains Not Registered. Prevent Child Abuse America national New York record 15-09-61 has EIN 23-7235671 and latest FYE December 31, 2024, supporting Delinquent.
+
+Oklahoma now allows the first certificate download up to 30 seconds, followed by one 15-second retry only after a timeout. This changes the ceiling for a slow download, not the time taken by successful fast downloads. No global timeout was changed.
+
+Final local live-source smokes: New York Junior Achievement Delinquent (12.05 seconds), Reading Is Fundamental Upcoming Filing (12.07), Prevent Child Abuse America Delinquent (15.98); Oklahoma Reading Is Fundamental Current (30.02), Make-A-Wish Upcoming Filing (38.48). Fourteen targeted tests and 30 existing matching fixtures pass. Version 4 is the required version for the final full staging run; prior diagnostic runs are retained separately.
