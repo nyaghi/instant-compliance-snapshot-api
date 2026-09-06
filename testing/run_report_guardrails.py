@@ -72,13 +72,13 @@ class ReportTests(unittest.TestCase):
         for r in rows:
             r["comments"] += f" Data freshness note: Scheduled {r['state']} dataset last downloaded: 2026-08-30T10:00:00+00:00. State source date: not stated by source. Downloads may lag registry changes."
         _, text = self.pdf(rows)
-        self.assertIn("LA: downloaded Aug 30, 2026 10:00 UTC", text)
-        self.assertIn("OR: downloaded Aug 30, 2026 10:00 UTC", text)
+        self.assertIn("LA: scheduled download Aug 30, 2026 10:00 UTC", text)
+        self.assertIn("OR: scheduled download Aug 30, 2026 10:00 UTC", text)
         self.assertIn("Confirm time-sensitive decisions directly with the state", text)
 
     def test_missing_freshness_not_fabricated(self):
         _, text = self.pdf([row("OR")])
-        self.assertIn("downloaded not supplied in this snapshot", text)
+        self.assertIn("scheduled download not supplied in this snapshot", text)
 
     def test_duplicate_state_rejected(self):
         with self.assertRaises(ValueError): self.pdf([row(), row()])
@@ -106,6 +106,13 @@ class ReportTests(unittest.TestCase):
     def test_long_fields_rejected(self):
         source = row(); source["comments"] = "a" * 10001
         with self.assertRaises(ValueError): self.pdf([source])
+
+    def test_long_registry_alias_list_does_not_block_report(self):
+        source = row("WA", "Unknown")
+        source["matched_registry_name"] = "Example national charity and regional aliases " * 30
+        reader, text = self.pdf([source])
+        self.assertEqual(len(reader.pages), 3)
+        self.assertIn("Not assessed", text)
 
     def test_endpoint_auth_and_no_registry_work(self):
         server = ThreadingHTTPServer(("127.0.0.1", 0), cc.RegistrySnapshotHandler)

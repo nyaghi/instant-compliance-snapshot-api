@@ -13,7 +13,7 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.utils import ImageReader
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
 
-REPORT_VERSION = "1.0"
+REPORT_VERSION = "1.0.1"
 NAVY = colors.HexColor("#0B2A5B")
 INK = colors.HexColor("#172B45")
 MUTED = colors.HexColor("#536274")
@@ -59,7 +59,7 @@ def validate_results(payload, supported_states):
                 raise ValueError("Invalid snapshot timestamp.")
         clean.append({
             **{k: text(row.get(k), 10000) for k in ("comments", "raw_status_text", "source_note")},
-            **{k: text(row.get(k), 500) for k in ("source_url", "matched_registry_name", "matched_registry_identifier", "app_version", "computed_due_date")},
+            **{k: text(row.get(k), 500) for k in ("source_url", "matched_registry_identifier", "app_version", "computed_due_date")},
             "organization_name": name, "ein": ein, "state": state, "status": status,
             "checked_at_epoch": checked,
         })
@@ -99,6 +99,9 @@ def evidence(row):
     # Copy a concise excerpt. Do not recalculate deadlines or infer a new state status.
     body = row["comments"].split("Data freshness note:", 1)[0]
     body = body.split("Registry match:", 1)[0].strip()
+    if body.startswith("Official state records show active registration or current filing evidence") and row["raw_status_text"]:
+        body = "Registry excerpt: " + row["raw_status_text"]
+    body = re.sub(r", so the status is (?:Current|Delinquent|Upcoming Filing)\.", ".", body)
     return shortened(body or row["raw_status_text"] or row["source_note"] or "No supporting detail returned.", 225)
 
 
@@ -228,10 +231,12 @@ def generate_report(payload, supported_states):
         story.extend([Spacer(1, 7), p("Downloadable data freshness", "h2")])
         for state, when, source_date in notes:
             try:
-                when = datetime.fromisoformat(when).strftime("%b %d, %Y %H:%M UTC")
+                downloaded = datetime.fromisoformat(when)
+                if downloaded.tzinfo is not None:
+                    when = downloaded.astimezone(timezone.utc).strftime("%b %d, %Y %H:%M UTC")
             except ValueError:
                 pass
-            story.append(p(f"{state}: downloaded {when}. State source date: {source_date}.", "small"))
+            story.append(p(f"{state}: scheduled download {when}. State source date: {source_date}.", "small"))
         story.append(p("Downloads may lag registry changes. Confirm time-sensitive decisions directly with the state. These dates are from the checked results; generating this report does not refresh the data.", "small"))
     story.extend([Spacer(1, 7), p("Basis and limits", "h3"), p("This report summarizes CharityClarity output for the listed organization and states. It does not independently verify the output, determine where registration is legally required, or replace a complete compliance review. Evidence excerpts are shortened; linked registry records and the full snapshot comments provide the supporting detail.", "small")])
     for start in range(0, len(rows), 10):

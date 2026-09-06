@@ -62,7 +62,7 @@ with sync_playwright() as p:
     assert not any("/api/check" in url for url in requests)
     assert not errors, errors
     text = "\n".join(p.extract_text() for p in reader.pages)
-    assert "LA: downloaded" in text and "OR: downloaded" in text
+    assert "LA: scheduled download" in text and "OR: scheduled download" in text
     page.locator("#generateReportButton").scroll_into_view_if_needed()
     page.screenshot(path=str(out / "report-button.png"))
     result = dict(live=args.live, pages=5, seconds=round(time.perf_counter()-started, 2), report_requests=1, state_lookups=0, javascript_errors=errors, file=download.suggested_filename)

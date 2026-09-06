@@ -1,4 +1,4 @@
-# CharityClarity automatic report — 2026.09.06.5-staging
+# CharityClarity automatic report — 2026.09.06.6-staging
 
 Scope: authenticated staging-only PDF endpoint in the master backend, deterministic report presentation module, real Compliance Express/CharityClarity assets, and Generate report button on the existing live staging frontend. No registry routing, matching, deadlines, state classification, environment or production changes.
 
@@ -6,10 +6,14 @@ The report uses the displayed results without performing another registry lookup
 
 LA and OR freshness notes were already present in fresh live staging API results. Explicit coverage added for current, negative and unavailable outcomes and report preservation; no speculative state-parser edits.
 
-Local gates: 12 Oklahoma recovery, 16 manual reconciliation, 14 New York, 30 mature matching, 10 downloadable data, 16 report tests (98 total). Report tests cover unavailable results, incorrect entities, unsupported states/statuses, duplicate rows, markup and unsafe links, actual endpoint authentication, zero additional state calls, and five-page worst-case layouts. Browser report smoke: five-page PDF downloaded, one report request, zero state lookups, zero JS errors. Every sample PDF page visually inspected. ReportLab pinned to 4.4.9.
+Local gates: 12 Oklahoma recovery, 16 manual reconciliation, 14 New York, 30 mature matching, 10 downloadable data, 17 report tests (99 total). Report tests cover unavailable results, incorrect entities, unsupported states/statuses, duplicate rows, markup and unsafe links, actual endpoint authentication, zero additional state calls, and five-page worst-case layouts. Browser report smoke: five-page PDF downloaded, one report request, zero state lookups, zero JS errors. Every sample PDF page visually inspected. ReportLab pinned to 4.4.9. The final report-only patch accepts long registry alias lists by ignoring that unused presentation field; the expanded Red Cross test exposed a 515-character alias list. State identity matching is unchanged.
 
 Regression: original five ×30 on live 2026.09.06.4-staging (unchanged state logic in .5): 150 conclusive first submitted requests, 138 manual matches, 12 differences, zero harness reruns. An additional KS no-record control passed. Eleven differences carry forward documented sheet drift/source limitations; RIF OR changed to Upcoming Filing with refreshed data. Expected values remain unchanged. The backend's existing bounded internal recovery may run within a submitted request; first submission does not mean one upstream request.
 
 Known issue: Oklahoma previously reproduced HTTP 520 on both existing staging backends. A successful full regression does not prove the external certificate service reliable. The existing bounded recovery and honest Site Not Reachable result remain. No cached certificate policy was introduced without the requested clarification.
 
 Deployment evidence, post-deployment smokes, new national candidate runs and final comparisons are retained under outputs/staging-expansion-20260906. Production promotion remains blocked pending resolution/review of material limitations. Production untouched.
+
+Expanded cohort: ten national prospective test candidates, with official EIN sources and no claim of an existing Cogency client relationship. All 300 first submitted checks retained: 295 statuses, five inconclusive. Red Cross WA could not classify the returned optional-charity fields; Red Cross OK exhausted the bounded name-search budget; Habitat, Alzheimer's Association and Special Olympics OK each received HTTP 520 on both certificate requests. No harness reruns replaced these outcomes. All ten actual 30-state outputs passed local five-page report generation, including incomplete outcomes. Final patch is held until the cohort finishes to avoid deployment interruption during the run.
+
+All 22 original concern statuses were rechecked, including separate Victims of Communism CT/MD smokes. The seven .5 post-deployment state smokes passed (CO Current, LA Not Registered with freshness, OR Delinquent with freshness, NY Upcoming, OK Current, Victims CT/MD Upcoming). A further live browser/PDF check follows the final .6 deployment.
