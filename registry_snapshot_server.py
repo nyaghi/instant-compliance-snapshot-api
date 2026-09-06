@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.06.1-staging").strip() or "2026.09.06.1-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.06.2-staging").strip() or "2026.09.06.2-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -13874,6 +13874,134 @@ def ny_safe_identity_from_evidence(org, result, evidence_text: str) -> bool:
     )
 
 
+NY_REGISTRY_API = "https://charities-search-api.ag.ny.gov/api/FileNet"
+
+
+def search_ny_direct(org):
+    """Read the official site's completed JSON responses, never its loading table."""
+    result = checker.StateResult(org.organization_name, format_ein(org.ein), "NY", "Unable to Confirm",
+                                 "https://charities-search.ag.ny.gov/RegistrySearch")
+    result.success = False
+    result.source_attempts = []
+    deadline = time.perf_counter() + 35.0
+    requested_ein = re.sub(r"\D", "", org.ein or "")
+    if requested_ein and (len(requested_ein) != 9 or requested_ein == "000000000"):
+        result.raw_status_text = "Invalid EIN"
+        result.source_note = "A valid nine-digit EIN is required to confirm the New York organization."
+        return result
+
+    def request_data(session, operation, params, expected_type):
+        remaining = deadline - time.perf_counter()
+        if remaining <= 0:
+            raise TimeoutError("New York lookup time limit reached")
+        started = time.perf_counter()
+        attempt = f"NY {operation}"
+        try:
+            response = session.get(NY_REGISTRY_API + "/" + operation, params=params,
+                                   timeout=min(12.0, remaining))
+            response.raise_for_status()
+            payload = response.json()
+            if (not isinstance(payload, dict) or payload.get("success") is not True
+                    or payload.get("statusCode") != 200
+                    or not isinstance(payload.get("data"), expected_type)):
+                raise ValueError("Incomplete or unsuccessful New York registry response")
+            result.source_attempts.append(f"{attempt}: complete in {time.perf_counter() - started:.2f}s")
+            return payload["data"]
+        except Exception:
+            result.source_attempts.append(f"{attempt}: failed in {time.perf_counter() - started:.2f}s")
+            raise
+
+    try:
+        if curl_requests is None:
+            raise RuntimeError("New York HTTP client unavailable")
+        queries = ([{"ein": requested_ein}] if requested_ein else [])
+        queries.extend({"orgName": name} for name in build_search_queries(
+            org.organization_name, requested_ein, max_queries=4))
+        if not queries:
+            raise ValueError("Organization identity was not provided")
+        with curl_requests.Session(impersonate="chrome136") as session:
+            session.headers.update({"Accept": "application/json", "Origin": "https://charities-search.ag.ny.gov"})
+            selected = None
+            for query in queries:
+                rows = request_data(session, "RegistrySearch", query, list)
+                candidates = {}
+                possible = False
+                for row in rows:
+                    if (not isinstance(row, dict) or not row.get("orgID") or not row.get("orgName")
+                            or "ein" not in row):
+                        raise ValueError("Incomplete New York search row")
+                    candidate_ein = re.sub(r"\D", "", str(row.get("ein") or ""))
+                    if candidate_ein == "000000000":
+                        candidate_ein = ""
+                    score = score_candidate(org.organization_name, requested_ein,
+                                            {"name": row["orgName"], "ein": candidate_ein})
+                    if score["decision"] == "accepted":
+                        candidates[str(row["orgID"])] = row
+                    elif score["decision"] == "possible":
+                        possible = True
+                if len(candidates) > 1 or (possible and not candidates):
+                    raise ValueError("New York search returned ambiguous organization identities")
+                if candidates:
+                    selected = next(iter(candidates.values()))
+                    break
+            if selected is None:
+                result.status = checker.STATUS_NOT_REGISTERED
+                result.raw_status_text = "No qualifying registration record found"
+                result.source_note = "New York completed the registry searches without a confirmed matching registration record."
+                result.status_reason = "NY_COMPLETED_SEARCH_NO_MATCH"
+                result.success = True
+                return result
+            detail = request_data(session, "RegistryDetail", {"orgID": selected["orgID"]}, dict)
+            detail_ein = re.sub(r"\D", "", str(detail.get("ein") or ""))
+            if detail_ein == "000000000":
+                detail_ein = ""
+            identity = score_candidate(org.organization_name, requested_ein,
+                                       {"name": detail.get("orgName"), "ein": detail_ein})
+            selected_ein = re.sub(r"\D", "", str(selected.get("ein") or ""))
+            if (str(detail.get("orgID")) != str(selected["orgID"]) or not detail.get("orgName")
+                    or identity["decision"] != "accepted"
+                    or (selected_ein and selected_ein != "000000000" and detail_ein != selected_ein)):
+                raise ValueError("New York detail identity did not confirm the selected organization")
+            result.matched_registry_name = detail["orgName"]
+            result.matched_registry_identifier = detail_ein or str(detail["orgID"])
+            result.source_url = "https://charities-search.ag.ny.gov/RegistrySearch/" + str(detail["orgID"])
+            if any(str(detail.get(field) or "").strip().upper() == "EXEMPT" for field in ("regType", "regStatute")):
+                result.status = "Exempt"
+                result.raw_status_text = "Exempt"
+                result.source_note = "The confirmed New York registry record explicitly identifies the organization as exempt."
+                result.status_reason = "NY_EXPLICIT_REGISTRY_EXEMPTION"
+                result.success = True
+                return result
+            documents = detail.get("documents")
+            if not isinstance(documents, dict) or any(not isinstance(v, list) for v in documents.values()):
+                raise ValueError("New York filing documents were incomplete")
+            annual = documents.get("Annual Filing for Charitable Organizations", [])
+            fiscal_dates = []
+            for document in annual:
+                fiscal_date = parse_due_date(str(document.get("fiscalYearEnd") or "")) if isinstance(document, dict) else None
+                if fiscal_date is None:
+                    raise ValueError("New York annual filing fiscal year end was missing or invalid")
+                fiscal_dates.append(fiscal_date)
+            result.source_note = "Organization identity and filing documents confirmed from the New York registry's official data service."
+            result.success = True
+            if not fiscal_dates:
+                # Preserve the existing NY interpretation for a confirmed record with no annual filings.
+                result.status = checker.STATUS_DELINQUENT
+                result.raw_status_text = "No filings found"
+                result.status_reason = "NY_SAFE_MATCH_NO_FILINGS_DELINQUENT"
+                result.source_note += " The completed record contains no annual filing documents."
+                return result
+            result.raw_status_text = f"Latest FYE: {max(fiscal_dates).isoformat()}"
+            return apply_ny_latest_fye_next_cycle_status(org, result)
+    except Exception as exc:
+        result.status = "Unable to Confirm"
+        result.raw_status_text = "New York registry lookup incomplete"
+        result.source_note = "New York did not provide a complete, confirmed registry record. " + str(exc)
+        result.status_reason = "NY_REGISTRY_RESPONSE_UNCONFIRMED"
+        result.success = False
+        return result
+
+
 def apply_ny_latest_fye_next_cycle_status(org, result, body: str = ""):
     """Use the latest NY FYE row as filed evidence, then classify the next filing cycle."""
     if (getattr(result, "state", "") or "").upper() != "NY":
@@ -13910,14 +14038,13 @@ def apply_ny_latest_fye_next_cycle_status(org, result, body: str = ""):
     result.next_required_period = format_date(next_fye)
     result.computed_due_date = format_date(next_due)
     result.status_reason = "NY_STATUS_FROM_LATEST_FYE_NEXT_CYCLE"
-    result.source_note = " ".join(part for part in [
-        getattr(result, "source_note", "") or "",
-        (
-            f"New York shows the latest fiscal year end on record as {format_date(latest_fye)}. "
-            f"CharityClarity calculated the next NY CHAR500 filing for FY ending {format_date(next_fye)} "
-            f"as due {format_date(next_due)}."
-        ),
-    ]).strip()
+    cycle_note = (
+        f"New York shows the latest fiscal year end on record as {format_date(latest_fye)}. "
+        f"CharityClarity calculated the next NY CHAR500 filing for FY ending {format_date(next_fye)} "
+        f"as due {format_date(next_due)}."
+    )
+    if cycle_note not in (getattr(result, "source_note", "") or ""):
+        result.source_note = " ".join(filter(None, [getattr(result, "source_note", "") or "", cycle_note]))
     result.success = True
     return result
 
@@ -19045,6 +19172,11 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
         org.evidence_mode = capture_source_snapshot
     body = ""
     proof_url = None
+    if state == "NY":
+        result = search_ny_direct(org)
+        body = " ".join(filter(None, [result.raw_status_text, result.source_note,
+                                      result.matched_registry_name, result.matched_registry_identifier]))
+        return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
     if state == "WI":
         wi_deadline = lookup_started + min(WI_LOOKUP_MAX_SECONDS, 60.0)
         result = search_wi(None, org, max_seconds=min(24.0, max(18.0, WI_LOOKUP_MAX_SECONDS / 2.5)))
@@ -19320,87 +19452,6 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     result.matched_registry_name or "",
                     result.matched_registry_identifier or "",
                 ]).strip()
-            elif state == "NY":
-                requested_ein = canonical_ein_digits(org.ein)
-                ny_has_ein = bool(requested_ein)
-                if ny_has_ein:
-                    result = checker.search_ny(page, org)
-                    result = ensure_state_result(result, org, "NY", "https://www.charitiesnys.com/RegistrySearch/search_charities.jsp", "New York exact-EIN checker returned a non-structured result.")
-                else:
-                    result = search_with_name_variants(
-                        page,
-                        org,
-                        checker.search_ny,
-                        max_variants=12,
-                        max_elapsed_seconds=min(max(NAME_SEARCH_VARIANT_MAX_SECONDS, 40.0), 50.0),
-                    )
-                    result = ensure_state_result(result, org, "NY", "https://www.charitiesnys.com/RegistrySearch/search_charities.jsp", "New York name-variant checker returned a non-structured result.")
-                elapsed_before_ny_confirmation = time.perf_counter() - lookup_started
-                clean_ny_ein_no_result = bool(
-                    ny_has_ein
-                    and public_status(result) == "Not Registered"
-                    and re.search(
-                        r"\bno\s+results\s+found\b|\bno\s+records?\b|\b0\s+results\b",
-                        " ".join([
-                            result.raw_status_text or "",
-                            result.source_note or "",
-                        ]),
-                        re.I,
-                    )
-                )
-                if clean_ny_ein_no_result and org.organization_name.strip():
-                    name_only_org = checker.Organization(organization_name=org.organization_name, ein="")
-                    if hasattr(name_only_org, "original_ein"):
-                        name_only_org.original_ein = org.ein
-                    name_only_result = search_with_name_variants(
-                        page,
-                        name_only_org,
-                        checker.search_ny,
-                        max_variants=10,
-                        max_elapsed_seconds=min(max(NAME_SEARCH_VARIANT_MAX_SECONDS, 34.0), 44.0),
-                    )
-                    name_only_result = ensure_state_result(name_only_result, name_only_org, "NY", "https://www.charitiesnys.com/RegistrySearch/search_charities.jsp", "New York name-only checker returned a non-structured result.")
-                    name_only_evidence = " ".join(part for part in [
-                        getattr(name_only_result, "matched_registry_name", "") or "",
-                        getattr(name_only_result, "matched_registry_identifier", "") or "",
-                        getattr(name_only_result, "raw_status_text", "") or "",
-                        getattr(name_only_result, "source_note", "") or "",
-                    ])
-                    name_only_digits = re.sub(r"\D", "", name_only_evidence)
-                    name_only_exposes_ein = bool(re.search(r"\b(?:EIN|Federal\s+tax\s+ID|Tax\s+ID)\b", name_only_evidence, re.I))
-                    name_only_wrong_ein = bool(requested_ein and name_only_exposes_ein and requested_ein not in name_only_digits)
-                    if public_status(name_only_result) != "Not Registered" and not name_only_wrong_ein:
-                        name_only_result.ein = org.ein
-                        name_only_result.source_note = " ".join(part for part in [
-                            name_only_result.source_note or "",
-                            "New York exact-EIN search returned no results, so CharityClarity retried by generated organization-name variants.",
-                        ]).strip()
-                        result = name_only_result
-                if (
-                    public_status(result) == "Not Registered"
-                    and not clean_ny_ein_no_result
-                    and elapsed_before_ny_confirmation < 48.0
-                ):
-                    time.sleep(2.0)
-                    confirmed_result = search_with_name_variants(
-                        page,
-                        org,
-                        checker.search_ny,
-                        max_variants=12,
-                        max_elapsed_seconds=min(max(NAME_SEARCH_VARIANT_MAX_SECONDS, 34.0), 44.0),
-                    )
-                    confirmed_result = ensure_state_result(confirmed_result, org, "NY", "https://www.charitiesnys.com/RegistrySearch/search_charities.jsp", "New York confirmation checker returned a non-structured result.")
-                    if public_status(confirmed_result) != "Not Registered":
-                        confirmed_result.source_note = " ".join(part for part in [
-                            confirmed_result.source_note or "",
-                            "Confirmed on a second NY public-registry pass after the first pass returned no record.",
-                        ]).strip()
-                        result = confirmed_result
-                result = ny_reject_unconfirmed_ein_negative(org, result, registry_page_body(page))
-                result = normalize_ny_registry_match_metadata(org, result)
-                result = apply_ny_latest_fye_next_cycle_status(org, result)
-                result = repair_ny_not_registered_with_due_date(org, result)
-                result = normalize_ny_registry_match_metadata(org, result)
             elif state == "NJ":
                 result = search_nj_with_name_fallback(page, org)
                 if public_status(result) != "Not Registered":
