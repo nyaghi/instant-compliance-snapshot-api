@@ -669,6 +669,8 @@ def search_wa(org: Organization, show_process: bool = False) -> SearchResult:
             time.sleep(1)
 
             detail_text = page.locator("body").inner_text(timeout=15000)
+            if callable(globals().get("apply_wa_detail_to_result")):
+                return apply_wa_detail_to_result(result, detail_text)
             status_text = extract_label(detail_text, "Status")
             renewal_text = (
                 extract_label(detail_text, "Renewal Date")
