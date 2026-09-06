@@ -6313,6 +6313,11 @@ def search_la_downloaded_export(page, org):
         result.success = False
         return result
     records = la_registered_charities_rows_from_xlsx(export_path)
+    if len(records) < 25:
+        result.raw_status_text = "Louisiana export was empty or incomplete"
+        result.source_note = "The downloadable source could not be verified as a complete registry list."
+        result.success = False
+        return result
     match = la_find_export_match(records, org)
     result.source_attempts = [
         f"Downloaded Louisiana registered charities export from {source_type}.",
@@ -15360,7 +15365,7 @@ def load_ky_snapshot_records() -> list[tuple[str, str, str, str]]:
         return json.loads(path.read_text(encoding="utf-8"))
     # The live loader owns the bounded cache. Never fall back to an undated embedded list.
     records = load_ky_live_pdf_records()
-    if not records:
+    if len(records) < 1000:
         raise RuntimeError("Kentucky weekly data is unavailable/stale and the live PDF could not be verified")
     return records
 
@@ -15899,6 +15904,8 @@ def nh_live_pdf_records() -> tuple[list[dict], str]:
         if NH_LIVE_PDF_RECORDS is not None and now - NH_LIVE_PDF_LOADED_AT < NH_LIVE_PDF_MAX_AGE_SECONDS and weekly_asset("NH", "registered-charities.pdf") is not None:
             return NH_LIVE_PDF_RECORDS, NH_LIVE_PDF_UPDATED_LABEL
         records, updated_label = nh_download_live_pdf_records()
+        if len(records) < 1000:
+            raise RuntimeError("New Hampshire PDF was empty or incomplete; registration cannot be determined")
         if records:
             NH_LIVE_PDF_RECORDS = records
             NH_LIVE_PDF_LOADED_AT = now

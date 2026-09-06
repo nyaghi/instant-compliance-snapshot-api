@@ -46,6 +46,18 @@ class WeeklyDataTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 cc.load_ky_snapshot_records()
 
+    def test_empty_nh_source_cannot_be_negative(self):
+        with patch.object(cc, "NH_LIVE_PDF_RECORDS", None), patch.object(cc, "nh_download_live_pdf_records", return_value=([], "")):
+            with self.assertRaises(RuntimeError):
+                cc.nh_live_pdf_records()
+
+    def test_empty_la_export_cannot_be_negative(self):
+        org = cc.checker.Organization(organization_name="Example", ein="000000000")
+        with patch.object(cc, "la_registered_charities_rows_from_xlsx", return_value=[]):
+            result = cc.search_la_downloaded_export(None, org)
+            self.assertFalse(result.success)
+            self.assertNotEqual(cc.public_status(result), "Not Registered")
+
     def test_fresh_la_uses_deployed_export_without_download(self):
         org = cc.checker.Organization(organization_name="Make-A-Wish Foundation of America", ein="860481941")
         with patch.object(cc, "la_download_registered_charities_export", side_effect=AssertionError("Unnecessary live download")):

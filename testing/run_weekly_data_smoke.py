@@ -18,14 +18,13 @@ rows = json.loads(Path(__file__).with_name("weekly-data-regression-baseline.json
 if not args.full:
     rows = [r for r in rows if r["state"] in {"KS", "KY", "LA", "NH", "OR"} or (r["state"] == "CO" and r["ein"] == "860481941")]
 rows.append({"organization": "ZZZ CharityClarity Nonexistent Test 987654321", "ein": "000000000", "state": "KS", "manual_expected": "Not Registered", "prior_staging": "Not Registered"})
-if not args.staging:
-    import registry_snapshot_server as cc
+import registry_snapshot_server as cc
 
 def run(row):
     started = time.perf_counter()
     try:
         if args.staging:
-            request = urllib.request.Request(API, data=json.dumps({"organization_name": row["organization"], "ein": row["ein"], "state": row["state"]}).encode(), headers={"Content-Type": "application/json"})
+            request = urllib.request.Request(API, data=json.dumps({"organization_name": row["organization"], "ein": row["ein"], "state": row["state"], "email": "staging-smoke@" + cc.EXEMPT_EMAIL_DOMAIN, "admin_passcode": cc.ADMIN_PASSCODE}).encode(), headers={"Content-Type": "application/json"})
             with urllib.request.urlopen(request, timeout=120) as response:
                 result = json.load(response)
         else:
@@ -36,12 +35,22 @@ def run(row):
 
 output = Path(args.output)
 output.parent.mkdir(parents=True, exist_ok=True)
-results = []
+first = run(rows[0])
+if first.get("error"):
+    output.write_text(json.dumps(first) + "\n", encoding="utf-8")
+    print("First request failed; stopped before submitting the remaining checks:", first["error"])
+    sys.exit(1)
+results = [first]
 with output.open("w", encoding="utf-8") as handle, concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-    for future in concurrent.futures.as_completed([pool.submit(run, row) for row in rows]):
+    handle.write(json.dumps(first) + "\n")
+    handle.flush()
+    for future in concurrent.futures.as_completed([pool.submit(run, row) for row in rows[1:]]):
         result = future.result()
         results.append(result)
         handle.write(json.dumps(result) + "\n")
         handle.flush()
         print(result["organization"], result["state"], result.get("result", {}).get("status", "ERROR"), result["seconds"], flush=True)
 print("Completed", len(results), "checks; evidence", output)
+
+if any(r.get("error") or r.get("result", {}).get("status") in {"Needs Review", "Unable to Confirm", "Site Not Reachable", "Unable to Verify", "Unknown"} for r in results):
+    sys.exit(1)
