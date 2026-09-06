@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.06.10-staging").strip() or "2026.09.06.10-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.06.11-staging").strip() or "2026.09.06.11-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -14924,6 +14924,13 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
         return ('The state registry lists the organization as "In Compliance: Yes", so CharityClarity classifies the status as Current. '
                 "The detailed filing record was unavailable, so a next filing date could not be confirmed.")
 
+    # Missing state filing evidence must not be replaced with a profile-derived year.
+    if status == "Delinquent" and not comment_registry_status(raw, "Delinquent"):
+        if re.search(r"annual\s+filings?\s+not\s+visible", raw, re.I):
+            return "The organization was found, but its annual filing information was not visible. CharityClarity infers Delinquent from that missing information; this does not establish that the state has no filings or independently confirm an overdue obligation."
+        if annual_filings_absent(combined):
+            return "The organization was found, but the registry shows no annual filings and no exemption was identified. CharityClarity infers Delinquent from that missing filing history; a specific overdue deadline was not confirmed."
+
     # Prefer the precise date already used by the lookup, with its source clearly identified.
     due = parsed_result_date(getattr(result, "computed_due_date", ""))
     calculated_states = {"AK", "KY", "MA", "MD", "MN", "NJ", "NM", "NY", "OH", "OR"}
@@ -15026,12 +15033,8 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
     if status == "Delinquent":
         if observed:
             return f'{source} lists the registration or filing as "{observed}", so CharityClarity classifies the status as Delinquent.'
-        if re.search(r"annual\s+filings?\s+not\s+visible", raw, re.I):
-            return "The organization was found, but its annual filing information was not visible. CharityClarity infers Delinquent from that missing information; this does not establish that the state has no filings or independently confirm an overdue obligation."
         if state == "NY" and reason == "NY_SAFE_MATCH_NO_FILINGS_DELINQUENT":
             return "The organization was found, but the completed annual-filing search returned no filings and no exemption was shown. CharityClarity infers Delinquent from that missing filing history; the state did not explicitly label the record delinquent."
-        if annual_filings_absent(combined):
-            return "The organization was found, but the registry shows no annual filings and no exemption was identified. CharityClarity's filing-history rule infers Delinquent from that absence; a specific overdue deadline was not confirmed."
         year = last_year or context.get("represented_year")
         if year and stale_represented_year_is_delinquent(int(year)):
             return f"The most recent filing year identified is {year}, more than one annual cycle behind. CharityClarity infers Delinquent from the age of that filing record; a precise due date could not be confirmed."
@@ -19857,15 +19860,15 @@ def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
             return index, None
         if confirmed_status and confirmed_status.lower() != "site not reachable" and confirmed_status != original_status:
             note = (
-                f"Batch reliability note: the initial multi-state result was {original_status or 'blank'}; "
-                f"an isolated confirmation lookup returned {confirmed_status}."
+                f"Verification note: the first check returned {original_status or 'no status'}. "
+                f"A follow-up check returned {confirmed_status}; the displayed result uses that follow-up evidence."
             )
             confirmed["comments"] = "\n\n".join(part for part in [confirmed.get("comments") or "", note] if part)
             return index, confirmed
         if confirmed_result_is_better_registry_match(original, confirmed):
             note = (
-                "Batch reliability note: an isolated confirmation lookup returned a stronger "
-                "registry-name match for the same submitted organization."
+                "Verification note: a follow-up check more clearly identified the organization's "
+                "registration record. The displayed result uses that record."
             )
             confirmed["comments"] = "\n\n".join(part for part in [confirmed.get("comments") or "", note] if part)
             return index, confirmed
@@ -19921,7 +19924,10 @@ def nm_tax_year_open_detail_result(result: dict) -> dict:
         "detail record with only an open required registration year as Delinquent rather than Not Registered "
         "or Unable to Confirm."
     )
-    updated["comments"] = "\n\n".join(part for part in [updated.get("comments") or "", note] if part)
+    updated["comments"] = (
+        "The state record for the organization's EIN shows an open registration year, but no submitted filing was visible. "
+        "CharityClarity infers Delinquent from that outstanding filing year; a specific overdue deadline was not confirmed."
+    )
     updated["source_note"] = " ".join(part for part in [updated.get("source_note") or "", note] if part).strip()
     updated["reason_code"] = "NM_FEIN_DETAIL_TAX_YEAR_OPEN_ONLY"
     updated["source_confidence"] = "confirmed_fein_detail_open_registration_year"
@@ -20031,7 +20037,10 @@ def conservative_incomplete_lookup_result(result: dict, state: str) -> dict:
         f"CharityClarity retried the {state} registry after an incomplete no-record response, "
         "but the registry still did not provide a completed search result. Rerun this state before treating it as not registered."
     )
-    updated["comments"] = "\n\n".join(part for part in [updated.get("comments") or "", note] if part)
+    updated["comments"] = (
+        "The state search remained incomplete after another attempt, so CharityClarity reports Unable to Confirm. "
+        "The available evidence does not establish whether this organization is registered; an incomplete search is not a confirmed negative result."
+    )
     updated["source_note"] = " ".join(part for part in [updated.get("source_note") or "", note] if part).strip()
     updated["success"] = False
     updated["reason_code"] = "INCOMPLETE_NO_MATCH_AFTER_RETRY"

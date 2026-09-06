@@ -472,7 +472,7 @@
 
         <div>&copy; <span id="year"></span> Compliance Express</div>
 
-          <div class="font-semibold text-slate-600">CharityClarity v2026.09.06.10 &middot; Staging</div>
+          <div class="font-semibold text-slate-600">CharityClarity v2026.09.06.11 &middot; Staging</div>
         <div>No legal or tax advice.</div>
 
       </div>
@@ -866,7 +866,7 @@
 
     function commentsWithRegistryFooter(result) {
 
-      const comments = result.comments || "Review the CharityClarity result for additional details.";
+      const comments = result.comments || `No explanation accompanied the ${result.status || "unconfirmed"} result. The supporting state evidence should be confirmed before relying on this result.`;
 
       const name = result.matched_registry_name || "";
 
@@ -1137,7 +1137,7 @@
 
         status: "Site Not Reachable",
 
-        comments: message || "The public registry lookup could not be completed. Please try this state again.",
+        comments: message || "The state check did not return a completed response, so CharityClarity reports Site Not Reachable. Registration status remains unconfirmed; this does not mean the organization is unregistered or delinquent.",
 
         lookup_seconds: ""
 
@@ -1261,7 +1261,7 @@
 
     async function checkSingleState(apiBases, einValue, emailValue, state, organizationName) {
 
-      let lastMessage = `The ${state} public registry lookup could not be completed. Please try this state again.`;
+      let lastMessage = `The ${state} check did not return a completed response, so CharityClarity reports Site Not Reachable. Registration status remains unconfirmed.`;
 
       const lanes = Array.isArray(apiBases) && apiBases.length ? apiBases : [API_BASE];
 
@@ -1295,9 +1295,9 @@
 
           lastMessage = error && error.name === "AbortError"
 
-            ? `The ${state} public registry lookup timed out. Please try this state again.`
+            ? `The ${state} check did not return a completed response before the request timed out, so CharityClarity reports Site Not Reachable. This does not mean the organization is unregistered or delinquent.`
 
-            : `The ${state} public registry lookup could not be completed. Please try this state again.`;
+            : `The ${state} check could not be completed because a response could not be received, so CharityClarity reports Site Not Reachable. This does not mean the organization is unregistered or delinquent.`;
 
         }
 

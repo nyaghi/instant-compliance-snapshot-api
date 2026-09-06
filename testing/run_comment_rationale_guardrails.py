@@ -176,6 +176,30 @@ class CommentTests(unittest.TestCase):
         text = self.comment(self.result("MA", "Delinquent", "Annual Filings not visible"))
         self.assertIn("does not establish that the state has no filings", text)
 
+    def test_incomplete_retry_replaces_obsolete_negative_comment(self):
+        r = {"state":"CT","status":"Not Registered","comments":"No record found; Not Registered.","raw_status_text":"Search incomplete"}
+        updated = cc.conservative_incomplete_lookup_result(r, "CT")
+        self.assertEqual(updated["status"], "Unable to Confirm")
+        self.assertNotIn("No record found", updated["comments"])
+        self.assertIn("search remained incomplete", updated["comments"])
+        self.assertEqual(r["status"], "Not Registered")
+
+    def test_nm_open_year_replaces_obsolete_negative_comment(self):
+        r = {"state":"NM","ein":"012345678","status":"Not Registered","comments":"No matching charity; Not Registered.","raw_status_text":"Tax Year Registration Open"}
+        updated = cc.nm_tax_year_open_detail_result(r)
+        self.assertEqual(updated["status"], "Delinquent")
+        self.assertNotIn("Not Registered", updated["comments"])
+        self.assertIn("specific overdue deadline was not confirmed", updated["comments"])
+
+    def test_batch_followup_explains_status_change(self):
+        original = {"organization_name":"Example","ein":"012345678","state":"CO","status":"Site Not Reachable","comments":"Check failed"}
+        confirmed = {**original,"status":"Current","comments":"The certificate expires 6/15/2027, more than six months away, so the status is Current."}
+        with patch.object(cc,"run_state_lookup_for_batch",return_value=confirmed), patch.object(cc,"BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS",0), patch.object(cc,"CONFIRM_FRAGILE_BATCH_RESULTS",True), patch.object(cc,"fragile_batch_result_needs_confirmation",return_value=True):
+            rows = cc.confirm_fragile_batch_results([original])
+        self.assertEqual(rows[0]["status"], "Current")
+        self.assertIn("first check returned Site Not Reachable", rows[0]["comments"])
+        self.assertNotIn("isolated", rows[0]["comments"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
