@@ -1,0 +1,4 @@
+KS_weekly_checker.py -text
+Charity_OR.txt -text
+registered-charities.pdf -text
+downloadable-data/* -text

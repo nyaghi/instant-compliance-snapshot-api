@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.05.5-staging").strip() or "2026.09.05.5-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.06.1-staging").strip() or "2026.09.06.1-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -304,6 +304,43 @@ WV_SEARCH_IDLE_TIMEOUT_MS = min(max(1000, int(os.environ.get("CE_WV_SEARCH_IDLE_
 WV_LOOKUP_MAX_SECONDS = min(max(8.0, float(os.environ.get("CE_WV_LOOKUP_MAX_SECONDS", "25"))), 40.0)
 WV_QUERY_LIMIT = min(max(3, int(os.environ.get("CE_WV_QUERY_LIMIT", "6"))), 12)
 WV_RESULTS_SETTLE_MS = min(max(250, int(os.environ.get("CE_WV_RESULTS_SETTLE_MS", "500"))), 1000)
+# Validated weekly assets are deployed with the backend, never inferred from file mtime.
+DOWNLOADABLE_MANIFEST_PATH = BASE_DIR / "downloadable-state-data.json"
+DOWNLOADABLE_MAX_AGE_SECONDS = 8 * 24 * 3600  # Sunday cadence plus deployment grace.
+DOWNLOADABLE_ASSET_HASH_CACHE = {}
+
+
+def downloadable_data_info(state: str) -> dict:
+    try:
+        manifest = json.loads(DOWNLOADABLE_MANIFEST_PATH.read_text(encoding="utf-8"))
+        info = dict(manifest["states"][state])
+        checked = datetime.fromisoformat(info["downloaded_at"].replace("Z", "+00:00"))
+        age = time.time() - checked.timestamp()
+        valid = -300 <= age <= DOWNLOADABLE_MAX_AGE_SECONDS
+        for asset in info["assets"]:
+            path = BASE_DIR / asset["path"]
+            if not path.resolve().is_relative_to(BASE_DIR.resolve()):
+                raise ValueError("Asset path outside backend")
+            stat = path.stat()
+            key = (str(path), stat.st_mtime_ns, stat.st_size)
+            checksum = DOWNLOADABLE_ASSET_HASH_CACHE.get(key)
+            if checksum is None:
+                checksum = hashlib.sha256(path.read_bytes()).hexdigest()
+                DOWNLOADABLE_ASSET_HASH_CACHE[key] = checksum
+            valid = valid and checksum == asset["sha256"]
+        info["usable"] = bool(valid and info["assets"] and info["record_count"] > 0)
+        return info
+    except Exception:
+        return {"usable": False, "state": state, "reason": "Missing or invalid weekly source manifest/assets"}
+
+
+def weekly_asset(state: str, filename: str) -> Path | None:
+    info = downloadable_data_info(state)
+    if info.get("usable") and any(a["path"] == filename for a in info.get("assets", [])):
+        return BASE_DIR / filename
+    return None
+
+
 DOWNLOADABLE_DATA_COMMENT_FOOTERS = {
     "KS": (
         "Data freshness note: Kansas is checked from a weekly refreshed downloadable Kansas AG registration list. "
@@ -1454,10 +1491,10 @@ def md_automatic_extension_due_date(fy_end: date) -> date:
 
 def fiscal_period_for_ein(ein: str) -> tuple[date | None, date | None]:
     target = re.sub(r"\D", "", ein or "")
-    if not target or not CHARITY_OR_PATH.exists():
+    if not target or not weekly_asset("OR", "Charity_OR.txt"):
         return None, None
 
-    with CHARITY_OR_PATH.open("r", encoding="utf-8", errors="ignore", newline="") as f:
+    with weekly_asset("OR", "Charity_OR.txt").open("r", encoding="utf-8", errors="ignore", newline="") as f:
         reader = csv.reader(f, delimiter="\t")
         for row in reader:
             if len(row) < 16:
@@ -1472,9 +1509,9 @@ def fiscal_period_for_ein(ein: str) -> tuple[date | None, date | None]:
 
 def organization_name_for_ein(ein: str) -> str:
     target = re.sub(r"\D", "", ein or "")
-    if not target or not CHARITY_OR_PATH.exists():
+    if not target or not weekly_asset("OR", "Charity_OR.txt"):
         return ""
-    with CHARITY_OR_PATH.open("r", encoding="utf-8", errors="ignore", newline="") as f:
+    with weekly_asset("OR", "Charity_OR.txt").open("r", encoding="utf-8", errors="ignore", newline="") as f:
         reader = csv.reader(f, delimiter="\t")
         for row in reader:
             if len(row) < 7:
@@ -1486,9 +1523,9 @@ def organization_name_for_ein(ein: str) -> str:
 
 def or_snapshot_row_for_ein(ein: str) -> list[str] | None:
     target = re.sub(r"\D", "", ein or "")
-    if len(target) != 9 or not CHARITY_OR_PATH.exists():
+    if len(target) != 9 or not weekly_asset("OR", "Charity_OR.txt"):
         return None
-    with CHARITY_OR_PATH.open("r", encoding="utf-8", errors="ignore", newline="") as f:
+    with weekly_asset("OR", "Charity_OR.txt").open("r", encoding="utf-8", errors="ignore", newline="") as f:
         reader = csv.reader(f, delimiter="\t")
         for row in reader:
             if len(row) >= 16 and re.sub(r"\D", "", row[4]) == target:
@@ -1497,9 +1534,9 @@ def or_snapshot_row_for_ein(ein: str) -> list[str] | None:
 
 
 def or_snapshot_headers() -> list[str]:
-    if not CHARITY_OR_PATH.exists():
+    if not weekly_asset("OR", "Charity_OR.txt"):
         return []
-    with CHARITY_OR_PATH.open("r", encoding="utf-8", errors="ignore", newline="") as f:
+    with weekly_asset("OR", "Charity_OR.txt").open("r", encoding="utf-8", errors="ignore", newline="") as f:
         try:
             return next(csv.reader(f, delimiter="\t"))
         except Exception:
@@ -6263,7 +6300,10 @@ def la_download_registered_charities_export(page, target_dir: Path | None = None
 
 def search_la_downloaded_export(page, org):
     result = checker.StateResult(org.organization_name, org.ein, "LA", "Unable to Verify", "https://www.ag.state.la.us/Charity/Registration/Listing")
-    export_path, source_type, error = la_download_registered_charities_export(page)
+    export_path = weekly_asset("LA", "downloadable-data/LA.xlsx")
+    source_type, error = "deployed weekly state Excel export", ""
+    if export_path is None:
+        export_path, source_type, error = la_download_registered_charities_export(page)
     if not export_path:
         result.raw_status_text = "Louisiana registered charities export could not be downloaded"
         result.source_note = "Louisiana lookup could not retrieve the official Excel export, so CharityClarity did not finalize a negative result from the rendered search table."
@@ -15300,36 +15340,28 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         comments_for_result_base(result, body, public_facing_status),
         public_facing_status,
     )
-    footer = DOWNLOADABLE_DATA_COMMENT_FOOTERS.get((getattr(result, "state", "") or "").upper(), "")
+    source_state = (getattr(result, "state", "") or "").upper()
+    footer = DOWNLOADABLE_DATA_COMMENT_FOOTERS.get(source_state, "")
+    if source_state in {"KS", "KY", "LA", "NH", "OR"}:
+        info = downloadable_data_info(source_state)
+        footer = (
+            f"Data freshness note: Scheduled {source_state} dataset last downloaded: {info.get('downloaded_at', 'unverified')}. "
+            f"State source date: {info.get('source_date') or 'not stated by source'}. "
+            "Downloads may lag registry changes; confirm time-sensitive decisions directly with the state."
+        )
     if footer and footer not in comment:
         return "\n\n".join([comment, footer])
     return comment
 
 
 def load_ky_snapshot_records() -> list[tuple[str, str, str, str]]:
-    global KY_SNAPSHOT_RECORDS
-    if KY_SNAPSHOT_RECORDS is not None:
-        return KY_SNAPSHOT_RECORDS
+    path = weekly_asset("KY", "downloadable-data/KY-records.json")
+    if path is not None:
+        return json.loads(path.read_text(encoding="utf-8"))
+    # The live loader owns the bounded cache. Never fall back to an undated embedded list.
     records = load_ky_live_pdf_records()
-    if records:
-        KY_SNAPSHOT_RECORDS = records
-        return KY_SNAPSHOT_RECORDS
-    modules = state_batch_modules(["KY"])
-    bundle = load_state_batch_bundle()
-    module = modules[bundle.STATE_TO_MODULE["KY"]]
-    encoded = getattr(module, "EMBEDDED_SNAPSHOT_B64", "")
-    records = []
-    if encoded:
-        try:
-            snapshot = json.loads(zlib.decompress(base64.b64decode(encoded)).decode("utf-8-sig"))
-            for item in snapshot.get("records", []):
-                record_text = item[1] if isinstance(item, (list, tuple)) and len(item) > 1 else item
-                registry_id, registry_name, filed_year = parse_ky_snapshot_record(record_text)
-                if registry_id and registry_name:
-                    records.append((registry_id, registry_name, filed_year, re.sub(r"\s+", " ", str(record_text or "")).strip()))
-        except Exception as exc:
-            log_event(f"KY snapshot decode failed: {exc}")
-    KY_SNAPSHOT_RECORDS = records
+    if not records:
+        raise RuntimeError("Kentucky weekly data is unavailable/stale and the live PDF could not be verified")
     return records
 
 
@@ -15752,13 +15784,7 @@ def nh_download_live_pdf_records() -> tuple[list[dict], str]:
         return [], ""
     pdf_source = NH_LIVE_PDF_URL
     try:
-        local_path = None
-        if NH_PREFER_ENV_PDF:
-            local_candidates = []
-            if NH_ENV_PDF_PATH is not None:
-                local_candidates.append(NH_ENV_PDF_PATH)
-            local_candidates.append(NH_BUNDLED_PDF_PATH)
-            local_path = next((path for path in local_candidates if path.exists()), None)
+        local_path = weekly_asset("NH", "registered-charities.pdf")
         if local_path is None:
             request = urllib.request.Request(
                 NH_LIVE_PDF_URL,
@@ -15777,7 +15803,7 @@ def nh_download_live_pdf_records() -> tuple[list[dict], str]:
             pdf_bytes = local_path.read_bytes()
             pdf_source = str(local_path)
     except Exception:
-        if not NH_BUNDLED_PDF_PATH.exists():
+        if not weekly_asset("NH", "registered-charities.pdf"):
             raise
         pdf_bytes = NH_BUNDLED_PDF_PATH.read_bytes()
         pdf_source = str(NH_BUNDLED_PDF_PATH)
@@ -15866,11 +15892,11 @@ def nh_download_live_pdf_records() -> tuple[list[dict], str]:
 def nh_live_pdf_records() -> tuple[list[dict], str]:
     global NH_LIVE_PDF_RECORDS, NH_LIVE_PDF_LOADED_AT, NH_LIVE_PDF_UPDATED_LABEL
     now = time.time()
-    if NH_LIVE_PDF_RECORDS is not None and now - NH_LIVE_PDF_LOADED_AT < NH_LIVE_PDF_MAX_AGE_SECONDS:
+    if NH_LIVE_PDF_RECORDS is not None and now - NH_LIVE_PDF_LOADED_AT < NH_LIVE_PDF_MAX_AGE_SECONDS and weekly_asset("NH", "registered-charities.pdf") is not None:
         return NH_LIVE_PDF_RECORDS, NH_LIVE_PDF_UPDATED_LABEL
     with NH_LIVE_PDF_LOCK:
         now = time.time()
-        if NH_LIVE_PDF_RECORDS is not None and now - NH_LIVE_PDF_LOADED_AT < NH_LIVE_PDF_MAX_AGE_SECONDS:
+        if NH_LIVE_PDF_RECORDS is not None and now - NH_LIVE_PDF_LOADED_AT < NH_LIVE_PDF_MAX_AGE_SECONDS and weekly_asset("NH", "registered-charities.pdf") is not None:
             return NH_LIVE_PDF_RECORDS, NH_LIVE_PDF_UPDATED_LABEL
         records, updated_label = nh_download_live_pdf_records()
         if records:
@@ -16139,6 +16165,12 @@ def _search_snapshot_or_embedded_state_once(org, state: str):
     if state == "NH":
         return search_nh_live_pdf(org)
     if state == "KS":
+        if not weekly_asset("KS", "KS_weekly_checker.py"):
+            result = checker.StateResult(org.organization_name, org.ein, "KS", "Unable to Confirm", "")
+            result.raw_status_text = "Kansas weekly source data is stale, missing, or failed integrity validation"
+            result.source_note = "A current validated Kansas download is required before determining registration status."
+            result.success = False
+            return result
         module = load_ks_weekly_checker()
         external_result = module.search_ks_snapshot(org.organization_name, ARTIFACTS_DIR / "KS", org.ein)
         original_name = getattr(org, "original_organization_name", org.organization_name)
@@ -20716,7 +20748,7 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def _send_healthz(self, include_body: bool = True) -> None:
-        body = json.dumps({"ok": True, "app_version": APP_VERSION}).encode("utf-8")
+        body = json.dumps({"ok": True, "app_version": APP_VERSION, "downloadable_data": {state: downloadable_data_info(state) for state in ("KS", "KY", "LA", "NH", "OR")}}).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Cache-Control", "no-store")

@@ -1,0 +1,1052 @@
+[
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "AK",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "AR",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "CA",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "CO",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "CT",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "FL",
+    "manual_expected": "Suspended",
+    "prior_staging": "Suspended"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "HI",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "KS",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "KY",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "LA",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "MA",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "MD",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "ME",
+    "manual_expected": "Failed to Renew",
+    "prior_staging": "Failed to Renew"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "MI",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "MN",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "MS",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "ND",
+    "manual_expected": "Current",
+    "prior_staging": "Closed / Withdrawn / Canceled"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "NH",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "NJ",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "NM",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "NY",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "OH",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "OK",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "OR",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "PA",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "SC",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "VA",
+    "manual_expected": "Exempt",
+    "prior_staging": "Exempt"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "WA",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "WI",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "WV",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "AK",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "AR",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "CA",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "CO",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "CT",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "FL",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "HI",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "KS",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "KY",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "LA",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "MA",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "MD",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "ME",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "MI",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "MN",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "MS",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "ND",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "NH",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "NJ",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "NM",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "NY",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "OH",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "OK",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "OR",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "PA",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "SC",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "VA",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "WA",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "WI",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "WV",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "AK",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "AR",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "CA",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "CO",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "CT",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "FL",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "HI",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "KS",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "KY",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "LA",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "MA",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "MD",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "ME",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "MI",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "MN",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "MS",
+    "manual_expected": "Closed/Withdrwan/Canceled",
+    "prior_staging": "Closed / Withdrawn / Canceled"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "ND",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "NH",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "NJ",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "NM",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "NY",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "OH",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "OK",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "OR",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "PA",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "SC",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "VA",
+    "manual_expected": "Exempt",
+    "prior_staging": "Exempt"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "WA",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "WI",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "WV",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "AK",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "AR",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "CA",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "CO",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "CT",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "FL",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "HI",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "KS",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "KY",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "LA",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "MA",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "MD",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "ME",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "MI",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "MN",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "MS",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "ND",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "NH",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "NJ",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "NM",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "NY",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "OH",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "OK",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "OR",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "PA",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "SC",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "VA",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "WA",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "WI",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "WV",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "AK",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "AR",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "CA",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "CO",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "CT",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "FL",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "HI",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "KS",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "KY",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "LA",
+    "manual_expected": "Not Registered",
+    "prior_staging": "Not Registered"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "MA",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "MD",
+    "manual_expected": "Pending",
+    "prior_staging": "Pending"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "ME",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "MI",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "MN",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "MS",
+    "manual_expected": "Closed/Withdrwan/Canceled",
+    "prior_staging": "Closed / Withdrawn / Canceled"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "ND",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "NH",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "NJ",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "NM",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "NY",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "OH",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "OK",
+    "manual_expected": "Current",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "OR",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "PA",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "SC",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "VA",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "WA",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "WI",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "WV",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  }
+]

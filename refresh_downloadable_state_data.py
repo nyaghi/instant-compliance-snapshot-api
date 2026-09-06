@@ -82,26 +82,23 @@ def refresh_nh(server_module, dry_run: bool) -> dict[str, object]:
     old_checksum = sha256_bytes(NH_PDF_PATH.read_bytes()) if NH_PDF_PATH.exists() else ""
     changed = checksum != old_checksum
     label = pdf_updated_label(pdf_bytes)
-    if not dry_run and changed:
-        tmp_path = NH_PDF_PATH.with_suffix(".pdf.tmp")
-        tmp_path.write_bytes(pdf_bytes)
-        shutil.move(str(tmp_path), str(NH_PDF_PATH))
-
-    # Validate with the production parser, using the refreshed bytes even in dry-run.
-    with tempfile.TemporaryDirectory(prefix="nh_refresh_parse_") as temp_dir:
-        temp_pdf = Path(temp_dir) / "registered-charities.pdf"
-        temp_pdf.write_bytes(pdf_bytes)
-        server_module.NH_LIVE_PDF_RECORDS = None
-        server_module.NH_BUNDLED_PDF_PATH = temp_pdf
-        server_module.NH_BUNDLED_XLSX_PATH = Path(temp_dir) / "missing.xlsx"
+    # Parse exactly the bytes just downloaded, before replacing a deployed asset.
+    from unittest.mock import patch
+    import io
+    server_module.NH_LIVE_PDF_RECORDS = None
+    with patch.object(server_module, "weekly_asset", return_value=None), patch.object(
+        server_module.urllib.request, "urlopen", return_value=io.BytesIO(pdf_bytes)
+    ):
         records, parsed_label = server_module.nh_live_pdf_records()
     if len(records) < 1000:
         raise RuntimeError(f"NH parser returned suspiciously few records: {len(records)}")
+    if not dry_run and changed:
+        NH_PDF_PATH.write_bytes(pdf_bytes)
     return {
         "state": "NH",
         "status": "changed" if changed else "unchanged",
         "record_count": len(records),
-        "updated_label": parsed_label or label,
+        "updated_label": label or parsed_label,
         "checksum": checksum,
     }
 
@@ -139,69 +136,167 @@ def refresh_ks(dry_run: bool) -> dict[str, object]:
     }
 
 
-def verify_ky(server_module) -> dict[str, object]:
-    records = server_module.load_ky_live_pdf_records()
-    if not records:
-        # Runtime can fall back to embedded KY data, but the weekly job should
-        # still flag this because the live downloadable list was not available.
-        raise RuntimeError("KY live downloadable PDF returned zero parseable records")
-    return {
-        "state": "KY",
-        "status": "live-verified",
-        "record_count": len(records),
-    }
+def refresh_ky(server_module, dry_run: bool) -> dict:
+    from unittest.mock import patch
+    import io
+    pdf_bytes = download_pdf(server_module.KY_LIVE_PDF_URL, "https://www.ag.ky.gov/")
+    server_module.KY_LIVE_PDF_RECORDS = None
+    with patch.object(server_module.urllib.request, "urlopen", return_value=io.BytesIO(pdf_bytes)):
+        records = server_module.load_ky_live_pdf_records()
+    if len(records) < 1000:
+        raise RuntimeError(f"KY suspicious parsed record count: {len(records)}")
+    if not dry_run:
+        (BASE_DIR / "downloadable-data/KY.pdf").write_bytes(pdf_bytes)
+        (BASE_DIR / "downloadable-data/KY-records.json").write_text(json.dumps(records), encoding="utf-8")
+    return {"state": "KY", "record_count": len(records), "source_url": server_module.KY_LIVE_PDF_URL,
+            "source_date": pdf_updated_label(pdf_bytes)}
 
 
-def verify_or() -> dict[str, object]:
-    if not OR_EXPORT_PATH.exists():
-        raise RuntimeError(f"OR export missing: {OR_EXPORT_PATH}")
-    size = OR_EXPORT_PATH.stat().st_size
-    if size < 1_000_000:
-        raise RuntimeError(f"OR export is suspiciously small: {size} bytes")
-    return {
-        "state": "OR",
-        "status": "packaged-export-present",
-        "bytes": size,
-        "last_write_time_utc": datetime.fromtimestamp(OR_EXPORT_PATH.stat().st_mtime, timezone.utc).isoformat(),
-    }
+def refresh_la(server_module, dry_run: bool) -> dict:
+    from playwright.sync_api import sync_playwright
+    with tempfile.TemporaryDirectory(prefix="la_weekly_") as folder, sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(accept_downloads=True)
+            path, source, error = server_module.la_download_registered_charities_export(page, Path(folder))
+            if path is None:
+                raise RuntimeError(f"LA export download failed: {error}")
+            records = server_module.la_registered_charities_rows_from_xlsx(path)
+            # Louisiana's solicitation list is much smaller than general charity registries.
+            if len(records) < 25 or not all(server_module.la_record_name(r) for r in records):
+                raise RuntimeError(f"LA invalid export: {len(records)} rows")
+            if not dry_run:
+                shutil.copyfile(path, BASE_DIR / "downloadable-data/LA.xlsx")
+            return {"state": "LA", "record_count": len(records),
+                    "source_url": "https://www.ag.state.la.us/Charity/Registration/Listing", "source_date": ""}
+        finally:
+            browser.close()
+
+
+def refresh_or(dry_run: bool) -> dict:
+    import csv, io, zipfile
+    url = "https://justice.oregon.gov/Charities/Charity/GetZip"
+    response = requests.get(url, impersonate="chrome120", timeout=90)
+    response.raise_for_status()
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        candidates = [i for i in archive.infolist() if i.filename.lower() == "charity.txt"]
+        if len(candidates) != 1 or candidates[0].file_size > 50_000_000:
+            raise RuntimeError("OR archive missing expected Charity.txt or exceeds size limit")
+        raw = archive.read(candidates[0])
+    text = raw.decode("utf-8-sig")
+    import re
+    # The official export leaves embedded newlines and tildes unquoted. A record
+    # starts with CharityID~RegistrationNumber, not every physical line.
+    chunks = re.split(r"\r?\n(?=\d+~\d+~)", text)
+    header = chunks[0].strip().split("~")
+    expected = ["CharityID", "RegistrationNumber", "CategoryCode", "IRSCode", "EIN", "Purpose", "Name"]
+    if header[:7] != expected or header[14:16] != ["PeriodBeginning", "PeriodEnding"]:
+        raise RuntimeError("OR source schema changed")
+    rows = [header]
+    for chunk in chunks[1:]:
+        fields = [re.sub(r"[\r\n]+", " ", field).strip() for field in chunk.split("~")]
+        # Two unused trailing columns occur in the source, but not its header.
+        if fields[-2:] != ["", ""]:
+            raise RuntimeError("OR trailing-column schema changed")
+        fields = fields[:-2]
+        if len(fields) > len(header):
+            # Name permits literal tildes; the fourteen typed/address fields
+            # following it retain their fixed positions from the right.
+            fields = fields[:6] + ["~".join(fields[6:-14])] + fields[-14:]
+        if len(fields) != len(header) or not fields[0].isdigit() or not fields[1].isdigit():
+            raise RuntimeError("OR export incomplete or malformed")
+        if any(fields[i] and not re.fullmatch(r"[A-Za-z]{3} \d{2}, \d{4}", fields[i]) for i in (14, 15)):
+            raise RuntimeError("OR fiscal-period columns misaligned")
+        for index in (14, 15):
+            if fields[index]:
+                fields[index] = datetime.strptime(fields[index], "%b %d, %Y").strftime("%m/%d/%Y")
+        rows.append(fields)
+    if len(rows) < 10000 or len({(row[0], row[14], row[15]) for row in rows[1:]}) != len(rows) - 1:
+        raise RuntimeError("OR export incomplete or duplicated")
+    output = io.StringIO(newline="")
+    csv.writer(output, delimiter="\t", lineterminator="\n").writerows(rows)
+    if not dry_run:
+        OR_EXPORT_PATH.write_text(output.getvalue(), encoding="utf-8", newline="")
+    return {"state": "OR", "record_count": sum(bool(row) for row in rows[1:]), "source_url": url, "source_date": ""}
+
+
+ASSETS = {
+    "KS": ["KS_weekly_checker.py"],
+    "KY": ["downloadable-data/KY.pdf", "downloadable-data/KY-records.json"],
+    "LA": ["downloadable-data/LA.xlsx"],
+    "NH": ["registered-charities.pdf"],
+    "OR": ["Charity_OR.txt"],
+}
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Refresh/verify CharityClarity downloadable state data.")
+    parser = argparse.ArgumentParser(description="Download and validate all five staging state datasets.")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument(
-        "--states",
-        default="NH,KS,KY,OR",
-        help="Comma-separated downloadable states to refresh or verify. WI is intentionally excluded.",
-    )
+    parser.add_argument("--states", default="KS,KY,LA,NH,OR")
     args = parser.parse_args()
-    states = {part.strip().upper() for part in args.states.split(",") if part.strip()}
-    server_module = load_server_module()
-    results: list[dict[str, object]] = []
-    errors: list[dict[str, str]] = []
-
-    for state in ["NH", "KS", "KY", "OR"]:
-        if state not in states:
-            continue
+    states = [part.strip().upper() for part in args.states.split(",") if part.strip()]
+    if set(states) - set(ASSETS):
+        parser.error("Supported downloadable states: KS,KY,LA,NH,OR")
+    (BASE_DIR / "downloadable-data").mkdir(exist_ok=True)
+    manifest_path = BASE_DIR / "downloadable-state-data.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {"schema_version": 1, "states": {}}
+    server = load_server_module()
+    results, errors = [], []
+    for state in states:
+        print(f"Downloading {state}...", flush=True)
+        backups = {name: (BASE_DIR / name).read_bytes() if (BASE_DIR / name).exists() else None for name in ASSETS[state]}
         try:
-            if state == "NH":
-                results.append(refresh_nh(server_module, args.dry_run))
-            elif state == "KS":
-                results.append(refresh_ks(args.dry_run))
+            if state == "KS":
+                if args.dry_run:
+                    # Dry-run must really download and parse; never mistake metadata inspection for refresh.
+                    module = server.load_ks_weekly_checker()
+                    data, url, filename = module.download_workbook_bytes_for_refresh(headless=True)
+                    entry = {"state": state, "status": "downloaded-dry-run", "source_url": url, "bytes": len(data)}
+                else:
+                    refresh_ks(False)
+                    ks_path = BASE_DIR / "KS_weekly_checker.py"
+                    ks_path.write_bytes(ks_path.read_bytes().replace(b"\r\n", b"\n"))
+                    spec = importlib.util.spec_from_file_location("ks_refreshed", BASE_DIR / "KS_weekly_checker.py")
+                    module = importlib.util.module_from_spec(spec); sys.modules[spec.name] = module; spec.loader.exec_module(module)
+                    records, url, _ = module.load_live_records()
+                    entry = {"state": state, "record_count": len(records), "source_url": url,
+                             "source_date": "", "content_last_changed_at": module.SNAPSHOT_LAST_CHANGED_AT}
             elif state == "KY":
-                results.append(verify_ky(server_module))
-            elif state == "OR":
-                results.append(verify_or())
+                entry = refresh_ky(server, args.dry_run)
+            elif state == "LA":
+                entry = refresh_la(server, args.dry_run)
+            elif state == "NH":
+                # Validate the newly downloaded PDF, not any already-deployed cached version.
+                from unittest.mock import patch
+                with patch.object(server, "weekly_asset", return_value=None), patch.object(server, "NH_PREFER_ENV_PDF", True):
+                    entry = refresh_nh(server, args.dry_run)
+                entry.update(source_url=server.NH_LIVE_PDF_URL, source_date=entry.get("updated_label", ""))
+            else:
+                entry = refresh_or(args.dry_run)
+            if not args.dry_run:
+                old = manifest["states"].get(state, {})
+                count = entry["record_count"]
+                if old.get("record_count") and count < old["record_count"] * 0.8:
+                    raise RuntimeError(f"{state} record count dropped over 20%; review required before deployment")
+                entry["downloaded_at"] = datetime.now(timezone.utc).isoformat()
+                entry["assets"] = [{"path": name, "sha256": sha256_bytes((BASE_DIR / name).read_bytes())} for name in ASSETS[state]]
+                manifest["states"][state] = entry
+            results.append(entry)
+            print(f"Validated {state}: {entry.get('record_count', 'dry-run')} records", flush=True)
         except Exception as exc:
+            if not args.dry_run:
+                for name, original in backups.items():
+                    if original is None:
+                        (BASE_DIR / name).unlink(missing_ok=True)
+                    else:
+                        (BASE_DIR / name).write_bytes(original)
             errors.append({"state": state, "error": " ".join(str(exc).split())})
-
-    report = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "dry_run": args.dry_run,
-        "results": results,
-        "errors": errors,
-    }
-    print(json.dumps(report, indent=2, sort_keys=True))
+            print(f"FAILED {state}: {errors[-1]['error']}", flush=True)
+    report = {"generated_at": datetime.now(timezone.utc).isoformat(), "dry_run": args.dry_run, "results": results, "errors": errors}
+    if not args.dry_run:
+        manifest["last_run"] = {"at": report["generated_at"], "errors": errors}
+        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps(report, indent=2))
     return 1 if errors else 0
 
 
