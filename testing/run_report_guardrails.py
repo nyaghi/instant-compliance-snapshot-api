@@ -22,6 +22,13 @@ def row(state="CO", status="Current"):
 
 
 class ReportTests(unittest.TestCase):
+    def test_calculated_ok_expiration_remains_disclosed(self):
+        result = row("OK", "Current")
+        result["comments"] = "Calculated registration expiration: 6/15/2027 (certificate unavailable; not certificate-confirmed). One calendar year after the completed registration/renewal filing dated 6/15/2026. " + "Supporting detail. " * 30
+        _, text = self.pdf([result])
+        self.assertIn("not certificate-confirmed", " ".join(text.split()))
+        self.assertIn("6/15/2027", text)
+
     def pdf(self, rows):
         content = report.generate_report({"results": rows}, cc.SUPPORTED_STATES)
         reader = PdfReader(BytesIO(content))

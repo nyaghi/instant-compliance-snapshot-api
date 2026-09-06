@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.06.8-staging").strip() or "2026.09.06.8-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.06.9-staging").strip() or "2026.09.06.9-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -14983,7 +14983,7 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
     normalized_status = public_facing_status.lower()
     state = (result.state or "the selected state").upper()
     context = filing_context(result, body)
-    if state == "OK" and (normalized_status == "needs review" or "Certificate Expiration Date:" in (result.raw_status_text or "")):
+    if state == "OK" and (normalized_status == "needs review" or "Certificate Expiration Date:" in (result.raw_status_text or "") or "Calculated Registration Expiration:" in (result.raw_status_text or "")):
         return result.source_note or "Oklahoma certificate expiration could not be confirmed from the available record."
     if state == "OH" and "Detail page unavailable" in (result.raw_status_text or ""):
         return result.source_note
@@ -17514,6 +17514,36 @@ def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: s
         return None, "Oklahoma certificate service unavailable. " + direct_note + f" Refreshed browser certificate request failed ({type(exc).__name__})."
 
 
+def ok_calculated_registration_expiration(latest_filing: str, certificate_note: str,
+                                         detail_text: str, candidates: list[str], module) -> date | None:
+    """User-approved anniversary fallback for a completed live filing, not a Form 990 deadline.
+
+    Only transport failure qualifies. A retrieved but invalid certificate, uncertain filing
+    history, or adverse registry evidence must never be replaced by a calculated date.
+    """
+    if not certificate_note.startswith("Oklahoma certificate service unavailable."):
+        return None
+    if ok_terminal_closed_text(detail_text) or re.search(r"\b(?:pending|rejected|denied|suspended|void|unapproved)\b", detail_text, re.I):
+        return None
+    row_pattern = r"(\d+)\s+(?:Renewal Registration(?:\s*-\s*EZ)?|Application for Registration)\s+([A-Za-z]+\s+\d{1,2},\s+\d{4})\s+\d+"
+    selected = re.fullmatch(row_pattern, latest_filing.strip(), re.I)
+    if not selected:
+        return None
+    filed = module.parse_ok_filing_date(latest_filing)
+    if not filed or filed > date.today() or (filed.month, filed.day) == (2, 29):
+        return None  # No unsupported leap-day convention.
+    for candidate in candidates:
+        if not re.search(r"\b(?:Renewal Registration|Application for Registration)\b", candidate, re.I):
+            continue
+        row = re.fullmatch(row_pattern, re.sub(r"\s+", " ", candidate).strip(), re.I)
+        candidate_date = module.parse_ok_filing_date(candidate)
+        if not row or not candidate_date or candidate_date > filed:
+            return None
+        if candidate_date == filed and row.group(1) != selected.group(1):
+            return None
+    return filed.replace(year=filed.year + 1)
+
+
 def ok_status_from_latest_filing_date(latest_filing_date: date) -> tuple[str, date | None]:
     # Filing history alone does not establish the 990 filing/deadline required by
     # 18 O.S. 552.3(A). Neither a calendar-year shortcut nor an anniversary proves compliance.
@@ -17750,6 +17780,19 @@ def search_ok_precise(page, org, module):
             result.success = True
             return result
         if certificate_note.startswith("Oklahoma certificate service unavailable."):
+            calculated_due = ok_calculated_registration_expiration(
+                latest_filing, certificate_note, detail_text, filing_candidates, module)
+            if calculated_due:
+                result.status = status_from_calendar_date(calculated_due)
+                result.raw_status_text = f"{latest_filing} | Calculated Registration Expiration: {format_date(calculated_due)}"
+                result.source_note = (
+                    f"Calculated registration expiration: {format_date(calculated_due)} (certificate unavailable; not certificate-confirmed). One calendar year after the "
+                    f"completed registration/renewal filing dated {format_date(module.parse_ok_filing_date(latest_filing))}. "
+                    "The live registry record safely matched the organization. This is the registration anniversary, "
+                    "not a separately determined Form 990-based filing deadline. Confirm time-sensitive decisions directly with the state registry."
+                )
+                result.success = True
+                return result
             result.status = "Site Not Reachable"
             result.raw_status_text = latest_filing
             result.source_note = certificate_note + " The matched organization was found, but the state certificate could not be retrieved; no deadline was inferred."
