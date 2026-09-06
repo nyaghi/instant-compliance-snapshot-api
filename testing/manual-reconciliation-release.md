@@ -66,3 +66,13 @@ The version 3 diagnostic run was stopped after a recurring Oklahoma certificate 
 Oklahoma now allows the first certificate download up to 30 seconds, followed by one 15-second retry only after a timeout. This changes the ceiling for a slow download, not the time taken by successful fast downloads. No global timeout was changed.
 
 Final local live-source smokes: New York Junior Achievement Delinquent (12.05 seconds), Reading Is Fundamental Upcoming Filing (12.07), Prevent Child Abuse America Delinquent (15.98); Oklahoma Reading Is Fundamental Current (30.02), Make-A-Wish Upcoming Filing (38.48). Fourteen targeted tests and 30 existing matching fixtures pass. Version 4 is the required version for the final full staging run; prior diagnostic runs are retained separately.
+
+
+## West Virginia query order and direct Oklahoma documents (2026.09.05.5)
+
+The completed version 4 regression exposed a West Virginia no-match for Ronald McDonald House Global / RMHC. Its trace completed four redundant name/acronym forms and hit the state budget before the three-word legacy-name probe. The existing shared core query now runs second for explicit slash/acronym names, with unchanged full candidate acceptance. Local national record 2202 is Delinquent, found in 13.70 seconds. Controls remain Make-A-Wish Current (10.96 seconds) and Junior Achievement USA Not Registered (49.23 seconds).
+
+Oklahoma's certificate link is an ASP.NET document-view postback. Replaying that same observed postback with the existing browser session returned both national Ronald McDonald and Make-A-Wish PDFs in approximately 2.4 seconds, while the browser download event had intermittently timed out. Direct PDF retrieval is now primary; only a validated filing-document link target is submitted, and only a PDF response proceeds to the existing strict certificate parser. The browser download remains a bounded fallback. There are no organization-specific date overrides or static status answers.
+
+Sixteen targeted tests, 30 existing matching fixtures, compilation, and whitespace checks pass. Version 5 is required for the final full staging regression. Earlier completed versions 2 and 4 and the partial version 3 diagnostic run remain in the evidence directory.
+`nFinal version 5 local Oklahoma live-source smoke: Make-A-Wish Upcoming Filing (39.16 seconds), Ronald McDonald Upcoming Filing (35.07), Reading Is Fundamental Current (44.23), Prevent Child Abuse America Upcoming Filing (25.89). All used the master direct-document path and the actual certificate parser.

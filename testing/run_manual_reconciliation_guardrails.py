@@ -61,6 +61,20 @@ class ReconciliationTests(unittest.TestCase):
             page.extract_text.return_value = text + " Another registration will expire on March 13, 2027."
             self.assertIsNone(cc.ok_certificate_expiration(b"fixture", "Reading Is Fundamental Inc")[0])
 
+    def test_oklahoma_direct_postback_reads_the_selected_certificate(self):
+        page = Mock()
+        page.url = "https://www.sos.ok.gov/corp/charityDetail.aspx?id=4300661192"
+        target = "ctl00$DefaultContent$grdFilingList$ctl26$lnkAction"
+        page.get_by_role.return_value.get_attribute.return_value = f"javascript:__doPostBack('{target}','')"
+        page.locator.return_value.first.evaluate.return_value = {"__VIEWSTATE": "fixture"}
+        page.request.post.return_value.ok = True
+        page.request.post.return_value.body.return_value = b"%PDF-fixture"
+        with patch.object(cc, "ok_certificate_expiration", return_value=(date(2027, 1, 28), "certificate")) as parse:
+            self.assertEqual(cc.ok_fetch_registration_certificate(page, "74761200002 Renewal Registration January 28, 2026 5", "Ronald McDonald House Charities Inc")[0], date(2027, 1, 28))
+            parse.assert_called_once_with(b"%PDF-fixture", "Ronald McDonald House Charities Inc")
+        self.assertEqual(page.request.post.call_args.kwargs["form"]["__EVENTTARGET"], target)
+        page.expect_download.assert_not_called()
+
     def test_certificate_ocr_month_and_spacing_are_bounded(self):
         page = Mock()
         page.images = []
@@ -141,6 +155,12 @@ class ReconciliationTests(unittest.TestCase):
         for other in ["Ronald McDonald House Cleveland", "Ronald McDonald House Charities of Greater Houston", "RMHC"]:
             self.assertFalse(cc.explicit_acronym_alias_matches_registry(name, other))
         self.assertFalse(cc.explicit_acronym_alias_matches_registry("Good Health National Foundation / GHNF", "Good Health Nevada Foundation"))
+
+    def test_west_virginia_explicit_alias_core_runs_before_budget_is_spent(self):
+        queries = cc.wv_preferred_query_variants("Ronald McDonald House Global / RMHC", "362934689")
+        self.assertEqual(queries[:2], ["Ronald McDonald House Global", "Ronald McDonald House"])
+        self.assertFalse(cc.registry_name_is_safe_for_org("Ronald McDonald House Charities of Greater Houston", "Ronald McDonald House Global / RMHC", "362934689"))
+        self.assertEqual(cc.wv_preferred_query_variants("Reading Is Fundamental Inc", "520976257")[0], "Reading Is Fundamental")
 
     def test_wisconsin_final_response_preserves_confirmed_alias(self):
         name = "Ronald McDonald House Global / RMHC"

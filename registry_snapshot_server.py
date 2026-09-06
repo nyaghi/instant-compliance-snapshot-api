@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.05.4-staging").strip() or "2026.09.05.4-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.05.5-staging").strip() or "2026.09.05.5-staging"
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -17220,6 +17220,26 @@ def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: s
     document_id = re.match(r"^\s*(\d+)\b", latest_filing or "")
     if not document_id:
         return None, "The registration document number could not be identified."
+    direct_note = ""
+    try:
+        link = page.get_by_role("link", name=document_id.group(1), exact=True)
+        postback = re.search(r"__doPostBack\('([^']+)'", link.get_attribute("href") or "")
+        if postback and re.fullmatch(r"ctl00\$DefaultContent\$grdFilingList\$ctl\d+\$lnkAction", postback.group(1)):
+            # Submit the same public document-view postback with the browser's
+            # session. A PDF response does not require a browser download event.
+            fields = page.locator("form").first.evaluate(
+                '(form) => Object.fromEntries(Array.from(new FormData(form).entries()).filter(([k,v]) => typeof v === "string"))'
+            )
+            fields["__EVENTTARGET"] = postback.group(1)
+            fields["__EVENTARGUMENT"] = ""
+            response = page.request.post(page.url, form=fields, timeout=15000)
+            if response.ok:
+                pdf_bytes = response.body()
+                if pdf_bytes.startswith(b"%PDF"):
+                    return ok_certificate_expiration(pdf_bytes, registry_name)
+            direct_note = "The direct document response did not contain a PDF. "
+    except Exception as exc:
+        direct_note = f"Direct certificate retrieval could not be completed ({type(exc).__name__}). "
     try:
         for attempt in range(2):
             try:
@@ -17239,7 +17259,7 @@ def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: s
         finally:
             download.delete()
     except Exception as exc:
-        return None, f"Registration certificate lookup could not be completed ({type(exc).__name__})."
+        return None, direct_note + f"Registration certificate lookup could not be completed ({type(exc).__name__})."
 
 
 def ok_status_from_latest_filing_date(latest_filing_date: date) -> tuple[str, date | None]:
@@ -18121,14 +18141,24 @@ def wv_preferred_query_variants(name: str, ein: str = "") -> list[str]:
         add("Winston Salem")
         add("Winston-Salem")
     add_name_forms(name)
-    for query in build_search_queries(
+    generated_queries = build_search_queries(
         name,
         ein,
         include_ein=False,
         include_ein_aliases=True,
         include_name_segments=True,
         max_queries=18,
-    ):
+    )
+    if re.search(r"[/|]\s*[A-Z]{3,8}\b", name or ""):
+        # An explicit acronym may accompany a newer name. Probe the existing
+        # shared three-word identity core before redundant punctuation variants
+        # consume the state budget; full candidate acceptance remains strict.
+        core = next((query for query in generated_queries if len(normalized_match_name(query).split()) == 3
+                     and normalized_match_name(name).startswith(normalized_match_name(query) + " ")), "")
+        if core:
+            preferred = [value for value in preferred if value.lower() != core.lower()]
+            preferred.insert(min(1, len(preferred)), core)
+    for query in generated_queries:
         add(query)
     for alias in known_names_for_ein(ein):
         if compatible_ein_alias_for_name(name, alias):
