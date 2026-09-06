@@ -104,6 +104,16 @@ class OklahomaCertificateRecoveryTests(unittest.TestCase):
         self.assertIsNone(due)
         self.page.goto.assert_not_called()
 
+    def test_unreadable_pdf_is_not_mislabeled_as_server_outage(self):
+        self.page.request.post.return_value.ok = True
+        self.page.request.post.return_value.body.return_value = b"%PDF-broken"
+        with patch.object(cc, "ok_certificate_expiration", side_effect=ValueError("broken document")):
+            due, note = self.fetch()
+        self.assertIsNone(due)
+        self.assertIn("could not be read", note)
+        self.assertNotIn("service unavailable", note)
+        self.page.goto.assert_not_called()
+
     def test_missing_document_action_is_not_guessed(self):
         self.page.get_by_role.return_value.get_attribute.return_value = "javascript:unrelatedAction()"
         due, note = self.fetch()

@@ -17391,6 +17391,13 @@ def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: s
     document_number = document_id.group(1)
     detail_url = page.url
     direct_note = ""
+
+    def read_certificate(pdf_bytes):
+        try:
+            return ok_certificate_expiration(pdf_bytes, registry_name)
+        except Exception as exc:
+            return None, f"The returned certificate could not be read ({type(exc).__name__}); its expiration was not inferred."
+
     try:
         link = page.get_by_role("link", name=document_number, exact=True)
         postback = re.search(r"__doPostBack\('([^']+)'", link.get_attribute("href") or "")
@@ -17404,7 +17411,7 @@ def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: s
         response = page.request.post(detail_url, form=fields, timeout=15000)
         pdf_bytes = response.body()
         if response.ok and pdf_bytes.startswith(b"%PDF"):
-            due, note = ok_certificate_expiration(pdf_bytes, registry_name)
+            due, note = read_certificate(pdf_bytes)
             return due, "Certificate retrieval: primary request returned a verified PDF." if due else note
         direct_note = (f"Primary certificate response: HTTP {response.status}, "
                        f"{response.headers.get('content-type', 'unspecified content type')}, "
@@ -17451,7 +17458,7 @@ def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: s
         )
         if browser_response.get("ok") and browser_response.get("pdf_base64"):
             pdf_bytes = base64.b64decode(browser_response["pdf_base64"], validate=True)
-            due, note = ok_certificate_expiration(pdf_bytes, registry_name)
+            due, note = read_certificate(pdf_bytes)
             if due:
                 return due, direct_note + " Certificate retrieval: one refreshed browser request returned a verified PDF."
             return None, direct_note + " " + note
