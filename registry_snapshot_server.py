@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.06.11-staging").strip() or "2026.09.06.11-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.06.12-staging").strip() or "2026.09.06.12-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -14171,6 +14171,13 @@ def ak_next_filing_due_from_result(result) -> date | None:
 def explicit_registry_date(result, body: str) -> date | None:
     text = combined_result_text(result, body)
     focused = " ".join([result.raw_status_text or "", result.source_note or ""])
+    if (result.state or "").upper() == "VA":
+        # Keep the selected registration's extension through master normalization.
+        for source in [result.raw_status_text or "", body or ""]:
+            base = comment_labeled_date(source, r"Expiration Date|Current Registration Expires")
+            extension = comment_labeled_date(source, r"Extension Date|Registration Extended Until")
+            if base or extension:
+                return max(d for d in (base, extension) if d)
     raw_date = parse_due_date(result.raw_status_text or "")
     if raw_date and re.fullmatch(r"\s*(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}-[A-Za-z]{3}-\d{2,4})\s*", result.raw_status_text or ""):
         return raw_date
@@ -14503,6 +14510,18 @@ def true_status_from_body(result, body: str) -> str:
         return status_from_calendar_date(registry_date) if registry_date else base_status
     if result_explicitly_exempt(result):
         return "Exempt"
+    # An empty/unavailable filing section is not proof of a missed obligation.
+    # MA expressly warns that absent public reports do not establish delinquency.
+    missing_filings = annual_filings_absent(combined) or bool(re.search(
+        r"Annual\s+Filings?\s+not\s+visible", result.raw_status_text or "", re.I))
+    filing_due = comment_labeled_date(result.raw_status_text or "", r"Next Filing Due|Filing Due|Report Due|Due Date|\bDue")
+    if missing_filings and not explicit_registry_date(result, body) and not filing_due:
+        raw = result.raw_status_text or ""
+        observed = any(comment_registry_status(raw, label) for label in (
+            "Delinquent", "Suspended", "Revoked", "Pending", "Failed to Renew", "Closed / Withdrawn / Canceled"))
+        if not observed:
+            result.status_reason = "FILING_HISTORY_UNAVAILABLE_NO_CONFIRMED_DEADLINE"
+            return "Unable to Confirm"
     if state == "NY":
         cycle_result = apply_ny_latest_fye_next_cycle_status(result, result, body)
         if getattr(cycle_result, "status_reason", "") == "NY_STATUS_FROM_LATEST_FYE_NEXT_CYCLE":
@@ -14862,6 +14881,11 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
         failure = "did not respond in time" if re.search(r"timeout|timed out", combined + " " + (getattr(result, "error", "") or ""), re.I) else "could not be accessed"
         return f"{source} {failure}, so CharityClarity could not complete the check and reports Site Not Reachable. This does not mean the organization is unregistered or delinquent."
     if status in {"Needs Review", "Unable to Verify", "Unable to Confirm", "Unknown", "No Confirmed Match"}:
+        if reason == "FILING_HISTORY_UNAVAILABLE_NO_CONFIRMED_DEADLINE":
+            evidence = "The registration record was found, but no annual filing history or overdue deadline could be confirmed"
+            if state == "MA":
+                return (f"{evidence}, so CharityClarity reports Unable to Confirm. Massachusetts cautions that missing public reports do not establish that a charity is delinquent or has failed to file.")
+            return f"{evidence}, so CharityClarity reports Unable to Confirm. Missing filing information alone does not establish delinquency."
         if state == "OK" and "certificate" in combined.lower():
             evidence = "The organization was found, but the certificate's organization name and expiration date could not both be confirmed"
         elif re.search(r"ambiguous|multiple|identity|match", combined, re.I) and not matched:
@@ -14946,14 +14970,13 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
         due = comment_labeled_date(raw, r"Current Expiration Date") or due
         label = "current expiration date"
     elif state == "VA":
-        # Explain the date actually used by the master, exposing conflicting extension evidence.
-        base = comment_labeled_date(raw, r"Expiration Date")
+        base = comment_labeled_date(raw, r"Expiration Date|Current Registration Expires")
         extension = comment_labeled_date(raw, r"Extension Date|Registration Extended Until")
-        if base and extension and status_from_calendar_date(base) == status and status_from_calendar_date(extension) != status:
-            return (f"CharityClarity uses the registration expiration of {format_date(base)}. {comment_date_conclusion(base, status)} "
-                    f"The record also lists an extension to {format_date(extension)}, which is not reflected in this status. That difference requires confirmation before relying on the result.")
-        due = extension or base or due
-        label = "extended registration expiration date" if extension else "registration expiration date"
+        due = explicit_registry_date(result, body) or due
+        if base and extension and extension > base:
+            return (f"The state registry shows a registration expiration of {format_date(base)} and an extension through {format_date(extension)}. "
+                    f"The recorded extension is used as the effective deadline. {comment_date_conclusion(extension, status)}")
+        label = "registration expiration date"
     if state == "MS":
         inferred = comment_labeled_date(raw, r"annual renewal date used")
         if inferred:

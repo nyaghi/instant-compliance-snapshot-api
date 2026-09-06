@@ -1,0 +1,7 @@
+# Filing evidence corrections — staging .12
+
+The master now preserves the later recorded Virginia extension/expiration for the selected registration. Explicit adverse, pending and exempt statuses remain authoritative. Missing or unavailable annual filing information without a confirmed deadline or explicit adverse status no longer proves delinquency; the master returns Unable to Confirm with a specific explanation. Massachusetts explicitly warns that absent public reports do not prove failure to file: https://www.mass.gov/info-details/search-public-charities-filings . Virginia supports renewal extensions: https://www.vdacs.virginia.gov/food-charitable-solicitation.shtml .
+
+No organization-specific logic, new runtime sidecars, matching changes or additional registry requests. Approved regression expectations remain unchanged. Nine new classification tests and 148 existing backend guardrails pass. A 38-case full-evidence replay changes only JA MA (Delinquent to Unable to Confirm) and RMEF VA (Delinquent to Upcoming Filing). Fourteen local checks reproduce both corrections and preserve the other twelve classifications, including current/no-record and mature EIN-first states. The generic smoke harness exits 1 for any inconclusive result; JA MA is an evidence-supported inconclusive result, not a test retrieval failure.
+
+Staging deployment and 25-organization/capacity validation evidence will be recorded in outputs/capacity-validation-20260906. Production is not authorized.

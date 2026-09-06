@@ -143,11 +143,11 @@ class CommentTests(unittest.TestCase):
         self.assertIn('"In Compliance: Yes"', text)
         self.assertIn("could not be confirmed", text)
 
-    def test_va_extension_conflict_is_not_hidden(self):
-        text = self.comment(self.result("VA", "Delinquent", "Expiration Date: 5/15/2026 | Extension Date: 11/15/2026 | Status: Registered"))
+    def test_va_extension_is_explained(self):
+        text = self.comment(self.result("VA", "Upcoming Filing", "Expiration Date: 5/15/2026 | Extension Date: 11/15/2026 | Status: Registered"))
         self.assertIn("5/15/2026", text)
         self.assertIn("11/15/2026", text)
-        self.assertIn("not reflected", text)
+        self.assertIn("effective deadline", text)
 
     def test_ms_calculated_renewal_not_described_as_state_expiration(self):
         text = self.comment(self.result("MS", "Upcoming Filing", "Current - Registered | Expiration Date not visible; MS annual renewal date used: 11/15/2026"))
