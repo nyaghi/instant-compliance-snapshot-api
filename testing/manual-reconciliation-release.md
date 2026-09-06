@@ -14,6 +14,7 @@ Expected spreadsheet results are preserved. The user explicitly selected Oklahom
 - Master backend: classify New Mexico's next cycle after a completed registration, retain later adverse events, and preserve actual fiscal-year-end dates instead of substituting tax-year labels.
 - Master backend: retain Ohio's exact-EIN compliance evidence when the state detail page fails, and use six calendar months for the shared upcoming window.
 - Requirements: add pinned rapidocr-onnxruntime 1.4.4 for scanned Oklahoma certificates. OCR is lazy-loaded, serialized, and limited to the first two certificate pages with an entity-name and expiration-date check.
+- Staging runtime: pin Python 3.12.14, the locally tested runtime. The first Render build used its unpinned Python 3.14 default and rejected the OCR dependency's Python compatibility requirement. No environment variable was changed.
 - Tests: eleven targeted regression tests; fix the pre-existing expired-date fixture in the core suite by freezing its clock, without changing expected results.
 - Staging frontend: version-only update prepared from the live staging HTML, retaining the verified staging-public API target.
 
