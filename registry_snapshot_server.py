@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.06.13-staging").strip() or "2026.09.06.13-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.07.1-staging").strip() or "2026.09.07.1-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -15049,6 +15049,14 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
                 extra_basis = "Alaska's annual cycle requires renewal on September 1 of the following year. "
             elif state == "NM" and "Registration Submitted" in raw:
                 extra_basis = "The previous registration was submitted, so the next filing cycle is used. "
+                filed_match = re.search(r"\bFiled FYE:\s*(\d{1,2}/\d{1,2}/\d{4})", raw)
+                year_match = re.search(r"\bTax Year (20\d{2})\b", raw)
+                if filed_match and year_match:
+                    extra_basis = (
+                        f"New Mexico records show Tax Year {year_match.group(1)} was submitted "
+                        f"for the fiscal year ending {filed_match.group(1)}. "
+                        "The next annual filing cycle is used. "
+                    )
             text = f"{year_evidence}{extra_basis}Under the state renewal rules, the next filing{period_text} is due {format_date(due)}. {comment_date_conclusion(due, status)}"
             if state == "MA":
                 text += " The calculation uses the fiscal year end available to CharityClarity; any applicable extension should be confirmed."
@@ -18572,6 +18580,20 @@ def nm_completed_clean_no_match_result(org, module, *attempt_results):
 
 def nm_apply_status_history_master(module, result, rows, fye_text="", context=None):
     """Use completed filings and the actual cycle dates before inherited year-label rules."""
+    evidence_rows = [
+        row for row in rows
+        if re.match(r"^(?:Registration Submitted\b|Extension Granted\b|Registration Submission Delinquent\b)", row[1], re.I)
+    ]
+    if rows and not evidence_rows:
+        result.status = module.STATUS_UNKNOWN
+        result.raw_status_text = "NM history has no submitted filing or approved extension evidence"
+        result.source_note = (
+            "The registry exposes a history record, but no submitted filing, granted extension "
+            "or explicit delinquency. An open tax year or requested extension does not establish "
+            "filing compliance, so CharityClarity cannot confirm the filing status."
+        )
+        result.success = True
+        return result
     inherited_parser = getattr(module, "original_nm_apply_status_history", module.apply_nm_rows_to_result)
     result = inherited_parser(result, rows, fye_text=fye_text, context=context)
     submitted = module.nm_latest_submitted(rows)
@@ -18581,8 +18603,8 @@ def nm_apply_status_history_master(module, result, rows, fye_text="", context=No
     submitted_date = module.parse_date(submitted_on)
     if not submitted_date:
         return result
-    latest_year = max(year for year, _, _ in rows)
-    latest_rows = [(year, detail, when) for year, detail, when in rows if year == latest_year]
+    latest_year = max(year for year, _, _ in evidence_rows)
+    latest_rows = [row for row in evidence_rows if row[0] == latest_year]
     later_adverse = any(
         re.search(r"\bdelinquent\b", detail, re.I)
         and (module.parse_date(when) or date.min) > submitted_date
@@ -18590,30 +18612,37 @@ def nm_apply_status_history_master(module, result, rows, fye_text="", context=No
     )
     if later_adverse:
         return result
-    cycle_fye = None
-    if submitted_year == latest_year:
-        filed_fye = module.parse_date(fye_text)
-        if filed_fye:
-            cycle_fye = add_months(filed_fye, 12)
-    elif latest_year == submitted_year + 1 and all(
-        detail.startswith("Tax Year Registration Open") for _, detail, _ in latest_rows
-    ):
-        opened_dates = {module.parse_date(when) for _, _, when in latest_rows}
-        opened_dates.discard(None)
-        if len(opened_dates) == 1:
-            cycle_fye = next(iter(opened_dates)) - timedelta(days=1)
+    later_grant = any(
+        detail.startswith("Extension Granted")
+        and (module.parse_date(when) or date.max) > submitted_date
+        for _, detail, when in latest_rows
+    )
+    if later_grant or latest_year > submitted_year:
+        return result
+    # A cycle's opening date is administrative. Only the actual submitted
+    # fiscal period supports advancing to the next annual filing obligation.
+    filed_fye = module.parse_date(fye_text)
+    cycle_fye = add_months(filed_fye, 12) if filed_fye else None
     if not cycle_fye:
+        result.status = module.STATUS_UNKNOWN
+        result.source_note = (
+            "The registry shows a submitted registration, but its fiscal period could not be confirmed. "
+            "An open tax year or extension request does not establish the next filing deadline."
+        )
         return result
     due = module.nm_due_date_from_fye(cycle_fye, False)
     result.status = status_from_calendar_date(due)
     result.raw_status_text = (
         f"Tax Year {submitted_year} | Registration Submitted {submitted_on} | "
+        f"Filed FYE: {filed_fye.strftime('%m/%d/%Y')} | "
         f"Next Required FYE: {cycle_fye.strftime('%m/%d/%Y')} | Due: {due.strftime('%m/%d/%Y')}"
     )
     result.source_note = (
-        f"New Mexico records show the prior registration was submitted on {submitted_on}. "
-        "CharityClarity uses the next filing cycle; an earlier extension or delinquency event "
-        "does not make an already submitted filing outstanding."
+        f"New Mexico records show the registration for the fiscal year ending "
+        f"{filed_fye.strftime('%m/%d/%Y')} was submitted on {submitted_on}. "
+        "The next deadline is calculated from that submitted fiscal period. "
+        "Tax Year Registration Open and Extension Requested do not count as "
+        "a submitted filing or an approved extension."
     )
     result.success = True
     return result

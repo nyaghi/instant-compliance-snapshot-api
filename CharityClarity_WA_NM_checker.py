@@ -973,8 +973,14 @@ def apply_nm_rows_to_result(
     fye_text: str = "",
     context=None,
 ) -> SearchResult:
-    latest_tax_year = max(year for year, _, _ in rows)
-    latest_year_rows = [(year, detail, status_date) for year, detail, status_date in rows if year == latest_tax_year]
+    # Open cycles and requested extensions are workflow events, not filing proof.
+    evidence_rows = [
+        row for row in rows
+        if re.match(r"^(?:Registration Submitted\b|Extension Granted\b|Registration Submission Delinquent\b)", row[1], re.I)
+    ]
+    classification_rows = evidence_rows or rows
+    latest_tax_year = max(year for year, _, _ in classification_rows)
+    latest_year_rows = [row for row in classification_rows if row[0] == latest_tax_year]
 
     def row_sort_key(row: tuple[int, str, str]):
         _, detail, status_date = row
@@ -997,7 +1003,6 @@ def apply_nm_rows_to_result(
         and (
             detail.startswith("Registration Submitted")
             or detail.startswith("Extension Granted")
-            or detail.startswith("Extension Requested")
         )
         for year, detail, _ in latest_year_rows
     )
@@ -1042,10 +1047,7 @@ def apply_nm_rows_to_result(
         return result
 
     _, reg_number, _ = latest_submitted
-    history_fye_text = nm_fye_from_tax_year_open(rows, latest_tax_year)
     has_extension = any(detail.startswith("Extension Granted") for _, detail, _ in latest_year_rows)
-    if not fye_text:
-        fye_text = history_fye_text
     if not fye_text and context is not None:
         _, fye_text = nm_extract_fye(context, reg_number)
     if not fye_text:
@@ -1097,8 +1099,9 @@ def search_nm(org: Organization, show_process: bool = False) -> SearchResult:
         raw_status_text="",
         source_url=NM_SEARCH_URL,
         source_note=(
-            "New Mexico uses the latest open tax year from Status History, "
-            "plus the FYE month/day read from the latest submitted registration PDF."
+            "New Mexico uses submitted registrations and granted extensions from Status History, "
+            "with the fiscal period read from the submitted filing. Open cycles and extension "
+            "requests do not establish that a filing was submitted or an extension approved."
         ),
     )
 
