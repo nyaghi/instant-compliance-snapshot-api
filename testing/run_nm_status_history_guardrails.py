@@ -43,13 +43,13 @@ class NewMexicoHistoryTests(unittest.TestCase):
         # FYE is an explicit test input, not asserted as Arbor Day's verified FYE.
         r = self.classify(ARBOR_HISTORY, "06/30/2024")
         self.assertEqual(r.status, "Delinquent")
-        self.assertIn("Due: 12/30/2025", r.raw_status_text)
+        self.assertIn("Due: 12/31/2025", r.raw_status_text)
         self.assertIn("Filed FYE: 06/30/2024", r.raw_status_text)
 
     def test_same_history_can_remain_upcoming_if_filed_period_supports_it(self):
         r = self.classify(ARBOR_HISTORY, "06/30/2025")
         self.assertEqual(r.status, "Upcoming Filing")
-        self.assertIn("Due: 12/30/2026", r.raw_status_text)
+        self.assertIn("Due: 12/31/2026", r.raw_status_text)
         self.assertIn("Filed FYE: 06/30/2025", r.raw_status_text)
 
     def test_requested_extension_does_not_change_unextended_deadline(self):
@@ -64,7 +64,7 @@ class NewMexicoHistoryTests(unittest.TestCase):
         r = self.classify(rows, "12/31/2024")
         self.assertEqual(r.status, "Upcoming Filing")
         self.assertIn("Extension Granted", r.raw_status_text)
-        self.assertIn("Due: 11/15/2026", r.raw_status_text)
+        self.assertIn("Due: 12/31/2026", r.raw_status_text)
 
     def test_newer_requested_year_cannot_hide_intermediate_grant(self):
         rows = [(2026, "Extension Requested", "9/1/2026"), (2025, "Extension Granted", "6/1/2026"), (2024, "Registration Submitted 123456789012", "2/1/2025")]
@@ -97,7 +97,7 @@ class NewMexicoHistoryTests(unittest.TestCase):
         copied = cc.copy_external_result(org, "NM", r)
         text = cc.comments_for_result(copied, "", copied.status)
         self.assertIn("6/30/2025", text)
-        self.assertIn("12/30/2026", text)
+        self.assertIn("12/31/2026", text)
 
     def test_later_explicit_delinquency_still_controls(self):
         rows = [(2025, "Registration Submission Delinquent", "8/1/2026"), (2025, "Registration Submitted 123456789012", "1/1/2026")]

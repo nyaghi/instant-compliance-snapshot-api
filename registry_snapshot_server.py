@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.07.1-staging").strip() or "2026.09.07.1-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.07.2-staging").strip() or "2026.09.07.2-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -593,6 +593,7 @@ def load_wa_nm_module():
         else:
             STATE_WA_NM_MODULE = load_module_from_path("charity_wa_nm_checker", STATE_WA_NM_PATH)
         module = STATE_WA_NM_MODULE
+        module.nm_due_date_from_fye = nm_due_date_from_fye_master
         module.apply_wa_detail_to_result = wa_apply_detail_master
         module.original_nm_apply_status_history = module.apply_nm_rows_to_result
         module.apply_nm_rows_to_result = lambda result, rows, fye_text="", context=None: nm_apply_status_history_master(
@@ -5225,8 +5226,10 @@ def va_evoke_status_from_entity_and_registrations(entity: dict, registrations: l
         status = "Pending"
     elif re.search(r"\b(?:withdrawn|closed|cancel(?:ed|led)|terminated|inactive|ceased)\b", combined, re.I):
         status = "Closed / Withdrawn / Canceled"
-    elif re.search(r"\bnot\s+authorized\s+to\s+solicit|suspended\b", entity_status, re.I):
+    elif re.search(r"\bsuspended\b", entity_status + " " + reg_status, re.I):
         status = "Suspended"
+    elif re.search(r"\bnot\s+authorized\s+to\s+solicit\b", entity_status, re.I):
+        status = "Delinquent" if re.search(r"\bexpired|lapsed|delinquent\b", reg_status, re.I) else "Unable to Confirm"
     elif re.search(r"\bexempt\b", reg_type + " " + form_name, re.I):
         status = "Exempt"
     elif effective_date:
@@ -5998,6 +6001,14 @@ def mi_solicitation_raw_from_combined(raw_status: str) -> str:
     return re.sub(r"\s+", " ", match.group(1)).strip() if match else ""
 
 
+def nm_due_date_from_fye_master(cycle_fye: date, has_extension: bool) -> date:
+    """NM-COROS: sixth month end, plus six months for a granted state extension."""
+    due = add_months(cycle_fye, 12 if has_extension else 6)
+    if cycle_fye.day == calendar.monthrange(cycle_fye.year, cycle_fye.month)[1]:
+        due = due.replace(day=calendar.monthrange(due.year, due.month)[1])
+    return due
+
+
 def classify_nm_status_history(raw_status: str) -> str:
     raw = re.sub(r"\s+", " ", raw_status or "").strip()
     if not raw:
@@ -6019,20 +6030,15 @@ def classify_nm_status_history(raw_status: str) -> str:
     if tax_years and open_only_tax_years and not evidence_tax_years and not re.search(r"\bRegistration\s+Submission\s+Delinquent\b|\bdelinquent\b", raw, re.I):
         return checker.STATUS_NOT_REGISTERED
     latest_tax_year = max(evidence_tax_years or tax_years) if tax_years else None
-    if re.search(r"\bExtension\s+Granted\b", raw, re.I):
+    if re.search(r"\bExtension\s+Granted\b", raw, re.I) and not re.search(r"\bDue(?:\s+Date)?\s*:", raw, re.I):
         fye_match = re.search(
             r"\bFYE\s*:\s*([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4})",
             raw,
             re.I,
         )
         fye_date = parse_due_date(fye_match.group(1)) if fye_match else None
-        if fye_date and latest_tax_year:
-            cycle_fye = date(latest_tax_year, fye_date.month, fye_date.day)
-            extended_due_month = add_months(cycle_fye.replace(day=1), 11)
-            return status_from_calendar_date(date(extended_due_month.year, extended_due_month.month, 15))
         if fye_date:
-            extended_due_month = add_months(fye_date.replace(day=1), 11)
-            return status_from_calendar_date(date(extended_due_month.year, extended_due_month.month, 15))
+            return status_from_calendar_date(nm_due_date_from_fye_master(fye_date, True))
     due_dates = [
         parsed
         for parsed in (
@@ -9761,8 +9767,14 @@ def ak_last_year_from_print_row(print_link: dict, row_text: str) -> int | None:
     return None
 
 
+def ak_latest_registration_cycle(today: date | None = None) -> int:
+    today = today or date.today()
+    # The next September-to-September solicitation cycle opens July 1.
+    return today.year + (1 if today.month >= 7 else 0)
+
+
 def ak_newer_year_result_from_retry(page, lookup_org, original_org, original_name: str, found_year: int, name_fallback: bool = False, deadline: float | None = None) -> tuple[int | None, str, str, str]:
-    current_year = date.today().year
+    current_year = ak_latest_registration_cycle()
     if found_year >= current_year:
         return None, "", "", ""
     for newer_year in range(current_year, found_year, -1):
@@ -9779,7 +9791,7 @@ def ak_newer_year_result_from_retry(page, lookup_org, original_org, original_nam
                 continue
             row_text = re.sub(r"\s+", " ", (print_link.get("rowText") or "")).strip() if isinstance(print_link, dict) else ""
             row_year = ak_last_year_from_print_row(print_link, row_text)
-            if row_year and row_year != newer_year:
+            if not row_year or row_year != newer_year:
                 continue
             if ak_row_has_wrong_ein(row_text, original_org.ein):
                 continue
@@ -9908,19 +9920,20 @@ def apply_ak_registration_status_from_best_evidence(
             pdf_text, pdf_url = fetch_ak_registration_pdf(page, context, print_link, org_name)
         except Exception:
             pdf_text, pdf_url = "", ""
-        last_year = ak_last_year_on_record_from_pdf_text(pdf_text)
+        cycle = re.search(r"\b(20\d{2})\s+Charitable\s+Organization\s+Registration", pdf_text, re.I)
+        last_year = int(cycle.group(1)) if cycle else None
     if last_year:
-        due_date = date(last_year + 1, 9, 1)
+        due_date = date(last_year, 9, 1)
         result.status = status_from_calendar_date(due_date)
         result.raw_status_text = " | ".join(part for part in [
-            f"Last Year on Record: {last_year}",
+            f"Registration Cycle: {last_year}",
             f"Next Filing Due: {format_date(due_date)}",
             f"Registration Year Searched: {registration_year}",
             f"PDF: {pdf_url}" if pdf_url else "",
         ] if part)
         evidence_note = (
-            "Alaska registry evidence includes the last year on record; "
-            "CharityClarity treats the next Alaska annual registration renewal as due on September 1 of the following year."
+            "Alaska's confirmed registration cycle expires on September 1 of the cycle year. "
+            "The financial reporting year does not determine registration expiration."
         )
     else:
         result.status = checker.STATUS_DELINQUENT
@@ -9975,19 +9988,19 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
     def apply_ak_status_from_confirmed_year() -> bool:
         if ak_best_confirmed_year is None:
             return False
-        due_date = date(ak_best_confirmed_year + 1, 9, 1)
+        due_date = date(ak_best_confirmed_year, 9, 1)
         result.status = status_from_calendar_date(due_date)
         result.matched_registry_name = ak_best_confirmed_name or result.matched_registry_name or original_name
         result.matched_registry_identifier = ak_best_confirmed_identifier or result.matched_registry_identifier
         result.raw_status_text = " | ".join(part for part in [
-            f"Last Year on Record: {ak_best_confirmed_year}",
+            f"Registration Cycle: {ak_best_confirmed_year}",
             f"Next Filing Due: {format_date(due_date)}",
             f"Registration Year Searched: {ak_best_confirmed_search_year or ak_best_confirmed_year}",
         ] if part)
         result.source_note = (
             "Alaska registry evidence confirmed the organization identity, but richer filing detail could not be loaded before "
             "the hosted lookup budget expired. CharityClarity used the latest confirmed Alaska registration year as the last "
-            "year on record and applies the September 1 renewal rule."
+            "registration cycle and applies September 1 of that cycle year as the renewal date."
         )
         result.error = ""
         result.success = True
@@ -10065,7 +10078,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
         )
         return True
 
-    current_year = date.today().year
+    current_year = ak_latest_registration_cycle()
     recent_cutoff_year = min(current_year, AK_RECENT_FILING_CUTOFF_YEAR)
     years_to_try = list(range(current_year, recent_cutoff_year - 1, -1))
     historical_identity_years = list(range(recent_cutoff_year - 1, AK_HISTORICAL_IDENTITY_FLOOR_YEAR - 1, -1))
@@ -10900,7 +10913,7 @@ def wi_extract_detail_status(detail_text: str) -> str:
     return ""
 
 
-def wi_http_detail_status(detail_href: str) -> str:
+def wi_http_detail_text(detail_href: str) -> str:
     if not detail_href:
         return ""
     try:
@@ -10908,10 +10921,13 @@ def wi_http_detail_status(detail_href: str) -> str:
         request = urllib.request.Request(detail_url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(request, timeout=WI_HTTP_TIMEOUT_SECONDS) as response:
             detail_html = response.read().decode("utf-8", errors="replace")
-        detail_text = html_to_text(detail_html)
-        return wi_extract_detail_status(detail_text)
+        return html_to_text(detail_html)
     except Exception:
         return ""
+
+
+def wi_http_detail_status(detail_href: str) -> str:
+    return wi_extract_detail_status(wi_http_detail_text(detail_href))
 
 
 def wi_reader_url(source_url: str) -> str:
@@ -11836,6 +11852,9 @@ def wi_live_candidate_name_is_safe(registry_name: str, target_names: list[str], 
         return False
     if explicit_acronym_alias_matches_registry(original_name, registry_name):
         return True
+    if (distinctive_entity_extension_mismatch(original_name, registry_name)
+            and not any(normalized_match_name(registry_name) == normalized_match_name(target) for target in target_names)):
+        return False
     if wi_snapshot_name_is_safe(registry_name, target_names, original_name, ein):
         return True
     candidate_tokens = distinctive_match_tokens(registry_name or "")
@@ -11960,6 +11979,21 @@ def wi_related_chapter_license_ids(names_by_license, target_names, original_name
     }
 
 
+def wi_confirm_same_credential_alias(candidate: dict, original_name: str, reader: bool = False) -> dict:
+    """Resolve a conflicting alias only against the primary name of the same credential."""
+    href = candidate.get("detail_href", "")
+    text = wi_reader_text(urljoin(WI_SEARCH_URL, href)) if reader else wi_http_detail_text(href)
+    compact = re.sub(r"\s+", " ", text or "").strip()
+    primary = re.search(r"\bName\s*:\s*(.*?)\s+Credential\s+Type\s*:", compact, re.I)
+    number = re.search(r"\bCredential\s+Number\s*:\s*([\d-]+)", compact, re.I)
+    confirmed = bool(primary and number and number.group(1) == candidate["license_number"]
+                     and normalized_match_name(primary.group(1)) == normalized_match_name(original_name))
+    candidate["identity_conflict"] = not confirmed
+    if confirmed:
+        candidate["detail_status"] = wi_extract_detail_status(text)
+    return candidate
+
+
 def wi_best_match_from_html(result_html: str, target_names: list[str], best_match: dict | None = None, original_name: str = "", ein: str = "") -> dict | None:
     table_match = re.search(
         r"<table[^>]+id=[\"']ctl00_cphMainContent_OrgCredentialSearch_gvCredentialSearchResults[\"'][^>]*>([\s\S]*?)</table>",
@@ -11979,15 +12013,22 @@ def wi_best_match_from_html(result_html: str, target_names: list[str], best_matc
     if best_match and best_match.get("license_number") in related_ids:
         best_match = None
     qualifying_ids = set()
+    alias_checks = {}
     for row_match in rows:
         row_html = row_match.group(1)
         if re.search(r"<th\b", row_html, re.I):
             continue
         cells = html_table_cells(row_html)
-        if cells and cells[0] in related_ids:
+        alias_conflict = bool(cells and cells[0] in related_ids)
+        if alias_conflict and (len(cells) < 3 or normalized_match_name(cells[2]) != normalized_match_name(original_name)):
             continue
         candidate = wi_candidate_from_row_html(row_html, target_names, original_name, ein)
         if candidate:
+            if alias_conflict:
+                key = candidate["license_number"]
+                if key not in alias_checks:
+                    alias_checks[key] = wi_confirm_same_credential_alias(candidate, original_name)
+                candidate = alias_checks[key]
             qualifying_ids.add(candidate["license_number"])
             if wi_better_candidate(candidate, best_match):
                 best_match = candidate
@@ -12015,10 +12056,18 @@ def wi_best_match_from_markdown(result_text: str, target_names: list[str], best_
     related_ids = wi_related_chapter_license_ids(names_by_license, target_names, original_name, ein)
     if best_match and best_match.get("license_number") in related_ids:
         best_match = None
+    alias_checks = {}
     for license_id, line in rows:
-        if license_id in related_ids:
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        registry_name, _ = wi_markdown_link_parts(cells[2])
+        alias_conflict = license_id in related_ids
+        if alias_conflict and normalized_match_name(registry_name) != normalized_match_name(original_name):
             continue
         candidate = wi_candidate_from_markdown_row(line, target_names, original_name, ein)
+        if candidate and alias_conflict:
+            if license_id not in alias_checks:
+                alias_checks[license_id] = wi_confirm_same_credential_alias(candidate, original_name, reader=True)
+            candidate = alias_checks[license_id]
         if candidate and wi_better_candidate(candidate, best_match):
             best_match = candidate
     return best_match
@@ -12218,6 +12267,12 @@ def search_wi(page, org, max_seconds: float | None = None):
             result.success = False
             return result
 
+        if best_match.get("identity_conflict"):
+            result.status = "Unable to Confirm"
+            result.raw_status_text = "Wisconsin credential names require identity confirmation"
+            result.source_note = "The search found a credential with conflicting organization names, but its primary detail record could not confirm the requested organization. This is not an empty registry search."
+            result.success = False
+            return result
         detail_status = best_match.get("detail_status", "")
         if best_match.get("detail_href") and page is not None:
             try:
@@ -14426,6 +14481,10 @@ def explicit_adverse_registry_status(result, body: str) -> str:
         return "Revoked"
     if re.search(pending_pattern, status_evidence, re.I):
         return "Pending"
+    if (state == "VA" and re.search(r"Not\s+Authorized\s+to\s+Solicit", result.raw_status_text or "", re.I)
+            and not re.search(r"\bsuspended\b|cease\s+and\s+desist", status_evidence, re.I)):
+        return ("Delinquent" if re.search(r"Registration\s+Status\s*:\s*(?:Expired|Lapsed|Delinquent)",
+                                          result.raw_status_text or "", re.I) else "Unable to Confirm")
     if re.search(r"\b(suspended|not\s+authorized\s+to\s+solicit|may\s+not\s+(?:solicit|raise\s+funds|operate)|cease\s+and\s+desist)\b", status_evidence, re.I):
         return "Suspended"
     if re.search(inactive_pattern, status_evidence, re.I):
@@ -14919,6 +14978,24 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
         return "The Washington registry shows an active optional charity registration. Washington offers optional registration to organizations exempt from mandatory charity registration, so CharityClarity infers Exempt."
 
     # Explicit statuses take precedence over a future date, and retain their distinct meaning.
+    if state == "NM" and "Extension Granted" in raw and status in {"Current", "Upcoming Filing", "Delinquent"}:
+        due = comment_labeled_date(raw, r"Due")
+        fye = comment_labeled_date(raw, r"FYE")
+        if due and fye:
+            return (f'The state granted an extension for the fiscal year ending {format_date(fye)}. '
+                    f'New Mexico allows six months to file plus the granted six-month extension, giving an inferred '
+                    f'deadline of {format_date(due)}. {comment_date_conclusion(due, status)}')
+    if state == "VA" and status == "Delinquent" and re.search(r"Not Authorized to Solicit", raw, re.I):
+        return ('The Virginia registry lists the registration as expired or lapsed and the organization as '
+                '"Not Authorized to Solicit". CharityClarity classifies the expired registration as Delinquent; '
+                'the state solicitation restriction remains in effect.')
+    if state == "AK" and status in {"Current", "Upcoming Filing", "Delinquent"}:
+        cycle = re.search(r"Registration Cycle:\s*(20\d{2})", raw)
+        if cycle:
+            due = date(int(cycle.group(1)), 9, 1)
+            return (f'The state registry confirms the {cycle.group(1)} registration cycle. '
+                    f'Alaska registrations expire on September 1 of that cycle year, giving a renewal date of '
+                    f'{format_date(due)}. {comment_date_conclusion(due, status)}')
     if status in {"Suspended", "Revoked", "Pending", "Failed to Renew", "Closed / Withdrawn / Canceled", "Exempt"}:
         if not observed:
             return f"CharityClarity returned {status}, but the available record does not include the specific state status supporting that classification. Confirmation with the state is needed."
@@ -17033,11 +17110,42 @@ _ok_certificate_cache: dict[tuple[str, str, str], tuple[float, date]] = {}
 _ok_certificate_cache_lock = threading.Lock()
 
 
-def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: str) -> tuple[date | None, str]:
+class OklahomaCertificateResult:
+    def __init__(self, expiration: date | None, note: str, failure_kind: str = ""):
+        self.expiration = expiration
+        self.note = note
+        self.failure_kind = failure_kind
+
+    def __iter__(self):
+        # Preserve the existing two-value evidence interface.
+        yield self.expiration
+        yield self.note
+
+    def __getitem__(self, index):
+        return (self.expiration, self.note)[index]
+
+
+def ok_certificate_service_unavailable(evidence) -> bool:
+    if isinstance(evidence, OklahomaCertificateResult):
+        return evidence.failure_kind == "delivery_unavailable"
+    # Compatibility for previously saved evidence and offline fixtures.
+    return str(evidence or "").startswith("Oklahoma certificate service unavailable.")
+
+
+def ok_document_delivery_error(text: str) -> bool:
+    text = html_to_text(text or "")
+    if re.search(r"\b(?:rejected|denied|suspended|revoked|void|unapproved)\b", text, re.I):
+        return False
+    return bool(re.search(r"\bdocument\s+(?:is\s+)?(?:unavailable|could\s+not\s+be|cannot\s+be|not\s+found)"
+                          r"|error\s+retrieving|unable\s+to\s+(?:retrieve|download)|temporarily\s+unavailable"
+                          r"|internal\s+server\s+error|service\s+unavailable|an\s+error\s+(?:has\s+)?occurred", text, re.I))
+
+
+def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: str) -> OklahomaCertificateResult:
     """Read the selected certificate; recover non-PDF responses without blind download waits."""
     document_id = re.match(r"^\s*(\d+)\b", latest_filing or "")
     if not document_id:
-        return None, "The registration document number could not be identified."
+        return OklahomaCertificateResult(None, "The registration document number could not be identified.")
     document_number = document_id.group(1)
     detail_url = page.url
     direct_note = ""
@@ -17067,7 +17175,7 @@ def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: s
         link = page.get_by_role("link", name=document_number, exact=True)
         postback = re.search(r"__doPostBack\('([^']+)'", link.get_attribute("href") or "")
         if not postback or not re.fullmatch(r"ctl00\$DefaultContent\$grdFilingList\$ctl\d+\$lnkAction", postback.group(1)):
-            return None, "The selected registration document did not expose a valid registry action."
+            return OklahomaCertificateResult(None, "The selected registration document did not expose a valid registry action.")
         live_action_confirmed = True
         fields = page.locator("form").first.evaluate(
             '(form) => Object.fromEntries(Array.from(new FormData(form).entries()).filter(([k,v]) => typeof v === "string"))'
@@ -17078,7 +17186,7 @@ def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: s
         pdf_bytes = response.body()
         if response.ok and pdf_bytes.startswith(b"%PDF"):
             due, note = read_certificate(pdf_bytes)
-            return due, "Certificate retrieval: primary request returned a verified PDF." if due else note
+            return OklahomaCertificateResult(due, "Certificate retrieval: primary request returned a verified PDF." if due else note)
         direct_note = (f"Primary certificate response: HTTP {response.status}, "
                        f"{response.headers.get('content-type', 'unspecified content type')}, "
                        f"{len(pdf_bytes)} bytes; no PDF received.")
@@ -17094,9 +17202,9 @@ def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: s
                 cached = None
         if cached:
             retrieved = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(cached[0]))
-            return cached[1], (direct_note + f" Certificate freshness note: reused the verified certificate retrieved {retrieved} "
+            return OklahomaCertificateResult(cached[1], (direct_note + f" Certificate freshness note: reused the verified certificate retrieved {retrieved} "
                                f"(less than 24 hours old). The live registry still lists the same selected filing document {document_number}. "
-                               "Confirm time-sensitive decisions directly with the state registry.")
+                               "Confirm time-sensitive decisions directly with the state registry."))
     try:
         # The API request can return an error/document page instead of an attachment.
         # Refresh its form state, then inspect the browser's actual response bytes.
@@ -17130,7 +17238,8 @@ def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: s
                     if (response.ok && pdf) for (let i = 0; i < bytes.length; i += 32768)
                         binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
                     return {ok: response.ok, status: response.status, content_type: response.headers.get('content-type'),
-                            size: bytes.length, pdf_base64: binary ? btoa(binary) : ''};
+                            size: bytes.length, pdf_base64: binary ? btoa(binary) : '',
+                            error_text: pdf ? '' : new TextDecoder().decode(bytes.subarray(0, 8192))};
                 } finally { clearTimeout(timer); }
             }""",
             document_number,
@@ -17139,13 +17248,16 @@ def ok_fetch_registration_certificate(page, latest_filing: str, registry_name: s
             pdf_bytes = base64.b64decode(browser_response["pdf_base64"], validate=True)
             due, note = read_certificate(pdf_bytes)
             if due:
-                return due, direct_note + " Certificate retrieval: one refreshed browser request returned a verified PDF."
-            return None, direct_note + " " + note
-        unavailable = "Oklahoma certificate service unavailable. " if int(browser_response.get("status") or 0) >= 400 else ""
-        return None, (unavailable + direct_note + f" Refreshed browser certificate response: HTTP {browser_response.get('status')}, "
-                      f"{browser_response.get('content_type')}; no PDF received.")
+                return OklahomaCertificateResult(due, direct_note + " Certificate retrieval: one refreshed browser request returned a verified PDF.")
+            return OklahomaCertificateResult(None, direct_note + " " + note)
+        unavailable = (int(browser_response.get("status") or 0) >= 400
+                       or (live_action_confirmed and int(browser_response.get("status") or 0) == 200
+                           and ok_document_delivery_error(browser_response.get("error_text", ""))))
+        prefix = "Oklahoma certificate service unavailable. " if unavailable else ""
+        return OklahomaCertificateResult(None, (prefix + direct_note + f" Refreshed browser certificate response: HTTP {browser_response.get('status')}, "
+                      f"{browser_response.get('content_type')}; no PDF received."), "delivery_unavailable" if unavailable else "")
     except Exception as exc:
-        return None, "Oklahoma certificate service unavailable. " + direct_note + f" Refreshed browser certificate request failed ({type(exc).__name__})."
+        return OklahomaCertificateResult(None, "Oklahoma certificate service unavailable. " + direct_note + f" Refreshed browser certificate request failed ({type(exc).__name__}).", "delivery_unavailable")
 
 
 def ok_calculated_registration_expiration(latest_filing: str, certificate_note: str,
@@ -17155,7 +17267,7 @@ def ok_calculated_registration_expiration(latest_filing: str, certificate_note: 
     Only transport failure qualifies. A retrieved but invalid certificate, uncertain filing
     history, or adverse registry evidence must never be replaced by a calculated date.
     """
-    if not certificate_note.startswith("Oklahoma certificate service unavailable."):
+    if not ok_certificate_service_unavailable(certificate_note):
         return None
     if ok_terminal_closed_text(detail_text) or re.search(r"\b(?:pending|rejected|denied|suspended|void|unapproved)\b", detail_text, re.I):
         return None
@@ -17400,7 +17512,8 @@ def search_ok_precise(page, org, module):
             )
             return result
 
-        certificate_due, certificate_note = ok_fetch_registration_certificate(page, latest_filing, matched_name)
+        certificate_evidence = ok_fetch_registration_certificate(page, latest_filing, matched_name)
+        certificate_due, certificate_note = certificate_evidence
         result.source_attempts = [certificate_note]
         if certificate_due:
             result.status = status_from_calendar_date(certificate_due)
@@ -17413,9 +17526,9 @@ def search_ok_precise(page, org, module):
             )
             result.success = True
             return result
-        if certificate_note.startswith("Oklahoma certificate service unavailable."):
+        if ok_certificate_service_unavailable(certificate_evidence):
             calculated_due = ok_calculated_registration_expiration(
-                latest_filing, certificate_note, detail_text, filing_candidates, module)
+                latest_filing, certificate_evidence, detail_text, filing_candidates, module)
             if calculated_due:
                 result.status = status_from_calendar_date(calculated_due)
                 result.raw_status_text = f"{latest_filing} | Calculated Registration Expiration: {format_date(calculated_due)}"
@@ -18617,6 +18730,22 @@ def nm_apply_status_history_master(module, result, rows, fye_text="", context=No
         and (module.parse_date(when) or date.max) > submitted_date
         for _, detail, when in latest_rows
     )
+    if latest_year > submitted_year and any(detail.startswith("Extension Granted") for _, detail, _ in latest_rows):
+        filed_fye = module.parse_date(fye_text)
+        if not filed_fye:
+            result.status = module.STATUS_UNKNOWN
+            result.source_note = "The state granted an extension, but the fiscal period could not be confirmed; no deadline was inferred."
+            return result
+        cycle_fye = add_months(filed_fye, 12 * (latest_year - submitted_year))
+        due = nm_due_date_from_fye_master(cycle_fye, True)
+        result.status = status_from_calendar_date(due)
+        result.raw_status_text = (f"Tax Year {latest_year} | Extension Granted | "
+                                  f"FYE: {cycle_fye.strftime('%m/%d/%Y')} | Due: {due.strftime('%m/%d/%Y')}")
+        result.source_note = (f"New Mexico granted an extension for the fiscal period ending {format_date(cycle_fye)}. "
+                              "The fiscal period is derived from the last submitted registration and the extension's tax year. "
+                              "The six-month state extension follows the six-month annual reporting deadline.")
+        result.success = True
+        return result
     if later_grant or latest_year > submitted_year:
         return result
     # A cycle's opening date is administrative. Only the actual submitted
