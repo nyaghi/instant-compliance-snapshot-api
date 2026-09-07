@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.07.2-staging").strip() or "2026.09.07.2-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.07.3-staging").strip() or "2026.09.07.3-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -2183,6 +2183,20 @@ def md_represented_year_from_text(body: str, ein: str = "", organization_name: s
 
 
 def filing_context(result, body: str) -> dict:
+    if (result.state or "").upper() == "MA" and hasattr(result, "ma_filing_evidence"):
+        evidence = result.ma_filing_evidence
+        period = parsed_result_date(evidence.get("period_end", ""))
+        return {
+            "represented_year": period.year if period else None,
+            "fiscal_end": (period.month, period.day) if period else None,
+            "next_report_year": period.year + 1 if period else None,
+            "due_date": parsed_result_date(getattr(result, "computed_due_date", "")),
+            "base_due_date": parsed_result_date(evidence.get("base_due", "")),
+            "extended_due_date": parsed_result_date(evidence.get("extended_due", "")),
+            "uses_extension_assumption": bool(evidence.get("automatic_extension_inferred")),
+            "uses_extension_scenario": False,
+            "comment": result.source_note or "",
+        }
     state = (result.state or "").upper()
     registry_text = " ".join([result.raw_status_text or "", body or ""])
     registry_latest_year = None
@@ -2237,18 +2251,11 @@ def filing_context(result, body: str) -> dict:
         latest_year = period_end.year
     result_fiscal_end = fiscal_year_end_from_result(result)
     registry_fiscal_end = fiscal_year_end_from_body(body, state)
-    ma_visible_form_pc_year_only = bool(
-        state == "MA"
-        and latest_year is not None
-        and re.fullmatch(r"\s*20\d{2}\s*", result.raw_status_text or "")
-        and re.search(r"latest\s+visible\s+Form\s*PC|Annual\s+Filings", result.source_note or "", re.I)
-        and not result_fiscal_end
-        and not registry_fiscal_end
-    )
     profile_period = public_profile_latest_tax_period_for_ein(result.ein)
     profile_fiscal_end = profile_period[1] if profile_period else None
-    if ma_visible_form_pc_year_only:
-        fiscal_end = (6, 30)
+    if state == "MA":
+        # A filing-list year is not a fiscal year end; never supply a fixed or profile date.
+        fiscal_end = result_fiscal_end or registry_fiscal_end
     else:
         fiscal_end = result_fiscal_end or registry_fiscal_end or profile_fiscal_end or fiscal_year_end_for_ein(result.ein)
 
@@ -10640,35 +10647,129 @@ def validate_ma_positive_record(org, result, body: str):
     return result
 
 
-def annotate_ma_visible_form_pc_due(result):
-    latest_match = re.fullmatch(r"\s*(20\d{2})\s*", getattr(result, "raw_status_text", "") or "")
-    if not latest_match or (getattr(result, "state", "") or "").upper() != "MA":
+def ma_submitted_form_pc_evidence(text: str, expected_year: int, expected_account: str) -> dict:
+    """Accept fiscal dates only from the selected charity's submitted Form PC."""
+    readable = re.sub(r"\s+", " ", text or "")
+    account = re.search(r"AG(?:O)?\s+Charity\s+Number\s*:?\s*(\d+)", readable, re.I)
+    year = re.search(r"Filing\s+Year\s*:?\s*(20\d{2})", readable, re.I)
+    submitted = re.search(r"Filing\s+Status\s*:?\s*Submitted\b", readable, re.I)
+    period = re.search(r"Current\s+Fiscal\s+Period\s+End\s+Date\s*:?\s*(\d{1,2}/\d{1,2}/\d{4})", readable, re.I)
+    if not (account and expected_account and account.group(1).lstrip("0") == expected_account.lstrip("0")
+            and year and int(year.group(1)) == expected_year and submitted and period):
+        return {}
+    period_end = parsed_result_date(period.group(1))
+    if not period_end or period_end > date.today():
+        return {}
+    return {"filing_year": expected_year, "period_end": format_date(period_end),
+            "filing_status": "Submitted", "ago_account": account.group(1)}
+
+
+def ma_read_latest_form_pc(page, result, body: str) -> dict:
+    """One bounded detail read, selected by filing year and confirmed AGO identity."""
+    account = re.search(r"AG\s+Account\s+Number\s*:?\s*(\d+)", re.sub(r"\s+", " ", body), re.I)
+    if not account:
+        return {}
+    adverse = re.search(
+        r"(?:Charity|Registration)\s+Status\s*:?\s*(Delinquent|Suspended|Revoked|Expired|Closed|Withdrawn)\b",
+        re.sub(r"\s+", " ", body), re.I,
+    )
+    if adverse:
+        return {"adverse_status": adverse.group(1).title(), "ago_account": account.group(1)}
+    candidates = []
+    all_form_years = []
+    try:
+        rows = page.get_by_role("row")
+        for index, row_text in enumerate(rows.all_inner_texts()):
+            filed_form = re.match(r"\s*(20\d{2})\s+(?:Form[\s-]*PC\s+Data\b|FY\d{4}\s+PC\s*-\s*Form\s+PC/Annual\s+RPT)", row_text, re.I)
+            if filed_form:
+                all_form_years.append(int(filed_form.group(1)))
+            match = re.match(r"\s*(20\d{2})\s+Form[\s-]*PC\s+Data\b", row_text, re.I)
+            if match:
+                candidates.append((int(match.group(1)), index))
+        if not candidates or max(all_form_years) > max(year for year, _ in candidates):
+            return {}
+        latest_year = max(year for year, _ in candidates)
+        latest = [index for year, index in candidates if year == latest_year]
+        # Conflicting same-year forms need resolution, not a first-row selection.
+        if len(latest) != 1:
+            return {}
+        detail = None
+        try:
+            with page.expect_popup(timeout=12000) as popup:
+                rows.nth(latest[0]).get_by_role("button", name="View Filing Form-PC Data", exact=True).click(timeout=5000)
+            detail = popup.value
+            detail.get_by_text(re.compile(r"Current Fiscal Period End Date", re.I)).first.wait_for(timeout=12000)
+            text = detail.locator("body").inner_text(timeout=5000)
+            evidence = ma_submitted_form_pc_evidence(text, latest_year, account.group(1))
+            if evidence:
+                evidence["source_url"] = detail.url
+            return evidence
+        finally:
+            if detail is not None:
+                detail.close()
+    except Exception as exc:
+        log_event(f"MA Form PC detail unavailable for AGO {account.group(1)}: {type(exc).__name__}")
+        return {}
+
+
+def annotate_ma_visible_form_pc_due(result, evidence=None):
+    if (getattr(result, "state", "") or "").upper() != "MA":
         return result
-    if not re.search(r"latest\s+visible\s+Form\s*PC|Annual\s+Filings", getattr(result, "source_note", "") or "", re.I):
+    if public_status(result) in {"Not Registered", "Site Not Reachable", "Exempt", "Suspended", "Revoked"}:
         return result
-    latest_year = int(latest_match.group(1))
-    fiscal_end = (6, 30)
-    next_report_year = latest_year + 1
-    due_options = filing_due_date_options("MA", next_report_year, fiscal_end)
-    due_date = due_options.get("effective_due")
-    if not due_date:
+    result.ma_filing_evidence = dict(evidence or {})
+    if result.ma_filing_evidence.get("adverse_status"):
+        adverse = result.ma_filing_evidence["adverse_status"]
+        result.status = {"Expired": "Delinquent", "Closed": "Closed / Withdrawn / Canceled",
+                         "Withdrawn": "Closed / Withdrawn / Canceled"}.get(adverse, adverse)
+        result.raw_status_text = f"Registration Status: {adverse}"
+        result.source_note = "The explicit Massachusetts registration status controls the result; an automatic extension was not assumed."
         return result
-    next_period = date(next_report_year, fiscal_end[0], fiscal_end[1])
+    period_end = parsed_result_date(result.ma_filing_evidence.get("period_end", ""))
+    if not period_end or result.ma_filing_evidence.get("filing_status") != "Submitted":
+        result.status = "Unable to Confirm"
+        result.status_reason = "MA_FORM_PC_DETAIL_UNCONFIRMED"
+        result.raw_status_text = "Submitted Form PC fiscal period not confirmed"
+        result.computed_due_date = ""
+        result.fiscal_year_end = ""
+        result.next_required_period = ""
+        result.source_note = (
+            "The Massachusetts charity record was found, but the fiscal period in its latest submitted Form PC "
+            "could not be confirmed. No fiscal year end or overdue deadline was assumed."
+        )
+        return result
+    fiscal_end = (period_end.month, period_end.day)
+    next_period = add_months_preserving_end_of_month(period_end, 12)
+    options = filing_due_date_options("MA", next_period.year, (next_period.month, next_period.day))
+    # MA's automatic extension is inferred from a submitted prior annual report,
+    # not represented as an individually granted extension or a compliance certificate.
+    due_date = options["extended_due"] or options["base_due"]
+    result.ma_filing_evidence.update({
+        "base_due": format_date(options["base_due"]), "extended_due": format_date(due_date),
+        "automatic_extension_inferred": True,
+    })
     result.status = status_from_calendar_date(due_date)
+    result.status_reason = "MA_SUBMITTED_FORM_PC_FISCAL_PERIOD"
+    result.matched_registry_identifier = result.ma_filing_evidence.get("ago_account", "")
+    result.source_url = result.ma_filing_evidence.get("source_url") or result.source_url
     result.raw_status_text = " | ".join([
-        f"Last Year on Record: {latest_year}",
+        f"Last Year on Record: {period_end.year}",
+        "Filing Status: Submitted",
+        f"Latest Filed Fiscal Period End: {format_date(period_end)}",
         f"Fiscal Year End: {fiscal_end[0]}/{fiscal_end[1]}",
         f"Next Required Period: {format_date(next_period)}",
+        f"Base Filing Due: {format_date(options['base_due'])}",
         f"Next Filing Due: {format_date(due_date)}",
+        "Automatic Extension: Inferred from submitted prior report",
     ])
     result.computed_due_date = format_date(due_date)
     result.fiscal_year_end = f"{fiscal_end[0]}/{fiscal_end[1]}"
-    result.last_year_on_record = latest_year
+    result.last_year_on_record = period_end.year
     result.next_required_period = format_date(next_period)
     result.source_note = (
-        "Massachusetts uses the latest visible Form PC year from Annual Filings. "
-        "When the portal does not expose a fiscal year end in the visible record, CharityClarity applies the Massachusetts "
-        "6/30 Form PC reporting-cycle assumption for due-date interpretation."
+        "Fiscal year end read from the submitted Massachusetts Form PC. The next annual deadline includes "
+        "the automatic six-month extension for registered charities in compliance with annual reporting requirements. "
+        "Eligibility is inferred from the submitted prior report, not separately certified by the state."
     )
     return result
 
@@ -12701,6 +12802,7 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         "fiscal_year_end",
         "next_required_period",
         "computed_due_date",
+        "ma_filing_evidence",
         "source_truth_conflict",
     ]:
         evidence_value = getattr(result, evidence_key, None)
@@ -14351,7 +14453,7 @@ def annual_filings_absent(text: str) -> bool:
 
 def source_note_for_result(result) -> str:
     state = (result.state or "").upper()
-    if state == "MA":
+    if state == "MA" and not hasattr(result, "ma_filing_evidence"):
         return (
             "Massachusetts public portal exposes Annual Filings only. Fiscal year end is not always visible in the portal, "
             "so the filing year should be interpreted against the organization's confirmed fiscal year end and any applicable extension window."
@@ -14550,6 +14652,8 @@ def true_status_from_body(result, body: str) -> str:
 
     if "site not reachable" in normalized or normalized in {"unable to verify", "unable to confirm", "needs review"}:
         return base_status
+    if state == "MA" and getattr(result, "status_reason", "") == "MA_SUBMITTED_FORM_PC_FISCAL_PERIOD":
+        return status_from_calendar_date(parsed_result_date(result.computed_due_date))
     confirmed_status = getattr(result, "_cc_confirmed_feedback_status", "")
     if confirmed_status:
         return confirmed_status
@@ -14935,6 +15039,20 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
     source = "The state's downloadable charity list" if state in {"KS", "KY", "LA", "NH", "OR"} else "The state registry"
     observed = comment_registry_status(raw, status)
     matched = bool(getattr(result, "matched_registry_name", "") or getattr(result, "matched_registry_identifier", ""))
+
+    if state == "MA" and reason == "MA_FORM_PC_DETAIL_UNCONFIRMED":
+        return ("The organization was found in the Massachusetts registry, but its latest submitted Form PC fiscal period "
+                "could not be confirmed. CharityClarity reports Unable to Confirm because no reliable next deadline "
+                "could be calculated; missing public filing details do not establish delinquency.")
+    if state == "MA" and reason == "MA_SUBMITTED_FORM_PC_FISCAL_PERIOD":
+        evidence = result.ma_filing_evidence
+        due = parsed_result_date(result.computed_due_date)
+        return (f"The latest submitted Form PC covers the fiscal year ending {evidence['period_end']}. "
+                f"The next annual report, for the period ending {result.next_required_period}, has a base deadline "
+                f"of {evidence['base_due']}. Massachusetts provides an automatic six-month extension for registered "
+                f"charities in compliance with annual reporting requirements. Based on the submitted prior report, "
+                f"CharityClarity infers that this extension applies and uses {format_date(due)}. "
+                f"{comment_date_conclusion(due, status)} Extension eligibility is inferred, not separately confirmed by the state.")
 
     if status == "Site Not Reachable":
         if state == "OK" and "certificate" in combined.lower() and matched:
@@ -19354,7 +19472,9 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 body = ma_detail_body(page)
                 result, body = repair_ma_false_not_registered(page, org, result, body)
                 result = validate_ma_positive_record(org, result, body)
-                result = annotate_ma_visible_form_pc_due(result)
+                if public_status(result) not in {"Not Registered", "Site Not Reachable", "Exempt", "Suspended", "Revoked"}:
+                    evidence = ma_read_latest_form_pc(page, result, body)
+                    result = annotate_ma_visible_form_pc_due(result, evidence)
             elif state == "MD":
                 result = checker.search_md(page, org)
                 result = ensure_state_result(result, org, "MD", source_note="Maryland checker returned a non-structured result.")
