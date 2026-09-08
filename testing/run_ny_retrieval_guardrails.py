@@ -79,10 +79,45 @@ class NewYorkRetrievalTests(unittest.TestCase):
         bad_http = Mock(); bad_http.raise_for_status.side_effect = RuntimeError("HTTP 503")
         for bad in [TimeoutError("Timeout"), bad_json, bad_http, response([], False), response(None)]:
             with self.subTest(bad=str(bad)):
-                r, s = self.lookup([bad])
-                self.assertEqual(r.status, "Unable to Confirm")
+                r, s = self.lookup([bad, bad] if isinstance(bad, TimeoutError) else [bad])
+                self.assertEqual(r.status, "Site Not Reachable" if isinstance(bad, TimeoutError) else "Unable to Confirm")
                 self.assertFalse(r.success)
-                self.assertEqual(s.get.call_count, 1)
+                self.assertEqual(s.get.call_count, 2 if isinstance(bad, TimeoutError) else 1)
+
+    def test_transient_detail_retry_keeps_confirmed_identity(self):
+        r, s = self.lookup([response([ROW]), TimeoutError("timed out"), response(DETAIL)])
+        self.assertEqual(r.status, "Current")
+        self.assertEqual(s.get.call_count, 3)
+        self.assertEqual(s.get.call_args_list[1].kwargs["params"], s.get.call_args_list[2].kwargs["params"])
+        self.assertTrue(any("retrying" in a for a in r.source_attempts))
+
+    def test_gateway_failure_is_retried_but_forbidden_is_not(self):
+        for code in (504, 403):
+            bad = Mock(status_code=code)
+            bad.raise_for_status.side_effect = RuntimeError(f"HTTP {code}")
+            r, s = self.lookup([response([ROW]), bad, response(DETAIL)])
+            self.assertEqual(r.status, "Current" if code == 504 else "Site Not Reachable")
+            self.assertEqual(s.get.call_count, 3 if code == 504 else 2)
+
+    def test_only_one_retry_across_entire_lookup(self):
+        r, s = self.lookup([TimeoutError("timed out"), response([ROW]), TimeoutError("timed out"), response(DETAIL)])
+        self.assertEqual(r.status, "Site Not Reachable")
+        self.assertEqual(s.get.call_count, 3)
+
+    def test_retry_is_capped_by_remaining_overall_budget(self):
+        elapsed = [0.0]
+        def slow_response(*args, **kwargs):
+            if elapsed[0] == 0:
+                elapsed[0] = 12.0
+                raise TimeoutError("timed out")
+            self.assertLessEqual(kwargs["timeout"], 12.0)
+            elapsed[0] = 35.0
+            raise TimeoutError("timed out")
+        with patch.object(cc.time, "perf_counter", side_effect=lambda: elapsed[0]), \
+             patch.object(cc.time, "sleep", side_effect=lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds)):
+            r, s = self.lookup(slow_response)
+        self.assertEqual(r.status, "Site Not Reachable")
+        self.assertEqual(s.get.call_count, 2)
 
     def test_incomplete_search_row_is_not_negative(self):
         r, _ = self.lookup([response([{"orgName": ROW["orgName"]}])])
@@ -127,8 +162,8 @@ class NewYorkRetrievalTests(unittest.TestCase):
                 pass
             def do_GET(self):
                 search = "RegistrySearch?" in self.path
-                if search:
-                    time.sleep(4)
+                if not search:
+                    time.sleep(0.3)
                 body = json.dumps({"success": True, "statusCode": 200,
                                    "data": [ROW] if search else DETAIL}).encode()
                 self.send_response(200)
@@ -143,7 +178,7 @@ class NewYorkRetrievalTests(unittest.TestCase):
             started = time.perf_counter()
             with patch.object(cc, "NY_REGISTRY_API", f"http://127.0.0.1:{server.server_port}"):
                 r = cc.search_ny_direct(self.org)
-            self.assertGreaterEqual(time.perf_counter() - started, 4)
+            self.assertGreaterEqual(time.perf_counter() - started, 0.3)
             self.assertEqual(r.status, "Current")
             self.assertEqual(len(r.source_attempts), 2)
         finally:

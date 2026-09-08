@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.07.3-staging").strip() or "2026.09.07.3-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.08.2-staging").strip() or "2026.09.08.2-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -2282,7 +2282,6 @@ def filing_context(result, body: str) -> dict:
         state == "MD"
         and re.search(r"^\s*Current\b", result.raw_status_text or "", re.I)
         and due_options.get("base_due")
-        and due_options["base_due"] < date.today()
         and due_options.get("extended_due")
     ):
         due_options["effective_due"] = due_options["extended_due"]
@@ -3710,8 +3709,17 @@ def registry_name_is_safe_against_targets(registry_name: str, targets: list[str]
     return False
 
 
+def legal_name_without_corporate_description(name: str) -> str:
+    """Remove only a trailing, comma-delimited legal-form description."""
+    return re.sub(
+        r",\s*(?:a|an)\s+(?:[A-Za-z]+\s+){0,3}(?:non[- ]?profit|not[- ]for[- ]profit)"
+        r"\s+(?:[A-Za-z]+\s+){0,4}corporation\.?\s*$",
+        "", name or "", flags=re.I).strip()
+
+
 def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: str = "") -> bool:
-    registry_name = clean_registry_name(registry_name or "")
+    registry_name = legal_name_without_corporate_description(clean_registry_name(registry_name or ""))
+    original_name = legal_name_without_corporate_description(original_name)
     if not registry_name:
         return False
     safe_targets = organization_match_target_variants(original_name, ein)
@@ -5791,6 +5799,8 @@ def me_fast_direct_search_rows(query: str) -> tuple[list[dict[str, str]], urllib
             "profession": re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", match.group("profession")))).strip(),
             "status": re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", match.group("status")))).strip(),
         })
+    if not rows and not re.search(r"\b0\s+records?\s+found\b|\bno\s+records?\s+(?:were\s+)?found\b", re.sub(r"<[^>]+>", " ", result_html), re.I):
+        raise ValueError("Maine returned an incomplete or unrecognized search result page")
     return rows, opener
 
 
@@ -5824,7 +5834,7 @@ def me_fast_direct_confirmation_result(org):
             break
 
     if not best_row or not best_opener:
-        if checked_any:
+        if checked_any and not last_error:
             result = checker.StateResult(
                 getattr(org, "organization_name", ""),
                 getattr(org, "ein", ""),
@@ -9062,7 +9072,7 @@ def search_mn(page, org):
                     () => Array.from(document.querySelectorAll('table tr, tr')).map((row, index) => {
                         const text = (row.innerText || row.textContent || '').replace(/\\s+/g, ' ').trim();
                         const link = row.querySelector('a[href*="CHR_GeneralInfo"]');
-                        return { index, text, linkText: link ? (link.innerText || link.textContent || '').replace(/\\s+/g, ' ').trim() : '' };
+                        return { index, text, href: link ? link.href : '', linkText: link ? (link.innerText || link.textContent || '').replace(/\\s+/g, ' ').trim() : '' };
                     }).filter((row) => row.linkText && row.text);
                     """
                 )
@@ -9081,6 +9091,9 @@ def search_mn(page, org):
             for candidate in row_candidates:
                 row_text = candidate.get("text") or ""
                 link_text = candidate.get("linkText") or ""
+                candidate_ein = re.sub(r"\D", "", parse_qs(urlparse(candidate.get("href") or "").query).get("FederalID", [""])[0])
+                if ein_digits and candidate_ein and candidate_ein != ein_digits:
+                    continue
                 if short_exact_targets and normalized_match_name(link_text) not in short_exact_targets:
                     continue
                 score = target_name_score(link_text, safe_targets)
@@ -9118,7 +9131,6 @@ def search_mn(page, org):
                 ein_digits
                 and detail_ein_digits
                 and detail_ein_digits != ein_digits
-                and not (best_alias_row_match or mn_safe_alias_row_match(best_row_text, best_name))
             ):
                 continue
             fiscal_year_end = mn_latest_fiscal_year_end_from_text(detail_text)
@@ -9150,6 +9162,90 @@ def search_mn(page, org):
     except Exception as exc:
         result.error = f"MN error: {exc}"
         return result
+
+
+def search_nd_completed(page, org):
+    """Read the same public JSON as FirstStop, after the search has completed.
+
+    This avoids treating the initial zero-count UI or an exhausted DOM scan as
+    a negative. Name matching remains in the master helpers; ND has no EIN field.
+    """
+    base = "https://firststop.sos.nd.gov"
+    result = checker.StateResult(org.organization_name, org.ein, "ND", "Unable to Confirm", base + "/search/charitable")
+    result.success = False
+    result.queries_attempted = []
+    deadline = time.perf_counter() + 35.0
+    targets = organization_match_target_variants(org.organization_name, org.ein)
+    queries = list(dict.fromkeys([org.organization_name, *connector_light_name_variants(org.organization_name),
+        *build_search_queries(org.organization_name, org.ein, include_ein=False, max_queries=8)]))[:8]
+    try:
+        page.goto(base + "/search/charitable", wait_until="domcontentloaded", timeout=12000)
+        search_input = page.locator('input[placeholder*="Search by name"], input[aria-label*="Search by name"], input[type="text"]').first
+        search_input.wait_for(state="visible", timeout=8000)
+        if search_input:
+            def request(path, payload=None):
+                remaining = deadline - time.perf_counter()
+                if remaining <= 0:
+                    raise TimeoutError("North Dakota lookup deadline reached")
+                timeout_ms = min(12000, remaining * 1000)
+                if payload is not None:
+                    search_input.fill(payload["SEARCH_VALUE"])
+                    with page.expect_response(lambda r: r.url.endswith(path) and r.request.method == "POST", timeout=timeout_ms) as pending:
+                        page.locator('button[aria-label="Execute search"]').click(timeout=timeout_ms)
+                    response = pending.value
+                else:
+                    with page.expect_response(lambda r: r.url.endswith(path), timeout=timeout_ms) as pending:
+                        page.get_by_text(str(selected["TITLE"][0]), exact=True).first.click(timeout=timeout_ms)
+                    response = pending.value
+                if response.status >= 400:
+                    raise OSError(f"North Dakota registry HTTP {response.status}")
+                return response.json()
+            for query in queries:
+                query = re.sub(r"\s+", " ", re.sub(r"[^A-Za-z0-9 ]", " ", query)).strip()
+                data = request("/api/Records/charitablesearch", {"SEARCH_VALUE": query,
+                               "STARTS_WITH_YN": False, "ACTIVE_ONLY_YN": False})
+                if not isinstance(data, dict) or not isinstance(data.get("rows"), dict) or not isinstance(data.get("template"), list):
+                    raise ValueError("North Dakota search response incomplete")
+                result.queries_attempted.append(query)
+                candidates = []
+                for row in data["rows"].values():
+                    if not isinstance(row, dict) or not isinstance(row.get("TITLE"), list) or not row["TITLE"] or not row.get("ID"):
+                        raise ValueError("North Dakota returned an incomplete search row")
+                    name = str(row["TITLE"][0]).strip()
+                    if registry_name_is_safe_against_targets(name, targets, org.organization_name, org.ein):
+                        rank = checker.candidate_selection_score_for_targets(name, targets, str(row.get("STATUS", "")))
+                        candidates.append((rank, row))
+                if not candidates:
+                    continue
+                candidates.sort(key=lambda item: item[0], reverse=True)
+                if len(candidates) > 1 and candidates[0][0] == candidates[1][0]:
+                    raise ValueError("North Dakota returned equally ranked registration records")
+                selected = candidates[0][1]
+                detail = request("/api/FilingDetail/charitable/" + quote(str(selected["ID"]), safe="") + "/false")
+                if not isinstance(detail, dict) or not isinstance(detail.get("DRAWER_DETAIL_LIST"), list):
+                    raise ValueError("North Dakota detail response incomplete")
+                fields = {str(row.get("LABEL", "")).strip(): str(row.get("VALUE") or "").strip()
+                          for row in detail["DRAWER_DETAIL_LIST"] if isinstance(row, dict)}
+                if not fields.get("Status"):
+                    raise ValueError("North Dakota detail did not contain a registration status")
+                result.matched_registry_name = selected["TITLE"][0]
+                result.matched_registry_identifier = str(selected.get("RECORD_NUM") or selected["ID"])
+                result.raw_status_text = fields["Status"]
+                result.status = fields["Status"]
+                result.source_note = "North Dakota's completed public search and selected registration detail supplied the status."
+                result._cc_detail_body = "\n".join(f"{key}: {value}" for key, value in fields.items())
+                result.success = True
+                return result
+            result.status = checker.STATUS_NOT_REGISTERED
+            result.raw_status_text = "No qualifying North Dakota registration record found"
+            result.source_note = "North Dakota completed the bounded name searches without a safely matching registration record."
+            result.success = True
+    except Exception as exc:
+        transport = isinstance(exc, (TimeoutError, OSError)) or type(exc).__name__ == "TimeoutError" or getattr(exc, "code", None) in {6, 7, 28, 35, 52, 55, 56}
+        result.status = "Site Not Reachable" if transport else "Unable to Confirm"
+        result.raw_status_text = "North Dakota registry lookup incomplete"
+        result.source_note = "North Dakota did not return a completed, confirmed registration result. " + str(exc)
+    return result
 
 
 def ohio_due_date(most_recent_filing_year: int, fiscal_year_end_month: int) -> date:
@@ -10664,7 +10760,42 @@ def ma_submitted_form_pc_evidence(text: str, expected_year: int, expected_accoun
             "filing_status": "Submitted", "ago_account": account.group(1)}
 
 
-def ma_read_latest_form_pc(page, result, body: str) -> dict:
+def ma_capture_completed_response(response, org, evidence: dict) -> None:
+    """Observe the public page's completed requests; retain no contact or session data."""
+    if urlparse(response.url).hostname != "masscharities.my.site.com" or "/aura" not in response.url:
+        return
+    try:
+        requests = json.loads(parse_qs(response.request.post_data or "")["message"][0])["actions"]
+        actions = {action["id"]: action for action in response.json().get("actions", [])}
+        for request in requests:
+            params = request.get("params", {})
+            if params.get("classname") != "AeS_Apex_Controller_Class":
+                continue
+            action = actions.get(request.get("id"), {})
+            wrapper = action.get("returnValue")
+            rows = wrapper.get("returnValue") if isinstance(wrapper, dict) else None
+            if action.get("state") != "SUCCESS" or not isinstance(rows, list):
+                continue
+            method = params.get("method")
+            query = params.get("params", {})
+            if method == "get_CharityInfo" and query.get("recID") and len(rows) == 1:
+                row = rows[0]
+                identity = score_candidate(org.organization_name, org.ein, {
+                    "name": row.get("Organization_Name__c"), "ein": row.get("Employer_Idendification_Number_EIN__c")})
+                if row.get("Id") == query["recID"] and identity["decision"] == "accepted":
+                    evidence["record"] = {"ago_account": str(row.get("AGO_Charity_Number__c") or ""),
+                                          "name": row.get("Organization_Name__c"),
+                                          "registry_status": str(row.get("Charity_Status__c") or "")}
+            elif method == "get_ALL_FILINGS_ATTACHMENTS_FOR_PUBLICUSERS" and query.get("agoNumber"):
+                # A completed all-filings response, not a filtered or loading table.
+                evidence.setdefault("filings", {})[str(query["agoNumber"])] = {
+                    "empty": len(rows) == 0, "row_count": len(rows)}
+    except Exception:
+        # Missing/changed response contracts cannot prove an empty history.
+        return
+
+
+def ma_read_latest_form_pc(page, result, body: str, completed=None) -> dict:
     """One bounded detail read, selected by filing year and confirmed AGO identity."""
     account = re.search(r"AG\s+Account\s+Number\s*:?\s*(\d+)", re.sub(r"\s+", " ", body), re.I)
     if not account:
@@ -10675,6 +10806,21 @@ def ma_read_latest_form_pc(page, result, body: str) -> dict:
     )
     if adverse:
         return {"adverse_status": adverse.group(1).title(), "ago_account": account.group(1)}
+    completed = completed or {}
+    record = completed.get("record", {})
+    if record.get("ago_account") == account.group(1):
+        registry_status = record.get("registry_status", "").strip()
+        # These statuses contradict inferring delinquency from absent filings.
+        # The user-approved inactive category retains the state's exact wording.
+        if re.search(r"not doing business|inactive|exempt|suspend|revok|withdraw|closed|pending", registry_status, re.I):
+            return {"registry_status": registry_status, "ago_account": account.group(1), "contrary_status": True}
+        filings = completed.get("filings", {}).get(account.group(1), {})
+        if filings.get("empty") is True:
+            if registry_status.lower() in {"", "registered", "delinquent", "expired"}:
+                return {"empty_history_confirmed": True, "ago_account": account.group(1),
+                        "registry_status": registry_status}
+            # Unrecognized or affirmative current statuses require interpretation.
+            return {"registry_status": registry_status, "ago_account": account.group(1), "contrary_status": True}
     candidates = []
     all_form_years = []
     try:
@@ -10718,6 +10864,25 @@ def annotate_ma_visible_form_pc_due(result, evidence=None):
     if public_status(result) in {"Not Registered", "Site Not Reachable", "Exempt", "Suspended", "Revoked"}:
         return result
     result.ma_filing_evidence = dict(evidence or {})
+    if result.ma_filing_evidence.get("contrary_status"):
+        registry_status = result.ma_filing_evidence["registry_status"]
+        inactive = registry_status.strip().lower() == "not doing business in mass"
+        result.status = "Closed / Withdrawn / Canceled" if inactive else "Needs Review"
+        result.status_reason = "MA_NOT_DOING_BUSINESS_INACTIVE" if inactive else "MA_EXPLICIT_STATUS_REQUIRES_REVIEW"
+        result.raw_status_text = f"Charity Status: {registry_status}"
+        result.matched_registry_identifier = result.ma_filing_evidence["ago_account"]
+        result.source_note = "Massachusetts reports an explicit charity status that contradicts inferring delinquency from missing filings."
+        return result
+    if result.ma_filing_evidence.get("empty_history_confirmed"):
+        result.status = "Delinquent"
+        result.status_reason = "MA_CONFIRMED_EMPTY_HISTORY_INFERRED_DELINQUENT"
+        result.raw_status_text = "Confirmed empty annual filing history | Delinquency inferred"
+        result.matched_registry_identifier = result.ma_filing_evidence["ago_account"]
+        result.computed_due_date = ""
+        result.fiscal_year_end = ""
+        result.next_required_period = ""
+        result.source_note = "The matched Massachusetts record returned a completed empty filing history with no contradictory charity status. CharityClarity infers Delinquent; this is not an explicit state delinquency determination."
+        return result
     if result.ma_filing_evidence.get("adverse_status"):
         adverse = result.ma_filing_evidence["adverse_status"]
         result.status = {"Expired": "Delinquent", "Closed": "Closed / Withdrawn / Canceled",
@@ -14034,6 +14199,8 @@ def ny_safe_identity_from_evidence(org, result, evidence_text: str) -> bool:
 
 
 NY_REGISTRY_API = "https://charities-search-api.ag.ny.gov/api/FileNet"
+NY_RESPONSE_TIMEOUT_SECONDS = 12.0
+NY_LOOKUP_TIMEOUT_SECONDS = 35.0
 
 
 def search_ny_direct(org):
@@ -14042,7 +14209,8 @@ def search_ny_direct(org):
                                  "https://charities-search.ag.ny.gov/RegistrySearch")
     result.success = False
     result.source_attempts = []
-    deadline = time.perf_counter() + 35.0
+    deadline = time.perf_counter() + NY_LOOKUP_TIMEOUT_SECONDS
+    retry_used = False
     requested_ein = re.sub(r"\D", "", org.ein or "")
     if requested_ein and (len(requested_ein) != 9 or requested_ein == "000000000"):
         result.raw_status_text = "Invalid EIN"
@@ -14050,15 +14218,34 @@ def search_ny_direct(org):
         return result
 
     def request_data(session, operation, params, expected_type):
-        remaining = deadline - time.perf_counter()
-        if remaining <= 0:
-            raise TimeoutError("New York lookup time limit reached")
-        started = time.perf_counter()
-        attempt = f"NY {operation}"
-        try:
-            response = session.get(NY_REGISTRY_API + "/" + operation, params=params,
-                                   timeout=min(12.0, remaining))
-            response.raise_for_status()
+        nonlocal retry_used
+        while True:
+            remaining = deadline - time.perf_counter()
+            if remaining <= 0:
+                raise TimeoutError("New York lookup time limit reached")
+            started = time.perf_counter()
+            attempt = f"NY {operation}"
+            response = None
+            try:
+                response = session.get(NY_REGISTRY_API + "/" + operation, params=params,
+                                       timeout=min(NY_RESPONSE_TIMEOUT_SECONDS, remaining))
+                response.raise_for_status()
+            except Exception as exc:
+                code = getattr(exc, "code", None)
+                http_status = getattr(response, "status_code", None)
+                result._ny_transport_failure = isinstance(exc, (TimeoutError, OSError)) or code in {6, 7, 28, 35, 52, 55, 56} or http_status in {403, 408, 429, 500, 502, 503, 504}
+                transient = isinstance(exc, TimeoutError) or code in {7, 28, 52, 55, 56} or http_status in {408, 429, 500, 502, 503, 504}
+                label = f"HTTP {http_status}" if isinstance(http_status, int) else type(exc).__name__
+                result.source_attempts.append(f"{attempt}: {label} in {time.perf_counter() - started:.2f}s")
+                # One retry for the entire lookup, inside the original deadline.
+                # Identity, schema and parsing failures below are never retried.
+                if transient and not retry_used and deadline - time.perf_counter() >= 5.0:
+                    retry_used = True
+                    result.source_attempts.append(f"{attempt}: retrying transient failure within lookup budget")
+                    time.sleep(1.0)
+                    continue
+                raise
+            result._ny_transport_failure = False
             payload = response.json()
             if (not isinstance(payload, dict) or payload.get("success") is not True
                     or payload.get("statusCode") != 200
@@ -14066,9 +14253,6 @@ def search_ny_direct(org):
                 raise ValueError("Incomplete or unsuccessful New York registry response")
             result.source_attempts.append(f"{attempt}: complete in {time.perf_counter() - started:.2f}s")
             return payload["data"]
-        except Exception:
-            result.source_attempts.append(f"{attempt}: failed in {time.perf_counter() - started:.2f}s")
-            raise
 
     try:
         if curl_requests is None:
@@ -14153,10 +14337,11 @@ def search_ny_direct(org):
             result.raw_status_text = f"Latest FYE: {max(fiscal_dates).isoformat()}"
             return apply_ny_latest_fye_next_cycle_status(org, result)
     except Exception as exc:
-        result.status = "Unable to Confirm"
-        result.raw_status_text = "New York registry lookup incomplete"
+        transport_failure = bool(getattr(result, "_ny_transport_failure", False)) or isinstance(exc, (TimeoutError, OSError))
+        result.status = "Site Not Reachable" if transport_failure else "Unable to Confirm"
+        result.raw_status_text = "New York registry detail or search endpoint could not be reached" if transport_failure else "New York registry lookup incomplete"
         result.source_note = "New York did not provide a complete, confirmed registry record. " + str(exc)
-        result.status_reason = "NY_REGISTRY_RESPONSE_UNCONFIRMED"
+        result.status_reason = "NY_REGISTRY_UNREACHABLE" if transport_failure else "NY_REGISTRY_RESPONSE_UNCONFIRMED"
         result.success = False
         return result
 
@@ -14654,6 +14839,10 @@ def true_status_from_body(result, body: str) -> str:
         return base_status
     if state == "MA" and getattr(result, "status_reason", "") == "MA_SUBMITTED_FORM_PC_FISCAL_PERIOD":
         return status_from_calendar_date(parsed_result_date(result.computed_due_date))
+    if state == "MA" and getattr(result, "status_reason", "") == "MA_CONFIRMED_EMPTY_HISTORY_INFERRED_DELINQUENT":
+        return "Delinquent"
+    if state == "MA" and getattr(result, "status_reason", "") == "MA_NOT_DOING_BUSINESS_INACTIVE":
+        return "Closed / Withdrawn / Canceled"
     confirmed_status = getattr(result, "_cc_confirmed_feedback_status", "")
     if confirmed_status:
         return confirmed_status
@@ -14674,8 +14863,8 @@ def true_status_from_body(result, body: str) -> str:
         return status_from_calendar_date(registry_date) if registry_date else base_status
     if result_explicitly_exempt(result):
         return "Exempt"
-    # An empty/unavailable filing section is not proof of a missed obligation.
-    # MA expressly warns that absent public reports do not establish delinquency.
+    # Unavailable filing evidence stays inconclusive. MA's explicitly confirmed
+    # empty-history inference is handled above under the user-approved rule.
     missing_filings = annual_filings_absent(combined) or bool(re.search(
         r"Annual\s+Filings?\s+not\s+visible", result.raw_status_text or "", re.I))
     filing_due = comment_labeled_date(result.raw_status_text or "", r"Next Filing Due|Filing Due|Report Due|Due Date|\bDue")
@@ -14740,6 +14929,8 @@ def true_status_from_body(result, body: str) -> str:
         )
     ):
         return base_status
+    if state == "NH" and getattr(result, "status_reason", "") == "NH_UNDOCUMENTED_STATUS_CODE":
+        return "Needs Review"
     if state == "NH":
         _, effective_report_due = nh_effective_report_due_date(result, body)
         if effective_report_due:
@@ -15040,6 +15231,22 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
     observed = comment_registry_status(raw, status)
     matched = bool(getattr(result, "matched_registry_name", "") or getattr(result, "matched_registry_identifier", ""))
 
+    if state == "MA" and reason == "MA_CONFIRMED_EMPTY_HISTORY_INFERRED_DELINQUENT":
+        return ("The matched Massachusetts record returned a completed, empty annual filing history with no contradictory charity status. "
+                "CharityClarity therefore infers Delinquent. This is an inferred status, not an explicit state determination; "
+                "recent filings may not yet be public, so confirm time-sensitive decisions directly with Massachusetts.")
+    if state == "MA" and reason == "MA_NOT_DOING_BUSINESS_INACTIVE":
+        return ("Massachusetts lists the charity status as Not Doing Business in Mass. "
+                "CharityClarity groups this inactive status under Closed / Withdrawn / Canceled. "
+                "The registry record remains on file; the state wording does not specify a formal withdrawal or cancellation.")
+    if state == "MA" and reason == "MA_EXPLICIT_STATUS_REQUIRES_REVIEW":
+        return (f"Massachusetts lists the charity status as {result.ma_filing_evidence['registry_status']}. "
+                "This contradicts inferring delinquency from missing filings, so CharityClarity reports Needs Review. "
+                "Confirm the organization's current Massachusetts activity and filing obligations with the state.")
+    if state == "NY" and reason == "NY_REGISTRY_RESPONSE_UNCONFIRMED" and re.search(r"timed out|timeout|HTTP (?:408|429|50[0234])", combined, re.I):
+        return ("New York's registry did not complete the request within the available time or returned a temporary service error. "
+                "CharityClarity reports Unable to Confirm because the registry evidence could not be retrieved. "
+                "Retry the state later; this result does not establish delinquency or non-registration.")
     if state == "MA" and reason == "MA_FORM_PC_DETAIL_UNCONFIRMED":
         return ("The organization was found in the Massachusetts registry, but its latest submitted Form PC fiscal period "
                 "could not be confirmed. CharityClarity reports Unable to Confirm because no reliable next deadline "
@@ -15789,8 +15996,9 @@ def nh_download_live_pdf_records() -> tuple[list[dict], str]:
 
     def add_nh_record(registry_id: str, body_text: str, status_code: str, due_raw: str) -> None:
         body = re.sub(r"\s+", " ", body_text or "").strip()
+        due_raw = due_raw or ""
         due_date = parse_due_date(due_raw)
-        if not body or not due_date:
+        if not body:
             return
         registry_name = nh_registry_name_from_live_body(body)
         registry_norm = normalized_match_name(registry_name)
@@ -15809,8 +16017,8 @@ def nh_download_live_pdf_records() -> tuple[list[dict], str]:
         })
 
     row_pattern = re.compile(
-        r"^\s*(?P<reg>\d{3,6})\s+(?P<body>.*?)\s*(?P<status>[GXS])\s+"
-        r"(?P<due>\d{1,2}/\d{1,2}/\d{4})\s*$",
+        r"^\s*(?P<reg>\d{3,6})\s+(?P<body>.*?)\s*(?P<status>[A-Z])(?:\s+"
+        r"(?P<due>\d{1,2}/\d{1,2}/\d{4}))?\s*$",
         re.I,
     )
     pending_row = ""
@@ -15839,7 +16047,7 @@ def nh_download_live_pdf_records() -> tuple[list[dict], str]:
 
     if not records:
         record_pattern = re.compile(
-            r"^\s*(?P<reg>\d{3,6})\s+(?P<body>[\s\S]*?)\s*(?P<status>[GXS])\s+"
+            r"^\s*(?P<reg>\d{3,6})\s+(?P<body>[\s\S]*?)\s*(?P<status>[A-Z])\s+"
             r"(?P<due>\d{1,2}/\d{1,2}/\d{4})(?=\s*(?:\n\s*\d{3,6}\s+[A-Z]|\n\s*Updated:|\Z))",
             re.I | re.M,
         )
@@ -15960,7 +16168,11 @@ def search_nh_live_pdf(org):
     record, registry_name = best
     code = record["status_code"]
     due_date = record["due_date"]
-    if code == "S":
+    if code not in {"G", "X", "S", "C"} or (code in {"G", "C"} and not due_date):
+        status = "Needs Review"
+        status_label = "Registry code requires confirmation"
+        result.status_reason = "NH_UNDOCUMENTED_STATUS_CODE"
+    elif code == "S":
         status = "Suspended"
         status_label = "Suspended"
     elif code == "X":
@@ -15968,7 +16180,7 @@ def search_nh_live_pdf(org):
         status_label = "Not in Good Standing"
     else:
         status = status_from_calendar_date(due_date)
-        status_label = "Good Standing"
+        status_label = "Classified from report due date" if code == "C" else "Good Standing"
     result.status = status
     result.raw_status_text = " | ".join(part for part in [
         f"{code} | {status_label}",
@@ -19468,13 +19680,17 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 if public_status(result) != "Not Registered":
                     body = ca_detail_body(page, org)
             elif state == "MA":
+                ma_completed = {}
+                ma_listener = lambda response: ma_capture_completed_response(response, org, ma_completed)
+                page.on("response", ma_listener)
                 result = checker.search_ma(page, org)
                 body = ma_detail_body(page)
                 result, body = repair_ma_false_not_registered(page, org, result, body)
                 result = validate_ma_positive_record(org, result, body)
                 if public_status(result) not in {"Not Registered", "Site Not Reachable", "Exempt", "Suspended", "Revoked"}:
-                    evidence = ma_read_latest_form_pc(page, result, body)
+                    evidence = ma_read_latest_form_pc(page, result, body, ma_completed)
                     result = annotate_ma_visible_form_pc_due(result, evidence)
+                page.remove_listener("response", ma_listener)
             elif state == "MD":
                 result = checker.search_md(page, org)
                 result = ensure_state_result(result, org, "MD", source_note="Maryland checker returned a non-structured result.")
@@ -19757,70 +19973,8 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     body = me_detail_body(page, org)
                     enrich_me_result_from_body(result, body)
             elif state == "ND":
-                reachable, _, preflight_result = preflight_name_search_registry(org, "ND")
-                nd_preferred_variants = connector_light_name_variants(org.organization_name)
-                def run_nd_lookup():
-                    return search_with_name_variants(
-                        page,
-                        org,
-                        checker.search_nd,
-                        max_variants=18,
-                        max_elapsed_seconds=NAME_SEARCH_VARIANT_MAX_SECONDS,
-                        include_ein_aliases=True,
-                        include_name_segments=True,
-                        include_compact_legal_suffixes=False,
-                        include_leading_article_variants=True,
-                        prioritize_institution_reductions=True,
-                        preferred_variants=nd_preferred_variants,
-                        require_safe_registry_name=True,
-                    )
-
-                def run_nd_confirmation_lookup():
-                    return search_with_name_variants(
-                        page,
-                        org,
-                        checker.search_nd,
-                        max_variants=8,
-                        max_elapsed_seconds=22.0,
-                        include_ein_aliases=True,
-                        include_name_segments=True,
-                        include_compact_legal_suffixes=False,
-                        include_leading_article_variants=True,
-                        prioritize_institution_reductions=True,
-                        preferred_variants=nd_preferred_variants,
-                        require_safe_registry_name=True,
-                    )
-
-                result = run_nd_lookup()
-                if (
-                    not reachable
-                    and preflight_result is not None
-                    and public_status(result) in {"Site Not Reachable", "Unknown", ""}
-                ):
-                    result = preflight_result
-                if state_result_has_weak_terminal_name_match(result, org):
-                    time.sleep(min(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS, 5.0))
-                    confirmed_result = run_nd_lookup()
-                    if state_result_should_replace_weak_match(result, confirmed_result, org):
-                        confirmed_result.source_note = " ".join(part for part in [
-                            confirmed_result.source_note or "",
-                            "A delayed confirmation lookup replaced an initial weaker North Dakota registry-name match.",
-                        ]).strip()
-                        result = confirmed_result
-                elapsed_before_nd_confirmation = time.perf_counter() - lookup_started
-                if (
-                    public_status(result) == "Not Registered"
-                    and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0
-                    and elapsed_before_nd_confirmation < 64.0
-                ):
-                    time.sleep(min(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS, 1.0))
-                    confirmed_result = run_nd_confirmation_lookup()
-                    if public_status(confirmed_result) != "Not Registered":
-                        confirmed_result.source_note = " ".join(part for part in [
-                            confirmed_result.source_note or "",
-                            "A bounded confirmation lookup replaced an initial North Dakota no-record response.",
-                        ]).strip()
-                        result = confirmed_result
+                result = search_nd_completed(page, org)
+                body = getattr(result, "_cc_detail_body", "")
             elif state == "OR":
                 result = search_bundled_extension_state(page, org, "OR")
                 elapsed_before_confirmation = time.perf_counter() - lookup_started
