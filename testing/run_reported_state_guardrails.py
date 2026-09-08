@@ -86,13 +86,13 @@ class ReportedStateTests(unittest.TestCase):
 
     def test_ma_fully_failed_direct_queries_are_not_completed_negative(self):
         org=cc.checker.Organization('Example Relief','123456789')
-        with patch.object(cc,'me_fast_direct_search_rows',side_effect=ValueError('incomplete page')):
+        with patch.object(cc.MaineRegistrySession,'search',side_effect=ValueError('incomplete page')):
             self.assertIsNone(cc.me_fast_direct_confirmation_result(org))
 
     def test_me_partial_query_failure_is_not_completed_negative(self):
         org=cc.checker.Organization('Example Relief','123456789')
         with patch.object(cc,'me_fast_direct_query_variants',return_value=['Example Relief','Example']), \
-             patch.object(cc,'me_fast_direct_search_rows',side_effect=[([],Mock()),ValueError('incomplete page')]):
+             patch.object(cc.MaineRegistrySession,'search',side_effect=[([],Mock()),ValueError('incomplete page')]):
             self.assertIsNone(cc.me_fast_direct_confirmation_result(org))
 
 if __name__=='__main__': unittest.main(verbosity=2)

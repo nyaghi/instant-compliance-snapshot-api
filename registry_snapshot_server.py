@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.08.5-staging").strip() or "2026.09.08.5-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.08.6-staging").strip() or "2026.09.08.6-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -5746,44 +5746,68 @@ def me_fast_direct_query_variants(org) -> list[str]:
             include_broad_query_prefixes=False,
         ):
             add(variant)
-    return variants[:ME_FAST_DIRECT_CONFIRMATION_MAX_VARIANTS]
+    # Maine's Begins With search already covers longer queries with the
+    # identical prefix. Retain punctuation/alias variants that change it.
+    bounded = variants[:ME_FAST_DIRECT_CONFIRMATION_MAX_VARIANTS]
+    return [query for query in bounded if not any(
+        other != query and query.casefold().startswith(other.casefold())
+        for other in bounded)]
 
 
-def me_fast_direct_search_rows(query: str) -> tuple[list[dict[str, str]], urllib.request.OpenerDirector]:
-    url = NAME_SEARCH_PREFLIGHT_URLS["ME"]
-    cookie_jar = http.cookiejar.CookieJar()
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
-    opener.addheaders = [
-        ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
-        ("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
-        ("Accept-Language", "en-US,en;q=0.9"),
-        ("Upgrade-Insecure-Requests", "1"),
-    ]
-    response = opener.open(url, timeout=ME_FAST_DIRECT_GET_TIMEOUT_SECONDS)
-    html_text = response.read().decode("utf-8", "replace")
-    fields: dict[str, str] = {}
-    for hidden in re.finditer(r'<input[^>]+type="hidden"[^>]*>', html_text, re.I):
-        tag = hidden.group(0)
-        name_match = re.search(r'name="([^"]+)"', tag, re.I)
-        value_match = re.search(r'value="([^"]*)"', tag, re.I)
-        if name_match:
-            fields[html.unescape(name_match.group(1))] = html.unescape(value_match.group(1) if value_match else "")
-    fields.update({
-        "ctl00$ctl00$mainContent$mainContent$scRegulator": "4076",
-        "ctl00$ctl00$mainContent$mainContent$scCompanyName": query or "",
-        "ctl00$ctl00$mainContent$mainContent$ctl24": "BW",
-        "ctl00$ctl00$mainContent$mainContent$btnSearch": "Search",
-    })
-    request = urllib.request.Request(
-        f"{url}?AspxAutoDetectCookieSupport=1",
-        data=urlencode(fields).encode("utf-8"),
-        method="POST",
-    )
-    request.add_header("Content-Type", "application/x-www-form-urlencoded")
-    request.add_header("Origin", "https://www.pfr.maine.gov")
-    request.add_header("Referer", url)
-    posted = opener.open(request, timeout=ME_FAST_DIRECT_POST_TIMEOUT_SECONDS)
-    result_html = posted.read().decode("utf-8", "replace")
+def me_request_timeout(deadline: float, maximum: float) -> float:
+    remaining = deadline - time.perf_counter()
+    if remaining <= 0:
+        raise TimeoutError("Maine lookup time budget exhausted")
+    return min(maximum, remaining)
+
+
+class MaineRegistrySession:
+    """One lookup's cookies and WebForms state; never shared across organizations."""
+    def __init__(self, deadline):
+        self.deadline = deadline
+        self.session = curl_requests.Session(impersonate="chrome136")
+        self.form_html = ""
+        self.url = NAME_SEARCH_PREFLIGHT_URLS["ME"]
+
+    def close(self):
+        self.session.close()
+
+    def open(self, url, timeout):
+        response = self.session.get(url, timeout=me_request_timeout(self.deadline, timeout))
+        response.raise_for_status()
+        return io.BytesIO(response.content)
+
+    def search(self, query):
+        if not self.form_html:
+            response = self.session.get(self.url, timeout=me_request_timeout(self.deadline, ME_FAST_DIRECT_GET_TIMEOUT_SECONDS))
+            response.raise_for_status()
+            self.form_html = response.text
+            self.url = response.url
+        fields = {}
+        for hidden in re.finditer(r'<input[^>]+type="hidden"[^>]*>', self.form_html, re.I):
+            tag = hidden.group(0)
+            name = re.search(r'name="([^"]+)"', tag, re.I)
+            value = re.search(r'value="([^"]*)"', tag, re.I)
+            if name:
+                fields[html.unescape(name.group(1))] = html.unescape(value.group(1) if value else "")
+        if "__VIEWSTATE" not in fields:
+            raise ValueError("Maine search form did not finish loading")
+        fields.update({
+            "ctl00$ctl00$mainContent$mainContent$scRegulator": "4076",
+            "ctl00$ctl00$mainContent$mainContent$scCompanyName": query,
+            "ctl00$ctl00$mainContent$mainContent$ctl24": "BW",
+            "ctl00$ctl00$mainContent$mainContent$btnSearch": "Search",
+        })
+        response = self.session.post(self.url, data=fields,
+            headers={"Referer": self.url, "Origin": "https://www.pfr.maine.gov"},
+            timeout=me_request_timeout(self.deadline, ME_FAST_DIRECT_POST_TIMEOUT_SECONDS))
+        response.raise_for_status()
+        rows = me_parse_search_rows(response.text)
+        self.form_html = response.text
+        return rows, self
+
+
+def me_parse_search_rows(result_html):
     rows: list[dict[str, str]] = []
     for match in re.finditer(
         r'<tr[^>]*>\s*<td[^>]*>\s*<a\s+href="(?P<href>ShowDetail\.aspx[^"]+)"[^>]*>(?P<name>.*?)</a>\s*</td>\s*'
@@ -5802,38 +5826,106 @@ def me_fast_direct_search_rows(query: str) -> tuple[list[dict[str, str]], urllib
         })
     if not rows and not re.search(r"\b0\s+records?\s+found\b|\bno\s+records?\s+(?:were\s+)?found\b", re.sub(r"<[^>]+>", " ", result_html), re.I):
         raise ValueError("Maine returned an incomplete or unrecognized search result page")
-    return rows, opener
+    return rows
 
 
-def me_fast_direct_confirmation_result(org):
+class MaineBrowserDetailReader:
+    def __init__(self, page, deadline):
+        self.page, self.deadline = page, deadline
+
+    def open(self, url, timeout):
+        self.page.goto(url, wait_until="domcontentloaded",
+            timeout=1000 * me_request_timeout(self.deadline, timeout))
+        return io.BytesIO(self.page.content().encode("utf-8"))
+
+
+def me_browser_search_rows(page, query, deadline):
+    # Search only the unresolved query; never re-enter the embedded reader's
+    # direct-search and confirmation loops.
+    page.goto(NAME_SEARCH_PREFLIGHT_URLS["ME"], wait_until="domcontentloaded",
+        timeout=1000 * me_request_timeout(deadline, 10))
+    prefix = 'ctl00$ctl00$mainContent$mainContent$'
+    page.locator(f'select[name="{prefix}scRegulator"]').select_option("4076",
+        timeout=1000 * me_request_timeout(deadline, 3))
+    page.locator(f'input[name="{prefix}scCompanyName"]').fill(query,
+        timeout=1000 * me_request_timeout(deadline, 3))
+    page.locator(f'input[name="{prefix}ctl24"][value="BW"]').check(
+        timeout=1000 * me_request_timeout(deadline, 3))
+    # WebForms submits a new document. Wait for that document, so an old empty
+    # results table cannot be interpreted as the answer to this query.
+    with page.expect_navigation(wait_until="domcontentloaded",
+            timeout=1000 * me_request_timeout(deadline, 12)):
+        page.locator(f'input[name="{prefix}btnSearch"]').click(
+            timeout=1000 * me_request_timeout(deadline, 3), no_wait_after=True)
+    return me_parse_search_rows(page.content()), MaineBrowserDetailReader(page, deadline)
+
+
+def me_fast_direct_confirmation_result(org, page=None, deadline=None):
+    deadline = deadline or (time.perf_counter() + 75)
     target_names = organization_match_target_variants(getattr(org, "organization_name", ""), getattr(org, "ein", ""))
-    best_row = None
-    best_opener = None
+    best_row, best_opener = None, None
     best_score = (-999, -999)
     last_error = ""
-    checked_any = False
-
-    for query in me_fast_direct_query_variants(org):
-        try:
-            rows, opener = me_fast_direct_search_rows(query)
-        except Exception as exc:
-            last_error = f"{type(exc).__name__}: {str(exc)[:120]}"
-            continue
-        checked_any = True
-        for row in rows:
-            row_text = " ".join(row.get(key, "") for key in ["name", "number", "location", "profession", "status"])
-            row_score = checker.candidate_selection_score_for_targets(row.get("name", ""), target_names, row_text)
-            if row_score[0] < 0:
+    completed = set()
+    queries = me_fast_direct_query_variants(org)
+    pending = []
+    sessions = []
+    session = None
+    for phase in ("direct", "browser", "browser_retry"):
+        phase_queries = queries if phase == "direct" else [q for q in queries if q not in completed]
+        for query in phase_queries:
+            if query in completed:
                 continue
-            if not registry_name_is_safe_for_org(row.get("name", ""), getattr(org, "organization_name", ""), getattr(org, "ein", "")):
-                continue
-            if row_score > best_score:
-                best_score = row_score
-                best_row = row
-                best_opener = opener
-        if best_row and best_opener:
+            started = time.perf_counter()
+            try:
+                me_request_timeout(deadline, 1)
+                if phase == "direct":
+                    if session is None:
+                        session = MaineRegistrySession(deadline)
+                        sessions.append(session)
+                    rows, opener = session.search(query)
+                else:
+                    if page is None:
+                        continue
+                    rows, opener = me_browser_search_rows(page, query, deadline)
+                completed.add(query)
+                for row in rows:
+                    row_text = " ".join(row.get(key, "") for key in ["name", "number", "location", "profession", "status"])
+                    score = checker.candidate_selection_score_for_targets(row.get("name", ""), target_names, row_text)
+                    if score[0] < 0 or not registry_name_is_safe_for_org(row.get("name", ""), org.organization_name, org.ein):
+                        continue
+                    if score > best_score:
+                        best_row, best_opener, best_score = row, opener, score
+                log_event(f"ME search phase={phase} query={query!r} seconds={time.perf_counter()-started:.2f} rows={len(rows)}")
+            except Exception as exc:
+                last_error = f"{type(exc).__name__}: {str(exc)[:120]}"
+                if phase == "direct":
+                    pending.append(query)
+                    session = None  # Failed WebForms state must not poison later searches.
+                if phase != "direct" and page is not None:
+                    # A timed-out WebForms request can still hold its server
+                    # session. Do not queue the next query behind that session.
+                    try:
+                        page.context.clear_cookies()
+                    except Exception:
+                        pass
+                log_event(f"ME search phase={phase} query={query!r} seconds={time.perf_counter()-started:.2f} error={last_error}")
+            if best_row or time.perf_counter() >= deadline or (phase == "direct" and len(pending) >= 2):
+                break
+        if best_row or time.perf_counter() >= deadline:
             break
+    checked_any = bool(completed)
+    last_error = "" if len(completed) == len(queries) else (last_error or "Incomplete Maine search")
+    # Keep the selected session through detail retrieval, then close every
+    # transport regardless of positive, negative, or incomplete result.
+    try:
+        return me_result_from_search(org, best_row, best_opener, checked_any, last_error)
+    finally:
+        for transport in sessions:
+            transport.close()
 
+
+def me_result_from_search(org, best_row, best_opener, checked_any, last_error):
     if not best_row or not best_opener:
         if checked_any and not last_error:
             result = checker.StateResult(
@@ -5843,12 +5935,12 @@ def me_fast_direct_confirmation_result(org):
                 checker.STATUS_NOT_REGISTERED,
                 NAME_SEARCH_PREFLIGHT_URLS["ME"],
                 raw_status_text="No matching organization record",
-                source_note="Maine fast direct public registry search returned no matching organization record for the generated name variants.",
+                source_note="Maine public registry searches completed for all generated name variants without a qualifying match.",
                 success=True,
             )
             if last_error:
                 result.source_note += f" Last non-fatal direct-confirmation error: {last_error}"
-            setattr(result, "_cc_detail_body", "0 records found. Maine fast direct public registry search returned no matching organization record.")
+            setattr(result, "_cc_detail_body", "0 records found. Maine public registry searches completed without a qualifying match.")
             return result
         return None
 
@@ -5883,7 +5975,7 @@ def me_fast_direct_confirmation_result(org):
     result.raw_status_text = "; ".join(
         part for part in [status_text, f"Expiration Date: {expiration_text}" if expiration_text else ""] if part
     )
-    result.source_note = "Maine fast direct public registry confirmation found a safe matching row after an initial no-match response."
+    result.source_note = "Maine public registry search found a safely matched registration record."
     if last_error:
         result.source_note += f" Last non-fatal direct-confirmation detail error: {last_error}"
     result.success = True
@@ -5894,74 +5986,26 @@ def me_fast_direct_confirmation_result(org):
 
 def search_me_serialized(page, org, confirm_no_match: bool = True):
     global ME_LAST_LOOKUP_FINISHED
-    with ME_LOOKUP_LOCK:
-        elapsed = time.perf_counter() - ME_LAST_LOOKUP_FINISHED
-        if elapsed < ME_LOOKUP_MIN_INTERVAL_SECONDS:
-            time.sleep(ME_LOOKUP_MIN_INTERVAL_SECONDS - elapsed)
-
-        def run_lookup():
-            preferred_variants = []
-            if re.search(r"\bTuberculosis\b", org.organization_name or "", re.I):
-                preferred_variants = [
-                    variant for variant in organization_name_variants(
-                        org.organization_name,
-                        org.ein,
-                        include_ein_aliases=True,
-                        include_name_segments=True,
-                        include_compact_legal_suffixes=False,
-                        include_leading_article_variants=True,
-                    )
-                    if re.search(r"\bTB\b", variant or "", re.I)
-                ][:3]
-            return search_with_name_variants(
-                page,
-                org,
-                checker.search_me,
-                max_variants=6,
-                max_elapsed_seconds=min(max(NAME_SEARCH_VARIANT_MAX_SECONDS, 25.0), 35.0),
-                include_ein_aliases=True,
-                include_name_segments=True,
-                include_compact_legal_suffixes=True,
-                include_leading_article_variants=True,
-                require_safe_registry_name=True,
-                preferred_variants=preferred_variants,
-            )
-
-        direct_first = me_fast_direct_confirmation_result(org)
-        if direct_first:
-            ME_LAST_LOOKUP_FINISHED = time.perf_counter()
-            return direct_first
-
-        result = run_lookup()
-        if confirm_no_match and ME_CONFIRM_NOT_REGISTERED and public_status(result) == "Not Registered":
-            direct_confirmation = me_fast_direct_confirmation_result(org)
-            if direct_confirmation and public_status(direct_confirmation) != "Not Registered":
-                result = direct_confirmation
-                result.source_note = (
-                    (result.source_note or "Maine public registry record found.")
-                    + " CharityClarity did not accept the earlier no-match response because a fresh direct registry confirmation found this record."
-                )
-                ME_LAST_LOOKUP_FINISHED = time.perf_counter()
+    # Includes queue time and all fallback work, leaving headroom beneath the
+    # existing 87-second batch allowance. No other state's allowance changes.
+    deadline = time.perf_counter() + 75
+    acquired = ME_LOOKUP_LOCK.acquire(timeout=me_request_timeout(deadline, 5))
+    try:
+        if acquired:
+            pause = ME_LOOKUP_MIN_INTERVAL_SECONDS - (time.perf_counter() - ME_LAST_LOOKUP_FINISHED)
+            if pause > 0:
+                time.sleep(min(pause, me_request_timeout(deadline, pause)))
+            result = me_fast_direct_confirmation_result(org, page=page, deadline=deadline)
+            if result is not None:
                 return result
-            confirmations = 1
-            for _ in range(max(0, ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS - 1)):
-                time.sleep(ME_NOT_REGISTERED_CONFIRMATION_DELAY_SECONDS)
-                confirmation = run_lookup()
-                confirmations += 1
-                if public_status(confirmation) != "Not Registered":
-                    result = confirmation
-                    result.source_note = (
-                        (result.source_note or "Maine public registry record found.")
-                        + f" Maine no-match was rechecked {confirmations} times before returning this result."
-                    )
-                    break
-            else:
-                result.source_note = (
-                    (result.source_note or "Maine search returned no matching organization result.")
-                    + f" {confirmations} Maine searches returned no matching organization result."
-                )
-        ME_LAST_LOOKUP_FINISHED = time.perf_counter()
-        return result
+        return checker.StateResult(org.organization_name, org.ein, "ME", "Site Not Reachable",
+            NAME_SEARCH_PREFLIGHT_URLS["ME"], raw_status_text="Maine registry search could not be completed",
+            source_note="Maine did not complete all required searches within the lookup time budget. No negative registration conclusion was drawn.",
+            success=False, error="Maine lookup incomplete or registry busy")
+    finally:
+        if acquired:
+            ME_LAST_LOOKUP_FINISHED = time.perf_counter()
+            ME_LOOKUP_LOCK.release()
 
 
 def external_status_to_checker_status(status: str) -> str:
@@ -20665,7 +20709,7 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
         attempts = max(attempts, 3)
     if state == "AK":
         attempts = max(attempts, 3)
-    if state in {"WA", "NY"}:
+    if state in {"WA", "NY", "ME"}:
         attempts = 1
     result: dict | None = None
     best_reachable_result: dict | None = None
