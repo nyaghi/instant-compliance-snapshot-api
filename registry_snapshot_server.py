@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.08.6-staging").strip() or "2026.09.08.6-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.08.7-staging").strip() or "2026.09.08.7-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -5989,7 +5989,7 @@ def search_me_serialized(page, org, confirm_no_match: bool = True):
     # Includes queue time and all fallback work, leaving headroom beneath the
     # existing 87-second batch allowance. No other state's allowance changes.
     deadline = time.perf_counter() + 75
-    acquired = ME_LOOKUP_LOCK.acquire(timeout=me_request_timeout(deadline, 5))
+    acquired = ME_LOOKUP_LOCK.acquire(timeout=me_request_timeout(deadline, 75))
     try:
         if acquired:
             pause = ME_LOOKUP_MIN_INTERVAL_SECONDS - (time.perf_counter() - ME_LAST_LOOKUP_FINISHED)

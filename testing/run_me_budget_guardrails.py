@@ -51,4 +51,5 @@ class MaineBudgetTests(unittest.TestCase):
   lock=Mock();lock.acquire.return_value=False
   with patch.object(c,'ME_LOOKUP_LOCK',lock):r=c.search_me_serialized(Mock(),self.org)
   self.assertEqual(c.public_status(r),'Site Not Reachable');lock.release.assert_not_called()
+  self.assertGreater(lock.acquire.call_args.kwargs['timeout'],70)
 if __name__=='__main__':unittest.main()
