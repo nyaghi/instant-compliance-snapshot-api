@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.08.3-staging").strip() or "2026.09.08.3-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.08.4-staging").strip() or "2026.09.08.4-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -20184,9 +20184,9 @@ def wv_transient_portal_failure_result(result) -> bool:
     ))
 
 
-def batch_timeout_lookup_result(organization_name: str, ein: str, state: str) -> dict:
+def batch_timeout_lookup_result(organization_name: str, ein: str, state: str, timeout_seconds: float | None = None) -> dict:
     org = checker.Organization(organization_name=organization_name, ein=ein)
-    started = time.perf_counter() - BATCH_STATE_LOOKUP_TIMEOUT_SECONDS
+    started = time.perf_counter() - (BATCH_STATE_LOOKUP_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds)
     result = checker.StateResult(
         organization_name or f"EIN {format_ein(ein)}",
         format_ein(ein),
@@ -20247,6 +20247,9 @@ def run_state_lookup_for_batch(
 
 
 def run_fanout_state_lookup_for_batch(organization_name: str, ein: str, state: str) -> dict:
+    # Alaska's completed single-state confirmation workflow can take 101-103s.
+    # Give only this parallel HTTP request the existing 115s ceiling.
+    timeout_seconds = 115.0 if state == "AK" else BATCH_FANOUT_STATE_TIMEOUT_SECONDS
     payload = {
         "organization_name": organization_name,
         "ein": ein,
@@ -20273,7 +20276,7 @@ def run_fanout_state_lookup_for_batch(organization_name: str, ein: str, state: s
             },
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=BATCH_FANOUT_STATE_TIMEOUT_SECONDS) as response:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             data = json.loads(response.read().decode("utf-8"))
         result = (data.get("results") or [None])[0]
         return result if isinstance(result, dict) else None
@@ -20309,7 +20312,7 @@ def run_fanout_state_lookup_for_batch(organization_name: str, ein: str, state: s
             return result
     except Exception as exc:
         log_error(f"{state} batch fanout lookup for {format_ein(ein)} failed: {exc}")
-    return batch_timeout_lookup_result(organization_name, ein, state)
+    return batch_timeout_lookup_result(organization_name, ein, state, timeout_seconds=timeout_seconds)
 
 
 def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
