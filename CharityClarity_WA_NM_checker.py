@@ -668,7 +668,8 @@ def search_wa(org: Organization, show_process: bool = False) -> SearchResult:
             safe_wait_for_network_idle(page, timeout=10000)
             time.sleep(1)
 
-            detail_text = page.locator("body").inner_text(timeout=15000)
+            detail_text = (read_wa_detail(page, result) if callable(globals().get("read_wa_detail"))
+                           else page.locator("body").inner_text(timeout=15000))
             if callable(globals().get("apply_wa_detail_to_result")):
                 return apply_wa_detail_to_result(result, detail_text)
             status_text = extract_label(detail_text, "Status")

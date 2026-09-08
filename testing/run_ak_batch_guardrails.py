@@ -16,7 +16,7 @@ class AlaskaBatchTests(unittest.TestCase):
                 expected = {'state': state, 'status': 'Current', 'matched_registry_identifier': 'control'}
                 with patch.object(cc, 'BATCH_FANOUT_STATE_TIMEOUT_SECONDS', 87), patch.object(cc.urllib.request, 'urlopen', return_value=io.BytesIO(json.dumps({'results':[expected]}).encode())) as request:
                     result = cc.run_fanout_state_lookup_for_batch('Control', '123456789', state)
-                self.assertEqual(request.call_args.kwargs['timeout'], 115 if state == 'AK' else 87)
+                self.assertEqual(request.call_args.kwargs['timeout'], 115 if state in {'AK','OK'} else 87)
                 self.assertEqual(result, {**expected, 'batch_fanout':'single_state_http'})
 
     def test_alaska_timeout_remains_inconclusive_and_reports_actual_allowance(self):

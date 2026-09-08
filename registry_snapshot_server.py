@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.08.4-staging").strip() or "2026.09.08.4-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.08.5-staging").strip() or "2026.09.08.5-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -595,6 +595,7 @@ def load_wa_nm_module():
         module = STATE_WA_NM_MODULE
         module.nm_due_date_from_fye = nm_due_date_from_fye_master
         module.apply_wa_detail_to_result = wa_apply_detail_master
+        module.read_wa_detail = wa_read_completed_detail
         module.original_nm_apply_status_history = module.apply_nm_rows_to_result
         module.apply_nm_rows_to_result = lambda result, rows, fye_text="", context=None: nm_apply_status_history_master(
             module, result, rows, fye_text=fye_text, context=context
@@ -10784,15 +10785,91 @@ def ma_capture_completed_response(response, org, evidence: dict) -> None:
                     "name": row.get("Organization_Name__c"), "ein": row.get("Employer_Idendification_Number_EIN__c")})
                 if row.get("Id") == query["recID"] and identity["decision"] == "accepted":
                     evidence["record"] = {"ago_account": str(row.get("AGO_Charity_Number__c") or ""),
+                                          "ein": re.sub(r"\D", "", org.ein or ""),
                                           "name": row.get("Organization_Name__c"),
                                           "registry_status": str(row.get("Charity_Status__c") or "")}
             elif method == "get_ALL_FILINGS_ATTACHMENTS_FOR_PUBLICUSERS" and query.get("agoNumber"):
                 # A completed all-filings response, not a filtered or loading table.
                 evidence.setdefault("filings", {})[str(query["agoNumber"])] = {
-                    "empty": len(rows) == 0, "row_count": len(rows)}
+                    "empty": len(rows) == 0, "row_count": len(rows),
+                    "annual_scans": [{"year": str(row.get("filingYear") or ""),
+                                      "title": str(row.get("nameforURL") or ""),
+                                      "url": str(row.get("url") or "")} for row in rows
+                                     if re.search(r"Form\s+PC/Annual\s+RPT", str(row.get("nameforURL") or ""), re.I)]}
     except Exception:
         # Missing/changed response contracts cannot prove an empty history.
         return
+
+
+_MA_LEGACY_OCR = None
+_MA_LEGACY_OCR_LOCK = threading.Lock()
+
+
+def ma_scanned_form_pc_evidence(text: str, expected_year: int, account: str, ein: str) -> dict:
+    """Require the actual Form PC, both identity anchors and its labeled period."""
+    readable = re.sub(r"\s+", " ", text or "")
+    if not re.search(r"\bForm\s+PC\b", readable, re.I):
+        return {}
+    eins = {re.sub(r"\D", "", x) for x in re.findall(r"(?<!\d)\d{2}[- ]?\d{7}(?!\d)", readable)}
+    if not ein or ein not in eins or not account or not re.search(r"(?<!\d)0*" + re.escape(account.lstrip("0")) + r"(?!\d)", readable):
+        return {}
+    label = re.search(r"Report\s+for\s+the\s+Fiscal\s+Period", readable, re.I)
+    if not label:
+        return {}
+    # Scanned columns may put the two dates just before or just after the label.
+    window = readable[max(0, label.start()-65):label.end()+85]
+    dates = [parsed_result_date(x) for x in re.findall(r"\b\d{1,2}/\d{1,2}/\d{4}\b", window)]
+    if len(dates) != 2 or not all(dates):
+        return {}
+    start, end = dates
+    if end.year != expected_year or end > date.today() or not 0 < (end-start).days <= 400:
+        return {}
+    return {"filing_year": expected_year, "period_end": format_date(end),
+            "filing_status": "Submitted", "ago_account": account, "legacy_scanned_form_pc": True}
+
+
+def ma_read_legacy_form_pc(page, completed: dict, account: str) -> dict:
+    global _MA_LEGACY_OCR
+    record = completed.get("record", {})
+    if record.get("ago_account") != account or not record.get("ein"):
+        return {}
+    scans = completed.get("filings", {}).get(account, {}).get("annual_scans", [])
+    scans = [r for r in scans if re.fullmatch(r"20\d{2}", r.get("year", ""))]
+    if not scans:
+        return {}
+    latest = max(int(r["year"]) for r in scans)
+    selected = {r["url"]: r for r in scans if int(r["year"]) == latest}
+    # Multiple latest annual returns require reconciliation, not first-row choice.
+    if len(selected) != 1:
+        return {}
+    row = next(iter(selected.values()))
+    parsed = urlparse(row["url"])
+    if parsed.scheme != "https" or parsed.hostname != "masscharities.my.site.com" or not parsed.path.startswith("/FilingSearch/sfc/servlet.shepherd/document/download/"):
+        return {}
+    try:
+        response = page.context.request.get(row["url"], timeout=15000)
+        if not response.ok:
+            return {}
+        content = response.body()
+        if len(content) > 12_000_000:
+            return {}
+        from PIL import Image
+        from rapidocr_onnxruntime import RapidOCR
+        with Image.open(io.BytesIO(content)) as scanned:
+            if scanned.width * scanned.height > 25_000_000:
+                return {}
+            with _MA_LEGACY_OCR_LOCK:
+                if _MA_LEGACY_OCR is None:
+                    _MA_LEGACY_OCR = RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1)
+                lines, _ = _MA_LEGACY_OCR(scanned.convert("RGB"))
+            text = "\n".join(str(line[1]) for line in lines or [] if float(line[2]) >= 0.85)
+        evidence = ma_scanned_form_pc_evidence(text, latest, account, record["ein"])
+        if evidence:
+            evidence["source_url"] = row["url"]
+        return evidence
+    except Exception as exc:
+        log_event(f"MA scanned Form PC unavailable for AGO {account}: {type(exc).__name__}")
+        return {}
 
 
 def ma_read_latest_form_pc(page, result, body: str, completed=None) -> dict:
@@ -10833,7 +10910,7 @@ def ma_read_latest_form_pc(page, result, body: str, completed=None) -> dict:
             if match:
                 candidates.append((int(match.group(1)), index))
         if not candidates or max(all_form_years) > max(year for year, _ in candidates):
-            return {}
+            return ma_read_legacy_form_pc(page, completed, account.group(1))
         latest_year = max(year for year, _ in candidates)
         latest = [index for year, index in candidates if year == latest_year]
         # Conflicting same-year forms need resolution, not a first-row selection.
@@ -16017,9 +16094,8 @@ def nh_download_live_pdf_records() -> tuple[list[dict], str]:
         })
 
     row_pattern = re.compile(
-        r"^\s*(?P<reg>\d{3,6})\s+(?P<body>.*?)\s*(?P<status>[A-Z])(?:\s+"
+        r"^\s*(?P<reg>\d{3,6})\s+(?P<body>.*?)\s+(?P<status>[A-Z])(?:\s+"
         r"(?P<due>\d{1,2}/\d{1,2}/\d{4}))?\s*$",
-        re.I,
     )
     pending_row = ""
     for raw_line in text.splitlines():
@@ -18761,6 +18837,28 @@ def wa_detail_field(body: str, label: str) -> str:
     return "" if value.endswith((":", "?")) or value == "CONTACT INFORMATION" else value
 
 
+def wa_read_completed_detail(page, result, timeout_seconds: float = 25.0) -> str:
+    """Wait for the selected detail fields, not a transient network-idle event."""
+    deadline = time.monotonic() + timeout_seconds
+    body = ""
+    while time.monotonic() < deadline:
+        try:
+            body = page.locator("body").inner_text(timeout=2000)
+            observed = re.sub(r"\D", "", wa_detail_field(body, "FEIN Number"))
+            status = wa_detail_field(body, "Status")
+            renewal = next((wa_detail_field(body, label) for label in
+                            ("Renewal Date", "Renewal Due Date", "Renewal") if wa_detail_field(body, label)), "")
+            optional = wa_detail_field(body, "Is Optional Charities?")
+            if len(observed) == 9 and status and (renewal or optional.lower() == "yes" or
+                    re.search(r"closed|withdraw|cancel|revok|inactive", status, re.I)):
+                # Interpretation still rejects a conflicting EIN.
+                return body
+        except Exception:
+            pass
+        time.sleep(0.4)
+    return body
+
+
 def wa_apply_detail_master(result, body: str):
     """Interpret only the selected FEIN's exact Washington registration fields."""
     module = load_wa_nm_module()
@@ -18768,8 +18866,10 @@ def wa_apply_detail_master(result, body: str):
     observed = re.sub(r"\D", "", wa_detail_field(body, "FEIN Number"))
     if not requested or requested != observed:
         result.status = "Unable to Confirm"
-        result.raw_status_text = "Washington detail page did not confirm the requested EIN."
-        result.source_note = "The registry detail record could not be reliably matched to the requested organization."
+        result.raw_status_text = ("Washington detail page returned a different EIN." if observed else
+                                  "Washington detail page did not finish loading its FEIN field.")
+        result.source_note = ("The completed detail identity conflicts with the requested EIN; the record was rejected." if observed else
+                             "The selected detail record remained incomplete after a bounded wait; registration status was not inferred.")
         result.success = False
         return result
     status = wa_detail_field(body, "Status")
@@ -20247,9 +20347,9 @@ def run_state_lookup_for_batch(
 
 
 def run_fanout_state_lookup_for_batch(organization_name: str, ein: str, state: str) -> dict:
-    # Alaska's completed single-state confirmation workflow can take 101-103s.
-    # Give only this parallel HTTP request the existing 115s ceiling.
-    timeout_seconds = 115.0 if state == "AK" else BATCH_FANOUT_STATE_TIMEOUT_SECONDS
+    # Completed AK and OK confirmation workflows can exceed the usual 87s.
+    # Give only these parallel HTTP requests the existing 115s ceiling.
+    timeout_seconds = 115.0 if state in {"AK", "OK"} else BATCH_FANOUT_STATE_TIMEOUT_SECONDS
     payload = {
         "organization_name": organization_name,
         "ein": ein,
