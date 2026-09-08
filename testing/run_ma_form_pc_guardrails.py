@@ -141,6 +141,73 @@ class MassachusettsTests(unittest.TestCase):
         self.assertEqual(evidence["adverse_status"], "Suspended")
         page.expect_popup.assert_not_called()
 
+    def completed(self, empty=True, status="Registered", account="051172"):
+        return {"record": {"ago_account": account, "registry_status": status},
+                "filings": {account: {"empty": empty}}}
+
+    def test_completed_empty_history_inference_survives_master_and_comment(self):
+        page = Mock()
+        evidence = cc.ma_read_latest_form_pc(page, self.result(), "AG Account Number 051172", self.completed())
+        r = cc.annotate_ma_visible_form_pc_due(self.result(), evidence)
+        self.assertEqual(cc.true_status_from_body(r, "No documents found"), "Delinquent")
+        self.assertEqual(r.computed_due_date, "")
+        comment = cc.comments_for_result(r, "", "Delinquent")
+        self.assertIn("infers Delinquent", comment)
+        self.assertIn("not an explicit state determination", comment)
+        page.expect_popup.assert_not_called()
+
+    def test_empty_dom_without_completed_response_is_not_inferred(self):
+        page = Mock()
+        page.get_by_role.return_value.all_inner_texts.return_value = []
+        for completed in ({}, {"record": {"ago_account": "051172"}}, self.completed(account="999999")):
+            evidence = cc.ma_read_latest_form_pc(page, self.result(), "AG Account Number 051172 No documents found", completed)
+            r = cc.annotate_ma_visible_form_pc_due(self.result(), evidence)
+            self.assertEqual(cc.true_status_from_body(r, ""), "Unable to Confirm")
+
+    def test_non_form_rows_are_not_an_empty_history(self):
+        page = Mock()
+        page.get_by_role.return_value.all_inner_texts.return_value = ["2023 Schedule-A2 Data"]
+        evidence = cc.ma_read_latest_form_pc(page, self.result(), "AG Account Number 051172", self.completed(empty=False))
+        self.assertEqual(cc.annotate_ma_visible_form_pc_due(self.result(), evidence).status, "Unable to Confirm")
+
+    def test_not_doing_business_contradicts_empty_filing_inference(self):
+        for empty in (False, True):
+            evidence = cc.ma_read_latest_form_pc(Mock(), self.result(), "AG Account Number 051172",
+                                                self.completed(empty=empty, status="Not Doing Business in Mass"))
+            r = cc.annotate_ma_visible_form_pc_due(self.result(), evidence)
+            self.assertEqual(cc.true_status_from_body(r, ""), "Closed / Withdrawn / Canceled")
+            self.assertIn("Not Doing Business in Mass", cc.comments_for_result(r, "", "Closed / Withdrawn / Canceled"))
+
+    def test_completed_response_requires_correct_identity_and_success(self):
+        import json
+        from urllib.parse import urlencode
+        org = cc.checker.Organization("Example Foundation", "123456789")
+        response = Mock(url="https://masscharities.my.site.com/FilingSearch/s/sfsites/aura")
+        response.request.post_data = urlencode({"message": json.dumps({"actions": [{"id": "1", "params": {
+            "classname": "AeS_Apex_Controller_Class", "method": "get_CharityInfo", "params": {"recID": "record1"}}}]})})
+        for ein, state in (("123456789", "SUCCESS"), ("987654321", "SUCCESS"), ("123456789", "ERROR")):
+            response.json.return_value = {"actions": [{"id": "1", "state": state, "returnValue": {"returnValue": [{
+                "Id": "record1", "AGO_Charity_Number__c": "051172", "Organization_Name__c": "Example Foundation",
+                "Employer_Idendification_Number_EIN__c": ein, "Charity_Status__c": "Registered"}]}}]}
+            evidence = {}
+            cc.ma_capture_completed_response(response, org, evidence)
+            self.assertEqual(bool(evidence), ein == "123456789" and state == "SUCCESS")
+
+    def test_only_all_filings_success_can_confirm_empty(self):
+        import json
+        from urllib.parse import urlencode
+        response = Mock(url="https://masscharities.my.site.com/FilingSearch/s/sfsites/aura")
+        for method, state, data in (("get_ALL_FILINGS_ATTACHMENTS_FOR_PUBLICUSERS", "SUCCESS", []),
+                                    ("get_CHARITY_ATTACHMENTS_FOR_PUBLICUSERS", "SUCCESS", []),
+                                    ("get_ALL_FILINGS_ATTACHMENTS_FOR_PUBLICUSERS", "ERROR", []),
+                                    ("get_ALL_FILINGS_ATTACHMENTS_FOR_PUBLICUSERS", "SUCCESS", None)):
+            response.request.post_data = urlencode({"message": json.dumps({"actions": [{"id": "1", "params": {
+                "classname": "AeS_Apex_Controller_Class", "method": method, "params": {"agoNumber": "051172"}}}]})})
+            response.json.return_value = {"actions": [{"id": "1", "state": state, "returnValue": {"returnValue": data}}]}
+            evidence = {}
+            cc.ma_capture_completed_response(response, cc.checker.Organization("Example Foundation", "123456789"), evidence)
+            self.assertEqual(bool(evidence), method == "get_ALL_FILINGS_ATTACHMENTS_FOR_PUBLICUSERS" and state == "SUCCESS" and data == [])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
