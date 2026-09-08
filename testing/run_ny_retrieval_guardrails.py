@@ -104,6 +104,12 @@ class NewYorkRetrievalTests(unittest.TestCase):
         self.assertEqual(r.status, "Site Not Reachable")
         self.assertEqual(s.get.call_count, 3)
 
+    def test_outer_runner_does_not_repeat_ny_internal_retry_budget(self):
+        with patch.object(cc, "run_state_lookup", return_value={"state":"NY", "status":"Site Not Reachable"}) as lookup:
+            result = cc.run_single_state_lookup_reliably("Example National Foundation", "123456789", "NY")
+            self.assertEqual(result["semantic_attempts"], 1)
+            lookup.assert_called_once()
+
     def test_retry_is_capped_by_remaining_overall_budget(self):
         elapsed = [0.0]
         def slow_response(*args, **kwargs):

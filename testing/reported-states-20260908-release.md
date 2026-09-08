@@ -1,4 +1,4 @@
-# Reported-state corrections — 2026.09.08.2-staging
+# Reported-state corrections — 2026.09.08.3-staging
 
 The rollback experiment reproduced preexisting identity/parsing problems. These corrections are in the master backend with no organization-specific runtime exceptions.
 
@@ -13,3 +13,5 @@ The rollback experiment reproduced preexisting identity/parsing problems. These 
 - Web: restore email variable scope fix; display new staging version.
 
 Final validation/deployment evidence is in outputs/open-state-fixes-20260908 in the parent workspace. Approved expectations remain unchanged. Staging only; no production/environment-variable changes. Do not promote with material unresolved mismatches.
+
+The shared single-state runner does not repeat NY's internally retried lookup; the entire NY attempt retains its 35-second budget. Inactive registry wording maps to the existing Closed / Withdrawn / Canceled public status.

@@ -81,6 +81,8 @@ class ReportedStateTests(unittest.TestCase):
         r,p=self.nd({'1':{'ID':1,'TITLE':['Example Relief'],'STATUS':'Inactive - Involuntary'}},
                     {'DRAWER_DETAIL_LIST':[{'LABEL':'Status','VALUE':'Inactive - Involuntary'}]})
         self.assertEqual(r.raw_status_text,'Inactive - Involuntary')
+        self.assertEqual(cc.public_status(r),'Closed / Withdrawn / Canceled')
+        self.assertEqual(cc.true_status_from_body(r,''),'Closed / Withdrawn / Canceled')
 
     def test_ma_fully_failed_direct_queries_are_not_completed_negative(self):
         org=cc.checker.Organization('Example Relief','123456789')

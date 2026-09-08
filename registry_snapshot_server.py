@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.08.2-staging").strip() or "2026.09.08.2-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.08.3-staging").strip() or "2026.09.08.3-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -20562,7 +20562,7 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
         attempts = max(attempts, 3)
     if state == "AK":
         attempts = max(attempts, 3)
-    if state == "WA":
+    if state in {"WA", "NY"}:
         attempts = 1
     result: dict | None = None
     best_reachable_result: dict | None = None
