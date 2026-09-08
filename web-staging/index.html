@@ -1369,7 +1369,7 @@
 
         const limit = stateLimit();
 
-      if (STAGING_ACCESS_REQUIRED && (!isComplianceExpressEmail(emailValue) || !adminPasscode.value.trim())) {
+      if (STAGING_ACCESS_REQUIRED && (!isComplianceExpressEmail(email.value) || !adminPasscode.value.trim())) {
 
         passcodeBox.classList.remove("hidden");
 
