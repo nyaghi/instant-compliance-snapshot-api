@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.08.1-staging").strip() or "2026.09.08.1-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.07.3-staging").strip() or "2026.09.07.3-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -10664,42 +10664,7 @@ def ma_submitted_form_pc_evidence(text: str, expected_year: int, expected_accoun
             "filing_status": "Submitted", "ago_account": account.group(1)}
 
 
-def ma_capture_completed_response(response, org, evidence: dict) -> None:
-    """Observe the public page's completed requests; retain no contact or session data."""
-    if urlparse(response.url).hostname != "masscharities.my.site.com" or "/aura" not in response.url:
-        return
-    try:
-        requests = json.loads(parse_qs(response.request.post_data or "")["message"][0])["actions"]
-        actions = {action["id"]: action for action in response.json().get("actions", [])}
-        for request in requests:
-            params = request.get("params", {})
-            if params.get("classname") != "AeS_Apex_Controller_Class":
-                continue
-            action = actions.get(request.get("id"), {})
-            wrapper = action.get("returnValue")
-            rows = wrapper.get("returnValue") if isinstance(wrapper, dict) else None
-            if action.get("state") != "SUCCESS" or not isinstance(rows, list):
-                continue
-            method = params.get("method")
-            query = params.get("params", {})
-            if method == "get_CharityInfo" and query.get("recID") and len(rows) == 1:
-                row = rows[0]
-                identity = score_candidate(org.organization_name, org.ein, {
-                    "name": row.get("Organization_Name__c"), "ein": row.get("Employer_Idendification_Number_EIN__c")})
-                if row.get("Id") == query["recID"] and identity["decision"] == "accepted":
-                    evidence["record"] = {"ago_account": str(row.get("AGO_Charity_Number__c") or ""),
-                                          "name": row.get("Organization_Name__c"),
-                                          "registry_status": str(row.get("Charity_Status__c") or "")}
-            elif method == "get_ALL_FILINGS_ATTACHMENTS_FOR_PUBLICUSERS" and query.get("agoNumber"):
-                # A completed all-filings response, not a filtered or loading table.
-                evidence.setdefault("filings", {})[str(query["agoNumber"])] = {
-                    "empty": len(rows) == 0, "row_count": len(rows)}
-    except Exception:
-        # Missing/changed response contracts cannot prove an empty history.
-        return
-
-
-def ma_read_latest_form_pc(page, result, body: str, completed=None) -> dict:
+def ma_read_latest_form_pc(page, result, body: str) -> dict:
     """One bounded detail read, selected by filing year and confirmed AGO identity."""
     account = re.search(r"AG\s+Account\s+Number\s*:?\s*(\d+)", re.sub(r"\s+", " ", body), re.I)
     if not account:
@@ -10710,21 +10675,6 @@ def ma_read_latest_form_pc(page, result, body: str, completed=None) -> dict:
     )
     if adverse:
         return {"adverse_status": adverse.group(1).title(), "ago_account": account.group(1)}
-    completed = completed or {}
-    record = completed.get("record", {})
-    if record.get("ago_account") == account.group(1):
-        registry_status = record.get("registry_status", "").strip()
-        # These statuses contradict inferring delinquency from absent filings.
-        # The user-approved inactive category retains the state's exact wording.
-        if re.search(r"not doing business|inactive|exempt|suspend|revok|withdraw|closed|pending", registry_status, re.I):
-            return {"registry_status": registry_status, "ago_account": account.group(1), "contrary_status": True}
-        filings = completed.get("filings", {}).get(account.group(1), {})
-        if filings.get("empty") is True:
-            if registry_status.lower() in {"", "registered", "delinquent", "expired"}:
-                return {"empty_history_confirmed": True, "ago_account": account.group(1),
-                        "registry_status": registry_status}
-            # Unrecognized or affirmative current statuses require interpretation.
-            return {"registry_status": registry_status, "ago_account": account.group(1), "contrary_status": True}
     candidates = []
     all_form_years = []
     try:
@@ -10768,25 +10718,6 @@ def annotate_ma_visible_form_pc_due(result, evidence=None):
     if public_status(result) in {"Not Registered", "Site Not Reachable", "Exempt", "Suspended", "Revoked"}:
         return result
     result.ma_filing_evidence = dict(evidence or {})
-    if result.ma_filing_evidence.get("contrary_status"):
-        registry_status = result.ma_filing_evidence["registry_status"]
-        inactive = registry_status.strip().lower() == "not doing business in mass"
-        result.status = "Closed / Withdrawn / Canceled" if inactive else "Needs Review"
-        result.status_reason = "MA_NOT_DOING_BUSINESS_INACTIVE" if inactive else "MA_EXPLICIT_STATUS_REQUIRES_REVIEW"
-        result.raw_status_text = f"Charity Status: {registry_status}"
-        result.matched_registry_identifier = result.ma_filing_evidence["ago_account"]
-        result.source_note = "Massachusetts reports an explicit charity status that contradicts inferring delinquency from missing filings."
-        return result
-    if result.ma_filing_evidence.get("empty_history_confirmed"):
-        result.status = "Delinquent"
-        result.status_reason = "MA_CONFIRMED_EMPTY_HISTORY_INFERRED_DELINQUENT"
-        result.raw_status_text = "Confirmed empty annual filing history | Delinquency inferred"
-        result.matched_registry_identifier = result.ma_filing_evidence["ago_account"]
-        result.computed_due_date = ""
-        result.fiscal_year_end = ""
-        result.next_required_period = ""
-        result.source_note = "The matched Massachusetts record returned a completed empty filing history with no contradictory charity status. CharityClarity infers Delinquent; this is not an explicit state delinquency determination."
-        return result
     if result.ma_filing_evidence.get("adverse_status"):
         adverse = result.ma_filing_evidence["adverse_status"]
         result.status = {"Expired": "Delinquent", "Closed": "Closed / Withdrawn / Canceled",
@@ -14103,8 +14034,6 @@ def ny_safe_identity_from_evidence(org, result, evidence_text: str) -> bool:
 
 
 NY_REGISTRY_API = "https://charities-search-api.ag.ny.gov/api/FileNet"
-NY_RESPONSE_TIMEOUT_SECONDS = 42.0
-NY_LOOKUP_TIMEOUT_SECONDS = 65.0
 
 
 def search_ny_direct(org):
@@ -14113,8 +14042,7 @@ def search_ny_direct(org):
                                  "https://charities-search.ag.ny.gov/RegistrySearch")
     result.success = False
     result.source_attempts = []
-    deadline = time.perf_counter() + NY_LOOKUP_TIMEOUT_SECONDS
-    retry_used = False
+    deadline = time.perf_counter() + 35.0
     requested_ein = re.sub(r"\D", "", org.ein or "")
     if requested_ein and (len(requested_ein) != 9 or requested_ein == "000000000"):
         result.raw_status_text = "Invalid EIN"
@@ -14122,32 +14050,15 @@ def search_ny_direct(org):
         return result
 
     def request_data(session, operation, params, expected_type):
-        nonlocal retry_used
-        while True:
-            remaining = deadline - time.perf_counter()
-            if remaining <= 0:
-                raise TimeoutError("New York lookup time limit reached")
-            started = time.perf_counter()
-            attempt = f"NY {operation}"
-            response = None
-            try:
-                response = session.get(NY_REGISTRY_API + "/" + operation, params=params,
-                                       timeout=min(NY_RESPONSE_TIMEOUT_SECONDS, remaining))
-                response.raise_for_status()
-            except Exception as exc:
-                code = getattr(exc, "code", None)
-                http_status = getattr(response, "status_code", None)
-                transient = isinstance(exc, TimeoutError) or code in {7, 28, 52, 55, 56} or http_status in {408, 429, 500, 502, 503, 504}
-                label = f"HTTP {http_status}" if isinstance(http_status, int) else type(exc).__name__
-                result.source_attempts.append(f"{attempt}: {label} in {time.perf_counter() - started:.2f}s")
-                # One retry for the entire lookup, inside the original deadline.
-                # Identity, schema and parsing failures below are never retried.
-                if transient and not retry_used and deadline - time.perf_counter() >= 5.0:
-                    retry_used = True
-                    result.source_attempts.append(f"{attempt}: retrying transient failure within lookup budget")
-                    time.sleep(1.0)
-                    continue
-                raise
+        remaining = deadline - time.perf_counter()
+        if remaining <= 0:
+            raise TimeoutError("New York lookup time limit reached")
+        started = time.perf_counter()
+        attempt = f"NY {operation}"
+        try:
+            response = session.get(NY_REGISTRY_API + "/" + operation, params=params,
+                                   timeout=min(12.0, remaining))
+            response.raise_for_status()
             payload = response.json()
             if (not isinstance(payload, dict) or payload.get("success") is not True
                     or payload.get("statusCode") != 200
@@ -14155,6 +14066,9 @@ def search_ny_direct(org):
                 raise ValueError("Incomplete or unsuccessful New York registry response")
             result.source_attempts.append(f"{attempt}: complete in {time.perf_counter() - started:.2f}s")
             return payload["data"]
+        except Exception:
+            result.source_attempts.append(f"{attempt}: failed in {time.perf_counter() - started:.2f}s")
+            raise
 
     try:
         if curl_requests is None:
@@ -14740,10 +14654,6 @@ def true_status_from_body(result, body: str) -> str:
         return base_status
     if state == "MA" and getattr(result, "status_reason", "") == "MA_SUBMITTED_FORM_PC_FISCAL_PERIOD":
         return status_from_calendar_date(parsed_result_date(result.computed_due_date))
-    if state == "MA" and getattr(result, "status_reason", "") == "MA_CONFIRMED_EMPTY_HISTORY_INFERRED_DELINQUENT":
-        return "Delinquent"
-    if state == "MA" and getattr(result, "status_reason", "") == "MA_NOT_DOING_BUSINESS_INACTIVE":
-        return "Closed / Withdrawn / Canceled"
     confirmed_status = getattr(result, "_cc_confirmed_feedback_status", "")
     if confirmed_status:
         return confirmed_status
@@ -14764,8 +14674,8 @@ def true_status_from_body(result, body: str) -> str:
         return status_from_calendar_date(registry_date) if registry_date else base_status
     if result_explicitly_exempt(result):
         return "Exempt"
-    # Unavailable filing evidence stays inconclusive. MA's explicitly confirmed
-    # empty-history inference is handled above under the user-approved rule.
+    # An empty/unavailable filing section is not proof of a missed obligation.
+    # MA expressly warns that absent public reports do not establish delinquency.
     missing_filings = annual_filings_absent(combined) or bool(re.search(
         r"Annual\s+Filings?\s+not\s+visible", result.raw_status_text or "", re.I))
     filing_due = comment_labeled_date(result.raw_status_text or "", r"Next Filing Due|Filing Due|Report Due|Due Date|\bDue")
@@ -15130,22 +15040,6 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
     observed = comment_registry_status(raw, status)
     matched = bool(getattr(result, "matched_registry_name", "") or getattr(result, "matched_registry_identifier", ""))
 
-    if state == "MA" and reason == "MA_CONFIRMED_EMPTY_HISTORY_INFERRED_DELINQUENT":
-        return ("The matched Massachusetts record returned a completed, empty annual filing history with no contradictory charity status. "
-                "CharityClarity therefore infers Delinquent. This is an inferred status, not an explicit state determination; "
-                "recent filings may not yet be public, so confirm time-sensitive decisions directly with Massachusetts.")
-    if state == "MA" and reason == "MA_NOT_DOING_BUSINESS_INACTIVE":
-        return ("Massachusetts lists the charity status as Not Doing Business in Mass. "
-                "CharityClarity groups this inactive status under Closed / Withdrawn / Canceled. "
-                "The registry record remains on file; the state wording does not specify a formal withdrawal or cancellation.")
-    if state == "MA" and reason == "MA_EXPLICIT_STATUS_REQUIRES_REVIEW":
-        return (f"Massachusetts lists the charity status as {result.ma_filing_evidence['registry_status']}. "
-                "This contradicts inferring delinquency from missing filings, so CharityClarity reports Needs Review. "
-                "Confirm the organization's current Massachusetts activity and filing obligations with the state.")
-    if state == "NY" and reason == "NY_REGISTRY_RESPONSE_UNCONFIRMED" and re.search(r"timed out|timeout|HTTP (?:408|429|50[0234])", combined, re.I):
-        return ("New York's registry did not complete the request within the available time or returned a temporary service error. "
-                "CharityClarity reports Unable to Confirm because the registry evidence could not be retrieved. "
-                "Retry the state later; this result does not establish delinquency or non-registration.")
     if state == "MA" and reason == "MA_FORM_PC_DETAIL_UNCONFIRMED":
         return ("The organization was found in the Massachusetts registry, but its latest submitted Form PC fiscal period "
                 "could not be confirmed. CharityClarity reports Unable to Confirm because no reliable next deadline "
@@ -19574,17 +19468,13 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 if public_status(result) != "Not Registered":
                     body = ca_detail_body(page, org)
             elif state == "MA":
-                ma_completed = {}
-                ma_listener = lambda response: ma_capture_completed_response(response, org, ma_completed)
-                page.on("response", ma_listener)
                 result = checker.search_ma(page, org)
                 body = ma_detail_body(page)
                 result, body = repair_ma_false_not_registered(page, org, result, body)
                 result = validate_ma_positive_record(org, result, body)
                 if public_status(result) not in {"Not Registered", "Site Not Reachable", "Exempt", "Suspended", "Revoked"}:
-                    evidence = ma_read_latest_form_pc(page, result, body, ma_completed)
+                    evidence = ma_read_latest_form_pc(page, result, body)
                     result = annotate_ma_visible_form_pc_due(result, evidence)
-                page.remove_listener("response", ma_listener)
             elif state == "MD":
                 result = checker.search_md(page, org)
                 result = ensure_state_result(result, org, "MD", source_note="Maryland checker returned a non-structured result.")
