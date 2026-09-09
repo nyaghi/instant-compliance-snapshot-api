@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.09.3-staging").strip() or "2026.09.09.3-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.09.4-staging").strip() or "2026.09.09.4-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -13343,8 +13343,43 @@ def enrich_me_result_from_body(result, body: str) -> None:
         result.success = True
 
 
+def nj_loaded_detail_body(page, org, wait_seconds: float = 0.0) -> str:
+    """Read a matched, populated detail frame, including one already open."""
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        for frame in page.frames:
+            if "CHR-Public-Details-Page" not in (frame.url or ""):
+                continue
+            try:
+                body = frame.content()
+                name = re.sub(r"\W+", "", org.organization_name or "").lower()
+                digits = re.sub(r"\D", "", org.ein or "")
+                identity_visible = (
+                    (digits and digits in re.sub(r"\D", "", body))
+                    or (name and name in re.sub(r"\W+", "", body).lower())
+                )
+                if identity_visible and nj_filing_context_from_body(body).get("computed_due_date"):
+                    return body
+            except Exception:
+                pass
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return ""
+        time.sleep(min(0.25, remaining))
+
+
+def nj_missing_period_result(result) -> bool:
+    return (
+        public_status(result) == "Current"
+        and getattr(result, "status_reason", "") == "NJ_RAW_COMPLIANT_STATUS_NO_FILING_PERIOD_EVIDENCE"
+    )
+
+
 def nj_detail_body(page, org) -> str:
     pieces = [registry_page_body(page)]
+    loaded_detail = nj_loaded_detail_body(page, org)
+    if loaded_detail:
+        return "\n".join([*pieces, loaded_detail])
     ein_digits = re.sub(r"\D", "", org.ein or "")
     normalize_name = getattr(checker, "normalize_name", lambda value: re.sub(r"\s+", " ", (value or "").lower()).strip())
     wanted_name = normalize_name(org.organization_name)
@@ -13417,6 +13452,9 @@ def nj_detail_body(page, org) -> str:
             clicked = False
 
     if clicked:
+        loaded_detail = nj_loaded_detail_body(page, org, wait_seconds=8.0)
+        if loaded_detail:
+            return "\n".join([*pieces, loaded_detail])
         try:
             checker.safe_wait_for_network_idle(page, timeout=8000)
         except Exception:
@@ -13488,6 +13526,10 @@ def nj_detail_body(page, org) -> str:
             pass
         pieces.append(registry_page_body(page))
 
+    # A modal can finish loading after the first click/read or remain open on a retry.
+    loaded_detail = nj_loaded_detail_body(page, org, wait_seconds=3.0)
+    if loaded_detail:
+        pieces.append(loaded_detail)
     return "\n".join(piece for piece in pieces if piece)
 
 
@@ -17289,7 +17331,16 @@ def search_ok_with_variants(page, org, module):
     probe_tokens = [token for token in distinctive_core_words(original_name)
                     if len(token) >= 4 and token.lower() not in {"america", "american", "global", "national", "international", "worldwide", "house", "make"}]
     probes = sorted(dict.fromkeys(probe_tokens), key=len, reverse=True)[:2]
-    variants = list(dict.fromkeys([*probes, *variants]))
+    # Spend the budget on specific legal/alias phrases before broad token probes.
+    # Reserve fallback slots; deduplicate the actual submitted query, since the
+    # portal-specific tail reduction can map several variants to one phrase.
+    phrase_slots = max(1, OK_QUERY_LIMIT - len(probes))
+    specific = []
+    for variant in variants:
+        query = ok_search_name_for_org(org_with_name(org, variant))
+        if query and query.casefold() not in {v.casefold() for v in specific}:
+            specific.append(query)
+    variants = list(dict.fromkeys([*specific[:phrase_slots], *probes, *specific[phrase_slots:]]))
     best_result = None
     started = time.perf_counter()
     attempted_variants: list[str] = []
@@ -20007,7 +20058,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 result = search_nj_with_name_fallback(page, org)
                 if public_status(result) != "Not Registered":
                     body = nj_detail_body(page, org)
-                    if public_status(result) == "Unable to Verify":
+                    if public_status(result) == "Unable to Verify" or nj_missing_period_result(result):
                         nj_context = nj_filing_context_from_body(body)
                         nj_due_date = nj_context.get("computed_due_date")
                         if nj_due_date:
