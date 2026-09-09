@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.08.8-staging").strip() or "2026.09.08.8-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.09.1-staging").strip() or "2026.09.09.1-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -8774,11 +8774,12 @@ def search_fl(page, org):
                 return result
             input_box.fill("", timeout=remaining_ms(4000))
             input_box.fill(variant, timeout=remaining_ms(4000))
-            try:
+            # Check-A-Charity submits an ASP.NET postback. A short network-idle
+            # wait can leave the old form visible; require the submitted response.
+            with page.expect_navigation(wait_until="domcontentloaded", timeout=remaining_ms(12000)) as submitted:
                 page.get_by_role("button", name=re.compile("search", re.I)).click(timeout=remaining_ms(4000), no_wait_after=True)
-            except Exception:
-                page.keyboard.press("Enter")
-            checker.safe_wait_for_network_idle(page, timeout=remaining_ms(5000))
+            if submitted.value is None or submitted.value.status >= 400:
+                raise ValueError("Florida search submission did not return a successful document")
             time.sleep(min(0.5, remaining_seconds()))
             text = readable_page_text(page)
             if no_registry_results_seen(text):
@@ -8798,6 +8799,8 @@ def search_fl(page, org):
             )
             best_candidate = None
             best_score = -10000
+            if not any(re.search(r"\bCH\d+\b", row.get("text", ""), re.I) for row in candidate_rows):
+                raise ValueError("Florida search response contained neither registration rows nor an explicit no-record message")
             for candidate in candidate_rows:
                 row_text = re.sub(r"\s+", " ", candidate.get("text") or "").strip()
                 row_name = (
@@ -8884,7 +8887,7 @@ def search_fl(page, org):
             if deadline_expired():
                 break
             continue
-    if best_result:
+    if best_result and not last_error:
         if deadline_expired():
             best_result.source_note = " ".join(
                 part for part in [
@@ -8892,19 +8895,22 @@ def search_fl(page, org):
                     "Florida Check-A-Charity reached the bounded lookup window before all generated name variants were attempted.",
                 ] if part
             )
-        return best_result
-    if last_error:
-        return checker.StateResult(
+        if not deadline_expired():
+            return best_result
+    if last_error or deadline_expired():
+        incomplete = checker.StateResult(
             original_name,
             org.ein,
             "FL",
-            checker.STATUS_NOT_REGISTERED,
+            "Unable to Confirm",
             url,
             raw_status_text="No usable Florida Check-A-Charity result within bounded lookup window",
             source_note="Florida Check-A-Charity did not return a usable search result within CharityClarity's bounded lookup window; no safely matching Florida registration record was confirmed.",
-            success=True,
-            error="",
+            success=False,
+            error=str(last_error or "Florida lookup deadline reached"),
         )
+        incomplete.reason_code = "FL_INCOMPLETE_SEARCH"
+        return incomplete
     return checker.StateResult(original_name, org.ein, "FL", checker.STATUS_NOT_REGISTERED, url, raw_status_text="No matching organization record", source_note="Florida Check-A-Charity returned no matching record for the generated name variants.", success=True)
 
 
@@ -9241,7 +9247,9 @@ def search_nd_completed(page, org):
                     response = pending.value
                 else:
                     with page.expect_response(lambda r: r.url.endswith(path), timeout=timeout_ms) as pending:
-                        page.get_by_text(str(selected["TITLE"][0]), exact=True).first.click(timeout=timeout_ms)
+                        # Names can be identical across historical and active records.
+                        # Open the scored registration, not the first matching label.
+                        page.get_by_role("row").filter(has=page.get_by_role("cell", name=str(selected["RECORD_NUM"]), exact=True)).get_by_role("button").click(timeout=timeout_ms)
                     response = pending.value
                 if response.status >= 400:
                     raise OSError(f"North Dakota registry HTTP {response.status}")
@@ -20767,6 +20775,11 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
             ):
                 best_ak_identity_result = dict(result)
         retryable_statuses = {"site not reachable"}
+        if (state, result.get("reason_code")) in {
+            ("FL", "FL_INCOMPLETE_SEARCH"),
+            ("NJ", "NJ_INCOMPLETE_EIN_SEARCH"),
+        }:
+            retryable_statuses.add(status)
         if state == "AK":
             if status == "not registered":
                 retryable_statuses.add("not registered")

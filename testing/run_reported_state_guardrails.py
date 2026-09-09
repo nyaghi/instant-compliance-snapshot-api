@@ -69,7 +69,8 @@ class ReportedStateTests(unittest.TestCase):
         r,p=self.nd({'1':{'ID':1,'TITLE':['Other Relief'],'STATUS':'Active'},
                      '2':{'ID':2,'TITLE':['Example Relief'],'STATUS':'Active','RECORD_NUM':'0004022'}})
         self.assertEqual(r.matched_registry_identifier,'0004022')
-        p.get_by_text.assert_called_once_with('Example Relief',exact=True)
+        p.get_by_text.assert_not_called()
+        p.get_by_role.assert_any_call('cell',name='0004022',exact=True)
 
     def test_nd_incomplete_and_failed_responses_are_not_negative(self):
         for rows,code in ((None,200),({'1':{'ID':1}},200),({},500)):
@@ -78,7 +79,7 @@ class ReportedStateTests(unittest.TestCase):
             self.assertFalse(r.success)
 
     def test_nd_explicit_inactive_is_retained(self):
-        r,p=self.nd({'1':{'ID':1,'TITLE':['Example Relief'],'STATUS':'Inactive - Involuntary'}},
+        r,p=self.nd({'1':{'ID':1,'RECORD_NUM':'0004010001','TITLE':['Example Relief'],'STATUS':'Inactive - Involuntary'}},
                     {'DRAWER_DETAIL_LIST':[{'LABEL':'Status','VALUE':'Inactive - Involuntary'}]})
         self.assertEqual(r.raw_status_text,'Inactive - Involuntary')
         self.assertEqual(cc.public_status(r),'Closed / Withdrawn / Canceled')
