@@ -238,16 +238,21 @@ def switch_to_fein_mode(page) -> None:
 
 def fill_fein_and_search(page, ein: str) -> bool:
     try:
-        page.locator("#txtKeywordSearch").first.fill("")
+        name_box = page.locator("#txtKeywordSearch").first
+        if name_box.is_visible():
+            name_box.fill("", timeout=1000)
     except Exception:
         pass
 
+    switch_to_fein_mode(page)
     fein_box = page.locator("#FEINNoSearchField").first
     fein_box.wait_for(state="visible", timeout=10000)
     fein_box.click(timeout=5000, force=True)
     time.sleep(1)
     fein_box.fill("")
     fein_box.type(digits_only(ein), delay=50)
+    if digits_only(fein_box.input_value()) != digits_only(ein):
+        raise RuntimeError("Washington EIN field did not retain the requested EIN; search was not submitted.")
     page.evaluate(
         """
         () => {

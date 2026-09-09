@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.08.7-staging").strip() or "2026.09.08.7-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.08.8-staging").strip() or "2026.09.08.8-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -596,6 +596,7 @@ def load_wa_nm_module():
         module.nm_due_date_from_fye = nm_due_date_from_fye_master
         module.apply_wa_detail_to_result = wa_apply_detail_master
         module.read_wa_detail = wa_read_completed_detail
+        module.switch_to_fein_mode = wa_select_ready_fein_mode
         module.original_nm_apply_status_history = module.apply_nm_rows_to_result
         module.apply_nm_rows_to_result = lambda result, rows, fye_text="", context=None: nm_apply_status_history_master(
             module, result, rows, fye_text=fye_text, context=context
@@ -18870,6 +18871,45 @@ def search_wv_precise(page, org):
         result.reason_code = "PORTAL_ERROR" if re.search(r"Page\.goto|Timeout|Navigation|net::ERR_", str(exc), re.I) else "PARSER_ERROR"
         result.success = False
         return result
+
+
+def wa_select_ready_fein_mode(page, timeout_seconds: float = 24.0) -> None:
+    """A click is not readiness: verify the selected radio and usable EIN field."""
+    ready = """() => {
+        const radio = document.querySelector("input[value='FEINNo']");
+        const field = document.querySelector('#FEINNoSearchField');
+        if (!radio || !radio.checked || !field || field.disabled || field.readOnly) return false;
+        const style = getComputedStyle(field);
+        return field.getClientRects().length > 0 && style.visibility !== 'hidden'
+            && style.display !== 'none';
+    }"""
+    deadline = time.monotonic() + timeout_seconds
+    last_error = ""
+    for attempt in range(3):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            if page.evaluate(ready):
+                return
+            timeout_ms = min(5000, max(1, remaining * 1000))
+            if attempt == 0:
+                page.locator("input[value='FEINNo']").first.check(timeout=timeout_ms)
+            elif attempt == 1:
+                page.get_by_text("FEIN Number", exact=True).click(timeout=timeout_ms)
+            else:
+                # Re-click even when the radio is already checked but its SPA
+                # panel is missing. Do not just mutate the checked property.
+                page.locator("input[value='FEINNo']").first.click(timeout=timeout_ms, force=True)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            page.wait_for_function(ready, timeout=min(5000, remaining * 1000))
+            return
+        except Exception as exc:
+            last_error = (str(exc) or type(exc).__name__).splitlines()[0][:160]
+            log_event(f"WA EIN mode attempt={attempt + 1} incomplete: {last_error}")
+    raise TimeoutError("Washington EIN search mode did not become ready; no EIN search was submitted. " + last_error)
 
 
 def wa_detail_field(body: str, label: str) -> str:
