@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.09.5-staging").strip() or "2026.09.09.5-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.09.6-staging").strip() or "2026.09.09.6-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -7275,7 +7275,24 @@ def search_mi_http_completion_probe(org):
     )
     submitted_text = ""
     last_exception = None
-    for attempt_index in range(2):
+    deadline = time.monotonic() + min(68.0, LOOKUP_SOFT_MAX_SECONDS - 6.0)
+    result.source_attempts = []
+
+    def request_timeout(limit):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Michigan EIN recovery budget exhausted")
+        return min(limit, remaining)
+
+    for attempt_index in range(3):
+        if attempt_index == 2:
+            # Only a confirmed transport timeout earns the additional recovery.
+            if not re.search(r"timed out|timeout|curl:\s*\(28\)", str(last_exception), re.I):
+                break
+            if deadline - time.monotonic() < 8.0:
+                break
+            time.sleep(2.0)
+        session = None
         try:
             session = curl_requests.Session(impersonate="chrome136")
             headers = {
@@ -7284,14 +7301,14 @@ def search_mi_http_completion_probe(org):
                 "Accept-Language": "en-US,en;q=0.9",
             }
             disclaimer_url = "https://www.ag.state.mi.us/CharitableTrust/frmDisclaimer.aspx"
-            disclaimer = session.get(disclaimer_url, timeout=10, headers=headers)
+            disclaimer = session.get(disclaimer_url, timeout=request_timeout(10), headers=headers)
             disclaimer.raise_for_status()
             fields = sc_extract_hidden_fields(disclaimer.text or "")
             fields.update({"__EVENTTARGET": "ctl00$MainContent$lblYes", "__EVENTARGUMENT": ""})
             accepted = session.post(
                 disclaimer_url,
                 data=fields,
-                timeout=10,
+                timeout=request_timeout(10),
                 headers={
                     **headers,
                     "Referer": disclaimer_url,
@@ -7328,7 +7345,7 @@ def search_mi_http_completion_probe(org):
             submitted = session.post(
                 source_url,
                 data=form_fields,
-                timeout=16,
+                timeout=request_timeout(24 if attempt_index == 2 else 16),
                 headers={
                     **headers,
                     "Referer": source_url,
@@ -7341,9 +7358,13 @@ def search_mi_http_completion_probe(org):
             break
         except Exception as exc:
             last_exception = exc
+            result.source_attempts.append(f"Michigan EIN attempt {attempt_index + 1}: {exc}")
             if attempt_index == 0:
-                time.sleep(1.0)
+                time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
             continue
+        finally:
+            if session is not None:
+                session.close()
     if not submitted_text:
         result.raw_status_text = "Michigan EIN search submission did not complete."
         result.source_note = (
@@ -7351,7 +7372,13 @@ def search_mi_http_completion_probe(org):
             "CharityClarity returned Unable to Verify rather than finalizing Not Registered from an incomplete state-source response."
         )
         result.reason_code = "STATE_RESPONSE_UNREADABLE"
-        result.source_attempts = [f"Michigan HTTP EIN probe error: {last_exception}"]
+        if re.search(r"timed out|timeout|curl:\s*\(28\)", str(last_exception), re.I):
+            result.reason_code = "MI_EIN_TRANSPORT_TIMEOUT"
+            result.source_note = (
+                "Michigan's EIN search timed out after bounded recovery attempts. "
+                "CharityClarity reports Unable to Verify because no completed search response was received. "
+                "This does not establish non-registration or delinquency."
+            )
         result.error = ""
         result.success = False
         return result
@@ -15520,6 +15547,9 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
     source = "The state's downloadable charity list" if state in {"KS", "KY", "LA", "NH", "OR"} else "The state registry"
     observed = comment_registry_status(raw, status)
     matched = bool(getattr(result, "matched_registry_name", "") or getattr(result, "matched_registry_identifier", ""))
+
+    if state == "MI" and status == "Unable to Verify" and getattr(result, "reason_code", "") == "MI_EIN_TRANSPORT_TIMEOUT":
+        return note
 
     if state == "MA" and reason == "MA_CONFIRMED_EMPTY_HISTORY_INFERRED_DELINQUENT":
         return ("The matched Massachusetts record returned a completed, empty annual filing history with no contradictory charity status. "

@@ -1,0 +1,7 @@
+# Michigan transport recovery
+
+Staging release 2026.09.09.6. A confirmed transport timeout after Michigan's existing two EIN-form attempts can receive one delayed fresh-session attempt. The recovery submission allows up to 24 seconds, while all form requests and waits share a deadline capped at 68 seconds and six seconds below the existing lookup soft ceiling. Successful first attempts retain their 16-second submission limit. Non-timeout errors do not receive the extra attempt. Each session is closed, and failed attempts remain in source diagnostics.
+
+Exhausted timeout recovery retains the existing Unable to Verify status and explicitly explains the source timeout. No state matching, completed-results parsing, product statuses, infrastructure, environment variables, or production targets change. This state-local retrieval recovery avoids launching another full outer lookup budget.
+
+Validation: `python testing/run_mi_transport_guardrails.py` (7 synthetic controls), 15 existing guardrail suites (262 checks), `python testing/run_weekly_data_smoke.py --cases <approved-controls> --output <evidence>` (six live MI/CO controls), compilation and `git diff --check`. All 269 offline checks and six live controls passed before staging deployment. The live controls cover MI Current, Pending and completed no-record, and CO Current and Suspended. Hosted browser verification and the first-25 regression must follow deployment. Baseline values are unchanged. Evidence is retained in the parent workspace under outputs/mi-recovery-20260909.
