@@ -16,6 +16,35 @@ class Tests(unittest.TestCase):
         with patch.object(c,'registry_page_body',return_value='Compliant'):
             self.assertIn('12/31/2026',c.nj_detail_body(page,self.org()))
 
+    def test_stalled_selected_frame_is_reloaded_once(self):
+        page=Mock(url='https://charportal.dca.njoag.gov/Charity-Registration/CHR-Public-Search-Page/')
+        locator=page.locator.return_value.first
+        locator.get_attribute.return_value='/CHR-Public-Details-Page/?id=record-id&rid=filing-id'
+        frame=locator.element_handle.return_value.content_frame.return_value
+        with patch.object(c,'nj_loaded_detail_body',return_value='confirmed fiscal evidence') as read:
+            self.assertEqual(c.nj_reload_detail_body(page,self.org()),'confirmed fiscal evidence')
+        frame.goto.assert_called_once_with('https://charportal.dca.njoag.gov/CHR-Public-Details-Page/?id=record-id&rid=filing-id',wait_until='domcontentloaded',timeout=15000)
+        read.assert_called_once_with(page,self.org(),wait_seconds=8.0)
+
+    def test_reload_rejects_untrusted_or_incomplete_record_url(self):
+        for source in ['https://example.test/CHR-Public-Details-Page/?id=x&rid=y','/CHR-Public-Details-Page/?id=x','/CHR-Public-Search-Page/']:
+            page=Mock(url='https://charportal.dca.njoag.gov/')
+            page.locator.return_value.first.get_attribute.return_value=source
+            self.assertEqual(c.nj_reload_detail_body(page,self.org()),'')
+            page.locator.return_value.first.element_handle.assert_not_called()
+
+    def test_master_reloads_only_missing_current_and_applies_recovered_date(self):
+        tree=ast.parse(Path(c.__file__).read_text())
+        fn=next(x for x in tree.body if isinstance(x,ast.FunctionDef) and x.name=='run_state_lookup')
+        branch=next(x for x in ast.walk(fn) if isinstance(x,ast.If) and ast.unparse(x.test)=="state == 'NJ'")
+        result=c.checker.StateResult('Example Relief','123456789','NJ','Current','')
+        result.status_reason='NJ_RAW_COMPLIANT_STATUS_NO_FILING_PERIOD_EVIDENCE'
+        recover=Mock(return_value='Next Filing Due: 12/31/2026')
+        ns=dict(c.__dict__);ns.update(page=None,org=self.org(),search_nj_with_name_fallback=lambda p,o:result,nj_detail_body=lambda p,o:'Compliant',nj_reload_detail_body=recover)
+        exec(compile(ast.fix_missing_locations(ast.Module(body=branch.body,type_ignores=[])),'NJ master recovery','exec'),ns)
+        self.assertEqual(c.public_status(result),'Upcoming Filing');recover.assert_called_once()
+        self.assertTrue(any('bounded reload' in x for x in result.source_attempts))
+
     def test_attached_empty_field_waits_for_value(self):
         clock=[0.0];frame=Mock(url='https://example.test/CHR-Public-Details-Page/')
         frame.content.side_effect=['Example Relief <input id="crsm_fiscalyearenddate" value="">','Example Relief <input id="crsm_fiscalyearenddate" value="2025-06-30">']

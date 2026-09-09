@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.09.4-staging").strip() or "2026.09.09.4-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.09.5-staging").strip() or "2026.09.09.5-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -13375,6 +13375,35 @@ def nj_missing_period_result(result) -> bool:
     )
 
 
+def nj_reload_detail_body(page, org) -> str:
+    """Recover one stalled, already-selected NJ detail document without re-searching."""
+    try:
+        iframe = page.locator('iframe#modalIframe').first
+        source = iframe.get_attribute("src", timeout=1000) or ""
+        url = urllib.parse.urljoin(page.url, source)
+        parsed = urllib.parse.urlparse(url)
+        parameters = urllib.parse.parse_qs(parsed.query)
+        if (
+            parsed.scheme != "https"
+            or parsed.netloc != "charportal.dca.njoag.gov"
+            or parsed.path.rstrip("/") != "/CHR-Public-Details-Page"
+            or not parameters.get("id")
+            or not parameters.get("rid")
+        ):
+            return ""
+        frame = iframe.element_handle(timeout=1000).content_frame()
+        if frame is None:
+            return ""
+        try:
+            frame.goto(url, wait_until="domcontentloaded", timeout=15000)
+        except Exception:
+            # A navigation timeout can still leave a usable populated document.
+            pass
+        return nj_loaded_detail_body(page, org, wait_seconds=8.0)
+    except Exception:
+        return ""
+
+
 def nj_detail_body(page, org) -> str:
     pieces = [registry_page_body(page)]
     loaded_detail = nj_loaded_detail_body(page, org)
@@ -20058,6 +20087,13 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 result = search_nj_with_name_fallback(page, org)
                 if public_status(result) != "Not Registered":
                     body = nj_detail_body(page, org)
+                    if nj_missing_period_result(result) and not nj_filing_context_from_body(body).get("computed_due_date"):
+                        recovered_body = nj_reload_detail_body(page, org)
+                        if recovered_body:
+                            body = "\n".join([body, recovered_body])
+                        result.source_attempts = [*(getattr(result, "source_attempts", None) or []),
+                            "NJ selected detail iframe received one bounded reload after its filing period remained unavailable."
+                        ]
                     if public_status(result) == "Unable to Verify" or nj_missing_period_result(result):
                         nj_context = nj_filing_context_from_body(body)
                         nj_due_date = nj_context.get("computed_due_date")
@@ -20082,7 +20118,8 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                             result.status_reason = "NJ_STATUS_FROM_REGISTRY_FILING_PERIOD"
                             result.source_confidence = ""
                             result.source_note = "New Jersey detail modal fiscal-period evidence was parsed after scrolling/loading the detail frame."
-                            result.source_attempts = [nj_context.get("source_evidence", "NJ registry filing-period evidence parsed.")]
+                            result.source_attempts = [*(getattr(result, "source_attempts", None) or []),
+                                nj_context.get("source_evidence", "NJ registry filing-period evidence parsed.")]
             elif state == "PA":
                 result = search_pa_with_name_fallback(page, org)
                 elapsed_before_confirmation = time.perf_counter() - lookup_started
