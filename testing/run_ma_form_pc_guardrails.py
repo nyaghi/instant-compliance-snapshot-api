@@ -185,7 +185,7 @@ class MassachusettsTests(unittest.TestCase):
         response = Mock(url="https://masscharities.my.site.com/FilingSearch/s/sfsites/aura")
         response.request.post_data = urlencode({"message": json.dumps({"actions": [{"id": "1", "params": {
             "classname": "AeS_Apex_Controller_Class", "method": "get_CharityInfo", "params": {"recID": "record1"}}}]})})
-        for ein, state in (("123456789", "SUCCESS"), ("987654321", "SUCCESS"), ("123456789", "ERROR")):
+        for ein, state in (("123456789", "SUCCESS"), ("", "SUCCESS"), ("987654321", "SUCCESS"), ("123456789", "ERROR")):
             response.json.return_value = {"actions": [{"id": "1", "state": state, "returnValue": {"returnValue": [{
                 "Id": "record1", "AGO_Charity_Number__c": "051172", "Organization_Name__c": "Example Foundation",
                 "Employer_Idendification_Number_EIN__c": ein, "Charity_Status__c": "Registered"}]}}]}
@@ -207,6 +207,71 @@ class MassachusettsTests(unittest.TestCase):
             evidence = {}
             cc.ma_capture_completed_response(response, cc.checker.Organization("Example Foundation", "123456789"), evidence)
             self.assertEqual(bool(evidence), method == "get_ALL_FILINGS_ATTACHMENTS_FOR_PUBLICUSERS" and state == "SUCCESS" and data == [])
+
+
+class MassachusettsSelectionTests(unittest.TestCase):
+    def setUp(self):
+        self.org = cc.checker.Organization("Example Foundation", "123456789")
+
+    def test_selection_requires_unique_safe_name_not_first_option(self):
+        good = {"label": "Example Foundation", "value": "right"}
+        other = {"label": "Unrelated Wildlife Association", "value": "wrong"}
+        self.assertEqual(cc.ma_selection_candidate(self.org, [other, good]), good)
+        self.assertEqual(cc.ma_selection_candidate(self.org, [other]), other)
+        self.assertIsNone(cc.ma_selection_candidate(cc.checker.Organization("Example Foundation", ""), [other]))
+        for options in ([], [good, {**good, "value": "duplicate"}],
+                        [{"label": "-- Select --", "value": ""}]):
+            self.assertIsNone(cc.ma_selection_candidate(self.org, options))
+
+    def page(self, completed, finish=True, record_id="right"):
+        page = Mock()
+        combo = Mock()
+        combo.locator.return_value.evaluate_all.return_value = [{"label": "Example Foundation", "value": "right"}]
+        page.get_by_role.return_value.all.return_value = [combo]
+        actions = []
+        combo.select_option.side_effect = lambda **kw: actions.append("selected")
+        def click(**kw):
+            if actions:
+                actions.append("filings")
+                if finish:
+                    completed.update({"record": {"record_id": record_id, "ago_account": "051172", "name": "Example Foundation"},
+                                      "filings": {"051172": {"empty": False}}})
+        page.get_by_role.return_value.click.side_effect = click
+        return page, actions
+
+    def test_select_then_filings_then_identity_bound_detail(self):
+        completed = {}
+        page, actions = self.page(completed)
+        with patch.object(cc, "registry_page_body", return_value="Select a Charity"), \
+             patch.object(cc, "ma_detail_body", return_value="AG Account Number 051172"), \
+             patch.object(cc, "ma_read_latest_form_pc", return_value={}) as read:
+            result, body = cc.search_ma_master(page, self.org, completed)
+        self.assertEqual(actions, ["selected", "filings"])
+        read.assert_called_once()
+        self.assertEqual(result.status_reason, "MA_FORM_PC_DETAIL_UNCONFIRMED")
+
+    def test_incomplete_or_wrong_record_never_becomes_empty_history(self):
+        for finish, record_id in ((False, "right"), (True, "wrong")):
+            completed = {}
+            page, _ = self.page(completed, finish, record_id)
+            with patch.object(cc, "registry_page_body", return_value="Select a Charity"), \
+                 patch.object(cc.time, "monotonic", side_effect=[0, 0, 21]), \
+                 patch.object(cc, "ma_read_latest_form_pc") as read:
+                result, body = cc.search_ma_master(page, self.org, completed)
+            read.assert_not_called()
+            self.assertEqual(cc.true_status_from_body(result, body), "Unable to Confirm")
+            self.assertEqual(result.status_reason, "MA_FILING_LIST_UNCONFIRMED")
+            self.assertIn("incomplete lookup", cc.comments_for_result(result, body, result.status))
+            self.assertEqual(cc.source_note_for_result(result), result.source_note)
+
+    def test_clean_no_record_and_timeout_are_distinct(self):
+        for fail in (False, True):
+            page = Mock()
+            if fail:
+                page.goto.side_effect = TimeoutError()
+            with patch.object(cc, "registry_page_body", return_value="No Charity Found"):
+                result, _ = cc.search_ma_master(page, self.org, {})
+            self.assertEqual(cc.public_status(result), "Unable to Confirm" if fail else "Not Registered")
 
 
 if __name__ == "__main__":

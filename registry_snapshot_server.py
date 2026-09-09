@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.09.2-staging").strip() or "2026.09.09.2-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.09.3-staging").strip() or "2026.09.09.3-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -10677,6 +10677,92 @@ def hi_detail_body(page) -> str:
     return "\n".join(piece for piece in pieces if piece)
 
 
+def ma_selection_candidate(org, options):
+    """A sole EIN result may be inspected; never classify before detail confirmation."""
+    options = [option for option in options if option.get("value") and option.get("label") != "-- Select --"]
+    if re.sub(r"\D", "", org.ein or "") and len(options) == 1:
+        return options[0]
+    matches = [option for option in options if option.get("value") and
+               registry_name_is_safe_for_org(option.get("label", ""), org.organization_name, org.ein)]
+    return matches[0] if len(matches) == 1 else None
+
+
+def search_ma_master(page, org, completed):
+    """Complete MA search, explicit charity selection and identity-bound filings."""
+    result = checker.StateResult(org.organization_name, org.ein, "MA", "Unable to Confirm",
+                                 "https://masscharities.my.site.com/FilingSearch/s/")
+    result.ma_filing_evidence = {}
+    body = ""
+    step = "search"
+
+    def incomplete(reason, note):
+        result.status = "Unable to Confirm"
+        result.status_reason = reason
+        result.raw_status_text = note
+        result.source_note = note + " This incomplete lookup does not establish non-registration or delinquency."
+        result.success = True
+        return result, body
+
+    try:
+        page.goto(result.source_url, wait_until="domcontentloaded", timeout=45000)
+        mode = "Employer Identification Number" if re.sub(r"\D", "", org.ein or "") else "Charity Name Contains"
+        page.get_by_role("combobox").first.select_option(label=mode, timeout=15000)
+        query = re.sub(r"\D", "", org.ein or "") or org.organization_name
+        field = page.get_by_role("textbox").first
+        field.fill("")
+        field.type(query, delay=35)
+        page.get_by_role("button", name="Search", exact=True).click(timeout=5000)
+        page.get_by_text(re.compile(r"^Select a Charity$|^No Charity Found[.!]?$", re.I)).and_(page.locator(":visible")).first.wait_for(timeout=15000)
+        body = registry_page_body(page)
+        if re.search(r"\bNo Charity Found\b", body, re.I):
+            result.status = checker.STATUS_NOT_REGISTERED
+            result.raw_status_text = "No record found"
+            result.source_note = "Massachusetts completed the registry search and returned No Charity Found."
+            result.success = True
+            return result, body
+        step = "selection"
+        # Locate by the returned charity options, excluding the search-mode control.
+        selections = []
+        for combo in page.get_by_role("combobox").all():
+            if not combo.is_visible():
+                continue
+            options = combo.locator("option").evaluate_all(
+                "nodes => nodes.map(n => ({value:n.value,label:n.textContent.trim()}))")
+            candidate = ma_selection_candidate(org, options)
+            if candidate:
+                selections.append((combo, candidate))
+        if len(selections) != 1:
+            return incomplete("MA_CHARITY_SELECTION_UNCONFIRMED", "Massachusetts returned charity choices, but a unique safe match could not be selected.")
+        combo, candidate = selections[0]
+        completed.clear()
+        combo.select_option(value=candidate["value"], timeout=5000)
+        page.get_by_role("button", name="Get Filings", exact=True).click(timeout=5000)
+        step = "filings"
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            # Playwright event processing is needed for the response observer.
+            page.wait_for_timeout(250)
+            record = completed.get("record", {})
+            account = record.get("ago_account")
+            if record.get("record_id") == candidate["value"] and account and account in completed.get("filings", {}):
+                break
+        else:
+            return incomplete("MA_FILING_LIST_UNCONFIRMED", "Massachusetts charity selection was attempted, but the matching record and completed filing list could not be confirmed.")
+        body = ma_detail_body(page)
+        account_match = re.search(r"AG\s+Account\s+Number\s*:?\s*(\d+)", re.sub(r"\s+", " ", body), re.I)
+        if not account_match or account_match.group(1) != account:
+            return incomplete("MA_FILING_LIST_UNCONFIRMED", "The displayed Massachusetts filing record could not be tied to the selected charity account.")
+        result.matched_registry_name = record["name"]
+        result.matched_registry_identifier = account
+        result.success = True
+        evidence = ma_read_latest_form_pc(page, result, body, completed)
+        return annotate_ma_visible_form_pc_due(result, evidence), body
+    except Exception as exc:
+        log_event(f"MA {step} unavailable: {type(exc).__name__}")
+        return incomplete("MA_CHARITY_SELECTION_UNCONFIRMED" if step == "selection" else "MA_FILING_LIST_UNCONFIRMED",
+                          f"Massachusetts did not complete the {step} step; registry evidence could not be confirmed.")
+
+
 def ma_detail_body(page) -> str:
     pieces = []
     for _ in range(3):
@@ -10836,8 +10922,11 @@ def ma_capture_completed_response(response, org, evidence: dict) -> None:
                 row = rows[0]
                 identity = score_candidate(org.organization_name, org.ein, {
                     "name": row.get("Organization_Name__c"), "ein": row.get("Employer_Idendification_Number_EIN__c")})
-                if row.get("Id") == query["recID"] and identity["decision"] == "accepted":
-                    evidence["record"] = {"ago_account": str(row.get("AGO_Charity_Number__c") or ""),
+                actual_ein = re.sub(r"\D", "", str(row.get("Employer_Idendification_Number_EIN__c") or ""))
+                expected_ein = re.sub(r"\D", "", org.ein or "")
+                if (row.get("Id") == query["recID"] and identity["decision"] == "accepted"
+                        and (not expected_ein or actual_ein == expected_ein)):
+                    evidence["record"] = {"record_id": row["Id"], "ago_account": str(row.get("AGO_Charity_Number__c") or ""),
                                           "ein": re.sub(r"\D", "", org.ein or ""),
                                           "name": row.get("Organization_Name__c"),
                                           "registry_status": str(row.get("Charity_Status__c") or "")}
@@ -15377,6 +15466,8 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
         return ("New York's registry did not complete the request within the available time or returned a temporary service error. "
                 "CharityClarity reports Unable to Confirm because the registry evidence could not be retrieved. "
                 "Retry the state later; this result does not establish delinquency or non-registration.")
+    if state == "MA" and reason in {"MA_CHARITY_SELECTION_UNCONFIRMED", "MA_FILING_LIST_UNCONFIRMED"}:
+        return result.source_note
     if state == "MA" and reason == "MA_FORM_PC_DETAIL_UNCONFIRMED":
         return ("The organization was found in the Massachusetts registry, but its latest submitted Form PC fiscal period "
                 "could not be confirmed. CharityClarity reports Unable to Confirm because no reliable next deadline "
@@ -19842,14 +19933,10 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 ma_completed = {}
                 ma_listener = lambda response: ma_capture_completed_response(response, org, ma_completed)
                 page.on("response", ma_listener)
-                result = checker.search_ma(page, org)
-                body = ma_detail_body(page)
-                result, body = repair_ma_false_not_registered(page, org, result, body)
-                result = validate_ma_positive_record(org, result, body)
-                if public_status(result) not in {"Not Registered", "Site Not Reachable", "Exempt", "Suspended", "Revoked"}:
-                    evidence = ma_read_latest_form_pc(page, result, body, ma_completed)
-                    result = annotate_ma_visible_form_pc_due(result, evidence)
-                page.remove_listener("response", ma_listener)
+                try:
+                    result, body = search_ma_master(page, org, ma_completed)
+                finally:
+                    page.remove_listener("response", ma_listener)
             elif state == "MD":
                 result = checker.search_md(page, org)
                 result = ensure_state_result(result, org, "MD", source_note="Maryland checker returned a non-structured result.")

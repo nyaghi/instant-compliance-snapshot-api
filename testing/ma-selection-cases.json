@@ -1,0 +1,56 @@
+[
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "CO",
+    "manual_expected": "Current",
+    "prior_staging": "Current"
+  },
+  {
+    "organization": "Make-A-Wish Foundation of America",
+    "ein": "860481941",
+    "state": "MA",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Junior Achievement USA",
+    "ein": "841267604",
+    "state": "MA",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Ronald McDonald House Global / RMHC",
+    "ein": "362934689",
+    "state": "MA",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Reading Is Fundamental, Inc.",
+    "ein": "520976257",
+    "state": "MA",
+    "manual_expected": "Upcoming Filing",
+    "prior_staging": "Upcoming Filing"
+  },
+  {
+    "organization": "Prevent Child Abuse America",
+    "ein": "237235671",
+    "state": "MA",
+    "manual_expected": "Delinquent",
+    "prior_staging": "Delinquent"
+  },
+  {
+    "organization": "Anita Borg Institute for Women and Technology",
+    "ein": "770480427",
+    "state": "MA",
+    "manual_expected": "Investigate"
+  },
+  {
+    "organization": "ZZZ CharityClarity Nonexistent Test 987654321",
+    "ein": "991234567",
+    "state": "MA",
+    "manual_expected": "Not Registered"
+  }
+]
