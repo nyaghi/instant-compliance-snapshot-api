@@ -71,7 +71,7 @@ class ReconciliationTests(unittest.TestCase):
         page.request.post.return_value.body.return_value = b"%PDF-fixture"
         with patch.object(cc, "ok_certificate_expiration", return_value=(date(2027, 1, 28), "certificate")) as parse:
             self.assertEqual(cc.ok_fetch_registration_certificate(page, "74761200002 Renewal Registration January 28, 2026 5", "Ronald McDonald House Charities Inc")[0], date(2027, 1, 28))
-            parse.assert_called_once_with(b"%PDF-fixture", "Ronald McDonald House Charities Inc")
+            parse.assert_called_once_with(b"%PDF-fixture", "Ronald McDonald House Charities Inc", allow_ocr=False)
         self.assertEqual(page.request.post.call_args.kwargs["form"]["__EVENTTARGET"], target)
         page.expect_download.assert_not_called()
 

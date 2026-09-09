@@ -24,6 +24,17 @@ class OklahomaCertificateRecoveryTests(unittest.TestCase):
     def test_transport_failure_can_use_completed_renewal_anniversary(self):
         self.assertEqual(self.calculate(), date(2027, 6, 15))
 
+    def test_historical_ez_application_does_not_block_latest_renewal(self):
+        self.assertEqual(self.calculate(candidates=["456 Application for Registration - EZ August 3, 2020 25"]), date(2027, 6, 15))
+
+    def test_unreadable_pdf_uses_live_filing_without_ocr(self):
+        self.page.request.post.return_value.ok = True
+        self.page.request.post.return_value.body.return_value = b"%PDF-scanned"
+        with patch.object(cc, "ok_certificate_expiration", return_value=(None, "The certificate's identity and stated expiration could not both be confirmed.")) as parse:
+            evidence = self.fetch()
+        self.assertEqual(self.calculate(note=evidence), date(2027, 6, 15))
+        parse.assert_called_once_with(b"%PDF-scanned", self.name, allow_ocr=False)
+
     def test_initial_registration_anniversary(self):
         self.assertEqual(self.calculate(filing="123 Application for Registration June 15, 2026 3"), date(2027, 6, 15))
 
@@ -170,17 +181,24 @@ class OklahomaCertificateRecoveryTests(unittest.TestCase):
         self.assertIsNone(due)
         self.assertNotIn(self.key, cc._ok_certificate_cache)
 
-    def test_520_recovers_via_refreshed_browser_request(self):
-        with patch.object(cc, "ok_certificate_expiration", return_value=(date(2027, 1, 28), "certificate")) as parse:
-            due, note = self.fetch()
-        self.assertEqual(due, date(2027, 1, 28))
-        self.assertIn("HTTP 520", note)
-        self.assertIn("one refreshed browser request", note)
-        self.page.goto.assert_called_once_with(self.page.url, wait_until="domcontentloaded", timeout=12000)
-        self.assertEqual(self.page.evaluate.call_args.args[1], "12345670002")
-        parse.assert_called_once_with(b"%PDF-recovered", self.name)
-        self.page.request.post.assert_called_once()
-        self.page.expect_download.assert_not_called()
+    def test_delivery_failures_promptly_use_filing_anniversary(self):
+        for status, body in ((520, b"server error"), (200, b"<html>Document viewer</html>"),
+                             (200, b"<html>Document unavailable</html>")):
+            with self.subTest(status=status, body=body):
+                self.page.request.post.return_value.status = status
+                self.page.request.post.return_value.body.return_value = body
+                evidence = self.fetch()
+                self.assertTrue(cc.ok_certificate_service_unavailable(evidence))
+                self.assertEqual(self.calculate(note=evidence), date(2027, 6, 15))
+                self.page.goto.assert_not_called()
+                self.page.evaluate.assert_not_called()
+                self.assertEqual(self.page.request.post.call_args.kwargs["timeout"], 5000)
+
+    def test_adverse_document_response_does_not_use_anniversary(self):
+        self.page.request.post.return_value.body.return_value = b"<html>Registration revoked</html>"
+        evidence = self.fetch()
+        self.assertFalse(cc.ok_certificate_service_unavailable(evidence))
+        self.assertIsNone(self.calculate(note=evidence))
 
     def test_primary_pdf_needs_no_recovery(self):
         self.page.request.post.return_value.ok = True
@@ -192,13 +210,14 @@ class OklahomaCertificateRecoveryTests(unittest.TestCase):
         self.page.evaluate.assert_not_called()
         self.assertIn("primary request", note)
 
-    def test_timeout_has_one_bounded_recovery(self):
+    def test_timeout_immediately_uses_filing_without_retry(self):
         self.page.request.post.side_effect = TimeoutError("upstream timeout")
-        with patch.object(cc, "ok_certificate_expiration", return_value=(date(2027, 1, 28), "certificate")):
-            due, note = self.fetch()
-        self.assertIsNotNone(due)
-        self.assertIn("TimeoutError", note)
-        self.page.evaluate.assert_called_once()
+        evidence = self.fetch()
+        self.assertTrue(cc.ok_certificate_service_unavailable(evidence))
+        self.assertEqual(self.calculate(note=evidence), date(2027, 6, 15))
+        self.page.request.post.assert_called_once()
+        self.page.evaluate.assert_not_called()
+        self.page.goto.assert_not_called()
 
     def test_persistent_520_is_registry_unavailability(self):
         self.page.evaluate.return_value = {"ok": False, "status": 520, "content_type": "text/html", "pdf_base64": ""}
@@ -208,35 +227,6 @@ class OklahomaCertificateRecoveryTests(unittest.TestCase):
         self.assertTrue(note.startswith("Oklahoma certificate service unavailable."))
         parse.assert_not_called()
         self.page.expect_download.assert_not_called()
-
-    def test_recovery_timeout_does_not_trigger_more_attempts(self):
-        self.page.evaluate.side_effect = TimeoutError("browser timeout")
-        due, note = self.fetch()
-        self.assertIsNone(due)
-        self.assertTrue(note.startswith("Oklahoma certificate service unavailable."))
-        self.page.evaluate.assert_called_once()
-        self.page.request.post.assert_called_once()
-
-    def test_refresh_failure_stops_before_posting_stale_form(self):
-        self.page.goto.side_effect = TimeoutError("refresh failed")
-        due, note = self.fetch()
-        self.assertIsNone(due)
-        self.page.evaluate.assert_not_called()
-        self.assertIn("unavailable", note)
-
-    def test_html_200_recovery_is_not_a_pdf(self):
-        self.page.evaluate.return_value = {"ok": True, "status": 200, "content_type": "text/html", "pdf_base64": ""}
-        with patch.object(cc, "ok_certificate_expiration") as parse:
-            due, note = self.fetch()
-        self.assertIsNone(due)
-        parse.assert_not_called()
-        self.assertIn("no PDF received", note)
-
-    def test_recovered_pdf_must_confirm_identity_and_date(self):
-        with patch.object(cc, "ok_certificate_expiration", return_value=(None, "Certificate identity not confirmed")):
-            due, note = self.fetch()
-        self.assertIsNone(due)
-        self.assertIn("identity not confirmed", note)
 
     def test_bad_primary_certificate_is_not_replaced_with_another_document(self):
         self.page.request.post.return_value.ok = True
