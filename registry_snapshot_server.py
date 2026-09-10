@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.09.6-staging").strip() or "2026.09.09.6-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.09.7-staging").strip() or "2026.09.09.7-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -17032,6 +17032,49 @@ def ms_status_from_filing_status(filing_status: str, expiration_date: date | Non
     return classifier(filing_status, expiration_date)
 
 
+def ms_read_detail_with_recovery(page, link, module, result) -> str:
+    """Read only the already matched MS detail; one recovery within eight seconds."""
+    deadline = time.perf_counter() + 8.0
+    attempts = []
+    text = ""
+    clicked = False
+    for attempt in range(2):
+        if not clicked:
+            remaining = deadline - time.perf_counter()
+            if remaining <= 0:
+                break
+            try:
+                link.click(timeout=max(1, min(3000, int(remaining * 1000))))
+                clicked = True
+            except Exception as exc:
+                attempts.append(f"Mississippi detail click attempt {attempt + 1} failed ({type(exc).__name__}).")
+        read_deadline = min(deadline, time.perf_counter() + 3.0)
+        while time.perf_counter() < read_deadline:
+            remaining = read_deadline - time.perf_counter()
+            try:
+                text = page.locator("body").inner_text(timeout=max(1, min(1000, int(remaining * 1000))))
+            except Exception as exc:
+                attempts.append(f"Mississippi detail body read failed ({type(exc).__name__}).")
+            filing = module.extract_labeled_value_from_text(text, ["Filing Status"])
+            expiration = module.extract_labeled_value_from_text(text, ["Expiration Date", "Expire Date"])
+            dated = module.parse_mmddyyyy_date(expiration)
+            if not dated:
+                match = re.search(r"\b(?:Expiration|Expire|Renewal)\s+Date\b\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})", text, re.I)
+                dated = bool(match and parse_due_date(match.group(1)))
+            terminal = re.search(r"\b(?:exempt(?:ed|ion)?|closed|withdrawn|cancel(?:ed|led)|terminated|dissolved)\b", filing or "", re.I)
+            if filing and (dated or terminal):
+                if attempt or attempts:
+                    attempts.append("Mississippi matched detail fields recovered within the bounded read retry.")
+                result.source_attempts = list(dict.fromkeys([*(getattr(result, "source_attempts", []) or []), *attempts]))
+                return text
+            remaining = read_deadline - time.perf_counter()
+            if remaining > 0:
+                page.wait_for_timeout(min(250, remaining * 1000))
+        attempts.append(f"Mississippi detail read attempt {attempt + 1} did not expose usable filing-status/date fields.")
+    result.source_attempts = list(dict.fromkeys([*(getattr(result, "source_attempts", []) or []), *attempts]))
+    return text
+
+
 def search_ms_fast(page, org, navigate: bool = True):
     """Master-level Mississippi path with bounded waits around the embedded checker logic."""
     modules = state_batch_modules(["MS"])
@@ -17157,7 +17200,7 @@ def search_ms_fast(page, org, navigate: bool = True):
         if re.fullmatch(r"\d{5,}", re.sub(r"\D", "", status_text or "")):
             status_text = ""
 
-        clicked_detail = False
+        detail_link = None
         try:
             links = row.locator("a")
             link_count = min(links.count(), 5)
@@ -17172,20 +17215,18 @@ def search_ms_fast(page, org, navigate: bool = True):
                     if candidate_name and registry_name_is_safe_for_org(candidate_name, original_name, getattr(org, "ein", "")):
                         result.matched_registry_name = candidate_name
                 if link_text and module.normalize_name(link_text) == module.normalize_name(org.organization_name):
-                    link.click(timeout=3000)
-                    clicked_detail = True
+                    detail_link = link
                     break
-            if not clicked_detail and link_count > 0:
-                links.first.click(timeout=3000)
-                clicked_detail = True
-        except Exception:
-            clicked_detail = False
+            if detail_link is None and link_count > 0:
+                detail_link = links.first
+        except Exception as exc:
+            result.source_attempts = [f"Mississippi matched detail link selection failed ({type(exc).__name__})."]
 
         detail_text = ""
-        if clicked_detail:
-            safe_wait_for_network_idle(page, timeout=1500)
-            page.wait_for_timeout(500)
-            detail_text = module.body_text(page)
+        if detail_link is not None:
+            detail_text = ms_read_detail_with_recovery(page, detail_link, module, result)
+        else:
+            result.source_attempts = [*(getattr(result, "source_attempts", []) or []), "Mississippi matched row did not expose a usable detail link."]
 
         filing_status = module.extract_labeled_value_from_text(detail_text, ["Filing Status"])
         expiration_raw = module.extract_labeled_value_from_text(detail_text, ["Expiration Date"])
