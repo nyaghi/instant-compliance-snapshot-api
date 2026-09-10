@@ -79,6 +79,17 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(selected[0][0], "664")
         self.assertEqual(result.status, "Closed / Withdrawn / Canceled")
 
+    def test_wv_stronger_closed_match_beats_weaker_safe_active_match(self):
+        closed = ("1", "Example Relief", "Closed")
+        active = ("2", "Example Aid", "Active")
+        for records in ([closed, active], [active, closed]):
+            with self.subTest(records=records), patch.object(
+                cc, "target_name_score", side_effect=lambda name, targets: 1000 if name == "Example Relief" else 500
+            ):
+                result, selected = self.wv(records, "Example Relief / Example Aid")
+                self.assertEqual(selected[0][0], "1")
+                self.assertEqual(result.status, "Closed / Withdrawn / Canceled")
+
     def test_wv_closed_only_is_preserved(self):
         result, _ = self.wv([("664", "Comic Relief, Inc.", "Closed")])
         self.assertEqual(result.status, "Closed / Withdrawn / Canceled")

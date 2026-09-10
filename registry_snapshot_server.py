@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.10.1-staging").strip() or "2026.09.10.1-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.10.2-staging").strip() or "2026.09.10.2-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -4688,10 +4688,10 @@ def sc_official_detail_lookup(org) -> object | None:
             candidate_score = max(score, 450) + exact_bonus + len(normalized_match_name(candidate_name).split())
             existing = candidates.get(candidate_id)
             if not existing or candidate_score > int(existing.get("score", -1000)):
-                candidates[candidate_id] = {"id": candidate_id, "name": candidate_name, "score": candidate_score}
+                candidates[candidate_id] = {"id": candidate_id, "name": candidate_name, "score": candidate_score, "status": registry_html_row_status(result_html, match.start())}
         if not candidates:
             continue
-        best = max(candidates.values(), key=lambda item: int(item.get("score", -1000)))
+        best = max(candidates.values(), key=lambda item: (int(item.get("score", -1000)), registry_exact_active_tiebreak(str(item["name"]), targets, str(item.get("status", "")))))
         try:
             detail_fields = sc_extract_hidden_fields(result_html)
             detail_fields.update({
@@ -5427,7 +5427,12 @@ def search_va_evoke_api(org):
         result.error = registration_fetch_errors[-1][:240]
         return result
 
-    selected = max(accepted, key=lambda item: (item["effective_date"] or date.min, item["identifier"]))
+    selected = max(accepted, key=lambda item: (
+        int(not item["used_name_fallback"]),
+        target_name_score(item["display_name"], organization_match_target_variants(org.organization_name, org.ein)),
+        registry_exact_active_tiebreak(item["display_name"], organization_match_target_variants(org.organization_name, org.ein), str(item["entity"].get("status") or "")),
+        item["effective_date"] or date.min, item["identifier"],
+    ))
     result = checker.StateResult(org.organization_name, org.ein, "VA", selected["status"], VA_EVOKE_PUBLIC_PORTAL_URL)
     result.raw_status_text = selected["raw_status"]
     result.source_note = (
@@ -6350,7 +6355,7 @@ def la_record_program_services(record: dict[str, str]) -> str:
 
 def la_find_export_match(records: list[dict[str, str]], org) -> dict[str, str] | None:
     target_names = organization_match_target_variants(org.organization_name, org.ein)
-    best: tuple[int, dict[str, str]] | None = None
+    best = None
     for record in records:
         candidate_name = la_record_name(record)
         if not candidate_name:
@@ -6360,8 +6365,10 @@ def la_find_export_match(records: list[dict[str, str]], org) -> dict[str, str] |
         score = target_name_score(candidate_name, target_names)
         if score < 450 and not compatible_ein_alias_for_name(org.organization_name, candidate_name):
             continue
-        if best is None or score > best[0]:
-            best = (score, record)
+        status = next((str(value) for key, value in record.items() if re.sub(r"[^a-z]", "", str(key).casefold()) in {"status", "registrationstatus"}), "")
+        rank = (score, registry_exact_active_tiebreak(candidate_name, target_names, status))
+        if best is None or rank > best[0]:
+            best = (rank, record)
     return best[1] if best else None
 
 
@@ -6562,7 +6569,7 @@ def patch_mi_module_for_fast_lookups(module) -> None:
                 result.source_note = "Michigan EIN search returned no matching result."
                 return result
 
-            chosen = module.choose_result_link(results_frame, org.organization_name)
+            chosen = mi_choose_result_link(results_frame, org.organization_name, module)
             if not chosen:
                 result.status = module.STATUS_NOT_REGISTERED
                 result.raw_status_text = "No matching organization link"
@@ -7016,7 +7023,11 @@ def co_api_fallback_result(org):
         result.success = True
         return result
 
-    row = safe_rows[0]
+    row = max(safe_rows, key=lambda item: (
+        target_name_score(item.get("name") or "", targets),
+        registry_exact_active_tiebreak(item.get("name") or "", targets, item.get("currentstatus") or ""),
+        str(item.get("registrationapproveddate") or ""),
+    ))
     raw_status = str(row.get("currentstatus") or "").strip()
     expiration = parse_due_date(str(row.get("expirationdate") or "").split("T", 1)[0])
     if re.search(r"\b(suspend|revok|notice\s*\d*|may\s+not|not\s+authorized)\b", raw_status, re.I):
@@ -8161,6 +8172,7 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
         score += 10
     if re.search(r"\bINACTIVE\b|\bCLOSED\b|\bWITHDRAWN\b|\bCANCEL(?:ED|LED)\b", combined, re.I):
         score -= 100
+    result.selection_rank = (name_score, registry_exact_active_tiebreak(best_identity_name, safe_targets, status_text), score)
     return result, score
 
 
@@ -8223,6 +8235,7 @@ def ct_direct_result_from_text(org, response_text: str, safe_targets: list[str],
         score += 80
     if re.search(r"\bEXEMPT\b", combined, re.I):
         score += 10
+    result.selection_rank = (name_score, registry_exact_active_tiebreak(best_identity_name, safe_targets, status_text), score)
     return result, score
 
 
@@ -8339,12 +8352,12 @@ def search_ct_direct(org):
             if not re.search(r"\b(PUBLIC\s+CHARITY|CHR\.)\b", html_fragment_text(row_html), re.I):
                 continue
             result, score = ct_direct_result_from_row(org, row_html, safe_targets, url, session=session)
-            if result and score > best_score:
+            if result and (best_result is None or result.selection_rank > best_result.selection_rank):
                 best_result = result
                 best_score = score
         if not best_result:
             result, score = ct_direct_result_from_text(org, body, safe_targets, url)
-            if result and score > best_score:
+            if result and (best_result is None or result.selection_rank > best_result.selection_rank):
                 best_result = result
                 best_score = score
         if best_result:
@@ -8478,6 +8491,7 @@ def search_ct(page, org):
             )
             best_candidate = None
             best_score = -10000
+            best_rank = (-10000, -1, -10000)
             details_index = 0
             for candidate in candidate_rows:
                 row_text = re.sub(r"\s+", " ", candidate.get("text") or "").strip()
@@ -8499,7 +8513,10 @@ def search_ct(page, org):
                     score -= 180
                 if re.search(r"\bSCIENTIFIC\s+RESEARCH\b|\bRESEARCH\s+CERTIFICATE\b", row_text, re.I):
                     score -= 300
-                if score > best_score:
+                rank = (name_score, registry_exact_active_tiebreak(row_name, safe_targets, text_between_labels(
+                    row_text, "Status", ["Status Reason", "City", "DBA", "Details"])), score)
+                if rank > best_rank:
+                    best_rank = rank
                     best_score = score
                     best_candidate = {**candidate, "details_index": details_index, "row_text": row_text, "row_name": row_name}
                 details_index += 1
@@ -8833,14 +8850,15 @@ def search_fl(page, org):
                 continue
             candidate_rows = page.evaluate(
                 """
-                () => Array.from(document.querySelectorAll('tr')).map((row) => {
+                () => Array.from(document.querySelectorAll('tr')).map((row, index) => {
                     const text = (row.innerText || row.textContent || '').replace(/\\s+/g, ' ').trim();
-                    return { text };
+                    return { text, index };
                 }).filter((row) => row.text && /License\\/Registration Number|Expiration Date|Solicitation|Business Name|CH\\d+/i.test(row.text));
                 """
             )
             best_candidate = None
             best_score = -10000
+            best_rank = (-10000, -1)
             if not any(re.search(r"\bCH\d+\b", row.get("text", ""), re.I) for row in candidate_rows):
                 raise ValueError("Florida search response contained neither registration rows nor an explicit no-record message")
             for candidate in candidate_rows:
@@ -8866,7 +8884,12 @@ def search_fl(page, org):
                 score = name_score
                 if re.search(r"\bCH\d+\b", row_text, re.I):
                     score += 40
-                if score > best_score:
+                row_status = text_between_labels(row_text, "Status", ["Expiration Date", "Solicitation", "Business Name", "License/Registration Number"])
+                if isinstance(candidate.get("index"), int):
+                    row_status = registry_candidate_fields(page.locator("tr").nth(candidate["index"])).get("status", "") or row_status
+                rank = (score, registry_exact_active_tiebreak(row_name, safe_targets, row_status))
+                if rank > best_rank:
+                    best_rank = rank
                     best_score = score
                     best_candidate = {"row_text": row_text, "row_name": row_name}
             if not best_candidate:
@@ -9404,10 +9427,11 @@ def search_oh(page, org):
             result.source_note = "Ohio EIN search returned no matching record."
             result.success = True
             return result
-        detail_ref = page.evaluate(
+        detail_refs = page.evaluate(
             """
             (einDigits) => {
                 const rows = Array.from(document.querySelectorAll('tr'));
+                const matches = [];
                 for (const row of rows) {
                     const rowText = (row.innerText || row.textContent || '').replace(/\\D/g, '');
                     if (!rowText.includes(einDigits)) continue;
@@ -9417,15 +9441,19 @@ def search_oh(page, org):
                         const match = onclick.match(/OpenDetailsLink\\('([^']+)','(\\d+)'\\)/i);
                         if (match) {
                             const cells = Array.from(row.querySelectorAll('td')).map(c => (c.innerText || c.textContent || '').trim());
-                            return { pageName: match[1], id: match[2], registryName: cells[0] || '', inCompliance: cells[8] || '', einConfirmed: true };
+                            matches.push({ pageName: match[1], id: match[2], registryName: cells[0] || '', inCompliance: cells[8] || '', einConfirmed: true });
                         }
                     }
                 }
-                return null;
+                return matches;
             }
             """,
             ein_digits,
         )
+        detail_ref = max(detail_refs, key=lambda item: (
+            target_name_score(item.get("registryName", ""), organization_match_target_variants(org.organization_name, org.ein)),
+            registry_exact_active_tiebreak(item.get("registryName", ""), organization_match_target_variants(org.organization_name, org.ein), "Active" if str(item.get("inCompliance", "")).strip().casefold() == "yes" else ""),
+        ), default=None)
         if not detail_ref:
             safe_targets = organization_match_target_variants(org.organization_name, org.ein)
             for variant in organization_name_variants(
@@ -9453,14 +9481,13 @@ def search_oh(page, org):
                 checker.safe_wait_for_network_idle(page, timeout=12000)
                 time.sleep(2)
                 search_summary_text = readable_page_text(page)
-                detail_ref = page.evaluate(
+                detail_refs = page.evaluate(
                     """
                     ({ einDigits, targets }) => {
                         const normalize = (value) => (value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\\b(the|a|an|inc|incorporated|corp|corporation|llc|ltd)\\b/g, ' ').replace(/\\s+/g, ' ').trim();
                         const targetNorms = (targets || []).map(normalize).filter(Boolean);
                         const rows = Array.from(document.querySelectorAll('tr'));
-                        let best = null;
-                        let bestScore = -1;
+                        const candidates = [];
                         for (const row of rows) {
                             const text = (row.innerText || row.textContent || '').replace(/\\s+/g, ' ').trim();
                             if (!text) continue;
@@ -9475,20 +9502,22 @@ def search_oh(page, org):
                                 }
                             }
                             if (score < 0) continue;
-                            if (score < bestScore) continue;
                             const link = Array.from(row.querySelectorAll('a')).find((a) => /View Details/i.test((a.innerText || a.textContent || '')));
                             const onclick = link ? (link.getAttribute('onclick') || '') : '';
                             const match = onclick.match(/OpenDetailsLink\\('([^']+)','(\\d+)'\\)/i);
                             if (match) {
-                                best = { pageName: match[1], id: match[2] };
-                                bestScore = score;
+                                candidates.push({ pageName: match[1], id: match[2], score, registryName: rowName, inCompliance: cells[8] || "" });
                             }
                         }
-                        return best || null;
+                        return candidates;
                     }
                     """,
                     {"einDigits": ein_digits, "targets": safe_targets},
                 )
+                detail_ref = max(detail_refs, key=lambda item: (
+                    item["score"],
+                    registry_exact_active_tiebreak(item.get("registryName", ""), organization_match_target_variants(org.organization_name, org.ein), "Active" if str(item.get("inCompliance", "")).strip().casefold() == "yes" else ""),
+                ), default=None)
                 if detail_ref:
                     break
             if not detail_ref:
@@ -9665,8 +9694,9 @@ def wait_ak_search_results(
     expected_ein: str = "",
     expected_name: str = "",
     previous_text: str = "",
+    completed_no_rows: bool | None = None,
 ) -> None:
-    deadline = time.perf_counter() + timeout
+    deadline = min(time.perf_counter() + timeout, getattr(page, "_ak_search_deadline", float("inf")))
     expected_ein_digits = re.sub(r"\D", "", expected_ein or "")
     expected_name_norm = re.sub(r"[^A-Z0-9]", "", (expected_name or "").upper())
     previous_norm = re.sub(r"\s+", " ", previous_text or "").strip()
@@ -9681,7 +9711,9 @@ def wait_ak_search_results(
             name_seen = bool(expected_name_norm and expected_name_norm in text_name_norm)
             if year_seen and (ein_seen or name_seen) and re.search(r"\bPrint\b", text_norm, re.I):
                 return
-            if text_norm != previous_norm and re.search(
+            if completed_no_rows is True and "There are no charitable organizations" in text_norm:
+                return
+            if completed_no_rows is None and text_norm != previous_norm and re.search(
                 r"\bPrint\b|There are no charitable organizations|No\s+(?:records?|results?)\s+(?:were\s+)?found|0\s+records?",
                 text_norm,
                 re.I,
@@ -9690,13 +9722,22 @@ def wait_ak_search_results(
         except Exception:
             pass
         time.sleep(0.2)
+    if completed_no_rows is not None:
+        raise TimeoutError("Alaska search results did not confirm completion for the submitted query")
+
+
+def ak_remaining_action_ms(page, maximum: int) -> int:
+    remaining = getattr(page, "_ak_search_deadline", float("inf")) - time.perf_counter()
+    if remaining <= 0:
+        raise TimeoutError("Alaska shared search deadline exhausted")
+    return max(1, min(maximum, int(remaining * 1000))) if remaining != float("inf") else maximum
 
 
 def fill_ak_search_form_ein_fast(page, org, year: int) -> None:
     submission = page.locator("#Dq-8")
     if submission.count() == 0:
         submission = page.get_by_label(re.compile(r"Submission\s+type", re.I)).first
-    submission.wait_for(state="visible", timeout=10000)
+    submission.wait_for(state="visible", timeout=ak_remaining_action_ms(page, 10000))
     submission.select_option(label="Charitable Organization")
     try:
         submission.dispatch_event("change")
@@ -9706,7 +9747,7 @@ def fill_ak_search_form_ein_fast(page, org, year: int) -> None:
     year_select = page.locator("#Dq-9")
     if year_select.count() == 0:
         year_select = page.get_by_label(re.compile(r"Year", re.I)).first
-    year_select.wait_for(state="visible", timeout=8000)
+    year_select.wait_for(state="visible", timeout=ak_remaining_action_ms(page, 8000))
     try:
         year_select.select_option(label=str(year))
     except Exception:
@@ -9726,7 +9767,7 @@ def fill_ak_search_form_ein_fast(page, org, year: int) -> None:
     fein_input = page.locator("#Dq-b")
     if fein_input.count() == 0:
         fein_input = page.get_by_label(re.compile(r"FEIN", re.I)).first
-    fein_input.wait_for(state="visible", timeout=8000)
+    fein_input.wait_for(state="visible", timeout=ak_remaining_action_ms(page, 8000))
     fein_input.fill("")
     fein_input.type(checker.format_ein_with_dash(org.ein), delay=20)
     try:
@@ -9740,15 +9781,27 @@ def fill_ak_search_form_ein_fast(page, org, year: int) -> None:
         search_button = page.get_by_role("button", name=re.compile(r"^Search$", re.I)).first
     previous_text = ""
     try:
-        previous_text = page.locator("#Dv-l").inner_text(timeout=600)
+        previous_text = page.locator("#Dv-l").inner_text(timeout=ak_remaining_action_ms(page, 600))
     except Exception:
         pass
-    search_button.click(timeout=AK_ACTION_TIMEOUT_MS, force=True)
+    event_id = search_button.get_attribute("id")
+    with page.expect_response(
+        lambda response: response.request.method == "POST"
+        and response.url.endswith("/EventOccurred")
+        and parse_qs(response.request.post_data or "").get("EVENT__") == [event_id],
+        timeout=ak_remaining_action_ms(page, 8000),
+    ) as submitted:
+        search_button.click(timeout=ak_remaining_action_ms(page, AK_ACTION_TIMEOUT_MS), force=True)
+    response = submitted.value
+    if not response.ok:
+        raise TimeoutError(f"Alaska search response HTTP {response.status}")
+    completed_no_rows = "There are no charitable organizations" in response.text()
     wait_ak_search_results(
         page,
         expected_year=year,
         expected_ein=checker.format_ein_with_dash(org.ein),
         previous_text=previous_text,
+        completed_no_rows=completed_no_rows,
     )
 
 
@@ -10159,6 +10212,8 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
     started = time.perf_counter()
     ak_deadline = started + AK_LOOKUP_TOTAL_BUDGET_SECONDS
     ak_confirmation_incomplete = False
+    completed_ein_years: list[int] = []
+    query_attempts: list[str] = []
     ak_best_confirmed_year: int | None = None
     ak_best_confirmed_search_year: int | None = None
     ak_best_confirmed_name = ""
@@ -10166,6 +10221,23 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
 
     def ak_budget_exhausted() -> bool:
         return time.perf_counter() >= ak_deadline
+
+    def submit_ein_year(page, lookup_org, year):
+        # Retry only the failed year; completed years remain in this lookup.
+        last_error = None
+        for attempt in range(1, 3):
+            if ak_budget_exhausted():
+                break
+            query_attempts.append(f"EIN year {year}, attempt {attempt}")
+            try:
+                page._ak_search_deadline = ak_deadline
+                fill_ak_search_form_ein_fast(page, lookup_org, year)
+                body = registry_page_body(page)
+                completed_ein_years.append(year)
+                return body
+            except Exception as exc:
+                last_error = exc
+        raise TimeoutError(f"Alaska year {year} incomplete: {last_error or 'search deadline exhausted'}")
 
     def remember_ak_confirmed_row(
         search_year: int,
@@ -10206,7 +10278,8 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
         return True
 
     def apply_ak_not_registered_after_completed_search() -> object:
-        checked_years = ak_negative_checked_years or years_to_try
+        checked_years = completed_ein_years
+        result.reason_code = "AK_COMPLETED_EIN_SEARCH"
         result.status = checker.STATUS_NOT_REGISTERED
         result.raw_status_text = (
             f"No confirmed Alaska registration found for checked compliance years "
@@ -10316,8 +10389,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                     break
                 page_body = ""
                 try:
-                    fill_ak_search_form_ein_fast(ak_page, lookup_org, year)
-                    page_body = registry_page_body(ak_page)
+                    page_body = submit_ein_year(ak_page, lookup_org, year)
                     print_link = find_ak_print_link_relaxed(ak_page, lookup_org)
                     if not print_link:
                         if remember_ak_result_row(year, find_ak_result_row_relaxed(ak_page, lookup_org), lookup_org.organization_name):
@@ -10373,6 +10445,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                     )
                     return result, page_body
                 except Exception as e:
+                    ak_confirmation_incomplete = True
                     result.error = f"AK error: {e}"
                     try:
                         if not ak_budget_exhausted():
@@ -10396,8 +10469,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                     break
                 page_body = ""
                 try:
-                    fill_ak_search_form_ein_fast(ak_page, lookup_org, year)
-                    page_body = registry_page_body(ak_page)
+                    page_body = submit_ein_year(ak_page, lookup_org, year)
                     print_link = find_ak_print_link_relaxed(ak_page, lookup_org)
                     if not print_link:
                         if remember_ak_result_row(year, find_ak_result_row_relaxed(ak_page, lookup_org), lookup_org.organization_name):
@@ -10422,6 +10494,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                     if apply_ak_status_from_confirmed_year():
                         return result, page_body
                 except Exception as e:
+                    ak_confirmation_incomplete = True
                     result.error = f"AK historical EIN error: {e}"
                     try:
                         if not ak_budget_exhausted():
@@ -10524,6 +10597,7 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
                     )
                     return result, page_body
                 except Exception as e:
+                    ak_confirmation_incomplete = True
                     result.error = f"AK name fallback error: {e}"
                     try:
                         if not ak_budget_exhausted():
@@ -10534,20 +10608,24 @@ def search_ak_with_registration_evidence(browser, org, artifact_name: str) -> tu
             if ak_name_fallback_stopped:
                 break
     finally:
+        result.queries_attempted = query_attempts
+        result.source_attempts = [f"AK completed EIN search years: {', '.join(map(str, completed_ein_years)) or 'none'}"]
         ak_context.close()
-    checked_years = ", ".join(str(year) for year in years_to_try)
+    checked_years = ", ".join(str(year) for year in completed_ein_years) or "none"
+    if set(completed_ein_years) != set(ak_negative_checked_years) or locals().get("ak_name_fallback_stopped"):
+        ak_confirmation_incomplete = True
     if locals().get("ak_confirmation_incomplete"):
         if apply_ak_status_from_confirmed_year():
             return result, ""
-        result.raw_status_text = f"No confirmed Alaska registration found before the bounded hosted search deadline; checked years included {checked_years}"
+        result.raw_status_text = f"No confirmed Alaska registration found after an incomplete bounded search; completed EIN years: {checked_years}"
         result.status = "Unable to Verify"
         result.source_note = (
             "Alaska public search was reachable, but CharityClarity could not complete the historical EIN/name "
             "confirmation within the hosted search budget. No definitive registration status was returned; "
             "time-sensitive decisions should confirm directly with Alaska."
         )
-        result.error = ""
-        result.success = True
+        result.reason_code = "AK_INCOMPLETE_SEARCH"
+        result.success = False
         return result, ""
     if apply_ak_status_from_confirmed_year():
         return result, ""
@@ -11278,6 +11356,7 @@ def search_hi_precise(page, org):
             for selector in ["#searchOrgTable tbody tr", "#searchResultTable tbody tr", "table tbody tr", "a[href]"]:
                 try:
                     rows = page.locator(selector)
+                    candidates = []
                     for i in range(min(rows.count(), 100)):
                         row = rows.nth(i)
                         try:
@@ -11294,20 +11373,23 @@ def search_hi_precise(page, org):
                             if not ein_digits and not name_match:
                                 continue
                             links = row.locator("a[href]")
-                            clicked_result_identifier = ein_digits if ein_digits and ein_digits in row_digits else ""
                             candidate_name = re.sub(r"^\s*\d{9}\s+", "", row_text).strip()
                             candidate_name = re.split(r"\s+\d{2,6}\s+", candidate_name, maxsplit=1)[0].strip()
-                            clicked_result_name = clean_registry_name(candidate_name)
-                            if selector == "a[href]":
-                                row.click(timeout=5000)
-                            elif links.count():
-                                links.first.click(timeout=5000)
-                            else:
-                                row.click(timeout=5000)
-                            clicked_result = True
-                            break
+                            fields = registry_candidate_fields(row)
+                            candidate_name = fields.get("name") or clean_registry_name(candidate_name)
+                            rank = (target_name_score(candidate_name, organization_match_target_variants(org.organization_name, org.ein)),
+                                    registry_exact_active_tiebreak(candidate_name, organization_match_target_variants(org.organization_name, org.ein), fields.get("status", "")))
+                            candidates.append((rank, row, candidate_name, ein_digits if ein_digits and ein_digits in row_digits else ""))
                         except Exception:
                             continue
+                    if candidates:
+                        _, row, clicked_result_name, clicked_result_identifier = max(candidates, key=lambda candidate: candidate[0])
+                        links = row.locator("a[href]")
+                        if selector == "a[href]" or not links.count():
+                            row.click(timeout=5000)
+                        else:
+                            links.first.click(timeout=5000)
+                        clicked_result = True
                     if clicked_result:
                         break
                 except Exception:
@@ -13472,6 +13554,8 @@ def nj_detail_body(page, org) -> str:
         except Exception:
             name_priority = 0
         ein_priority = 3 if ein_digits and ein_digits in row_digits else 0
+        if (ein_priority == 3 or name_priority == 5) and status_priority in {70, 85}:
+            status_priority += 100
         return (ein_priority, name_priority, status_priority, -index)
 
     for selector in ["button.ms-Link", "button[role='link']", "[data-automation-key='name'] button"]:
@@ -13816,6 +13900,8 @@ def search_nj_direct(page, org):
                     except Exception:
                         name_priority = -1
                     status_priority = checker.active_row_priority(row_text)
+                    if (name_priority == 5 or ein_digits in re.sub(r"\D", "", row_text)) and status_priority in {70, 85}:
+                        status_priority += 100
                     row_score = (name_priority, status_priority, -i)
                     if row_score > best_score:
                         best_score = row_score
@@ -13839,6 +13925,8 @@ def search_nj_direct(page, org):
                     except Exception:
                         name_priority = -1
                     status_priority = checker.active_row_priority(label)
+                    if status_priority in {70, 85}:
+                        status_priority += 100
                     body_candidates.append((status_priority, name_priority, -match.start(), label))
             if body_candidates:
                 body_candidates.sort(reverse=True)
@@ -16491,7 +16579,7 @@ def search_nh_live_pdf(org):
                 continue
             if not safe_match:
                 continue
-            composite = (max(score, 450), len(normalized_match_name(registry_name).split()))
+            composite = (max(score, 450), len(normalized_match_name(registry_name).split()), registry_exact_active_tiebreak(registry_name, targets, "Good Standing" if record.get("status_code") == "G" else ""))
             if composite > best_score:
                 best_score = composite
                 best_candidate = (record, registry_name)
@@ -17029,7 +17117,8 @@ def ms_choose_safe_row_from_table(table, original_name: str, ein: str = ""):
             if parsed:
                 date_ordinals.append(parsed.toordinal())
         name_score = target_name_score(matched_name, organization_match_target_variants(original_name, ein))
-        candidates.append((name_score, status_priority, max(date_ordinals) if date_ordinals else 0, -index, row))
+        active = registry_exact_active_tiebreak(matched_name, organization_match_target_variants(original_name, ein), status_text)
+        candidates.append((name_score, (active, status_priority), max(date_ordinals) if date_ordinals else 0, -index, row))
     if not candidates:
         return None
     candidates.sort(key=lambda item: item[:4], reverse=True)
@@ -17630,6 +17719,7 @@ def ok_choose_safe_result_row_on_page(page, org, module):
     )
     best = None
     best_score = -10000
+    best_rank = (-10000, -1)
     try:
         rows = page.locator("tr")
         row_count = min(rows.count(), 100)
@@ -17687,7 +17777,9 @@ def ok_choose_safe_result_row_on_page(page, org, module):
             continue
 
         score = target_name_score(registry_name, safe_targets)
-        if score > best_score:
+        rank = (score, registry_exact_active_tiebreak(registry_name, safe_targets, registry_candidate_fields(row).get("status", "")))
+        if rank > best_rank:
+            best_rank = rank
             best_score = score
             best = (row, filing_link, registry_name, filing_number)
 
@@ -18936,6 +19028,132 @@ def wv_completed_no_match_result(result, completed_queries: list[str], reason_co
     return result
 
 
+def md_prefer_active_entry_body(body: str, org) -> str:
+    """Keep Maryland's exact-EIN entry boundary while comparing duplicate statuses."""
+    try:
+        payload, _ = json.JSONDecoder().raw_decode(body[body.index('{'):])
+        entries = payload.get("entries", [])
+        if len(entries) < 2:
+            return body
+        candidates = []
+        targets = organization_match_target_variants(org.organization_name, org.ein)
+        for entry in entries:
+            fields = entry.get("view_data", {}).get("content_element_data", {})
+            status = ""
+            ein = ""
+            for value in fields.values():
+                text = html_fragment_text(str(value))
+                if text.startswith("Registration Status:"):
+                    status = text.split(":", 1)[1].strip()
+                elif text.startswith("Charity EIN:"):
+                    ein = re.sub(r"\D", "", text.split(":", 1)[1])
+            if ein != re.sub(r"\D", "", org.ein or ""):
+                continue
+            name = str(entry.get("f_aedd5545-808f-4725-9b1d-5fa61e994a75") or "")
+            candidates.append(((target_name_score(name, targets), registry_exact_active_tiebreak(name, targets, status)), entry))
+        if not candidates:
+            return body
+        selected = max(candidates, key=lambda item: item[0])[1]
+        return json.dumps({**payload, "entries": [selected]})
+    except (ValueError, TypeError, AttributeError):
+        return body
+
+
+def mi_choose_result_link(frame, requested_name: str, module):
+    candidates = []
+    target = module.normalize_name(requested_name)
+    links = frame.locator("a")
+    for index in range(min(links.count(), 50)):
+        link = links.nth(index)
+        try:
+            href = (link.get_attribute("href") or "").strip()
+            name = re.sub(r"\s+", " ", link.inner_text(timeout=1000)).strip()
+            if not href or "btnOrgName" not in href or not name:
+                continue
+            normalized = module.normalize_name(name)
+            priority = 3 if target and normalized == target else (2 if target and normalized and (target in normalized or normalized in target) else 1)
+            status = registry_candidate_fields(link.locator("xpath=ancestor::tr[1]")).get("status", "")
+            candidates.append((priority, registry_active_tiebreak(status) if priority == 3 else 0, name, link, href))
+        except Exception:
+            continue
+    if not candidates:
+        return None
+    priority, _, name, link, href = min(candidates, key=lambda item: (-item[0], -item[1], item[2]))
+    return priority, name, link, href
+
+
+def registry_html_row_status(page_html: str, anchor_position: int) -> str:
+    """Read a labeled status cell from the search row containing this result link."""
+    row_start = page_html.lower().rfind("<tr", 0, anchor_position)
+    row_end = page_html.lower().find("</tr>", anchor_position)
+    table_start = page_html.lower().rfind("<table", 0, anchor_position)
+    if min(row_start, row_end, table_start) < 0:
+        return ""
+    headers = [html_fragment_text(value).casefold().strip() for value in re.findall(r"<th\b[^>]*>(.*?)</th>", page_html[table_start:row_start], re.I | re.S)]
+    cells = [html_fragment_text(value) for value in re.findall(r"<td\b[^>]*>(.*?)</td>", page_html[row_start:row_end], re.I | re.S)]
+    for label in ("registration status", "filing status", "status"):
+        if label in headers and headers.index(label) < len(cells):
+            return cells[headers.index(label)]
+    return ""
+
+
+def registry_exact_active_tiebreak(name: str, targets, status: str) -> int:
+    normalized = normalized_match_name(name)
+    if normalized and any(normalized == normalized_match_name(target) for target in targets):
+        return registry_active_tiebreak(status)
+    return 0
+
+
+def registry_candidate_fields(row) -> dict:
+    """Read labeled search-table fields; absent status evidence is never inferred."""
+    try:
+        fields = row.evaluate("""row => {
+            const table = row.closest('table');
+            if (!table) return {};
+            const heads = Array.from(table.querySelectorAll('thead th, thead td'));
+            const header = heads.length ? heads : Array.from((table.querySelector('tr') || table).querySelectorAll('th'));
+            const cells = Array.from(row.querySelectorAll('td'));
+            const result = {};
+            header.forEach((cell, i) => {
+                const label = (cell.innerText || cell.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+                const value = cells[i] ? (cells[i].innerText || cells[i].textContent || '').trim() : '';
+                if (['registration status', 'filing status', 'status', 'in compliance'].includes(label)) {
+                    result[label] = value;
+                }
+                if (['organization name', 'charity name', 'legal name', 'name'].includes(label)) result.name = value;
+            });
+            return result;
+        }""")
+    except Exception:
+        return {}
+    if not isinstance(fields, dict):
+        return {}
+    status = next((str(fields[key]) for key in ('registration status', 'filing status', 'status') if fields.get(key)), '')
+    if not status and str(fields.get('in compliance', '')).strip().casefold() == 'yes':
+        status = 'Active'
+    return {'name': str(fields.get('name') or ''), 'status': status}
+
+
+def registry_active_tiebreak(status: str) -> int:
+    """Explicit active status breaks an identity-score tie; it is not identity evidence.
+
+    Callers pass the current status field, never an organization's name, a whole
+    detail page, or historical filing text. Unknown statuses retain the old order.
+    """
+    value = re.sub(r"\s+", " ", str(status or "")).strip().casefold()
+    return int(value in {
+        "active", "current", "registered", "compliant", "good standing",
+        "in good standing", "active - current", "active/current",
+        "license is current (active)",
+    })
+
+
+checker.registry_active_tiebreak = registry_active_tiebreak
+checker.registry_exact_active_tiebreak = registry_exact_active_tiebreak
+checker.registry_candidate_fields = registry_candidate_fields
+checker.md_prefer_active_entry_body = md_prefer_active_entry_body
+
+
 def search_wv_precise(page, org):
     result = checker.StateResult(
         org.organization_name,
@@ -18952,7 +19170,7 @@ def search_wv_precise(page, org):
         safe_targets = getattr(org, "match_target_names", None) or organization_match_target_variants(org.organization_name, org.ein)
         best = None
         best_score = -10000
-        best_rank = (-1, -1, -10000)
+        best_rank = (-1, -10000, -1)
         searched_queries: list[str] = []
         completed_queries: list[str] = []
         saw_result_rows = False
@@ -19015,9 +19233,8 @@ def search_wv_precise(page, org):
                 safe_candidate = score >= 450 and registry_name_is_safe_against_targets(
                     registry_name, safe_targets, org.organization_name, org.ein,
                 )
-                # Among matching organization records, Active takes precedence over
-                # a historical closed record, regardless of result order/name score.
-                rank = (int(safe_candidate), int(safe_candidate and status_text.casefold() == "active"), score)
+                # Status only breaks a tie after safety and name strength.
+                rank = (int(safe_candidate), score, registry_exact_active_tiebreak(registry_name, safe_targets, status_text))
                 if rank > best_rank:
                     best_rank = rank
                     best_score = score
@@ -21017,9 +21234,9 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
         }:
             retryable_statuses.add(status)
         if state == "AK":
-            if status == "not registered":
+            if status == "not registered" and result.get("reason_code") != "AK_COMPLETED_EIN_SEARCH":
                 retryable_statuses.add("not registered")
-            elif ak_batch_result_needs_confirmation(result) or ak_stale_exact_ein_result_needs_confirmation(result):
+            elif result.get("reason_code") != "AK_COMPLETED_EIN_SEARCH" and (ak_batch_result_needs_confirmation(result) or ak_stale_exact_ein_result_needs_confirmation(result)):
                 retryable_statuses.add(status)
         if state == "WI":
             retryable_statuses.add("not registered")

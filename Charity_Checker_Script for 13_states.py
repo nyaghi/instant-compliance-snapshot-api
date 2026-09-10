@@ -866,7 +866,12 @@ def search_ca(page, org: Organization) -> StateResult:
             registrations = ca_evoke_registrations_for_entity(str(entity.get("id") or ""))
             status, raw_status, identifier, expiration_date = ca_evoke_status_from_record(entity, registrations)
             accepted.append((expiration_date or date.min, identifier, status, raw_status, entity, match_basis))
-        _, identifier, status, raw_status, entity, match_basis = max(accepted, key=lambda item: (item[0], item[1]))
+        _, identifier, status, raw_status, entity, match_basis = max(accepted, key=lambda item: (
+            int(item[5] == "exact FEIN"),
+            name_match_priority(ca_evoke_display_name(item[4]), org.organization_name),
+            globals().get("registry_exact_active_tiebreak", lambda name, targets, status: 0)(ca_evoke_display_name(item[4]), [org.organization_name], str(item[4].get("entityStatus") or "")),
+            item[0], item[1],
+        ))
         result.status = status
         result.raw_status_text = raw_status or f"Entity Status: {entity.get('entityStatus') or ''}"
         result.source_note = (
@@ -1731,13 +1736,15 @@ def extract_pa_result_expiration(page, ein: str, organization_name: str = ""):
                     # When PA returns several rows for one EIN, prefer the exact/name match first.
                     # If the name is unavailable, prefer a usable future expiration over stale history.
                     date_score = 1 if expiration_date and expiration_date >= date.today() else 0
-                    candidates.append((priority, date_score, expiration_date or date.min, row_text, expiration_raw))
+                    fields = globals().get("registry_candidate_fields", lambda row: {})(row)
+                    activity = globals().get("registry_exact_active_tiebreak", lambda name, targets, status: 0)(row_name, [organization_name], fields.get("status", ""))
+                    candidates.append((priority, date_score, expiration_date or date.min, row_text, expiration_raw, activity))
                 except Exception:
                     continue
         except Exception:
             continue
     if candidates:
-        candidates.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+        candidates.sort(key=lambda item: (item[0], item[5], item[1], item[2]), reverse=True)
         return candidates[0][3], candidates[0][4]
     return "", ""
 def search_pa(page, org: Organization) -> StateResult:
@@ -2050,6 +2057,8 @@ def candidate_selection_score(candidate_name: str, target_name: str, row_text: s
     # non-terminal bonus only breaks ties among similarly strong name matches.
     name_priority = (name_priority * 100) + non_terminal_row_bonus(row_text)
     status_priority = active_row_priority(row_text)
+    if name_priority >= 500 and status_priority in {70, 85}:
+        status_priority += 100
     return (name_priority, status_priority)
 
 def match_target_names(org_or_name) -> list[str]:
@@ -2559,6 +2568,7 @@ def search_md(page, org: Organization) -> StateResult:
             })
             page.goto(entries_url, wait_until="domcontentloaded", timeout=20000)
             body = page.locator("body").inner_text(timeout=5000)
+            body = globals().get("md_prefer_active_entry_body", lambda body, org: body)(body, org)
             body_digits = digits_only(body)
             if ein in body_digits:
                 status_match = re.search(

@@ -578,7 +578,7 @@ def find_best_match(records: Iterable[KSRecord], organization_name: str) -> Opti
         else:
             continue
 
-        status_rank = 1 if "REGISTERED" in (record.status or "").upper() else 0
+        status_rank = 1 if (record.status or "").strip().upper() == "REGISTERED" else 0
         expiration_rank = record.expire_date.toordinal() if record.expire_date else 0
         candidates.append((match_rank, status_rank, expiration_rank, record))
 
@@ -596,7 +596,7 @@ def find_ein_match(records: Iterable[KSRecord], ein: str) -> Optional[KSRecord]:
         record_ein = re.sub(r"\D", "", record.ein or "")
         if record_ein != target:
             continue
-        status_rank = 1 if "REGISTERED" in (record.status or "").upper() else 0
+        status_rank = 1 if (record.status or "").strip().upper() == "REGISTERED" else 0
         expiration_rank = record.expire_date.toordinal() if record.expire_date else 0
         candidates.append((status_rank, expiration_rank, record))
     if not candidates:

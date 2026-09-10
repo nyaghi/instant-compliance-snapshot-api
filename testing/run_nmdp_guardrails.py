@@ -102,19 +102,19 @@ class StateEvidenceTests(unittest.TestCase):
             self.assertIsNone(cc.wi_best_match_from_html(self.wi_html(name+' Foundation', name+' Foundation'),
                                                        [name], original_name=name, ein='840865803'))
 
-    def test_ok_http_200_document_error_qualifies_but_generic_html_does_not(self):
+    def test_ok_failed_certificate_delivery_uses_anniversary_but_adverse_evidence_does_not(self):
         page = Mock()
         page.url = 'https://www.sos.ok.gov/corp/charityDetail.aspx?id=fixture'
         page.get_by_role.return_value.get_attribute.return_value = "javascript:__doPostBack('ctl00$DefaultContent$grdFilingList$ctl02$lnkAction','')"
         page.locator.return_value.first.evaluate.return_value = {}
         response = page.request.post.return_value
         response.ok = True; response.status = 200; response.headers = {'content-type': 'text/html'}
-        response.body.return_value = b'<html>Document unavailable</html>'
-        for content, eligible in (('<html>Document unavailable</html>', True), ('Login required', False),
-                                  ('Registration rejected. Document unavailable', False), ('Unknown HTML', False)):
+        # Exercise the current certificate transport. Any non-PDF delivery can
+        # use the approved filing anniversary; explicit adverse evidence cannot.
+        for content, eligible in (('<html>Document unavailable</html>', True), ('Login required', True),
+                                  ('Registration rejected. Document unavailable', False), ('Unknown HTML', True)):
             cc._ok_certificate_cache.clear()
-            page.evaluate.return_value = {'ok': True, 'status': 200, 'content_type': 'text/html',
-                                          'pdf_base64': '', 'error_text': content}
+            response.body.return_value = content.encode('utf-8')
             result = cc.ok_fetch_registration_certificate(page, '74201040002 Renewal Registration December 22, 2025 4', 'Fixture')
             self.assertEqual(cc.ok_certificate_service_unavailable(result), eligible)
             due = cc.ok_calculated_registration_expiration('74201040002 Renewal Registration December 22, 2025 4',
