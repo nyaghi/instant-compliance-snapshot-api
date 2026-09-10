@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.09.7-staging").strip() or "2026.09.09.7-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.10.1-staging").strip() or "2026.09.10.1-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -4231,6 +4231,18 @@ def descriptor_entity_extension_match(original_name: str, registry_name: str) ->
     return False
 
 
+def distinctive_entity_extension_mismatch_against_targets(original_name: str, registry_name: str, targets: list[str]) -> bool:
+    """Keep extension protection without rejecting an exact recognized legal name/alias.
+
+    Callers must still pass the registry candidate through the master identity
+    check. Search prefixes are not acceptance targets.
+    """
+    registry_norm = normalized_match_name(registry_name)
+    return distinctive_entity_extension_mismatch(original_name, registry_name) and not any(
+        registry_norm and registry_norm == normalized_match_name(target) for target in targets
+    )
+
+
 def distinctive_entity_extension_mismatch(original_name: str, registry_name: str) -> bool:
     original_norm = normalized_match_name(original_name)
     registry_norm = normalized_match_name(registry_name)
@@ -4665,7 +4677,7 @@ def sc_official_detail_lookup(org) -> object | None:
                 continue
             safe_candidate_name = (
                 registry_name_is_safe_against_targets(candidate_name, targets, original_name, getattr(org, "ein", ""))
-                and not distinctive_entity_extension_mismatch(original_name, candidate_name)
+                and not distinctive_entity_extension_mismatch_against_targets(original_name, candidate_name, targets)
             )
             if not safe_candidate_name:
                 continue
@@ -4808,7 +4820,10 @@ def search_sc_resilient(page, org):
     )
     if not reachable and public_status(result) in {"Site Not Reachable", "Unknown", ""}:
         return preflight_result
-    if result and distinctive_entity_extension_mismatch(org.organization_name, getattr(result, "matched_registry_name", "") or ""):
+    if result and distinctive_entity_extension_mismatch_against_targets(
+        org.organization_name, getattr(result, "matched_registry_name", "") or "",
+        organization_match_target_variants(org.organization_name, org.ein),
+    ):
         result.status = "Needs Review"
         result.source_note = "South Carolina returned a related entity whose identity could not be confirmed as the requested organization."
         result.success = False
@@ -18937,6 +18952,7 @@ def search_wv_precise(page, org):
         safe_targets = getattr(org, "match_target_names", None) or organization_match_target_variants(org.organization_name, org.ein)
         best = None
         best_score = -10000
+        best_rank = (-1, -1, -10000)
         searched_queries: list[str] = []
         completed_queries: list[str] = []
         saw_result_rows = False
@@ -18996,7 +19012,14 @@ def search_wv_precise(page, org):
                 if not registry_id or not registry_name:
                     continue
                 score = target_name_score(registry_name, query_targets)
-                if score > best_score:
+                safe_candidate = score >= 450 and registry_name_is_safe_against_targets(
+                    registry_name, safe_targets, org.organization_name, org.ein,
+                )
+                # Among matching organization records, Active takes precedence over
+                # a historical closed record, regardless of result order/name score.
+                rank = (int(safe_candidate), int(safe_candidate and status_text.casefold() == "active"), score)
+                if rank > best_rank:
+                    best_rank = rank
                     best_score = score
                     best = (row, registry_id, registry_name, status_text, query_targets)
             if best is not None and best_score >= 450:
