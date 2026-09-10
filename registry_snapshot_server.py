@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.10.3-staging").strip() or "2026.09.10.3-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.10.4-staging").strip() or "2026.09.10.4-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -17601,6 +17601,10 @@ def search_ok_with_variants(page, org, module):
             exhausted_budget = True
             break
         variant_org = org_with_name(org, variant)
+        variant_org.ok_search_deadline = started + 72.0
+        # Inspect broad phrase results first; spend the remaining search budget
+        # on targeted probes. Small result sets can still be completed in full.
+        variant_org.ok_search_page_limit = 1 if len(search_query_tokens(variant)) > 1 else 3
         variant_org.match_target_names = list(dict.fromkeys([
             *organization_match_target_variants(original_name, getattr(org, "ein", "") or ""),
         ]))
@@ -17715,7 +17719,16 @@ def search_ok_with_variants(page, org, module):
         ]
         budget_result.reason_code = "RUNNER_TIMEOUT_RETRY_FAILED"
         return budget_result
-    return best_result or search_ok_precise(page, org, module)
+    if best_result is not None:
+        best_result.queries_attempted = list(attempted_variants)
+        if public_status(best_result) == "Not Registered":
+            best_result.source_attempts = [
+                *(getattr(best_result, "source_attempts", []) or []),
+                "Oklahoma completed all returned pages without a qualifying identity match for: "
+                + ", ".join(completed_no_match_variants) + ".",
+            ]
+        return best_result
+    return search_ok_precise(page, org, module)
 
 
 def ok_singular_plural_name_variants(name: str) -> list[str]:
@@ -17772,9 +17785,10 @@ def ok_choose_safe_result_row_on_page(page, org, module):
         row_count = 0
 
     for index in range(row_count):
+        ok_action_timeout(org, 1500)
         row = rows.nth(index)
         try:
-            row_text = re.sub(r"\s+", " ", row.inner_text(timeout=1500)).strip()
+            row_text = re.sub(r"\s+", " ", row.inner_text(timeout=ok_action_timeout(org, 1500))).strip()
         except Exception:
             continue
         if not row_text:
@@ -17791,7 +17805,7 @@ def ok_choose_safe_result_row_on_page(page, org, module):
         for link_index in range(link_count):
             link = links.nth(link_index)
             try:
-                link_text = re.sub(r"\s+", " ", link.inner_text(timeout=1000)).strip()
+                link_text = re.sub(r"\s+", " ", link.inner_text(timeout=ok_action_timeout(org, 1000))).strip()
             except Exception:
                 continue
             if not link_text:
@@ -17812,7 +17826,7 @@ def ok_choose_safe_result_row_on_page(page, org, module):
                 cell_count = 0
             for cell_index in range(cell_count):
                 try:
-                    cell_text = useful_registry_name(cells.nth(cell_index).inner_text(timeout=750))
+                    cell_text = useful_registry_name(cells.nth(cell_index).inner_text(timeout=ok_action_timeout(org, 750)))
                 except Exception:
                     continue
                 if cell_text and not re.fullmatch(r"\d+", cell_text):
@@ -17838,19 +17852,33 @@ def ok_choose_safe_result_row_on_page(page, org, module):
 def ok_choose_safe_result_row(page, org, module):
     """Inspect bounded result pages; an unvisited page is not a completed negative."""
     org.ok_search_incomplete = False
+    page_limit = getattr(org, "ok_search_page_limit", 10)
     for page_number in range(1, 11):
+        ok_action_timeout(org, 1000)
         selected = ok_choose_safe_result_row_on_page(page, org, module)
         if selected is not None:
             return selected
         next_link = page.locator(f'a[href*="Page${page_number + 1}\'"]').first
         if not next_link.count():
             return None
-        if page_number == 10:
+        if page_number == 1 and page_limit == 1:
+            hrefs = page.locator('a[href*="Page$"]').evaluate_all(
+                "links => links.map(link => link.getAttribute('href'))")
+            numbered_pages = [int(value) for href in hrefs
+                              for value in re.findall(r"'Page\$(\d+)'", href or "")]
+            # Keep complete two/three-page searches, including later-page matches.
+            if numbered_pages and max(numbered_pages) <= 3 and not any("Page$Last" in (h or "") for h in hrefs):
+                page_limit = max(numbered_pages)
+        if page_number >= page_limit:
             org.ok_search_incomplete = True
             return None
         try:
-            next_link.click(timeout=5000)
-            page.wait_for_load_state("domcontentloaded", timeout=10000)
+            grid = "#ctl00_DefaultContent_CharityNameSearch1_EntityGridView"
+            previous = page.locator(grid).inner_text(timeout=ok_action_timeout(org, 2000))
+            next_link.click(timeout=ok_action_timeout(org, 5000))
+            page.wait_for_function(
+                "([selector, before]) => { const grid = document.querySelector(selector); return grid && grid.innerText !== before; }",
+                arg=[grid, previous], timeout=ok_action_timeout(org, 8000))
         except Exception:
             org.ok_search_incomplete = True
             return None
@@ -18128,7 +18156,18 @@ def ok_search_name_for_org(org) -> str:
     return name
 
 
-def ok_click_name_search_ok_button(page) -> bool:
+def ok_action_timeout(org, maximum: int) -> int:
+    """Keep Oklahoma form and pagination waits inside its existing search budget."""
+    deadline = getattr(org, "ok_search_deadline", None)
+    if not isinstance(deadline, (int, float)):
+        return maximum
+    remaining = int((deadline - time.perf_counter()) * 1000)
+    if remaining <= 0:
+        raise TimeoutError("Oklahoma search deadline reached before retrieval completed")
+    return min(maximum, remaining)
+
+
+def ok_click_name_search_ok_button(page, org=None) -> bool:
     selectors = [
         "#ctl00_DefaultContent_CharityNameSearch1_buttonOk",
         'input[type="submit"][value="Ok"]',
@@ -18142,8 +18181,8 @@ def ok_click_name_search_ok_button(page) -> bool:
         try:
             locator = page.locator(selector).first
             if locator.count() > 0:
-                locator.scroll_into_view_if_needed(timeout=1500)
-                locator.click(timeout=3500, force=True)
+                locator.scroll_into_view_if_needed(timeout=ok_action_timeout(org, 1500))
+                locator.click(timeout=ok_action_timeout(org, 3500), force=True)
                 return True
         except Exception:
             continue
@@ -18153,8 +18192,8 @@ def ok_click_name_search_ok_button(page) -> bool:
     ]
     for locator in role_candidates:
         try:
-            locator.first.scroll_into_view_if_needed(timeout=1500)
-            locator.first.click(timeout=3500, force=True)
+            locator.first.scroll_into_view_if_needed(timeout=ok_action_timeout(org, 1500))
+            locator.first.click(timeout=ok_action_timeout(org, 3500), force=True)
             return True
         except Exception:
             continue
@@ -18197,24 +18236,23 @@ def search_ok_precise(page, org, module):
         ),
     )
     try:
-        page.goto(module.OK_SEARCH_URL, wait_until="domcontentloaded", timeout=45000)
-        module.safe_wait_for_network_idle(page, timeout=20000)
-        page.wait_for_timeout(2500)
+        page.goto(module.OK_SEARCH_URL, wait_until="domcontentloaded", timeout=ok_action_timeout(org, 12000))
 
         try:
-            page.locator("#ctl00_DefaultContent_CharityNameSearch1_RadioButtonList1_0").click(timeout=5000)
+            page.locator("#ctl00_DefaultContent_CharityNameSearch1_RadioButtonList1_0").click(timeout=ok_action_timeout(org, 8000))
         except Exception:
             try:
-                page.get_by_label(re.compile("Search by Name", re.I)).click(timeout=5000)
+                page.get_by_label(re.compile("Search by Name", re.I)).click(timeout=ok_action_timeout(org, 4000))
             except Exception:
                 result.error = "Could not select Oklahoma Search by Name."
                 return result
 
-        if not ok_click_name_search_ok_button(page):
+        if not ok_click_name_search_ok_button(page, org):
             result.error = "Could not click the Oklahoma Ok button."
             return result
 
-        page.wait_for_timeout(1500)
+        page.locator('input[name*="singlename" i]').first.wait_for(
+            state="visible", timeout=ok_action_timeout(org, 8000))
         name_input = module.find_visible_input(page, [
             "#ctl00_DefaultContent_CharityNameSearch1__singlename",
             'input[name="ctl00$DefaultContent$CharityNameSearch1$_singlename"]',
@@ -18227,10 +18265,7 @@ def search_ok_precise(page, org, module):
             return result
 
         search_name = ok_search_name_for_org(org)
-        name_input.click(timeout=5000)
-        name_input.fill("")
-        name_input.type(search_name, delay=40)
-        page.wait_for_timeout(500)
+        name_input.fill(search_name, timeout=ok_action_timeout(org, 4000))
 
         clicked = False
         for candidate in [
@@ -18239,7 +18274,7 @@ def search_ok_precise(page, org, module):
             page.locator('input[type="submit"][value="Search"]').first,
         ]:
             try:
-                candidate.click(timeout=5000)
+                candidate.click(timeout=ok_action_timeout(org, 5000))
                 clicked = True
                 break
             except Exception:
@@ -18248,10 +18283,12 @@ def search_ok_precise(page, org, module):
             result.error = "Could not click the Oklahoma Search button."
             return result
 
-        module.safe_wait_for_network_idle(page, timeout=20000)
-        page.wait_for_timeout(2500)
+        page.wait_for_function(
+            """() => Boolean(document.querySelector('#ctl00_DefaultContent_CharityNameSearch1_EntityGridView span[id$="_lblName"]'))
+                || /no records found|no matching|no result/i.test(document.body?.innerText || '')""",
+            timeout=ok_action_timeout(org, 12000))
 
-        text = module.body_text(page)
+        text = module.body_text(page, timeout=ok_action_timeout(org, 4000))
         if re.search(r"no records found|no matching|no result", text, re.I):
             result.status = module.STATUS_NOT_FOUND
             result.raw_status_text = "No results found"
@@ -18275,7 +18312,7 @@ def search_ok_precise(page, org, module):
             return result
 
         _, selected_filing_link, matched_name, filing_number = selected
-        selected_filing_link.click(timeout=5000)
+        selected_filing_link.click(timeout=ok_action_timeout(org, 5000))
         module.safe_wait_for_network_idle(page, timeout=20000)
         page.wait_for_timeout(2500)
 
@@ -18384,6 +18421,11 @@ def search_ok_precise(page, org, module):
         return result
     except Exception as exc:
         result.error = f"OK error: {exc}"
+        if isinstance(exc, TimeoutError):
+            result.status = "Unable to Verify"
+            result.raw_status_text = "Oklahoma search deadline expired before retrieval completed"
+            result.source_note = "The Oklahoma search did not complete; no negative registration conclusion was made."
+            result.reason_code = "RUNNER_TIMEOUT_RETRY_FAILED"
         return result
 
 

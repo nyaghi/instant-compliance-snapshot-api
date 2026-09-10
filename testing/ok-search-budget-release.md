@@ -1,0 +1,15 @@
+# Oklahoma search completion — 2026.09.10.4-staging
+
+The First Responders lookup spent its time on two broad ten-page searches before reaching the complete targeted `responders` result set. Its nominal 72-second search budget was checked only between queries. Staging client calls timed out at 160 and 200 seconds; the unchanged local lookup took 120 seconds and remained inconclusive.
+
+The approved read-only study tested 30 organizations with 48 queries across 131 pages. Every one of the 25 previously confirmed filing numbers was on the first page of the primary master query. Pages 2–3 added no qualifying matches. The study is retrieval evidence, not a blanket rule that one unsuccessful page establishes non-registration.
+
+This change keeps the existing query order, query limit, original-identity checks, active-record tie preference, status interpretation and certificate fallback. Broad phrase queries inspect their first page; result sets containing only two or three pages can still finish and recover later-page matches. Targeted queries inspect at most three pages. Unvisited pages retain incomplete-search evidence. The existing variant-result handling can use a completed targeted search without a qualifying identity match; an incomplete first-page miss alone cannot supply Not Registered.
+
+The Oklahoma master now clamps form and pagination waits to its existing search deadline. Search readiness waits for actual result/no-result content instead of network-idle and fixed delays. Pagination waits for the grid content to change. The matched-record certificate path and filing-date-plus-12-months calculation are unchanged. No global timeout, retry count, shared matching rule, environment variable or state dataset was changed.
+
+Thirteen new regression tests cover the navigation document temporarily lacking a body, actual result readiness, bounded waits, incomplete pagination, complete two/three-page searches and later-page matches, completed targeted negative evidence, outage handling, and the original first-page deadline blocker. An initial null-body race was caught in the local controls and corrected before deployment; failed evidence is preserved.
+
+Validation: `python -X utf8 testing/run_ok_search_budget_guardrails.py`; all 21 established release suites via parent `tmp/ok_fix_gate.py`; parent `tmp/ok_fix_controls.py focus --label focus-recovery` and `tmp/ok_fix_controls.py local`; Python compilation and `git diff --check`. Live local controls cover all 30 Oklahoma organizations plus nine mature/state-change controls. Staging requires both backends, the frontend version/API target, all supporting frontend files and five state data assets, followed by smoke/batch checks and all 30 Oklahoma reruns. Original 870-case evidence and expected values remain preserved; the new results are reconciled separately.
+
+See parent `outputs/ok-search-fix-20260910` and `FIX_TRACKER.md` for completed gate results and deployment IDs. This file describes the release requirements; it does not by itself assert deployment completion. Production is not authorized.
