@@ -69,7 +69,7 @@ def pdf_updated_label(pdf_bytes: bytes) -> str:
         temp_path.unlink(missing_ok=True)
     import re
 
-    match = re.search(r"\bUpdated:\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})", text, re.I)
+    match = re.search(r"\bUpdated:\s*([A-Za-z]+\s+\d{1,2},\s+\d{4}|\d{1,2}/\d{1,2}/\d{4})", text, re.I)
     return match.group(1) if match else ""
 
 
@@ -92,8 +92,14 @@ def refresh_nh(server_module, dry_run: bool) -> dict[str, object]:
         records, parsed_label = server_module.nh_live_pdf_records()
     if len(records) < 1000:
         raise RuntimeError(f"NH parser returned suspiciously few records: {len(records)}")
-    if not dry_run and changed:
+    if not dry_run:
         NH_PDF_PATH.write_bytes(pdf_bytes)
+        # The master owns extraction; store its validated rows with the exact
+        # source hash so checks do not reparse hundreds of pages on cold start.
+        payload = {"source_sha256": checksum, "updated_label": label or parsed_label,
+                   "source_record_count": len(records),
+                   "records": [[r[k] for k in ("registry_id", "registry_name", "status_code", "due_raw")] for r in records]}
+        (BASE_DIR / "downloadable-data/NH-records.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     return {
         "state": "NH",
         "status": "changed" if changed else "unchanged",
@@ -224,7 +230,7 @@ ASSETS = {
     "KS": ["KS_weekly_checker.py"],
     "KY": ["downloadable-data/KY.pdf", "downloadable-data/KY-records.json"],
     "LA": ["downloadable-data/LA.xlsx"],
-    "NH": ["registered-charities.pdf"],
+    "NH": ["registered-charities.pdf", "downloadable-data/NH-records.json"],
     "OR": ["Charity_OR.txt"],
 }
 

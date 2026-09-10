@@ -8,7 +8,7 @@ Use a fresh isolated worktree from the latest origin/staging. Do not use or comm
 
 ## Download and validate
 
-Run `python refresh_downloadable_state_data.py --states KS,KY,LA,NH,OR`. Require exit 0, no errors, and all five manifest entries present and usable. This command downloads actual source files, validates/parses them, preserves old files on a state failure, and writes downloadable-state-data.json. It downloads KS's published Excel into its existing packaged module, KY PDF plus parsed rows, LA Excel export, NH PDF, and OR ZIP converted to the existing TSV schema. Source dates are distinct from download timestamps; an unchanged source still records a successful check.
+Run `python refresh_downloadable_state_data.py --states KS,KY,LA,NH,OR`. Require exit 0, no errors, and all five manifest entries present and usable. This command downloads actual source files, validates/parses them, preserves old files on a state failure, and writes downloadable-state-data.json. It downloads KS's published Excel into its existing packaged module, KY PDF plus parsed rows, LA Excel export, NH PDF plus validated parsed rows, and OR ZIP converted to the existing TSV schema. KY and NH read drawn table cells and reconcile registration IDs; incomplete extraction must fail the refresh. NH-records.json is bound to the exact PDF hash. Source dates are distinct from download timestamps; an unchanged source still records a successful check.
 
 Run these commands:
 
@@ -24,7 +24,7 @@ Run `python testing/run_weekly_data_smoke.py --output testing/weekly-data-eviden
 
 ## Deploy without another permission request
 
-The user authorizes automatic STAGING deployment of validated weekly data. Stage only KS_weekly_checker.py, registered-charities.pdf, Charity_OR.txt, downloadable-data/KY.pdf, downloadable-data/KY-records.json, downloadable-data/LA.xlsx, and downloadable-state-data.json. Do not sweep unrelated changes into a commit. Respect .gitattributes so asset checksums survive checkout. Commit and push HEAD:staging after confirming origin/staging has not advanced; reconcile safely if it has. Never force push. Code fixes outside routine data maintenance require their normal local regression checks.
+The user authorizes automatic STAGING deployment of validated weekly data. Stage only KS_weekly_checker.py, registered-charities.pdf, downloadable-data/NH-records.json, Charity_OR.txt, downloadable-data/KY.pdf, downloadable-data/KY-records.json, downloadable-data/LA.xlsx, and downloadable-state-data.json. Do not sweep unrelated changes into a commit. Respect .gitattributes so asset checksums survive checkout. Commit and push HEAD:staging after confirming origin/staging has not advanced; reconcile safely if it has. Never force push. Code fixes outside routine data maintenance require their normal local regression checks.
 
 Wait for both staging Render services to deploy that exact commit:
 - public: srv-d8a38lnavr4c73d4ib30

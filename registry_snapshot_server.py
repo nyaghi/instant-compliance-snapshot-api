@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.10.5-staging").strip() or "2026.09.10.5-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.10.6-staging").strip() or "2026.09.10.6-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -16008,6 +16008,52 @@ def load_ky_snapshot_records() -> list[tuple[str, str, str, str]]:
     return records
 
 
+def ky_parse_pdf_table_records(pdf_bytes: bytes) -> list[tuple[str, str, str, str]]:
+    """Read name/DBA and last-filed year from the same drawn Kentucky row."""
+    import pdfplumber
+    from collections import Counter
+
+    records = []
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        for page in pdf.pages:
+            try:
+                tables = page.find_tables()
+                if len(tables) != 1:
+                    raise ValueError(f"KY table structure changed on page {page.page_number}")
+                table = tables[0]
+                rows = table.extract()
+                header = [re.sub(r"\s+", " ", value or "").strip() for value in rows[0]]
+                if len(header) != 11 or [header[i] for i in (0, 1, 2, 5)] != ["ID", "Name", "DBA", "Yr Last Filed"]:
+                    raise ValueError(f"KY table columns changed on page {page.page_number}")
+                first_cell = table.rows[0].cells[0]
+                source_ids = [word["text"] for word in page.extract_words()
+                              if first_cell[0] <= word["x0"] < first_cell[2]
+                              and first_cell[3] <= word["top"] < table.bbox[3]
+                              and re.fullmatch(r"\d{1,6}", word["text"])]
+                page_records = []
+                for row in rows[1:]:
+                    if len(row) != 11:
+                        raise ValueError(f"KY incomplete row on page {page.page_number}")
+                    registry_id, name, dba, filed_year = [re.sub(r"\s+", " ", row[i] or "").strip() for i in (0, 1, 2, 5)]
+                    if not re.fullmatch(r"\d{1,6}", registry_id) or not name or not re.fullmatch(r"20\d{2}", filed_year):
+                        raise ValueError(f"KY identity or year could not be read on page {page.page_number}")
+                    # Keep the existing legal-name/DBA text together; addresses
+                    # are deliberately outside the identity fields.
+                    registry_name = " ".join(part for part in (name, dba) if part)
+                    if "(cid:" in registry_name:
+                        raise ValueError(f"KY name could not be decoded for registration {registry_id}")
+                    page_records.append((registry_id, registry_name, filed_year,
+                                         f"{registry_id} {registry_name} Yr Last Filed {filed_year}"))
+                if not page_records or Counter(source_ids) != Counter(row[0] for row in page_records):
+                    raise ValueError(f"KY registration-column reconciliation failed on page {page.page_number}")
+                records.extend(page_records)
+            finally:
+                page.close()
+    if not records:
+        raise ValueError("KY PDF registration rows are incomplete")
+    return records
+
+
 def load_ky_live_pdf_records() -> list[tuple[str, str, str, str]]:
     global KY_LIVE_PDF_RECORDS, KY_LIVE_PDF_LOADED_AT
     now = time.time()
@@ -16034,44 +16080,7 @@ def load_ky_live_pdf_records() -> list[tuple[str, str, str, str]]:
             )
             with urllib.request.urlopen(request, timeout=45) as response:
                 pdf_bytes = response.read()
-            reader = PdfReader(io.BytesIO(pdf_bytes))
-            text = "\n".join(page.extract_text() or "" for page in reader.pages)
-            record_pattern = re.compile(
-                r"(?:^|\n)\s*(?P<id>\d{1,6})\s*\n(?P<body>[\s\S]{3,700}?)\n\s*"
-                r"\$[\d,]+(?:\.\d{2})?\s*\n\s*\$[\d,]+(?:\.\d{2})?\s*\n\s*(?P<year>20\d{2})\b",
-                re.I,
-            )
-            for match in record_pattern.finditer(text):
-                registry_id = match.group("id")
-                filed_year = match.group("year")
-                body_lines = [
-                    re.sub(r"\s+", " ", line).strip()
-                    for line in (match.group("body") or "").splitlines()
-                    if re.sub(r"\s+", " ", line).strip()
-                ]
-                if not body_lines:
-                    continue
-                shifted_id = re.match(r"^(\d{1,6})\s+([A-Za-z].*)$", body_lines[0])
-                if shifted_id:
-                    registry_id = shifted_id.group(1)
-                    body_lines[0] = shifted_id.group(2).strip()
-                elif len(body_lines) >= 2 and re.fullmatch(r"\d{1,6}", body_lines[0]) and re.search(r"[A-Za-z]", body_lines[1]):
-                    registry_id = body_lines[0]
-                    body_lines = body_lines[1:]
-                else:
-                    joined_body = " ".join(body_lines)
-                    embedded_ids = list(re.finditer(r"\b(\d{3,6})\s+([A-Za-z][A-Za-z0-9&',()./\-\s]{4,})$", joined_body))
-                    for embedded in reversed(embedded_ids):
-                        candidate_name = useful_registry_name(embedded.group(2))
-                        if candidate_name and len(normalized_match_name(candidate_name).split()) >= 2:
-                            registry_id = embedded.group(1)
-                            body_lines = [candidate_name]
-                            break
-                registry_name = useful_registry_name(" ".join(body_lines))
-                if not registry_name or re.search(r"^\d+$", registry_name):
-                    continue
-                record_text = f"{registry_id} {registry_name} Yr Last Filed {filed_year}"
-                records.append((registry_id, registry_name, filed_year, record_text))
+            records = ky_parse_pdf_table_records(pdf_bytes)
         except Exception as exc:
             log_event(f"KY live PDF load failed: {exc}")
             records = []
@@ -16422,9 +16431,77 @@ def nh_should_try_xlsx_before_pdf() -> bool:
     return False
 
 
+def nh_record_from_cells(cells: list[str]) -> dict:
+    if len(cells) != 4:
+        raise ValueError("NH registration row has an unexpected number of fields")
+    registry_id, registry_name, status_code, due_raw = [re.sub(r"\s+", " ", str(value or "")).strip() for value in cells]
+    if (registry_id and not re.fullmatch(r"\d{1,6}", registry_id)) or not registry_name or "(cid:" in registry_name:
+        raise ValueError(f"NH registration identity could not be read: {registry_id!r}")
+    due_date = parse_due_date(due_raw)
+    if due_raw and not due_date:
+        raise ValueError(f"NH report date could not be read for registration {registry_id}")
+    return {
+        "registry_id": registry_id, "registry_name": registry_name,
+        "body": registry_name, "registry_words": set(normalized_match_name(registry_name).split()),
+        "status_code": status_code.upper(), "due_raw": due_raw, "due_date": due_date,
+    }
+
+
+def nh_parse_pdf_table_records(pdf_bytes: bytes) -> tuple[list[dict], str]:
+    # Read the drawn table cells: text-line order does not preserve NH's wrapped
+    # names/addresses. Validate the separate registration column on every page.
+    import pdfplumber
+    from collections import Counter
+
+    records = []
+    updated_label = ""
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        for page in pdf.pages:
+            try:
+                if not updated_label:
+                    match = re.search(r"\bUpdated:\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})", page.extract_text() or "", re.I)
+                    updated_label = match.group(1) if match else ""
+                tables = page.find_tables()
+                if len(tables) != 1:
+                    raise ValueError(f"NH table structure changed on page {page.page_number}")
+                table = tables[0]
+                rows = table.extract()
+                header = [re.sub(r"\s+", " ", value or "").strip() for value in rows[0]]
+                if len(header) != 8 or [header[i] for i in (0, 1, 6, 7)] != ["Reg. No.", "Charity Name", "Status", "Report Due"]:
+                    raise ValueError(f"NH table columns changed on page {page.page_number}")
+                first_cell = table.rows[0].cells[0]
+                source_ids = [word["text"] for word in page.extract_words()
+                              if first_cell[0] <= word["x0"] < first_cell[2]
+                              and first_cell[3] <= word["top"] < table.bbox[3]
+                              and re.fullmatch(r"\d{1,6}", word["text"])]
+                page_records = []
+                for row in rows[1:]:
+                    if len(row) != 8:
+                        raise ValueError(f"NH incomplete row on page {page.page_number}")
+                    page_records.append(nh_record_from_cells([row[i] for i in (0, 1, 6, 7)]))
+                if not page_records or Counter(source_ids) != Counter(row["registry_id"] for row in page_records if row["registry_id"]):
+                    raise ValueError(f"NH registration-column reconciliation failed on page {page.page_number}")
+                records.extend(page_records)
+            finally:
+                page.close()
+    if not updated_label or not records:
+        raise ValueError("NH PDF source date or registration rows are incomplete")
+    return records, updated_label
+
+
 def nh_download_live_pdf_records() -> tuple[list[dict], str]:
-    if PdfReader is None:
-        return [], ""
+    # Like KY, use the validated parsed asset during checks. The master parser
+    # runs during refresh, avoiding a full-document parse on the first request.
+    snapshot_path = weekly_asset("NH", "downloadable-data/NH-records.json")
+    if snapshot_path is not None:
+        payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        pdf_path = weekly_asset("NH", "registered-charities.pdf")
+        if pdf_path is None or payload.get("source_sha256") != hashlib.sha256(pdf_path.read_bytes()).hexdigest():
+            raise ValueError("NH parsed records do not match the verified source PDF")
+        records = [nh_record_from_cells(row) for row in payload["records"]]
+        if payload.get("source_record_count") != len(records) or not payload.get("updated_label"):
+            raise ValueError("NH parsed record reconciliation is missing or incomplete")
+        return records, f"{payload['updated_label']} from bundled NH PDF"
     pdf_source = NH_LIVE_PDF_URL
     try:
         local_path = weekly_asset("NH", "registered-charities.pdf")
@@ -16450,83 +16527,7 @@ def nh_download_live_pdf_records() -> tuple[list[dict], str]:
             raise
         pdf_bytes = NH_BUNDLED_PDF_PATH.read_bytes()
         pdf_source = str(NH_BUNDLED_PDF_PATH)
-    reader = PdfReader(io.BytesIO(pdf_bytes))
-    text_parts = []
-    for page in reader.pages:
-        try:
-            text_parts.append(page.extract_text() or "")
-        except Exception:
-            continue
-    text = "\n".join(text_parts)
-    text = re.sub(r"(\d{1,2}/\d{1,2}/\d{4})(?=\d{3,6}\s+[A-Z])", r"\1\n", text)
-    updated_match = re.search(r"\bUpdated:\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})", text, re.I)
-    updated_label = updated_match.group(1) if updated_match else ""
-    records = []
-    seen_record_keys = set()
-
-    def add_nh_record(registry_id: str, body_text: str, status_code: str, due_raw: str) -> None:
-        body = re.sub(r"\s+", " ", body_text or "").strip()
-        due_raw = due_raw or ""
-        due_date = parse_due_date(due_raw)
-        if not body:
-            return
-        registry_name = nh_registry_name_from_live_body(body)
-        registry_norm = normalized_match_name(registry_name)
-        key = (registry_id, registry_name, status_code.upper(), due_raw)
-        if key in seen_record_keys:
-            return
-        seen_record_keys.add(key)
-        records.append({
-            "registry_id": registry_id,
-            "body": body,
-            "registry_name": registry_name,
-            "registry_words": set(registry_norm.split()),
-            "status_code": status_code.upper(),
-            "due_raw": due_raw,
-            "due_date": due_date,
-        })
-
-    row_pattern = re.compile(
-        r"^\s*(?P<reg>\d{3,6})\s+(?P<body>.*?)\s+(?P<status>[A-Z])(?:\s+"
-        r"(?P<due>\d{1,2}/\d{1,2}/\d{4}))?\s*$",
-    )
-    pending_row = ""
-    for raw_line in text.splitlines():
-        line = re.sub(r"\s+", " ", raw_line or "").strip()
-        if not line:
-            continue
-        if re.search(r"\b(?:Updated:|Registered Charities List|Good Standing|Charitable Trusts Unit|Reg\. No\.)\b", line, re.I):
-            continue
-        starts_record = bool(re.match(r"^\d{3,6}\s+\S", line))
-        if starts_record:
-            pending_row = line
-        elif pending_row:
-            pending_row = f"{pending_row} {line}"
-        else:
-            continue
-        row_match = row_pattern.match(pending_row)
-        if row_match:
-            add_nh_record(
-                row_match.group("reg"),
-                row_match.group("body"),
-                row_match.group("status"),
-                row_match.group("due"),
-            )
-            pending_row = ""
-
-    if not records:
-        record_pattern = re.compile(
-            r"^\s*(?P<reg>\d{3,6})\s+(?P<body>[\s\S]*?)\s*(?P<status>[A-Z])\s+"
-            r"(?P<due>\d{1,2}/\d{1,2}/\d{4})(?=\s*(?:\n\s*\d{3,6}\s+[A-Z]|\n\s*Updated:|\Z))",
-            re.I | re.M,
-        )
-        for match in record_pattern.finditer(text):
-            add_nh_record(
-                match.group("reg"),
-                match.group("body"),
-                match.group("status"),
-                match.group("due"),
-            )
+    records, updated_label = nh_parse_pdf_table_records(pdf_bytes)
     if pdf_source != NH_LIVE_PDF_URL and updated_label:
         updated_label = f"{updated_label} from bundled NH PDF"
     return records, updated_label
