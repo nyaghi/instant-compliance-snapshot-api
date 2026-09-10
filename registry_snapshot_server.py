@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.10.4-staging").strip() or "2026.09.10.4-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.10.5-staging").strip() or "2026.09.10.5-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -17224,6 +17224,35 @@ def ms_read_detail_with_recovery(page, link, module, result) -> str:
     return text
 
 
+def ms_wait_for_search_results(page):
+    """Wait for MS search completion, preserving the existing table criteria."""
+    started = time.perf_counter()
+    try:
+        ready = page.wait_for_function(
+            r"""() => {
+                const text = document.body?.innerText || '';
+                if (/\bplease\s+wait\b/i.test(text)) return false;
+                if (/no results found|no records found|no matching|0 results/i.test(text)) {
+                    return {no_rows: true};
+                }
+                const tables = Array.from(document.querySelectorAll('table')).slice(0, 20);
+                const index = tables.findIndex(table => {
+                    const value = (table.innerText || '').replace(/\s+/g, ' ').trim();
+                    return /charity name/i.test(value) && /status/i.test(value);
+                });
+                return index >= 0 ? {table_index: index} : false;
+            }""",
+            timeout=8000,
+        ).json_value()
+        elapsed = time.perf_counter() - started
+        note = f"Mississippi search results became ready after {elapsed:.2f} seconds." if elapsed >= 4.0 else ""
+        if ready.get("no_rows"):
+            return None, True, note
+        return page.locator("table").nth(ready["table_index"]), False, note
+    except Exception as exc:
+        return None, False, f"Mississippi search results remained incomplete within the bounded readiness wait ({type(exc).__name__})."
+
+
 def search_ms_fast(page, org, navigate: bool = True):
     """Master-level Mississippi path with bounded waits around the embedded checker logic."""
     modules = state_batch_modules(["MS"])
@@ -17288,21 +17317,11 @@ def search_ms_fast(page, org, navigate: bool = True):
             result.error = "Could not click the Mississippi Search button."
             return result
 
-        safe_wait_for_network_idle(page, timeout=1500)
+        table, completed_no_rows, readiness_note = ms_wait_for_search_results(page)
+        if readiness_note:
+            result.source_attempts = [readiness_note]
 
-        table = None
-        page_text = ""
-        deadline = time.perf_counter() + 4.0
-        while time.perf_counter() < deadline:
-            page.wait_for_timeout(500)
-            page_text = page.locator("body").inner_text(timeout=4000)
-            if re.search(r"no results found|no records found|no matching|0 results", page_text, re.I):
-                break
-            table = module.find_results_table(page)
-            if table:
-                break
-
-        if re.search(r"no results found|no records found|no matching|0 results", page_text, re.I):
+        if completed_no_rows:
             result.status = module.STATUS_NOT_FOUND
             result.raw_status_text = "No results found"
             result.success = True
