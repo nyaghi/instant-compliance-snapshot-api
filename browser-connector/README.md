@@ -1,4 +1,4 @@
-# CharityClarity staging New York connector — 0.1.0
+# CharityClarity staging New York connector — 0.1.1
 
 This internal prototype is restricted to staging.compliance-express.com and the New York charities registry. It is not published to the Chrome Web Store and has not been approved for production.
 
@@ -16,7 +16,9 @@ The prototype has no automatic update service. If a test fix is made, reload it 
 ## What it does
 
 - Receives a single EIN or name query from the staging page, after the backend chooses the query.
-- Opens New York's normal search page, clears fields, completes the normal Verify/Search flow, and returns the completed public search response.
+- Opens one New York search tab per organization lookup, retains it for the master's EIN-to-name fallback, clears fields before each query, and completes the normal Verify/Search flow. It returns only completed public search responses.
+- A staging-tab-bound connection keeps the worker available for at most five minutes (Chrome 114+). Completion, error, expiry, or disconnection closes the connector-owned tab. User-opened registry tabs are not used or closed. A browser/worker crash fails conservatively; an orphan tab is never reused as evidence.
+- Verification/search network errors are reported immediately. Verification rejection is not retried or bypassed; tokens are neither retained nor reused by the connector.
 - Returns an incomplete result on rejection or failure. It never chooses records or derives a registration status.
 - Reads only whitelisted public search-response fields. Cookies, verification tokens, browser history, and login credentials are not sent to CharityClarity.
 

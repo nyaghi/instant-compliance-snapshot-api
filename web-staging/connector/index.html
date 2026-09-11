@@ -28,7 +28,8 @@
   <img class="logo" src="charityclarity.png" alt="CharityClarity — Compliance Express">
   <p class="eyebrow">NEW YORK CONNECTOR · STAGING PROTOTYPE</p>
   <h1>Connect New York to CharityClarity</h1>
-  <p data-connector-install>One-time setup for <strong>Chrome on Windows</strong>. Use the same Chrome profile you use for CharityClarity.</p>
+  <p data-connector-first-install>One-time setup for <strong>Chrome on Windows</strong>. Use the same Chrome profile you use for CharityClarity.</p>
+  <p data-connector-update hidden>Update your existing connector in the same Chrome profile you use for CharityClarity.</p>
   <div id="nyConnectorSetup" role="status"><p data-connector-message>Checking whether your connector is already installed…</p></div>
   <section class="ready" data-connector-ready hidden>
     <h2>You’re all set</h2>
@@ -37,17 +38,21 @@
   </section>
   <ol data-connector-install aria-label="Three setup steps">
     <li>
-      <h2>Download and extract</h2>
+      <h2 data-connector-first-install>Download and extract</h2>
+      <h2 data-connector-update hidden>Download and replace the old files</h2>
       <a class="button" href="charityclarity-ny-staging.zip" download>Download connector ZIP</a>
-      <p>Save the ZIP to <strong>Downloads</strong>. Open Downloads, right-click <span class="folder">charityclarity-ny-staging.zip</span>, then choose <strong>Extract all → Extract</strong>.</p>
+      <p data-connector-first-install>Save the ZIP to <strong>Downloads</strong>. Open Downloads, right-click <span class="folder">charityclarity-ny-staging.zip</span>, then choose <strong>Extract all → Extract</strong>.</p>
+      <p data-connector-update hidden>Download the latest ZIP above. Right-click it in Downloads and choose <strong>Extract all</strong>. Extract into your existing yellow <span class="folder">charityclarity-ny-staging</span> folder and choose <strong>Replace the files in the destination</strong> when Windows asks.</p>
       <p class="hint">You should now see a normal yellow folder named <span class="folder">charityclarity-ny-staging</span>. Opening the ZIP alone does not extract it.</p>
     </li>
     <li>
-      <h2>Add the folder to Chrome</h2>
+      <h2 data-connector-first-install>Add the folder to Chrome</h2>
+      <h2 data-connector-update hidden>Reload the connector in Chrome</h2>
       <p>Copy this address, paste it into Chrome’s address bar, then press <strong>Enter</strong>.</p>
       <div class="copy-row"><input id="chromeAddress" aria-label="Chrome extensions address" value="chrome://extensions" readonly><button id="copyAddress" type="button">Copy address</button></div>
       <p id="copyFeedback" class="copy-feedback" role="status"></p>
-      <p>Turn on <strong>Developer mode</strong> at the top right and click <strong>Load unpacked</strong>. In Downloads, select the yellow <span class="folder">charityclarity-ny-staging</span> folder, then click <strong>Select Folder</strong>.</p>
+      <p data-connector-first-install>Turn on <strong>Developer mode</strong> at the top right and click <strong>Load unpacked</strong>. In Downloads, select the yellow <span class="folder">charityclarity-ny-staging</span> folder, then click <strong>Select Folder</strong>.</p>
+      <p data-connector-update hidden>Turn on <strong>Developer mode</strong> at the top right. Find <strong>CharityClarity — Staging NY Connector</strong> and click its <strong>Reload</strong> button (the circular arrow). Its version should now be <strong>0.1.1</strong>.</p>
       <p class="hint">Choose the extracted folder, not the ZIP file. Keep that folder on your computer while you use the connector.</p>
     </li>
     <li>

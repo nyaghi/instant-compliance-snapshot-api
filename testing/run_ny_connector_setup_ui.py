@@ -18,13 +18,13 @@ class SetupUI(unittest.TestCase):
         cls.legacy=subprocess.check_output(['git','show','e4a64b5:web-staging/index.html'],cwd=WORK).decode('utf-8')
     @classmethod
     def tearDownClass(cls):cls.browser.close();cls.p.stop()
-    def page(self,ready,guide=False,legacy=False,width=1280):
+    def page(self,ready,guide=False,legacy=False,width=1280,outdated=False):
         context=self.browser.new_context(viewport={'width':width,'height':1000},permissions=['clipboard-read','clipboard-write'])
         self.addCleanup(context.close)
         context.add_init_script('''window.addEventListener('message', event=>{
           const m=event.data;if(event.source===window&&m?.channel==='cc-ny-staging-v1'&&m.direction==='request'&&m.action==='ping')
-            window.postMessage({channel:m.channel,direction:'response',id:m.id,ok:READY,version:'0.1.0'},location.origin);
-        });'''.replace('READY',json.dumps(ready)))
+            window.postMessage({channel:m.channel,direction:'response',id:m.id,ok:READY,version:'0.1.1',capabilities:CAPABILITIES},location.origin);
+        });'''.replace('READY',json.dumps(ready)).replace('CAPABILITIES',json.dumps([] if outdated else ['lookup-tab-v1'])))
         def route(r):
             from urllib.parse import urlparse
             u=urlparse(r.request.url)
@@ -42,7 +42,7 @@ class SetupUI(unittest.TestCase):
             page.wait_for_function("getComputedStyle(document.querySelector('#appShell')).display === 'none'",timeout=30000)
             page.locator('#stagingEmail').fill('fixture@compliance-express.com')
             page.locator('#stagingPasscode').fill('fixture-only');page.locator('#stagingUnlockButton').click()
-        page.wait_for_function("document.querySelector('#nyConnectorSetup').dataset.state === '"+('ready' if ready else 'missing')+"'")
+        page.wait_for_function("document.querySelector('#nyConnectorSetup').dataset.state === '"+('update' if outdated else 'ready' if ready else 'missing')+"'")
         return page
     def test_previous_markup_reproduces_visible_hidden_link(self):
         page=self.page(True,legacy=True)
@@ -78,5 +78,17 @@ class SetupUI(unittest.TestCase):
         self.assertLessEqual(page.evaluate('document.documentElement.scrollWidth'),390)
         self.assertTrue(page.get_by_role('button',name='Copy address').is_visible())
         page.screenshot(path=str(OUT/'guide-missing-mobile.png'),full_page=True)
+
+    def test_old_connector_requires_update_on_main_and_guide(self):
+        page=self.page(True,outdated=True)
+        self.assertTrue(page.get_by_role('link',name='Update New York in 3 steps').is_visible())
+        self.assertNotIn('is ready',page.locator('#nyConnectorSetup').inner_text())
+        guide=self.page(True,guide=True,outdated=True)
+        self.assertEqual(guide.locator('ol > li').count(),3)
+        self.assertTrue(guide.get_by_role('heading',name='Reload the connector in Chrome').is_visible())
+        self.assertFalse(guide.get_by_role('heading',name='Add the folder to Chrome').is_visible())
+        self.assertTrue(guide.get_by_role('link',name='Download connector ZIP').is_visible())
+        self.assertFalse(guide.locator('[data-connector-ready]').is_visible())
+        guide.screenshot(path=str(OUT/'guide-update-desktop.png'),full_page=True)
 
 if __name__=='__main__':unittest.main(verbosity=2)

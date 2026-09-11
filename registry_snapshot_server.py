@@ -97,7 +97,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.11.2-staging").strip() or "2026.09.11.2-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.11.3-staging").strip() or "2026.09.11.3-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -15135,7 +15135,10 @@ class NYConnectorResponse:
 def ny_connector_failure(record, code):
     comments = {
         "NY_CONNECTOR_UNAVAILABLE": "The New York browser connector is unavailable. Install or enable the staging connector and keep Chrome open while the check runs.",
+        "NY_CONNECTOR_UPDATE_REQUIRED": "The New York browser connector needs an update. Follow the staging connector update steps and refresh CharityClarity before retrying.",
         "NY_CONNECTOR_VERIFICATION_REQUIRED": "New York did not accept browser verification. Registration status could not be confirmed.",
+        "NY_CONNECTOR_VERIFICATION_NETWORK_ERROR": "New York's browser verification request failed with a network error. The search could not continue, so registration status could not be confirmed.",
+        "NY_CONNECTOR_SEARCH_NETWORK_ERROR": "The New York registry search request failed with a network error. Registration status could not be confirmed.",
         "NY_CONNECTOR_TIMEOUT": "The New York browser search did not finish in time. Registration status could not be confirmed.",
         "NY_CONNECTOR_BROWSER_CLOSED": "The New York browser tab closed before the search finished. Registration status could not be confirmed.",
         "NY_CONNECTOR_BUSY": "The New York browser connector is completing another search. Retry this check shortly.",
@@ -15150,7 +15153,7 @@ def ny_connector_failure(record, code):
     result.source_note = comments[code]
     data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, "NY", time.perf_counter())
     data["comments"] = comments[code]
-    data["connector_version"] = "0.1.0"
+    data["connector_version"] = "0.1.1"
     return data
 
 
@@ -15194,7 +15197,7 @@ def ny_connector_advance(record):
         record["pending"] = {"query_id": secrets.token_urlsafe(18), "query": pending.params}
         return {"phase": "search", **record["pending"]}
     data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, "NY", started)
-    data["connector_version"] = "0.1.0"
+    data["connector_version"] = "0.1.1"
     return {"phase": "complete", "result": data}
 
 

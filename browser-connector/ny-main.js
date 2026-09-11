@@ -16,8 +16,16 @@
   const observe = (request, status, payload, jobId) => {
     if (!active || active.id !== jobId) return;
     try { publish(P.publicResponse(request, status, payload)); }
-    catch { if (active.waiter?.kind === request.kind) { const w = active.waiter; active.waiter = null; clearTimeout(w.timer); w.reject(new Error("NY_CONNECTOR_INCOMPLETE")); } }
+    catch { rejectRequest(request, jobId, "NY_CONNECTOR_INCOMPLETE"); }
   };
+  const rejectRequest = (request, jobId, reason) => {
+    const job = active;
+    if (!job || job.id !== jobId || job.waiter?.kind !== request.kind) return;
+    if (request.kind === "search" && !P.sameQuery(request.query, job.query)) return;
+    const waiter = job.waiter; job.waiter = null; clearTimeout(waiter.timer); waiter.reject(new Error(reason));
+  };
+  const networkFailure = (request, jobId) => rejectRequest(request, jobId,
+    request.kind === "verify" ? "NY_CONNECTOR_VERIFICATION_NETWORK_ERROR" : "NY_CONNECTOR_SEARCH_NETWORK_ERROR");
   XMLHttpRequest.prototype.open = function(method, url, ...args) {
     const request = P.publicRequest(url);
     if (request && ((request.kind === "search" && String(method).toUpperCase() === "GET") || (request.kind === "verify" && String(method).toUpperCase() === "POST"))) xhrMetadata.set(this, request);
@@ -26,19 +34,24 @@
   };
   XMLHttpRequest.prototype.send = function(...args) {
     const request = xhrMetadata.get(this), jobId = active?.id;
-    if (request && jobId) this.addEventListener("load", () => {
+    if (request && jobId) {
+      for (const event of ["error", "abort", "timeout"]) this.addEventListener(event, () => networkFailure(request, jobId), { once: true });
+      this.addEventListener("load", () => {
       let data;
       try { data = this.responseType === "json" ? this.response : JSON.parse(this.responseText); }
       catch { data = null; }
       observe(request, this.status, data, jobId);
-    }, { once: true });
+      }, { once: true });
+    }
     return originalSend.apply(this, args);
   };
   const originalFetch = window.fetch;
   window.fetch = async function(input, init) {
     const request = P.publicRequest(typeof input === "string" || input instanceof URL ? input : input?.url);
     const jobId = active?.id;
-    const response = await originalFetch.apply(this, arguments);
+    let response;
+    try { response = await originalFetch.apply(this, arguments); }
+    catch (error) { if (request && jobId) networkFailure(request, jobId); throw error; }
     if (request && jobId) response.clone().json().then(data => observe(request, response.status, data, jobId)).catch(() => observe(request, response.status, null, jobId));
     return response;
   };
