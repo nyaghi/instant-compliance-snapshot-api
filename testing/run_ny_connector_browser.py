@@ -26,6 +26,7 @@ PAGE='''<!doctype html><title>Connector browser integration fixture</title><scri
 class BrowserIntegration(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls.key_patch=patch.object(c,'NY_CONNECTOR_SIGNING_KEY','browser-test-only-signing-key-not-a-real-secret');cls.key_patch.start()
         cls.temp=tempfile.TemporaryDirectory(prefix='cc-ny-extension-test-')
         cls.playwright=c.checker.sync_playwright().start()
         cls.context=cls.playwright.chromium.launch_persistent_context(cls.temp.name,headless=False,
@@ -45,7 +46,7 @@ class BrowserIntegration(unittest.TestCase):
         cls.trace=[];cls.accepted=True;cls.mode='positive';cls.state_calls=[]
     @classmethod
     def tearDownClass(cls):
-        cls.context.close();cls.playwright.stop();cls.server.shutdown();cls.server.server_close();cls.temp.cleanup()
+        cls.context.close();cls.playwright.stop();cls.server.shutdown();cls.server.server_close();cls.temp.cleanup();cls.key_patch.stop()
     @classmethod
     def route(cls,route):
         from urllib.parse import urlparse,parse_qs
@@ -79,7 +80,7 @@ class BrowserIntegration(unittest.TestCase):
         elif u.scheme=='chrome-extension':route.continue_()
         else:route.abort()
     def run_case(self,mode='positive',accepted=True):
-        type(self).mode=mode;type(self).accepted=accepted;type(self).trace=[];c.NY_CONNECTOR_SESSIONS.clear()
+        type(self).mode=mode;type(self).accepted=accepted;type(self).trace=[]
         detail=Mock();detail.json.return_value={'success':True,'statusCode':200,'data':{**ROW,'regType':'NFP','regStatute':'7A','documents':{'Annual Filing for Charitable Organizations':[{'fiscalYearEnd':'12/31/2025'}]}}}
         session=Mock();session.__enter__=Mock(return_value=session);session.__exit__=Mock(return_value=False);session.get.return_value=detail
         page=self.context.new_page();page.goto(c.NY_CONNECTOR_ORIGIN+'/connector-test')
@@ -102,7 +103,6 @@ class BrowserIntegration(unittest.TestCase):
         self.assertEqual(result['status_reason'],'NY_CONNECTOR_VERIFICATION_REQUIRED');session.get.assert_not_called();self.assertEqual(self.trace,[])
     def test_full_staging_form_mixed_batch_preserves_mature_state_when_ny_fails(self):
         type(self).accepted=False;type(self).mode='positive';type(self).trace=[];type(self).state_calls=[]
-        c.NY_CONNECTOR_SESSIONS.clear()
         page=self.context.new_page();page.goto(c.NY_CONNECTOR_ORIGIN+'/full-ui')
         page.locator('#stagingEmail').fill('browser-test@compliance-express.com')
         page.locator('#stagingPasscode').fill(c.ADMIN_PASSCODE);page.locator('#stagingUnlockButton').click()

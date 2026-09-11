@@ -5,6 +5,7 @@ import calendar
 import csv
 import gzip
 import hashlib
+import hmac
 import importlib.util
 import http.cookiejar
 import html
@@ -96,7 +97,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.11.1-staging").strip() or "2026.09.11.1-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.11.2-staging").strip() or "2026.09.11.2-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -15090,10 +15091,32 @@ def search_ny_direct(org, browser_page=None, registry_search_provider=None):
 
 
 NY_CONNECTOR_ORIGIN = "https://staging.compliance-express.com"
-NY_CONNECTOR_SESSIONS = {}
-NY_CONNECTOR_LOCK = threading.Lock()
 NY_CONNECTOR_TTL_SECONDS = 300
-NY_CONNECTOR_MAX_SESSIONS = 16
+NY_CONNECTOR_SIGNING_KEY = os.environ.get("CE_NY_CONNECTOR_SIGNING_KEY", "")
+
+
+def ny_connector_pack(record):
+    # Public search evidence and check binding only; no passcode or state credential.
+    body = base64.urlsafe_b64encode(json.dumps(record, separators=(",", ":"), sort_keys=True).encode()).rstrip(b"=")
+    if len(body) > 320000:
+        raise ValueError("The New York check exceeded the connector evidence limit.")
+    signature = hmac.new(NY_CONNECTOR_SIGNING_KEY.encode(), b"cc-ny-staging-v1." + body, hashlib.sha256).hexdigest()
+    return body.decode("ascii") + "." + signature
+
+
+def ny_connector_unpack(token, email, device):
+    if not isinstance(token, str) or not 65 <= len(token) <= 320065:
+        raise ValueError("Invalid check token")
+    body, signature = token.rsplit(".", 1)
+    expected = hmac.new(NY_CONNECTOR_SIGNING_KEY.encode(), b"cc-ny-staging-v1." + body.encode("ascii"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        raise ValueError("Invalid check signature")
+    record = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+    now = time.time()
+    if (record["email"] != email or record["device"] != device or record["version"] != APP_VERSION
+            or not record["issued"] <= now + 5 or not now < record["expires"] <= record["issued"] + NY_CONNECTOR_TTL_SECONDS):
+        raise ValueError("Expired or mismatched check")
+    return record
 
 
 class NYConnectorResponse:
@@ -15176,7 +15199,7 @@ def ny_connector_advance(record):
 
 
 def ny_connector_request(payload, origin):
-    """Staging-only capability exchange; no user credentials enter the extension."""
+    """Signed, bounded continuation works across staging instances and restarts."""
     if not APP_VERSION.endswith("-staging") or origin != NY_CONNECTOR_ORIGIN:
         return 404, {"error": "Not found"}
     if not isinstance(payload, dict):
@@ -15184,69 +15207,54 @@ def ny_connector_request(payload, origin):
     email = normalize_email(str(payload.get("email") or ""))
     if not is_verified_internal_passcode(email, str(payload.get("admin_passcode") or "")):
         return 403, {"error": "Unlock staging to use the New York connector prototype."}
+    if len(NY_CONNECTOR_SIGNING_KEY) < 32:
+        return 503, {"error": "The staging New York connector is not configured."}
     device = payload.get("device_id")
     if not isinstance(device, str) or not 8 <= len(device) <= 200:
         return 400, {"error": "A valid browser session identifier is required."}
     action = payload.get("action")
     if not isinstance(action, str):
         return 400, {"error": "Invalid connector action."}
-    now = time.monotonic()
-    with NY_CONNECTOR_LOCK:
-        for key in list(NY_CONNECTOR_SESSIONS):
-            if NY_CONNECTOR_SESSIONS[key]["expires"] <= now and not NY_CONNECTOR_SESSIONS[key]["busy"]:
-                del NY_CONNECTOR_SESSIONS[key]
-        if action == "start":
-            name = payload.get("organization_name")
-            ein = str(payload.get("ein") or "").strip()
-            if (not isinstance(name, str) or not 1 <= len(name.strip()) <= 500
-                    or not re.fullmatch(r"[0-9]{2}-?[0-9]{7}", ein) or ein.replace("-", "") == "000000000"):
-                return 400, {"error": "Enter the organization name and a valid nine-digit EIN."}
-            if len(NY_CONNECTOR_SESSIONS) >= NY_CONNECTOR_MAX_SESSIONS:
-                return 429, {"error": "The New York prototype is busy. Retry shortly."}
-            token = secrets.token_urlsafe(32)
-            key = hashlib.sha256(token.encode()).hexdigest()
-            record = {"email": email, "device": device, "organization_name": name.strip(), "ein": format_ein(ein),
-                      "expires": now + NY_CONNECTOR_TTL_SECONDS, "completed": [], "pending": None, "busy": True}
-            NY_CONNECTOR_SESSIONS[key] = record
-        else:
-            token = payload.get("check_token")
-            if not isinstance(token, str) or not 32 <= len(token) <= 80:
-                return 410, {"error": "This New York browser check expired. Run the check again."}
-            key = hashlib.sha256(token.encode()).hexdigest()
-            record = NY_CONNECTOR_SESSIONS.get(key)
-            if not record or record["expires"] <= now or record["email"] != email or record["device"] != device:
-                return 410, {"error": "This New York browser check expired. Run the check again."}
-            if record["busy"]:
-                return 409, {"error": "A response for this New York check is already being processed."}
-            if action == "cancel":
-                del NY_CONNECTOR_SESSIONS[key]
-                return 200, {"phase": "canceled"}
-            if action not in {"advance", "fail"}:
-                return 400, {"error": "Invalid connector action."}
-            if action == "advance":
-                pending = record["pending"]
-                if not pending or payload.get("query_id") != pending["query_id"]:
-                    return 409, {"error": "The connector response is stale or belongs to another search."}
-                try:
-                    rows = ny_connector_clean_response(payload.get("evidence"), pending["query"])
-                except ValueError:
-                    del NY_CONNECTOR_SESSIONS[key]
-                    return 200, {"phase": "complete", "result": ny_connector_failure(record, "NY_CONNECTOR_INCOMPLETE")}
-                record["completed"].append({"query": pending["query"], "rows": rows})
-                record["pending"] = None
-            record["busy"] = True
-    response = None
-    try:
-        response = ({"phase": "complete", "result": ny_connector_failure(record, payload.get("reason"))}
-                    if action == "fail" else ny_connector_advance(record))
-        if response["phase"] == "search":
-            response.update(check_token=token, expires_in=max(0, int(record["expires"] - time.monotonic())))
-        return 200, response
-    finally:
-        with NY_CONNECTOR_LOCK:
-            record["busy"] = False
-            if response is None or response.get("phase") != "search" or record["expires"] <= time.monotonic():
-                NY_CONNECTOR_SESSIONS.pop(key, None)
+    now = time.time()
+    if action == "start":
+        name = payload.get("organization_name")
+        ein = str(payload.get("ein") or "").strip()
+        if (not isinstance(name, str) or not 1 <= len(name.strip()) <= 500
+                or not re.fullmatch(r"[0-9]{2}-?[0-9]{7}", ein) or ein.replace("-", "") == "000000000"):
+            return 400, {"error": "Enter the organization name and a valid nine-digit EIN."}
+        record = {"email": email, "device": device, "organization_name": name.strip(), "ein": format_ein(ein),
+                  "issued": now, "expires": now + NY_CONNECTOR_TTL_SECONDS, "version": APP_VERSION,
+                  "completed": [], "pending": None}
+    else:
+        try:
+            record = ny_connector_unpack(payload.get("check_token"), email, device)
+        except (ValueError, TypeError, KeyError, UnicodeError):
+            return 410, {"error": "This New York browser check expired or changed. Run the check again."}
+        if action == "cancel":
+            # No background job is retained. The page discards its continuation.
+            return 200, {"phase": "canceled"}
+        if action not in {"advance", "fail"}:
+            return 400, {"error": "Invalid connector action."}
+        if action == "advance":
+            pending = record["pending"]
+            if not pending or payload.get("query_id") != pending["query_id"]:
+                return 409, {"error": "The connector response is stale or belongs to another search."}
+            try:
+                rows = ny_connector_clean_response(payload.get("evidence"), pending["query"])
+            except ValueError:
+                return 200, {"phase": "complete", "result": ny_connector_failure(record, "NY_CONNECTOR_INCOMPLETE")}
+            record["completed"].append({"query": pending["query"], "rows": rows})
+            record["pending"] = None
+    response = ({"phase": "complete", "result": ny_connector_failure(record, payload.get("reason"))}
+                if action == "fail" else ny_connector_advance(record))
+    if time.time() >= record["expires"]:
+        return 410, {"error": "This New York browser check expired. Run the check again."}
+    if response["phase"] == "search":
+        try:
+            response.update(check_token=ny_connector_pack(record), expires_in=max(0, int(record["expires"] - time.time())))
+        except ValueError:
+            return 200, {"phase": "complete", "result": ny_connector_failure(record, "NY_CONNECTOR_INCOMPLETE")}
+    return 200, response
 
 
 def apply_ny_latest_fye_next_cycle_status(org, result, body: str = ""):

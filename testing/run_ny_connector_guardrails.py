@@ -1,5 +1,5 @@
 """Staging connector contract, isolation, and unchanged master NY interpretation."""
-import copy, json, sys, threading, time, unittest, urllib.request, urllib.error
+import copy, json, os, subprocess, sys, threading, time, unittest, urllib.request, urllib.error
 from datetime import date
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -16,7 +16,7 @@ class Clock(date):
 
 class ConnectorTests(unittest.TestCase):
     def setUp(self):
-        c.NY_CONNECTOR_SESSIONS.clear()
+        key=patch.object(c,'NY_CONNECTOR_SIGNING_KEY','test-only-signing-key-not-a-real-secret-20260911');key.start();self.addCleanup(key.stop)
         self.auth = {'email': 'connector-test@compliance-express.com', 'admin_passcode': c.ADMIN_PASSCODE, 'device_id': 'test-browser-session-a'}
         for target, value in [('date', Clock), ('public_profile_for_ein', Mock(return_value={}))]:
             p=patch.object(c,target,value);p.start();self.addCleanup(p.stop)
@@ -41,7 +41,6 @@ class ConnectorTests(unittest.TestCase):
         self.session.get.assert_called_once()
         self.assertEqual(self.session.get.call_args.args[0],c.NY_REGISTRY_API+'/RegistryDetail')
         self.assertEqual(self.session.get.call_args.kwargs['params'],{'orgID':ROW['orgID']})
-        self.assertEqual(len(c.NY_CONNECTOR_SESSIONS),0)
     def test_no_record_only_after_all_master_queries_complete(self):
         state=self.start();queries=[]
         for _ in range(3):
@@ -72,14 +71,13 @@ class ConnectorTests(unittest.TestCase):
         for reason in ['NY_CONNECTOR_VERIFICATION_REQUIRED','NY_CONNECTOR_TIMEOUT','NY_CONNECTOR_BROWSER_CLOSED','NY_CONNECTOR_UNAVAILABLE','NY_CONNECTOR_BUSY']:
             state=self.start();_,result=self.request(action='fail',check_token=state['check_token'],reason=reason)
             self.assertEqual(result['result']['status'],'Unable to Confirm');self.assertFalse(result['result']['success'])
-            self.assertEqual(len(c.NY_CONNECTOR_SESSIONS),0)
     def test_incomplete_malformed_wrong_query_extra_filters_are_inconclusive(self):
         cases=[{'http_status':401},{'success':False},{'statusCode':500},{'rows':None},
                {'rows':[{'orgName':'Missing identity'}]}, {'rows':[{**ROW,'orgID':'https://example.com'}]},
                {'query':{'ein':'987654321'}},{'query':{'ein':ROW['ein'],'state':'NY'}}, {'rows':[{**ROW,'token':'not-public-evidence'}]}]
         for fields in cases:
             _,result=self.submit(self.start(),**fields)
-            self.assertEqual(result['result']['status'],'Unable to Confirm');self.assertEqual(len(c.NY_CONNECTOR_SESSIONS),0)
+            self.assertEqual(result['result']['status'],'Unable to Confirm')
     def test_malformed_failure_reason_and_action_are_safe(self):
         for reason in [{}, [], None, 42]:
             state=self.start();code,result=self.request(action='fail',check_token=state['check_token'],reason=reason)
@@ -91,21 +89,23 @@ class ConnectorTests(unittest.TestCase):
         state=self.start()
         for fields in [{'device_id':'another-browser-session'},{'email':'another@compliance-express.com'}]:
             code,_=self.request(action='advance',check_token=state['check_token'],query_id=state['query_id'],**fields);self.assertEqual(code,410)
-        self.assertEqual(len(c.NY_CONNECTOR_SESSIONS),1)
     def test_query_nonce_blocks_replays_and_cross_check_responses(self):
         a=self.start();b=self.start()
         code,_=self.request(action='advance',check_token=a['check_token'],query_id=b['query_id']);self.assertEqual(code,409)
         _,next_state=self.submit(a,[])
-        code,_=self.submit(a,[]);self.assertEqual(code,409)
+        code,_=self.request(action='advance',check_token=next_state['check_token'],query_id=a['query_id']);self.assertEqual(code,409)
         self.assertNotEqual(a['query_id'],next_state['query_id'])
-    def test_completed_check_token_cannot_be_replayed(self):
-        state=self.start();self.submit(state);code,_=self.submit(state);self.assertEqual(code,410)
-    def test_expired_restart_lost_and_canceled_sessions_fail_closed(self):
+    def test_short_lived_retry_refetches_live_detail_and_cannot_extend_expiry(self):
+        state=self.start();self.submit(state);code,result=self.submit(state)
+        self.assertEqual(code,200);self.assertEqual(result['result']['status'],'Current');self.assertEqual(self.session.get.call_count,2)
+        with patch.object(c.time,'time',return_value=time.time()+301):self.assertEqual(self.submit(state)[0],410)
+    def test_expired_and_tampered_tokens_fail_closed(self):
         state=self.start()
-        for record in c.NY_CONNECTOR_SESSIONS.values():record['expires']=time.monotonic()-1
-        self.assertEqual(self.submit(state)[0],410)
-        state=self.start();c.NY_CONNECTOR_SESSIONS.clear();self.assertEqual(self.submit(state)[0],410)
-        state=self.start();self.request(action='cancel',check_token=state['check_token']);self.assertEqual(self.submit(state)[0],410)
+        with patch.object(c.time,'time',return_value=time.time()+301):self.assertEqual(self.submit(state)[0],410)
+        original=state['check_token']
+        for token in ['x'+original[1:],original[:-1]+('a' if original[-1]!='a' else 'b'),'malformed',original+'.extra']:
+            self.assertEqual(self.submit({**state,'check_token':token})[0],410)
+        self.assertEqual(self.request(action='cancel',check_token=original)[1]['phase'],'canceled')
     def test_staging_origin_internal_auth_and_valid_identity_required(self):
         for origin in ['','https://compliance-express.com','https://staging.compliance-express.com.evil.example']:
             self.assertEqual(c.ny_connector_request(self.auth,origin)[0],404)
@@ -114,10 +114,27 @@ class ConnectorTests(unittest.TestCase):
         self.assertEqual(self.request(action='start',admin_passcode='invalid')[0],403)
         for ein in ['000000000','123','1234567890']:
             self.assertEqual(self.request(action='start',organization_name='Example',ein=ein)[0],400)
-    def test_concurrent_duplicate_advance_is_rejected(self):
+    def test_missing_or_different_signing_key_fails_closed(self):
         state=self.start()
-        for record in c.NY_CONNECTOR_SESSIONS.values():record['busy']=True
-        self.assertEqual(self.submit(state)[0],409)
+        with patch.object(c,'NY_CONNECTOR_SIGNING_KEY',''):
+            self.assertEqual(self.request(action='start')[0],503)
+        with patch.object(c,'NY_CONNECTOR_SIGNING_KEY','a-different-test-only-key-12345678901234567890'):
+            self.assertEqual(self.submit(state)[0],410)
+    def test_continuation_works_across_fresh_processes_without_shared_memory(self):
+        child='''import json,sys;from unittest.mock import patch;import registry_snapshot_server as c
+p=json.load(sys.stdin);p.update(email='process-test@compliance-express.com',admin_passcode=c.ADMIN_PASSCODE,device_id='cross-process-browser')
+with patch.object(c,'public_profile_for_ein',return_value={}),patch.object(c,'build_search_queries',return_value=['Example National Foundation']):
+ print(json.dumps(c.ny_connector_request(p,c.NY_CONNECTOR_ORIGIN)))
+'''
+        def process(payload):
+            env={**os.environ,'CE_NY_CONNECTOR_SIGNING_KEY':c.NY_CONNECTOR_SIGNING_KEY}
+            result=subprocess.run([sys.executable,'-X','utf8','-c',child],input=json.dumps(payload),capture_output=True,text=True,encoding='utf-8',env=env,cwd=Path(__file__).resolve().parents[1],timeout=20)
+            self.assertEqual(result.returncode,0,result.stderr);return json.loads(result.stdout)
+        code,state=process({'action':'start','organization_name':ROW['orgName'],'ein':ROW['ein']});self.assertEqual(code,200)
+        code,next_state=process({'action':'advance','check_token':state['check_token'],'query_id':state['query_id'],'evidence':{'query':state['query'],'http_status':200,'success':True,'statusCode':200,'rows':[]}})
+        self.assertEqual(code,200);self.assertEqual(next_state['query'],{'orgName':ROW['orgName']})
+        code,final=process({'action':'fail','check_token':next_state['check_token'],'reason':'NY_CONNECTOR_UNAVAILABLE'})
+        self.assertEqual(code,200);self.assertEqual(final['result']['status'],'Unable to Confirm')
     def test_real_http_handler_contract(self):
         server=ThreadingHTTPServer(('127.0.0.1',0),c.RegistrySnapshotHandler)
         thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
