@@ -1,16 +1,70 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>New York connector setup | CharityClarity</title>
-<style>body{margin:0;background:#f3f5f8;color:#172238;font:17px/1.65 Arial,sans-serif}main{max-width:720px;margin:48px auto;padding:36px;background:white;border-radius:16px;border:1px solid #dbe1ea}img{max-width:285px;height:auto}h1{font-size:30px;line-height:1.2;color:#0b2a5b}a{color:#0b2a5b}ol{padding-left:24px}li{padding:8px 0}.download{display:inline-block;background:#0b2a5b;color:white;text-decoration:none;padding:12px 22px;border-radius:24px}small{color:#526178}footer{margin-top:28px;border-top:1px solid #e2e8f0;padding-top:20px;font-size:14px}@media(max-width:780px){main{margin:16px;padding:24px}}</style></head>
-<body><main><img src="charityclarity.png" alt="CharityClarity — Compliance Express"><p><small>STAGING PROTOTYPE · VERSION 0.1.0</small></p>
-<h1>Connect New York searches to Chrome</h1>
-<p>The connector opens New York’s registry in your browser. CharityClarity confirms the organization’s record and interprets the filing information.</p>
-<a class="download" href="charityclarity-ny-staging.zip" download>Download staging connector</a>
-<ol><li>Download the ZIP file and extract it to a folder you can keep on this computer.</li>
-<li>In Chrome, open <strong>chrome://extensions</strong> and turn on <strong>Developer mode</strong>. This is required for this unpublished staging prototype.</li>
-<li>Select <strong>Load unpacked</strong> and choose the extracted folder containing <strong>manifest.json</strong>.</li>
-<li>Return to <a href="/">CharityClarity staging</a> and refresh the page. After unlocking staging, the connector should show as ready.</li></ol>
-<p>Keep Chrome open while New York checks run. A New York tab opens briefly for each search, then closes when the response is received.</p>
-<p>This prototype works only with CharityClarity staging and New York’s registry. It does not send browser cookies, verification tokens, or your CharityClarity passcode to the connector. To remove it, use Chrome’s Extensions page.</p>
-<footer>Compliance Express · <a href="https://www.compliance-express.com">www.compliance-express.com</a><br><a href="mailto:info@compliance-express.com">info@compliance-express.com</a></footer>
-</main></body></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Set up New York in 3 steps | CharityClarity</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#f3f5f8;color:#172238;font:16px/1.55 Arial,sans-serif}
+    main{max-width:760px;margin:28px auto;padding:30px 34px;background:#fff;border:1px solid #dbe1ea;border-radius:16px}
+    .logo{width:240px;max-width:100%;height:auto}.eyebrow{margin:8px 0 18px;color:#526178;font-size:12px;letter-spacing:.06em}
+    h1{font-size:30px;line-height:1.2;color:#0b2a5b;margin:0 0 12px}h2{font-size:19px;color:#0b2a5b;margin:0 0 8px}p{margin:8px 0}
+    a{color:#0b2a5b}button,input{font:inherit}a:focus-visible,button:focus-visible,input:focus-visible{outline:3px solid #527ab7;outline-offset:3px}
+    #nyConnectorSetup{padding:13px 16px;border:1px solid #dbe1ea;border-radius:10px;margin:16px 0;color:#43536b;background:#f8fafc}
+    #nyConnectorSetup[data-state="ready"]{background:#edf8f1;border-color:#b6d9c3;color:#165633}
+    ol{list-style:none;padding:0;margin:22px 0 0;counter-reset:steps}li{position:relative;padding:0 0 22px 48px;counter-increment:steps}
+    li:not(:last-child){margin-bottom:22px;border-bottom:1px solid #e2e8f0}li:before{content:counter(steps);position:absolute;left:0;top:0;width:32px;height:32px;border-radius:50%;display:grid;place-items:center;background:#0b2a5b;color:white;font-weight:bold}
+    .button{display:inline-block;border:0;border-radius:24px;background:#0b2a5b;color:#fff;text-decoration:none;padding:10px 18px;margin:5px 0;cursor:pointer;font-weight:bold}
+    .hint{font-size:14px;color:#526178}.folder{font-family:Consolas,monospace;overflow-wrap:anywhere}.copy-row{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+    .copy-row input{min-width:0;flex:1;width:220px;border:1px solid #bdc9d8;border-radius:7px;padding:9px 10px;color:#172238;background:#f8fafc}
+    .copy-row button{border:1px solid #0b2a5b;border-radius:7px;background:#fff;color:#0b2a5b;padding:9px 12px;cursor:pointer}.copy-feedback{font-size:14px;min-height:21px}
+    footer{border-top:1px solid #e2e8f0;padding-top:18px;margin-top:6px;color:#526178;font-size:13px}.ready{padding:12px 0 24px}
+    [hidden]{display:none!important}
+    @media(max-width:600px){main{margin:12px;padding:22px 18px}h1{font-size:26px}li{padding-left:42px}.logo{width:215px}.copy-row input{flex-basis:100%;width:100%}}
+  </style>
+  <script src="/ny-connector.js" defer></script>
+</head>
+<body><main>
+  <img class="logo" src="charityclarity.png" alt="CharityClarity — Compliance Express">
+  <p class="eyebrow">NEW YORK CONNECTOR · STAGING PROTOTYPE</p>
+  <h1>Connect New York to CharityClarity</h1>
+  <p data-connector-install>One-time setup for <strong>Chrome on Windows</strong>. Use the same Chrome profile you use for CharityClarity.</p>
+  <div id="nyConnectorSetup" role="status"><p data-connector-message>Checking whether your connector is already installed…</p></div>
+  <section class="ready" data-connector-ready hidden>
+    <h2>You’re all set</h2>
+    <p>No download or installation is needed. Return to CharityClarity to run your checks.</p>
+    <a class="button" href="/">Return to CharityClarity</a>
+  </section>
+  <ol data-connector-install aria-label="Three setup steps">
+    <li>
+      <h2>Download and extract</h2>
+      <a class="button" href="charityclarity-ny-staging.zip" download>Download connector ZIP</a>
+      <p>Save the ZIP to <strong>Downloads</strong>. Open Downloads, right-click <span class="folder">charityclarity-ny-staging.zip</span>, then choose <strong>Extract all → Extract</strong>.</p>
+      <p class="hint">You should now see a normal yellow folder named <span class="folder">charityclarity-ny-staging</span>. Opening the ZIP alone does not extract it.</p>
+    </li>
+    <li>
+      <h2>Add the folder to Chrome</h2>
+      <p>Copy this address, paste it into Chrome’s address bar, then press <strong>Enter</strong>.</p>
+      <div class="copy-row"><input id="chromeAddress" aria-label="Chrome extensions address" value="chrome://extensions" readonly><button id="copyAddress" type="button">Copy address</button></div>
+      <p id="copyFeedback" class="copy-feedback" role="status"></p>
+      <p>Turn on <strong>Developer mode</strong> at the top right and click <strong>Load unpacked</strong>. In Downloads, select the yellow <span class="folder">charityclarity-ny-staging</span> folder, then click <strong>Select Folder</strong>.</p>
+      <p class="hint">Choose the extracted folder, not the ZIP file. Keep that folder on your computer while you use the connector.</p>
+    </li>
+    <li>
+      <h2>Return and check</h2>
+      <p>Open CharityClarity below and unlock staging. You should see <strong>“New York connector is ready.”</strong></p>
+      <a class="button" href="/">Return to CharityClarity</a>
+      <p class="hint">Keep Chrome open while checks run. Setup is complete once the ready message appears.</p>
+    </li>
+  </ol>
+  <footer>Compliance Express · <a href="https://www.compliance-express.com">www.compliance-express.com</a><br><a href="mailto:info@compliance-express.com">info@compliance-express.com</a></footer>
+</main>
+<script>
+  document.addEventListener("DOMContentLoaded", () => { window.CCNYConnector?.setup(); });
+  document.getElementById("copyAddress").addEventListener("click", async () => {
+    const input = document.getElementById("chromeAddress"), feedback = document.getElementById("copyFeedback");
+    try { await navigator.clipboard.writeText(input.value); feedback.textContent = "Copied. Paste into Chrome’s address bar and press Enter."; }
+    catch { input.focus(); input.select(); feedback.textContent = "Press Ctrl+C to copy, then paste into Chrome’s address bar."; }
+  });
+</script>
+</body></html>

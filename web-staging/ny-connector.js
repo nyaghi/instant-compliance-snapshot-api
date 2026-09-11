@@ -25,8 +25,9 @@
     const response = await bridge("ping");
     box.hidden = false;
     const message = box.querySelector("[data-connector-message]");
-    message.textContent = response.ok ? "New York connector is ready. Keep Chrome open while checks run." : "New York needs the staging browser connector. Install it once, then return here and refresh this page.";
-    box.querySelector("[data-connector-install]").hidden = !!response.ok;
+    message.textContent = response.ok ? "New York connector is ready. Keep Chrome open while checks run." : "Connect this browser to New York using the three setup steps.";
+    document.querySelectorAll("[data-connector-install]").forEach(element => { element.hidden = !!response.ok; });
+    document.querySelectorAll("[data-connector-ready]").forEach(element => { element.hidden = !response.ok; });
     box.dataset.state = response.ok ? "ready" : "missing";
   }
   async function lookup({ organization_name, ein, email, admin_passcode, device_id }) {
