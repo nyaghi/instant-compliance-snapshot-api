@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "CharityClarity — Staging NY Connector",
+  "version": "0.1.0",
+  "minimum_chrome_version": "111",
+  "description": "Staging prototype: searches New York in your browser; CharityClarity verifies records and interprets status.",
+  "host_permissions": ["https://staging.compliance-express.com/*", "https://charities-search.ag.ny.gov/*"],
+  "background": {"service_worker": "worker.js"},
+  "content_scripts": [
+    {"matches": ["https://staging.compliance-express.com/*"], "js": ["protocol.js", "staging-bridge.js"], "run_at": "document_start"},
+    {"matches": ["https://charities-search.ag.ny.gov/RegistrySearch*"], "js": ["protocol.js", "ny-main.js"], "run_at": "document_start", "world": "MAIN"},
+    {"matches": ["https://charities-search.ag.ny.gov/RegistrySearch*"], "js": ["ny-content.js"], "run_at": "document_start"}
+  ]
+}

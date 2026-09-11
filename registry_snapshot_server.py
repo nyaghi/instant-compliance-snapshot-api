@@ -96,7 +96,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.10.6-staging").strip() or "2026.09.10.6-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.11.1-staging").strip() or "2026.09.11.1-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -1663,10 +1663,16 @@ def public_profile_latest_tax_year_for_ein(ein: str) -> int | None:
 
 
 def public_profile_latest_tax_period_for_ein(ein: str) -> tuple[int, tuple[int, int]] | None:
-    """Return the latest public profile tax year and fiscal year end, if available."""
+    """Use the latest dated fiscal metadata, regardless of financial extraction."""
     payload = public_profile_for_ein(ein)
     candidates: list[tuple[int, tuple[int, int]]] = []
-    for filing in payload.get("filings_with_data") or []:
+    year_only = []
+    for filing in [*(payload.get("filings_with_data") or []), *(payload.get("filings_without_data") or [])]:
+        if not isinstance(filing, dict):
+            continue
+        # Unrelated/supplemental tax forms do not establish the annual fiscal calendar.
+        if filing.get("formtype_str") and str(filing["formtype_str"]).upper() not in {"990", "990EZ", "990-EZ", "990PF", "990-PF"}:
+            continue
         raw_period = str(filing.get("tax_prd") or "")
         match = re.fullmatch(r"(20\d{2})(\d{2})", raw_period)
         if match:
@@ -1676,17 +1682,21 @@ def public_profile_latest_tax_period_for_ein(ein: str) -> tuple[int, tuple[int, 
                 candidates.append((year, (month, calendar.monthrange(year, month)[1])))
         raw_year = str(filing.get("tax_prd_yr") or "")
         if re.fullmatch(r"20\d{2}", raw_year):
-            candidates.append((int(raw_year), (12, 31)))
-    if candidates:
-        return max(candidates, key=lambda item: item[0])
+            year_only.append((int(raw_year), (12, 31)))
     raw_tax_period = str((payload.get("organization") or {}).get("tax_period") or "")
-    match = re.match(r"(20\d{2})[-/]?(\d{1,2})?", raw_tax_period)
+    match = re.fullmatch(r"(20\d{2})[-/]?(\d{2})(?:[-/](\d{1,2}))?", raw_tax_period)
     if match:
         year = int(match.group(1))
-        month = int(match.group(2) or "12")
+        month = int(match.group(2))
         if 1 <= month <= 12:
-            candidates.append((year, (month, calendar.monthrange(year, month)[1])))
-    return max(candidates, key=lambda item: item[0]) if candidates else None
+            day = int(match.group(3) or "1")
+            if day == 1:
+                day = calendar.monthrange(year, month)[1]
+            if 1 <= day <= calendar.monthrange(year, month)[1]:
+                candidates.append((year, (month, day)))
+    # A year-only fallback must not override an evidenced month in the same year.
+    candidates = candidates or year_only
+    return max(candidates) if candidates else None
 
 
 def resolved_organization_name(ein: str, supplied_name: str = "") -> str:
@@ -1773,26 +1783,9 @@ def md_direct_ein_no_record_result(org):
 
 
 def fiscal_year_end_for_ein(ein: str) -> tuple[int, int] | None:
-    payload = public_profile_for_ein(ein)
-    filings = payload.get("filings_with_data") or []
-    for filing in filings:
-        raw_period = str(filing.get("tax_prd") or "")
-        match = re.fullmatch(r"(\d{4})(\d{2})", raw_period)
-        if match:
-            year = int(match.group(1))
-            month = int(match.group(2))
-            if 1 <= month <= 12:
-                return month, calendar.monthrange(year, month)[1]
-    raw_tax_period = str((payload.get("organization") or {}).get("tax_period") or "")
-    match = re.match(r"(\d{4})-(\d{1,2})-(\d{1,2})", raw_tax_period)
-    if match:
-        year = int(match.group(1))
-        month = int(match.group(2))
-        day = int(match.group(3))
-        if 1 <= month <= 12:
-            if day == 1:
-                day = calendar.monthrange(year, month)[1]
-            return month, min(day, calendar.monthrange(year, month)[1])
+    period = public_profile_latest_tax_period_for_ein(ein)
+    if period:
+        return period[1]
     _, period_end = fiscal_period_for_ein(ein)
     if period_end:
         return period_end.month, period_end.day
@@ -1803,9 +1796,27 @@ def format_date(value: date) -> str:
     return f"{value.month}/{value.day}/{value.year}"
 
 
+class FiscalPeriodError(ValueError):
+    """Invalid fiscal-calendar evidence, distinct from registry transport failure."""
+
+
+def fiscal_period_end_in_year(year: int, fiscal_end: tuple[int, int]) -> date:
+    """Recur a valid month/day, retaining February month-end in non-leap years."""
+    try:
+        month, day = fiscal_end
+        date(2000, month, day)  # Validate against a leap year; do not coerce bad dates.
+        if (month, day) == (2, 29) and not calendar.isleap(year):
+            day = 28
+        return date(year, month, day)
+    except (TypeError, ValueError) as exc:
+        raise FiscalPeriodError("Fiscal period could not be interpreted from the available date evidence") from exc
+
+
 def filing_due_date(state: str, report_year: int, fiscal_end: tuple[int, int]) -> tuple[date | None, str]:
-    fy_end = date(report_year, fiscal_end[0], fiscal_end[1])
     state = state.upper()
+    if state not in {"CA", "MD", "MA", "NY", "NJ", "PA", "VA", "SC", "CO", "HI", "KY", "ME", "ND", "AK"}:
+        return None, "state due-date rule is not encoded"
+    fy_end = fiscal_period_end_in_year(report_year, fiscal_end)
     if state == "CA":
         base_due = fifteenth_day_after_fiscal_year_end(fy_end, 5)
         return base_due, "based on California's 4.5-month annual renewal cycle"
@@ -1862,7 +1873,8 @@ def filing_due_date(state: str, report_year: int, fiscal_end: tuple[int, int]) -
 
 def filing_due_date_options(state: str, report_year: int, fiscal_end: tuple[int, int]) -> dict:
     state = state.upper()
-    fy_end = date(report_year, fiscal_end[0], fiscal_end[1])
+    # Explicit-date states (including OH/OK) do not use this fiscal calendar.
+    fy_end = fiscal_period_end_in_year(report_year, fiscal_end) if state in {"CA", "MD", "MA", "NY", "HI", "SC", "KY", "PA", "NJ"} else None
     if state == "CA":
         base_due = fifteenth_day_after_fiscal_year_end(fy_end, 5)
     elif state == "MD":
@@ -8763,10 +8775,9 @@ def search_fl(page, org):
                 and row_norm.startswith(target_norm + " ")
                 and target_words
                 and target_words < original_words
-                and not (target_words & requested_wrappers)
             ):
                 extra_words = row_words - target_words - generic
-                if len(extra_words) >= 2:
+                if extra_words - original_words:
                     return True
         return False
 
@@ -9097,6 +9108,38 @@ def apply_mn_fiscal_year_status(result, year: int | None, fiscal_year_end: date 
         result.computed_due_date = format_date(next_report_due)
 
 
+def mn_exact_structured_alias(aliases, requested_name: str) -> str:
+    """Only full names in the registry's explicit alias field qualify."""
+    target = normalized_match_name(requested_name)
+    if not target or not isinstance(aliases, list):
+        return ""
+    return next((str(alias).strip() for alias in aliases
+                 if isinstance(alias, str) and normalized_match_name(alias) == target), "")
+
+
+def mn_unconfirmed_alias_result(result, explanation: str):
+    result.status = "Unable to Confirm"
+    result.status_reason = "MN_ALTERNATE_REGISTRATION_UNCONFIRMED"
+    result.raw_status_text = "Minnesota alternate-name registration requires review"
+    result.source_note = explanation
+    result.success = False
+    result.error = ""
+    return result
+
+
+def mn_confirmed_alias_evidence(result) -> dict:
+    if getattr(result, "state", "") != "MN":
+        return {}
+    evidence = getattr(result, "mn_alias_evidence", {})
+    if (not isinstance(evidence, dict) or not evidence
+            or canonical_ein_digits(evidence.get("requested_ein", "")) != canonical_ein_digits(result.ein)
+            or canonical_ein_digits(evidence.get("registered_ein", "")) != canonical_ein_digits(result.matched_registry_identifier)
+            or normalized_match_name(evidence.get("registered_name", "")) != normalized_match_name(result.matched_registry_name)
+            or not mn_exact_structured_alias([evidence.get("confirmed_alias", "")], result.organization_name)):
+        return {}
+    return evidence
+
+
 def search_mn(page, org):
     url = "https://www.ag.state.mn.us/Charity/Search/"
     result = checker.StateResult(org.organization_name, org.ein, "MN", checker.STATUS_UNKNOWN, url)
@@ -9200,6 +9243,7 @@ def search_mn(page, org):
             return registry_name_is_safe_against_targets(row_text, safe_targets, org.organization_name, org.ein)
 
         name_fallback_started = time.perf_counter()
+        result.queries_attempted = []
         for index, variant in enumerate(build_search_queries(
             org.organization_name,
             org.ein,
@@ -9226,6 +9270,7 @@ def search_mn(page, org):
             checker.safe_wait_for_network_idle(page, timeout=7000)
             time.sleep(0.5)
             text = readable_page_text(page)
+            result.queries_attempted.append(variant)
             if no_registry_results_seen(text):
                 continue
             try:
@@ -9234,7 +9279,8 @@ def search_mn(page, org):
                     () => Array.from(document.querySelectorAll('table tr, tr')).map((row, index) => {
                         const text = (row.innerText || row.textContent || '').replace(/\\s+/g, ' ').trim();
                         const link = row.querySelector('a[href*="CHR_GeneralInfo"]');
-                        return { index, text, href: link ? link.href : '', linkText: link ? (link.innerText || link.textContent || '').replace(/\\s+/g, ' ').trim() : '' };
+                        const aliases = Array.from(row.querySelectorAll('ul.altName > li')).map(e => (e.textContent || '').trim());
+                        return { index, text, aliases, href: link ? link.getAttribute('href') : '', linkText: link ? (link.innerText || link.textContent || '').replace(/\\s+/g, ' ').trim() : '' };
                     }).filter((row) => row.linkText && row.text);
                     """
                 )
@@ -9245,6 +9291,13 @@ def search_mn(page, org):
             best_name = ""
             best_row_text = ""
             best_alias_row_match = False
+            best_explicit_alias = ""
+            best_candidate_ein = ""
+            best_href = ""
+            alias_ids = {parse_qs(urlparse(row.get("href") or "").query).get("FederalID", [""])[0]
+                         for row in row_candidates if mn_exact_structured_alias(row.get("aliases"), org.organization_name)}
+            if len(alias_ids - {"", ein_digits}) > 1 and ein_digits not in alias_ids:
+                return mn_unconfirmed_alias_result(result, "Minnesota lists the exact alternate name under multiple different registrations; no registration was selected arbitrarily.")
             safe_target_norms = [normalized_match_name(target) for target in safe_targets]
             short_exact_targets = {
                 target_norm for target_norm in safe_target_norms
@@ -9254,9 +9307,12 @@ def search_mn(page, org):
                 row_text = candidate.get("text") or ""
                 link_text = candidate.get("linkText") or ""
                 candidate_ein = re.sub(r"\D", "", parse_qs(urlparse(candidate.get("href") or "").query).get("FederalID", [""])[0])
-                if ein_digits and candidate_ein and candidate_ein != ein_digits:
+                explicit_alias = mn_exact_structured_alias(candidate.get("aliases"), org.organization_name)
+                if ein_digits and candidate_ein and candidate_ein != ein_digits and not explicit_alias:
                     continue
-                if short_exact_targets and normalized_match_name(link_text) not in short_exact_targets:
+                if explicit_alias and (len(candidate_ein) != 9 or urlparse(urljoin(url, candidate.get("href") or "")).hostname != "www.ag.state.mn.us"):
+                    return mn_unconfirmed_alias_result(result, "Minnesota alternate-name search evidence did not identify a valid state registration detail.")
+                if short_exact_targets and normalized_match_name(link_text) not in short_exact_targets and not explicit_alias:
                     continue
                 score = target_name_score(link_text, safe_targets)
                 alias_row_match = mn_safe_alias_row_match(row_text, link_text)
@@ -9268,31 +9324,50 @@ def search_mn(page, org):
                     pass
                 if alias_row_match:
                     score = max(score, 650)
+                if explicit_alias:
+                    score = max(score, 900 if candidate_ein == ein_digits else 850)
                 if score > best_score:
                     best_score = score
                     best_index = candidate.get("index")
                     best_name = candidate.get("linkText") or ""
                     best_row_text = row_text
                     best_alias_row_match = alias_row_match
+                    best_explicit_alias = explicit_alias
+                    best_candidate_ein = candidate_ein
+                    best_href = candidate.get("href") or ""
             if best_index is None or best_score < 450:
                 continue
-            try:
-                link = page.get_by_role("link", name=re.compile(re.escape(best_name), re.I)).first
-            except Exception:
-                link = page.locator("a[href*='CHR_GeneralInfo']").first
+            link = page.locator(f'a[href={json.dumps(best_href)}]').first
             try:
                 link.click(timeout=5000)
                 checker.safe_wait_for_network_idle(page, timeout=7000)
                 time.sleep(0.5)
             except Exception:
+                if best_explicit_alias and best_candidate_ein != ein_digits:
+                    return mn_unconfirmed_alias_result(result, "Minnesota listed an exact alternate name, but its registration detail could not be opened for confirmation.")
                 continue
             detail_text = readable_page_text(page)
             federal_match = re.search(r"FEDERAL\s+ID#?\s*([0-9-]+)", detail_text, re.I)
             detail_ein_digits = re.sub(r"\D", "", federal_match.group(1)) if federal_match else ""
+            cross_ein_alias = bool(best_explicit_alias and best_candidate_ein != ein_digits)
+            if cross_ein_alias:
+                try:
+                    page.get_by_role("button", name="Alternate Name(s)", exact=True).click(timeout=5000)
+                    detail_aliases = page.locator(".accordion-panel ul.altName > li").all_inner_texts()
+                except Exception:
+                    detail_aliases = []
+                if (detail_ein_digits != best_candidate_ein
+                        or not mn_exact_structured_alias(detail_aliases, org.organization_name)):
+                    return mn_unconfirmed_alias_result(result, "Minnesota search listed the requested alternate name, but the selected detail did not confirm that alias and its registered EIN.")
+                result.mn_alias_evidence = {"requested_name": org.organization_name, "requested_ein": format_ein(ein_digits),
+                                            "registered_name": best_name, "registered_ein": format_ein(detail_ein_digits),
+                                            "confirmed_alias": best_explicit_alias, "source_url": page.url}
+                result.identity_anchor = "STATE_CONFIRMED_ALTERNATE_NAME"
             if (
                 ein_digits
                 and detail_ein_digits
                 and detail_ein_digits != ein_digits
+                and not cross_ein_alias
             ):
                 continue
             fiscal_year_end = mn_latest_fiscal_year_end_from_text(detail_text)
@@ -9316,10 +9391,17 @@ def search_mn(page, org):
             result.source_note = "MN tried EIN search first, then used the public organization-name search when the EIN field returned no exact result. CharityClarity derives the next filing due date from the latest fiscal year ending shown by the registry."
             if best_alias_row_match:
                 result.source_note += " The Minnesota search-result row listed the requested organization as a safe alternate name/alias for the registry record."
+            if cross_ein_alias:
+                result.source_note += (f" Minnesota explicitly lists {best_explicit_alias} as an alternate name under {best_name}, "
+                                       f"registered EIN {format_ein(detail_ein_digits)}. The requested EIN is {format_ein(ein_digits)}; "
+                                       "this result describes that alternate-name listing, not a separate registration for the requested EIN.")
             result.matched_registry_name = clean_registry_name(best_name or checker.extract_labeled_value_from_text(detail_text, ["Organization Name", "Charity Name", "Name"]))
             result.matched_registry_identifier = federal_match.group(1) if federal_match else ""
             result.success = True
             return result
+        if result.success and public_status(result) == "Not Registered":
+            result.raw_status_text = "No qualifying Minnesota EIN or organization-name registration found"
+            result.source_note = "Minnesota EIN-first searches and the completed bounded name searches found no qualifying registration or confirmed exact alternate-name listing."
         return result
     except Exception as exc:
         result.error = f"MN error: {exc}"
@@ -11061,8 +11143,40 @@ def ma_submitted_form_pc_evidence(text: str, expected_year: int, expected_accoun
     period_end = parsed_result_date(period.group(1))
     if not period_end or period_end > date.today():
         return {}
-    return {"filing_year": expected_year, "period_end": format_date(period_end),
-            "filing_status": "Submitted", "ago_account": account.group(1)}
+    evidence = {"filing_year": expected_year, "period_end": format_date(period_end),
+                "filing_status": "Submitted", "ago_account": account.group(1)}
+    start = re.search(r"Current\s+Fiscal\s+Period\s+Start\s+Date\s*:?\s*(\d{1,2}/\d{1,2}/\d{4})", readable, re.I)
+    if start:
+        period_start = parsed_result_date(start.group(1))
+        if not period_start or period_start >= period_end:
+            return {}
+        evidence["period_start"] = format_date(period_start)
+    return evidence
+
+
+def ma_latest_distinct_fiscal_period(forms: list[dict]) -> dict:
+    """Reconcile submitted same-year forms only when their actual periods agree."""
+    if not forms or not all(forms):
+        return {}
+    if len(forms) == 1:
+        return forms[0]
+    periods = []
+    accounts = {str(form.get("ago_account", "")).lstrip("0") for form in forms}
+    if len(accounts) != 1 or not next(iter(accounts)):
+        return {}
+    for form in forms:
+        start = parsed_result_date(form.get("period_start", ""))
+        end = parsed_result_date(form.get("period_end", ""))
+        if (not start or not end or not 0 < (end-start).days <= 400
+                or form.get("filing_status") != "Submitted" or end.year != form.get("filing_year")):
+            return {}
+        periods.append((start, end, form))
+    periods.sort(key=lambda item: (item[0], item[1]))
+    if any(later[0] <= earlier[1] for earlier, later in zip(periods, periods[1:])):
+        return {}  # Overlapping or duplicate periods may be amendments/conflicts.
+    selected = dict(periods[-1][2])
+    selected["same_year_periods_reviewed"] = len(forms)
+    return selected
 
 
 def ma_capture_completed_response(response, org, evidence: dict) -> None:
@@ -11180,7 +11294,7 @@ def ma_read_legacy_form_pc(page, completed: dict, account: str) -> dict:
 
 
 def ma_read_latest_form_pc(page, result, body: str, completed=None) -> dict:
-    """One bounded detail read, selected by filing year and confirmed AGO identity."""
+    """Bounded detail reads, selected by actual fiscal period and AGO identity."""
     account = re.search(r"AG\s+Account\s+Number\s*:?\s*(\d+)", re.sub(r"\s+", " ", body), re.I)
     if not account:
         return {}
@@ -11220,23 +11334,32 @@ def ma_read_latest_form_pc(page, result, body: str, completed=None) -> dict:
             return ma_read_legacy_form_pc(page, completed, account.group(1))
         latest_year = max(year for year, _ in candidates)
         latest = [index for year, index in candidates if year == latest_year]
-        # Conflicting same-year forms need resolution, not a first-row selection.
-        if len(latest) != 1:
+        if len(latest) > 3:
             return {}
-        detail = None
-        try:
-            with page.expect_popup(timeout=12000) as popup:
-                rows.nth(latest[0]).get_by_role("button", name="View Filing Form-PC Data", exact=True).click(timeout=5000)
-            detail = popup.value
-            detail.get_by_text(re.compile(r"Current Fiscal Period End Date", re.I)).first.wait_for(timeout=12000)
-            text = detail.locator("body").inner_text(timeout=5000)
-            evidence = ma_submitted_form_pc_evidence(text, latest_year, account.group(1))
-            if evidence:
+        deadline = time.monotonic() + 30.0
+        forms = []
+        def remaining_ms(cap):
+            remaining = int((deadline - time.monotonic()) * 1000)
+            if remaining <= 0:
+                raise TimeoutError("Massachusetts Form PC detail budget exhausted")
+            return min(cap, remaining)
+        for index in latest:
+            detail = None
+            try:
+                with page.expect_popup(timeout=remaining_ms(12000)) as popup:
+                    rows.nth(index).get_by_role("button", name="View Filing Form-PC Data", exact=True).click(timeout=remaining_ms(5000))
+                detail = popup.value
+                detail.get_by_text(re.compile(r"Current Fiscal Period End Date", re.I)).first.wait_for(timeout=remaining_ms(12000))
+                text = detail.locator("body").inner_text(timeout=remaining_ms(5000))
+                evidence = ma_submitted_form_pc_evidence(text, latest_year, account.group(1))
+                if not evidence:
+                    return {}
                 evidence["source_url"] = detail.url
-            return evidence
-        finally:
-            if detail is not None:
-                detail.close()
+                forms.append(evidence)
+            finally:
+                if detail is not None:
+                    detail.close()
+        return ma_latest_distinct_fiscal_period(forms)
     except Exception as exc:
         log_event(f"MA Form PC detail unavailable for AGO {account.group(1)}: {type(exc).__name__}")
         return {}
@@ -13278,6 +13401,16 @@ def search_wi_backend_browser_fallback(org, max_seconds: float | None = None):
             WI_BACKEND_BROWSER_SEMAPHORE.release()
 
 
+def mark_fiscal_period_unconfirmed(result):
+    result.status = "Unable to Confirm"
+    result.raw_status_text = "Filing date interpretation could not be completed"
+    result.source_note = "The available fiscal-period evidence could not be interpreted safely. Confirm the filing deadline directly with the state registry."
+    result.reason_code = "FISCAL_PERIOD_UNCONFIRMED"
+    result.success = False
+    result.error = "Fiscal period could not be interpreted from the available date evidence"
+    return result
+
+
 def response_data_for_lookup(result, body: str, org, organization_name: str, ein: str, state: str, lookup_started: float) -> dict:
     if result is None:
         result = checker.StateResult(organization_name or f"EIN {format_ein(ein)}", format_ein(ein), state, "Site Not Reachable", "")
@@ -13285,6 +13418,9 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         result.source_note = "Public registry lookup could not produce a result."
         result.error = "No result"
         result.success = False
+    if "Fiscal period could not be interpreted from the available date evidence" in (result.error or ""):
+        mark_fiscal_period_unconfirmed(result)
+        body = ""
     correction_body = apply_confirmed_feedback_correction(result)
     if correction_body:
         body = " ".join(part for part in [body or "", correction_body] if part)
@@ -13333,8 +13469,19 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
     elif not (data.get("organization_name") or "").strip():
         data["organization_name"] = "Organization not identified"
         result.organization_name = data["organization_name"]
-    data["status"] = true_status_from_body(result, body)
-    data["comments"] = comments_for_result(result, body, data["status"])
+    try:
+        data["status"] = true_status_from_body(result, body)
+        data["comments"] = comments_for_result(result, body, data["status"])
+    except FiscalPeriodError:
+        mark_fiscal_period_unconfirmed(result)
+        data.update(checker.asdict(result))
+        data["status"] = "Unable to Confirm"
+        data["comments"] = result.source_note
+    alias_evidence = mn_confirmed_alias_evidence(result)
+    if alias_evidence and result.success:
+        data["comments"] += (f" Minnesota explicitly lists {alias_evidence['confirmed_alias']} as an alternate name under "
+                             f"{alias_evidence['registered_name']}, registered EIN {alias_evidence['registered_ein']}. "
+                             f"This confirms the alternate-name listing, not a separate registration for requested EIN {alias_evidence['requested_ein']}.")
     data["evidence_url"] = ""
     data["lookup_seconds"] = round(time.perf_counter() - lookup_started, 2)
     data["checked_at_epoch"] = int(time.time())
@@ -13356,6 +13503,7 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         "next_required_period",
         "computed_due_date",
         "ma_filing_evidence",
+        "mn_alias_evidence",
         "source_truth_conflict",
     ]:
         evidence_value = getattr(result, evidence_key, None)
@@ -13426,6 +13574,8 @@ def debug_trace_for_result(result, org, state: str, interpreted_status: str) -> 
             getattr(org, "ein", ""),
             {"name": matched_name, "ein": candidate_ein},
         )
+        if mn_confirmed_alias_evidence(result):
+            decision = {"decision": "accepted", "reason": "MATCH_STATE_CONFIRMED_ALTERNATE_NAME", "score": 80}
         status_reason_code = getattr(result, "reason_code", "") or reason_code_for_result(result, interpreted_status)
         if (
             decision.get("decision") == "rejected"
@@ -14668,7 +14818,121 @@ NY_RESPONSE_TIMEOUT_SECONDS = 12.0
 NY_LOOKUP_TIMEOUT_SECONDS = 35.0
 
 
-def search_ny_direct(org):
+class NYVerificationRequired(ValueError):
+    pass
+
+
+class NYConnectorQueryNeeded(Exception):
+    """Pause the existing NY interpreter until a browser search is completed."""
+    def __init__(self, params):
+        self.params = dict(params)
+
+
+class NYBrowserResponse:
+    """Expose only the completed official response; never retain verification tokens."""
+    def __init__(self, response):
+        self.status_code = response.status
+        self.payload = response.json()
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"New York registry HTTP {self.status_code}")
+
+    def json(self):
+        return self.payload
+
+
+def ny_browser_registry_response(page, operation: str, params: dict, timeout: float):
+    """Submit the normal Verify/Search flow and wait for this query's response."""
+    deadline = time.perf_counter() + timeout
+    def remaining_ms():
+        remaining = int((deadline-time.perf_counter())*1000)
+        if remaining <= 0:
+            raise TimeoutError("New York browser request time limit reached")
+        return remaining
+    if operation == "RegistrySearch":
+        for field in ("ein", "orgName", "orgID"):
+            page.locator(f"#{field}").fill(str(params.get(field) or ""), timeout=remaining_ms())
+        search = page.get_by_role("button", name="Search", exact=True)
+        if not search.is_enabled():
+            try:
+                with page.expect_response(lambda response: urlparse(response.url).path == "/api/recaptcha/verify"
+                                          and response.request.method == "POST", timeout=remaining_ms()) as verification:
+                    page.get_by_role("button", name="Verify", exact=True).click(timeout=remaining_ms())
+                verified = verification.value
+                if verified.status != 200 or verified.json().get("verified") is not True:
+                    raise NYVerificationRequired("New York did not accept the browser verification")
+                page.wait_for_function("Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === 'Search' && !b.disabled)", timeout=remaining_ms())
+            except Exception as exc:
+                if isinstance(exc, NYVerificationRequired):
+                    raise
+                raise NYVerificationRequired("New York browser verification did not complete") from exc
+        def submitted_response(response):
+            parsed = urlparse(response.url)
+            if parsed.hostname != "charities-search-api.ag.ny.gov" or parsed.path != "/api/FileNet/RegistrySearch":
+                return False
+            submitted = parse_qs(parsed.query)
+            # A retained EIN/filter must not narrow an intended name-only search.
+            if any(key not in params and submitted.get(key) for key in ("ein", "orgName", "orgID", "regtype", "city", "state")):
+                return False
+            for key, value in params.items():
+                actual = submitted.get(key, [])
+                if len(actual) != 1:
+                    return False
+                expected = str(value)
+                if key == "ein":
+                    # The official input inserts a hyphen before submitting.
+                    # Accept only the same complete EIN in either valid format.
+                    if not re.fullmatch(r"[0-9]{2}-?[0-9]{7}", actual[0]) or not re.fullmatch(r"[0-9]{2}-?[0-9]{7}", expected):
+                        return False
+                    if actual[0].replace("-", "") != expected.replace("-", ""):
+                        return False
+                elif actual[0] != expected:
+                    return False
+            return True
+        with page.expect_response(submitted_response, timeout=remaining_ms()) as pending:
+            search.click(timeout=remaining_ms())
+        return NYBrowserResponse(pending.value)
+    if operation == "RegistryDetail":
+        identifier = str(params["orgID"])
+        with page.expect_response(lambda response: urlparse(response.url).hostname == "charities-search-api.ag.ny.gov"
+                                  and urlparse(response.url).path == "/api/FileNet/RegistryDetail"
+                                  and parse_qs(urlparse(response.url).query).get("orgID", [""])[0] == identifier,
+                                  timeout=remaining_ms()) as pending:
+            page.get_by_role("link", name=identifier, exact=True).click(timeout=remaining_ms())
+        return NYBrowserResponse(pending.value)
+    raise ValueError("Unexpected New York registry operation")
+
+
+def search_ny_verified(org):
+    """Use the same master matching/status code with the verified browser transport."""
+    if not BROWSER_LOOKUP_SEMAPHORE.acquire(timeout=10.0):
+        return browser_capacity_busy_result(org.organization_name, org.ein, "NY")
+    try:
+        with checker.sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            try:
+                context = browser.new_context(user_agent=BROWSER_USER_AGENT, locale="en-US")
+                # Verification resources must load normally; no heavy-resource filter.
+                page = context.new_page()
+                page.goto("https://charities-search.ag.ny.gov/RegistrySearch", wait_until="domcontentloaded", timeout=15000)
+                page.get_by_role("button", name="Verify", exact=True).wait_for(timeout=12000)
+                return search_ny_direct(org, browser_page=page)
+            finally:
+                browser.close()
+    except Exception as exc:
+        result = checker.StateResult(org.organization_name, org.ein, "NY", "Unable to Confirm", "https://charities-search.ag.ny.gov/RegistrySearch")
+        result.raw_status_text = "New York verification/search page did not become ready"
+        result.source_note = "New York's verified search could not be completed. Confirm directly in the state registry."
+        result.status_reason = "NY_VERIFICATION_REQUIRED"
+        result.success = False
+        log_event(f"NY verified browser unavailable: {type(exc).__name__}")
+        return result
+    finally:
+        BROWSER_LOOKUP_SEMAPHORE.release()
+
+
+def search_ny_direct(org, browser_page=None, registry_search_provider=None):
     """Read the official site's completed JSON responses, never its loading table."""
     result = checker.StateResult(org.organization_name, format_ein(org.ein), "NY", "Unable to Confirm",
                                  "https://charities-search.ag.ny.gov/RegistrySearch")
@@ -14692,8 +14956,13 @@ def search_ny_direct(org):
             attempt = f"NY {operation}"
             response = None
             try:
-                response = session.get(NY_REGISTRY_API + "/" + operation, params=params,
-                                       timeout=min(NY_RESPONSE_TIMEOUT_SECONDS, remaining))
+                if operation == "RegistrySearch" and registry_search_provider is not None:
+                    response = registry_search_provider(params)
+                elif browser_page is not None:
+                    response = ny_browser_registry_response(browser_page, operation, params, min(NY_RESPONSE_TIMEOUT_SECONDS, remaining))
+                else:
+                    response = session.get(NY_REGISTRY_API + "/" + operation, params=params,
+                                           timeout=min(NY_RESPONSE_TIMEOUT_SECONDS, remaining))
                 response.raise_for_status()
             except Exception as exc:
                 code = getattr(exc, "code", None)
@@ -14802,6 +15071,15 @@ def search_ny_direct(org):
             result.raw_status_text = f"Latest FYE: {max(fiscal_dates).isoformat()}"
             return apply_ny_latest_fye_next_cycle_status(org, result)
     except Exception as exc:
+        if isinstance(exc, NYConnectorQueryNeeded):
+            raise
+        if isinstance(exc, NYVerificationRequired):
+            result.status = "Unable to Confirm"
+            result.raw_status_text = "New York verification required"
+            result.source_note = "New York requires browser verification before searching. Verification could not be completed for this lookup; confirm directly in the state registry."
+            result.status_reason = "NY_VERIFICATION_REQUIRED"
+            result.success = False
+            return result
         transport_failure = bool(getattr(result, "_ny_transport_failure", False)) or isinstance(exc, (TimeoutError, OSError))
         result.status = "Site Not Reachable" if transport_failure else "Unable to Confirm"
         result.raw_status_text = "New York registry detail or search endpoint could not be reached" if transport_failure else "New York registry lookup incomplete"
@@ -14809,6 +15087,166 @@ def search_ny_direct(org):
         result.status_reason = "NY_REGISTRY_UNREACHABLE" if transport_failure else "NY_REGISTRY_RESPONSE_UNCONFIRMED"
         result.success = False
         return result
+
+
+NY_CONNECTOR_ORIGIN = "https://staging.compliance-express.com"
+NY_CONNECTOR_SESSIONS = {}
+NY_CONNECTOR_LOCK = threading.Lock()
+NY_CONNECTOR_TTL_SECONDS = 300
+NY_CONNECTOR_MAX_SESSIONS = 16
+
+
+class NYConnectorResponse:
+    status_code = 200
+
+    def __init__(self, rows):
+        self.rows = rows
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return {"success": True, "statusCode": 200, "data": self.rows}
+
+
+def ny_connector_failure(record, code):
+    comments = {
+        "NY_CONNECTOR_UNAVAILABLE": "The New York browser connector is unavailable. Install or enable the staging connector and keep Chrome open while the check runs.",
+        "NY_CONNECTOR_VERIFICATION_REQUIRED": "New York did not accept browser verification. Registration status could not be confirmed.",
+        "NY_CONNECTOR_TIMEOUT": "The New York browser search did not finish in time. Registration status could not be confirmed.",
+        "NY_CONNECTOR_BROWSER_CLOSED": "The New York browser tab closed before the search finished. Registration status could not be confirmed.",
+        "NY_CONNECTOR_BUSY": "The New York browser connector is completing another search. Retry this check shortly.",
+        "NY_CONNECTOR_INCOMPLETE": "New York did not provide a complete response for the requested search. Registration status could not be confirmed.",
+    }
+    code = code if isinstance(code, str) and code in comments else "NY_CONNECTOR_INCOMPLETE"
+    org = checker.Organization(record["organization_name"], record["ein"])
+    result = checker.StateResult(org.organization_name, org.ein, "NY", "Unable to Confirm", "https://charities-search.ag.ny.gov/RegistrySearch")
+    result.success = False
+    result.status_reason = code
+    result.raw_status_text = "New York browser search incomplete"
+    result.source_note = comments[code]
+    data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, "NY", time.perf_counter())
+    data["comments"] = comments[code]
+    data["connector_version"] = "0.1.0"
+    return data
+
+
+def ny_connector_clean_response(payload, expected_query):
+    """Accept only complete public search rows for the exact issued query."""
+    if not isinstance(payload, dict) or payload.get("query") != expected_query:
+        raise ValueError("The connector response does not match the requested search.")
+    if payload.get("http_status") != 200 or payload.get("success") is not True or payload.get("statusCode") != 200:
+        raise ValueError("The New York search response is incomplete.")
+    rows = payload.get("rows")
+    if not isinstance(rows, list) or len(rows) > 1000:
+        raise ValueError("The New York result set is incomplete or too large.")
+    cleaned = []
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != {"orgID", "orgName", "ein"}:
+            raise ValueError("The New York search row is incomplete.")
+        if not isinstance(row["orgID"], str) or not re.fullmatch(r"[0-9]{2}-[0-9]{2}-[0-9]{2}", row["orgID"]):
+            raise ValueError("The New York record identifier is invalid.")
+        if not isinstance(row["orgName"], str) or not 1 <= len(row["orgName"].strip()) <= 500:
+            raise ValueError("The New York organization name is invalid.")
+        if not isinstance(row["ein"], str) or (row["ein"] and not re.fullmatch(r"[0-9]{2}-?[0-9]{7}", row["ein"])):
+            raise ValueError("The New York record EIN is invalid.")
+        cleaned.append(dict(row))
+    return cleaned
+
+
+def ny_connector_advance(record):
+    """Replay only this check's completed searches; fetch positive details afresh."""
+    def search_response(params):
+        for completed in record["completed"]:
+            if completed["query"] == params:
+                return NYConnectorResponse(completed["rows"])
+        raise NYConnectorQueryNeeded(params)
+    org = checker.Organization(record["organization_name"], record["ein"])
+    started = time.perf_counter()
+    try:
+        result = search_ny_direct(org, registry_search_provider=search_response)
+    except NYConnectorQueryNeeded as pending:
+        if len(record["completed"]) >= 5:
+            return {"phase": "complete", "result": ny_connector_failure(record, "NY_CONNECTOR_INCOMPLETE")}
+        record["pending"] = {"query_id": secrets.token_urlsafe(18), "query": pending.params}
+        return {"phase": "search", **record["pending"]}
+    data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, "NY", started)
+    data["connector_version"] = "0.1.0"
+    return {"phase": "complete", "result": data}
+
+
+def ny_connector_request(payload, origin):
+    """Staging-only capability exchange; no user credentials enter the extension."""
+    if not APP_VERSION.endswith("-staging") or origin != NY_CONNECTOR_ORIGIN:
+        return 404, {"error": "Not found"}
+    if not isinstance(payload, dict):
+        return 400, {"error": "Invalid connector request."}
+    email = normalize_email(str(payload.get("email") or ""))
+    if not is_verified_internal_passcode(email, str(payload.get("admin_passcode") or "")):
+        return 403, {"error": "Unlock staging to use the New York connector prototype."}
+    device = payload.get("device_id")
+    if not isinstance(device, str) or not 8 <= len(device) <= 200:
+        return 400, {"error": "A valid browser session identifier is required."}
+    action = payload.get("action")
+    if not isinstance(action, str):
+        return 400, {"error": "Invalid connector action."}
+    now = time.monotonic()
+    with NY_CONNECTOR_LOCK:
+        for key in list(NY_CONNECTOR_SESSIONS):
+            if NY_CONNECTOR_SESSIONS[key]["expires"] <= now and not NY_CONNECTOR_SESSIONS[key]["busy"]:
+                del NY_CONNECTOR_SESSIONS[key]
+        if action == "start":
+            name = payload.get("organization_name")
+            ein = str(payload.get("ein") or "").strip()
+            if (not isinstance(name, str) or not 1 <= len(name.strip()) <= 500
+                    or not re.fullmatch(r"[0-9]{2}-?[0-9]{7}", ein) or ein.replace("-", "") == "000000000"):
+                return 400, {"error": "Enter the organization name and a valid nine-digit EIN."}
+            if len(NY_CONNECTOR_SESSIONS) >= NY_CONNECTOR_MAX_SESSIONS:
+                return 429, {"error": "The New York prototype is busy. Retry shortly."}
+            token = secrets.token_urlsafe(32)
+            key = hashlib.sha256(token.encode()).hexdigest()
+            record = {"email": email, "device": device, "organization_name": name.strip(), "ein": format_ein(ein),
+                      "expires": now + NY_CONNECTOR_TTL_SECONDS, "completed": [], "pending": None, "busy": True}
+            NY_CONNECTOR_SESSIONS[key] = record
+        else:
+            token = payload.get("check_token")
+            if not isinstance(token, str) or not 32 <= len(token) <= 80:
+                return 410, {"error": "This New York browser check expired. Run the check again."}
+            key = hashlib.sha256(token.encode()).hexdigest()
+            record = NY_CONNECTOR_SESSIONS.get(key)
+            if not record or record["expires"] <= now or record["email"] != email or record["device"] != device:
+                return 410, {"error": "This New York browser check expired. Run the check again."}
+            if record["busy"]:
+                return 409, {"error": "A response for this New York check is already being processed."}
+            if action == "cancel":
+                del NY_CONNECTOR_SESSIONS[key]
+                return 200, {"phase": "canceled"}
+            if action not in {"advance", "fail"}:
+                return 400, {"error": "Invalid connector action."}
+            if action == "advance":
+                pending = record["pending"]
+                if not pending or payload.get("query_id") != pending["query_id"]:
+                    return 409, {"error": "The connector response is stale or belongs to another search."}
+                try:
+                    rows = ny_connector_clean_response(payload.get("evidence"), pending["query"])
+                except ValueError:
+                    del NY_CONNECTOR_SESSIONS[key]
+                    return 200, {"phase": "complete", "result": ny_connector_failure(record, "NY_CONNECTOR_INCOMPLETE")}
+                record["completed"].append({"query": pending["query"], "rows": rows})
+                record["pending"] = None
+            record["busy"] = True
+    response = None
+    try:
+        response = ({"phase": "complete", "result": ny_connector_failure(record, payload.get("reason"))}
+                    if action == "fail" else ny_connector_advance(record))
+        if response["phase"] == "search":
+            response.update(check_token=token, expires_in=max(0, int(record["expires"] - time.monotonic())))
+        return 200, response
+    finally:
+        with NY_CONNECTOR_LOCK:
+            record["busy"] = False
+            if response is None or response.get("phase") != "search" or record["expires"] <= time.monotonic():
+                NY_CONNECTOR_SESSIONS.pop(key, None)
 
 
 def apply_ny_latest_fye_next_cycle_status(org, result, body: str = ""):
@@ -15294,6 +15732,8 @@ def ca_explicit_primary_registry_status(result) -> str:
 
 
 def true_status_from_body(result, body: str) -> str:
+    if getattr(result, "reason_code", "") == "FISCAL_PERIOD_UNCONFIRMED":
+        return "Unable to Confirm"
     base_status = public_status(result)
     normalized = base_status.lower()
     state = (result.state or "").upper()
@@ -16264,7 +16704,7 @@ def search_ky_strict_snapshot(org):
         fiscal_end = fiscal_year_end_for_ein(getattr(org, "ein", "") or "") or (12, 31)
         due_options = filing_due_date_options("KY", report_year, fiscal_end)
         due_date = due_options.get("base_due") or due_options.get("effective_due")
-        next_required_period = format_date(date(report_year, fiscal_end[0], fiscal_end[1]))
+        next_required_period = format_date(fiscal_period_end_in_year(report_year, fiscal_end))
         if due_date:
             result.status = status_from_calendar_date(due_date)
     result.raw_status_text = " | ".join(part for part in [
@@ -20227,7 +20667,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
     body = ""
     proof_url = None
     if state == "NY":
-        result = search_ny_direct(org)
+        result = search_ny_verified(org)
         body = " ".join(filter(None, [result.raw_status_text, result.source_note,
                                       result.matched_registry_name, result.matched_registry_identifier]))
         return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
@@ -21686,6 +22126,21 @@ def payload_missing_required_organization_name(payload: dict) -> bool:
 
 
 class RegistrySnapshotHandler(BaseHTTPRequestHandler):
+    def _send_ny_connector(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= 524288:
+                self._send_json(413, {"error": "Connector input must be between 1 byte and 512 KB."})
+                return
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            code, response = ny_connector_request(payload, self.headers.get("Origin", ""))
+            self._send_json(code, response, {"Cache-Control": "no-store"})
+        except (ValueError, TypeError, UnicodeError):
+            self._send_json(400, {"error": "Invalid New York connector request."})
+        except Exception as exc:
+            log_error(f"NY connector request failed: {type(exc).__name__}")
+            self._send_json(500, {"error": "The New York browser check could not be completed. Retry the check."})
+
     def _send_snapshot_report(self) -> None:
         # Report rendering is independent of state lookup capacity and performs no registry calls.
         if not APP_VERSION.endswith("-staging"):
@@ -21908,6 +22363,9 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
         self._send_json(404, {"error": "Open http://127.0.0.1:8765/ to use the registry snapshot page."})
 
     def do_POST(self) -> None:
+        if self.path == "/api/ny-connector":
+            self._send_ny_connector()
+            return
         if self.path == "/api/report":
             self._send_snapshot_report()
             return

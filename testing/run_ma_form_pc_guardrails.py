@@ -126,7 +126,7 @@ class MassachusettsTests(unittest.TestCase):
         page = Mock()
         page.get_by_role.return_value.all_inner_texts.return_value = ["2024 Form-PC Data", "2024 Form-PC Data"]
         self.assertFalse(cc.ma_read_latest_form_pc(page, self.result(), "AG Account Number 051172"))
-        page.expect_popup.assert_not_called()
+        page.expect_popup.assert_called_once()  # First unreadable detail keeps the result inconclusive.
 
     def test_newer_scanned_form_is_not_ignored_for_older_electronic_form(self):
         page = Mock()

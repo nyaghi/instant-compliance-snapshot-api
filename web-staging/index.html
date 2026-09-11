@@ -201,6 +201,11 @@
           <div class="rounded-2xl border border-slate-200 bg-slate-50 p-5 sm:p-6 shadow-sm">
 
             <form id="snapshotForm" class="space-y-4">
+              <div id="nyConnectorSetup" hidden class="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm" role="status">
+                <p class="font-semibold text-[#0B2A5B]">New York browser connector · Staging prototype</p>
+                <p data-connector-message class="mt-1 text-slate-700"></p>
+                <a data-connector-install href="/connector/" target="_blank" rel="noopener" class="mt-2 inline-block font-semibold text-[#0B2A5B] underline">Install staging connector</a>
+              </div>
 
               <div>
 
@@ -472,7 +477,7 @@
 
         <div>&copy; <span id="year"></span> Compliance Express</div>
 
-          <div class="font-semibold text-slate-600">CharityClarity v2026.09.10.6 &middot; Staging</div>
+          <div class="font-semibold text-slate-600">CharityClarity v2026.09.11.1 &middot; Staging</div>
         <div>No legal or tax advice.</div>
 
       </div>
@@ -483,6 +488,7 @@
 
 
 
+  <script src="/ny-connector.js"></script>
   <script>
 
     const API_BASE = "https://instant-compliance-snapshot-api-staging-8dnk.onrender.com";
@@ -673,6 +679,7 @@
       appShell.classList.add("flex");
 
       updatePasscodeVisibility();
+      window.CCNYConnector?.setup();
 
     }
 
@@ -1156,6 +1163,19 @@
 
 
     async function requestSingleState(apiBase, einValue, emailValue, state, organizationNameValue) {
+      if (state === "NY" && window.location.origin === "https://staging.compliance-express.com") {
+        try {
+          if (!window.CCNYConnector) throw new Error("Connector UI unavailable");
+          return await window.CCNYConnector.lookup({ organization_name: organizationNameValue, ein: einValue,
+            email: emailValue, admin_passcode: adminPasscode.value.trim(), device_id: getDeviceId() });
+        } catch {
+          const result = fallbackResult("NY", einValue, "The New York browser check could not be completed. Confirm that staging is unlocked and the connector is enabled, then retry. Registration status remains unconfirmed.", organizationNameValue);
+          result.status = "Unable to Confirm";
+          result.success = false;
+          result.status_reason = "NY_CONNECTOR_UNAVAILABLE";
+          return result;
+        }
+      }
 
       const controller = new AbortController();
 
