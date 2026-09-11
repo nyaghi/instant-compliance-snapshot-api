@@ -37,7 +37,7 @@ class ConnectorTests(unittest.TestCase):
     def test_positive_details_are_fetched_from_state_and_existing_rules_apply(self):
         state=self.start();code,result=self.submit(state)
         self.assertEqual(code,200);self.assertEqual(result['phase'],'complete')
-        self.assertEqual(result['result']['status'],'Current');self.assertEqual(result['result']['computed_due_date'],'5/15/2027')
+        self.assertEqual(result['result']['status'],'Current');self.assertEqual(result['result']['computed_due_date'],'11/15/2027')
         self.session.get.assert_called_once()
         self.assertEqual(self.session.get.call_args.args[0],c.NY_REGISTRY_API+'/RegistryDetail')
         self.assertEqual(self.session.get.call_args.kwargs['params'],{'orgID':ROW['orgID']})

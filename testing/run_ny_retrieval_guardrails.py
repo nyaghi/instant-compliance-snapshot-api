@@ -46,7 +46,7 @@ class NewYorkRetrievalTests(unittest.TestCase):
         r, s = self.lookup([response([ROW]), response(DETAIL)])
         self.assertEqual(r.status, "Current")
         self.assertEqual(r.fiscal_year_end, "12/31/2025")
-        self.assertEqual(r.computed_due_date, "5/15/2027")
+        self.assertEqual(r.computed_due_date, "11/15/2027")
         self.assertEqual(s.get.call_count, 2)
         self.assertEqual(s.get.call_args_list[0].kwargs["params"], {"ein": "123456789"})
         cc.apply_ny_latest_fye_next_cycle_status(self.org, r)

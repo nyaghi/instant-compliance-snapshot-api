@@ -97,7 +97,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.11.3-staging").strip() or "2026.09.11.3-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.11.4-staging").strip() or "2026.09.11.4-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -1813,6 +1813,19 @@ def fiscal_period_end_in_year(year: int, fiscal_end: tuple[int, int]) -> date:
         raise FiscalPeriodError("Fiscal period could not be interpreted from the available date evidence") from exc
 
 
+def ny_filing_deadlines(period_end: date, category: str = "7A") -> tuple[date, date]:
+    """Use the AG's published CHAR500 table, including its calendar-month extension."""
+    category = re.sub(r"[^A-Z0-9]", "", category.upper())
+    if category in {"7A", "DUAL"}:
+        base = fifteenth_day_after_fiscal_year_end(period_end, 5)
+        return base, add_months(base, 6)
+    if category == "EPTL":
+        sixth_month = add_months(date(period_end.year, period_end.month, 1), 6)
+        base = date(sixth_month.year, sixth_month.month, calendar.monthrange(sixth_month.year, sixth_month.month)[1])
+        return base, add_months_preserving_end_of_month(base, 6)
+    raise ValueError("New York registration category could not be confirmed")
+
+
 def filing_due_date(state: str, report_year: int, fiscal_end: tuple[int, int]) -> tuple[date | None, str]:
     state = state.upper()
     if state not in {"CA", "MD", "MA", "NY", "NJ", "PA", "VA", "SC", "CO", "HI", "KY", "ME", "ND", "AK"}:
@@ -1836,8 +1849,7 @@ def filing_due_date(state: str, report_year: int, fiscal_end: tuple[int, int]) -
             f"if an extension applies, the extended due date is {format_date(extended_due)}"
         )
     if state == "NY":
-        base_due = fifteenth_day_after_fiscal_year_end(fy_end, 5)
-        extended_due = add_months(base_due, 6)
+        base_due, extended_due = ny_filing_deadlines(fy_end)
         return extended_due, (
             f"New York annual filing base due date is {format_date(base_due)}; "
             "the public guidance references a 180-day extension of time to file"
@@ -15050,6 +15062,10 @@ def search_ny_direct(org, browser_page=None, registry_search_provider=None):
                 result.status_reason = "NY_EXPLICIT_REGISTRY_EXEMPTION"
                 result.success = True
                 return result
+            category = re.sub(r"[^A-Z0-9]", "", str(detail.get("regStatute") or "").upper())
+            if category not in {"7A", "DUAL", "EPTL"}:
+                raise ValueError("New York registration category could not be confirmed")
+            result.ny_registration_category = category
             documents = detail.get("documents")
             if not isinstance(documents, dict) or any(not isinstance(v, list) for v in documents.values()):
                 raise ValueError("New York filing documents were incomplete")
@@ -15069,7 +15085,7 @@ def search_ny_direct(org, browser_page=None, registry_search_provider=None):
                 result.status_reason = "NY_SAFE_MATCH_NO_FILINGS_DELINQUENT"
                 result.source_note += " The completed record contains no annual filing documents."
                 return result
-            result.raw_status_text = f"Latest FYE: {max(fiscal_dates).isoformat()}"
+            result.raw_status_text = f"Registration category: {category} | Latest FYE: {max(fiscal_dates).isoformat()}"
             return apply_ny_latest_fye_next_cycle_status(org, result)
     except Exception as exc:
         if isinstance(exc, NYConnectorQueryNeeded):
@@ -15260,11 +15276,26 @@ def ny_connector_request(payload, origin):
     return 200, response
 
 
+def ny_next_filing_context(result, latest_fye: date, evidence_text: str) -> dict:
+    # Older evidence-only callers used the 7A schedule. Explicit categories always
+    # take precedence; the live JSON lookup requires a confirmed category above.
+    match = re.search(r"Registration\s+category\s*:?\s*(7\s*-?\s*A|DUAL|EPTL)\b", evidence_text, re.I)
+    category = getattr(result, "ny_registration_category", "") or (match.group(1) if match else "7A")
+    category = re.sub(r"[^A-Z0-9]", "", category.upper())
+    next_fye = add_months(latest_fye, 12)
+    base, extended = ny_filing_deadlines(next_fye, category)
+    denied = bool(re.search(r"(?:^|[|\n])\s*(?:Automatic\s+)?Extension\s*(?:status\s*)?:\s*Denied\b", evidence_text, re.I))
+    return {"category": category, "next_fye": next_fye, "base_due": base,
+            "extended_due": extended, "due": base if denied else extended, "extension_applied": not denied}
+
+
 def apply_ny_latest_fye_next_cycle_status(org, result, body: str = ""):
     """Use the latest NY FYE row as filed evidence, then classify the next filing cycle."""
     if (getattr(result, "state", "") or "").upper() != "NY":
         return result
     if public_status(result) in {"Exempt", "Pending", "Suspended", "Revoked", "Closed / Withdrawn / Canceled"}:
+        return result
+    if re.search(r"(?:^|[|\n])\s*(?:Registration\s+)?Status\s*:\s*Delinquent\b", getattr(result, "raw_status_text", "") or "", re.I):
         return result
     evidence_text = " ".join(part for part in [
         getattr(result, "matched_registry_name", "") or "",
@@ -15276,33 +15307,26 @@ def apply_ny_latest_fye_next_cycle_status(org, result, body: str = ""):
     latest_fye = ny_latest_fye_from_evidence_text(evidence_text)
     if not latest_fye or not ny_safe_identity_from_evidence(org, result, evidence_text):
         return result
-    next_fye = add_months(latest_fye, 12)
-    next_due = fifteenth_day_after_fiscal_year_end(next_fye, 5)
+    context = ny_next_filing_context(result, latest_fye, evidence_text)
+    next_fye, next_due = context["next_fye"], context["due"]
     result.status = status_from_calendar_date(next_due)
-    result.raw_status_text = re.sub(
-        r"\s*\|\s*Due\s*:?\s*(?:\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
-        "",
-        getattr(result, "raw_status_text", "") or "",
-        flags=re.I,
-    ).strip()
-    if "Next Filing Due" not in result.raw_status_text:
-        result.raw_status_text = " | ".join(part for part in [
-            result.raw_status_text or f"Latest FYE: {latest_fye.isoformat()}",
-            f"Next Required Period: {next_fye.isoformat()}",
-            f"Next Filing Due: {format_date(next_due)}",
-        ] if part)
+    parts = [part.strip() for part in (getattr(result, "raw_status_text", "") or "").split("|")
+             if part.strip() and not re.match(r"(?:Due|Next Required Period|Next Filing Due)\s*:", part.strip(), re.I)]
+    result.raw_status_text = " | ".join(parts + [f"Next Required Period: {next_fye.isoformat()}", f"Next Filing Due: {format_date(next_due)}"])
     result.last_year_on_record = str(latest_fye.year)
     result.fiscal_year_end = format_date(latest_fye)
     result.next_required_period = format_date(next_fye)
     result.computed_due_date = format_date(next_due)
+    result.ny_filing_evidence = {"category": context["category"], "base_due": format_date(context["base_due"]),
+                                 "extended_due": format_date(context["extended_due"]), "extension_applied": context["extension_applied"]}
     result.status_reason = "NY_STATUS_FROM_LATEST_FYE_NEXT_CYCLE"
     cycle_note = (
         f"New York shows the latest fiscal year end on record as {format_date(latest_fye)}. "
         f"CharityClarity calculated the next NY CHAR500 filing for FY ending {format_date(next_fye)} "
         f"as due {format_date(next_due)}."
     )
-    if cycle_note not in (getattr(result, "source_note", "") or ""):
-        result.source_note = " ".join(filter(None, [getattr(result, "source_note", "") or "", cycle_note]))
+    prior_note = re.sub(r"New York shows the latest fiscal year end on record as [^.]+\. CharityClarity calculated the next NY CHAR500 filing for FY ending [^.]+\.", "", getattr(result, "source_note", "") or "").strip()
+    result.source_note = " ".join(filter(None, [prior_note, cycle_note]))
     result.success = True
     return result
 
@@ -15310,6 +15334,10 @@ def apply_ny_latest_fye_next_cycle_status(org, result, body: str = ""):
 def ny_safe_due_status_from_evidence(org, result, body: str = "") -> str:
     """Return NY interpreted status when safe identity and filing due evidence exist."""
     if (getattr(result, "state", "") or "").upper() != "NY":
+        return ""
+    if public_status(result) in {"Exempt", "Pending", "Suspended", "Revoked", "Closed / Withdrawn / Canceled"} or re.search(
+        r"(?:^|[|\n])\s*(?:Registration\s+)?Status\s*:\s*Delinquent\b", getattr(result, "raw_status_text", "") or "", re.I
+    ):
         return ""
     registry_name = clean_registry_name(getattr(result, "matched_registry_name", "") or "")
     registry_identity_name = re.split(
@@ -15355,7 +15383,7 @@ def ny_safe_due_status_from_evidence(org, result, body: str = "") -> str:
         return ""
     latest_fye = ny_latest_fye_from_evidence_text(evidence_text)
     if latest_fye:
-        next_due = fifteenth_day_after_fiscal_year_end(add_months(latest_fye, 12), 5)
+        next_due = ny_next_filing_context(result, latest_fye, evidence_text)["due"]
         return status_from_calendar_date(next_due)
     due_match = re.search(
         r"\b(?:Due|Filing\s+Due|Next\s+Filing\s+Due|Report\s+Due|Annual\s+Report\s+Due)\s*:?\s*"
@@ -16181,6 +16209,15 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
                 f"charities in compliance with annual reporting requirements. Based on the submitted prior report, "
                 f"CharityClarity infers that this extension applies and uses {format_date(due)}. "
                 f"{comment_date_conclusion(due, status)} Extension eligibility is inferred, not separately confirmed by the state.")
+    if state == "NY" and reason == "NY_STATUS_FROM_LATEST_FYE_NEXT_CYCLE" and status in {"Current", "Upcoming Filing", "Delinquent"}:
+        evidence = getattr(result, "ny_filing_evidence", {})
+        due = parsed_result_date(getattr(result, "computed_due_date", ""))
+        if evidence and due and status_from_calendar_date(due) == status:
+            extension = (f"New York's automatic filing extension moves that deadline to {evidence['extended_due']}. "
+                         if evidence["extension_applied"] else "The record states that the extension was denied, so the base deadline applies. ")
+            return (f"The state registry shows the latest filed fiscal year ended {result.fiscal_year_end}. "
+                    f"The next CHAR500 filing, for the period ending {result.next_required_period}, has a base deadline of {evidence['base_due']}. "
+                    f"{extension}{comment_date_conclusion(due, status)}")
 
     if status == "Site Not Reachable":
         if state == "OK" and "certificate" in combined.lower() and matched:

@@ -106,9 +106,9 @@ class ReconciliationTests(unittest.TestCase):
         r.source_note = "New York public record did not match the requested EIN."
         body = "Organization name: PREVENT CHILD ABUSE AMERICA\nFederal tax ID (EIN): 237235671\nAnnual Filing for Charitable Organizations\t12/31/2024"
         recovered = cc.ny_reject_unconfirmed_ein_negative(org, r, body)
-        self.assertEqual(cc.public_status(recovered), "Delinquent")
+        self.assertEqual(cc.public_status(recovered), "Upcoming Filing")
         self.assertEqual(recovered.matched_registry_identifier, "237235671")
-        self.assertIn("5/15/2026", recovered.raw_status_text)
+        self.assertIn("11/15/2026", recovered.raw_status_text)
 
     def test_maine_status_glossary_cannot_override_failed_renewal(self):
         r = cc.checker.StateResult("Make-A-Wish", "860481941", "ME", "Failed to Renew", "")
