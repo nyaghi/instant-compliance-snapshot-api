@@ -10,7 +10,7 @@ const id = n => String(n).padStart(20,'0');
 const ein = {ein:'123456789'}, name = {orgName:'Example National Foundation'};
 function harness() {
   const timers=[],created=[],removed=[],queries=[];
-  const tabs=new Map([[1,{id:1,url:'https://staging.compliance-express.com/'}],[2,{id:2,url:'https://charities-search.ag.ny.gov/RegistrySearch'}]]);
+  const tabs=new Map([[1,{id:1,windowId:10,url:'https://staging.compliance-express.com/'}],[2,{id:2,windowId:99,url:'https://charities-search.ag.ny.gov/RegistrySearch'}]]);
   let next=100, deferred=null, now=10000;
   const chrome={runtime:{id:'fixture-extension',onMessage:event(),onConnect:event()},tabs:{
     onRemoved:event(),create:async options=>{if(deferred)await deferred;const tab={id:next++,...options};tabs.set(tab.id,tab);created.push(tab.id);return tab;},
@@ -72,7 +72,7 @@ test('origin disconnect and user closing either involved tab clean up safely',as
 });
 test('closing origin during tab creation cannot leak its newly created tab',async()=>{
   const h=harness();let release;h.deferCreate(new Promise(resolve=>{release=resolve;}));const p=h.connect();p.onMessage.emit({action:'search',id:id(11),query:ein});
-  p.disconnect();release();await tick();assert.deepEqual(h.removed,[100]);assert.deepEqual(h.queries,[]);
+  await tick();p.disconnect();release();await tick();assert.deepEqual(h.removed,[100]);assert.deepEqual(h.queries,[]);
 });
 test('overlapping query cannot consume another query response',async()=>{
   const h=harness();let release;h.deferCreate(new Promise(resolve=>{release=resolve;}));const p=h.connect();p.onMessage.emit({action:'search',id:id(11),query:ein});
@@ -131,4 +131,25 @@ test('rate limiting retries only twice with bounded pauses and same owned tab',a
     assert.equal(final.ok,recover);if(!recover)assert.equal(final.reason,'NY_CONNECTOR_RATE_LIMITED');
     assert.equal(h.created.length,1);
   }
+});
+
+test('registry tabs stay in the originating window even when another window is current',async()=>{
+  const h=harness(),p=h.connect();await h.query(p,11);
+  assert.equal(h.tabs.get(100).windowId,10);assert.equal(h.tabs.get(2).windowId,99);
+  assert.equal(h.tabs.get(2).active,undefined);
+});
+
+test('queued origin moved to another window is resolved when its lookup starts',async()=>{
+  const h=harness(),first=h.connect(1);await h.query(first,11);
+  h.tabs.set(3,{id:3,windowId:20,url:'https://staging.compliance-express.com/'});
+  const second=h.connect(2,{id:h.chrome.runtime.id,frameId:0,url:h.tabs.get(3).url,tab:{id:3}});
+  h.tabs.get(3).windowId=30;
+  first.onMessage.emit({action:'finish',id:id(12)});await tick();await h.advance(3000);
+  assert.equal((await h.query(second,21)).ok,true);assert.equal(h.tabs.get(101).windowId,30);
+});
+
+test('missing origin cannot create a registry tab in another window',async()=>{
+  const h=harness(),p=h.connect();h.tabs.delete(1);
+  assert.equal((await h.query(p,11)).reason,'NY_CONNECTOR_INCOMPLETE');
+  assert.deepEqual(h.created,[]);assert.equal(p.disconnected,true);assert.ok(h.tabs.has(2));
 });

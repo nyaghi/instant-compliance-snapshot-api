@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CharityClarity — Dedicated validation window</title>
+<style>body{font:16px system-ui,sans-serif;color:#0b2f63;background:#f8fafc;margin:2rem auto;max-width:900px;padding:0 1rem}h1{font-size:1.7rem}label{display:block;margin-top:1rem}input,textarea,button{font:inherit;padding:.7rem;box-sizing:border-box}input,textarea{display:block;width:100%;border:1px solid #bcc9d8;border-radius:5px}button{margin-top:1rem;background:#c62828;color:white;border:0;border-radius:5px;cursor:pointer}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:white;padding:1rem}small{color:#52667f}</style>
+<script src="/ny-connector.js" defer></script></head><body>
+<h1>CharityClarity staging validation</h1>
+<p>Keep this dedicated Chrome window open. Searches stay in this window. Your other Chrome windows can remain in use.</p>
+<small>Internal testing only. This page runs the released connector and staging backend. It does not change spreadsheet expectations.</small>
+<form id="setup"><label>Email<input id="email" type="email" required autocomplete="off"></label>
+<label>Staging passcode<input id="passcode" type="password" required autocomplete="off"></label>
+<label>Organizations (JSON)<textarea id="cases" rows="5" required></textarea></label>
+<button id="start" type="submit">Start background validation</button></form>
+<p id="progress" role="status">Ready for validation inputs.</p><pre id="results">[]</pre>
+<script>
+if(location.origin!=="https://staging.compliance-express.com")throw new Error("Staging only");
+const setup=document.getElementById('setup'),progress=document.getElementById('progress'),output=document.getElementById('results');
+function connection(){return new Promise(resolve=>{
+ const id=crypto.randomUUID().replaceAll('-','');
+ const done=message=>{clearTimeout(timer);window.removeEventListener('message',receive);resolve(message);};
+ const receive=event=>{const message=event.data;if(event.source===window&&event.origin===location.origin&&message?.channel==='cc-ny-staging-v1'&&message.direction==='response'&&message.id===id)done(message);};
+ const timer=setTimeout(()=>done({ok:false}),2000);window.addEventListener('message',receive);
+ window.postMessage({channel:'cc-ny-staging-v1',direction:'request',action:'ping',id},location.origin);
+});}
+setup.addEventListener('submit',async event=>{
+ event.preventDefault();let rows;
+ try{rows=JSON.parse(document.getElementById('cases').value);if(!Array.isArray(rows)||!rows.length||rows.length>45||rows.some(r=>typeof r.organization!=='string'||typeof r.ein!=='string'))throw Error('Invalid organization list');}
+ catch(error){progress.textContent=error.message;return;}
+ const email=document.getElementById('email').value.trim(),passcode=document.getElementById('passcode').value,deviceId=crypto.randomUUID();
+ document.getElementById('start').disabled=true;
+ const ready=await connection();
+ if(!ready?.ok||!ready.capabilities?.includes('origin-window-v1')){progress.textContent='Reload connector 0.2.1 or later before starting.';document.getElementById('start').disabled=false;return;}
+ setup.hidden=true;document.getElementById('passcode').value='';let completed=[];
+ // Tests call the same released bridge as the normal form. The master remains
+ // responsible for queries, matching, interpretation and evidence validation.
+ // The page bridge permits one lookup per originating page; this driver keeps
+ // its own checks sequential. Five-tab concurrency was validated separately.
+ for(const row of rows){
+   const started=Date.now();progress.textContent=`Checking ${completed.length+1} of ${rows.length}: ${row.organization}`;
+   let result;
+   try{result=await window.CCNYConnector.lookup({organization_name:row.organization,ein:row.ein,email,admin_passcode:passcode,device_id:deviceId,onProgress:message=>{progress.textContent=`${completed.length+1} of ${rows.length}: ${row.organization} — ${message}`;}});
+    if(result.state!=='NY'||String(result.ein).replace(/\D/g,'')!==row.ein.replace(/\D/g,'')||result.app_version!=='2026.09.12.2-staging'||result.checked_at_epoch<started/1000-5)throw Error('Result identity, version, or freshness did not match this check');}
+   catch(error){result={status:'Unable to Confirm',error:error.message};}
+   const allowed=['organization_name','ein','state','status','comments','raw_status_text','source_note','matched_registry_name','matched_registry_identifier','success','error','app_version','checked_at_epoch','connector_version','reason_code'];
+   const evidence=Object.fromEntries(allowed.filter(key=>key in result).map(key=>[key,result[key]]));
+   completed.push({...row,started_epoch:started/1000,seconds:(Date.now()-started)/1000,installed_connector_version:ready.version,result:evidence});output.textContent=JSON.stringify(completed,null,2);
+   if(result.error||['Unable to Confirm','Site Not Reachable','Needs Review'].includes(result.status)){progress.textContent=`Paused for investigation after ${completed.length} of ${rows.length}.`;return;}
+ }
+ progress.textContent=`Completed ${completed.length} of ${rows.length}.`;
+});
+</script></body></html>

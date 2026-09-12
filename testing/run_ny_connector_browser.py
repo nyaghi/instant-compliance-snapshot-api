@@ -29,7 +29,7 @@ class BrowserIntegration(unittest.TestCase):
         cls.key_patch=patch.object(c,'NY_CONNECTOR_SIGNING_KEY','browser-test-only-signing-key-not-a-real-secret');cls.key_patch.start()
         cls.temp=tempfile.TemporaryDirectory(prefix='cc-ny-extension-test-')
         cls.playwright=c.checker.sync_playwright().start()
-        cls.context=cls.playwright.chromium.launch_persistent_context(cls.temp.name,headless=False,
+        cls.context=cls.playwright.chromium.launch_persistent_context(cls.temp.name,headless=True,channel='chromium',
             args=[f'--disable-extensions-except={WORK / "browser-connector"}',f'--load-extension={WORK / "browser-connector"}'])
         cls.observations=[]
         cls.context.on('page',lambda page: page.on('pageerror',lambda error: cls.observations.append({'page_error':str(error),'stack':error.stack})))
@@ -39,7 +39,7 @@ class BrowserIntegration(unittest.TestCase):
         # Playwright attaches. In this fixture harness only, defer navigation until
         # the context route is attached, preventing accidental real state traffic.
         cls.worker=worker
-        worker.evaluate('''() => {globalThis.testCreatedTabs=[];const original=chrome.tabs.create.bind(chrome.tabs);chrome.tabs.create=async options=>{
+        worker.evaluate('''() => {globalThis.testCreatedTabs=[];globalThis.testCreatedOptions=[];const original=chrome.tabs.create.bind(chrome.tabs);chrome.tabs.create=async options=>{testCreatedOptions.push(options);
           const tab=await original({...options,url:'about:blank'});await new Promise(r=>setTimeout(r,500));
           testCreatedTabs.push(tab.id);await chrome.tabs.update(tab.id,{url:options.url});return tab;};}''')
         cls.server=ThreadingHTTPServer(('127.0.0.1',0),c.RegistrySnapshotHandler)

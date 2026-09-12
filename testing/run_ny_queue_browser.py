@@ -1,5 +1,6 @@
 """Real extension queue integration against routed public-response fixtures only."""
 import json,sys,unittest
+from pathlib import Path
 from unittest.mock import Mock,patch
 from run_ny_connector_browser import BrowserIntegration,ROW,c
 
@@ -26,7 +27,10 @@ class QueueIntegration(BrowserIntegration):
             self.assertTrue(all(r['result'].get('status')=='Current' for r in results),results)
             self.assertTrue(any('position' in msg for r in results for msg in r['progress']))
             self.assertEqual(len(self.trace),count)
-            self.assertTrue(all(r['result']['connector_version']=='0.2.0' for r in results))
+            version=json.loads((Path(__file__).resolve().parents[1]/'browser-connector/manifest.json').read_text())['version']
+            self.assertEqual(self.worker.evaluate('chrome.runtime.getManifest().version'),version)
+            # Check the backend release metadata separately from the loaded extension.
+            self.assertTrue(all(r['result']['connector_version']=='0.2.1' for r in results))
             self.assertEqual(self.worker.evaluate('async()=>{const ts=await chrome.tabs.query({});return ts.filter(t=>testCreatedTabs.includes(t.id)).length;}'),0)
             for page in pages:page.close()
             print(json.dumps({'real_extension_sessions':count,'completed':len(results),'busy_failures':0,'passed':True}),flush=True)

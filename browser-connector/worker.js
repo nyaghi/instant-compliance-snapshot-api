@@ -61,7 +61,14 @@ async function performSearch(job, query, id) {
   let response;
   try {
     if (job.tab === null) {
-      job.creating = chrome.tabs.create({ url: P.NY + "/RegistrySearch", active: true }).then(tab => { job.tab = tab.id; });
+      // Resolve the origin when its queued turn starts, including a moved tab.
+      // Never fall back to Chrome's last-focused window (the user's work).
+      job.creating = chrome.tabs.get(job.sender.tab.id).then(origin => {
+        if (job.closed) return;
+        if (!Number.isInteger(origin.windowId) || origin.windowId < 0) throw new Error("NY_CONNECTOR_INCOMPLETE");
+        return chrome.tabs.create({ windowId: origin.windowId, url: P.NY + "/RegistrySearch", active: true })
+          .then(tab => { job.tab = tab.id; });
+      });
       await job.creating;
       job.creating = null;
     }
@@ -104,7 +111,7 @@ chrome.tabs.onRemoved.addListener(id => {
 });
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (!allowedSender(sender) || !P.validId(message?.id) || message.action !== "ping") return false;
-  respond({ ok: true, version: "0.2.0", capabilities: ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1"] });
+  respond({ ok: true, version: "0.2.1", capabilities: ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "origin-window-v1"] });
   return false;
 });
 chrome.runtime.onConnect.addListener(port => {
