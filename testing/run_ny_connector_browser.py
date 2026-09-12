@@ -96,14 +96,20 @@ class BrowserIntegration(unittest.TestCase):
                 if getattr(cls,'verification_responses',[]):
                     status,verified=cls.verification_responses.pop(0);payload={'verified':verified}
             else:
+                cls.searches=getattr(cls,'searches',0)+1
                 if cls.failure=='search-network':route.abort('failed');return
                 params=parse_qs(u.query);rows=[] if cls.mode=='empty' or (cls.mode=='name' and params.get('ein')) else [ROW]
                 payload={'success':True,'statusCode':200,'data':rows};status=200
+                if getattr(cls,'search_responses',[]):
+                    status=cls.search_responses.pop(0)
+                    if status!=200:payload={'error':'Verification rejected'}
+                    if status==401 and cls.failure=='search-html-rejection':
+                        route.fulfill(status=401,content_type='text/html',body='<html>Unauthorized</html>',headers={'Access-Control-Allow-Origin':'*'});return
             route.fulfill(status=status,content_type='application/json',body=json.dumps(payload),headers={'Access-Control-Allow-Origin':'*'})
         elif u.scheme=='chrome-extension':route.continue_()
         else:route.abort()
-    def run_case(self,mode='positive',accepted=True,failure='',verification_responses=None):
-        type(self).mode=mode;type(self).accepted=accepted;type(self).trace=[];type(self).failure=failure;type(self).verifies=0;type(self).verification_responses=list(verification_responses or [])
+    def run_case(self,mode='positive',accepted=True,failure='',verification_responses=None,search_responses=None):
+        type(self).mode=mode;type(self).accepted=accepted;type(self).trace=[];type(self).failure=failure;type(self).verifies=0;type(self).verification_responses=list(verification_responses or []);type(self).search_responses=list(search_responses or []);type(self).searches=0
         before=self.worker.evaluate('testCreatedTabs.length')
         detail=Mock();detail.json.return_value={'success':True,'statusCode':200,'data':{**ROW,'regType':'NFP','regStatute':'7A','documents':{'Annual Filing for Charitable Organizations':[{'fiscalYearEnd':'12/31/2025'}]}}}
         session=Mock();session.__enter__=Mock(return_value=session);session.__exit__=Mock(return_value=False);session.get.return_value=detail
@@ -151,6 +157,44 @@ class BrowserIntegration(unittest.TestCase):
     def test_recovered_verification_still_requires_completed_empty_searches(self):
         result,session=self.run_case('empty',verification_responses=[(401,False),(200,True),(200,True)])
         self.assertEqual(result['status'],'Not Registered');self.assertEqual(self.verifies,3)
+        self.assertEqual(len(self.trace),2);session.get.assert_not_called()
+    def test_search_rejection_restarts_normal_verify_and_search_once(self):
+        result,session=self.run_case(search_responses=[401,200])
+        self.assertEqual(result['status'],'Current');self.assertEqual((self.verifies,self.searches),(2,2))
+        self.assertEqual(len(self.trace),1);session.get.assert_called_once();self.assertNotIn('fixture-token',json.dumps(self.trace))
+    def test_search_rejection_with_non_json_body_can_recover(self):
+        result,session=self.run_case(search_responses=[401,200],failure='search-html-rejection')
+        self.assertEqual(result['status'],'Current');self.assertEqual((self.verifies,self.searches),(2,2))
+        self.assertEqual(len(self.trace),1);session.get.assert_called_once()
+    def test_repeated_search_rejection_is_explicit_and_inconclusive(self):
+        result,session=self.run_case(search_responses=[401,401])
+        self.assertEqual(result['status'],'Unable to Confirm');self.assertEqual(result['status_reason'],'NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED')
+        self.assertEqual((self.verifies,self.searches),(2,2));self.assertEqual(self.trace,[]);session.get.assert_not_called()
+    def test_verify_retry_consumes_search_retry_budget(self):
+        result,session=self.run_case(verification_responses=[(401,False),(200,True)],search_responses=[401])
+        self.assertEqual(result['status_reason'],'NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED')
+        self.assertEqual((self.verifies,self.searches),(2,1));self.assertEqual(self.trace,[]);session.get.assert_not_called()
+    def test_search_retry_consumes_verify_retry_budget(self):
+        result,session=self.run_case(verification_responses=[(200,True),(401,False)],search_responses=[401])
+        self.assertEqual(result['status_reason'],'NY_CONNECTOR_VERIFICATION_REJECTED')
+        self.assertEqual((self.verifies,self.searches),(2,1));self.assertEqual(self.trace,[]);session.get.assert_not_called()
+    def test_name_search_can_use_remaining_retry(self):
+        result,session=self.run_case('name',search_responses=[200,401,200])
+        self.assertEqual(result['status'],'Current');self.assertEqual((self.verifies,self.searches),(3,3))
+        self.assertEqual([e['query'] for e in self.trace],[{'ein':ROW['ein']},{'orgName':ROW['orgName']}]);session.get.assert_called_once()
+    def test_name_search_cannot_repeat_consumed_retry(self):
+        result,session=self.run_case('name',search_responses=[401,200,401])
+        self.assertEqual(result['status_reason'],'NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED')
+        self.assertEqual((self.verifies,self.searches),(3,3));self.assertEqual([e['query'] for e in self.trace],[{'ein':ROW['ein']}]);session.get.assert_not_called()
+    def test_non_401_search_errors_are_not_retried(self):
+        for status in [403,500]:
+            with self.subTest(status=status):
+                result,session=self.run_case(search_responses=[status])
+                self.assertEqual(result['status_reason'],'NY_CONNECTOR_INCOMPLETE');self.assertEqual(result['status'],'Unable to Confirm')
+                self.assertEqual((self.verifies,self.searches),(1,1));self.assertEqual(self.trace,[]);session.get.assert_not_called()
+    def test_search_recovery_requires_both_empty_searches_before_negative(self):
+        result,session=self.run_case('empty',search_responses=[401,200,200])
+        self.assertEqual(result['status'],'Not Registered');self.assertEqual((self.verifies,self.searches),(3,3))
         self.assertEqual(len(self.trace),2);session.get.assert_not_called()
     def test_second_verification_network_failure_is_immediate_and_inconclusive(self):
         for failure in ['network','abort','timeout','fetch']:

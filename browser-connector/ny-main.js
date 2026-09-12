@@ -4,7 +4,7 @@
   const P = CCNYProtocol;
   if (location.origin !== P.NY || window !== window.top) return;
   let active = null;
-  // The worker owns one page per organization, including EIN/name fallback.
+  // Verify and Search share one retry across this page's EIN/name lookup.
   let verificationRetryUsed = false;
   const xhrMetadata = new WeakMap();
   const originalOpen = XMLHttpRequest.prototype.open;
@@ -17,6 +17,11 @@
   };
   const observe = (request, status, payload, jobId) => {
     if (!active || active.id !== jobId) return;
+    if (request.kind === "search" && status === 401) {
+      // Rejections can have a JSON error or HTML body, never a result table.
+      publish({ kind: "search", query: request.query, http_status: status });
+      return;
+    }
     try { publish(P.publicResponse(request, status, payload)); }
     catch { rejectRequest(request, jobId, "NY_CONNECTOR_INCOMPLETE"); }
   };
@@ -102,6 +107,14 @@
     const completed = waitResponse("search", 15000);
     search.click();
     const evidence = await completed;
+    if (evidence.http_status === 401) {
+      if (verificationRetryUsed) throw new Error("NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED");
+      verificationRetryUsed = true;
+      await pause(1000);
+      // Clear the form and repeat its normal Verify/Search flow. The shared
+      // budget prevents further recursion or another retry on name fallback.
+      return run(query);
+    }
     if (evidence.http_status !== 200 || evidence.success !== true || evidence.statusCode !== 200) throw new Error("NY_CONNECTOR_INCOMPLETE");
     const { kind, ...publicEvidence } = evidence;
     return publicEvidence;

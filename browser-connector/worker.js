@@ -64,7 +64,7 @@ chrome.tabs.onRemoved.addListener(id => {
 });
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (!allowedSender(sender) || !P.validId(message?.id) || message.action !== "ping") return false;
-  respond({ ok: true, version: "0.1.2", capabilities: ["lookup-tab-v1", "verification-retry-v1"] });
+  respond({ ok: true, version: "0.1.3", capabilities: ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1"] });
   return false;
 });
 chrome.runtime.onConnect.addListener(port => {
