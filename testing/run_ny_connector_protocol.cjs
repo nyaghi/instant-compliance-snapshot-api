@@ -58,10 +58,19 @@ test('diagnostic reasons distinguish response failures without accepting incompl
     [200,{...good,data:null},'ROWS_INVALID'],
     [200,{...good,data:[{...row,orgID:'bad'}]},'IDENTITY_INVALID'],
     [200,{...good,data:[{orgID:row.orgID,orgName:row.orgName}]},'EIN_MISSING'],
-    [200,{...good,data:[{...row,ein:null}]},'EIN_NULL'],
     [200,{...good,data:[{...row,ein:123456789}]},'EIN_TYPE'],
     [200,{...good,data:[{...row,ein:'invalid'}]},'EIN_FORMAT']
   ];
   for(const [status,payload,reason] of cases)assert.throws(()=>P.publicResponse(request,status,payload),new RegExp('NY_CONNECTOR_SEARCH_'+reason));
   assert.deepEqual(normal(P.publicResponse(request,200,{...good,data:[{...row,ein:''}]}).rows),[{...row,ein:''}]);
+});
+
+test('NY explicit null EIN is preserved as blank; missing and malformed fields remain rejected',()=>{
+  const request={kind:'search',query:{orgName:'Focus on the Family'}};
+  const payload={success:true,statusCode:200,data:[{orgID:'20-80-11',orgName:'FOCUS ON THE FAMILY',ein:null}]};
+  assert.deepEqual(normal(P.publicResponse(request,200,payload).rows),[{orgID:'20-80-11',orgName:'FOCUS ON THE FAMILY',ein:''}]);
+  for(const value of [undefined,953188150,{},[],false,'bad']){
+    const bad={...payload,data:[{...payload.data[0],ein:value}]};
+    assert.throws(()=>P.publicResponse(request,200,bad));
+  }
 });

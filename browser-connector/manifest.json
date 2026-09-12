@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CharityClarity — Staging NY Connector",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "minimum_chrome_version": "114",
   "description": "Staging prototype: searches New York in your browser; CharityClarity verifies records and interprets status.",
   "host_permissions": ["https://staging.compliance-express.com/*", "https://charities-search.ag.ny.gov/*"],

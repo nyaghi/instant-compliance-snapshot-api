@@ -97,7 +97,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.11.7-staging").strip() or "2026.09.11.7-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.11.8-staging").strip() or "2026.09.11.8-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -15179,7 +15179,7 @@ def ny_connector_failure(record, code):
     result.source_note = comments[code]
     data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, "NY", time.perf_counter())
     data["comments"] = comments[code]
-    data["connector_version"] = "0.1.4"
+    data["connector_version"] = "0.1.5"
     return data
 
 
@@ -15223,7 +15223,7 @@ def ny_connector_advance(record):
         record["pending"] = {"query_id": secrets.token_urlsafe(18), "query": pending.params}
         return {"phase": "search", **record["pending"]}
     data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, "NY", started)
-    data["connector_version"] = "0.1.4"
+    data["connector_version"] = "0.1.5"
     return {"phase": "complete", "result": data}
 
 

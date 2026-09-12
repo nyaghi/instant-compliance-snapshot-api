@@ -44,10 +44,12 @@
         if (!row || typeof row.orgID !== "string" || !/^[0-9]{2}-[0-9]{2}-[0-9]{2}$/.test(row.orgID) ||
           typeof row.orgName !== "string" || !row.orgName.trim() || row.orgName.length > 500) throw new Error("NY_CONNECTOR_SEARCH_IDENTITY_INVALID");
         if (!Object.hasOwn(row, "ein")) throw new Error("NY_CONNECTOR_SEARCH_EIN_MISSING");
-        if (row.ein === null) throw new Error("NY_CONNECTOR_SEARCH_EIN_NULL");
-        if (typeof row.ein !== "string") throw new Error("NY_CONNECTOR_SEARCH_EIN_TYPE");
-        if (row.ein && !/^[0-9]{2}-?[0-9]{7}$/.test(row.ein)) throw new Error("NY_CONNECTOR_SEARCH_EIN_FORMAT");
-        return { orgID: row.orgID, orgName: row.orgName, ein: row.ein };
+        // NY uses null in some search rows but an empty string in the detail.
+        // Preserve the row; the master still confirms its name and detail ID.
+        const ein = row.ein === null ? "" : row.ein;
+        if (typeof ein !== "string") throw new Error("NY_CONNECTOR_SEARCH_EIN_TYPE");
+        if (ein && !/^[0-9]{2}-?[0-9]{7}$/.test(ein)) throw new Error("NY_CONNECTOR_SEARCH_EIN_FORMAT");
+        return { orgID: row.orgID, orgName: row.orgName, ein };
       }) };
   }
   globalThis.CCNYProtocol = Object.freeze({ STAGING, NY, validId, validQuery, sameQuery, publicRequest, publicResponse });

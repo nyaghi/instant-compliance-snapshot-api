@@ -1,0 +1,7 @@
+{
+  "source": "https://charities-search.ag.ny.gov/RegistrySearch/20-80-11",
+  "note": "Reduced fixture from the official visible identity and detail; live connector 0.1.4 confirmed the search EIN is explicitly null on 2026-09-11. No verification credentials retained.",
+  "requested": {"orgName": "Focus on the Family", "ein": "953188150"},
+  "search_row": {"orgID": "20-80-11", "orgName": "FOCUS ON THE FAMILY", "ein": null},
+  "detail": {"orgID": "20-80-11", "orgName": "FOCUS ON THE FAMILY", "ein": "", "regType": "NFP", "regStatute": "Exempt"}
+}

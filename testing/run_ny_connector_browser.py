@@ -102,12 +102,14 @@ class BrowserIntegration(unittest.TestCase):
                 payload={'success':True,'statusCode':200,'data':rows};status=200
                 if cls.failure=='schema-missing':payload['data']=[{k:v for k,v in ROW.items() if k!='ein'}]
                 elif cls.failure=='schema-null':payload['data']=[{**ROW,'ein':None}]
+                elif cls.failure=='null-wrong-name':payload['data']=[{**ROW,'ein':None,'orgName':'Unrelated Wildlife Society'}]
                 elif cls.failure=='schema-type':payload['data']=[{**ROW,'ein':123456789}]
                 elif cls.failure=='schema-format':payload['data']=[{**ROW,'ein':'invalid'}]
                 elif cls.failure=='schema-identity':payload['data']=[{**ROW,'orgID':'bad'}]
                 elif cls.failure=='schema-rows':payload['data']=None
                 elif cls.failure=='schema-unsuccessful':payload['success']=False
                 elif cls.failure=='blank-string':payload['data']=[{**ROW,'ein':''}]
+                elif cls.failure=='focus-live-shape':payload['data']=[] if params.get('ein') else [json.loads((WORK/'testing/fixtures/ny_focus_null_ein.json').read_text())['search_row']]
 
                 if getattr(cls,'search_responses',[]):
                     status=cls.search_responses.pop(0)
@@ -121,11 +123,15 @@ class BrowserIntegration(unittest.TestCase):
         type(self).mode=mode;type(self).accepted=accepted;type(self).trace=[];type(self).failure=failure;type(self).verifies=0;type(self).verification_responses=list(verification_responses or []);type(self).search_responses=list(search_responses or []);type(self).searches=0
         before=self.worker.evaluate('testCreatedTabs.length')
         detail=Mock();detail.json.return_value={'success':True,'statusCode':200,'data':{**ROW,'regType':'NFP','regStatute':'7A','documents':{'Annual Filing for Charitable Organizations':[{'fiscalYearEnd':'12/31/2025'}]}}}
+        requested=ROW
+        if failure=='focus-live-shape':
+            fixture=json.loads((WORK/'testing/fixtures/ny_focus_null_ein.json').read_text());requested=fixture['requested']
+            detail.json.return_value={'success':True,'statusCode':200,'data':fixture['detail']}
         session=Mock();session.__enter__=Mock(return_value=session);session.__exit__=Mock(return_value=False);session.get.return_value=detail
         page=self.context.new_page();page.goto(c.NY_CONNECTOR_ORIGIN+'/connector-test')
         page.wait_for_function('!!window.CCNYConnector')
-        with patch.object(c.curl_requests,'Session',return_value=session),patch.object(c,'public_profile_for_ein',return_value={}),patch.object(c,'build_search_queries',return_value=['Example National Foundation']):
-            result=page.evaluate('args=>window.CCNYConnector.lookup(args)',{'organization_name':ROW['orgName'],'ein':ROW['ein'],'email':'browser-test@compliance-express.com','admin_passcode':c.ADMIN_PASSCODE,'device_id':'fixture-browser-session'})
+        with patch.object(c.curl_requests,'Session',return_value=session),patch.object(c,'public_profile_for_ein',return_value={}),patch.object(c,'build_search_queries',return_value=[requested['orgName']]):
+            result=page.evaluate('args=>window.CCNYConnector.lookup(args)',{'organization_name':requested['orgName'],'ein':requested['ein'],'email':'browser-test@compliance-express.com','admin_passcode':c.ADMIN_PASSCODE,'device_id':'fixture-browser-session'})
         if result.get('status_reason') in {'NY_CONNECTOR_INCOMPLETE','NY_CONNECTOR_TIMEOUT','NY_CONNECTOR_UNAVAILABLE'}:
             print(json.dumps({'mode':mode,'reason':result.get('status_reason'),'observations':self.observations}),flush=True)
         self.assertEqual(self.worker.evaluate('testCreatedTabs.length')-before,1,'Every query in this lookup must use one connector-owned tab')
@@ -202,13 +208,27 @@ class BrowserIntegration(unittest.TestCase):
                 self.assertEqual(result['status_reason'],'NY_CONNECTOR_SEARCH_HTTP_ERROR');self.assertEqual(result['status'],'Unable to Confirm')
                 self.assertEqual((self.verifies,self.searches),(1,1));self.assertEqual(self.trace,[]);session.get.assert_not_called()
     def test_schema_failure_reasons_survive_the_entire_bridge(self):
-        for failure,reason in [('missing','EIN_MISSING'),('null','EIN_NULL'),('type','EIN_TYPE'),('format','EIN_FORMAT'),('identity','IDENTITY_INVALID'),('rows','ROWS_INVALID'),('unsuccessful','UNSUCCESSFUL')]:
+        for failure,reason in [('missing','EIN_MISSING'),('type','EIN_TYPE'),('format','EIN_FORMAT'),('identity','IDENTITY_INVALID'),('rows','ROWS_INVALID'),('unsuccessful','UNSUCCESSFUL')]:
             with self.subTest(failure=failure):
                 result,session=self.run_case(failure='schema-'+failure)
                 self.assertEqual(result['status_reason'],'NY_CONNECTOR_SEARCH_'+reason)
                 self.assertEqual(result['status'],'Unable to Confirm');self.assertFalse(result['success'])
                 self.assertEqual(self.trace,[]);session.get.assert_not_called()
                 self.assertEqual((self.verifies,self.searches),(1,1))
+    def test_explicit_null_ein_reaches_existing_master_identity_confirmation(self):
+        result,session=self.run_case(failure='schema-null')
+        self.assertEqual(result['status'],'Current');self.assertTrue(result['success'])
+        self.assertEqual(self.trace[0]['rows'][0]['ein'],'');session.get.assert_called_once()
+    def test_null_ein_does_not_make_an_unrelated_name_a_positive_match(self):
+        result,session=self.run_case(failure='null-wrong-name')
+        self.assertEqual(result['status'],'Not Registered');session.get.assert_not_called()
+        self.assertEqual(len(self.trace),2)
+    def test_focus_null_search_ein_and_blank_detail_ein_confirm_exemption(self):
+        result,session=self.run_case(failure='focus-live-shape')
+        self.assertEqual(result['status'],'Exempt');self.assertTrue(result['success'])
+        self.assertEqual(result['matched_registry_identifier'],'20-80-11')
+        self.assertEqual([e['query'] for e in self.trace],[{'ein':'953188150'},{'orgName':'Focus on the Family'}])
+        self.assertEqual(self.trace[1]['rows'][0]['ein'],'');session.get.assert_called_once()
     def test_blank_string_ein_still_uses_master_identity_confirmation(self):
         result,session=self.run_case(failure='blank-string')
         self.assertEqual(result['status'],'Current');self.assertTrue(result['success'])
