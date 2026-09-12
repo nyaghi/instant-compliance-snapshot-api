@@ -97,7 +97,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.12.2-staging").strip() or "2026.09.12.2-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.12.3-staging").strip() or "2026.09.12.3-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -15099,8 +15099,13 @@ def search_ny_direct(org, browser_page=None, registry_search_provider=None):
         if curl_requests is None:
             raise RuntimeError("New York HTTP client unavailable")
         queries = ([{"ein": requested_ein}] if requested_ein else [])
-        queries.extend({"orgName": name} for name in build_search_queries(
-            org.organization_name, requested_ein, max_queries=4))
+        # NY's public form rejects apostrophes with HTTP 400. Submit the same
+        # bounded name variants without that punctuation; keep the original
+        # organization identity for every candidate and detail comparison.
+        names = dict.fromkeys(canonical_name_punctuation(name).replace("'", "")
+                              for name in build_search_queries(
+                                  org.organization_name, requested_ein, max_queries=4))
+        queries.extend({"orgName": name} for name in names if name.strip())
         if not queries:
             raise ValueError("Organization identity was not provided")
         with curl_requests.Session(impersonate="chrome136") as session:

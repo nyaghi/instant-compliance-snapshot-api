@@ -37,7 +37,7 @@ setup.addEventListener('submit',async event=>{
    const started=Date.now();progress.textContent=`Checking ${completed.length+1} of ${rows.length}: ${row.organization}`;
    let result;
    try{result=await window.CCNYConnector.lookup({organization_name:row.organization,ein:row.ein,email,admin_passcode:passcode,device_id:deviceId,onProgress:message=>{progress.textContent=`${completed.length+1} of ${rows.length}: ${row.organization} — ${message}`;}});
-    if(result.state!=='NY'||String(result.ein).replace(/\D/g,'')!==row.ein.replace(/\D/g,'')||result.app_version!=='2026.09.12.2-staging'||result.checked_at_epoch<started/1000-5)throw Error('Result identity, version, or freshness did not match this check');}
+    if(result.state!=='NY'||String(result.ein).replace(/\D/g,'')!==row.ein.replace(/\D/g,'')||result.app_version!=='2026.09.12.3-staging'||result.checked_at_epoch<started/1000-5)throw Error('Result identity, version, or freshness did not match this check');}
    catch(error){result={status:'Unable to Confirm',error:error.message};}
    const allowed=['organization_name','ein','state','status','comments','raw_status_text','source_note','matched_registry_name','matched_registry_identifier','success','error','app_version','checked_at_epoch','connector_version','reason_code'];
    const evidence=Object.fromEntries(allowed.filter(key=>key in result).map(key=>[key,result[key]]));
