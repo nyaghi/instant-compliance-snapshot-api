@@ -17,7 +17,7 @@ function connection(){return new Promise(resolve=>{
  const id=crypto.randomUUID().replaceAll('-','');
  const done=message=>{clearTimeout(timer);window.removeEventListener('message',receive);resolve(message);};
  const receive=event=>{const message=event.data;if(event.source===window&&event.origin===location.origin&&message?.channel==='cc-ny-staging-v1'&&message.direction==='response'&&message.id===id)done(message);};
- const timer=setTimeout(()=>done({ok:false}),2000);window.addEventListener('message',receive);
+ const timer=setTimeout(()=>done({ok:false}),5000);window.addEventListener('message',receive);
  window.postMessage({channel:'cc-ny-staging-v1',direction:'request',action:'ping',id},location.origin);
 });}
 setup.addEventListener('submit',async event=>{

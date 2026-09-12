@@ -29,8 +29,9 @@ class BrowserIntegration(unittest.TestCase):
         cls.key_patch=patch.object(c,'NY_CONNECTOR_SIGNING_KEY','browser-test-only-signing-key-not-a-real-secret');cls.key_patch.start()
         cls.temp=tempfile.TemporaryDirectory(prefix='cc-ny-extension-test-')
         cls.playwright=c.checker.sync_playwright().start()
+        extension_path=getattr(cls,'extension_path',WORK/'browser-connector')
         cls.context=cls.playwright.chromium.launch_persistent_context(cls.temp.name,headless=True,channel='chromium',
-            args=[f'--disable-extensions-except={WORK / "browser-connector"}',f'--load-extension={WORK / "browser-connector"}'])
+            args=[f'--disable-extensions-except={extension_path}',f'--load-extension={extension_path}'])
         cls.observations=[]
         cls.context.on('page',lambda page: page.on('pageerror',lambda error: cls.observations.append({'page_error':str(error),'stack':error.stack})))
         cls.context.route('**/*',cls.route)

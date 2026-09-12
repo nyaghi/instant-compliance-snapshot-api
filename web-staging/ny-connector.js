@@ -16,7 +16,8 @@
   function bridge(action, query, lookupId, onProgress) {
     return new Promise(resolve => {
       const id = crypto.randomUUID().replaceAll("-", "");
-      const duration = action === "acquire" ? 1205000 : action === "search" ? 180000 : 1500;
+      // Allow a delayed readiness reply before declaring the connector unavailable.
+      const duration = action === "ping" ? 5000 : action === "acquire" ? 1205000 : action === "search" ? 180000 : 1500;
       const timer = setTimeout(() => { waiting.delete(id); resolve({ ok: false, reason: action === "ping" ? "NY_CONNECTOR_UNAVAILABLE" : action === "acquire" ? "NY_CONNECTOR_QUEUE_TIMEOUT" : "NY_CONNECTOR_TIMEOUT" }); }, duration);
       waiting.set(id, { resolve, timer, onProgress });
       window.postMessage({ channel: "cc-ny-staging-v1", direction: "request", id, action, ...(query ? { query } : {}), ...(lookupId ? { lookup_id: lookupId } : {}) }, ORIGIN);
