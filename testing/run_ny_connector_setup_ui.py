@@ -7,7 +7,7 @@ import json,subprocess,sys,unittest
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 WORK=Path(__file__).resolve().parents[1]
-OUT=WORK.parents[1]/'outputs/ny-connector-setup-ui-20260911'
+OUT=WORK.parents[1]/'outputs/ny-verification-retry-20260911/setup-ui'
 ORIGIN='https://staging.compliance-express.com'
 
 class SetupUI(unittest.TestCase):
@@ -23,8 +23,8 @@ class SetupUI(unittest.TestCase):
         self.addCleanup(context.close)
         context.add_init_script('''window.addEventListener('message', event=>{
           const m=event.data;if(event.source===window&&m?.channel==='cc-ny-staging-v1'&&m.direction==='request'&&m.action==='ping')
-            window.postMessage({channel:m.channel,direction:'response',id:m.id,ok:READY,version:'0.1.1',capabilities:CAPABILITIES},location.origin);
-        });'''.replace('READY',json.dumps(ready)).replace('CAPABILITIES',json.dumps([] if outdated else ['lookup-tab-v1'])))
+            window.postMessage({channel:m.channel,direction:'response',id:m.id,ok:READY,version:VERSION,capabilities:CAPABILITIES},location.origin);
+        });'''.replace('READY',json.dumps(ready)).replace('VERSION',json.dumps('0.1.1' if outdated else '0.1.2')).replace('CAPABILITIES',json.dumps(['lookup-tab-v1'] if outdated else ['lookup-tab-v1','verification-retry-v1'])))
         def route(r):
             from urllib.parse import urlparse
             u=urlparse(r.request.url)

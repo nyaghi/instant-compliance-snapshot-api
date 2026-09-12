@@ -4,6 +4,8 @@
   const P = CCNYProtocol;
   if (location.origin !== P.NY || window !== window.top) return;
   let active = null;
+  // The worker owns one page per organization, including EIN/name fallback.
+  let verificationRetryUsed = false;
   const xhrMetadata = new WeakMap();
   const originalOpen = XMLHttpRequest.prototype.open;
   const originalSend = XMLHttpRequest.prototype.send;
@@ -69,6 +71,22 @@
       job.waiter = { kind, resolve, reject, timer };
     });
   }
+  async function verifySearch() {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const verify = await until(() => { const b = button("Verify"); return b && !b.disabled && b; }, 3000);
+      const verification = waitResponse("verify", 15000);
+      verify.click();
+      const result = await verification;
+      if (result.http_status === 401) {
+        if (verificationRetryUsed) throw new Error("NY_CONNECTOR_VERIFICATION_REJECTED");
+        verificationRetryUsed = true;
+        await pause(1000);
+        continue;
+      }
+      if (result.http_status !== 200 || !result.verified) throw new Error("NY_CONNECTOR_VERIFICATION_REQUIRED");
+      return;
+    }
+  }
   async function run(query) {
     const clear = await until(() => button("Clear fields"), 10000);
     clear.click();
@@ -79,11 +97,7 @@
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
     await until(() => key === "ein" ? input.value.replace("-", "") === value : input.value === value, 2000);
-    const verify = await until(() => { const b = button("Verify"); return b && !b.disabled && b; }, 3000);
-    const verification = waitResponse("verify", 15000);
-    verify.click();
-    const result = await verification;
-    if (result.http_status !== 200 || !result.verified) throw new Error("NY_CONNECTOR_VERIFICATION_REQUIRED");
+    await verifySearch();
     const search = await until(() => { const b = button("Search"); return b && !b.disabled && b; }, 3000);
     const completed = waitResponse("search", 15000);
     search.click();
