@@ -11,7 +11,7 @@
     const task = waiting.get(m.id); if (!task) return;
     waiting.delete(m.id); clearTimeout(task.timer); task.resolve(m);
   });
-  const compatible = response => response?.ok && ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1"].every(capability => response.capabilities?.includes(capability));
+  const compatible = response => response?.ok && ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1"].every(capability => response.capabilities?.includes(capability));
   function bridge(action, query, lookupId) {
     return new Promise(resolve => {
       const id = crypto.randomUUID().replaceAll("-", "");

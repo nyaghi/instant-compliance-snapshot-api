@@ -100,6 +100,15 @@ class BrowserIntegration(unittest.TestCase):
                 if cls.failure=='search-network':route.abort('failed');return
                 params=parse_qs(u.query);rows=[] if cls.mode=='empty' or (cls.mode=='name' and params.get('ein')) else [ROW]
                 payload={'success':True,'statusCode':200,'data':rows};status=200
+                if cls.failure=='schema-missing':payload['data']=[{k:v for k,v in ROW.items() if k!='ein'}]
+                elif cls.failure=='schema-null':payload['data']=[{**ROW,'ein':None}]
+                elif cls.failure=='schema-type':payload['data']=[{**ROW,'ein':123456789}]
+                elif cls.failure=='schema-format':payload['data']=[{**ROW,'ein':'invalid'}]
+                elif cls.failure=='schema-identity':payload['data']=[{**ROW,'orgID':'bad'}]
+                elif cls.failure=='schema-rows':payload['data']=None
+                elif cls.failure=='schema-unsuccessful':payload['success']=False
+                elif cls.failure=='blank-string':payload['data']=[{**ROW,'ein':''}]
+
                 if getattr(cls,'search_responses',[]):
                     status=cls.search_responses.pop(0)
                     if status!=200:payload={'error':'Verification rejected'}
@@ -190,8 +199,20 @@ class BrowserIntegration(unittest.TestCase):
         for status in [403,500]:
             with self.subTest(status=status):
                 result,session=self.run_case(search_responses=[status])
-                self.assertEqual(result['status_reason'],'NY_CONNECTOR_INCOMPLETE');self.assertEqual(result['status'],'Unable to Confirm')
+                self.assertEqual(result['status_reason'],'NY_CONNECTOR_SEARCH_HTTP_ERROR');self.assertEqual(result['status'],'Unable to Confirm')
                 self.assertEqual((self.verifies,self.searches),(1,1));self.assertEqual(self.trace,[]);session.get.assert_not_called()
+    def test_schema_failure_reasons_survive_the_entire_bridge(self):
+        for failure,reason in [('missing','EIN_MISSING'),('null','EIN_NULL'),('type','EIN_TYPE'),('format','EIN_FORMAT'),('identity','IDENTITY_INVALID'),('rows','ROWS_INVALID'),('unsuccessful','UNSUCCESSFUL')]:
+            with self.subTest(failure=failure):
+                result,session=self.run_case(failure='schema-'+failure)
+                self.assertEqual(result['status_reason'],'NY_CONNECTOR_SEARCH_'+reason)
+                self.assertEqual(result['status'],'Unable to Confirm');self.assertFalse(result['success'])
+                self.assertEqual(self.trace,[]);session.get.assert_not_called()
+                self.assertEqual((self.verifies,self.searches),(1,1))
+    def test_blank_string_ein_still_uses_master_identity_confirmation(self):
+        result,session=self.run_case(failure='blank-string')
+        self.assertEqual(result['status'],'Current');self.assertTrue(result['success'])
+        self.assertEqual(self.trace[0]['rows'][0]['ein'],'');session.get.assert_called_once()
     def test_search_recovery_requires_both_empty_searches_before_negative(self):
         result,session=self.run_case('empty',search_responses=[401,200,200])
         self.assertEqual(result['status'],'Not Registered');self.assertEqual((self.verifies,self.searches),(3,3))

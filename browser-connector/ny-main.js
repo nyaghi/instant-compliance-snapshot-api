@@ -23,7 +23,11 @@
       return;
     }
     try { publish(P.publicResponse(request, status, payload)); }
-    catch { rejectRequest(request, jobId, "NY_CONNECTOR_INCOMPLETE"); }
+    catch (error) {
+      const reason = /^NY_CONNECTOR_SEARCH_(HTTP_ERROR|UNSUCCESSFUL|ROWS_INVALID|IDENTITY_INVALID|EIN_MISSING|EIN_NULL|EIN_TYPE|EIN_FORMAT)$/.test(error.message)
+        ? error.message : "NY_CONNECTOR_INCOMPLETE";
+      rejectRequest(request, jobId, reason);
+    }
   };
   const rejectRequest = (request, jobId, reason) => {
     const job = active;

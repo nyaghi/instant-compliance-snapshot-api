@@ -35,13 +35,18 @@
   function publicResponse(request, status, payload) {
     if (request.kind === "verify") return { kind: "verify", http_status: status, verified: payload?.verified === true };
     const rows = payload?.data;
-    if (!Array.isArray(rows) || rows.length > 1000) throw new Error("NY_CONNECTOR_INCOMPLETE");
+    if (status !== 200) throw new Error("NY_CONNECTOR_SEARCH_HTTP_ERROR");
+    if (payload?.success !== true || payload?.statusCode !== 200) throw new Error("NY_CONNECTOR_SEARCH_UNSUCCESSFUL");
+    if (!Array.isArray(rows) || rows.length > 1000) throw new Error("NY_CONNECTOR_SEARCH_ROWS_INVALID");
     return { kind: "search", query: request.query, http_status: status,
       success: payload?.success === true, statusCode: payload?.statusCode,
       rows: rows.map(row => {
         if (!row || typeof row.orgID !== "string" || !/^[0-9]{2}-[0-9]{2}-[0-9]{2}$/.test(row.orgID) ||
-          typeof row.orgName !== "string" || !row.orgName.trim() || row.orgName.length > 500 ||
-          typeof row.ein !== "string" || (row.ein && !/^[0-9]{2}-?[0-9]{7}$/.test(row.ein))) throw new Error("NY_CONNECTOR_INCOMPLETE");
+          typeof row.orgName !== "string" || !row.orgName.trim() || row.orgName.length > 500) throw new Error("NY_CONNECTOR_SEARCH_IDENTITY_INVALID");
+        if (!Object.hasOwn(row, "ein")) throw new Error("NY_CONNECTOR_SEARCH_EIN_MISSING");
+        if (row.ein === null) throw new Error("NY_CONNECTOR_SEARCH_EIN_NULL");
+        if (typeof row.ein !== "string") throw new Error("NY_CONNECTOR_SEARCH_EIN_TYPE");
+        if (row.ein && !/^[0-9]{2}-?[0-9]{7}$/.test(row.ein)) throw new Error("NY_CONNECTOR_SEARCH_EIN_FORMAT");
         return { orgID: row.orgID, orgName: row.orgName, ein: row.ein };
       }) };
   }

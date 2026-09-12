@@ -1,4 +1,4 @@
-# CharityClarity staging New York connector — 0.1.3
+# CharityClarity staging New York connector — 0.1.4
 
 This internal prototype is restricted to staging.compliance-express.com and the New York charities registry. It is not published to the Chrome Web Store and has not been approved for production.
 

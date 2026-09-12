@@ -97,7 +97,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.11.6-staging").strip() or "2026.09.11.6-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.11.7-staging").strip() or "2026.09.11.7-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -15160,6 +15160,14 @@ def ny_connector_failure(record, code):
         "NY_CONNECTOR_TIMEOUT": "The New York browser search did not finish in time. Registration status could not be confirmed.",
         "NY_CONNECTOR_BROWSER_CLOSED": "The New York browser tab closed before the search finished. Registration status could not be confirmed.",
         "NY_CONNECTOR_BUSY": "The New York browser connector is completing another search. Retry this check shortly.",
+        "NY_CONNECTOR_SEARCH_HTTP_ERROR": "The New York search request returned an error response. Registration status could not be confirmed.",
+        "NY_CONNECTOR_SEARCH_UNSUCCESSFUL": "New York did not mark the search response as successfully completed. Registration status could not be confirmed.",
+        "NY_CONNECTOR_SEARCH_ROWS_INVALID": "New York did not return a complete usable set of search results. Registration status could not be confirmed.",
+        "NY_CONNECTOR_SEARCH_IDENTITY_INVALID": "A New York search result had an incomplete organization name or record number. Registration status could not be confirmed.",
+        "NY_CONNECTOR_SEARCH_EIN_MISSING": "A New York search result omitted its EIN field. The connector could not validate that response, so registration status could not be confirmed.",
+        "NY_CONNECTOR_SEARCH_EIN_NULL": "A New York search result returned its EIN as a null value. The connector could not validate that response, so registration status could not be confirmed.",
+        "NY_CONNECTOR_SEARCH_EIN_TYPE": "A New York search result returned its EIN in an unexpected data format. Registration status could not be confirmed.",
+        "NY_CONNECTOR_SEARCH_EIN_FORMAT": "A New York search result contained an EIN in an unrecognized format. Registration status could not be confirmed.",
         "NY_CONNECTOR_INCOMPLETE": "New York did not provide a complete response for the requested search. Registration status could not be confirmed.",
     }
     code = code if isinstance(code, str) and code in comments else "NY_CONNECTOR_INCOMPLETE"
@@ -15171,7 +15179,7 @@ def ny_connector_failure(record, code):
     result.source_note = comments[code]
     data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, "NY", time.perf_counter())
     data["comments"] = comments[code]
-    data["connector_version"] = "0.1.3"
+    data["connector_version"] = "0.1.4"
     return data
 
 
@@ -15215,7 +15223,7 @@ def ny_connector_advance(record):
         record["pending"] = {"query_id": secrets.token_urlsafe(18), "query": pending.params}
         return {"phase": "search", **record["pending"]}
     data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, "NY", started)
-    data["connector_version"] = "0.1.3"
+    data["connector_version"] = "0.1.4"
     return {"phase": "complete", "result": data}
 
 

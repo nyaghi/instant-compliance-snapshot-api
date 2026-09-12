@@ -28,7 +28,7 @@ test('complete empty response is distinguishable from failed or incomplete data'
   const request={kind:'search',query:{ein:'123456789'}};
   assert.deepEqual(normal(P.publicResponse(request,200,{success:true,statusCode:200,data:[]})),{kind:'search',query:request.query,http_status:200,success:true,statusCode:200,rows:[]});
   assert.throws(()=>P.publicResponse(request,200,{success:true,statusCode:200,data:null}));
-  assert.equal(P.publicResponse(request,401,{success:false,statusCode:401,data:[]}).success,false);
+  assert.throws(()=>P.publicResponse(request,401,{success:false,statusCode:401,data:[]}),/NY_CONNECTOR_SEARCH_HTTP_ERROR/);
 });
 test('only public row identity fields cross the bridge',()=>{
   const result=P.publicResponse({kind:'search',query:{ein:'123456789'}},200,{success:true,statusCode:200,data:[{...row,token:'secret',email:'not-needed',address:'not-needed'}]});
@@ -48,4 +48,20 @@ test('manifest is restricted to staging and NY; no credential/debugger permissio
   assert.deepEqual(manifest.host_permissions,['https://staging.compliance-express.com/*','https://charities-search.ag.ny.gov/*']);
   assert.equal(manifest.permissions,undefined);
   for(const source of ['worker.js','staging-bridge.js','ny-content.js','ny-main.js'])assert.equal(/admin_passcode|document\.cookie|chrome\.cookies|chrome\.debugger/.test(fs.readFileSync(path.join(root,source),'utf8')),false);
+});
+
+test('diagnostic reasons distinguish response failures without accepting incomplete evidence',()=>{
+  const request={kind:'search',query:{ein:'123456789'}};
+  const good={success:true,statusCode:200,data:[row]};
+  const cases=[
+    [503,good,'HTTP_ERROR'],[200,{...good,success:false},'UNSUCCESSFUL'],
+    [200,{...good,data:null},'ROWS_INVALID'],
+    [200,{...good,data:[{...row,orgID:'bad'}]},'IDENTITY_INVALID'],
+    [200,{...good,data:[{orgID:row.orgID,orgName:row.orgName}]},'EIN_MISSING'],
+    [200,{...good,data:[{...row,ein:null}]},'EIN_NULL'],
+    [200,{...good,data:[{...row,ein:123456789}]},'EIN_TYPE'],
+    [200,{...good,data:[{...row,ein:'invalid'}]},'EIN_FORMAT']
+  ];
+  for(const [status,payload,reason] of cases)assert.throws(()=>P.publicResponse(request,status,payload),new RegExp('NY_CONNECTOR_SEARCH_'+reason));
+  assert.deepEqual(normal(P.publicResponse(request,200,{...good,data:[{...row,ein:''}]}).rows),[{...row,ein:''}]);
 });

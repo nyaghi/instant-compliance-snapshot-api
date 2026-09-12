@@ -68,7 +68,7 @@ class ConnectorTests(unittest.TestCase):
         self.session.get.return_value.json.return_value={'success':True,'statusCode':200,'data':{**DETAIL,'documents':None}}
         _,result=self.submit(self.start());self.assertEqual(result['result']['status'],'Unable to Confirm')
     def test_verification_timeout_closed_browser_and_missing_connector_never_negative(self):
-        for reason in ['NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED','NY_CONNECTOR_VERIFICATION_REJECTED','NY_CONNECTOR_VERIFICATION_REQUIRED','NY_CONNECTOR_TIMEOUT','NY_CONNECTOR_BROWSER_CLOSED','NY_CONNECTOR_UNAVAILABLE','NY_CONNECTOR_BUSY','NY_CONNECTOR_VERIFICATION_NETWORK_ERROR','NY_CONNECTOR_SEARCH_NETWORK_ERROR','NY_CONNECTOR_UPDATE_REQUIRED']:
+        for reason in ['NY_CONNECTOR_SEARCH_HTTP_ERROR','NY_CONNECTOR_SEARCH_UNSUCCESSFUL','NY_CONNECTOR_SEARCH_ROWS_INVALID','NY_CONNECTOR_SEARCH_IDENTITY_INVALID','NY_CONNECTOR_SEARCH_EIN_MISSING','NY_CONNECTOR_SEARCH_EIN_NULL','NY_CONNECTOR_SEARCH_EIN_TYPE','NY_CONNECTOR_SEARCH_EIN_FORMAT','NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED','NY_CONNECTOR_VERIFICATION_REJECTED','NY_CONNECTOR_VERIFICATION_REQUIRED','NY_CONNECTOR_TIMEOUT','NY_CONNECTOR_BROWSER_CLOSED','NY_CONNECTOR_UNAVAILABLE','NY_CONNECTOR_BUSY','NY_CONNECTOR_VERIFICATION_NETWORK_ERROR','NY_CONNECTOR_SEARCH_NETWORK_ERROR','NY_CONNECTOR_UPDATE_REQUIRED']:
             state=self.start();_,result=self.request(action='fail',check_token=state['check_token'],reason=reason)
             self.assertEqual(result['result']['status'],'Unable to Confirm');self.assertFalse(result['result']['success']);self.assertEqual(result['result']['status_reason'],reason)
     def test_incomplete_malformed_wrong_query_extra_filters_are_inconclusive(self):
