@@ -20,6 +20,7 @@
     port.onMessage.addListener(message => {
       if (job.closed) return;
       if (message?.action === "closed") { dispose(job, message.reason); return; }
+      if (message?.progress && job.pending.has(message.id)) { reply(message.id, message); return; }
       if (job.pending.delete(message?.id)) reply(message.id, message);
     });
     port.onDisconnect.addListener(() => { void chrome.runtime.lastError; dispose(job); });
@@ -27,7 +28,7 @@
     job.heartbeat = setInterval(() => {
       try { port.postMessage({ action: "heartbeat" }); } catch { dispose(job); }
     }, 20000);
-    job.timer = setTimeout(() => dispose(job, "NY_CONNECTOR_TIMEOUT"), 300000);
+    job.timer = setTimeout(() => dispose(job, "NY_CONNECTOR_QUEUE_TIMEOUT"), 1500000);
     return job;
   }
   window.addEventListener("message", async event => {
@@ -50,12 +51,12 @@
       }
       reply(m.id, { ok: true }); return;
     }
-    if (m.action !== "search" || !P.validQuery(m.query)) return;
+    if (m.action !== "acquire" && (m.action !== "search" || !P.validQuery(m.query))) return;
     if (active && active.lookupId !== m.lookup_id) { reply(m.id, { ok: false, reason: "NY_CONNECTOR_BUSY" }); return; }
     try {
       const job = active || connect(m.lookup_id);
       job.pending.add(m.id);
-      job.port.postMessage({ action: "search", id: m.id, query: m.query });
+      job.port.postMessage({ action: m.action, id: m.id, ...(m.query ? { query: m.query } : {}) });
     } catch {
       if (active) dispose(active);
       reply(m.id, { ok: false, reason: "NY_CONNECTOR_UNAVAILABLE" });

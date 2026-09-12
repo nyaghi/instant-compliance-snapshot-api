@@ -131,7 +131,14 @@ class BrowserIntegration(unittest.TestCase):
         page=self.context.new_page();page.goto(c.NY_CONNECTOR_ORIGIN+'/connector-test')
         page.wait_for_function('!!window.CCNYConnector')
         with patch.object(c.curl_requests,'Session',return_value=session),patch.object(c,'public_profile_for_ein',return_value={}),patch.object(c,'build_search_queries',return_value=[requested['orgName']]):
-            result=page.evaluate('args=>window.CCNYConnector.lookup(args)',{'organization_name':requested['orgName'],'ein':requested['ein'],'email':'browser-test@compliance-express.com','admin_passcode':c.ADMIN_PASSCODE,'device_id':'fixture-browser-session'})
+            timed=page.evaluate('''async args=>{
+              let admitted=performance.now();
+              const result=await window.CCNYConnector.lookup({...args,onProgress:message=>{
+                if(message==='New York: checking the registry.')admitted=performance.now();
+              }});
+              return {result,activeSeconds:(performance.now()-admitted)/1000};
+            }''',{'organization_name':requested['orgName'],'ein':requested['ein'],'email':'browser-test@compliance-express.com','admin_passcode':c.ADMIN_PASSCODE,'device_id':'fixture-browser-session'})
+            result=timed['result'];self.last_active_seconds=timed['activeSeconds']
         if result.get('status_reason') in {'NY_CONNECTOR_INCOMPLETE','NY_CONNECTOR_TIMEOUT','NY_CONNECTOR_UNAVAILABLE'}:
             print(json.dumps({'mode':mode,'reason':result.get('status_reason'),'observations':self.observations}),flush=True)
         self.assertEqual(self.worker.evaluate('testCreatedTabs.length')-before,1,'Every query in this lookup must use one connector-owned tab')
@@ -243,7 +250,7 @@ class BrowserIntegration(unittest.TestCase):
                 started=time.monotonic();result,session=self.run_case('empty',failure=failure)
                 self.assertEqual(result['status'],'Unable to Confirm')
                 self.assertEqual(result['status_reason'],'NY_CONNECTOR_VERIFICATION_NETWORK_ERROR')
-                self.assertLess(time.monotonic()-started,8,'Do not wait for the old 15-second timeout')
+                self.assertLess(self.last_active_seconds,8,'After queue admission, do not wait for the old 15-second timeout')
                 self.assertEqual([e['query'] for e in self.trace],[{'ein':ROW['ein']}])
                 session.get.assert_not_called()
     def test_search_network_failure_cannot_become_an_empty_result(self):
@@ -259,6 +266,12 @@ class BrowserIntegration(unittest.TestCase):
         try:
             result,_=self.run_case('name');self.assertEqual(result['status'],'Current')
         finally:type(self).advance_delay=0
+    def test_rate_limit_at_verify_and_search_recovers_with_normal_form(self):
+        for stage in ['verify','search']:
+            kwargs={'verification_responses':[(429,False),(200,True)]} if stage=='verify' else {'search_responses':[429,200]}
+            result,session=self.run_case(**kwargs)
+            self.assertEqual(result['status'],'Current');session.get.assert_called_once()
+            self.assertEqual(self.verifies,2)
     def test_full_staging_form_mixed_batch_preserves_mature_state_when_ny_fails(self):
         type(self).accepted=False;type(self).mode='positive';type(self).trace=[];type(self).state_calls=[];type(self).failure='';type(self).verifies=0
         page=self.context.new_page();page.goto(c.NY_CONNECTOR_ORIGIN+'/full-ui')

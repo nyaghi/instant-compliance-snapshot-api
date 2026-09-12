@@ -477,7 +477,7 @@
 
         <div>&copy; <span id="year"></span> Compliance Express</div>
 
-          <div class="font-semibold text-slate-600">CharityClarity v2026.09.11.8 &middot; Staging</div>
+          <div class="font-semibold text-slate-600">CharityClarity v2026.09.12.1 &middot; Staging</div>
         <div>No legal or tax advice.</div>
 
       </div>
@@ -1167,7 +1167,16 @@
         try {
           if (!window.CCNYConnector) throw new Error("Connector UI unavailable");
           return await window.CCNYConnector.lookup({ organization_name: organizationNameValue, ein: einValue,
-            email: emailValue, admin_passcode: adminPasscode.value.trim(), device_id: getDeviceId() });
+            email: emailValue, admin_passcode: adminPasscode.value.trim(), device_id: getDeviceId(),
+            onProgress: (message) => {
+              let note = document.getElementById("nyQueueProgress");
+              if (!note) {
+                note = document.createElement("p"); note.id = "nyQueueProgress";
+                note.className = "mt-2 text-sm text-slate-600"; note.setAttribute("role", "status");
+                progressBar.parentElement.insertAdjacentElement("afterend", note);
+              }
+              note.textContent = message; note.hidden = !message;
+            } });
         } catch {
           const result = fallbackResult("NY", einValue, "The New York browser check could not be completed. Confirm that staging is unlocked and the connector is enabled, then retry. Registration status remains unconfirmed.", organizationNameValue);
           result.status = "Unable to Confirm";
@@ -1345,7 +1354,7 @@
 
 
 
-      for (const state of states) {
+      async function runOneState(state) {
 
         const result = await checkSingleState(stateLaneBases(states, einValue, state), einValue, emailValue, state, organizationName);
 
@@ -1375,6 +1384,12 @@
 
 
 
+      // Only NY gets an independent lane; preserve all other state ordering.
+      const nyPending = states.includes("NY") ? runOneState("NY") : null;
+      for (const state of states) {
+        if (state !== "NY") await runOneState(state);
+      }
+      if (nyPending) await nyPending;
       return results.sort((a, b) => states.indexOf(a.state) - states.indexOf(b.state));
 
     }

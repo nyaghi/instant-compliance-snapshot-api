@@ -17,6 +17,7 @@
   };
   const observe = (request, status, payload, jobId) => {
     if (!active || active.id !== jobId) return;
+    if (status === 429) { rejectRequest(request, jobId, "NY_CONNECTOR_RATE_LIMITED"); return; }
     if (request.kind === "search" && status === 401) {
       // Rejections can have a JSON error or HTML body, never a result table.
       publish({ kind: "search", query: request.query, http_status: status });

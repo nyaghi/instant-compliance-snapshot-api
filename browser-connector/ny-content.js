@@ -14,7 +14,11 @@
   });
   chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (sender.id !== chrome.runtime.id) return false;
-    if (message?.action === "ready") { respond({ ready: !!document.querySelector("#ein") }); return false; }
+    if (message?.action === "ready") {
+      const ready = !!document.querySelector("#ein");
+      respond({ ready, rateLimited: !ready && /(?:429\s+Too Many Requests|Too Many Requests\s*429)/i.test(document.body?.innerText || "") });
+      return false;
+    }
     if (message?.action !== "search" || typeof message.id !== "string" || message.id.length > 80) return false;
     if (pending) { respond({ ok: false, reason: "NY_CONNECTOR_BUSY" }); return false; }
     const timer = setTimeout(() => { if (pending?.id === message.id) { pending = null; respond({ ok: false, reason: "NY_CONNECTOR_TIMEOUT" }); } }, 55000);

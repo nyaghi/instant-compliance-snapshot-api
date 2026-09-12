@@ -97,7 +97,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.11.8-staging").strip() or "2026.09.11.8-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.12.1-staging").strip() or "2026.09.12.1-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -485,7 +485,14 @@ def load_checker():
     return module
 
 
+def canonical_name_punctuation(value: str) -> str:
+    """Give typographic apostrophes the existing straight-apostrophe semantics."""
+    return (value or "").translate(str.maketrans({"\u2018": "'", "\u2019": "'", "\u02bc": "'", "\uff07": "'"}))
+
+
 checker = load_checker()
+_checker_normalize_name = checker.normalize_name
+checker.normalize_name = lambda value: _checker_normalize_name(canonical_name_punctuation(value))
 STATE_EXTENSION_BUNDLE = None
 STATE_EXTENSION_MODULES: dict[str, object] = {}
 STATE_BATCH_BUNDLE = None
@@ -2527,6 +2534,7 @@ def organization_name_variants(
     include_broad_query_prefixes: bool = True,
     include_institutional_reductions: bool = True,
 ) -> list[str]:
+    name = canonical_name_punctuation(name)
     variants = []
 
     def add(value: str) -> None:
@@ -3234,6 +3242,7 @@ def singularized_high_signal_name_variants(name: str) -> list[str]:
 
 def high_signal_search_phrases(name: str) -> list[str]:
     """Build bounded name-only probes from distinctive legal-name pieces."""
+    name = canonical_name_punctuation(name)
     phrases: list[str] = []
 
     def add(value: str, allow_single: bool = False) -> None:
@@ -3604,6 +3613,7 @@ def build_search_queries(
     max_queries: int | None = None,
 ) -> list[str]:
     """Ranked shared query ladder for name-capable state searches."""
+    org_name = canonical_name_punctuation(org_name)
     queries: list[str] = []
 
     def add(value: str, reason: str = "") -> None:
@@ -3617,6 +3627,8 @@ def build_search_queries(
             add(digits)
             add(format_ein(digits))
 
+    for phrase in possessive_search_phrases(org_name):
+        add(phrase)
     for alias in explicit_name_alias_segments(org_name):
         add(alias)
         for variant in high_signal_search_phrases(alias):
@@ -3651,6 +3663,29 @@ def build_search_queries(
     return queries
 
 
+def possessive_search_phrases(name: str) -> list[str]:
+    """Bounded discovery phrases; acceptance still uses the complete identity."""
+    name = canonical_name_punctuation(name)
+    match = re.search(r"\b([A-Za-z]{4,})'s\b", name, re.I)
+    if not match:
+        return []
+    prefix = name[:match.end(1)].strip()
+    # A useful prefix can find either a possessive or its unpunctuated spelling.
+    if len(re.findall(r"[A-Za-z0-9]+", prefix)) < 2:
+        return []
+    return [prefix, name.replace("'", ""), name]
+
+
+def explicit_legal_identity_match(original_name: str, registry_name: str) -> bool:
+    """Accept an exact complete legal name before an explicit registry DBA/AKA."""
+    marker = re.search(r"\b(?:d\s*/?\s*b\s*/?\s*a|doing\s+business\s+as|also\s+known\s+as|aka)\b", registry_name or "", re.I)
+    if not marker or not explicit_name_alias_segments(registry_name):
+        return False
+    legal = (registry_name or "")[:marker.start()].rstrip(" (,;-/")
+    wanted = normalized_match_name(original_name)
+    return bool(wanted and normalized_match_name(legal) == wanted)
+
+
 def score_candidate(expected_name: str, expected_ein: str | None, candidate: dict) -> dict:
     """Conservative identity score used for debug traces and shared gates."""
     candidate_name = clean_registry_name(str(candidate.get("name") or candidate.get("matched_registry_name") or ""))
@@ -3671,6 +3706,10 @@ def score_candidate(expected_name: str, expected_ein: str | None, candidate: dic
             score += 80
             decision = "accepted"
             reason = "MATCH_NAME_EXACT" if reason != "MATCH_EIN_EXACT" else reason
+        elif explicit_legal_identity_match(expected_name, candidate_name):
+            score += 80
+            decision = "accepted"
+            reason = "MATCH_EXPLICIT_LEGAL_NAME" if reason != "MATCH_EIN_EXACT" else reason
         elif explicit_acronym_alias_matches_registry(expected_name, candidate_name):
             score += 80
             decision = "accepted"
@@ -3719,6 +3758,8 @@ def registry_name_is_safe_against_targets(registry_name: str, targets: list[str]
         return False
     if institutional_subunit_identity_conflict(original_name, registry_name):
         return False
+    if explicit_legal_identity_match(original_name, registry_name):
+        return True
     if registry_name_is_safe_for_org(registry_name, original_name, ein):
         return True
     if (
@@ -3760,6 +3801,8 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
         return False
     if institutional_subunit_identity_conflict(original_name, registry_name):
         return False
+    if explicit_legal_identity_match(original_name, registry_name):
+        return True
     if explicit_acronym_alias_matches_registry(original_name, registry_name):
         return True
     if not has_sufficient_identity_overlap(original_name, registry_name, ein):
@@ -5440,6 +5483,7 @@ def search_va_evoke_api(org):
             "display_name": display_name,
             "match_basis": match_basis,
             "used_name_fallback": used_name_fallback,
+            "registration_count": len(registrations),
         })
 
     if not accepted and registration_fetch_errors:
@@ -5468,7 +5512,13 @@ def search_va_evoke_api(org):
     result.matched_registry_identifier = selected["identifier"]
     result.reason_code = f"VA_MATCHED_BY_{re.sub(r'[^A-Za-z0-9]+', '_', selected['match_basis']).strip('_').upper()}"
     result.source_confidence = "exact_ein_match" if selected["match_basis"] == "exact FEIN" else "safe_registry_name_match"
-    result.success = public_status(result) != "Unable to Verify"
+    entity = selected["entity"]
+    entity_ein = canonical_ein_digits(entity.get("ein") or entity.get("identificationNumber") or "")
+    if selected["match_basis"] == "exact FEIN" and len(entity_ein) == 9 and entity_ein == canonical_ein_digits(org.ein):
+        result.va_entity_evidence = {"ein": entity_ein, "name": selected["display_name"],
+            "id": selected["identifier"], "entity_id": str(entity.get("id") or ""),
+            "status": str(entity.get("status") or ""), "registration_count": selected["registration_count"]}
+    result.success = public_status(result) not in {"Unable to Verify", "Unable to Confirm"}
     return result
 
 
@@ -7702,6 +7752,7 @@ def best_row_with_link_by_name(page, targets: list[str], link_pattern: str = r"d
 
 
 def normalized_match_name(value: str) -> str:
+    value = canonical_name_punctuation(value)
     normalized = checker.normalize_name(value or "") if hasattr(checker, "normalize_name") else re.sub(r"\W+", " ", (value or "").lower()).strip()
     normalized = re.sub(r"\b(the|a|an|inc|incorporated|corp|corporation|llc|ltd|limited)\b", " ", normalized, flags=re.I)
     return re.sub(r"\s+", " ", normalized).strip()
@@ -7997,6 +8048,12 @@ def normalize_registry_match_fields(result, org) -> None:
     submitted_name = re.sub(r"\s+", " ", (getattr(org, "organization_name", "") or getattr(result, "organization_name", "") or "").strip())
 
     if public_status(result) in {"Not Registered", "Site Not Reachable", "Unable to Verify", "Unable to Confirm", "Needs Review"}:
+        evidence = getattr(result, "va_entity_evidence", {})
+        if (result.state == "VA" and getattr(result, "reason_code", "") == "VA_MATCHED_BY_EXACT_FEIN"
+                and len(evidence.get("ein", "")) == 9
+                and evidence.get("ein") == canonical_ein_digits(org.ein)
+                and evidence.get("name") == matched_name and evidence.get("id") == matched_identifier):
+            return  # Identity is confirmed even when registration status is not.
         result.matched_registry_name = ""
         result.matched_registry_identifier = ""
         return
@@ -8841,6 +8898,7 @@ def search_fl(page, org):
         raise last_error
 
     generated_variants = [
+        *possessive_search_phrases(original_name),
         *high_signal_search_phrases(original_name),
         *organization_name_variants(
             original_name,
@@ -9433,8 +9491,9 @@ def search_nd_completed(page, org):
     result.queries_attempted = []
     deadline = time.perf_counter() + 35.0
     targets = organization_match_target_variants(org.organization_name, org.ein)
-    queries = list(dict.fromkeys([org.organization_name, *connector_light_name_variants(org.organization_name),
+    queries = list(dict.fromkeys([org.organization_name, *possessive_search_phrases(org.organization_name), *connector_light_name_variants(org.organization_name),
         *build_search_queries(org.organization_name, org.ein, include_ein=False, max_queries=8)]))[:8]
+    queries = list(dict.fromkeys(re.sub(r"\s+", " ", re.sub(r"[^A-Za-z0-9 ]", " ", query)).strip() for query in queries))
     try:
         page.goto(base + "/search/charitable", wait_until="domcontentloaded", timeout=12000)
         search_input = page.locator('input[placeholder*="Search by name"], input[aria-label*="Search by name"], input[type="text"]').first
@@ -12216,6 +12275,11 @@ def wi_search_names_for_org(org) -> list[str]:
         ) and value not in filtered_names:
             filtered_names.append(value)
     filtered_names.sort(key=priority)
+    # The complete supplied name is valid discovery input even when short.
+    original_query = canonical_name_punctuation(original_name).strip()
+    early = list(dict.fromkeys([*possessive_search_phrases(original_query),
+                               *([original_query] if original_query not in filtered_names else [])]))
+    filtered_names = [value for value in early if value] + [value for value in filtered_names if value not in early]
     return filtered_names
 
 
@@ -12660,6 +12724,22 @@ def wi_live_candidate_name_is_safe(registry_name: str, target_names: list[str], 
     return False
 
 
+def wi_foundation_identity_review(registry_name: str, original_name: str, license_number: str, href: str, expiration_text: str) -> dict | None:
+    """Retain a closely related credential for review without accepting its identity."""
+    original = normalized_match_name(original_name)
+    candidate = normalized_match_name(registry_name)
+    if not original.endswith(" foundation") or original.removesuffix(" foundation") != candidate:
+        return None
+    if len(candidate.split()) < 3 or not any(len(word) >= 5 and word not in WEAK_NAME_MATCH_TOKENS for word in distinctive_match_tokens(candidate)):
+        return None
+    if not re.fullmatch(r"\d+-800", license_number.strip()):
+        return None
+    return {"score": 0, "expiration_date": parse_due_date(expiration_text), "license_number": license_number,
+        "registry_name": registry_name, "detail_href": href, "detail_status": "", "identity_conflict": True,
+        "identity_review_evidence": {"registry_name": registry_name, "credential": license_number,
+            "detail_url": urljoin(WI_SEARCH_URL, href), "reason": "Registry name omits Foundation; no identity equivalence established."}}
+
+
 def wi_candidate_from_row_html(row_html: str, target_names: list[str], original_name: str = "", ein: str = "") -> dict | None:
     values = html_table_cells(row_html)
     if len(values) < 6:
@@ -12667,13 +12747,15 @@ def wi_candidate_from_row_html(row_html: str, target_names: list[str], original_
     license_number, profession, registry_name, location, granted_date, expiration_text = values[:6]
     if not re.search(r"Charitable\s+Organization", profession, re.I):
         return None
+    href_match = re.search(r"<a[^>]+href=[\"']([^\"']+)[\"']", row_html, re.I)
+    review_href = html.unescape(href_match.group(1)) if href_match else ""
     if not wi_live_candidate_name_is_safe(registry_name, target_names, original_name, ein):
-        return None
+        return wi_foundation_identity_review(registry_name, original_name, license_number, review_href, expiration_text)
     score = checker.name_match_priority_for_targets(registry_name, target_names)
     if explicit_acronym_alias_matches_registry(original_name, registry_name):
         score = max(score, 4)
     if score < 4 and not wi_contains_full_target_name(registry_name, target_names):
-        return None
+        return wi_foundation_identity_review(registry_name, original_name, license_number, review_href, expiration_text)
     href_match = re.search(r"<a[^>]+href=[\"']([^\"']+)[\"']", row_html, re.I)
     href = html.unescape(href_match.group(1)) if href_match else ""
     expiration_date = parse_due_date(expiration_text)
@@ -12703,12 +12785,12 @@ def wi_candidate_from_markdown_row(row_text: str, target_names: list[str], origi
         return None
     registry_name, detail_href = wi_markdown_link_parts(registry_cell)
     if not wi_live_candidate_name_is_safe(registry_name, target_names, original_name, ein):
-        return None
+        return wi_foundation_identity_review(registry_name, original_name, license_number, detail_href, expiration_text)
     score = checker.name_match_priority_for_targets(registry_name, target_names)
     if explicit_acronym_alias_matches_registry(original_name, registry_name):
         score = max(score, 4)
     if score < 4 and not wi_contains_full_target_name(registry_name, target_names):
-        return None
+        return wi_foundation_identity_review(registry_name, original_name, license_number, detail_href, expiration_text)
     expiration_date = parse_due_date(expiration_text)
     detail_status = wi_reader_detail_status(detail_href)
     if not expiration_date and not wi_status_from_detail_status(detail_status):
@@ -13058,6 +13140,16 @@ def search_wi(page, org, max_seconds: float | None = None):
             return result
 
         if best_match.get("identity_conflict"):
+            if best_match.get("identity_review_evidence"):
+                result.status = "Needs Review"
+                result.reason_code = "WI_FOUNDATION_IDENTITY_REVIEW"
+                result.identity_review_evidence = best_match["identity_review_evidence"]
+                result.raw_status_text = "Wisconsin returned a related credential whose name omits Foundation"
+                result.source_note = (f"Wisconsin returned {best_match['registry_name']} (credential {best_match['license_number']}), "
+                    "whose name omits Foundation. The available state evidence does not confirm that this credential belongs to the requested Foundation. "
+                    "CharityClarity reports Needs Review; it has not treated the Association and Foundation as the same organization or concluded that no record exists.")
+                result.success = False
+                return result
             result.status = "Unable to Confirm"
             result.raw_status_text = "Wisconsin credential names require identity confirmation"
             result.source_note = "The search found a credential with conflicting organization names, but its primary detail record could not confirm the requested organization. This is not an empty registry search."
@@ -13517,6 +13609,8 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         "computed_due_date",
         "ma_filing_evidence",
         "mn_alias_evidence",
+        "va_entity_evidence",
+        "identity_review_evidence",
         "source_truth_conflict",
     ]:
         evidence_value = getattr(result, evidence_key, None)
@@ -15160,6 +15254,9 @@ def ny_connector_failure(record, code):
         "NY_CONNECTOR_TIMEOUT": "The New York browser search did not finish in time. Registration status could not be confirmed.",
         "NY_CONNECTOR_BROWSER_CLOSED": "The New York browser tab closed before the search finished. Registration status could not be confirmed.",
         "NY_CONNECTOR_BUSY": "The New York browser connector is completing another search. Retry this check shortly.",
+        "NY_CONNECTOR_QUEUE_TIMEOUT": "New York remained in the browser queue for twenty minutes without obtaining a search slot. Registration status remains unconfirmed; keep Chrome open and retry New York when the queue has cleared.",
+        "NY_CONNECTOR_RATE_LIMITED": "New York temporarily limited registry requests (HTTP 429). CharityClarity paused and retried twice, but the state continued to reject requests. Registration status remains unconfirmed.",
+        "NY_CONNECTOR_INVALID_SEQUENCE": "The New York browser check received overlapping or out-of-order commands. No registration conclusion was drawn. Retry this state.",
         "NY_CONNECTOR_SEARCH_HTTP_ERROR": "The New York search request returned an error response. Registration status could not be confirmed.",
         "NY_CONNECTOR_SEARCH_UNSUCCESSFUL": "New York did not mark the search response as successfully completed. Registration status could not be confirmed.",
         "NY_CONNECTOR_SEARCH_ROWS_INVALID": "New York did not return a complete usable set of search results. Registration status could not be confirmed.",
@@ -15179,7 +15276,7 @@ def ny_connector_failure(record, code):
     result.source_note = comments[code]
     data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, "NY", time.perf_counter())
     data["comments"] = comments[code]
-    data["connector_version"] = "0.1.5"
+    data["connector_version"] = "0.2.0"
     return data
 
 
@@ -15223,7 +15320,7 @@ def ny_connector_advance(record):
         record["pending"] = {"query_id": secrets.token_urlsafe(18), "query": pending.params}
         return {"phase": "search", **record["pending"]}
     data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, "NY", started)
-    data["connector_version"] = "0.1.5"
+    data["connector_version"] = "0.2.0"
     return {"phase": "complete", "result": data}
 
 
@@ -16184,6 +16281,17 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
     source = "The state's downloadable charity list" if state in {"KS", "KY", "LA", "NH", "OR"} else "The state registry"
     observed = comment_registry_status(raw, status)
     matched = bool(getattr(result, "matched_registry_name", "") or getattr(result, "matched_registry_identifier", ""))
+
+    if state == "WI" and getattr(result, "reason_code", "") == "WI_FOUNDATION_IDENTITY_REVIEW":
+        return note
+    if state == "VA" and getattr(result, "reason_code", "") == "VA_MATCHED_BY_EXACT_FEIN" and status == "Unable to Confirm":
+        evidence = getattr(result, "va_entity_evidence", {})
+        if evidence.get("registration_count") == 0 and evidence.get("status"):
+            return (f"Virginia found {evidence['name']} by exact EIN and lists the entity status as "
+                    f"{evidence['status']}. Its registration history returned no registration entries. "
+                    "CharityClarity reports Unable to Confirm because the available record does not establish "
+                    "a registration expiration date or a specific suspended, revoked, or delinquent status. "
+                    "Confirm registration details directly with Virginia.")
 
     if state == "MI" and status == "Unable to Verify" and getattr(result, "reason_code", "") == "MI_EIN_TRANSPORT_TIMEOUT":
         return note
@@ -19517,6 +19625,7 @@ def wv_status_from_fields(status_text: str, expiration_text: str) -> str:
 
 def wv_preferred_query_variants(name: str, ein: str = "") -> list[str]:
     """Search suffix-light WV names first while keeping row acceptance strict."""
+    name = canonical_name_punctuation(name)
     preferred = []
 
     def add(value: str) -> None:
@@ -19570,6 +19679,8 @@ def wv_preferred_query_variants(name: str, ein: str = "") -> list[str]:
         add_name_forms(hyphenated)
         add("Winston Salem")
         add("Winston-Salem")
+    for phrase in possessive_search_phrases(name):
+        add(phrase)
     add_name_forms(name)
     generated_queries = build_search_queries(
         name,

@@ -77,7 +77,8 @@ class RetrievalTests(unittest.TestCase):
         self.assertIn('responders',result.source_attempts[-1]);self.assertNotIn('children.',result.source_attempts[-1])
         self.assertEqual([c[1] for c in calls],[1,1,3,3]);self.assertEqual(len({c[2] for c in calls}),1)
     def test_outage_does_not_reuse_an_earlier_negative(self):
-        result,_=self.run_variants(complete_query='responders',error_query='children')
+        # Curly apostrophes now retain the same possessive token as ASCII input.
+        result,_=self.run_variants(complete_query='responders',error_query='childrens')
         self.assertEqual(result.status,'Site Not Reachable')
 
 class ReadinessTests(unittest.TestCase):
