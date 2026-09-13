@@ -19,11 +19,11 @@
       respond({ ready, rateLimited: !ready && /(?:429\s+Too Many Requests|Too Many Requests\s*429)/i.test(document.body?.innerText || "") });
       return false;
     }
-    if (message?.action !== "search" || typeof message.id !== "string" || message.id.length > 80) return false;
+    if (!["search", "verify"].includes(message?.action) || typeof message.id !== "string" || message.id.length > 80) return false;
     if (pending) { respond({ ok: false, reason: "NY_CONNECTOR_BUSY" }); return false; }
     const timer = setTimeout(() => { if (pending?.id === message.id) { pending = null; respond({ ok: false, reason: "NY_CONNECTOR_TIMEOUT" }); } }, 55000);
     pending = { id: message.id, respond, timer };
-    window.postMessage({ channel: "cc-ny-page-v1", direction: "request", id: message.id, query: message.query }, NY);
+    window.postMessage({ channel: "cc-ny-page-v1", direction: "request", id: message.id, action: message.action, query: message.query }, NY);
     return true;
   });
 })();

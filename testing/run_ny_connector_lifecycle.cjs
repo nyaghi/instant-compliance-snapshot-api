@@ -8,11 +8,13 @@ const event = () => { const listeners=[];return {addListener:f=>listeners.push(f
 const tick = () => new Promise(resolve=>setImmediate(resolve));
 const id = n => String(n).padStart(20,'0');
 const ein = {ein:'123456789'}, name = {orgName:'Example National Foundation'};
-function harness() {
-  const timers=[],created=[],removed=[],queries=[];
+function harness(initial={}) {
+  const timers=[],created=[],removed=[],queries=[],repairs=[];
+  const data={local:initial.local||{},session:initial.session||{}};
+  const area=name=>({get:async key=>({[key]:data[name][key]}),set:async value=>Object.assign(data[name],JSON.parse(JSON.stringify(value))),setAccessLevel:async()=>{}});
   const tabs=new Map([[1,{id:1,windowId:10,url:'https://staging.compliance-express.com/'}],[2,{id:2,windowId:99,url:'https://charities-search.ag.ny.gov/RegistrySearch'}]]);
   let next=100, deferred=null, now=10000;
-  const chrome={runtime:{id:'fixture-extension',onMessage:event(),onConnect:event()},tabs:{
+  const chrome={storage:{local:area('local'),session:area('session')},runtime:{id:'fixture-extension',onMessage:event(),onConnect:event()},tabs:{
     onRemoved:event(),create:async options=>{if(deferred)await deferred;const tab={id:next++,...options};tabs.set(tab.id,tab);created.push(tab.id);return tab;},
     get:async id=>{if(!tabs.has(id))throw Error('Tab absent');return tabs.get(id);},
     update:async(id,options)=>Object.assign(tabs.get(id),options),
@@ -20,14 +22,15 @@ function harness() {
     sendMessage:async(tab,message)=>{if(message.action==='ready')return {ready:true};queries.push({tab,...message});return {ok:true,evidence:{query:message.query,rows:[]}};}
   }};
   class Clock extends Date { static now(){return now;} }
-  const context=vm.createContext({URL,Date:Clock,chrome,importScripts:()=>{},setTimeout:(fn,ms)=>{const t={fn,ms,due:now+ms,cleared:false};timers.push(t);return t;},clearTimeout:t=>{if(t)t.cleared=true;}});
+  const recovery={clearForTab:async(tabId,owned,close)=>{repairs.push({tabId,owned});await close();}};
+  const context=vm.createContext({URL,Date:Clock,chrome,CCNYRecovery:recovery,importScripts:()=>{},setTimeout:(fn,ms)=>{const t={fn,ms,due:now+ms,cleared:false};timers.push(t);return t;},clearTimeout:t=>{if(t)t.cleared=true;}});
   for(const file of ['protocol.js','worker.js'])vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),context);
-  function connect(n=1,sender={id:chrome.runtime.id,frameId:0,url:tabs.get(1).url,tab:{id:1}}) {
-    const port={name:'cc-ny-lookup-v1:'+id(n),sender,onMessage:event(),onDisconnect:event(),messages:[],disconnected:false,
+  function connect(n=1,sender={id:chrome.runtime.id,frameId:0,url:tabs.get(1).url,tab:{id:1}},refresh=false) {
+    const port={name:(refresh?'cc-ny-refresh-v1:':'cc-ny-lookup-v1:')+id(n),sender,onMessage:event(),onDisconnect:event(),messages:[],disconnected:false,
       postMessage:m=>port.messages.push(JSON.parse(JSON.stringify(m))),disconnect:()=>{if(!port.disconnected){port.disconnected=true;port.onDisconnect.emit();}}};
     chrome.runtime.onConnect.emit(port);return port;
   }
-  const query=async(port,n,q=ein)=>{port.onMessage.emit({action:'search',id:id(n),query:q});await tick();return port.messages.find(m=>m.id===id(n));};
+  const query=async(port,n,q=ein)=>{port.onMessage.emit({action:'search',id:id(n),query:q});await tick();return port.messages.find(m=>m.id===id(n)&&!m.progress);};
   async function advance(ms) {
     const end=now+ms;
     for (;;) {
@@ -36,7 +39,7 @@ function harness() {
     }
     now=end;await tick();
   }
-  return {chrome,tabs,timers,created,removed,queries,connect,query,advance,deferCreate:p=>{deferred=p;}};
+  return {chrome,tabs,timers,created,removed,queries,repairs,recovery,data,context,connect,query,advance,deferCreate:p=>{deferred=p;}};
 }
 test('one owned tab serves EIN and name; finish closes only that tab',async()=>{
   const h=harness(),p=h.connect();assert.equal((await h.query(p,11)).ok,true);assert.equal((await h.query(p,12,name)).ok,true);
@@ -83,13 +86,14 @@ test('wrong query evidence and navigated registry tab fail closed',async()=>{
     const h=harness(),p=h.connect();await h.query(p,11);
     if(mode==='navigated')h.tabs.get(100).url='https://example.com/';
     else h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='ready'?{ready:true}:{ok:true,evidence:{query:ein,rows:[]}};
-    assert.equal((await h.query(p,12,name)).reason,'NY_CONNECTOR_INCOMPLETE');assert.equal(p.disconnected,true);assert.deepEqual(h.removed,[100]);
+    assert.equal((await h.query(p,12,name)).reason,'NY_CONNECTOR_INCOMPLETE');assert.equal(p.disconnected,true);assert.deepEqual(h.removed,mode==='navigated'?[]:[100]);
   }
 });
 
 for (const count of [5,10,15]) test(count+' simultaneous sessions complete FIFO without sharing evidence',async()=>{
   const h=harness(),ports=Array.from({length:count},(_,i)=>h.connect(i+1));
   ports.forEach((p,i)=>p.onMessage.emit({action:'acquire',id:id(1000+i)}));
+  await tick();
   for(let i=0;i<count;i++){
     assert.ok(ports[i].messages.some(m=>m.id===id(1000+i)&&m.ok));
     assert.ok(ports.slice(i+1).every(p=>!p.messages.some(m=>m.ok)));
@@ -133,6 +137,20 @@ test('rate limiting retries only twice with bounded pauses and same owned tab',a
   }
 });
 
+test('Chrome without local storage access-level method still initializes',async()=>{
+  const h=harness();delete h.chrome.storage.local.setAccessLevel;
+  const p=h.connect();assert.equal((await h.query(p,11)).ok,true);
+});
+
+test('session persistence failure closes owned tab and releases queue capacity',async()=>{
+  const h=harness(),p=h.connect();await h.query(p,11);
+  h.chrome.storage.session.set=async()=>{throw Error('fixture storage failure');};
+  p.onMessage.emit({action:'finish',id:id(12)});await tick();
+  assert.equal(p.disconnected,true);assert.deepEqual(h.removed,[100]);
+  h.chrome.storage.session.set=async value=>Object.assign(h.data.session,value);
+  const next=h.connect(2);await h.advance(3000);assert.equal((await h.query(next,21)).ok,true);
+});
+
 test('registry tabs stay in the originating window even when another window is current',async()=>{
   const h=harness(),p=h.connect();await h.query(p,11);
   assert.equal(h.tabs.get(100).windowId,10);assert.equal(h.tabs.get(2).windowId,99);
@@ -152,4 +170,81 @@ test('missing origin cannot create a registry tab in another window',async()=>{
   const h=harness(),p=h.connect();h.tabs.delete(1);
   assert.equal((await h.query(p,11)).reason,'NY_CONNECTOR_INCOMPLETE');
   assert.deepEqual(h.created,[]);assert.equal(p.disconnected,true);assert.ok(h.tabs.has(2));
+});
+
+test('one 401 recovery replaces only the owned tab and retries the same query',async()=>{
+  const h=harness(),p=h.connect();let attempts=0;
+  h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='ready'?{ready:true}:
+    (++attempts===1?{ok:false,reason:'NY_CONNECTOR_VERIFICATION_REJECTED'}:{ok:true,evidence:{query:m.query,rows:[]}});
+  const result=await h.query(p,11);
+  assert.equal(result.ok,true);assert.equal(attempts,2);assert.equal(h.repairs.length,1);
+  assert.deepEqual(h.created,[100,101]);assert.deepEqual(h.removed,[100]);assert.ok(h.tabs.has(2));
+  assert.equal(h.data.local.ccnyRepair.phase,'verified');
+  assert.equal(h.tabs.get(101).active,false);
+});
+
+test('failed repair stops queued lookups without fifteen separate resets',async()=>{
+  const h=harness(),ports=Array.from({length:15},(_,i)=>h.connect(i+1));let attempts=0;
+  h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='ready'?{ready:true}:(attempts++,{ok:false,reason:'NY_CONNECTOR_VERIFICATION_REJECTED'});
+  const result=await h.query(ports[0],11);await tick();await h.advance(3000);
+  assert.equal(result.reason,'NY_CONNECTOR_RECOVERY_REJECTED');
+  assert.equal(h.repairs.length,1);assert.equal(attempts,2);
+  assert.ok(ports.every(p=>p.disconnected));assert.equal(h.data.local.ccnyRepair.phase,'failed');
+  assert.ok(ports.slice(1).every(p=>p.messages.some(m=>m.reason==='NY_CONNECTOR_RECOVERY_REJECTED')));
+});
+
+test('recent successful repair does not grant a new reset for every organization',async()=>{
+  const h=harness({local:{ccnyRepair:{phase:'verified',attemptedAt:5000,nextAllowedAt:999999,finishedAt:6000}}}),p=h.connect();
+  h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='ready'?{ready:true}:{ok:false,reason:'NY_CONNECTOR_VERIFICATION_REJECTED'};
+  assert.equal((await h.query(p,11)).reason,'NY_CONNECTOR_RECOVERY_REJECTED');assert.equal(h.repairs.length,0);
+  assert.equal(h.data.local.ccnyRepair.phase,'failed');
+});
+
+test('ordinary source network/schema failures never trigger cookie cleanup',async()=>{
+  for(const reason of ['NY_CONNECTOR_SEARCH_NETWORK_ERROR','NY_CONNECTOR_SEARCH_ROWS_INVALID','NY_CONNECTOR_TIMEOUT']){
+    const h=harness(),p=h.connect();h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='ready'?{ready:true}:{ok:false,reason};
+    assert.equal((await h.query(p,11)).reason,reason);assert.equal(h.repairs.length,0);
+  }
+});
+
+test('user NY page blocker preserves the repair allowance for a later valid attempt',async()=>{
+  const h=harness(),p=h.connect();h.recovery.clearForTab=async()=>{throw Error('NY_CONNECTOR_RECOVERY_PAGE_OPEN');};
+  h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='ready'?{ready:true}:{ok:false,reason:'NY_CONNECTOR_VERIFICATION_REJECTED'};
+  assert.equal((await h.query(p,11)).reason,'NY_CONNECTOR_RECOVERY_PAGE_OPEN');
+  assert.deepEqual(h.data.local.ccnyRepair,{});assert.ok(h.tabs.has(2));
+});
+
+test('cleanup failure and interrupted repair remain bounded after worker restart',async()=>{
+  const h=harness(),p=h.connect();h.recovery.clearForTab=async()=>{throw Error('storage failed');};
+  h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='ready'?{ready:true}:{ok:false,reason:'NY_CONNECTOR_VERIFICATION_REJECTED'};
+  await h.query(p,11);assert.equal(h.data.local.ccnyRepair.phase,'failed');
+  const restarted=harness({local:JSON.parse(JSON.stringify(h.data.local))});const q=restarted.connect();await tick();
+  assert.equal(q.disconnected,true);assert.equal(restarted.created.length,0);assert.equal(restarted.repairs.length,0);
+  const interrupted=harness({local:{ccnyRepair:{phase:'repairing',attemptedAt:9000,nextAllowedAt:900000}}});const r=interrupted.connect();await tick();
+  assert.equal(r.disconnected,true);assert.equal(interrupted.data.local.ccnyRepair.reason,'NY_CONNECTOR_INTERRUPTED');
+});
+
+test('manual refresh verifies normally and queued duplicate refreshes join it',async()=>{
+  const h=harness(),a=h.connect(1,undefined,true),b=h.connect(2,undefined,true);let verifies=0;
+  h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='ready'?{ready:true}:(verifies++,{ok:true,evidence:{verified:true}});
+  await tick();a.onMessage.emit({action:'refresh',id:id(11)});await tick();
+  assert.ok(a.messages.some(m=>m.id===id(11)&&m.verified));
+  a.onMessage.emit({action:'finish',id:id(12)});await tick();await h.advance(3000);
+  b.onMessage.emit({action:'refresh',id:id(21)});await tick();
+  assert.ok(b.messages.some(m=>m.id===id(21)&&m.verified));assert.equal(h.repairs.length,1);assert.equal(verifies,1);
+});
+
+test('manual refresh cannot bypass the persisted recovery pause',async()=>{
+  const h=harness({local:{ccnyRepair:{phase:'failed',nextAllowedAt:999999,reason:'NY_CONNECTOR_RECOVERY_REJECTED'}}});
+  const p=h.connect(1,undefined,true);await tick();p.onMessage.emit({action:'refresh',id:id(11)});await tick();
+  assert.equal(p.messages.find(m=>m.id===id(11)).reason,'NY_CONNECTOR_RECOVERY_COOLDOWN');assert.equal(h.repairs.length,0);
+});
+
+test('closing an origin during cleanup never sends a late recovered result',async()=>{
+  const h=harness(),p=h.connect();let release;
+  h.recovery.clearForTab=async(tabId,ids,close)=>{await close();await new Promise(r=>{release=r;});};
+  h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='ready'?{ready:true}:{ok:false,reason:'NY_CONNECTOR_VERIFICATION_REJECTED'};
+  await h.query(p,11);p.disconnect();release();await tick();
+  assert.equal(p.messages.some(m=>m.id===id(11)&&m.ok),false);assert.deepEqual(h.created,[100]);
+  assert.equal(h.data.local.ccnyRepair.phase,'failed');
 });

@@ -27,11 +27,15 @@ class BrowserIntegration(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.key_patch=patch.object(c,'NY_CONNECTOR_SIGNING_KEY','browser-test-only-signing-key-not-a-real-secret');cls.key_patch.start()
+        cls.addClassCleanup(cls.key_patch.stop)
         cls.temp=tempfile.TemporaryDirectory(prefix='cc-ny-extension-test-')
+        cls.addClassCleanup(cls.temp.cleanup)
         cls.playwright=c.checker.sync_playwright().start()
+        cls.addClassCleanup(cls.playwright.stop)
         extension_path=getattr(cls,'extension_path',WORK/'browser-connector')
         cls.context=cls.playwright.chromium.launch_persistent_context(cls.temp.name,headless=True,channel='chromium',
             args=[f'--disable-extensions-except={extension_path}',f'--load-extension={extension_path}'])
+        cls.addClassCleanup(cls.context.close)
         cls.observations=[]
         cls.context.on('page',lambda page: page.on('pageerror',lambda error: cls.observations.append({'page_error':str(error),'stack':error.stack})))
         cls.context.route('**/*',cls.route)
@@ -40,15 +44,18 @@ class BrowserIntegration(unittest.TestCase):
         # Playwright attaches. In this fixture harness only, defer navigation until
         # the context route is attached, preventing accidental real state traffic.
         cls.worker=worker
+        worker.evaluate('''async () => {const until=Date.now()+5000;while(!chrome.tabs&&Date.now()<until)await new Promise(r=>setTimeout(r,25));if(!chrome.tabs)throw new Error('Fixture extension API did not initialize');}''')
         worker.evaluate('''() => {globalThis.testCreatedTabs=[];globalThis.testCreatedOptions=[];const original=chrome.tabs.create.bind(chrome.tabs);chrome.tabs.create=async options=>{testCreatedOptions.push(options);
           const tab=await original({...options,url:'about:blank'});await new Promise(r=>setTimeout(r,500));
           testCreatedTabs.push(tab.id);await chrome.tabs.update(tab.id,{url:options.url});return tab;};}''')
         cls.server=ThreadingHTTPServer(('127.0.0.1',0),c.RegistrySnapshotHandler)
+        cls.addClassCleanup(cls.server.server_close)
         threading.Thread(target=cls.server.serve_forever,daemon=True).start()
+        cls.addClassCleanup(cls.server.shutdown)
         cls.trace=[];cls.accepted=True;cls.mode='positive';cls.state_calls=[];cls.failure='';cls.verifies=0;cls.advance_delay=0
     @classmethod
     def tearDownClass(cls):
-        cls.context.close();cls.playwright.stop();cls.server.shutdown();cls.server.server_close();cls.temp.cleanup();cls.key_patch.stop()
+        pass  # Registered cleanups also run if initialization fails.
     @classmethod
     def route(cls,route):
         from urllib.parse import urlparse,parse_qs
@@ -120,7 +127,12 @@ class BrowserIntegration(unittest.TestCase):
             route.fulfill(status=status,content_type='application/json',body=json.dumps(payload),headers={'Access-Control-Allow-Origin':'*'})
         elif u.scheme=='chrome-extension':route.continue_()
         else:route.abort()
-    def run_case(self,mode='positive',accepted=True,failure='',verification_responses=None,search_responses=None):
+    def reset_repair(self, available=False):
+        # Existing tests isolate the one-retry page protocol after a recent
+        # connection repair. RecoveryIntegration separately exercises cleanup.
+        self.worker.evaluate('''async available => {repair=available?{}:{phase:'verified',finishedAt:Date.now(),nextAllowedAt:Date.now()+1200000};await chrome.storage.local.set({ccnyRepair:repair});}''',available)
+    def run_case(self,mode='positive',accepted=True,failure='',verification_responses=None,search_responses=None,repair_available=False,expected_tabs=1):
+        self.reset_repair(repair_available)
         type(self).mode=mode;type(self).accepted=accepted;type(self).trace=[];type(self).failure=failure;type(self).verifies=0;type(self).verification_responses=list(verification_responses or []);type(self).search_responses=list(search_responses or []);type(self).searches=0
         before=self.worker.evaluate('testCreatedTabs.length')
         detail=Mock();detail.json.return_value={'success':True,'statusCode':200,'data':{**ROW,'regType':'NFP','regStatute':'7A','documents':{'Annual Filing for Charitable Organizations':[{'fiscalYearEnd':'12/31/2025'}]}}}
@@ -141,8 +153,8 @@ class BrowserIntegration(unittest.TestCase):
             }''',{'organization_name':requested['orgName'],'ein':requested['ein'],'email':'browser-test@compliance-express.com','admin_passcode':c.ADMIN_PASSCODE,'device_id':'fixture-browser-session'})
             result=timed['result'];self.last_active_seconds=timed['activeSeconds']
         if result.get('status_reason') in {'NY_CONNECTOR_INCOMPLETE','NY_CONNECTOR_TIMEOUT','NY_CONNECTOR_UNAVAILABLE'}:
-            print(json.dumps({'mode':mode,'reason':result.get('status_reason'),'observations':self.observations}),flush=True)
-        self.assertEqual(self.worker.evaluate('testCreatedTabs.length')-before,1,'Every query in this lookup must use one connector-owned tab')
+            print(json.dumps({'mode':mode,'reason':result.get('status_reason'),'observations':self.observations[-20:]}),flush=True)
+        self.assertEqual(self.worker.evaluate('testCreatedTabs.length')-before,expected_tabs,'Queries share one owned tab except for one explicitly tested connection repair')
         self.assertEqual(self.worker.evaluate('async()=>{const tabs=await chrome.tabs.query({});return tabs.filter(t=>testCreatedTabs.includes(t.id)).length;}'),0,'Completed lookups must close their owned tab')
         page.close();return result,session
     def test_real_extension_positive_pipeline(self):
@@ -155,8 +167,8 @@ class BrowserIntegration(unittest.TestCase):
         result,session=self.run_case('empty');self.assertEqual(result['status'],'Not Registered');session.get.assert_not_called()
     def test_real_extension_rejected_verification_is_inconclusive(self):
         result,session=self.run_case(accepted=False);self.assertEqual(result['status'],'Unable to Confirm')
-        self.assertEqual(result['status_reason'],'NY_CONNECTOR_VERIFICATION_REJECTED');session.get.assert_not_called();self.assertEqual(self.trace,[])
-        self.assertEqual(self.verifies,2);self.assertIn('after one retry',result['comments'])
+        self.assertEqual(result['status_reason'],'NY_CONNECTOR_RECOVERY_REJECTED');session.get.assert_not_called();self.assertEqual(self.trace,[])
+        self.assertEqual(self.verifies,2)
     def test_first_rejection_recovers_with_one_fresh_normal_attempt(self):
         result,session=self.run_case(verification_responses=[(401,False),(200,True)])
         self.assertEqual(result['status'],'Current');self.assertEqual(self.verifies,2);session.get.assert_called_once()
@@ -170,7 +182,7 @@ class BrowserIntegration(unittest.TestCase):
                 self.assertEqual(self.trace,[]);session.get.assert_not_called()
     def test_retry_budget_is_shared_with_name_fallback(self):
         result,session=self.run_case('name',verification_responses=[(401,False),(200,True),(401,False)])
-        self.assertEqual(result['status_reason'],'NY_CONNECTOR_VERIFICATION_REJECTED')
+        self.assertEqual(result['status_reason'],'NY_CONNECTOR_RECOVERY_REJECTED')
         self.assertEqual(result['status'],'Unable to Confirm');self.assertEqual(self.verifies,3)
         self.assertEqual([e['query'] for e in self.trace],[{'ein':ROW['ein']}]);session.get.assert_not_called()
     def test_unused_retry_can_recover_name_fallback(self):
@@ -191,15 +203,15 @@ class BrowserIntegration(unittest.TestCase):
         self.assertEqual(len(self.trace),1);session.get.assert_called_once()
     def test_repeated_search_rejection_is_explicit_and_inconclusive(self):
         result,session=self.run_case(search_responses=[401,401])
-        self.assertEqual(result['status'],'Unable to Confirm');self.assertEqual(result['status_reason'],'NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED')
+        self.assertEqual(result['status'],'Unable to Confirm');self.assertEqual(result['status_reason'],'NY_CONNECTOR_RECOVERY_REJECTED')
         self.assertEqual((self.verifies,self.searches),(2,2));self.assertEqual(self.trace,[]);session.get.assert_not_called()
     def test_verify_retry_consumes_search_retry_budget(self):
         result,session=self.run_case(verification_responses=[(401,False),(200,True)],search_responses=[401])
-        self.assertEqual(result['status_reason'],'NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED')
+        self.assertEqual(result['status_reason'],'NY_CONNECTOR_RECOVERY_REJECTED')
         self.assertEqual((self.verifies,self.searches),(2,1));self.assertEqual(self.trace,[]);session.get.assert_not_called()
     def test_search_retry_consumes_verify_retry_budget(self):
         result,session=self.run_case(verification_responses=[(200,True),(401,False)],search_responses=[401])
-        self.assertEqual(result['status_reason'],'NY_CONNECTOR_VERIFICATION_REJECTED')
+        self.assertEqual(result['status_reason'],'NY_CONNECTOR_RECOVERY_REJECTED')
         self.assertEqual((self.verifies,self.searches),(2,1));self.assertEqual(self.trace,[]);session.get.assert_not_called()
     def test_name_search_can_use_remaining_retry(self):
         result,session=self.run_case('name',search_responses=[200,401,200])
@@ -207,7 +219,7 @@ class BrowserIntegration(unittest.TestCase):
         self.assertEqual([e['query'] for e in self.trace],[{'ein':ROW['ein']},{'orgName':ROW['orgName']}]);session.get.assert_called_once()
     def test_name_search_cannot_repeat_consumed_retry(self):
         result,session=self.run_case('name',search_responses=[401,200,401])
-        self.assertEqual(result['status_reason'],'NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED')
+        self.assertEqual(result['status_reason'],'NY_CONNECTOR_RECOVERY_REJECTED')
         self.assertEqual((self.verifies,self.searches),(3,3));self.assertEqual([e['query'] for e in self.trace],[{'ein':ROW['ein']}]);session.get.assert_not_called()
     def test_non_401_search_errors_are_not_retried(self):
         for status in [403,500]:
@@ -274,6 +286,7 @@ class BrowserIntegration(unittest.TestCase):
             self.assertEqual(result['status'],'Current');session.get.assert_called_once()
             self.assertEqual(self.verifies,2)
     def test_full_staging_form_mixed_batch_preserves_mature_state_when_ny_fails(self):
+        self.reset_repair(False)
         type(self).accepted=False;type(self).mode='positive';type(self).trace=[];type(self).state_calls=[];type(self).failure='';type(self).verifies=0
         page=self.context.new_page();page.goto(c.NY_CONNECTOR_ORIGIN+'/full-ui')
         page.locator('#stagingEmail').fill('browser-test@compliance-express.com')

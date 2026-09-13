@@ -205,6 +205,8 @@
                 <p class="font-semibold text-[#0B2A5B]">New York browser connector · Staging prototype</p>
                 <p data-connector-message class="mt-1 text-slate-700"></p>
                 <p data-connector-install class="mt-2"><a data-connector-setup-link href="/connector/" target="_blank" rel="noopener" class="font-semibold text-[#0B2A5B] underline">Set up New York in 3 steps</a></p>
+                <button type="button" data-connector-refresh hidden class="mt-3 rounded-lg border border-slate-300 bg-white px-3 py-2 font-semibold text-[#0B2A5B] disabled:opacity-50">Refresh New York connection</button>
+                <p data-connector-recovery hidden class="mt-2 text-slate-700" aria-live="polite"></p>
               </div>
 
               <div>
@@ -555,6 +557,22 @@
     const generateReportButton = document.getElementById("generateReportButton");
     const reportMessage = document.getElementById("reportMessage");
     let latestResults = [];
+    let lastNyInput = null;
+    let nyResultRefresh = false;
+    window.addEventListener("ccny-connection-refreshed", async () => {
+      if (nyResultRefresh || !lastNyInput || submitButton.disabled) return;
+      const input = lastNyInput;
+      const original = latestResults.find(r => r.state === "NY" && String(r.ein).replace(/\D/g, "") === String(input.einValue).replace(/\D/g, "") && r.organization_name === input.organizationNameValue);
+      if (!original || !["Unable to Confirm", "Site Not Reachable"].includes(original.status)) return;
+      nyResultRefresh = true;
+      try {
+        const result = await requestSingleState(input.apiBase, input.einValue, input.emailValue, "NY", input.organizationNameValue, true);
+        // A new submission or another result update supersedes this retry.
+        if (lastNyInput === input && latestResults.includes(original)) {
+          renderResults(latestResults.map(r => r === original ? { ...result, _request_id: original._request_id } : r), true);
+        }
+      } finally { nyResultRefresh = false; }
+    });
 
     let internalUnlocked = false;
 
@@ -973,7 +991,7 @@
 
 
 
-    function renderResults(results) {
+    function renderResults(results, onlyNewYorkRefreshed = false) {
       latestResults = results;
       generateReportButton.classList.toggle("hidden", !results.length);
       generateReportButton.disabled = false;
@@ -981,7 +999,7 @@
 
       resultRows.innerHTML = "";
 
-      resultTimestamp.textContent = `Checked ${new Date().toLocaleString()}`;
+      if (!onlyNewYorkRefreshed) resultTimestamp.textContent = `Checked ${new Date().toLocaleString()}`;
 
 
 
@@ -1017,6 +1035,7 @@
       downloadLeadLogButton.classList.toggle("hidden", !internalUnlocked);
 
       fullPictureCta.classList.remove("hidden");
+      if (onlyNewYorkRefreshed) return;
       const requestId = (results[0] && results[0]._request_id) || "";
       trackFunnelEvent("free_result_viewed", { request_id: requestId, state: results[0]?.state || "", status: results[0]?.status || "" });
       trackFunnelEvent("paid_offer_viewed", { request_id: requestId, state: results[0]?.state || "" });
@@ -1162,8 +1181,9 @@
 
 
 
-    async function requestSingleState(apiBase, einValue, emailValue, state, organizationNameValue) {
+    async function requestSingleState(apiBase, einValue, emailValue, state, organizationNameValue, isConnectionRetry = false) {
       if (state === "NY" && window.location.origin === "https://staging.compliance-express.com") {
+        if (!isConnectionRetry) lastNyInput = { apiBase, einValue, emailValue, organizationNameValue };
         try {
           if (!window.CCNYConnector) throw new Error("Connector UI unavailable");
           return await window.CCNYConnector.lookup({ organization_name: organizationNameValue, ein: einValue,

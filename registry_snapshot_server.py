@@ -97,7 +97,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.13.3-staging").strip() or "2026.09.13.3-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.13.4-staging").strip() or "2026.09.13.4-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -15370,6 +15370,11 @@ def ny_connector_failure(record, code):
     comments = {
         "NY_CONNECTOR_UNAVAILABLE": "The New York browser connector is unavailable. Install or enable the staging connector and keep Chrome open while the check runs.",
         "NY_CONNECTOR_UPDATE_REQUIRED": "The New York browser connector needs an update. Follow the staging connector update steps and refresh CharityClarity before retrying.",
+        "NY_CONNECTOR_INTERRUPTED": "The New York browser connection was interrupted before this search completed. Other state results remain available. Retry New York when the connector is connected; registration status remains unconfirmed.",
+        "NY_CONNECTOR_RECOVERY_PAGE_OPEN": "The New York connection could not be refreshed while another New York registry page was open. Close that registry page and use Refresh New York connection. Registration status remains unconfirmed.",
+        "NY_CONNECTOR_RECOVERY_COOLDOWN": "A New York connection refresh was already attempted recently. The connector is pausing further recovery attempts. Other state results remain available; registration status remains unconfirmed.",
+        "NY_CONNECTOR_RECOVERY_FAILED": "The New York connection refresh could not finish. Other state results remain available. Registration status could not be confirmed.",
+        "NY_CONNECTOR_RECOVERY_REJECTED": "New York verification remains unavailable after a connection recovery attempt. Further queued searches were paused to avoid repeated rejected requests. Other state results remain available; registration status could not be confirmed.",
         "NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED": "New York rejected verification for the registry search after this check had already used its one retry. Registration status could not be confirmed. Please try the New York check again later.",
         "NY_CONNECTOR_VERIFICATION_REJECTED": "New York rejected browser verification again after one retry during this check. Registration status could not be confirmed. Please try the New York check again later.",
         "NY_CONNECTOR_VERIFICATION_REQUIRED": "New York did not accept browser verification. Registration status could not be confirmed.",
@@ -15400,7 +15405,7 @@ def ny_connector_failure(record, code):
     result.source_note = comments[code]
     data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, "NY", time.perf_counter())
     data["comments"] = comments[code]
-    data["connector_version"] = "0.2.1"
+    data["connector_version"] = record.get("connector_version", "0.2.1")
     return data
 
 
@@ -15444,7 +15449,7 @@ def ny_connector_advance(record):
         record["pending"] = {"query_id": secrets.token_urlsafe(18), "query": pending.params}
         return {"phase": "search", **record["pending"]}
     data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, "NY", started)
-    data["connector_version"] = "0.2.1"
+    data["connector_version"] = record.get("connector_version", "0.2.1")
     return {"phase": "complete", "result": data}
 
 
@@ -15467,12 +15472,16 @@ def ny_connector_request(payload, origin):
         return 400, {"error": "Invalid connector action."}
     now = time.time()
     if action == "start":
+        connector_version = payload.get("connector_version", "0.2.1")
+        if not isinstance(connector_version, str) or connector_version not in {"0.2.1", "0.3.0"}:
+            return 400, {"error": "The New York connector version is unsupported. Refresh or update the staging connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()
         if (not isinstance(name, str) or not 1 <= len(name.strip()) <= 500
                 or not re.fullmatch(r"[0-9]{2}-?[0-9]{7}", ein) or ein.replace("-", "") == "000000000"):
             return 400, {"error": "Enter the organization name and a valid nine-digit EIN."}
         record = {"email": email, "device": device, "organization_name": name.strip(), "ein": format_ein(ein),
+                  "connector_version": connector_version,
                   "issued": now, "expires": now + NY_CONNECTOR_TTL_SECONDS, "version": APP_VERSION,
                   "completed": [], "pending": None}
     else:

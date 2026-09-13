@@ -89,6 +89,20 @@ class ConnectorTests(unittest.TestCase):
         state=self.start()
         for fields in [{'device_id':'another-browser-session'},{'email':'another@compliance-express.com'}]:
             code,_=self.request(action='advance',check_token=state['check_token'],query_id=state['query_id'],**fields);self.assertEqual(code,410)
+    def test_recovery_failures_remain_inconclusive_without_changing_state_rules(self):
+        for reason in ['NY_CONNECTOR_INTERRUPTED','NY_CONNECTOR_RECOVERY_PAGE_OPEN','NY_CONNECTOR_RECOVERY_COOLDOWN','NY_CONNECTOR_RECOVERY_FAILED','NY_CONNECTOR_RECOVERY_REJECTED']:
+            state=self.start();code,result=self.request(action='fail',check_token=state['check_token'],reason=reason)
+            self.assertEqual(code,200);self.assertEqual(result['result']['status'],'Unable to Confirm')
+            self.assertFalse(result['result']['success']);self.assertEqual(result['result']['status_reason'],reason)
+            self.assertTrue(result['result']['comments']);self.session.get.assert_not_called()
+    def test_connector_version_is_bound_to_the_signed_check(self):
+        code,state=self.request(action='start',organization_name=ROW['orgName'],ein=ROW['ein'],connector_version='0.3.0')
+        self.assertEqual(code,200)
+        _,result=self.submit(state)
+        self.assertEqual(result['result']['connector_version'],'0.3.0')
+        self.assertEqual(result['result']['status'],'Current')
+        for invalid in [{},[],None,'99.0.0',42]:
+            self.assertEqual(self.request(action='start',organization_name=ROW['orgName'],ein=ROW['ein'],connector_version=invalid)[0],400)
     def test_query_nonce_blocks_replays_and_cross_check_responses(self):
         a=self.start();b=self.start()
         code,_=self.request(action='advance',check_token=a['check_token'],query_id=b['query_id']);self.assertEqual(code,409)

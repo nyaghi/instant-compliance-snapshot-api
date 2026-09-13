@@ -13,6 +13,7 @@ class DedicatedWindow(BrowserIntegration):
         else:super().route(route)
 
     def prepare(self,accepted):
+        self.reset_repair(False)
         cls=type(self);cls.accepted=accepted;cls.mode='empty';cls.trace=[];cls.failure='';cls.verifies=0
         cls.verification_responses=[];cls.search_responses=[];cls.advance_delay=0
         page=self.context.new_page();page.goto(c.NY_CONNECTOR_ORIGIN+'/connector/validation.html')
@@ -54,6 +55,7 @@ class DedicatedWindow(BrowserIntegration):
             page.wait_for_function("document.querySelector('#progress').textContent==='Completed 1 of 1.'",timeout=30000)
         evidence=self.worker.evaluate("async()=>({created:testCreatedOptions,lastFocused:(await chrome.windows.getLastFocused()).id,windows:await chrome.windows.getAll({populate:true})})")
         self.assertEqual(evidence['created'][-1]['windowId'],origin)
+        self.assertFalse(evidence['created'][-1]['active'])
         self.assertEqual(evidence['lastFocused'],other['id'])
         untouched=next(w for w in evidence['windows'] if w['id']==other['id'])
         self.assertEqual([t['id'] for t in untouched['tabs']],other['tabs'])

@@ -12,15 +12,24 @@
     if (m.progress) { task.onProgress?.(m); return; }
     waiting.delete(m.id); clearTimeout(task.timer); task.resolve(m);
   });
-  const compatible = response => response?.ok && ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1"].every(capability => response.capabilities?.includes(capability));
-  function bridge(action, query, lookupId, onProgress) {
+  const compatible = response => response?.ok && ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "connection-recovery-v1"].every(capability => response.capabilities?.includes(capability));
+  let refreshing = null, activeLookups = 0;
+  const recoveryMessage = (reason, retryAt) => ({
+    NY_CONNECTOR_RECOVERY_PAGE_OPEN: "Close your other New York registry page before refreshing this connection. Your CharityClarity results are saved on this page.",
+    NY_CONNECTOR_RECOVERY_COOLDOWN: "A connection refresh was already attempted recently. New York checks can be tried again after the recovery pause.",
+    NY_CONNECTOR_RECOVERY_REJECTED: "New York still rejected verification after the connection refresh. Your other state results are unchanged.",
+    NY_CONNECTOR_RECOVERY_FAILED: "The New York connection refresh could not finish. Your other state results are unchanged.",
+    NY_CONNECTOR_INTERRUPTED: "The browser connection was interrupted. Retry the New York check when the connector is connected."
+  }[reason] || "The New York connection could not be refreshed. Your other state results are unchanged.") +
+    (Number.isFinite(retryAt) && retryAt > Date.now() ? ` You can refresh again at ${new Date(retryAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.` : "");
+  function bridge(action, query, lookupId, onProgress, intent) {
     return new Promise(resolve => {
       const id = crypto.randomUUID().replaceAll("-", "");
       // Allow a delayed readiness reply before declaring the connector unavailable.
-      const duration = action === "ping" ? 5000 : action === "acquire" ? 1205000 : action === "search" ? 180000 : 1500;
+      const duration = action === "ping" ? 5000 : action === "acquire" ? 1205000 : ["search", "refresh"].includes(action) ? 180000 : 1500;
       const timer = setTimeout(() => { waiting.delete(id); resolve({ ok: false, reason: action === "ping" ? "NY_CONNECTOR_UNAVAILABLE" : action === "acquire" ? "NY_CONNECTOR_QUEUE_TIMEOUT" : "NY_CONNECTOR_TIMEOUT" }); }, duration);
       waiting.set(id, { resolve, timer, onProgress });
-      window.postMessage({ channel: "cc-ny-staging-v1", direction: "request", id, action, ...(query ? { query } : {}), ...(lookupId ? { lookup_id: lookupId } : {}) }, ORIGIN);
+      window.postMessage({ channel: "cc-ny-staging-v1", direction: "request", id, action, ...(query ? { query } : {}), ...(lookupId ? { lookup_id: lookupId } : {}), ...(intent ? { intent } : {}) }, ORIGIN);
     });
   }
   async function setup() {
@@ -30,7 +39,15 @@
     const ready = !!compatible(response), update = !!response.ok && !ready;
     box.hidden = false;
     const message = box.querySelector("[data-connector-message]");
-    message.textContent = ready ? "New York connector is ready. Keep Chrome open while checks run." : update ? "Your New York connector needs an update. Follow the three update steps, then refresh CharityClarity." : "Connect this browser to New York using the three setup steps.";
+    message.textContent = ready ? "New York connector connected. Keep Chrome open while checks run." : update ? "Your New York connector needs an update. Follow the three update steps, then refresh CharityClarity." : "Connect this browser to New York using the three setup steps.";
+    const refreshButton = box.querySelector("[data-connector-refresh]");
+    if (refreshButton) {
+      refreshButton.hidden = !ready; refreshButton.disabled = !!refreshing || activeLookups > 0;
+      if (!refreshButton.dataset.bound) {
+        refreshButton.dataset.bound = "true";
+        refreshButton.addEventListener("click", () => refresh().catch(() => {}));
+      }
+    }
     document.querySelectorAll("[data-connector-install]").forEach(element => { element.hidden = ready; });
     document.querySelectorAll("[data-connector-first-install]").forEach(element => { element.hidden = ready || update; });
     document.querySelectorAll("[data-connector-update]").forEach(element => { element.hidden = !update; });
@@ -38,7 +55,37 @@
     document.querySelectorAll("[data-connector-setup-link]").forEach(element => { element.textContent = update ? "Update New York in 3 steps" : "Set up New York in 3 steps"; });
     box.dataset.state = ready ? "ready" : update ? "update" : "missing";
   }
+  function refresh() {
+    if (refreshing) return refreshing;
+    if (activeLookups) return Promise.resolve({ ok: false, reason: "NY_CONNECTOR_INVALID_SEQUENCE" });
+    const box = document.getElementById("nyConnectorSetup");
+    const note = box?.querySelector("[data-connector-recovery]");
+    const button = box?.querySelector("[data-connector-refresh]");
+    const progress = text => { if (note) { note.hidden = false; note.textContent = text; } };
+    if (button) button.disabled = true;
+    refreshing = (async () => {
+      const lookupId = crypto.randomUUID().replaceAll("-", "");
+      let verified = false;
+      try {
+        const connected = await bridge("ping");
+        if (!compatible(connected)) { await setup(); return { ok: false, reason: "NY_CONNECTOR_UPDATE_REQUIRED" }; }
+        progress("Waiting to refresh the New York connection…");
+        const admitted = await bridge("acquire", null, lookupId, () => progress("Waiting for the current New York check to finish…"), "refresh");
+        const result = admitted.ok ? await bridge("refresh", null, lookupId, () => progress("Refreshing New York connection…")) : admitted;
+        progress(result.ok ? "New York verification succeeded. The connection has been refreshed." : recoveryMessage(result.reason, result.retryAt));
+        verified = result.ok === true;
+        return result;
+      } finally {
+        await bridge("finish", null, lookupId);
+        if (verified) window.dispatchEvent(new CustomEvent("ccny-connection-refreshed"));
+      }
+    })().finally(() => { refreshing = null; if (button) button.disabled = activeLookups > 0; });
+    return refreshing;
+  }
   async function lookup({ organization_name, ein, email, admin_passcode, device_id, onProgress }) {
+    activeLookups++;
+    const refreshButton = document.querySelector("[data-connector-refresh]");
+    if (refreshButton) refreshButton.disabled = true;
     const credentials = { email, admin_passcode, device_id };
     let checkToken = "";
     const lookupId = crypto.randomUUID().replaceAll("-", "");
@@ -62,7 +109,7 @@
       }
       // Start the signed continuation only after queue admission. Waiting cannot
       // consume the master's five-minute evidence lifetime.
-      let state = await api({ action: "start", organization_name, ein });
+      let state = await api({ action: "start", organization_name, ein, connector_version: compatible(connection) ? connection.version : "0.2.1" });
       checkToken = state.check_token || "";
       if (!compatible(connection) && state.phase === "search") {
         state = await api({ action: "fail", check_token: checkToken, reason: connection.ok ? "NY_CONNECTOR_UPDATE_REQUIRED" : "NY_CONNECTOR_UNAVAILABLE" });
@@ -76,7 +123,7 @@
       while (state.phase === "search" && count++ < 5) {
         checkToken = state.check_token;
         connected = true;
-        const completed = await bridge("search", state.query, lookupId, () => onProgress?.("New York: the registry requested a pause. Retrying automatically."));
+        const completed = await bridge("search", state.query, lookupId, progress => onProgress?.(progress.recovering ? "New York: refreshing the connection, then retrying this check. Other states can continue." : "New York: the registry requested a pause. Retrying automatically."));
         state = completed.ok
           ? await api({ action: "advance", check_token: checkToken, query_id: state.query_id, evidence: completed.evidence })
           : await api({ action: "fail", check_token: checkToken, reason: completed.reason });
@@ -87,7 +134,8 @@
       if (connected) await bridge("finish", null, lookupId);
       if (checkToken) api({ action: "cancel", check_token: checkToken }).catch(() => {});
       onProgress?.("");
+      activeLookups--; if (refreshButton) refreshButton.disabled = !!refreshing || activeLookups > 0;
     }
   }
-  window.CCNYConnector = Object.freeze({ setup, lookup });
+  window.CCNYConnector = Object.freeze({ setup, lookup, refresh });
 })();

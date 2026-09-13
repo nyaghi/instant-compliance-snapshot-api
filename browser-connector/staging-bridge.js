@@ -4,7 +4,7 @@
   if (location.origin !== P.STAGING || window !== window.top) return;
   let active = null;
   const reply = (id, response) => window.postMessage({ channel: "cc-ny-staging-v1", direction: "response", ...response, id }, P.STAGING);
-  function dispose(job, reason = "NY_CONNECTOR_UNAVAILABLE") {
+  function dispose(job, reason = "NY_CONNECTOR_INTERRUPTED") {
     if (job.closed) return;
     job.closed = true;
     clearInterval(job.heartbeat); clearTimeout(job.timer);
@@ -13,8 +13,8 @@
     try { job.port.disconnect(); } catch {}
     if (active === job) active = null;
   }
-  function connect(lookupId) {
-    const port = chrome.runtime.connect({ name: "cc-ny-lookup-v1:" + lookupId });
+  function connect(lookupId, refreshOnly = false) {
+    const port = chrome.runtime.connect({ name: (refreshOnly ? "cc-ny-refresh-v1:" : "cc-ny-lookup-v1:") + lookupId });
     const job = { port, lookupId, pending: new Set(), closed: false };
     active = job;
     port.onMessage.addListener(message => {
@@ -51,10 +51,10 @@
       }
       reply(m.id, { ok: true }); return;
     }
-    if (m.action !== "acquire" && (m.action !== "search" || !P.validQuery(m.query))) return;
+    if (!["acquire", "refresh"].includes(m.action) && (m.action !== "search" || !P.validQuery(m.query))) return;
     if (active && active.lookupId !== m.lookup_id) { reply(m.id, { ok: false, reason: "NY_CONNECTOR_BUSY" }); return; }
     try {
-      const job = active || connect(m.lookup_id);
+      const job = active || connect(m.lookup_id, m.action === "acquire" && m.intent === "refresh");
       job.pending.add(m.id);
       job.port.postMessage({ action: m.action, id: m.id, ...(m.query ? { query: m.query } : {}) });
     } catch {

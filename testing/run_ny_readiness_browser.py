@@ -8,6 +8,7 @@ class Readiness(BrowserIntegration):
     @classmethod
     def setUpClass(cls):
         cls.copy=tempfile.TemporaryDirectory(prefix='cc-readiness-fixture-')
+        cls.addClassCleanup(cls.copy.cleanup)
         cls.extension_path=Path(cls.copy.name)/'extension'
         shutil.copytree(WORK/'browser-connector',cls.extension_path)
         bridge=cls.extension_path/'staging-bridge.js';source=bridge.read_text(encoding='utf-8')
@@ -16,10 +17,6 @@ class Readiness(BrowserIntegration):
         source=source.replace(needle,needle+'\n      await new Promise(resolve => setTimeout(resolve, Number(new URL(location.href).searchParams.get("pingDelay") || 0)));')
         bridge.write_text(source,encoding='utf-8')
         super().setUpClass()
-
-    @classmethod
-    def tearDownClass(cls):
-        super().tearDownClass();cls.copy.cleanup()
 
     def lookup_with_delay(self,delay):
         cls=type(self);cls.mode='empty';cls.accepted=True;cls.trace=[];cls.failure='';cls.verifies=0

@@ -3,11 +3,11 @@
 Only the public Tailwind stylesheet compiler is fetched. All app/registry routes
 are fixtures. No extension installation or registry check is performed.
 """
-import json,subprocess,sys,unittest
+import json,os,subprocess,sys,unittest
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 WORK=Path(__file__).resolve().parents[1]
-OUT=WORK.parents[1]/'outputs/fresh45-fixes-20260912/setup-ui'
+OUT=Path(os.environ.get('CCNY_TEST_OUTPUT',WORK/'artifacts/ny-setup-ui'))
 ORIGIN='https://staging.compliance-express.com'
 
 class SetupUI(unittest.TestCase):
@@ -24,7 +24,7 @@ class SetupUI(unittest.TestCase):
         context.add_init_script('''window.addEventListener('message', event=>{
           const m=event.data;if(event.source===window&&m?.channel==='cc-ny-staging-v1'&&m.direction==='request'&&m.action==='ping')
             window.postMessage({channel:m.channel,direction:'response',id:m.id,ok:READY,version:VERSION,capabilities:CAPABILITIES},location.origin);
-        });'''.replace('READY',json.dumps(ready)).replace('VERSION',json.dumps('0.1.2' if outdated else '0.2.0')).replace('CAPABILITIES',json.dumps(['lookup-tab-v1','verification-retry-v1'] if outdated else ['lookup-tab-v1','verification-retry-v1','search-verification-retry-v1','search-schema-errors-v1','nullable-ein-v1','queue-v1'])))
+        });'''.replace('READY',json.dumps(ready)).replace('VERSION',json.dumps('0.1.2' if outdated else '0.3.0')).replace('CAPABILITIES',json.dumps(['lookup-tab-v1','verification-retry-v1'] if outdated else ['lookup-tab-v1','verification-retry-v1','search-verification-retry-v1','search-schema-errors-v1','nullable-ein-v1','queue-v1','connection-recovery-v1'])))
         def route(r):
             from urllib.parse import urlparse
             u=urlparse(r.request.url)
