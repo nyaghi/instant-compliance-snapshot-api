@@ -240,6 +240,43 @@ test('manual refresh cannot bypass the persisted recovery pause',async()=>{
   assert.equal(p.messages.find(m=>m.id===id(11)).reason,'NY_CONNECTOR_RECOVERY_COOLDOWN');assert.equal(h.repairs.length,0);
 });
 
+test('manual refresh preserves network, timeout and incomplete causes for the waiting queue',async()=>{
+  for(const reason of ['NY_CONNECTOR_VERIFICATION_NETWORK_ERROR','NY_CONNECTOR_TIMEOUT','NY_CONNECTOR_VERIFICATION_REQUIRED','NY_CONNECTOR_RATE_LIMITED']){
+    const h=harness(),p=h.connect(1,undefined,true),q=h.connect(2);
+    let verifies=0;
+    h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='ready'?{ready:true}:(verifies++,{ok:false,reason});
+    await tick();p.onMessage.emit({action:'refresh',id:id(11)});await tick();await h.advance(3000);
+    assert.equal(p.messages.find(m=>m.id===id(11)&&!m.progress).reason,reason);
+    assert.equal(h.data.local.ccnyRepair.reason,reason);
+    assert.ok(q.messages.some(m=>m.reason===reason));
+    assert.equal(h.repairs.length,1);assert.equal(verifies,1);
+  }
+});
+
+test('manual refresh reports rejected only for an observed rejection',async()=>{
+  for(const [reply,reason] of [
+    [{ok:false,reason:'NY_CONNECTOR_VERIFICATION_REJECTED'},'NY_CONNECTOR_RECOVERY_REJECTED'],
+    [{ok:true,evidence:{verified:false}},'NY_CONNECTOR_INCOMPLETE'],
+    [{ok:false,reason:'untrusted arbitrary text'},'NY_CONNECTOR_INCOMPLETE']
+  ]){
+    const h=harness(),p=h.connect(1,undefined,true);
+    h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='ready'?{ready:true}:reply;
+    await tick();p.onMessage.emit({action:'refresh',id:id(11)});await tick();
+    assert.equal(p.messages.find(m=>m.id===id(11)&&!m.progress).reason,reason);
+    assert.equal(h.data.local.ccnyRepair.reason,reason);
+  }
+});
+
+test('schema failure after automatic repair retains its cause in later queue results',async()=>{
+  const h=harness(),p=h.connect(),q=h.connect(2);let searches=0;
+  h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='ready'?{ready:true}:{ok:false,reason:++searches===1?'NY_CONNECTOR_VERIFICATION_REJECTED':'NY_CONNECTOR_SEARCH_ROWS_INVALID'};
+  assert.equal((await h.query(p,11)).reason,'NY_CONNECTOR_SEARCH_ROWS_INVALID');
+  await h.advance(3000);
+  assert.equal(h.data.local.ccnyRepair.reason,'NY_CONNECTOR_SEARCH_ROWS_INVALID');
+  assert.ok(q.messages.some(m=>m.reason==='NY_CONNECTOR_SEARCH_ROWS_INVALID'));
+  assert.equal(h.repairs.length,1);
+});
+
 test('closing an origin during cleanup never sends a late recovered result',async()=>{
   const h=harness(),p=h.connect();let release;
   h.recovery.clearForTab=async(tabId,ids,close)=>{await close();await new Promise(r=>{release=r;});};

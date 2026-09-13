@@ -97,7 +97,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.13.4-staging").strip() or "2026.09.13.4-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.13.5-staging").strip() or "2026.09.13.5-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -15473,7 +15473,7 @@ def ny_connector_request(payload, origin):
     now = time.time()
     if action == "start":
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or connector_version not in {"0.2.1", "0.3.0"}:
+        if not isinstance(connector_version, str) or connector_version not in {"0.2.1", "0.3.0", "0.3.1"}:
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the staging connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()
@@ -19921,10 +19921,18 @@ def md_prefer_active_entry_body(body: str, org) -> str:
             if ein != re.sub(r"\D", "", org.ein or ""):
                 continue
             name = str(entry.get("f_aedd5545-808f-4725-9b1d-5fa61e994a75") or "")
-            candidates.append(((target_name_score(name, targets), registry_exact_active_tiebreak(name, targets, status)), entry))
+            exact_name = normalized_match_name(name) in {normalized_match_name(target) for target in targets}
+            candidates.append(((target_name_score(name, targets), registry_exact_active_tiebreak(name, targets, status)), entry, status.casefold().strip(), exact_name))
         if not candidates:
             return body
-        selected = max(candidates, key=lambda item: item[0])[1]
+        best = max(candidates, key=lambda item: item[0])
+        selected = best[1]
+        strongest = [item for item in candidates if item[0][0] == best[0][0]]
+        # MD's Not Current record remains nonclosed even though its filings are
+        # delinquent. Resolve only this exact-EIN/exact-name pair; other status
+        # combinations and stronger identities retain the existing selection.
+        if all(item[3] for item in strongest) and {item[2] for item in strongest} == {"not current", "closed"}:
+            selected = next(item[1] for item in strongest if item[2] == "not current")
         return json.dumps({**payload, "entries": [selected]})
     except (ValueError, TypeError, AttributeError):
         return body

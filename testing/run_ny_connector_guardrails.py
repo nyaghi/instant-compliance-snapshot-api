@@ -96,11 +96,12 @@ class ConnectorTests(unittest.TestCase):
             self.assertFalse(result['result']['success']);self.assertEqual(result['result']['status_reason'],reason)
             self.assertTrue(result['result']['comments']);self.session.get.assert_not_called()
     def test_connector_version_is_bound_to_the_signed_check(self):
-        code,state=self.request(action='start',organization_name=ROW['orgName'],ein=ROW['ein'],connector_version='0.3.0')
-        self.assertEqual(code,200)
-        _,result=self.submit(state)
-        self.assertEqual(result['result']['connector_version'],'0.3.0')
-        self.assertEqual(result['result']['status'],'Current')
+        for version in ['0.2.1','0.3.0','0.3.1']:
+            code,state=self.request(action='start',organization_name=ROW['orgName'],ein=ROW['ein'],connector_version=version)
+            self.assertEqual(code,200)
+            _,result=self.submit(state)
+            self.assertEqual(result['result']['connector_version'],version)
+            self.assertEqual(result['result']['status'],'Current')
         for invalid in [{},[],None,'99.0.0',42]:
             self.assertEqual(self.request(action='start',organization_name=ROW['orgName'],ein=ROW['ein'],connector_version=invalid)[0],400)
     def test_query_nonce_blocks_replays_and_cross_check_responses(self):

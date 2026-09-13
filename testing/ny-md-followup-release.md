@@ -1,0 +1,17 @@
+# NY error causes and Maryland duplicate record follow-up
+
+Candidate: staging 2026.09.13.5, connector 0.3.1. Baseline frontend 7f49bd4 / backend ef458a9, staging .4. Production is outside scope.
+
+The .4 first-55 run paused with 1,587 of 1,595 API checks captured, 1,586 exact matches. Maryland returned Closed for Beth Israel Deaconess Medical Center (04-2103881), while the sheet and the earlier .3 run say Delinquent. No spreadsheet expectation was changed. New York's .4 run remains incomplete; an initial smoke attempt lost its browser test window before evidence was captured.
+
+The fresh Maryland public endpoint contains two same-EIN records: Charity ID 15364, name Beth Israel Deaconess Medical Center, Inc., Not Current, year represented 2024; and Charity ID 26587, name Beth Israel Deaconess Medical Center, Closed, no filing year. Both names score equally after established normalization. The pre-fix selector chooses the Closed record when these entries are reversed. This reproduces an order-dependent selection bug without any source or expectation change.
+
+The master MD selector now resolves only a strongest exact-name/exact-EIN group containing the pair Not Current and Closed in favor of Not Current. It preserves Current priority, stronger identity scores, other status combinations, and the existing delinquency calculation. This does not add Not Current to the global list of active statuses. Eight controls cover both orders, Current, wrong EIN, weaker names, uncertain/revoked statuses, single Closed, nonexact matches, and malformed data.
+
+The live .4 refresh displayed a rejection message after targeted cleanup, but review found that its manual path mapped every unsuccessful page response to RECOVERY_REJECTED. Consequently that message alone cannot establish an HTTP 401 rejection; it may have masked a timeout, network interruption or incomplete verification. Its original precise cause is unavailable and must not be retroactively asserted.
+
+Connector 0.3.1 preserves the actual bounded failure code in manual refresh and the shared repair state used by waiting requests. Only an observed verification rejection maps to RECOVERY_REJECTED. Unrecognized replies remain incomplete. The frontend distinguishes network interruption, timeout, unconfirmed verification, incomplete response, and rate limiting. Repair scope, timing, queue bounds, browser permissions, normal Verify/Search actions, matching and status interpretation are unchanged. Backend changes only accept 0.3.1 metadata alongside prior supported versions, update the release version, and implement the MD selection correction.
+
+The former refresh reporting bug reproduces in three Node tests; passing follow-up cases cover failures propagated to the queue and precise manual messages through an actual disposable-browser extension. No claim that local origin cleanup fixes New York's verification service is justified yet. Live recovery, 15-session capacity/endurance, and production distribution remain open gates.
+
+Release gates: 36 master suites, 42 Node tests, all nine browser suites (including 14 cleanup-isolation checks and 59 integration/setup/identity cases), 13 live controls, exact staging deployment verification, staging smoke, then a fresh first-55 validation. Preserve the .4 attempt and its mismatch rather than replacing it with passing .5 results. Do not promote while material validation or source-reliability failures remain.

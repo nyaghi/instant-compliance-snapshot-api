@@ -12,13 +12,18 @@
     if (m.progress) { task.onProgress?.(m); return; }
     waiting.delete(m.id); clearTimeout(task.timer); task.resolve(m);
   });
-  const compatible = response => response?.ok && ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "connection-recovery-v1"].every(capability => response.capabilities?.includes(capability));
+  const compatible = response => response?.ok && ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "connection-recovery-v1", "recovery-causes-v1"].every(capability => response.capabilities?.includes(capability));
   let refreshing = null, activeLookups = 0;
   const recoveryMessage = (reason, retryAt) => ({
     NY_CONNECTOR_RECOVERY_PAGE_OPEN: "Close your other New York registry page before refreshing this connection. Your CharityClarity results are saved on this page.",
     NY_CONNECTOR_RECOVERY_COOLDOWN: "A connection refresh was already attempted recently. New York checks can be tried again after the recovery pause.",
     NY_CONNECTOR_RECOVERY_REJECTED: "New York still rejected verification after the connection refresh. Your other state results are unchanged.",
     NY_CONNECTOR_RECOVERY_FAILED: "The New York connection refresh could not finish. Your other state results are unchanged.",
+    NY_CONNECTOR_TIMEOUT: "New York verification did not finish within the time allowed. Your other state results are unchanged.",
+    NY_CONNECTOR_VERIFICATION_NETWORK_ERROR: "The connection to New York was interrupted during verification. Your other state results are unchanged.",
+    NY_CONNECTOR_VERIFICATION_REQUIRED: "New York did not confirm verification. Your other state results are unchanged.",
+    NY_CONNECTOR_RATE_LIMITED: "New York is limiting requests. Your other state results are unchanged.",
+    NY_CONNECTOR_INCOMPLETE: "New York returned an incomplete verification response. Your other state results are unchanged.",
     NY_CONNECTOR_INTERRUPTED: "The browser connection was interrupted. Retry the New York check when the connector is connected."
   }[reason] || "The New York connection could not be refreshed. Your other state results are unchanged.") +
     (Number.isFinite(retryAt) && retryAt > Date.now() ? ` You can refresh again at ${new Date(retryAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.` : "");

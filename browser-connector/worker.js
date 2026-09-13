@@ -7,6 +7,8 @@ const queue = [];
 let repair = {}, saving = Promise.resolve();
 const owned = new Set();
 const rejected = reason => ["NY_CONNECTOR_VERIFICATION_REJECTED", "NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED"].includes(reason);
+const recoveryFailure = reason => rejected(reason) ? "NY_CONNECTOR_RECOVERY_REJECTED" :
+  typeof reason === "string" && /^NY_CONNECTOR_[A-Z_]+$/.test(reason) ? reason : "NY_CONNECTOR_INCOMPLETE";
 const runtimeState = () => ({ ownedTabs: [...owned], queue: [active, ...queue].filter(Boolean).map(j => ({ id: j.lookupId, tabId: j.sender.tab.id, enqueuedAt: j.enqueuedAt, expiresAt: j.expiresAt, active: j === active })) });
 function saveRuntime() { const value = runtimeState(); saving = saving.catch(() => {}).then(() => chrome.storage.session.set({ ccnyRuntime: value })); return saving; }
 async function saveRepair(value) { await chrome.storage.local.set({ ccnyRepair: value }); repair = value; }
@@ -120,7 +122,7 @@ async function repairConnection(job, id) {
 }
 async function recordRecovery(response) {
   if (response.ok) await saveRepair({ ...repair, phase: "verified", finishedAt: Date.now() });
-  else await saveRepair({ ...repair, phase: "failed", finishedAt: Date.now(), reason: "NY_CONNECTOR_RECOVERY_REJECTED" });
+  else await saveRepair({ ...repair, phase: "failed", finishedAt: Date.now(), reason: recoveryFailure(response.reason) });
 }
 async function ready(job) {
   const deadline = Date.now() + 15000;
@@ -203,7 +205,7 @@ async function performRefresh(job, id) {
       if (job.closed || generation !== job.generation) return;
       response = checked?.ok && checked.evidence?.verified === true
         ? { ok: true, verified: true, verifiedAt: Date.now() }
-        : { ok: false, reason: "NY_CONNECTOR_RECOVERY_REJECTED" };
+        : { ok: false, reason: recoveryFailure(checked?.reason) };
       await recordRecovery(response);
     }
   } catch (error) {
@@ -221,7 +223,7 @@ chrome.tabs.onRemoved.addListener(id => {
 });
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (!allowedSender(sender) || !P.validId(message?.id) || message.action !== "ping") return false;
-  boot.then(() => respond({ ok: true, version: "0.3.0", capabilities: ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "origin-window-v1", "connection-recovery-v1"], recovery: { phase: repair.phase || "idle", nextAllowedAt: repair.nextAllowedAt || 0, verifiedAt: repair.finishedAt || 0 } }), () => respond({ ok: false, reason: "NY_CONNECTOR_INTERRUPTED" }));
+  boot.then(() => respond({ ok: true, version: "0.3.1", capabilities: ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "origin-window-v1", "connection-recovery-v1", "recovery-causes-v1"], recovery: { phase: repair.phase || "idle", nextAllowedAt: repair.nextAllowedAt || 0, verifiedAt: repair.finishedAt || 0 } }), () => respond({ ok: false, reason: "NY_CONNECTOR_INTERRUPTED" }));
   return true;
 });
 chrome.runtime.onConnect.addListener(port => {

@@ -24,7 +24,7 @@ class SetupUI(unittest.TestCase):
         context.add_init_script('''window.addEventListener('message', event=>{
           const m=event.data;if(event.source===window&&m?.channel==='cc-ny-staging-v1'&&m.direction==='request'&&m.action==='ping')
             window.postMessage({channel:m.channel,direction:'response',id:m.id,ok:READY,version:VERSION,capabilities:CAPABILITIES},location.origin);
-        });'''.replace('READY',json.dumps(ready)).replace('VERSION',json.dumps('0.1.2' if outdated else '0.3.0')).replace('CAPABILITIES',json.dumps(['lookup-tab-v1','verification-retry-v1'] if outdated else ['lookup-tab-v1','verification-retry-v1','search-verification-retry-v1','search-schema-errors-v1','nullable-ein-v1','queue-v1','connection-recovery-v1'])))
+        });'''.replace('READY',json.dumps(ready)).replace('VERSION',json.dumps('0.1.2' if outdated else '0.3.1')).replace('CAPABILITIES',json.dumps(['lookup-tab-v1','verification-retry-v1'] if outdated else ['lookup-tab-v1','verification-retry-v1','search-verification-retry-v1','search-schema-errors-v1','nullable-ein-v1','queue-v1','connection-recovery-v1','recovery-causes-v1'])))
         def route(r):
             from urllib.parse import urlparse
             u=urlparse(r.request.url)
@@ -52,7 +52,7 @@ class SetupUI(unittest.TestCase):
         page=self.page(True)
         self.assertFalse(page.locator('[data-connector-install]').is_visible())
         self.assertEqual(page.get_by_role('link',name='Set up New York in 3 steps').count(),0)
-        self.assertTrue(page.get_by_text('CharityClarity v2026.09.13.4 · Staging',exact=True).is_visible())
+        self.assertTrue(page.get_by_text('CharityClarity v2026.09.13.5 · Staging',exact=True).is_visible())
         page.locator('#nyConnectorSetup').screenshot(path=str(OUT/'main-ready.png'))
     def test_missing_main_offers_three_step_setup(self):
         page=self.page(False)

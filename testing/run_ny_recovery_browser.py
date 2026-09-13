@@ -7,7 +7,7 @@ class RecoveryIntegration(BrowserIntegration):
     def test_repair_retries_same_ein_and_confirms_detail(self):
         result, session = self.run_case(verification_responses=[(401,False),(401,False),(200,True)], repair_available=True, expected_tabs=2)
         self.assertEqual(result['status'],'Current')
-        self.assertEqual(result['connector_version'],'0.3.0')
+        self.assertEqual(result['connector_version'],'0.3.1')
         self.assertEqual(self.verifies,3)
         self.assertEqual([e['query'] for e in self.trace],[{'ein':ROW['ein']}])
         session.get.assert_called_once()
@@ -88,6 +88,43 @@ class RecoveryIntegration(BrowserIntegration):
             self.assertEqual(len(self.trace),1)
             self.assertIn('verification succeeded',page.locator('[data-connector-recovery]').inner_text())
         page.close()
+
+    def test_manual_network_failure_has_accurate_page_message(self):
+        self.manual_failure('network','NY_CONNECTOR_VERIFICATION_NETWORK_ERROR','interrupted during verification')
+
+    def test_manual_timeout_has_accurate_page_message(self):
+        self.manual_failure('no-response','NY_CONNECTOR_TIMEOUT','did not finish within the time allowed')
+
+    def test_manual_unconfirmed_response_is_not_labeled_rejected(self):
+        self.manual_failure('unconfirmed','NY_CONNECTOR_VERIFICATION_REQUIRED','did not confirm verification')
+
+    def manual_failure(self, failure, reason, message):
+        self.reset_repair(True)
+        cls=type(self);cls.accepted=True;cls.mode='positive';cls.trace=[];cls.state_calls=[];cls.failure='';cls.verifies=0
+        cls.verification_responses=[];cls.search_responses=[]
+        def response(route):
+            if failure=='network':route.abort('failed')
+            elif failure=='no-response':route.fulfill(status=200,content_type='application/json',body='{}',headers={'Access-Control-Allow-Origin':'*'})
+            else:route.fulfill(status=200,content_type='application/json',body='{"verified":false}',headers={'Access-Control-Allow-Origin':'*'})
+        # A form whose handler does not issue a request exercises the actual
+        # page timeout without network sleeps or changing production deadlines.
+        def form_without_request(route):
+            from run_ny_connector_browser import FORM
+            route.fulfill(content_type='text/html',body=FORM.replace('x.send();','if(!path.endsWith("/verify"))x.send();'))
+        pattern='https://charities-search-api.ag.ny.gov/**/recaptcha/verify'
+        self.context.route(pattern,response)
+        if failure=='no-response':self.context.route('https://charities-search.ag.ny.gov/RegistrySearch',form_without_request)
+        page=self.context.new_page();page.goto(c.NY_CONNECTOR_ORIGIN+'/full-ui')
+        try:
+            page.locator('#stagingEmail').fill('browser-test@compliance-express.com');page.locator('#stagingPasscode').fill(c.ADMIN_PASSCODE);page.locator('#stagingUnlockButton').click()
+            page.locator('[data-connector-refresh]').click()
+            page.wait_for_function("text=>document.querySelector('[data-connector-recovery]').textContent.includes(text)",arg=message,timeout=45000)
+            self.assertNotIn('rejected',page.locator('[data-connector-recovery]').inner_text())
+            self.assertEqual(self.worker.evaluate('repair.reason'),reason)
+            self.assertEqual(self.trace,[]);self.assertEqual(self.state_calls,[])
+        finally:
+            page.close();self.context.unroute(pattern,response)
+            if failure=='no-response':self.context.unroute('https://charities-search.ag.ny.gov/RegistrySearch',form_without_request)
 
     def test_worker_restart_interrupts_queue_and_preserves_repair_budget(self):
         self.reset_repair(True)

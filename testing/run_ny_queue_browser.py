@@ -65,7 +65,7 @@ class QueueIntegration(BrowserIntegration):
             version=json.loads((Path(__file__).resolve().parents[1]/'browser-connector/manifest.json').read_text())['version']
             self.assertEqual(self.worker.evaluate('chrome.runtime.getManifest().version'),version)
             # Check the backend release metadata separately from the loaded extension.
-            self.assertTrue(all(r['result']['connector_version']=='0.3.0' for r in results))
+            self.assertTrue(all(r['result']['connector_version']=='0.3.1' for r in results))
             self.assertEqual(self.worker.evaluate('async()=>{const ts=await chrome.tabs.query({});return ts.filter(t=>testCreatedTabs.includes(t.id)).length;}'),0)
             for page in pages:page.close()
             print(json.dumps({'real_extension_sessions':count,'completed':len(results),'distinct_organizations':distinct,'verification_accepted':accepted,'repair_episode':repair,'busy_failures':0,'passed':True}),flush=True)
