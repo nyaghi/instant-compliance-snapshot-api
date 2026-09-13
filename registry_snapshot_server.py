@@ -97,7 +97,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.13.1-staging").strip() or "2026.09.13.1-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.13.2-staging").strip() or "2026.09.13.2-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -7244,6 +7244,11 @@ def search_mi_name_fallback(page, org):
         result.source_note = message + " No negative registration conclusion was drawn."
         result.success = False
         return result
+    def portal_query(value):
+        # Michigan's public form rejects typographic dashes before submitting.
+        # Adapt query punctuation only; keep original names/aliases for identity.
+        return re.sub(r"[\u2010-\u2015\u2212]", "-", canonical_name_punctuation(value))
+
     variants = []
     for variant in organization_name_variants(
         org.organization_name,
@@ -7254,6 +7259,7 @@ def search_mi_name_fallback(page, org):
         include_leading_article_variants=True,
         include_broad_query_prefixes=False,
     ):
+        variant = portal_query(variant)
         variant_words = re.findall(r"[A-Za-z0-9]+", variant or "")
         substantive_variant_words = [
             word for word in variant_words
@@ -7278,7 +7284,7 @@ def search_mi_name_fallback(page, org):
         )
 
     variants = sorted(variants, key=lambda value: (
-        value.strip().casefold() != org.organization_name.strip().casefold(), mi_variant_priority(value)))
+        value.strip().casefold() != portal_query(org.organization_name).strip().casefold(), mi_variant_priority(value)))
 
     completed_empty_queries = []
     for variant in variants[:4]:
@@ -20065,10 +20071,6 @@ def search_wv_precise(page, org):
 
             body = registry_page_body(page)
             completed_queries.append(query_name)
-            query_targets = list(dict.fromkeys([
-                *safe_targets,
-                *organization_match_target_variants(query_name, org.ein),
-            ]))
             if re.search(r"\bNo\s+(?:matching\s+)?(?:records?|results?)\b|records\s+0\s+to\s+0\s+of\s+0", body, re.I):
                 continue
 
@@ -20092,16 +20094,20 @@ def search_wv_precise(page, org):
                     continue
                 if not registry_id or not registry_name:
                     continue
-                score = target_name_score(registry_name, query_targets)
+                # Broad queries discover rows; only original identity targets
+                # may establish a match (including a named hospital location).
+                score = target_name_score(registry_name, safe_targets)
                 safe_candidate = score >= 450 and registry_name_is_safe_against_targets(
                     registry_name, safe_targets, org.organization_name, org.ein,
                 )
+                if not safe_candidate:
+                    continue
                 # Status only breaks a tie after safety and name strength.
                 rank = (int(safe_candidate), score, registry_exact_active_tiebreak(registry_name, safe_targets, status_text))
                 if rank > best_rank:
                     best_rank = rank
                     best_score = score
-                    best = (row, registry_id, registry_name, status_text, query_targets)
+                    best = (row, registry_id, registry_name, status_text, safe_targets)
             if best is not None and best_score >= 450:
                 break
 
