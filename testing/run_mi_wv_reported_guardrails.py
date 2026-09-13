@@ -76,5 +76,15 @@ class LocationTests(unittest.TestCase):
  def test_detail_cannot_switch_to_sibling_using_broad_query(self):
   r,_=self.wv([("10","Beth Israel Deaconess Hospital - Milton, Inc.","Active")],"Beth Israel Deaconess Hospital – Milton, Inc.",detail_name="Beth Israel Deaconess Hospital - Needham, Inc.")
   self.assertEqual(c.public_status(r),"Not Registered");self.assertFalse(r.matched_registry_identifier)
+ def test_existing_nonlocation_registry_name_omission_is_preserved(self):
+  # Captured WV C230213021545: the public name omits "Women and".
+  # Location protection must not tighten all existing WV name variations.
+  with patch.object(c,"wv_preferred_query_variants",return_value=["Anita Borg Institute"]):
+   r,selected=self.broad_flow([("C230213021545","ANITA BORG INSTITUTE FOR TECHNOLOGY","Active")],"Anita Borg Institute for Women and Technology",None)
+  self.assertEqual(r.matched_registry_identifier,"C230213021545")
+  self.assertEqual(selected[0][1],"ANITA BORG INSTITUTE FOR TECHNOLOGY")
+ def test_location_cannot_be_dropped_for_parent_record(self):
+  r,selected=self.wv([("parent","Beth Israel Deaconess Hospital, Inc.","Active")],"Beth Israel Deaconess Hospital – Milton, Inc.")
+  self.assertEqual(c.public_status(r),"Not Registered");self.assertFalse(selected)
 
 if __name__=="__main__":unittest.main()

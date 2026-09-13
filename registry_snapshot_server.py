@@ -97,7 +97,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.13.2-staging").strip() or "2026.09.13.2-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.13.3-staging").strip() or "2026.09.13.3-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -20037,6 +20037,16 @@ def search_wv_precise(page, org):
     )
     try:
         safe_targets = getattr(org, "match_target_names", None) or organization_match_target_variants(org.organization_name, org.ein)
+        def location_identity_is_safe(registry_name):
+            # A dash-delimited branch/location must survive broad discovery.
+            # Keep the established WV treatment of other registry name variants.
+            location_separator = r"\s-\s*|\s*-\s|[\u2010-\u2015\u2212]"
+            if not re.search(location_separator, org.organization_name + " " + registry_name):
+                return True
+            return registry_name_is_safe_against_targets(
+                registry_name, safe_targets, org.organization_name, org.ein,
+            )
+
         best = None
         best_score = -10000
         best_rank = (-1, -10000, -1)
@@ -20071,6 +20081,10 @@ def search_wv_precise(page, org):
 
             body = registry_page_body(page)
             completed_queries.append(query_name)
+            query_targets = list(dict.fromkeys([
+                *safe_targets,
+                *organization_match_target_variants(query_name, org.ein),
+            ]))
             if re.search(r"\bNo\s+(?:matching\s+)?(?:records?|results?)\b|records\s+0\s+to\s+0\s+of\s+0", body, re.I):
                 continue
 
@@ -20094,20 +20108,18 @@ def search_wv_precise(page, org):
                     continue
                 if not registry_id or not registry_name:
                     continue
-                # Broad queries discover rows; only original identity targets
-                # may establish a match (including a named hospital location).
-                score = target_name_score(registry_name, safe_targets)
+                if not location_identity_is_safe(registry_name):
+                    continue
+                score = target_name_score(registry_name, query_targets)
                 safe_candidate = score >= 450 and registry_name_is_safe_against_targets(
                     registry_name, safe_targets, org.organization_name, org.ein,
                 )
-                if not safe_candidate:
-                    continue
                 # Status only breaks a tie after safety and name strength.
                 rank = (int(safe_candidate), score, registry_exact_active_tiebreak(registry_name, safe_targets, status_text))
                 if rank > best_rank:
                     best_rank = rank
                     best_score = score
-                    best = (row, registry_id, registry_name, status_text, safe_targets)
+                    best = (row, registry_id, registry_name, status_text, query_targets)
             if best is not None and best_score >= 450:
                 break
 
@@ -20156,7 +20168,7 @@ def search_wv_precise(page, org):
         detail_text = registry_page_body(page)
         detail_name = useful_registry_name(text_between_labels(detail_text, "Organization Name", ["Expiration Date", "Contact Name", "Status", "Street Address"]))
         matched_name = detail_name or registry_name
-        if matched_name and not registry_name_is_safe_against_targets(matched_name, selected_targets, org.organization_name, org.ein):
+        if matched_name and (not location_identity_is_safe(matched_name) or not registry_name_is_safe_against_targets(matched_name, selected_targets, org.organization_name, org.ein)):
             result = wv_completed_no_match_result(
                 result,
                 completed_queries or searched_queries,

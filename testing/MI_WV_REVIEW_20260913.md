@@ -1,6 +1,20 @@
 # Michigan / West Virginia corrections — September 13, 2026
 
-Candidate: 2026.09.13.2-staging. Baseline: d03bcea465d363d1bd6c714f43adae811f7b0dbd (2026.09.13.1-staging).
+Candidate: **2026.09.13.3-staging**. Original baseline: d03bcea465d363d1bd6c714f43adae811f7b0dbd (2026.09.13.1-staging). Follow-up to 00f60b027f3ea6e935f0bf70baae86fee05dd95a (2026.09.13.2-staging).
+
+## Follow-up: preserve existing WV name variations
+
+Post-validation caught a regression in .2 at Anita Borg (77-0480427): WV uses ANITA BORG INSTITUTE FOR TECHNOLOGY, omitting “Women and.” The original release returned Upcoming Filing for C230213021545; the .2 change rejected it. Of the prior first-50 affirmative WV registry identities, this was the only identity rejected by the stricter gate. The original .2 run is retained at 702 checks, with this mismatch and separate NY smoke verification failures. It is not a passing run.
+
+The final WV scope is narrower than the historical .2 proposal below. When either name has a spaced hyphen or typographic dash delimiting a location or branch, `search_wv_precise` requires a match against the original safe identity targets before selection and again on the detail page. A broad query cannot remove or substitute Milton/Needham, nor attach Needham to the Medical Center. Outside those names, established .1 WV query scoring and detail confirmation are restored, preserving the Anita Borg omission. Active-status ranking remains subordinate to equivalent identity. Michigan's query punctuation correction is unchanged.
+
+This follows the user's requested location distinction without tightening every WV name variation. No global Foundation deletion, new organization alias, shared matcher change, status interpretation, downloadable dataset, state routing, runtime sidecar, or connector change is introduced. Only the same two runtime functions differ from .1. Frontend changes are version metadata and the internal validation page's allowance for 55 organizations. Production and environment variables remain untouched.
+
+Ten targeted MI/WV cases cover the reported failures, correct location, active wrong sibling versus exact closed location, parent without requested location, detail-page sibling substitution, and Anita Borg's existing omission. The omission test fails against .2 and passes with the narrower safeguard. The full backend/browser suites and 48 local controls are repeated. A separate fresh live WV preflight covering all 55 approved organizations is required by the deployment gate. Fresh 55 × 30 post-validation must restart on .3; the .2 originals remain separate and expectations are not edited.
+
+Evidence is isolated under `outputs/mi-wv-location-followup-20260913/`. The initial directory `outputs/mi-wv-location-fixes-20260913/` retains the .2 results, `wv-prior-identity-audit.json`, and failing omission test. Actual outcomes and release identifiers belong in the follow-up release report; this document is not a completion claim.
+
+## Historical .2 proposal and diagnosis — superseded by the narrower scope above
 
 ## Reproduced causes
 
