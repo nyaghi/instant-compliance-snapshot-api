@@ -153,7 +153,7 @@ class ReportedCases(unittest.TestCase):
 
     def test_ma_contrary_registry_status_overrides_schedule_only_inference(self):
         self.assertEqual(self.ma_evidence([self.schedule()],status='Not Doing Business in Mass')['status'],
-                         'Closed / Withdrawn / Canceled')
+                         'Needs Review')
         self.assertEqual(self.ma_evidence([self.schedule()],status='Pending')['status'],'Needs Review')
 
     def test_me_truncated_registry_name_is_discoverable_without_relaxing_identity(self):

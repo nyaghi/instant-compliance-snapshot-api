@@ -39,7 +39,7 @@ class ReportedCases(unittest.TestCase):
                                     ('National Marrow Donor Program','National Marrow Donor Program Foundation')]:
             self.assertNotEqual(c.score_candidate(requested,'',{'name':candidate})['decision'],'accepted')
     def wi_row(self,name='AMERICAN FARRIERS ASSOCIATION INC',license='23067-800'):
-        return f'<tr><td>{license}</td><td>Charitable Organization</td><td><a href="CredSummaryDetails.aspx?chid=945248">{name}</a></td><td>Lexington KY</td><td>7/1/2022</td><td>7/31/2025</td></tr>'
+        return f'<tr><td>{license}</td><td>Charitable Organization</td><td><a href="CredSummaryDetails.aspx?chid=999999">{name}</a></td><td>Lexington KY</td><td>7/1/2022</td><td>7/31/2025</td></tr>'
     def test_wi_missing_foundation_is_review_never_a_positive_or_negative(self):
         org=self.org();targets=c.organization_match_target_variants(org.organization_name,org.ein)
         candidate=c.wi_candidate_from_row_html(self.wi_row(),targets,org.organization_name,org.ein)
@@ -60,14 +60,14 @@ class ReportedCases(unittest.TestCase):
     def test_review_does_not_include_unrelated_or_wrong_profession(self):
         for name,license in [('OTHER FARRIERS ASSOCIATION INC','23067-800'),('AMERICAN FARRIERS ASSOCIATION INC','23067-100')]:
             self.assertIsNone(c.wi_foundation_identity_review(name,self.farrier,license,'CredSummaryDetails.aspx?chid=1','7/31/2025'))
-    def test_va_exact_identity_survives_unconfirmed_registration(self):
+    def test_va_exact_identity_preserves_explicit_restriction_without_registrations(self):
         org=self.org('Al-Ayn Social Care Foundation','47-1614315')
         entity={'id':'74671','name':org.organization_name,'fullName':org.organization_name,'ein':org.ein,'status':'Not Authorized to Solicit'}
         with patch.object(c,'va_evoke_entity_search_by_ein',return_value=[entity]),patch.object(c,'va_evoke_registrations_for_entity',return_value=[]):
             result=c.search_va_evoke_api(org)
         with patch.object(c,'public_profile_for_ein',return_value={}):
             data=c.response_data_for_lookup(result,'',org,org.organization_name,org.ein,'VA',time.perf_counter())
-        self.assertEqual(data['status'],'Unable to Confirm');self.assertFalse(data['success'])
+        self.assertEqual(data['status'],'Suspended');self.assertTrue(data['success'])
         self.assertEqual(data['matched_registry_name'],org.organization_name)
         self.assertIn('Not Authorized to Solicit',data['comments']);self.assertIn('no registration entries',data['comments'])
         self.assertEqual(data['va_entity_evidence']['ein'],'471614315')

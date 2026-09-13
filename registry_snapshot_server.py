@@ -97,7 +97,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.12.4-staging").strip() or "2026.09.12.4-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.13.1-staging").strip() or "2026.09.13.1-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -5518,6 +5518,12 @@ def search_va_evoke_api(org):
         result.va_entity_evidence = {"ein": entity_ein, "name": selected["display_name"],
             "id": selected["identifier"], "entity_id": str(entity.get("id") or ""),
             "status": str(entity.get("status") or ""), "registration_count": selected["registration_count"]}
+        # A completed empty history cannot erase an explicit solicitation restriction.
+        # Keep the existing expired-registration interpretation and name-only paths.
+        if (selected["registration_count"] == 0 and selected["status"] == "Unable to Confirm"
+                and re.fullmatch(r"\s*Not\s+Authorized\s+to\s+Solicit\s*", str(entity.get("status") or ""), re.I)):
+            result.status = "Suspended"
+            result.status_reason = "VA_CONFIRMED_SOLICITATION_RESTRICTION"
     result.success = public_status(result) not in {"Unable to Verify", "Unable to Confirm"}
     return result
 
@@ -11399,11 +11405,15 @@ def ma_read_latest_form_pc(page, result, body: str, completed=None) -> dict:
         return {"adverse_status": adverse.group(1).title(), "ago_account": account.group(1)}
     completed = completed or {}
     record = completed.get("record", {})
+    context = {}
     if record.get("ago_account") == account.group(1):
         registry_status = record.get("registry_status", "").strip()
-        # These statuses contradict inferring delinquency from absent filings.
-        # The user-approved inactive category retains the state's exact wording.
-        if re.search(r"not doing business|inactive|exempt|suspend|revok|withdraw|closed|pending", registry_status, re.I):
+        # This activity description alone does not establish formal withdrawal.
+        # Preserve it while reading the submitted annual report; do not generalize
+        # this exception to explicit adverse or other unrecognized statuses.
+        if registry_status.casefold() == "not doing business in mass":
+            context = {"registry_status": registry_status, "ago_account": account.group(1)}
+        elif re.search(r"not doing business|inactive|exempt|suspend|revok|withdraw|closed|pending", registry_status, re.I):
             return {"registry_status": registry_status, "ago_account": account.group(1), "contrary_status": True}
         filings = completed.get("filings", {}).get(account.group(1), {})
         if filings.get("empty") is True or filings.get("only_schedule_a2") is True:
@@ -11425,11 +11435,11 @@ def ma_read_latest_form_pc(page, result, body: str, completed=None) -> dict:
             if match:
                 candidates.append((int(match.group(1)), index))
         if not candidates or max(all_form_years) > max(year for year, _ in candidates):
-            return ma_read_legacy_form_pc(page, completed, account.group(1))
+            return {**ma_read_legacy_form_pc(page, completed, account.group(1)), **context}
         latest_year = max(year for year, _ in candidates)
         latest = [index for year, index in candidates if year == latest_year]
         if len(latest) > 3:
-            return {}
+            return context
         deadline = time.monotonic() + 30.0
         forms = []
         def remaining_ms(cap):
@@ -11447,16 +11457,16 @@ def ma_read_latest_form_pc(page, result, body: str, completed=None) -> dict:
                 text = detail.locator("body").inner_text(timeout=remaining_ms(5000))
                 evidence = ma_submitted_form_pc_evidence(text, latest_year, account.group(1))
                 if not evidence:
-                    return {}
+                    return context
                 evidence["source_url"] = detail.url
                 forms.append(evidence)
             finally:
                 if detail is not None:
                     detail.close()
-        return ma_latest_distinct_fiscal_period(forms)
+        return {**ma_latest_distinct_fiscal_period(forms), **context}
     except Exception as exc:
         log_event(f"MA Form PC detail unavailable for AGO {account.group(1)}: {type(exc).__name__}")
-        return {}
+        return context
 
 
 def annotate_ma_visible_form_pc_due(result, evidence=None):
@@ -11467,9 +11477,8 @@ def annotate_ma_visible_form_pc_due(result, evidence=None):
     result.ma_filing_evidence = dict(evidence or {})
     if result.ma_filing_evidence.get("contrary_status"):
         registry_status = result.ma_filing_evidence["registry_status"]
-        inactive = registry_status.strip().lower() == "not doing business in mass"
-        result.status = "Closed / Withdrawn / Canceled" if inactive else "Needs Review"
-        result.status_reason = "MA_NOT_DOING_BUSINESS_INACTIVE" if inactive else "MA_EXPLICIT_STATUS_REQUIRES_REVIEW"
+        result.status = "Needs Review"
+        result.status_reason = "MA_EXPLICIT_STATUS_REQUIRES_REVIEW"
         result.raw_status_text = f"Charity Status: {registry_status}"
         result.matched_registry_identifier = result.ma_filing_evidence["ago_account"]
         result.source_note = "Massachusetts reports an explicit charity status that contradicts inferring delinquency from missing filings."
@@ -11531,6 +11540,8 @@ def annotate_ma_visible_form_pc_due(result, evidence=None):
         f"Next Filing Due: {format_date(due_date)}",
         "Automatic Extension: Inferred from submitted prior report",
     ])
+    if result.ma_filing_evidence.get("registry_status"):
+        result.raw_status_text += f" | Charity Status: {result.ma_filing_evidence['registry_status']}"
     result.computed_due_date = format_date(due_date)
     result.fiscal_year_end = f"{fiscal_end[0]}/{fiscal_end[1]}"
     result.last_year_on_record = period_end.year
@@ -12765,6 +12776,57 @@ def wi_foundation_identity_review(registry_name: str, original_name: str, licens
             "detail_url": urljoin(WI_SEARCH_URL, href), "reason": "Registry name omits Foundation; no identity equivalence established."}}
 
 
+def wi_reviewed_credential_identity(original_name: str, ein: str, candidate: dict) -> dict:
+    """One reviewed identity association; never a generic Foundation-name alias.
+
+    Approved September 13, 2026: WI credential 23067-800's 2022 filing matches
+    Foundation EIN 87-2999231: revenue 130869, expenses 9816, net assets 122273.
+    The similarly named Association has a different EIN (61-1424719).
+    Revalidate the public credential and read its status on every lookup.
+    """
+    url = urlparse(urljoin(WI_SEARCH_URL, candidate.get("detail_href", "")))
+    if (canonical_ein_digits(ein) != "872999231"
+            or normalized_match_name(original_name) != "american farriers association foundation"
+            or normalized_match_name(candidate.get("registry_name", "")) != "american farriers association"
+            or candidate.get("license_number") != "23067-800"
+            or url.scheme != "https" or url.netloc.lower() != "apps.dfi.wi.gov"
+            or url.path.lower() != "/ice/berg/registration/credsummarydetails.aspx"
+            or parse_qs(url.query).get("chid") != ["945248"]):
+        return {}
+    return {"requested_ein": "872999231", "credential": "23067-800", "source_id": "945248",
+            "registry_name": candidate["registry_name"], "detail_url": url.geturl(),
+            "basis": "Reviewed corresponding 2022 financial filings; Wisconsin does not display an EIN.",
+            "reviewed_on": "2026-09-13",
+            "financial_source": "https://apps.dfi.wi.gov/ice/berg/Registration/Financials.aspx?chid=945248&h=764579286",
+            "tax_source": "https://projects.propublica.org/nonprofits/organizations/872999231"}
+
+
+def wi_confirm_reviewed_credential(candidate: dict, original_name: str, ein: str) -> dict:
+    evidence = wi_reviewed_credential_identity(original_name, ein, candidate)
+    if not evidence:
+        return candidate
+    text = wi_http_detail_text(candidate.get("detail_href", ""))
+    compact = re.sub(r"\s+", " ", text or "").strip()
+    primary = re.search(r"\bName\s*:\s*(.*?)\s+Credential\s+Type\s*:", compact, re.I)
+    number = re.search(r"\bCredential\s+Number\s*:\s*([\d-]+)", compact, re.I)
+    status = wi_extract_detail_status(text)
+    if (primary and number and number.group(1) == evidence["credential"]
+            and normalized_match_name(primary.group(1)) == normalized_match_name(evidence["registry_name"])
+            and wi_status_from_detail_status(status)):
+        candidate = {**candidate, "identity_conflict": False, "detail_status": status,
+                     "reviewed_identity_evidence": evidence}
+    return candidate
+
+
+def wi_result_has_reviewed_identity(result, org) -> bool:
+    evidence = getattr(result, "wi_reviewed_identity_evidence", {})
+    candidate = {"registry_name": getattr(result, "matched_registry_name", ""),
+                 "license_number": getattr(result, "matched_registry_identifier", ""),
+                 "detail_href": evidence.get("detail_url", "")}
+    expected = wi_reviewed_credential_identity(org.organization_name, org.ein, candidate)
+    return bool(result.state == "WI" and expected and evidence == expected)
+
+
 def wi_candidate_from_row_html(row_html: str, target_names: list[str], original_name: str = "", ein: str = "") -> dict | None:
     values = html_table_cells(row_html)
     if len(values) < 6:
@@ -13164,6 +13226,12 @@ def search_wi(page, org, max_seconds: float | None = None):
             result.success = False
             return result
 
+        if best_match.get("identity_conflict") and best_match.get("identity_review_evidence"):
+            best_match = wi_confirm_reviewed_credential(best_match, original_name, ein)
+        if best_match.get("reviewed_identity_evidence"):
+            result.wi_reviewed_identity_evidence = best_match["reviewed_identity_evidence"]
+            result.source_url = result.wi_reviewed_identity_evidence["detail_url"]
+            result.identity_anchor = "reviewed_credential_filing_identity"
         if best_match.get("identity_conflict"):
             if best_match.get("identity_review_evidence"):
                 result.status = "Needs Review"
@@ -13572,7 +13640,7 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
             getattr(result, "ein", "") or getattr(org, "ein", ""),
             {"name": getattr(result, "matched_registry_name", "")},
         )
-        if identity_decision.get("decision") == "rejected" and not explicit_acronym_alias_matches_registry(
+        if identity_decision.get("decision") == "rejected" and not wi_result_has_reviewed_identity(result, org) and not explicit_acronym_alias_matches_registry(
             getattr(org, "organization_name", ""), getattr(result, "matched_registry_name", "")
         ):
             rejected_name = getattr(result, "matched_registry_name", "")
@@ -13612,6 +13680,11 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         data["comments"] += (f" Minnesota explicitly lists {alias_evidence['confirmed_alias']} as an alternate name under "
                              f"{alias_evidence['registered_name']}, registered EIN {alias_evidence['registered_ein']}. "
                              f"This confirms the alternate-name listing, not a separate registration for requested EIN {alias_evidence['requested_ein']}.")
+    if wi_result_has_reviewed_identity(result, org) and result.success:
+        data["comments"] += (" Identity is based on a reviewed association of credential 23067-800 with the Foundation's "
+                             "corresponding 2022 financial filings. Wisconsin lists AMERICAN FARRIERS ASSOCIATION INC "
+                             "and does not display an EIN; this identity association is inferred from filing evidence. "
+                             "The credential status above was retrieved from Wisconsin for this check.")
     data["evidence_url"] = ""
     data["lookup_seconds"] = round(time.perf_counter() - lookup_started, 2)
     data["checked_at_epoch"] = int(time.time())
@@ -13636,6 +13709,7 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         "ny_filing_evidence",
         "mn_alias_evidence",
         "va_entity_evidence",
+        "wi_reviewed_identity_evidence",
         "identity_review_evidence",
         "source_truth_conflict",
     ]:
@@ -15936,8 +16010,12 @@ def true_status_from_body(result, body: str) -> str:
         return status_from_calendar_date(parsed_result_date(result.computed_due_date))
     if state == "MA" and getattr(result, "status_reason", "") == "MA_CONFIRMED_EMPTY_HISTORY_INFERRED_DELINQUENT":
         return "Delinquent"
-    if state == "MA" and getattr(result, "status_reason", "") == "MA_NOT_DOING_BUSINESS_INACTIVE":
-        return "Closed / Withdrawn / Canceled"
+    if state == "VA" and getattr(result, "status_reason", "") == "VA_CONFIRMED_SOLICITATION_RESTRICTION":
+        evidence = getattr(result, "va_entity_evidence", {})
+        if (evidence.get("registration_count") == 0 and len(evidence.get("ein", "")) == 9
+                and evidence["ein"] == canonical_ein_digits(result.ein)
+                and re.fullmatch(r"\s*Not\s+Authorized\s+to\s+Solicit\s*", evidence.get("status", ""), re.I)):
+            return "Suspended"
     confirmed_status = getattr(result, "_cc_confirmed_feedback_status", "")
     if confirmed_status:
         return confirmed_status
@@ -16331,6 +16409,11 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
 
     if state == "WI" and getattr(result, "reason_code", "") == "WI_FOUNDATION_IDENTITY_REVIEW":
         return note
+    if state == "VA" and reason == "VA_CONFIRMED_SOLICITATION_RESTRICTION" and status == "Suspended":
+        return ("Virginia found the organization by exact EIN and explicitly lists Not Authorized to Solicit. "
+                "Its completed registration history returned no registration entries. CharityClarity uses its existing "
+                "Suspended category for this solicitation restriction; the state wording does not establish a formal "
+                "suspension order or the reason for the restriction.")
     if state == "VA" and getattr(result, "reason_code", "") == "VA_MATCHED_BY_EXACT_FEIN" and status == "Unable to Confirm":
         evidence = getattr(result, "va_entity_evidence", {})
         if evidence.get("registration_count") == 0 and evidence.get("status"):
@@ -16356,10 +16439,6 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
         return ("The matched New York record returned a completed document collection with no annual filings and no recorded exemption. "
                 "CharityClarity therefore infers Delinquent. This is an inferred status, not an explicit state determination; "
                 "a specific overdue deadline was not confirmed, and recent filings may still be awaiting state review.")
-    if state == "MA" and reason == "MA_NOT_DOING_BUSINESS_INACTIVE":
-        return ("Massachusetts lists the charity status as Not Doing Business in Mass. "
-                "CharityClarity groups this inactive status under Closed / Withdrawn / Canceled. "
-                "The registry record remains on file; the state wording does not specify a formal withdrawal or cancellation.")
     if state == "MA" and reason == "MA_EXPLICIT_STATUS_REQUIRES_REVIEW":
         return (f"Massachusetts lists the charity status as {result.ma_filing_evidence['registry_status']}. "
                 "This contradicts inferring delinquency from missing filings, so CharityClarity reports Needs Review. "
@@ -16371,13 +16450,18 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
     if state == "MA" and reason in {"MA_CHARITY_SELECTION_UNCONFIRMED", "MA_FILING_LIST_UNCONFIRMED"}:
         return result.source_note
     if state == "MA" and reason == "MA_FORM_PC_DETAIL_UNCONFIRMED":
-        return ("The organization was found in the Massachusetts registry, but its latest submitted Form PC fiscal period "
+        context = getattr(result, "ma_filing_evidence", {}).get("registry_status", "")
+        return ((f"Massachusetts lists the charity status as {context}. " if context else "")
+                + "The organization was found in the Massachusetts registry, but its latest submitted Form PC fiscal period "
                 "could not be confirmed. CharityClarity reports Unable to Confirm because no reliable next deadline "
                 "could be calculated; missing public filing details do not establish delinquency.")
     if state == "MA" and reason == "MA_SUBMITTED_FORM_PC_FISCAL_PERIOD":
         evidence = result.ma_filing_evidence
         due = parsed_result_date(result.computed_due_date)
-        return (f"The latest submitted Form PC covers the fiscal year ending {evidence['period_end']}. "
+        context = (f"Massachusetts also lists {evidence['registry_status']}. That activity description alone does not establish "
+                   "formal closure or withdrawal; this result reflects the annual filing deadline. "
+                   if evidence.get("registry_status") else "")
+        return (context + f"The latest submitted Form PC covers the fiscal year ending {evidence['period_end']}. "
                 f"The next annual report, for the period ending {result.next_required_period}, has a base deadline "
                 f"of {evidence['base_due']}. Massachusetts provides an automatic six-month extension for registered "
                 f"charities in compliance with annual reporting requirements. Based on the submitted prior report, "

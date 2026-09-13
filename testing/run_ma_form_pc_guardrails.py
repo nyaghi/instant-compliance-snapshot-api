@@ -175,8 +175,9 @@ class MassachusettsTests(unittest.TestCase):
             evidence = cc.ma_read_latest_form_pc(Mock(), self.result(), "AG Account Number 051172",
                                                 self.completed(empty=empty, status="Not Doing Business in Mass"))
             r = cc.annotate_ma_visible_form_pc_due(self.result(), evidence)
-            self.assertEqual(cc.true_status_from_body(r, ""), "Closed / Withdrawn / Canceled")
-            self.assertIn("Not Doing Business in Mass", cc.comments_for_result(r, "", "Closed / Withdrawn / Canceled"))
+            expected = "Needs Review" if empty else "Unable to Confirm"
+            self.assertEqual(cc.true_status_from_body(r, ""), expected)
+            self.assertIn("Not Doing Business in Mass", cc.comments_for_result(r, "", expected))
 
     def test_completed_response_requires_correct_identity_and_success(self):
         import json
