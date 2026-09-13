@@ -52,6 +52,7 @@ class SetupUI(unittest.TestCase):
         page=self.page(True)
         self.assertFalse(page.locator('[data-connector-install]').is_visible())
         self.assertEqual(page.get_by_role('link',name='Set up New York in 3 steps').count(),0)
+        self.assertTrue(page.get_by_text('CharityClarity v2026.09.13.4 · Staging',exact=True).is_visible())
         page.locator('#nyConnectorSetup').screenshot(path=str(OUT/'main-ready.png'))
     def test_missing_main_offers_three_step_setup(self):
         page=self.page(False)

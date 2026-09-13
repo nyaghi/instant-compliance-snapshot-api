@@ -83,6 +83,10 @@
     return refreshing;
   }
   async function lookup({ organization_name, ein, email, admin_passcode, device_id, onProgress }) {
+    if (refreshing) {
+      onProgress?.("New York: waiting for the connection refresh. Other states can continue.");
+      await refreshing;
+    }
     activeLookups++;
     const refreshButton = document.querySelector("[data-connector-refresh]");
     if (refreshButton) refreshButton.disabled = true;

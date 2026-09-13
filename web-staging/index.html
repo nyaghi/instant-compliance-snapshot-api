@@ -479,7 +479,7 @@
 
         <div>&copy; <span id="year"></span> Compliance Express</div>
 
-          <div class="font-semibold text-slate-600">CharityClarity v2026.09.13.3 &middot; Staging</div>
+          <div class="font-semibold text-slate-600">CharityClarity v2026.09.13.4 &middot; Staging</div>
         <div>No legal or tax advice.</div>
 
       </div>
@@ -565,13 +565,14 @@
       const original = latestResults.find(r => r.state === "NY" && String(r.ein).replace(/\D/g, "") === String(input.einValue).replace(/\D/g, "") && r.organization_name === input.organizationNameValue);
       if (!original || !["Unable to Confirm", "Site Not Reachable"].includes(original.status)) return;
       nyResultRefresh = true;
+      submitButton.disabled = true;
       try {
         const result = await requestSingleState(input.apiBase, input.einValue, input.emailValue, "NY", input.organizationNameValue, true);
         // A new submission or another result update supersedes this retry.
         if (lastNyInput === input && latestResults.includes(original)) {
           renderResults(latestResults.map(r => r === original ? { ...result, _request_id: original._request_id } : r), true);
         }
-      } finally { nyResultRefresh = false; }
+      } finally { nyResultRefresh = false; submitButton.disabled = false; }
     });
 
     let internalUnlocked = false;
@@ -1522,6 +1523,7 @@
     form.addEventListener("submit", async (event) => {
 
       event.preventDefault();
+      if (nyResultRefresh) return;
 
       clearError();
 
