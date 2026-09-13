@@ -97,7 +97,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.12.3-staging").strip() or "2026.09.12.3-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.12.4-staging").strip() or "2026.09.12.4-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -5845,9 +5845,21 @@ def me_fast_direct_query_variants(org) -> list[str]:
     # Maine's Begins With search already covers longer queries with the
     # identical prefix. Retain punctuation/alias variants that change it.
     bounded = variants[:ME_FAST_DIRECT_CONFIRMATION_MAX_VARIANTS]
-    return [query for query in bounded if not any(
+    queries = [query for query in bounded if not any(
         other != query and query.casefold().startswith(other.casefold())
         for other in bounded)]
+    # Some ME record names end mid-word. Reserve one final four-word prefix
+    # from the master ladder; acceptance still compares the complete identity.
+    prefix_sources = [canonical_name_punctuation(name).casefold()
+                      for name in (original_name, leading_article_removed)]
+    prefix = next((query for query in build_search_queries(original_name, getattr(org, "ein", ""))
+                   if len(query.split()) == 4
+                   and any(source.startswith(query.casefold() + " ") for source in prefix_sources)
+                   and any(token.casefold() not in WEAK_NAME_MATCH_TOKENS
+                           for token in query.split())), None)
+    if prefix and not any(prefix.casefold().startswith(query.casefold()) for query in queries):
+        queries = queries[:ME_FAST_DIRECT_CONFIRMATION_MAX_VARIANTS - 1] + [prefix]
+    return queries
 
 
 def me_request_timeout(deadline: float, maximum: float) -> float:
@@ -11285,6 +11297,14 @@ def ma_capture_completed_response(response, org, evidence: dict) -> None:
                 # A completed all-filings response, not a filtered or loading table.
                 evidence.setdefault("filings", {})[str(query["agoNumber"])] = {
                     "empty": len(rows) == 0, "row_count": len(rows),
+                    # Schedule A2 is a supplement, not the annual Form PC.
+                    # Unknown labels cannot establish an absent annual report.
+                    "only_schedule_a2": bool(rows) and all(
+                        isinstance(row, dict)
+                        and row.get("nameforURL") == "Schedule-A2 Data"
+                        and row.get("nameforButton") == "View Filing Schedule-A2 Data"
+                        and re.fullmatch(r"20\d{2}", str(row.get("filingYear") or ""))
+                        for row in rows),
                     "annual_scans": [{"year": str(row.get("filingYear") or ""),
                                       "title": str(row.get("nameforURL") or ""),
                                       "url": str(row.get("url") or "")} for row in rows
@@ -11385,10 +11405,11 @@ def ma_read_latest_form_pc(page, result, body: str, completed=None) -> dict:
         if re.search(r"not doing business|inactive|exempt|suspend|revok|withdraw|closed|pending", registry_status, re.I):
             return {"registry_status": registry_status, "ago_account": account.group(1), "contrary_status": True}
         filings = completed.get("filings", {}).get(account.group(1), {})
-        if filings.get("empty") is True:
+        if filings.get("empty") is True or filings.get("only_schedule_a2") is True:
             if registry_status.lower() in {"", "registered", "delinquent", "expired"}:
                 return {"empty_history_confirmed": True, "ago_account": account.group(1),
-                        "registry_status": registry_status}
+                        "registry_status": registry_status,
+                        "schedule_a2_only": filings.get("only_schedule_a2") is True}
             # Unrecognized or affirmative current statuses require interpretation.
             return {"registry_status": registry_status, "ago_account": account.group(1), "contrary_status": True}
     candidates = []
@@ -11461,6 +11482,9 @@ def annotate_ma_visible_form_pc_due(result, evidence=None):
         result.fiscal_year_end = ""
         result.next_required_period = ""
         result.source_note = "The matched Massachusetts record returned a completed empty filing history with no contradictory charity status. CharityClarity infers Delinquent; this is not an explicit state delinquency determination."
+        if result.ma_filing_evidence.get("schedule_a2_only"):
+            result.raw_status_text = "Completed filing list contains only Schedule A2; no annual Form PC | Delinquency inferred"
+            result.source_note = "The completed Massachusetts filing list contains only Schedule A2 supplemental data and no annual Form PC, with no contradictory charity status. CharityClarity infers Delinquent; this is not an explicit state delinquency determination."
         return result
     if result.ma_filing_evidence.get("adverse_status"):
         adverse = result.ma_filing_evidence["adverse_status"]
@@ -13608,6 +13632,7 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         "next_required_period",
         "computed_due_date",
         "ma_filing_evidence",
+        "ny_filing_evidence",
         "mn_alias_evidence",
         "va_entity_evidence",
         "identity_review_evidence",
@@ -15125,13 +15150,20 @@ def search_ny_direct(org, browser_page=None, registry_search_provider=None):
                     score = score_candidate(org.organization_name, requested_ein,
                                             {"name": row["orgName"], "ein": candidate_ein})
                     if score["decision"] == "accepted":
-                        candidates[str(row["orgID"])] = row
+                        candidates[str(row["orgID"])] = (score["score"], row)
                     elif score["decision"] == "possible":
                         possible = True
-                if len(candidates) > 1 or (possible and not candidates):
+                if possible and not candidates:
                     raise ValueError("New York search returned ambiguous organization identities")
                 if candidates:
-                    selected = next(iter(candidates.values()))
+                    # Honor the existing master's identity strength: exact EIN
+                    # plus exact name outranks EIN alone. Equal best rows remain
+                    # ambiguous; filing recency is not an active-status signal.
+                    best_score = max(score for score, row in candidates.values())
+                    strongest = [row for score, row in candidates.values() if score == best_score]
+                    if len(strongest) != 1:
+                        raise ValueError("New York search returned ambiguous organization identities")
+                    selected = strongest[0]
                     break
             if selected is None:
                 result.status = checker.STATUS_NOT_REGISTERED
@@ -15178,10 +15210,16 @@ def search_ny_direct(org, browser_page=None, registry_search_provider=None):
             result.source_note = "Organization identity and filing documents confirmed from the New York registry's official data service."
             result.success = True
             if not fiscal_dates:
+                if (set(documents) - {"Annual Filing for Charitable Organizations", "Registration Documents", "Other Filed Documents"}
+                        or any(not isinstance(document, dict) for entries in documents.values() for document in entries)):
+                    raise ValueError("New York document categories or entries could not confirm an empty annual filing history")
                 # Preserve the existing NY interpretation for a confirmed record with no annual filings.
                 result.status = checker.STATUS_DELINQUENT
                 result.raw_status_text = "No filings found"
                 result.status_reason = "NY_SAFE_MATCH_NO_FILINGS_DELINQUENT"
+                result.ny_filing_evidence = {"empty_history_confirmed": True, "category": category,
+                                             "org_id": str(detail["orgID"]), "ein": detail_ein,
+                                             "annual_document_count": 0, "document_categories": sorted(documents)}
                 result.source_note += " The completed record contains no annual filing documents."
                 return result
             result.raw_status_text = f"Registration category: {category} | Latest FYE: {max(fiscal_dates).isoformat()}"
@@ -15919,8 +15957,11 @@ def true_status_from_body(result, body: str) -> str:
         return status_from_calendar_date(registry_date) if registry_date else base_status
     if result_explicitly_exempt(result):
         return "Exempt"
-    # Unavailable filing evidence stays inconclusive. MA's explicitly confirmed
-    # empty-history inference is handled above under the user-approved rule.
+    if (state == "NY" and getattr(result, "status_reason", "") == "NY_SAFE_MATCH_NO_FILINGS_DELINQUENT"
+            and getattr(result, "ny_filing_evidence", {}).get("empty_history_confirmed") is True):
+        return "Delinquent"
+    # Unavailable filing evidence stays inconclusive. Confirmed MA/NY empty
+    # histories are handled above under their existing interpretation rules.
     missing_filings = annual_filings_absent(combined) or bool(re.search(
         r"Annual\s+Filings?\s+not\s+visible", result.raw_status_text or "", re.I))
     filing_due = comment_labeled_date(result.raw_status_text or "", r"Next Filing Due|Filing Due|Report Due|Due Date|\bDue")
@@ -16302,9 +16343,18 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
         return note
 
     if state == "MA" and reason == "MA_CONFIRMED_EMPTY_HISTORY_INFERRED_DELINQUENT":
+        if getattr(result, "ma_filing_evidence", {}).get("schedule_a2_only"):
+            return ("The completed Massachusetts filing list contains only Schedule A2 supplemental data and no annual Form PC, "
+                    "with no contradictory charity status. CharityClarity therefore infers Delinquent. This is an inferred status, "
+                    "not an explicit state determination; recent filings may not yet be public, so confirm time-sensitive decisions directly with Massachusetts.")
         return ("The matched Massachusetts record returned a completed, empty annual filing history with no contradictory charity status. "
                 "CharityClarity therefore infers Delinquent. This is an inferred status, not an explicit state determination; "
                 "recent filings may not yet be public, so confirm time-sensitive decisions directly with Massachusetts.")
+    if (state == "NY" and reason == "NY_SAFE_MATCH_NO_FILINGS_DELINQUENT"
+            and getattr(result, "ny_filing_evidence", {}).get("empty_history_confirmed") is True):
+        return ("The matched New York record returned a completed document collection with no annual filings and no recorded exemption. "
+                "CharityClarity therefore infers Delinquent. This is an inferred status, not an explicit state determination; "
+                "a specific overdue deadline was not confirmed, and recent filings may still be awaiting state review.")
     if state == "MA" and reason == "MA_NOT_DOING_BUSINESS_INACTIVE":
         return ("Massachusetts lists the charity status as Not Doing Business in Mass. "
                 "CharityClarity groups this inactive status under Closed / Withdrawn / Canceled. "
