@@ -5848,8 +5848,8 @@ def me_fast_direct_query_variants(org) -> list[str]:
     queries = [query for query in bounded if not any(
         other != query and query.casefold().startswith(other.casefold())
         for other in bounded)]
-    # Some ME record names end mid-word. Reserve one final four-word prefix
-    # from the master ladder; acceptance still compares the complete identity.
+    # Some ME record names end mid-word. Use a spare query slot for a four-word
+    # master prefix without displacing an existing punctuation or alias query.
     prefix_sources = [canonical_name_punctuation(name).casefold()
                       for name in (original_name, leading_article_removed)]
     prefix = next((query for query in build_search_queries(original_name, getattr(org, "ein", ""))
@@ -5857,8 +5857,9 @@ def me_fast_direct_query_variants(org) -> list[str]:
                    and any(source.startswith(query.casefold() + " ") for source in prefix_sources)
                    and any(token.casefold() not in WEAK_NAME_MATCH_TOKENS
                            for token in query.split())), None)
-    if prefix and not any(prefix.casefold().startswith(query.casefold()) for query in queries):
-        queries = queries[:ME_FAST_DIRECT_CONFIRMATION_MAX_VARIANTS - 1] + [prefix]
+    if (prefix and len(queries) < ME_FAST_DIRECT_CONFIRMATION_MAX_VARIANTS
+            and not any(prefix.casefold().startswith(query.casefold()) for query in queries)):
+        queries.append(prefix)
     return queries
 
 

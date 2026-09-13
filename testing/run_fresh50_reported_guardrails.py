@@ -171,6 +171,15 @@ class ReportedCases(unittest.TestCase):
         for expected in ('Young Life','Young-Life','The Young Life'):
             self.assertIn(expected,queries)
 
+    def test_me_prefix_does_not_displace_existing_alias_at_query_limit(self):
+        org=cc.checker.Organization('American Institute for Chartered Property Casualty Underwriters','231352012')
+        aliases=['First Alias Foundation','Second Alias Foundation','Third Alias Foundation',
+                 'Fourth Alias Foundation','Fifth Alias Foundation']
+        with patch.object(cc,'known_names_for_ein',return_value=aliases), \
+             patch.object(cc,'compatible_ein_alias_for_name',return_value=True), \
+             patch.object(cc,'organization_name_variants',return_value=[]):
+            self.assertEqual(cc.me_fast_direct_query_variants(org),[org.organization_name]+aliases)
+
 
 if __name__=='__main__':
     unittest.main()
