@@ -49,6 +49,22 @@ with sync_playwright() as p:
     page.locator("#stagingEmail").fill("staging-smoke@" + cc.EXEMPT_EMAIL_DOMAIN)
     page.locator("#stagingPasscode").fill(cc.ADMIN_PASSCODE)
     page.locator("#stagingUnlockButton").click()
+    assert page.locator('label[for="ein"]').inner_text().strip() == 'EIN'
+    assert page.locator('#ein').get_attribute('required') is not None
+    page.locator('#organizationName').fill('Example Community Foundation')
+    page.locator('input[name="states"][value="CO"]').check()
+    page.locator('#consent').check()
+    for value in ['', '123', '01-234567', '01-23456789', 'ab012345678', '01 2345678']:
+        page.locator('#ein').fill(value)
+        assert not page.locator('#ein').evaluate('(el) => el.checkValidity()'), value
+        page.locator('#snapshotForm').evaluate("el => el.dispatchEvent(new Event('submit', {bubbles:true,cancelable:true}))")
+        assert page.get_by_text('Enter the organization’s 9-digit EIN (XX-XXXXXXX).', exact=True).is_visible()
+    for value in ['01-2345678','012345678']:
+        page.locator('#ein').fill(value)
+        assert page.locator('#ein').evaluate('(el) => el.checkValidity()'), value
+    assert 'preliminary results for diagnostic purposes only' in page.locator('body').inner_text()
+    page.locator('#ein').scroll_into_view_if_needed()
+    page.screenshot(path=str(out / 'required-ein.png'))
     page.evaluate("(rows) => renderResults(rows)", rows)
     started = time.perf_counter()
     with page.expect_download(timeout=45000) as event:
@@ -57,15 +73,16 @@ with sync_playwright() as p:
     target = out / "CharityClarity-Make-A-Wish-staging.pdf"
     download.save_as(target)
     reader = PdfReader(target)
-    assert len(reader.pages) == 5
+    assert len(reader.pages) == 7
     assert sum(url.endswith("/api/report") for url in requests) == 1
     assert not any("/api/check" in url for url in requests)
     assert not errors, errors
     text = "\n".join(p.extract_text() for p in reader.pages)
     assert "LA: scheduled download" in text and "OR: scheduled download" in text
+    assert 'Operational Insights' in text and 'Downloadable data freshness' not in text
     page.locator("#generateReportButton").scroll_into_view_if_needed()
     page.screenshot(path=str(out / "report-button.png"))
-    result = dict(live=args.live, pages=5, seconds=round(time.perf_counter()-started, 2), report_requests=1, state_lookups=0, javascript_errors=errors, file=download.suggested_filename)
+    result = dict(live=args.live, pages=len(reader.pages), seconds=round(time.perf_counter()-started, 2), report_requests=1, state_lookups=0, javascript_errors=errors, file=download.suggested_filename)
     (out / "report-web-smoke.json").write_text(json.dumps(result, indent=2), encoding="utf8")
     print(json.dumps(result))
     browser.close()

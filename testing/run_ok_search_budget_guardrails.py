@@ -33,24 +33,14 @@ class RetrievalTests(unittest.TestCase):
     def test_first_page_match_does_not_page(self):
         pages=Pages(20);selected,org=self.choose(pages,1)
         self.assertEqual(selected[3],'123');self.assertEqual(pages.current,1);self.assertFalse(org.ok_search_incomplete)
-    def test_large_phrase_set_preserves_incomplete_evidence(self):
-        pages=Pages(20);selected,org=self.choose(pages)
-        self.assertIsNone(selected);self.assertEqual(pages.current,1);self.assertTrue(org.ok_search_incomplete)
-    def test_small_sets_keep_second_and_third_page_matches(self):
-        for count in [2,3]:
-            pages=Pages(count);selected,org=self.choose(pages,count)
-            self.assertEqual(selected[3],'123');self.assertEqual(pages.current,count);self.assertFalse(org.ok_search_incomplete)
-    def test_three_page_probe_is_a_completed_negative_only_at_end(self):
-        for count,complete in [(3,True),(4,False)]:
-            pages=Pages(count);selected,org=self.choose(pages,limit=3)
-            self.assertIsNone(selected);self.assertEqual(pages.current,3);self.assertEqual(not org.ok_search_incomplete,complete)
-    def test_pagination_waits_for_new_grid_content(self):
-        pages=Pages(2);self.choose(pages)
-        self.assertEqual(len(pages.waits),1)
-        self.assertEqual(pages.waits[0][1]['arg'][1],'Page 1 records')
-    def test_failed_pagination_stays_incomplete(self):
-        pages=Pages(2);pages.wait_for_function=Mock(side_effect=TimeoutError('navigation stalled'))
-        selected,org=self.choose(pages);self.assertIsNone(selected);self.assertTrue(org.ok_search_incomplete)
+    def test_extra_pages_do_not_invalidate_completed_first_page(self):
+        for count in (2,3,4,20):
+            pages=Pages(count);selected,org=self.choose(pages)
+            self.assertIsNone(selected);self.assertEqual(pages.current,1);self.assertFalse(org.ok_search_incomplete)
+            self.assertEqual(pages.waits,[])
+    def test_later_pages_are_outside_approved_search_policy(self):
+        pages=Pages(3);selected,org=self.choose(pages,target=3)
+        self.assertIsNone(selected);self.assertEqual(pages.current,1)
     def test_expired_budget_does_not_start_page_scan(self):
         org=self.org();org.ok_search_deadline=10
         with patch.object(cc.time,'perf_counter',return_value=11),patch.object(cc,'ok_choose_safe_result_row_on_page') as scan:
@@ -69,13 +59,12 @@ class RetrievalTests(unittest.TestCase):
         with patch.object(cc,'search_ok_precise',side_effect=search),patch.object(cc,'public_status',lambda r:r.status):
             result=cc.search_ok_with_variants(None,cc.checker.Organization('First Responders Children\u2019s Foundation','05-0536854'),SimpleNamespace())
         return result,calls
-    def test_all_first_page_misses_never_become_not_registered(self):
+    def test_all_incomplete_first_pages_never_become_not_registered(self):
         result,calls=self.run_variants();self.assertEqual(result.status,'Unable to Confirm');self.assertEqual(len(calls),4)
-    def test_complete_targeted_search_can_supply_existing_negative_result(self):
+    def test_complete_targeted_search_cannot_hide_other_unfinished_queries(self):
         result,calls=self.run_variants(complete_query='responders')
-        self.assertEqual(result.status,'Not Registered');self.assertEqual(len(result.queries_attempted),4)
-        self.assertIn('responders',result.source_attempts[-1]);self.assertNotIn('children.',result.source_attempts[-1])
-        self.assertEqual([c[1] for c in calls],[1,1,3,3]);self.assertEqual(len({c[2] for c in calls}),1)
+        self.assertEqual(result.status,'Unable to Confirm');self.assertEqual(len(result.queries_attempted),4)
+        self.assertEqual([c[1] for c in calls],[1,1,1,1]);self.assertEqual(len({c[2] for c in calls}),1)
     def test_outage_does_not_reuse_an_earlier_negative(self):
         # Curly apostrophes now retain the same possessive token as ASCII input.
         result,_=self.run_variants(complete_query='responders',error_query='childrens')

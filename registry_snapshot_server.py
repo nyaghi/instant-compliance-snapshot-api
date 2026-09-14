@@ -97,7 +97,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.13.5-staging").strip() or "2026.09.13.5-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.14.1-staging").strip() or "2026.09.14.1-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -3014,9 +3014,11 @@ def compatible_ein_alias_for_name(original_name: str, alias_name: str) -> bool:
     generic_words = {
         "the", "and", "of", "for", "to", "in", "on", "at", "by", "inc", "incorporated",
         "corp", "corporation", "llc", "ltd", "foundation", "fund", "charity", "charities",
-        "association", "society", "center", "centre", "institute", "organization", "org",
-        "university", "college", "school", "saint", "st",
+        "association", "society", "center", "centre", "saint", "st",
     }
+    # Institution/entity words can distinguish separate organizations sharing a
+    # subject (e.g. an Institute versus an Organization for that subject).
+    # Keep them here; an actual same-record EIN or explicit alias is separate evidence.
     original_essential = {word for word in original_words if word not in generic_words}
     alias_essential = {word for word in alias_words if word not in generic_words}
     if original_essential and original_essential == alias_essential:
@@ -4759,7 +4761,11 @@ def sc_official_detail_lookup(org) -> object | None:
                 candidates[candidate_id] = {"id": candidate_id, "name": candidate_name, "score": candidate_score, "status": registry_html_row_status(result_html, match.start())}
         if not candidates:
             continue
-        best = max(candidates.values(), key=lambda item: (int(item.get("score", -1000)), registry_exact_active_tiebreak(str(item["name"]), targets, str(item.get("status", "")))))
+        best = max(candidates.values(), key=lambda item: (
+            complete_name_identity_key(str(item["name"])) == complete_name_identity_key(original_name),
+            int(item.get("score", -1000)),
+            registry_exact_active_tiebreak(str(item["name"]), targets, str(item.get("status", ""))),
+        ))
         try:
             detail_fields = sc_extract_hidden_fields(result_html)
             detail_fields.update({
@@ -7783,6 +7789,13 @@ def normalized_match_name(value: str) -> str:
     return re.sub(r"\s+", " ", normalized).strip()
 
 
+def complete_name_identity_key(value: str) -> str:
+    """Case/punctuation/entity-suffix equality without deleting name articles."""
+    value = canonical_name_punctuation(value).casefold()
+    value = re.sub(r"[^a-z0-9]+", " ", value).strip()
+    return re.sub(r"(?:\s+(?:inc|incorporated|corp|corporation|llc|ltd|limited))+$", "", value).strip()
+
+
 WEAK_NAME_MATCH_TOKENS = {
     "a", "action", "an", "and", "association", "america", "american",
     "americans", "care", "center", "centre", "charitable", "charities",
@@ -9504,6 +9517,24 @@ def search_mn(page, org):
         return result
 
 
+def nd_search_queries(org) -> list[str]:
+    """FirstStop discovery variants; compare returned rows to the full identity."""
+    original = canonical_name_punctuation(org.organization_name)
+    possessive_removed = re.sub(r"\b([A-Za-z]+)'s\b", r"\1", original, flags=re.I)
+    candidates = [original, possessive_removed, *possessive_search_phrases(original),
+                  *connector_light_name_variants(original),
+                  *build_search_queries(original, org.ein, include_ein=False, max_queries=8)]
+    queries = []
+    for value in candidates:
+        if re.search(r"\b[A-Za-z]+'s\b", original, re.I):
+            value = re.sub(r"\bs\b", " ", value, flags=re.I)
+        # Preserve the possessive token rather than submitting a detached 's'.
+        query = re.sub(r"\s+", " ", re.sub(r"[^A-Za-z0-9 ]", " ", value.replace("'", ""))).strip()
+        if query and query.casefold() not in {q.casefold() for q in queries}:
+            queries.append(query)
+    return queries[:8]
+
+
 def search_nd_completed(page, org):
     """Read the same public JSON as FirstStop, after the search has completed.
 
@@ -9516,9 +9547,7 @@ def search_nd_completed(page, org):
     result.queries_attempted = []
     deadline = time.perf_counter() + 35.0
     targets = organization_match_target_variants(org.organization_name, org.ein)
-    queries = list(dict.fromkeys([org.organization_name, *possessive_search_phrases(org.organization_name), *connector_light_name_variants(org.organization_name),
-        *build_search_queries(org.organization_name, org.ein, include_ein=False, max_queries=8)]))[:8]
-    queries = list(dict.fromkeys(re.sub(r"\s+", " ", re.sub(r"[^A-Za-z0-9 ]", " ", query)).strip() for query in queries))
+    queries = nd_search_queries(org)
     try:
         page.goto(base + "/search/charitable", wait_until="domcontentloaded", timeout=12000)
         search_input = page.locator('input[placeholder*="Search by name"], input[aria-label*="Search by name"], input[type="text"]').first
@@ -16424,6 +16453,8 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
 
     if state == "WI" and getattr(result, "reason_code", "") == "WI_FOUNDATION_IDENTITY_REVIEW":
         return note
+    if state == "AR" and getattr(result, "reason_code", "") == "AR_RELATED_ENTITY_EIN_UNAVAILABLE":
+        return note
     if state == "VA" and reason == "VA_CONFIRMED_SOLICITATION_RESTRICTION" and status == "Suspended":
         return ("Virginia found the organization by exact EIN and explicitly lists Not Authorized to Solicit. "
                 "Its completed registration history returned no registration entries. CharityClarity uses its existing "
@@ -18377,15 +18408,15 @@ def search_ok_with_variants(page, org, module):
     completed_no_match_variants: list[str] = []
     planned_variants = (variants[:OK_QUERY_LIMIT] or [original_name])
     exhausted_budget = False
+    incomplete_result = None
     for variant in planned_variants:
         if best_result is not None and time.perf_counter() - started > 72.0:
             exhausted_budget = True
             break
         variant_org = org_with_name(org, variant)
         variant_org.ok_search_deadline = started + 72.0
-        # Inspect broad phrase results first; spend the remaining search budget
-        # on targeted probes. Small result sets can still be completed in full.
-        variant_org.ok_search_page_limit = 1 if len(search_query_tokens(variant)) > 1 else 3
+        # Approved Oklahoma policy: complete page one of each bounded query.
+        variant_org.ok_search_page_limit = 1
         variant_org.match_target_names = list(dict.fromkeys([
             *organization_match_target_variants(original_name, getattr(org, "ein", "") or ""),
         ]))
@@ -18419,6 +18450,7 @@ def search_ok_with_variants(page, org, module):
         if public_status(result) == "Site Not Reachable":
             return result
         if public_status(result) == "Unable to Confirm" and not getattr(result, "matched_registry_name", ""):
+            incomplete_result = incomplete_result or result
             best_result = best_result or result
             continue
         if public_status(result) != "Not Registered":
@@ -18453,33 +18485,6 @@ def search_ok_with_variants(page, org, module):
         completed_no_match_variants.append(variant)
         best_result = result
     if best_result and exhausted_budget:
-        clean_no_match_text = " ".join([
-            getattr(best_result, "raw_status_text", "") or "",
-            getattr(best_result, "source_note", "") or "",
-        ])
-        if (
-            public_status(best_result) == "Not Registered"
-            and len(completed_no_match_variants) >= 2
-            and re.search(r"\b(?:no results found|no safely matching|no matching entity|no matching filing)\b", clean_no_match_text, re.I)
-        ):
-            best_result.raw_status_text = " ".join(part for part in [
-                getattr(best_result, "raw_status_text", "") or "",
-                (
-                    f"Oklahoma bounded search completed {len(completed_no_match_variants)} high-signal name/alias variants "
-                    f"before the state budget; no safe registry row was found."
-                ),
-            ]).strip()
-            best_result.source_note = (
-                "Oklahoma completed the strongest bounded name/alias searches and returned no safe matching organization row. "
-                "CharityClarity finalized Not Registered rather than exposing a budget cap from unsearched low-priority variants."
-            )
-            best_result.success = True
-            best_result.queries_attempted = list(attempted_variants)
-            best_result.source_attempts = [
-                f"Oklahoma completed bounded high-signal name/alias queries: {', '.join(completed_no_match_variants[:OK_QUERY_LIMIT])}."
-            ]
-            best_result.reason_code = "NO_CONFIRMED_MATCH_AFTER_COMPLETED_HIGH_SIGNAL_SEARCH"
-            return best_result
         budget_result = module.SearchResult(
             organization_name=original_name,
             status="Unable to Verify",
@@ -18500,12 +18505,15 @@ def search_ok_with_variants(page, org, module):
         ]
         budget_result.reason_code = "RUNNER_TIMEOUT_RETRY_FAILED"
         return budget_result
+    if incomplete_result is not None:
+        incomplete_result.queries_attempted = list(attempted_variants)
+        return incomplete_result
     if best_result is not None:
         best_result.queries_attempted = list(attempted_variants)
         if public_status(best_result) == "Not Registered":
             best_result.source_attempts = [
                 *(getattr(best_result, "source_attempts", []) or []),
-                "Oklahoma completed all returned pages without a qualifying identity match for: "
+                "Oklahoma completed the first page of each planned name search without a qualifying identity match, under the approved first-page policy: "
                 + ", ".join(completed_no_match_variants) + ".",
             ]
         return best_result
@@ -18561,24 +18569,26 @@ def ok_choose_safe_result_row_on_page(page, org, module):
     best_rank = (-10000, -1)
     try:
         rows = page.locator("tr")
-        row_count = min(rows.count(), 100)
-    except Exception:
-        row_count = 0
+        row_count = rows.count()
+        if not 0 < row_count <= 100:
+            raise ValueError("Oklahoma first-page row set is missing or exceeds the supported page size")
+    except Exception as exc:
+        raise RuntimeError("Oklahoma first-page rows could not be read") from exc
 
     for index in range(row_count):
         ok_action_timeout(org, 1500)
         row = rows.nth(index)
         try:
             row_text = re.sub(r"\s+", " ", row.inner_text(timeout=ok_action_timeout(org, 1500))).strip()
-        except Exception:
-            continue
+        except Exception as exc:
+            raise RuntimeError("Oklahoma first-page row could not be read") from exc
         if not row_text:
             continue
         try:
             links = row.locator("a")
-            link_count = min(links.count(), 10)
-        except Exception:
-            continue
+            link_count = links.count()
+        except Exception as exc:
+            raise RuntimeError("Oklahoma first-page record links could not be read") from exc
 
         filing_link = None
         filing_number = ""
@@ -18587,8 +18597,8 @@ def ok_choose_safe_result_row_on_page(page, org, module):
             link = links.nth(link_index)
             try:
                 link_text = re.sub(r"\s+", " ", link.inner_text(timeout=ok_action_timeout(org, 1000))).strip()
-            except Exception:
-                continue
+            except Exception as exc:
+                raise RuntimeError("Oklahoma first-page record link could not be read") from exc
             if not link_text:
                 continue
             if re.fullmatch(r"\d+", link_text):
@@ -18614,8 +18624,10 @@ def ok_choose_safe_result_row_on_page(page, org, module):
                     registry_name = cell_text
                     break
         if not registry_name:
-            continue
+            raise ValueError("Oklahoma filing link has no readable organization name")
 
+        if not registry_name_is_safe_for_org(registry_name, getattr(org, "original_organization_name", getattr(org, "organization_name", "")), getattr(org, "ein", "")):
+            continue
         score = target_name_score(registry_name, safe_targets)
         rank = (score, registry_exact_active_tiebreak(registry_name, safe_targets, registry_candidate_fields(row).get("status", "")))
         if rank > best_rank:
@@ -18631,39 +18643,11 @@ def ok_choose_safe_result_row_on_page(page, org, module):
 
 
 def ok_choose_safe_result_row(page, org, module):
-    """Inspect bounded result pages; an unvisited page is not a completed negative."""
+    """Approved OK policy: inspect page one; extra pages do not imply a failure."""
     org.ok_search_incomplete = False
-    page_limit = getattr(org, "ok_search_page_limit", 10)
-    for page_number in range(1, 11):
-        ok_action_timeout(org, 1000)
-        selected = ok_choose_safe_result_row_on_page(page, org, module)
-        if selected is not None:
-            return selected
-        next_link = page.locator(f'a[href*="Page${page_number + 1}\'"]').first
-        if not next_link.count():
-            return None
-        if page_number == 1 and page_limit == 1:
-            hrefs = page.locator('a[href*="Page$"]').evaluate_all(
-                "links => links.map(link => link.getAttribute('href'))")
-            numbered_pages = [int(value) for href in hrefs
-                              for value in re.findall(r"'Page\$(\d+)'", href or "")]
-            # Keep complete two/three-page searches, including later-page matches.
-            if numbered_pages and max(numbered_pages) <= 3 and not any("Page$Last" in (h or "") for h in hrefs):
-                page_limit = max(numbered_pages)
-        if page_number >= page_limit:
-            org.ok_search_incomplete = True
-            return None
-        try:
-            grid = "#ctl00_DefaultContent_CharityNameSearch1_EntityGridView"
-            previous = page.locator(grid).inner_text(timeout=ok_action_timeout(org, 2000))
-            next_link.click(timeout=ok_action_timeout(org, 5000))
-            page.wait_for_function(
-                "([selector, before]) => { const grid = document.querySelector(selector); return grid && grid.innerText !== before; }",
-                arg=[grid, previous], timeout=ok_action_timeout(org, 8000))
-        except Exception:
-            org.ok_search_incomplete = True
-            return None
-    return None
+    ok_action_timeout(org, 1000)
+    # Read/parse failures propagate to the caller's retrieval-error path.
+    return ok_choose_safe_result_row_on_page(page, org, module)
 
 
 def ok_latest_filing_from_candidates(candidates: list[str], module) -> str:
@@ -19088,7 +19072,7 @@ def search_ok_precise(page, org, module):
             result.source_note = (
                 "Oklahoma returned additional result pages that could not all be checked; no negative registration conclusion was made."
                 if getattr(org, "ok_search_incomplete", False)
-                else "Oklahoma results did not contain a safe matching organization row."
+                else "Oklahoma completed the first result page without a safe matching organization row; the bounded name variants are checked under the approved first-page policy."
             )
             return result
 
@@ -19304,6 +19288,26 @@ def ar_registry_name_is_safe(row_name: str, original_name: str, variant_targets:
     return registry_name_is_safe_against_targets(row_name, variant_targets, original_name, ein)
 
 
+def ar_candidate_identity(row: dict, original_name: str, targets: list[str], ein: str) -> str:
+    """Use same-record EIN evidence when supplied; never borrow an EIN by name."""
+    candidate_ein = re.sub(r"\D", "", str(row.get("ein") or row.get("fein") or ""))
+    expected_ein = re.sub(r"\D", "", ein or "")
+    if len(candidate_ein) == 9 and len(expected_ein) == 9:
+        return "accept" if candidate_ein == expected_ein else "reject"
+    name = str(row.get("name") or "")
+    if ar_registry_name_is_safe(name, original_name, targets, ein):
+        return "accept"
+    # A substantial identical leading name with additional distinctive words can
+    # be a separate parent/foundation. The public AR list supplies no EIN/detail.
+    left, right = complete_name_identity_key(name), complete_name_identity_key(original_name)
+    shorter, longer = sorted((left, right), key=len)
+    if (len(shorter.split()) >= 3 and len(distinctive_match_tokens(shorter)) >= 2
+            and longer.startswith(shorter + " ")
+            and distinctive_match_tokens(longer[len(shorter):])):
+        return "unconfirmed"
+    return "reject"
+
+
 def ar_wait_for_search_form(page, timeout_ms: int) -> bool:
     deadline = time.perf_counter() + max(1.0, timeout_ms / 1000.0)
     while time.perf_counter() < deadline:
@@ -19343,6 +19347,7 @@ def search_ar_precise(page, org):
     best = None
     best_score = -10000
     first_rejected_row = ""
+    unconfirmed_name = ""
     reached = False
     rows_seen = 0
     explicit_no_results_seen = False
@@ -19409,7 +19414,10 @@ def search_ar_precise(page, org):
                     *organization_match_target_variants(original_name, getattr(org, "ein", "")),
                     *organization_match_target_variants(variant, getattr(org, "ein", "")),
                 ]))
-                if not ar_registry_name_is_safe(row_name, original_name, variant_targets, getattr(org, "ein", "")):
+                identity = ar_candidate_identity(row, original_name, variant_targets, getattr(org, "ein", ""))
+                if identity != "accept":
+                    if identity == "unconfirmed":
+                        unconfirmed_name = unconfirmed_name or row_name
                     if not first_rejected_row:
                         first_rejected_row = " | ".join(
                             part for part in [
@@ -19448,6 +19456,17 @@ def search_ar_precise(page, org):
                 "result table; no no-record determination was made."
             )
             result.error = "AR bounded lookup did not expose usable rows"
+            result.success = False
+        elif unconfirmed_name:
+            result.status = "Needs Review"
+            result.raw_status_text = f"Related name requires EIN confirmation: {unconfirmed_name}"
+            result.source_note = (
+                f'Arkansas lists "{unconfirmed_name}", but the requested name has a materially different extension. '
+                'The public charity row supplies no EIN or filed-document link to distinguish the related entities. '
+                'Confirm the EIN on the Arkansas registration before treating this as either a registration or a no-record result.'
+            )
+            result.rejected_candidates = [unconfirmed_name]
+            result.reason_code = "AR_RELATED_ENTITY_EIN_UNAVAILABLE"
             result.success = False
         elif rows_seen or (explicit_no_results_seen and not result_shell_without_rows):
             result.status = checker.STATUS_NOT_REGISTERED

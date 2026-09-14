@@ -57,19 +57,19 @@ class ReportTests(unittest.TestCase):
         self.assertIn("10/17/2026", text)
         self.assertEqual(source, original)
 
-    def test_small_report_has_three_pages(self):
+    def test_small_report_has_four_pages(self):
         reader, text = self.pdf([row()])
-        self.assertEqual(len(reader.pages), 3)
+        self.assertEqual(len(reader.pages), 4)
         self.assertIn("1 states checked", text)
 
-    def test_all_30_states_fit_five_pages_with_adverse_and_incomplete(self):
+    def test_all_30_states_fit_seven_pages_with_adverse_and_incomplete(self):
         statuses = sorted(report.HIGH | report.MODERATE | report.INCOMPLETE | report.LOW)
         rows = [row(s, statuses[i % len(statuses)]) for i, s in enumerate(sorted(cc.SUPPORTED_STATES))]
         for r in rows:
             r["comments"] = ("Long detailed evidence with registry dates and organization identity. " * 20)
             r["matched_registry_identifier"] = "Registry certificate 12345678901234567890"
         reader, text = self.pdf(rows)
-        self.assertEqual(len(reader.pages), 5)
+        self.assertEqual(len(reader.pages), 7)
         self.assertIn("30 states checked", text)
         for r in rows:
             self.assertIn(r["state"], text)
@@ -93,7 +93,7 @@ class ReportTests(unittest.TestCase):
         ok = next(r for r in rows if r["state"] == "OK")
         ok["comments"] = "Long registry evidence. " * 30 + "Certificate freshness note: reused the verified certificate retrieved 2026-09-06 12:34:56 UTC (less than 24 hours old)."
         reader, text = self.pdf(rows)
-        self.assertEqual(len(reader.pages), 5)
+        self.assertEqual(len(reader.pages), 7)
         self.assertIn("OK certificate: verified copy retrieved 2026-09-06 12:34:56 UTC", text)
 
     def test_duplicate_state_rejected(self):
@@ -127,7 +127,7 @@ class ReportTests(unittest.TestCase):
         source = row("WA", "Unknown")
         source["matched_registry_name"] = "Example national charity and regional aliases " * 30
         reader, text = self.pdf([source])
-        self.assertEqual(len(reader.pages), 3)
+        self.assertEqual(len(reader.pages), 4)
         self.assertIn("Not assessed", text)
 
     def test_endpoint_auth_and_no_registry_work(self):
