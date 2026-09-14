@@ -97,7 +97,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.14.1-staging").strip() or "2026.09.14.1-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.14.2-staging").strip() or "2026.09.14.2-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -16244,6 +16244,14 @@ def true_status_from_body(result, body: str) -> str:
         return "Failed to Renew"
     if normalized in {"withdrawn", "closed", "closed / withdrawn / canceled"}:
         return "Closed / Withdrawn / Canceled"
+    if state == "ND" and matched_record and not result_indicates_no_record(result):
+        base_due = comment_labeled_date(body, r"AR Due Date")
+        extended_due = comment_labeled_date(body, r"AR Extended Due Date")
+        if (base_due and extended_due and base_due <= extended_due
+                <= date(base_due.year, 12, 1)):
+            result.computed_due_date = format_date(extended_due)
+            result.status_reason = "ND_RECORDED_ANNUAL_REPORT_EXTENSION"
+            return status_from_calendar_date(extended_due)
     context = filing_context(result, body)
     due_date = context["due_date"]
     represented_year = context["represented_year"]
@@ -16453,7 +16461,9 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
 
     if state == "WI" and getattr(result, "reason_code", "") == "WI_FOUNDATION_IDENTITY_REVIEW":
         return note
-    if state == "AR" and getattr(result, "reason_code", "") == "AR_RELATED_ENTITY_EIN_UNAVAILABLE":
+    if state == "AR" and getattr(result, "reason_code", "") in {
+        "AR_RELATED_ENTITY_EIN_UNAVAILABLE", "AR_APPROVED_NAME_EIN_CONFIRMATION"
+    }:
         return note
     if state == "VA" and reason == "VA_CONFIRMED_SOLICITATION_RESTRICTION" and status == "Suspended":
         return ("Virginia found the organization by exact EIN and explicitly lists Not Authorized to Solicit. "
@@ -19288,6 +19298,17 @@ def ar_registry_name_is_safe(row_name: str, original_name: str, variant_targets:
     return registry_name_is_safe_against_targets(row_name, variant_targets, original_name, ein)
 
 
+def ar_user_accepted_name_match(candidate_name: str, original_name: str, ein: str) -> bool:
+    """September 14 user-approved AR name pair; this does not verify the EIN."""
+    return (
+        canonical_ein_digits(ein) == "832985088"
+        and complete_name_identity_key(original_name) == complete_name_identity_key(
+            "Chemical Coaters Association International Finishing Education Foundation, Inc.")
+        and complete_name_identity_key(candidate_name) == complete_name_identity_key(
+            "Chemical Coaters Association International")
+    )
+
+
 def ar_candidate_identity(row: dict, original_name: str, targets: list[str], ein: str) -> str:
     """Use same-record EIN evidence when supplied; never borrow an EIN by name."""
     candidate_ein = re.sub(r"\D", "", str(row.get("ein") or row.get("fein") or ""))
@@ -19297,6 +19318,8 @@ def ar_candidate_identity(row: dict, original_name: str, targets: list[str], ein
     name = str(row.get("name") or "")
     if ar_registry_name_is_safe(name, original_name, targets, ein):
         return "accept"
+    if ar_user_accepted_name_match(name, original_name, ein):
+        return "accept_with_ein_caution"
     # A substantial identical leading name with additional distinctive words can
     # be a separate parent/foundation. The public AR list supplies no EIN/detail.
     left, right = complete_name_identity_key(name), complete_name_identity_key(original_name)
@@ -19415,7 +19438,7 @@ def search_ar_precise(page, org):
                     *organization_match_target_variants(variant, getattr(org, "ein", "")),
                 ]))
                 identity = ar_candidate_identity(row, original_name, variant_targets, getattr(org, "ein", ""))
-                if identity != "accept":
+                if identity not in {"accept", "accept_with_ein_caution"}:
                     if identity == "unconfirmed":
                         unconfirmed_name = unconfirmed_name or row_name
                     if not first_rejected_row:
@@ -19436,7 +19459,7 @@ def search_ar_precise(page, org):
                 )
                 if score > best_score:
                     best_score = score
-                    best = row
+                    best = dict(row, _cc_identity=identity)
             if best and best_score >= 300:
                 break
         except Exception as exc:
@@ -19497,6 +19520,12 @@ def search_ar_precise(page, org):
     result.raw_status_text = f"Type: {best.get('type', '')} | Status: {best.get('status', '')} | Registration Date: {best.get('registration_date', '')}"
     result.status = ar_status_from_text(best.get("status", ""))
     result.source_note = "Arkansas public charity search matched a safe registry name; CharityClarity maps Not Current to Delinquent."
+    if best.get("_cc_identity") == "accept_with_ein_caution":
+        result.reason_code = "AR_APPROVED_NAME_EIN_CONFIRMATION"
+        result.source_note = (
+            f'Arkansas lists "{best.get("name", "")}" as {best.get("status", "")}. '
+            'This result uses that shorter-name record. Confirm the EIN with Arkansas.'
+        )
     result.success = True
     return result
 

@@ -110,7 +110,7 @@ class ArkansasTests(unittest.TestCase):
     name='Chemical Coaters Association International Finishing Education Foundation, Inc.'
     candidate='Chemical Coaters Association International'
     def test_same_record_ein_wins_and_conflict_rejects(self):
-        for ein,expected in [('832985088','accept'),('237159835','reject'),('','unconfirmed')]:
+        for ein,expected in [('832985088','accept'),('237159835','reject'),('','accept_with_ein_caution')]:
             self.assertEqual(cc.ar_candidate_identity({'name':self.candidate,'ein':ein},self.name,[self.name],'83-2985088'),expected)
         self.assertEqual(cc.ar_candidate_identity({'name':self.name,'ein':'237159835'},self.name,[self.name],'83-2985088'),'reject')
 
@@ -120,7 +120,7 @@ class ArkansasTests(unittest.TestCase):
 
     def test_unconfirmed_public_row_is_not_negative(self):
         with patch.object(cc,'ar_preferred_name_variants',return_value=[self.name]),patch.object(cc,'organization_name_variants',return_value=[]),patch.object(cc,'ar_wait_for_search_form',return_value=True),patch.object(cc,'registry_page_body',return_value='Back to Search Form Registration Date'),patch.object(cc,'safe_wait_for_network_idle'),patch.object(cc,'ar_result_rows',return_value=[{'name':self.candidate,'status':'Current','type':'Charity','registration_date':'2020-05-28'}]):
-            result=cc.search_ar_precise(Mock(),cc.checker.Organization(self.name,'832985088'))
+            result=cc.search_ar_precise(Mock(),cc.checker.Organization(self.name,'832985089'))
         self.assertEqual(result.status,'Needs Review');self.assertEqual(result.reason_code,'AR_RELATED_ENTITY_EIN_UNAVAILABLE')
         self.assertIn('no EIN',result.source_note)
 
