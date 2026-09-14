@@ -1,6 +1,6 @@
 # Massachusetts and Michigan surgical follow-up
 
-Candidate version: **2026.09.14.3-staging**.
+Candidate version: **2026.09.14.4-staging**.
 Baseline commit: **66634867c42b75bda3f75fa8883b7f170f970510**.
 
 ## Behavior
@@ -15,7 +15,7 @@ Baseline commit: **66634867c42b75bda3f75fa8883b7f170f970510**.
 - Michigan has a 100-second attempt budget, including time already spent
   before entering its source lookup. EIN recovery remains capped at 55 seconds
   and reserves at least 45 seconds for name fallback. Search submissions allow
-  up to 25 seconds, bounded by the remaining time. Two patient EIN submissions
+  up to 35 seconds, bounded by the remaining time. Two patient EIN submissions
   replace three shorter submissions.
 - Michigan transport and name-budget failures qualify for the existing bounded
   second lookup. Its short delay is staggered by EIN. Attempt history preserves
@@ -52,3 +52,12 @@ list approved date drift and other corrections; never hide initial failures.
 Deployment and final post-validation outcomes are recorded in the external
 release review after the corresponding gates pass. Production deployment is
 not authorized.
+
+
+The deployed .3 fifteen-session test retained three MI name-search timeouts, so
+the broader validation was held. The .4 refinement preserves completed
+zero-result EIN and name queries only within the same bounded organization
+check, allowing its retry to resume unfinished searches. No cross-request
+cache is used. A new browser still opens and accepts the search form. The
+35-second response ceiling remains clipped to the same 100-second attempt
+budget; all matching and the two-attempt maximum remain unchanged.

@@ -1,5 +1,6 @@
 """MA primary-status precedence and MI slow-source recovery, without network."""
 import copy,json,sys,time,unittest
+from contextlib import ExitStack
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
@@ -55,13 +56,31 @@ class Massachusetts(unittest.TestCase):
 class Michigan(mi.MichiganNameTests):
  def test_slow_name_response_fits_michigan_even_with_shared_59_second_setting(self):
   with patch.object(c,'LOOKUP_SOFT_MAX_SECONDS',59):
-   for millis in [13000,20000,24000]:
+   for millis in [13000,24000,34000]:
     with self.subTest(millis=millis):
      r,_,_=self.flow([self.correct],navigation_ms=millis)
      self.assertTrue(r.success);self.assertEqual(r.matched_registry_name,"America's Charities")
  def test_slow_response_cannot_outrun_final_deadline(self):
   r,_,_=self.flow([self.correct],navigation_ms=20000,lookup_deadline=18,clock=lambda:0)
   self.assertFalse(r.success);self.assertNotEqual(c.public_status(r),'Not Registered')
+ def test_retry_resumes_completed_empty_queries_and_opens_new_session(self):
+  progress={'identity':(self.org.organization_name,c.canonical_ein_digits(self.org.ein))}
+  variants=["America's Charities",'Americas Charities']
+  first,_,_=self.flow([],text='0 record(s) found',variants=variants,navigation_ms=iter([1000,40000]),progress=progress)
+  self.assertFalse(first.success);self.assertEqual(progress['completed_empty_name_queries'],["America's Charities"])
+  second,_,module=self.flow([],text='0 record(s) found',variants=variants,navigation_ms=1000,progress=progress)
+  self.assertTrue(second.success);self.assertEqual(c.public_status(second),'Not Registered')
+  self.assertEqual(second.queries_attempted,['Americas Charities']);module.open_search_form.assert_called_once()
+ def test_other_organization_progress_cannot_skip_search(self):
+  progress={'identity':('Unrelated','123456789'),'completed_empty_name_queries':["America's Charities"]}
+  r,_,_=self.flow([self.correct],progress=progress)
+  self.assertTrue(r.success);self.assertEqual(r.queries_attempted,["America's Charities"])
+  self.assertEqual(progress['completed_empty_name_queries'],["America's Charities"])
+ def test_incomplete_or_nonempty_response_is_never_remembered_as_empty(self):
+  for options in [{'missing_frame':True},{'text':'Please try again later'},{}]:
+   progress={'identity':(self.org.organization_name,c.canonical_ein_digits(self.org.ein))}
+   self.flow([self.wrong],progress=progress,**options)
+   self.assertNotIn('completed_empty_name_queries',progress)
 
 class Recovery(unittest.TestCase):
  def lookup(self,results,state='MI',ein='27-3067797'):
@@ -88,6 +107,16 @@ class Recovery(unittest.TestCase):
  def test_other_state_retry_behavior_is_unchanged(self):
   r,run,sleep=self.lookup([{'status':'Site Not Reachable'},{'status':'Current'}],state='CO')
   self.assertEqual(run.call_count,2);sleep.assert_called_once_with(1);self.assertNotIn('mi_attempt_history',r)
+ def test_progress_is_private_to_one_check_and_shared_only_with_its_retry(self):
+  seen=[]
+  def lookup(name,ein,state,**kwargs):
+   progress=kwargs['mi_progress'];seen.append(progress)
+   if progress.get('attempted'):return {'status':'Current','success':True}
+   progress['attempted']=True
+   return {'status':'Site Not Reachable','reason_code':'MI_NAME_SEARCH_INCOMPLETE','error':'timeout','success':False}
+  with patch.object(c,'run_state_lookup',side_effect=lookup),patch.object(c,'SINGLE_STATE_SEMANTIC_RETRY_STATES',{'MI'}),patch.object(c,'SINGLE_STATE_SEMANTIC_RETRY_ATTEMPTS',2),patch.object(c.time,'sleep'):
+   for _ in range(2):self.assertEqual(c.run_single_state_lookup_reliably('Example','12-3456789','MI')['status'],'Current')
+  self.assertIs(seen[0],seen[1]);self.assertIs(seen[2],seen[3]);self.assertIsNot(seen[0],seen[2])
  def test_mi_batch_uses_same_recovery_without_abandoned_worker(self):
   with patch.object(c,'run_single_state_lookup_reliably',return_value={'status':'Current'}) as run,patch.object(c,'ThreadPoolExecutor',side_effect=AssertionError('No abandoned MI worker')):
    r=c.run_state_lookup_for_batch('Control','12-3456789','MI',False)
@@ -99,6 +128,29 @@ class Recovery(unittest.TestCase):
     c.run_fanout_state_lookup_for_batch('Control','12-3456789',state);self.assertEqual(request.call_args.kwargs['timeout'],timeout)
 
 class EinTiming(unittest.TestCase):
+ def test_real_master_retry_reuses_only_completed_ein_no_results(self):
+  for completed in [True,False]:
+   ein_result=c.checker.StateResult('Example Relief','12-3456789','MI','Not Registered' if completed else 'Unable to Verify','https://www.ag.state.mi.us/CharitableTrust/frmDefault.aspx')
+   ein_result.success=completed;ein_result.raw_status_text='No results found' if completed else 'EIN timed out'
+   ein_result.reason_code='NO_CANDIDATES_AFTER_COMPLETED_SEARCH' if completed else 'MI_EIN_TRANSPORT_TIMEOUT'
+   failed=c.checker.StateResult('Example Relief','12-3456789','MI','Unable to Verify','')
+   failed.success=False;failed.reason_code='MI_NAME_SEARCH_INCOMPLETE';failed.error='name search timeout'
+   success=c.checker.StateResult('Example Relief','12-3456789','MI','Not Registered','')
+   success.success=True;success.reason_code='MI_COMPLETED_EIN_AND_NAME_SEARCH'
+   with ExitStack() as stack:
+    for key,value in {'SINGLE_STATE_SEMANTIC_RETRY_STATES':{'MI'},'SINGLE_STATE_SEMANTIC_RETRY_ATTEMPTS':2,'CAPTURE_EVIDENCE_SCREENSHOTS':False,'CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT':False,'MI_CONFIRM_NO_RESULTS_FRAME':False,'MI_ENABLE_NAME_FALLBACK':True}.items():stack.enter_context(patch.object(c,key,value))
+    stack.enter_context(patch.object(c.checker,'sync_playwright',return_value=MagicMock()))
+    stack.enter_context(patch.object(c,'configure_browser_context'))
+    stack.enter_context(patch.object(c,'registry_page_body',return_value=''))
+    stack.enter_context(patch.object(c,'public_profile_for_ein',return_value={}))
+    stack.enter_context(patch.object(c.time,'sleep'))
+    stack.enter_context(patch.object(c,'response_data_for_lookup',side_effect=lambda r,*a:{'status':r.status,'success':r.success,'reason_code':r.reason_code,'error':r.error}))
+    probe=stack.enter_context(patch.object(c,'search_mi_http_completion_probe',return_value=ein_result))
+    names=stack.enter_context(patch.object(c,'search_mi_name_fallback',side_effect=[failed,success]))
+    result=c.run_single_state_lookup_reliably('Example Relief','12-3456789','MI')
+   self.assertEqual(probe.call_count,1 if completed else 2)
+   self.assertEqual(names.call_count,2 if completed else 0)
+   self.assertEqual(result['status'],'Not Registered' if completed else 'Unable to Verify')
  def probe(self,search_seconds,*,spent=0):
   clock=[float(spent)];timeouts=[]
   session=Mock()
@@ -113,7 +165,7 @@ class EinTiming(unittest.TestCase):
   return r,clock[0],timeouts
  def test_slow_twenty_second_ein_completes_without_retry(self):
   r,elapsed,timeouts=self.probe(20)
-  self.assertTrue(r.success);self.assertEqual(r.source_attempts,[]);self.assertLess(elapsed,25);self.assertEqual(timeouts[-1],25)
+  self.assertTrue(r.success);self.assertEqual(r.source_attempts,[]);self.assertLess(elapsed,25);self.assertEqual(timeouts[-1],35)
  def test_setup_time_is_charged_and_name_time_reserved(self):
   r,elapsed,_=self.probe(40,spent=20)
   self.assertFalse(r.success);self.assertLessEqual(elapsed,55);self.assertGreaterEqual(c.MI_LOOKUP_MAX_SECONDS-elapsed,45)

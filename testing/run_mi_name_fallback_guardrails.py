@@ -26,14 +26,16 @@ class MichiganNameTests(unittest.TestCase):
         self.correct=link("America's Charities",'9927')
         self.wrong=link("America's Best Charities",'10158')
 
-    def flow(self,items,*,text='2 record(s) found',open_error=None,missing_frame=False,clock=None,variants=None,lookup_deadline=None,navigation_ms=None):
+    def flow(self,items,*,text='2 record(s) found',open_error=None,missing_frame=False,clock=None,variants=None,lookup_deadline=None,navigation_ms=None,progress=None):
         page=Mock();page.expect_navigation.return_value=nullcontext()
         if navigation_ms is not None:
             def navigation(**kwargs):
-                if kwargs['timeout'] < navigation_ms:raise TimeoutError('results arrive after navigation cutoff')
+                delay=next(navigation_ms) if hasattr(navigation_ms,'__next__') else navigation_ms
+                if kwargs['timeout'] < delay:raise TimeoutError('results arrive after navigation cutoff')
                 return nullcontext()
             page.expect_navigation.side_effect=navigation
         if lookup_deadline is not None:page._cc_mi_lookup_deadline=lookup_deadline
+        if progress is not None:page._cc_mi_search_progress=progress
         frame=frame_for(items)
         module=SimpleNamespace(open_search_form=Mock(return_value=True,side_effect=open_error),
             find_results_frame=Mock(return_value=None if missing_frame else frame),

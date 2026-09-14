@@ -97,7 +97,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.14.3-staging").strip() or "2026.09.14.3-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.14.4-staging").strip() or "2026.09.14.4-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -202,7 +202,7 @@ LOOKUP_SOFT_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_LOOKUP_SOFT_MAX
 # Michigan's completed EIN search must leave room for mandatory name fallback.
 # Keep its attempt budget independent of the shorter shared state allowance.
 MI_LOOKUP_MAX_SECONDS = 100.0
-MI_SEARCH_RESPONSE_TIMEOUT_MS = 25000
+MI_SEARCH_RESPONSE_TIMEOUT_MS = 35000
 SC_NAME_VARIANT_MAX_SECONDS = max(12.0, float(os.environ.get("CE_SC_NAME_VARIANT_MAX_SECONDS", "44")))
 NAME_SEARCH_VARIANT_MAX_SECONDS = max(18.0, float(os.environ.get("CE_NAME_SEARCH_VARIANT_MAX_SECONDS", "44")))
 CT_NAME_VARIANT_MAX_SECONDS = min(max(10.0, float(os.environ.get("CE_CT_NAME_VARIANT_MAX_SECONDS", "30"))), 44.0)
@@ -7296,7 +7296,12 @@ def search_mi_name_fallback(page, org):
     variants = sorted(variants, key=lambda value: (
         value.strip().casefold() != portal_query(org.organization_name).strip().casefold(), mi_variant_priority(value)))
 
-    completed_empty_queries = []
+    progress = getattr(page, "_cc_mi_search_progress", None)
+    identity = (org.organization_name, canonical_ein_digits(org.ein))
+    if not isinstance(progress, dict) or progress.get("identity") != identity:
+        progress = {}
+    completed_empty_queries = list(progress.get("completed_empty_name_queries", []))
+    opened_session = False
     for variant in variants[:4]:
         query_tokens = set(variant.casefold().split())
         covered = next((query for query in completed_empty_queries
@@ -7310,7 +7315,7 @@ def search_mi_name_fallback(page, org):
         fresh_page = None
         try:
             page._cc_mi_name_deadline = deadline
-            if result.source_attempts:
+            if opened_session:
                 # Reuse the accepted registry session between name variants.
                 active_page.goto(module.MI_SEARCH_URL, wait_until="domcontentloaded", timeout=mi_action_timeout(active_page, MI_SEARCH_RESPONSE_TIMEOUT_MS))
                 opened_form = module.wait_for_search_form(active_page)
@@ -7328,6 +7333,7 @@ def search_mi_name_fallback(page, org):
                     active_page = page
             if not opened_form:
                 return incomplete("Michigan could not open the name-search form.")
+            opened_session = True
             active_page.locator("#ctl00_MainContent_txtName").fill("", timeout=mi_action_timeout(active_page, 3000))
             active_page.locator("#ctl00_MainContent_txtName").fill(variant, timeout=mi_action_timeout(active_page, 3000))
             active_page.locator("#ctl00_MainContent_txtEIN").fill("", timeout=mi_action_timeout(active_page, 3000))
@@ -7345,6 +7351,7 @@ def search_mi_name_fallback(page, org):
             result.source_attempts.append(f"Completed Michigan name query: {variant}")
             if no_registry_results_seen(results_text):
                 completed_empty_queries.append(variant)
+                progress["completed_empty_name_queries"] = list(completed_empty_queries)
                 continue
             chosen = mi_choose_result_link(frame, org.organization_name, module, org=org)
             if not chosen:
@@ -21072,7 +21079,7 @@ def browser_capacity_busy_result(organization_name: str, ein: str, state: str, u
     return result
 
 
-def run_state_lookup(organization_name: str, ein: str, state: str, capture_source_snapshot: bool = False, confirm_single_no_match: bool = True) -> dict:
+def run_state_lookup(organization_name: str, ein: str, state: str, capture_source_snapshot: bool = False, confirm_single_no_match: bool = True, mi_progress: dict | None = None) -> dict:
     lookup_started = time.perf_counter()
     artifact_name = organization_name or f"EIN {format_ein(ein)}"
     lookup_name = organization_name
@@ -21434,7 +21441,17 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
             elif state == "MI":
                 mi_started = time.perf_counter()
                 mi_deadline = lookup_started + MI_LOOKUP_MAX_SECONDS
-                mi_probe_result = search_mi_http_completion_probe(org, lookup_deadline=mi_deadline)
+                # This dictionary belongs only to this bounded MI check. A retry
+                # resumes completed zero-result searches for the identical input.
+                progress = mi_progress if isinstance(mi_progress, dict) and mi_progress.get("identity") == (
+                    org.organization_name, canonical_ein_digits(org.ein)) else {}
+                mi_probe_result = progress.get("completed_empty_ein_result")
+                if mi_probe_result is None:
+                    mi_probe_result = search_mi_http_completion_probe(org, lookup_deadline=mi_deadline)
+                    if (mi_probe_result is not None and mi_probe_result.success
+                            and getattr(mi_probe_result, "reason_code", "") == "NO_CANDIDATES_AFTER_COMPLETED_SEARCH"
+                            and public_status(mi_probe_result) == "Not Registered"):
+                        progress["completed_empty_ein_result"] = mi_probe_result
                 if mi_probe_result is not None:
                     result = mi_probe_result
                     mi_elapsed = time.perf_counter() - mi_started
@@ -21461,6 +21478,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     )
                 ):
                     page._cc_mi_lookup_deadline = mi_deadline
+                    page._cc_mi_search_progress = progress
                     result = search_mi_name_fallback(page, org)
                 if (
                     public_status(result) == "Not Registered"
@@ -22199,8 +22217,10 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
     best_reachable_result: dict | None = None
     best_ak_identity_result: dict | None = None
     mi_attempt_history: list[dict] = []
+    mi_progress = {"identity": (organization_name, canonical_ein_digits(ein))} if state == "MI" else None
     for attempt in range(1, attempts + 1):
-        result = run_state_lookup(organization_name, ein, state)
+        result = (run_state_lookup(organization_name, ein, state, mi_progress=mi_progress)
+                  if state == "MI" else run_state_lookup(organization_name, ein, state))
         result["semantic_attempts"] = attempt
         if state == "MI":
             mi_attempt_history.append({key: result.get(key) for key in (

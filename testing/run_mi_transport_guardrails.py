@@ -41,7 +41,7 @@ class Tests(unittest.TestCase):
   self.assertIn('timed out',c.comments_for_result_base(r,'',r.status));self.assertIn('does not establish',r.source_note)
  def test_budget_accounts_for_setup_requests(self):
   r,s,t,timeouts=self.probe([TimeoutError('Operation timed out')],setup_elapsed=9)
-  self.assertLessEqual(t,55);self.assertLessEqual(len(s),2);self.assertTrue(all(0<v<=25 for v in timeouts));self.assertNotEqual(c.public_status(r),'Not Registered')
+  self.assertLessEqual(t,55);self.assertLessEqual(len(s),2);self.assertTrue(all(0<v<=35 for v in timeouts));self.assertNotEqual(c.public_status(r),'Not Registered')
  def test_non_timeout_does_not_get_extra_attempt(self):
   r,s,_,_=self.probe([ValueError('HTTP 403')]);self.assertEqual(len(s),2);self.assertEqual(r.reason_code,'STATE_RESPONSE_UNREADABLE');self.assertFalse(r.success)
  def test_uninterpretable_response_is_not_retried_or_negative(self):
