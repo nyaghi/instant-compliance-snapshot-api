@@ -55,8 +55,8 @@ class Revisions(unittest.TestCase):
         for period, expected in [('12/31/2023','Delinquent'), ('12/31/2025','Current')]:
             with self.subTest(period=period): self.assertEqual(self.ma(period)['status'], expected)
 
-    def test_ma_non_operating_phrase_without_annuals_requires_review(self):
-        self.assertEqual(self.ma('', empty=True)['status'], 'Needs Review')
+    def test_ma_non_operating_phrase_uses_confirmed_empty_annuals(self):
+        self.assertEqual(self.ma('', empty=True)['status'], 'Delinquent')
         data = self.ma('')
         self.assertEqual(data['status'], 'Unable to Confirm')
         self.assertIn('Not Doing Business in Mass', data['comments'])

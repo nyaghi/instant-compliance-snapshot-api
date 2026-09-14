@@ -28,20 +28,20 @@ class Tests(unittest.TestCase):
    result=c.search_mi_http_completion_probe(c.checker.Organization('Example Relief','123456789'))
   for session in sessions:session.close.assert_called_once()
   return result,sessions,clock[0],timeouts
- def test_third_attempt_recovers_completed_no_record(self):
-  r,s,t,_=self.probe([TimeoutError('curl: (28) Operation timed out'),TimeoutError('Operation timed out'),'No results found'])
-  self.assertEqual(c.public_status(r),'Not Registered');self.assertTrue(r.success);self.assertEqual(len(s),3);self.assertEqual(len(r.source_attempts),2);self.assertLessEqual(t,68)
+ def test_second_patient_attempt_recovers_completed_no_record(self):
+  r,s,t,_=self.probe([TimeoutError('curl: (28) Operation timed out'),'No results found'],elapsed=25)
+  self.assertEqual(c.public_status(r),'Not Registered');self.assertTrue(r.success);self.assertEqual(len(s),2);self.assertEqual(len(r.source_attempts),1);self.assertLessEqual(t,55)
  def test_current_pending_and_no_record_need_no_recovery(self):
   for text,expected in [('No results found','Not Registered'),('1 record(s) found<br>12345<br>Example Relief<br>12/31/2027','Current'),('1 record(s) found<br>12345<br>Example Relief<br>12/31/2026 Registration Pending','Pending')]:
    with self.subTest(expected=expected):
     r,s,_,_=self.probe([text]);self.assertEqual(c.public_status(r),expected);self.assertEqual(len(s),1)
  def test_persistent_timeout_is_inconclusive_and_explained(self):
   r,s,t,_=self.probe([TimeoutError('Operation timed out')],elapsed=24)
-  self.assertEqual(len(s),3);self.assertEqual(r.status,'Unable to Verify');self.assertFalse(r.success);self.assertEqual(r.reason_code,'MI_EIN_TRANSPORT_TIMEOUT');self.assertLessEqual(t,68)
+  self.assertEqual(len(s),2);self.assertEqual(r.status,'Unable to Verify');self.assertFalse(r.success);self.assertEqual(r.reason_code,'MI_EIN_TRANSPORT_TIMEOUT');self.assertLessEqual(t,55)
   self.assertIn('timed out',c.comments_for_result_base(r,'',r.status));self.assertIn('does not establish',r.source_note)
  def test_budget_accounts_for_setup_requests(self):
   r,s,t,timeouts=self.probe([TimeoutError('Operation timed out')],setup_elapsed=9)
-  self.assertLessEqual(t,68);self.assertLessEqual(len(s),3);self.assertTrue(all(0<v<=24 for v in timeouts));self.assertNotEqual(c.public_status(r),'Not Registered')
+  self.assertLessEqual(t,55);self.assertLessEqual(len(s),2);self.assertTrue(all(0<v<=25 for v in timeouts));self.assertNotEqual(c.public_status(r),'Not Registered')
  def test_non_timeout_does_not_get_extra_attempt(self):
   r,s,_,_=self.probe([ValueError('HTTP 403')]);self.assertEqual(len(s),2);self.assertEqual(r.reason_code,'STATE_RESPONSE_UNREADABLE');self.assertFalse(r.success)
  def test_uninterpretable_response_is_not_retried_or_negative(self):

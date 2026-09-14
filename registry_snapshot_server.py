@@ -97,7 +97,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.14.2-staging").strip() or "2026.09.14.2-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.14.3-staging").strip() or "2026.09.14.3-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -199,6 +199,10 @@ CAPTURE_EVIDENCE_SCREENSHOTS = os.environ.get("CE_CAPTURE_EVIDENCE_SCREENSHOTS",
 CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT = os.environ.get("CE_CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT", "0").strip().lower() in {"1", "true", "yes"}
 ON_DEMAND_EVIDENCE_SCREENSHOT = os.environ.get("CE_ON_DEMAND_EVIDENCE_SCREENSHOT", "1").strip().lower() not in {"0", "false", "no"}
 LOOKUP_SOFT_MAX_SECONDS = min(max(20.0, float(os.environ.get("CE_LOOKUP_SOFT_MAX_SECONDS", "74"))), 75.0)
+# Michigan's completed EIN search must leave room for mandatory name fallback.
+# Keep its attempt budget independent of the shorter shared state allowance.
+MI_LOOKUP_MAX_SECONDS = 100.0
+MI_SEARCH_RESPONSE_TIMEOUT_MS = 25000
 SC_NAME_VARIANT_MAX_SECONDS = max(12.0, float(os.environ.get("CE_SC_NAME_VARIANT_MAX_SECONDS", "44")))
 NAME_SEARCH_VARIANT_MAX_SECONDS = max(18.0, float(os.environ.get("CE_NAME_SEARCH_VARIANT_MAX_SECONDS", "44")))
 CT_NAME_VARIANT_MAX_SECONDS = min(max(10.0, float(os.environ.get("CE_CT_NAME_VARIANT_MAX_SECONDS", "30"))), 44.0)
@@ -7236,7 +7240,7 @@ def search_mi_name_fallback(page, org):
     result = checker.StateResult(org.organization_name, org.ein, "MI", "Unable to Verify", module.MI_SEARCH_URL)
     safe_targets = organization_match_target_variants(org.organization_name, org.ein)
     started = time.perf_counter()
-    deadline = started + LOOKUP_SOFT_MAX_SECONDS
+    deadline = started + MI_LOOKUP_MAX_SECONDS
     lookup_deadline = getattr(page, "_cc_mi_lookup_deadline", None)
     if isinstance(lookup_deadline, (int, float)):
         deadline = min(deadline, lookup_deadline)
@@ -7308,7 +7312,7 @@ def search_mi_name_fallback(page, org):
             page._cc_mi_name_deadline = deadline
             if result.source_attempts:
                 # Reuse the accepted registry session between name variants.
-                active_page.goto(module.MI_SEARCH_URL, wait_until="domcontentloaded", timeout=mi_action_timeout(active_page, 12000))
+                active_page.goto(module.MI_SEARCH_URL, wait_until="domcontentloaded", timeout=mi_action_timeout(active_page, MI_SEARCH_RESPONSE_TIMEOUT_MS))
                 opened_form = module.wait_for_search_form(active_page)
             else:
                 opened_form = module.open_search_form(active_page)
@@ -7330,7 +7334,7 @@ def search_mi_name_fallback(page, org):
             active_page.locator("#ctl00_MainContent_ddlName1").select_option("Includes", timeout=mi_action_timeout(active_page, 2000))
             active_page.locator("#ctl00_MainContent_ddlName2").select_option("All words", timeout=mi_action_timeout(active_page, 2000))
             result.queries_attempted.append(variant)
-            with active_page.expect_navigation(wait_until="domcontentloaded", timeout=mi_action_timeout(active_page, 12000)):
+            with active_page.expect_navigation(wait_until="domcontentloaded", timeout=mi_action_timeout(active_page, MI_SEARCH_RESPONSE_TIMEOUT_MS)):
                 active_page.locator("#ctl00_MainContent_btnTextSearch").click(timeout=mi_action_timeout(active_page, 3000), no_wait_after=True)
             frame = module.find_results_frame(active_page)
             if not frame:
@@ -7434,7 +7438,7 @@ def search_mi_name_fallback(page, org):
     return result
 
 
-def search_mi_http_completion_probe(org):
+def search_mi_http_completion_probe(org, lookup_deadline=None):
     """Probe Michigan's official EIN form before entering the slower browser frame path."""
     if curl_requests is None:
         return None
@@ -7452,7 +7456,12 @@ def search_mi_http_completion_probe(org):
     )
     submitted_text = ""
     last_exception = None
-    deadline = time.monotonic() + min(68.0, LOOKUP_SOFT_MAX_SECONDS - 6.0)
+    # Two patient submissions cause less repeated work than three short ones.
+    # Keep EIN recovery bounded at 55s and reserve at least 45s for names.
+    allowance = min(55.0, MI_LOOKUP_MAX_SECONDS - 45.0)
+    if lookup_deadline is not None:
+        allowance = min(allowance, max(0.0, lookup_deadline - time.perf_counter() - 45.0))
+    deadline = time.monotonic() + allowance
     result.source_attempts = []
 
     def request_timeout(limit):
@@ -7461,14 +7470,7 @@ def search_mi_http_completion_probe(org):
             raise TimeoutError("Michigan EIN recovery budget exhausted")
         return min(limit, remaining)
 
-    for attempt_index in range(3):
-        if attempt_index == 2:
-            # Only a confirmed transport timeout earns the additional recovery.
-            if not re.search(r"timed out|timeout|curl:\s*\(28\)", str(last_exception), re.I):
-                break
-            if deadline - time.monotonic() < 8.0:
-                break
-            time.sleep(2.0)
+    for attempt_index in range(2):
         session = None
         try:
             session = curl_requests.Session(impersonate="chrome136")
@@ -7522,7 +7524,7 @@ def search_mi_http_completion_probe(org):
             submitted = session.post(
                 source_url,
                 data=form_fields,
-                timeout=request_timeout(24 if attempt_index == 2 else 16),
+                timeout=request_timeout(MI_SEARCH_RESPONSE_TIMEOUT_MS / 1000),
                 headers={
                     **headers,
                     "Referer": source_url,
@@ -7549,7 +7551,7 @@ def search_mi_http_completion_probe(org):
             "CharityClarity returned Unable to Verify rather than finalizing Not Registered from an incomplete state-source response."
         )
         result.reason_code = "STATE_RESPONSE_UNREADABLE"
-        if re.search(r"timed out|timeout|curl:\s*\(28\)", str(last_exception), re.I):
+        if isinstance(last_exception, TimeoutError) or re.search(r"timed out|timeout|curl:\s*\(28\)", str(last_exception), re.I):
             result.reason_code = "MI_EIN_TRANSPORT_TIMEOUT"
             result.source_note = (
                 "Michigan's EIN search timed out after bounded recovery attempts. "
@@ -11448,11 +11450,13 @@ def ma_read_latest_form_pc(page, result, body: str, completed=None) -> dict:
         # this exception to explicit adverse or other unrecognized statuses.
         if registry_status.casefold() == "not doing business in mass":
             context = {"registry_status": registry_status, "ago_account": account.group(1)}
+        elif re.fullmatch(r"pending|in[\s-]*progress", registry_status, re.I):
+            return {"registry_status": registry_status, "ago_account": account.group(1), "registration_pending": True}
         elif re.search(r"not doing business|inactive|exempt|suspend|revok|withdraw|closed|pending", registry_status, re.I):
             return {"registry_status": registry_status, "ago_account": account.group(1), "contrary_status": True}
         filings = completed.get("filings", {}).get(account.group(1), {})
         if filings.get("empty") is True or filings.get("only_schedule_a2") is True:
-            if registry_status.lower() in {"", "registered", "delinquent", "expired"}:
+            if registry_status.lower() in {"", "registered", "delinquent", "expired", "not doing business in mass"}:
                 return {"empty_history_confirmed": True, "ago_account": account.group(1),
                         "registry_status": registry_status,
                         "schedule_a2_only": filings.get("only_schedule_a2") is True}
@@ -11510,6 +11514,20 @@ def annotate_ma_visible_form_pc_due(result, evidence=None):
     if public_status(result) in {"Not Registered", "Site Not Reachable", "Exempt", "Suspended", "Revoked"}:
         return result
     result.ma_filing_evidence = dict(evidence or {})
+    if result.ma_filing_evidence.get("registration_pending"):
+        registry_status = result.ma_filing_evidence["registry_status"]
+        result.status = "Pending"
+        result.status_reason = "MA_PRIMARY_REGISTRATION_PENDING"
+        result.raw_status_text = f"Charity Status: {registry_status}"
+        result.matched_registry_identifier = result.ma_filing_evidence["ago_account"]
+        result.computed_due_date = ""
+        result.fiscal_year_end = ""
+        result.next_required_period = ""
+        result.source_note = (
+            f"Massachusetts lists the charity registration as {registry_status}. CharityClarity reports Pending. "
+            "Review state communications for outstanding registration items."
+        )
+        return result
     if result.ma_filing_evidence.get("contrary_status"):
         registry_status = result.ma_filing_evidence["registry_status"]
         result.status = "Needs Review"
@@ -16054,6 +16072,8 @@ def true_status_from_body(result, body: str) -> str:
         return status_from_calendar_date(parsed_result_date(result.computed_due_date))
     if state == "MA" and getattr(result, "status_reason", "") == "MA_CONFIRMED_EMPTY_HISTORY_INFERRED_DELINQUENT":
         return "Delinquent"
+    if state == "MA" and getattr(result, "status_reason", "") == "MA_PRIMARY_REGISTRATION_PENDING":
+        return "Pending"
     if state == "VA" and getattr(result, "status_reason", "") == "VA_CONFIRMED_SOLICITATION_RESTRICTION":
         evidence = getattr(result, "va_entity_evidence", {})
         if (evidence.get("registration_count") == 0 and len(evidence.get("ein", "")) == 9
@@ -16480,6 +16500,9 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
                     "Confirm registration details directly with Virginia.")
 
     if state == "MI" and status == "Unable to Verify" and getattr(result, "reason_code", "") == "MI_EIN_TRANSPORT_TIMEOUT":
+        return note
+
+    if state == "MA" and reason == "MA_PRIMARY_REGISTRATION_PENDING":
         return note
 
     if state == "MA" and reason == "MA_CONFIRMED_EMPTY_HISTORY_INFERRED_DELINQUENT":
@@ -21410,7 +21433,8 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     body = hi_detail_body(page)
             elif state == "MI":
                 mi_started = time.perf_counter()
-                mi_probe_result = search_mi_http_completion_probe(org)
+                mi_deadline = lookup_started + MI_LOOKUP_MAX_SECONDS
+                mi_probe_result = search_mi_http_completion_probe(org, lookup_deadline=mi_deadline)
                 if mi_probe_result is not None:
                     result = mi_probe_result
                     mi_elapsed = time.perf_counter() - mi_started
@@ -21432,11 +21456,11 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     public_status(result) == "Not Registered"
                     and not mi_incomplete_frame
                     and (
-                        (MI_ENABLE_NAME_FALLBACK and mi_elapsed < (LOOKUP_SOFT_MAX_SECONDS - 6))
+                        (MI_ENABLE_NAME_FALLBACK and time.perf_counter() < (mi_deadline - 6))
                         or mi_clean_no_results
                     )
                 ):
-                    page._cc_mi_lookup_deadline = mi_started + LOOKUP_SOFT_MAX_SECONDS
+                    page._cc_mi_lookup_deadline = mi_deadline
                     result = search_mi_name_fallback(page, org)
                 if (
                     public_status(result) == "Not Registered"
@@ -21801,6 +21825,10 @@ def run_state_lookup_for_batch(
     state: str,
     confirm_single_no_match: bool,
 ) -> dict:
+    if state == "MI":
+        # Use the same bounded, reason-aware recovery as the website. An outer
+        # 87/90-second timeout must not abandon a still-running MI attempt.
+        return run_single_state_lookup_reliably(organization_name, ein, state)
     saw_timeout = False
     for attempt in (1, 2):
         executor = ThreadPoolExecutor(max_workers=1)
@@ -21839,7 +21867,8 @@ def run_state_lookup_for_batch(
 def run_fanout_state_lookup_for_batch(organization_name: str, ein: str, state: str) -> dict:
     # Completed AK and OK confirmation workflows can exceed the usual 87s.
     # Give only these parallel HTTP requests the existing 115s ceiling.
-    timeout_seconds = 115.0 if state in {"AK", "OK"} else BATCH_FANOUT_STATE_TIMEOUT_SECONDS
+    timeout_seconds = (2 * MI_LOOKUP_MAX_SECONDS + 30.0) if state == "MI" else (
+        115.0 if state in {"AK", "OK"} else BATCH_FANOUT_STATE_TIMEOUT_SECONDS)
     payload = {
         "organization_name": organization_name,
         "ein": ein,
@@ -22148,6 +22177,15 @@ def conservative_incomplete_lookup_result(result: dict, state: str) -> dict:
     return updated
 
 
+def mi_transient_lookup_result(result: dict) -> bool:
+    """Retry transport/budget failures, never reinterpret incomplete evidence."""
+    if result.get("reason_code") == "MI_EIN_TRANSPORT_TIMEOUT":
+        return True
+    return (result.get("reason_code") == "MI_NAME_SEARCH_INCOMPLETE" and bool(re.search(
+        r"timed? out|timeout|time budget|budget exhausted",
+        " ".join(str(result.get(key) or "") for key in ("error", "source_note", "raw_status_text")), re.I)))
+
+
 def run_single_state_lookup_reliably(organization_name: str, ein: str, state: str) -> dict:
     state = (state or "").upper()
     attempts = SINGLE_STATE_SEMANTIC_RETRY_ATTEMPTS if state in SINGLE_STATE_SEMANTIC_RETRY_STATES else 1
@@ -22160,9 +22198,15 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
     result: dict | None = None
     best_reachable_result: dict | None = None
     best_ak_identity_result: dict | None = None
+    mi_attempt_history: list[dict] = []
     for attempt in range(1, attempts + 1):
         result = run_state_lookup(organization_name, ein, state)
         result["semantic_attempts"] = attempt
+        if state == "MI":
+            mi_attempt_history.append({key: result.get(key) for key in (
+                "semantic_attempts", "status", "reason_code", "error", "source_note",
+                "lookup_seconds", "queries_attempted", "source_attempts")})
+            result["mi_attempt_history"] = list(mi_attempt_history)
         status = (result.get("status") or "").strip().lower()
         if status != "site not reachable":
             best_reachable_result = dict(result)
@@ -22173,6 +22217,8 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
             ):
                 best_ak_identity_result = dict(result)
         retryable_statuses = {"site not reachable"}
+        if state == "MI" and mi_transient_lookup_result(result):
+            retryable_statuses.add(status)
         if (state, result.get("reason_code")) in {
             ("FL", "FL_INCOMPLETE_SEARCH"),
             ("NJ", "NJ_INCOMPLETE_EIN_SEARCH"),
@@ -22195,7 +22241,10 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
         if status not in retryable_statuses:
             return result
         if attempt < attempts and SINGLE_STATE_SEMANTIC_RETRY_DELAY_SECONDS > 0:
-            time.sleep(SINGLE_STATE_SEMANTIC_RETRY_DELAY_SECONDS)
+            delay = SINGLE_STATE_SEMANTIC_RETRY_DELAY_SECONDS
+            if state == "MI":
+                delay = 2.0 + (int(canonical_ein_digits(ein) or "0") % 3000) / 1000.0
+            time.sleep(delay)
     if state == "AK" and best_ak_identity_result and result:
         final_status = (result.get("status") or "").strip().lower()
         if (

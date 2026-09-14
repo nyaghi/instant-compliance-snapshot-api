@@ -170,14 +170,15 @@ class MassachusettsTests(unittest.TestCase):
         evidence = cc.ma_read_latest_form_pc(page, self.result(), "AG Account Number 051172", self.completed(empty=False))
         self.assertEqual(cc.annotate_ma_visible_form_pc_due(self.result(), evidence).status, "Unable to Confirm")
 
-    def test_not_doing_business_contradicts_empty_filing_inference(self):
+    def test_not_doing_business_does_not_override_confirmed_empty_history(self):
         for empty in (False, True):
             evidence = cc.ma_read_latest_form_pc(Mock(), self.result(), "AG Account Number 051172",
                                                 self.completed(empty=empty, status="Not Doing Business in Mass"))
             r = cc.annotate_ma_visible_form_pc_due(self.result(), evidence)
-            expected = "Needs Review" if empty else "Unable to Confirm"
+            expected = "Delinquent" if empty else "Unable to Confirm"
             self.assertEqual(cc.true_status_from_body(r, ""), expected)
-            self.assertIn("Not Doing Business in Mass", cc.comments_for_result(r, "", expected))
+            comment = cc.comments_for_result(r, "", expected)
+            self.assertIn("infers Delinquent" if empty else "Not Doing Business in Mass", comment)
 
     def test_completed_response_requires_correct_identity_and_success(self):
         import json

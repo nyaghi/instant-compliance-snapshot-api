@@ -151,10 +151,10 @@ class ReportedCases(unittest.TestCase):
             with self.subTest(rows=rows,completed=completed):
                 self.assertEqual(self.ma_evidence(rows,completed=completed)['status'],'Unable to Confirm')
 
-    def test_ma_contrary_registry_status_overrides_schedule_only_inference(self):
+    def test_ma_primary_pending_and_noncontrolling_activity_with_schedule_only(self):
         self.assertEqual(self.ma_evidence([self.schedule()],status='Not Doing Business in Mass')['status'],
-                         'Needs Review')
-        self.assertEqual(self.ma_evidence([self.schedule()],status='Pending')['status'],'Needs Review')
+                         'Delinquent')
+        self.assertEqual(self.ma_evidence([self.schedule()],status='Pending')['status'],'Pending')
 
     def test_me_truncated_registry_name_is_discoverable_without_relaxing_identity(self):
         name='American Institute for Chartered Property Casualty Underwriters'
