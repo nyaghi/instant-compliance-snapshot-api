@@ -97,7 +97,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.14.4-staging").strip() or "2026.09.14.4-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.14.5-staging").strip() or "2026.09.14.5-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -8089,6 +8089,46 @@ def fill_registry_match_from_text(result, body: str, org) -> None:
         result.matched_registry_name = re.sub(r"\s+", " ", getattr(org, "organization_name", "")).strip()
 
 
+def md_registry_match_from_entries(result, body: str, org) -> None:
+    """Read display metadata from the same exact-EIN entry MD already selects."""
+    if (getattr(result, "state", "") or "").upper() != "MD":
+        return
+    ein = canonical_ein_digits(getattr(org, "ein", ""))
+    if len(ein) != 9 or ein != canonical_ein_digits(getattr(result, "ein", "")):
+        return
+    try:
+        selected_body = md_prefer_active_entry_body(body, org)
+        payload, _ = json.JSONDecoder().raw_decode(selected_body[selected_body.index("{"):])
+        entries = payload.get("entries", [])
+        if len(entries) != 1:
+            return
+        entry = entries[0]
+        fields = entry.get("view_data", {}).get("content_element_data", {})
+        values = [html_fragment_text(str(value)) for value in fields.values()]
+        entry_eins = [value.split(":", 1)[1].strip() for value in values if value.startswith("Charity EIN:")]
+        if not entry_eins or any(canonical_ein_digits(value) != ein for value in entry_eins):
+            return
+        name = entry.get("f_aedd5545-808f-4725-9b1d-5fa61e994a75")
+        if not isinstance(name, str) or re.search(r"[<>]|\\u[0-9a-fA-F]{4}", name):
+            return
+        name = useful_registry_name(name)
+        if not name:
+            return
+        identifiers = {value.split(":", 1)[1].strip() for value in values if value.startswith("Charity ID:")}
+        if len(identifiers) != 1:
+            return
+        identifier = identifiers.pop()
+        if not re.fullmatch(r"\d+", identifier):
+            return
+        existing_id = getattr(result, "matched_registry_identifier", "") or ""
+        if existing_id and existing_id != identifier:
+            return
+        result.matched_registry_name = name
+        result.matched_registry_identifier = identifier
+    except (ValueError, TypeError, AttributeError, KeyError):
+        return
+
+
 def normalize_registry_match_fields(result, org) -> None:
     matched_name = useful_registry_name(getattr(result, "matched_registry_name", "") or "")
     matched_identifier = (getattr(result, "matched_registry_identifier", "") or "").strip()
@@ -13683,6 +13723,7 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
     if correction_body:
         body = " ".join(part for part in [body or "", correction_body] if part)
     if public_status(result) not in {"Not Registered", "Site Not Reachable", "Unable to Verify", "Unable to Confirm", "Needs Review"}:
+        md_registry_match_from_entries(result, body, org)
         fill_registry_match_from_text(result, body, org)
     normalize_registry_match_fields(result, org)
     if (getattr(result, "state", "") or "").upper() == "NY":
