@@ -1,0 +1,56 @@
+{
+  "record": {
+    "record_id": "a09Rm0000055QjlIAE",
+    "ago_account": "084432",
+    "ein": "811823628",
+    "name": "Education Forward DC",
+    "registry_status": "Not Doing Business in Mass"
+  },
+  "registration_documents": {
+    "084432": {
+      "complete": true,
+      "empty": false,
+      "row_count": 4,
+      "document_years": [
+        "",
+        "",
+        "",
+        ""
+      ],
+      "documents": [
+        {
+          "year": "",
+          "title": "Copy of the By-Laws.pdf",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/069Rm00000UUR6PIAX"
+        },
+        {
+          "year": "",
+          "title": "Copy of the IRS Letter.pdf",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/069Rm00000UTwtwIAD"
+        },
+        {
+          "year": "",
+          "title": "Articles of Organization.pdf",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/069Rm00000UTtZSIA1"
+        },
+        {
+          "year": "",
+          "title": "MA Withdrawal Request.pdf",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/069Rm000011M2BmIAK"
+        }
+      ],
+      "annual_scans": []
+    }
+  },
+  "filings": {
+    "084432": {
+      "complete": true,
+      "empty": true,
+      "row_count": 0,
+      "document_years": [],
+      "documents": [],
+      "annual_scans": [],
+      "only_schedule_a2": false
+    }
+  }
+}

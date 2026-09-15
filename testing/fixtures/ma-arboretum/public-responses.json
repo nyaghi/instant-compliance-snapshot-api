@@ -1,0 +1,83 @@
+[
+  {
+    "method": "get_CharityInfo",
+    "params": {
+      "agoNumber": "",
+      "einNumberHyphen": "52-1257712",
+      "einNumberNoHyphen": "521257712",
+      "charityName": "",
+      "recID": ""
+    },
+    "state": "SUCCESS",
+    "rows": [
+      {}
+    ]
+  },
+  {
+    "method": "get_CharityInfo",
+    "params": {
+      "agoNumber": "",
+      "einNumberHyphen": "",
+      "einNumberNoHyphen": "",
+      "charityName": "",
+      "recID": "a095e000009HqEHAA0"
+    },
+    "state": "SUCCESS",
+    "rows": [
+      {}
+    ]
+  },
+  {
+    "method": "get_CHARITY_ATTACHMENTS_FOR_PUBLICUSERS",
+    "params": {
+      "agoNumber": "067048"
+    },
+    "state": "SUCCESS",
+    "rows": [
+      {
+        "filingYear": "",
+        "nameforButton": "Download Attachment FY2021 PC - Form PC/Annual RPT.tiff",
+        "nameforURL": "FY2021 PC - Form PC/Annual RPT.tiff",
+        "rowID": 0,
+        "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007inGKAAY"
+      }
+    ]
+  },
+  {
+    "method": "get_ALL_FILINGS_ATTACHMENTS_FOR_PUBLICUSERS",
+    "params": {
+      "agoNumber": "067048"
+    },
+    "state": "SUCCESS",
+    "rows": [
+      {
+        "filingYear": "2021",
+        "nameforButton": "View Filing Schedule-A2 Data",
+        "nameforURL": "Schedule-A2 Data",
+        "rowID": 0,
+        "url": "https://masscharities.my.site.com/FilingSearch/s/detail/a0I4U00000uiM3fUAE"
+      },
+      {
+        "filingYear": "2019",
+        "nameforButton": "Download Attachment FY2019 PC - Registration Docs.tiff",
+        "nameforURL": "FY2019 PC - Registration Docs.tiff",
+        "rowID": 1,
+        "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007kG4mAAE"
+      },
+      {
+        "filingYear": "2020",
+        "nameforButton": "Download Attachment FY2020 PC - Articles ORG/Bylaws.tiff",
+        "nameforURL": "FY2020 PC - Articles ORG/Bylaws.tiff",
+        "rowID": 2,
+        "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007iogKAAQ"
+      },
+      {
+        "filingYear": "2020",
+        "nameforButton": "Download Attachment FY2020 PC - Other/Misc.tiff",
+        "nameforURL": "FY2020 PC - Other/Misc.tiff",
+        "rowID": 3,
+        "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007ka7MAAQ"
+      }
+    ]
+  }
+]

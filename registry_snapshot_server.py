@@ -97,7 +97,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.15.2-staging").strip() or "2026.09.15.2-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.15.3-staging").strip() or "2026.09.15.3-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -11214,7 +11214,8 @@ def search_ma_master(page, org, completed):
             page.wait_for_timeout(250)
             record = completed.get("record", {})
             account = record.get("ago_account")
-            if record.get("record_id") == candidate["value"] and account and account in completed.get("filings", {}):
+            if (record.get("record_id") == candidate["value"] and account and account in completed.get("filings", {})
+                    and account in completed.get("registration_documents", {})):
                 break
         else:
             return incomplete("MA_FILING_LIST_UNCONFIRMED", "Massachusetts charity selection was attempted, but the matching record and completed filing list could not be confirmed.")
@@ -11402,6 +11403,54 @@ def ma_latest_distinct_fiscal_period(forms: list[dict]) -> dict:
     return selected
 
 
+def ma_public_document_collection(rows: list) -> dict:
+    """Keep both public tables' years/types; a title year is not a fiscal end."""
+    documents = []
+    for row in rows:
+        if not isinstance(row, dict):
+            documents.append({"year": "", "title": "", "url": ""})
+            continue
+        title = str(row.get("nameforURL") or "")
+        year = str(row.get("filingYear") or "")
+        title_year = re.match(r"^FY(20\d{2})\s+PC\s*-", title, re.I)
+        if not year and title_year:
+            year = title_year.group(1)
+        if title_year and year != title_year.group(1):
+            year = ""  # Conflicting labels cannot support a stale-history inference.
+        documents.append({"year": year, "title": title, "url": str(row.get("url") or "")})
+    return {"complete": True, "empty": not rows, "row_count": len(rows),
+            "document_years": [r["year"] for r in documents],
+            "documents": documents,
+            "annual_scans": [r for r in documents if re.search(r"Form\s+PC/Annual\s+RPT", r["title"], re.I)]}
+
+
+def ma_completed_history_inference(completed: dict, account: str) -> dict:
+    """Apply the approved no-annual/stale-history rule only to complete evidence."""
+    record = completed.get("record", {})
+    annual = completed.get("filings", {}).get(account, {})
+    registration = completed.get("registration_documents", {}).get(account, {})
+    if (record.get("ago_account") != account or not re.fullmatch(r"\d{9}", record.get("ein", ""))
+            or annual.get("complete") is not True or registration.get("complete") is not True):
+        return {}
+    documents = annual.get("documents", []) + registration.get("documents", [])
+    nonannual = r"(?:Schedule-A2 Data|FY20\d{2}\s+PC\s*-\s*(?:Articles ORG/Bylaws|Registration Docs|IRS determination letter)\.[A-Za-z0-9]+)"
+    if all(re.fullmatch(nonannual, r["title"], re.I) for r in documents):
+        return {"completed_history_inferred_delinquent": True, "ago_account": account,
+                "no_annual_report_confirmed": True}
+    years = [r["year"] for r in documents]
+    if not years or not all(re.fullmatch(r"20\d{2}", y) for y in years):
+        return {}
+    latest = max(map(int, years))
+    # Allow the label to name a starting year, the next annual cycle, and the
+    # full extension. This is only a conservative age guard, never a due date.
+    options = filing_due_date_options("MA", latest + 2, (12, 31))
+    last_possible_due = options["extended_due"] or options["base_due"]
+    if not last_possible_due or last_possible_due >= date.today():
+        return {}
+    return {"completed_history_inferred_delinquent": True, "ago_account": account,
+            "latest_public_document_year": latest}
+
+
 def ma_capture_completed_response(response, org, evidence: dict) -> None:
     """Observe the public page's completed requests; retain no contact or session data."""
     if urlparse(response.url).hostname != "masscharities.my.site.com" or "/aura" not in response.url:
@@ -11432,9 +11481,12 @@ def ma_capture_completed_response(response, org, evidence: dict) -> None:
                                           "ein": re.sub(r"\D", "", org.ein or ""),
                                           "name": row.get("Organization_Name__c"),
                                           "registry_status": str(row.get("Charity_Status__c") or "")}
+            elif method == "get_CHARITY_ATTACHMENTS_FOR_PUBLICUSERS" and query.get("agoNumber"):
+                evidence.setdefault("registration_documents", {})[str(query["agoNumber"])] = ma_public_document_collection(rows)
             elif method == "get_ALL_FILINGS_ATTACHMENTS_FOR_PUBLICUSERS" and query.get("agoNumber"):
                 # A completed all-filings response, not a filtered or loading table.
                 evidence.setdefault("filings", {})[str(query["agoNumber"])] = {
+                    **ma_public_document_collection(rows),
                     "empty": len(rows) == 0, "row_count": len(rows),
                     "document_years": [str(row.get("filingYear") or "") for row in rows],
                     # Schedule A2 is a supplement, not the annual Form PC.
@@ -11493,7 +11545,7 @@ def ma_scanned_form_pc_evidence(text: str, expected_year: int, account: str, ein
     start, end = dates
     if end.year != expected_year or end > date.today() or not 0 < (end-start).days <= 400:
         return {}
-    return {"filing_year": expected_year, "period_end": format_date(end),
+    return {"filing_year": expected_year, "period_start": format_date(start), "period_end": format_date(end),
             "filing_status": "Submitted", "ago_account": account, "legacy_scanned_form_pc": True}
 
 
@@ -11542,12 +11594,15 @@ def ma_scanned_urs_overdue_evidence(text: str, expected_year: int, account: str,
             "filing_year": expected_year, "ago_account": account}
 
 
-def ma_read_legacy_form_pc(page, completed: dict, account: str) -> dict:
+def ma_read_legacy_form_pc(page, completed: dict, account: str, read_progress=None) -> dict:
     global _MA_LEGACY_OCR
     record = completed.get("record", {})
     if record.get("ago_account") != account or not record.get("ein"):
         return {}
-    scans = completed.get("filings", {}).get(account, {}).get("annual_scans", [])
+    scans = (completed.get("filings", {}).get(account, {}).get("annual_scans", [])
+             + completed.get("registration_documents", {}).get(account, {}).get("annual_scans", []))
+    if read_progress is not None and scans:
+        read_progress.update(attempted=True, complete=False)
     scans = [r for r in scans if re.fullmatch(r"20\d{2}", r.get("year", ""))]
     if not scans:
         return {}
@@ -11577,9 +11632,13 @@ def ma_read_legacy_form_pc(page, completed: dict, account: str) -> dict:
                     _MA_LEGACY_OCR = RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1)
                 lines, _ = _MA_LEGACY_OCR(scanned.convert("RGB"))
             text = "\n".join(str(line[1]) for line in lines or [] if float(line[2]) >= 0.85)
+            if read_progress is not None:
+                document_eins = {re.sub(r"\D", "", x) for x in re.findall(r"(?<!\d)\d{2}[- ]?\d{7}(?!\d)", text)}
+                read_progress["complete"] = document_eins == {record["ein"]}
             evidence = ma_scanned_form_pc_evidence(text, latest, account, record["ein"])
             if not evidence:
-                years = completed.get("filings", {}).get(account, {}).get("document_years", [])
+                years = (completed.get("filings", {}).get(account, {}).get("document_years", [])
+                         + completed.get("registration_documents", {}).get(account, {}).get("document_years", []))
                 if years and all(re.fullmatch(r"20\d{2}", year) for year in years) and max(map(int, years)) == latest:
                     evidence = ma_scanned_urs_overdue_evidence(text, latest, account, record["ein"])
             if not evidence:
@@ -11634,7 +11693,10 @@ def ma_read_latest_form_pc(page, result, body: str, completed=None) -> dict:
         elif re.search(r"not doing business|inactive|exempt|suspend|revok|withdraw|closed|pending", registry_status, re.I):
             return {"registry_status": registry_status, "ago_account": account.group(1), "contrary_status": True}
         filings = completed.get("filings", {}).get(account.group(1), {})
-        if filings.get("empty") is True or filings.get("only_schedule_a2") is True:
+        registration = completed.get("registration_documents", {}).get(account.group(1), {})
+        # Preserve the approved empty/Schedule-A2 behavior when registration
+        # attachments contain no annual candidate. Bylaws are not annual reports.
+        if (filings.get("empty") is True or filings.get("only_schedule_a2") is True) and not registration.get("annual_scans"):
             if registry_status.lower() in {"", "registered", "delinquent", "expired", "not doing business in mass"}:
                 return {"empty_history_confirmed": True, "ago_account": account.group(1),
                         "registry_status": registry_status,
@@ -11652,8 +11714,14 @@ def ma_read_latest_form_pc(page, result, body: str, completed=None) -> dict:
             match = re.match(r"\s*(20\d{2})\s+Form[\s-]*PC\s+Data\b", row_text, re.I)
             if match:
                 candidates.append((int(match.group(1)), index))
+        all_form_years.extend(int(r["year"]) for r in completed.get("registration_documents", {}).get(account.group(1), {}).get("annual_scans", [])
+                              if re.fullmatch(r"20\d{2}", r.get("year", "")))
         if not candidates or max(all_form_years) > max(year for year, _ in candidates):
-            return {**ma_read_legacy_form_pc(page, completed, account.group(1)), **context}
+            progress = {}
+            legacy = ma_read_legacy_form_pc(page, completed, account.group(1), read_progress=progress)
+            if not legacy and (not progress.get("attempted") or progress.get("complete")):
+                legacy = ma_completed_history_inference(completed, account.group(1))
+            return {**legacy, **context}
         latest_year = max(year for year, _ in candidates)
         latest = [index for year, index in candidates if year == latest_year]
         if len(latest) > 3:
@@ -11681,6 +11749,12 @@ def ma_read_latest_form_pc(page, result, body: str, completed=None) -> dict:
             finally:
                 if detail is not None:
                     detail.close()
+        if any(int(r["year"]) == latest_year for r in completed.get("registration_documents", {}).get(account.group(1), {}).get("annual_scans", [])
+               if re.fullmatch(r"20\d{2}", r.get("year", ""))):
+            legacy = ma_read_legacy_form_pc(page, completed, account.group(1))
+            if not legacy.get("period_end"):
+                return context
+            forms.append(legacy)
         return {**ma_latest_distinct_fiscal_period(forms), **context}
     except Exception as exc:
         log_event(f"MA Form PC detail unavailable for AGO {account.group(1)}: {type(exc).__name__}")
@@ -11754,6 +11828,20 @@ def annotate_ma_visible_form_pc_due(result, evidence=None):
             "this is not an explicit state determination. A specific overdue deadline is not asserted. "
             "Recent filings may not yet be public, so confirm time-sensitive decisions directly with Massachusetts."
         )
+        return result
+    if result.ma_filing_evidence.get("completed_history_inferred_delinquent"):
+        result.status = "Delinquent"
+        result.status_reason = "MA_COMPLETED_HISTORY_INFERRED_DELINQUENT"
+        result.matched_registry_identifier = result.ma_filing_evidence["ago_account"]
+        result.computed_due_date = ""
+        result.fiscal_year_end = ""
+        result.next_required_period = ""
+        latest = result.ma_filing_evidence.get("latest_public_document_year")
+        finding = (f"The latest year shown in the completed Massachusetts public document history is {latest}, with no later filing listed. "
+                   if latest else "The completed Massachusetts public document history contains only supplemental or registration documents, with no annual Form PC. ")
+        result.raw_status_text = finding + "Delinquency inferred"
+        result.source_note = (finding + "CharityClarity therefore infers Delinquent. This is not an explicit state determination; "
+                              "a specific overdue deadline was not confirmed. Recent filings may not yet be public, so confirm time-sensitive decisions directly with Massachusetts.")
         return result
     period_end = parsed_result_date(result.ma_filing_evidence.get("period_end", ""))
     if not period_end or result.ma_filing_evidence.get("filing_status") != "Submitted":
@@ -16270,7 +16358,7 @@ def true_status_from_body(result, body: str) -> str:
         return base_status
     if state == "MA" and getattr(result, "status_reason", "") == "MA_SUBMITTED_FORM_PC_FISCAL_PERIOD":
         return status_from_calendar_date(parsed_result_date(result.computed_due_date))
-    if state == "MA" and getattr(result, "status_reason", "") == "MA_CONFIRMED_EMPTY_HISTORY_INFERRED_DELINQUENT":
+    if state == "MA" and getattr(result, "status_reason", "") in {"MA_CONFIRMED_EMPTY_HISTORY_INFERRED_DELINQUENT", "MA_COMPLETED_HISTORY_INFERRED_DELINQUENT"}:
         return "Delinquent"
     if state == "MA" and getattr(result, "status_reason", "") == "MA_PRIMARY_REGISTRATION_PENDING":
         return "Pending"
@@ -16705,7 +16793,7 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
     if state == "MI" and status == "Unable to Verify" and getattr(result, "reason_code", "") == "MI_EIN_TRANSPORT_TIMEOUT":
         return note
 
-    if state == "MA" and reason in {"MA_PRIMARY_REGISTRATION_PENDING", "MA_LEGACY_URS_NO_LATER_ANNUAL"}:
+    if state == "MA" and reason in {"MA_PRIMARY_REGISTRATION_PENDING", "MA_LEGACY_URS_NO_LATER_ANNUAL", "MA_COMPLETED_HISTORY_INFERRED_DELINQUENT"}:
         return note
 
     if state == "MA" and reason == "MA_CONFIRMED_EMPTY_HISTORY_INFERRED_DELINQUENT":

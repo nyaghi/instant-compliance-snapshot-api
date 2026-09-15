@@ -1,0 +1,58 @@
+{
+  "record": {
+    "record_id": "a09Rm000004in2jIAA",
+    "ago_account": "084259",
+    "ein": "814770680",
+    "name": "American Independent Media",
+    "registry_status": ""
+  },
+  "registration_documents": {
+    "084259": {
+      "complete": true,
+      "empty": false,
+      "row_count": 3,
+      "document_years": [
+        "",
+        "",
+        ""
+      ],
+      "documents": [
+        {
+          "year": "",
+          "title": "Copy of the By-Laws.pdf",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/069Rm00000SSPY3IAP"
+        },
+        {
+          "year": "",
+          "title": "Articles of Organization.pdf",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/069Rm00000SSOH0IAP"
+        },
+        {
+          "year": "",
+          "title": "Copy of the IRS Letter.pdf",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/069Rm00000SS6YgIAL"
+        }
+      ],
+      "annual_scans": []
+    }
+  },
+  "filings": {
+    "084259": {
+      "complete": true,
+      "empty": false,
+      "row_count": 1,
+      "document_years": [
+        "2025"
+      ],
+      "documents": [
+        {
+          "year": "2025",
+          "title": "Schedule-A2 Data",
+          "url": "https://masscharities.my.site.com/FilingSearch/s/detail/a0IRm00000i1n8bMAA"
+        }
+      ],
+      "annual_scans": [],
+      "only_schedule_a2": true
+    }
+  }
+}

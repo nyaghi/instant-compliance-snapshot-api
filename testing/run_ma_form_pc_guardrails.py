@@ -208,7 +208,7 @@ class MassachusettsTests(unittest.TestCase):
             response.json.return_value = {"actions": [{"id": "1", "state": state, "returnValue": {"returnValue": data}}]}
             evidence = {}
             cc.ma_capture_completed_response(response, cc.checker.Organization("Example Foundation", "123456789"), evidence)
-            self.assertEqual(bool(evidence), method == "get_ALL_FILINGS_ATTACHMENTS_FOR_PUBLICUSERS" and state == "SUCCESS" and data == [])
+            self.assertEqual(bool(evidence.get("filings")), method == "get_ALL_FILINGS_ATTACHMENTS_FOR_PUBLICUSERS" and state == "SUCCESS" and data == [])
 
 
 class MassachusettsSelectionTests(unittest.TestCase):
@@ -237,7 +237,8 @@ class MassachusettsSelectionTests(unittest.TestCase):
                 actions.append("filings")
                 if finish:
                     completed.update({"record": {"record_id": record_id, "ago_account": "051172", "name": "Example Foundation"},
-                                      "filings": {"051172": {"empty": False}}})
+                                      "filings": {"051172": {"empty": False}},
+                                      "registration_documents": {"051172": {"complete": True, "documents": []}}})
         page.get_by_role.return_value.click.side_effect = click
         return page, actions
 
