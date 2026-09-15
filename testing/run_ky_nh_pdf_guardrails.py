@@ -95,7 +95,7 @@ class PdfGuardrails(unittest.TestCase):
 
     def test_ky_real_columns_preserve_one_word_names_at_names_years_and_neighbors(self):
         rows=c.ky_parse_pdf_table_records(self.ky_pdf())
-        self.assertEqual([(r[0],r[1],r[2]) for r in rows],[('10484','FoodChain','2024'),('8507','FoodCorps, Inc.','2024'),('17696','Opportunity@work','2024'),('11198','Good Sports, Inc.','2025'),('9892','Zamir Choral Foundation, Inc.','2024'),('14503','ZEARN Inc.','2024'),('54321','Legal Relief Known Relief','2024')])
+        self.assertEqual([(r[0],r[1],r[2]) for r in rows],[('10484','FoodChain','2024'),('8507','FoodCorps, Inc.','2024'),('17696','Opportunity@work','2024'),('11198','Good Sports, Inc.','2025'),('9892','Zamir Choral Foundation, Inc.','2024'),('14503','ZEARN Inc.','2024'),('54321','Legal Relief | DBA: Known Relief','2024')])
 
     def test_ky_missing_year_cannot_silently_become_current(self):
         with self.assertRaises(ValueError):c.ky_parse_pdf_table_records(self.ky_pdf(missing_year=True))

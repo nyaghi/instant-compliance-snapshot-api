@@ -14,25 +14,39 @@ class Today(date):
  def today(cls):return cls(2026,9,14)
 
 class Massachusetts(unittest.TestCase):
- def final(self,status,*,empty=False,a2=False,period='',account='067606',observed_account=None,filing_status='Submitted',name='College of William & Mary',ein='54-6001718'):
+ def final(self,status,*,empty=False,a2=False,period='',account='067606',observed_account=None,filing_status='Submitted',name='College of William & Mary',ein='54-6001718',visible_status=''):
   org=c.checker.Organization(name,ein);r=c.checker.StateResult(name,ein,'MA','Current','https://masscharities.my.site.com/FilingSearch/s/')
   r.matched_registry_name=name;r.matched_registry_identifier=account;r.success=True
   page=Mock();page.get_by_role.return_value.all_inner_texts.return_value=[]
+  page.locator.return_value.inner_text.return_value='AG Account Number '+account+(' Charity Status: '+visible_status if visible_status else '')
   completed={'record':{'ago_account':observed_account or account,'registry_status':status},'filings':{account:{'empty':empty,'only_schedule_a2':a2}}}
   annual={'period_end':period,'filing_status':filing_status,'ago_account':account} if period else {}
   with patch.object(c,'date',Today),patch.object(c,'public_profile_for_ein',return_value={}),patch.object(c,'ma_read_legacy_form_pc',return_value=annual),patch.object(c.urllib.request,'urlopen',side_effect=AssertionError('Unexpected network')):
-   evidence=c.ma_read_latest_form_pc(page,r,'AG Account Number '+account,completed)
+   evidence=c.ma_read_latest_form_pc(page,r,'AG Account Number '+account+(' Charity Status: '+visible_status if visible_status else ''),completed)
    c.annotate_ma_visible_form_pc_due(r,evidence)
    return c.response_data_for_lookup(r,'',org,name,ein,'MA',time.perf_counter())
  def test_primary_pending_controls_all_filing_conditions_and_retains_identity(self):
   for status in ['Pending','In-Progress','In Progress','in-progress']:
    for filing in [{'empty':True},{'a2':True},{},{'period':'12/31/2023'},{'period':'12/31/2025'}]:
     with self.subTest(status=status,filing=filing):
-     r=self.final(status,**filing)
+     r=self.final(status,visible_status=status,**filing)
      self.assertEqual(r['status'],'Pending');self.assertEqual(r['status_reason'],'MA_PRIMARY_REGISTRATION_PENDING')
      self.assertEqual(r['ein'],'54-6001718');self.assertEqual(r['matched_registry_identifier'],'067606')
      self.assertEqual(r['matched_registry_name'],'College of William & Mary');self.assertTrue(r['success'])
      self.assertFalse(r.get('computed_due_date'));self.assertIn(status,r['comments']);self.assertIn('Review state communications',r['comments'])
+ def test_network_only_pending_follows_public_filings(self):
+  for primary in ['Pending','In-Progress','In Progress','in-progress']:
+   for filing,expected in [({'empty':True},'Delinquent'),({'a2':True},'Delinquent'),({},'Unable to Confirm'),({'period':'12/31/2023'},'Delinquent'),({'period':'12/31/2024'},'Upcoming Filing'),({'period':'12/31/2025'},'Current')]:
+    with self.subTest(primary=primary,filing=filing):
+     r=self.final(primary,**filing);self.assertEqual(r['status'],expected)
+     self.assertNotIn('registration as '+primary,r['comments'])
+     self.assertEqual(r['ma_filing_evidence'].get('noncontrolling_network_status'),primary)
+ def test_pending_in_hidden_html_is_not_visible_status(self):
+  page=Mock();page.locator.return_value.inner_text.return_value='AG Account Number 067606 Annual Filings and Documents'
+  completed={'record':{'ago_account':'067606','registry_status':'In-Progress'},'filings':{'067606':{'empty':True}}}
+  r=c.checker.StateResult('College of William & Mary','546001718','MA','Current','')
+  evidence=c.ma_read_latest_form_pc(page,r,'AG Account Number 067606 <script>Charity Status: Pending</script>',completed)
+  self.assertTrue(evidence['empty_history_confirmed']);self.assertFalse(evidence.get('registration_pending'))
  def test_education_forward_activity_is_noncontrolling(self):
   for filing in [{'empty':True},{'a2':True}]:
    r=self.final('Not Doing Business in Mass',account='084432',name='Education Forward DC',ein='81-1823628',**filing)

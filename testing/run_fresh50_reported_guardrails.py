@@ -111,7 +111,7 @@ class ReportedCases(unittest.TestCase):
         data,_=self.ny(row['orgName'],row['ein'],[row],{row['orgID']:detail})
         self.assertEqual(data['status'],'Exempt')
 
-    def ma_evidence(self, rows, status='', completed=True):
+    def ma_evidence(self, rows, status='', completed=True, visible_status=''):
         org=cc.checker.Organization('American Independent Media','814770680')
         evidence={'record':{'record_id':'record1','ago_account':'084259','ein':'814770680',
                             'name':org.organization_name,'registry_status':status}}
@@ -123,6 +123,7 @@ class ReportedCases(unittest.TestCase):
                                                'returnValue':{'returnValue':rows}}]}
         cc.ma_capture_completed_response(response,org,evidence)
         page=Mock()
+        page.locator.return_value.inner_text.return_value='AG Account Number 084259'+(' Charity Status: '+visible_status if visible_status else '')
         page.get_by_role.return_value.all_inner_texts.return_value=[]
         r=cc.checker.StateResult(org.organization_name,org.ein,'MA','Unknown','https://masscharities.my.site.com/FilingSearch/s/')
         r.matched_registry_name=org.organization_name
@@ -154,7 +155,8 @@ class ReportedCases(unittest.TestCase):
     def test_ma_primary_pending_and_noncontrolling_activity_with_schedule_only(self):
         self.assertEqual(self.ma_evidence([self.schedule()],status='Not Doing Business in Mass')['status'],
                          'Delinquent')
-        self.assertEqual(self.ma_evidence([self.schedule()],status='Pending')['status'],'Pending')
+        self.assertEqual(self.ma_evidence([self.schedule()],status='Pending')['status'],'Delinquent')
+        self.assertEqual(self.ma_evidence([self.schedule()],status='Pending',visible_status='Pending')['status'],'Pending')
 
     def test_me_truncated_registry_name_is_discoverable_without_relaxing_identity(self):
         name='American Institute for Chartered Property Casualty Underwriters'

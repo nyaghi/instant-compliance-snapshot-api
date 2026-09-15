@@ -97,7 +97,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.14.6-staging").strip() or "2026.09.14.6-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.15.1-staging").strip() or "2026.09.15.1-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -11409,7 +11409,7 @@ _MA_LEGACY_OCR = None
 _MA_LEGACY_OCR_LOCK = threading.Lock()
 
 
-def ma_scanned_form_pc_evidence(text: str, expected_year: int, account: str, ein: str) -> dict:
+def ma_scanned_form_pc_evidence(text: str, expected_year: int, account: str, ein: str, period_text: str = "") -> dict:
     """Require the actual Form PC, both identity anchors and its labeled period."""
     readable = re.sub(r"\s+", " ", text or "")
     if not re.search(r"\bForm\s+PC\b", readable, re.I):
@@ -11420,9 +11420,25 @@ def ma_scanned_form_pc_evidence(text: str, expected_year: int, account: str, ein
     label = re.search(r"Report\s+for\s+the\s+Fiscal\s+Period", readable, re.I)
     if not label:
         return {}
+    if period_text:
+        readable = re.sub(r"\s+", " ", period_text)
+        label = re.search(r"Report\s+for\s+the\s+Fiscal\s+Period", readable, re.I)
+        if not label:
+            return {}
     # Scanned columns may put the two dates just before or just after the label.
     window = readable[max(0, label.start()-65):label.end()+85]
-    dates = [parsed_result_date(x) for x in re.findall(r"\b\d{1,2}/\d{1,2}/\d{4}\b", window)]
+    tokens = list(re.finditer(r"(?<!\d)(?:\d{1,2}/\d{1,2}/\d{4}|\d{1,2}\s+\d{1,2}\s+\d{4}|\d{8})(?!\d)", window))
+    if len(tokens) != 2:
+        return {}
+    # Some printed forms separate date components with spaces, not slashes.
+    # Accept only complete dates joined by 'to'; never supply unread digits.
+    if any("/" not in token[0] for token in tokens) and not re.fullmatch(r"\s+to\s+", window[tokens[0].end():tokens[1].start()], re.I):
+        return {}
+    dates = []
+    for token in tokens:
+        raw = token[0]
+        parts = [raw[:2], raw[2:4], raw[4:]] if re.fullmatch(r"\d{8}", raw) else re.split(r"[/\s]+", raw)
+        dates.append(parsed_result_date("/".join(parts)))
     if len(dates) != 2 or not all(dates):
         return {}
     start, end = dates
@@ -11430,6 +11446,23 @@ def ma_scanned_form_pc_evidence(text: str, expected_year: int, account: str, ein
         return {}
     return {"filing_year": expected_year, "period_end": format_date(end),
             "filing_status": "Submitted", "ago_account": account, "legacy_scanned_form_pc": True}
+
+
+def ma_scanned_period_row_text(scanned, lines, ocr) -> str:
+    """One bounded reread of the labeled date row at the scan's resolution."""
+    labels = [line for line in lines or [] if float(line[2]) >= 0.85 and
+              re.fullmatch(r"Report\s+for\s+the\s+Fiscal\s+Period\s*:?", str(line[1]).strip(), re.I)]
+    if len(labels) != 1:
+        return ""
+    top = min(point[1] for point in labels[0][0])
+    bottom = max(point[1] for point in labels[0][0])
+    height = bottom - top
+    if not 0 < height <= scanned.height / 10 or not 0 <= top < bottom <= scanned.height:
+        return ""
+    crop = scanned.crop((0, max(0, int(top-height/2)), scanned.width,
+                         min(scanned.height, int(bottom+height/2)))).convert("RGB")
+    rows, _ = ocr(crop, use_det=True, use_cls=False)
+    return "\n".join(str(row[1]) for row in rows or [] if float(row[2]) >= 0.85)
 
 
 def ma_read_legacy_form_pc(page, completed: dict, account: str) -> dict:
@@ -11467,7 +11500,14 @@ def ma_read_legacy_form_pc(page, completed: dict, account: str) -> dict:
                     _MA_LEGACY_OCR = RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1)
                 lines, _ = _MA_LEGACY_OCR(scanned.convert("RGB"))
             text = "\n".join(str(line[1]) for line in lines or [] if float(line[2]) >= 0.85)
-        evidence = ma_scanned_form_pc_evidence(text, latest, account, record["ein"])
+            evidence = ma_scanned_form_pc_evidence(text, latest, account, record["ein"])
+            if not evidence:
+                with _MA_LEGACY_OCR_LOCK:
+                    period_text = ma_scanned_period_row_text(scanned, lines, _MA_LEGACY_OCR)
+                if period_text:
+                    evidence = ma_scanned_form_pc_evidence(text, latest, account, record["ein"], period_text)
+                    if evidence:
+                        evidence["legacy_period_row_reread"] = True
         if evidence:
             evidence["source_url"] = row["url"]
         return evidence
@@ -11491,6 +11531,15 @@ def ma_read_latest_form_pc(page, result, body: str, completed=None) -> dict:
     record = completed.get("record", {})
     context = {}
     if record.get("ago_account") == account.group(1):
+        try:
+            visible_text = page.locator("body").inner_text(timeout=5000)
+        except Exception:
+            visible_text = ""
+        visible_pending = re.search(r"(?:Charity|Registration)\s+Status\s*:?\s*(Pending|In[\s-]*Progress)\b",
+                                    re.sub(r"\s+", " ", visible_text if isinstance(visible_text, str) else ""), re.I)
+        if visible_pending:
+            return {"registry_status": visible_pending.group(1), "ago_account": account.group(1),
+                    "registration_pending": True, "status_visible": True}
         registry_status = record.get("registry_status", "").strip()
         # This activity description alone does not establish formal withdrawal.
         # Preserve it while reading the submitted annual report; do not generalize
@@ -11498,7 +11547,9 @@ def ma_read_latest_form_pc(page, result, body: str, completed=None) -> dict:
         if registry_status.casefold() == "not doing business in mass":
             context = {"registry_status": registry_status, "ago_account": account.group(1)}
         elif re.fullmatch(r"pending|in[\s-]*progress", registry_status, re.I):
-            return {"registry_status": registry_status, "ago_account": account.group(1), "registration_pending": True}
+            # A network-only workflow flag no longer overrides public filings.
+            context = {"noncontrolling_network_status": registry_status, "ago_account": account.group(1)}
+            registry_status = ""
         elif re.search(r"not doing business|inactive|exempt|suspend|revok|withdraw|closed|pending", registry_status, re.I):
             return {"registry_status": registry_status, "ago_account": account.group(1), "contrary_status": True}
         filings = completed.get("filings", {}).get(account.group(1), {})
@@ -11506,7 +11557,7 @@ def ma_read_latest_form_pc(page, result, body: str, completed=None) -> dict:
             if registry_status.lower() in {"", "registered", "delinquent", "expired", "not doing business in mass"}:
                 return {"empty_history_confirmed": True, "ago_account": account.group(1),
                         "registry_status": registry_status,
-                        "schedule_a2_only": filings.get("only_schedule_a2") is True}
+                        "schedule_a2_only": filings.get("only_schedule_a2") is True, **context}
             # Unrecognized or affirmative current statuses require interpretation.
             return {"registry_status": registry_status, "ago_account": account.group(1), "contrary_status": True}
     candidates = []
@@ -16910,9 +16961,9 @@ def ky_parse_pdf_table_records(pdf_bytes: bytes) -> list[tuple[str, str, str, st
                     registry_id, name, dba, filed_year = [re.sub(r"\s+", " ", row[i] or "").strip() for i in (0, 1, 2, 5)]
                     if not re.fullmatch(r"\d{1,6}", registry_id) or not name or not re.fullmatch(r"20\d{2}", filed_year):
                         raise ValueError(f"KY identity or year could not be read on page {page.page_number}")
-                    # Keep the existing legal-name/DBA text together; addresses
-                    # are deliberately outside the identity fields.
-                    registry_name = " ".join(part for part in (name, dba) if part)
+                    # Retain the column boundary so each official name can be
+                    # matched independently without borrowing a neighboring row.
+                    registry_name = name + (f" | DBA: {dba}" if dba else "")
                     if "(cid:" in registry_name:
                         raise ValueError(f"KY name could not be decoded for registration {registry_id}")
                     page_records.append((registry_id, registry_name, filed_year,
@@ -17006,7 +17057,23 @@ def ky_strict_name_score(registry_name: str, target_norms: set[str], original_na
     return best
 
 
+def ky_registry_name_variants(registry_name: str) -> list[str]:
+    """Names separated by the verified PDF's explicit Name/DBA boundary."""
+    legal, separator, dba = registry_name.partition(" | DBA: ")
+    return list(dict.fromkeys([legal, dba])) if separator and legal and dba else [registry_name]
+
+
+def ky_registry_column_name_is_safe(candidate_name: str, original_name: str, ein: str = "") -> bool:
+    """New column matches must preserve the complete original identity."""
+    return (score_candidate(original_name, ein, {"name": candidate_name})["decision"] == "accepted" or
+            (shared_distinctive_core_match(original_name, candidate_name) and
+             registry_name_is_safe_for_org(candidate_name, original_name, ein)))
+
+
 def ky_snapshot_registry_name_is_safe(registry_name: str, targets: list[str], original_name: str, ein: str = "") -> bool:
+    names = ky_registry_name_variants(registry_name)
+    if len(names) > 1:
+        return any(ky_registry_column_name_is_safe(name, original_name, ein) for name in names)
     if ky_named_university_scope_conflict(original_name, registry_name):
         return False
     if registry_name_is_safe_for_org(registry_name, original_name, ein):
@@ -17114,19 +17181,34 @@ def search_ky_strict_snapshot(org):
     target_first_words = {target.split()[0] for target in target_norms if target.split()}
     best = None
     best_score = (-1000, -1000, 0)
+    tied_records = []
     for registry_id, registry_name, filed_year, record_text in load_ky_snapshot_records():
-        registry_norm = normalized_match_name(registry_name)
-        if not ky_candidate_passes_fast_prefilter(registry_norm, target_first_words, target_norms):
-            continue
-        score = ky_strict_name_score(registry_name, target_norms, org.organization_name)
-        match_score = target_name_score(registry_name, targets)
-        if not ky_snapshot_registry_name_is_safe(registry_name, targets, org.organization_name, org.ein) and score < 900:
-            continue
-        composite_score = (score, match_score, len(registry_norm.split()))
-        if composite_score > best_score:
-            best_score = composite_score
-            best = (registry_id, registry_name, filed_year, record_text)
+        names = ky_registry_name_variants(registry_name)
+        for name_index, candidate_name in enumerate(names):
+            registry_norm = normalized_match_name(candidate_name)
+            if not ky_candidate_passes_fast_prefilter(registry_norm, target_first_words, target_norms):
+                continue
+            if len(names) > 1 and not ky_registry_column_name_is_safe(
+                    candidate_name, getattr(org, "original_organization_name", org.organization_name), org.ein):
+                continue
+            score = ky_strict_name_score(candidate_name, target_norms, org.organization_name)
+            match_score = target_name_score(candidate_name, targets)
+            if not ky_snapshot_registry_name_is_safe(candidate_name, targets, org.organization_name, org.ein) and score < 900:
+                continue
+            composite_score = (score, match_score, len(registry_norm.split()))
+            if composite_score > best_score:
+                best_score = composite_score
+                best = (registry_id, registry_name, filed_year, record_text)
+                tied_records = [(registry_id, name_index)]
+            elif composite_score == best_score:
+                tied_records.append((registry_id, name_index))
     if not best or best_score[0] < 700:
+        return result
+    if any(index > 0 for _, index in tied_records) and len({identifier for identifier, _ in tied_records}) > 1:
+        result.status = "Needs Review"
+        result.status_reason = "KY_AMBIGUOUS_DBA_MATCH"
+        result.raw_status_text = "The same qualifying name matches multiple Kentucky registration IDs, including a DBA."
+        result.source_note = "The Kentucky list does not provide EINs to resolve these equally matching records."
         return result
     registry_id, registry_name, filed_year, record_text = best
     result.status = checker.STATUS_CURRENT
@@ -18710,6 +18792,11 @@ def ok_choose_safe_result_row_on_page(page, org, module):
         if not registry_name_is_safe_for_org(registry_name, getattr(org, "original_organization_name", getattr(org, "organization_name", "")), getattr(org, "ein", "")):
             continue
         score = target_name_score(registry_name, safe_targets)
+        # The master already accepts a complete distinctive core with generic
+        # descriptor differences. The secondary rank must not veto that match.
+        if score < 450 and shared_distinctive_core_match(
+                getattr(org, "original_organization_name", org.organization_name), registry_name):
+            score = 450
         rank = (score, registry_exact_active_tiebreak(registry_name, safe_targets, registry_candidate_fields(row).get("status", "")))
         if rank > best_rank:
             best_rank = rank
