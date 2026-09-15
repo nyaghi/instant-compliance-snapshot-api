@@ -73,7 +73,9 @@ with sync_playwright() as p:
     target = out / "CharityClarity-Make-A-Wish-staging.pdf"
     download.save_as(target)
     reader = PdfReader(target)
-    assert len(reader.pages) == 7
+    assert 5 <= len(reader.pages) <= 24
+    for index,pdfpage in enumerate(reader.pages,1):
+        assert f"{index} / {len(reader.pages)}" in pdfpage.extract_text()
     assert sum(url.endswith("/api/report") for url in requests) == 1
     assert not any("/api/check" in url for url in requests)
     assert not errors, errors

@@ -64,7 +64,8 @@ class InsightsTests(unittest.TestCase):
         self.assertIn('Contact the state',insights)
         self.assertIn('AR',insights)
         actions=r.action_items([row('WV','Closed / Withdrawn / Canceled'),row('CO','Suspended'),row('MI',days=10)])
-        self.assertIn('closed',actions[0][0]);self.assertEqual(actions[0][1],['WV','CO'])
+        self.assertIn('suspended',actions[0][0]);self.assertEqual(actions[0][1],['CO'])
+        self.assertEqual(next(states for title,states,_ in actions if 'closed' in title),['WV'])
         self.assertIn('within 60',actions[1][0])
 
     def test_pdf_insights_and_original_snapshot_preserved(self):
