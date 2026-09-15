@@ -1,0 +1,23 @@
+{
+  "record": {
+    "record_id": "a095e000009HogEAAS",
+    "ago_account": "061133",
+    "ein": "473272024",
+    "name": "INTERNATIONAL COMMISSION ON VIOLENCE AGAINST WOMEN AND GIRLS",
+    "registry_status": "In-Progress"
+  },
+  "filings": {
+    "061133": {
+      "empty": false,
+      "row_count": 3,
+      "only_schedule_a2": false,
+      "annual_scans": [
+        {
+          "year": "2016",
+          "title": "FY2016 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007jZD2AAM"
+        }
+      ]
+    }
+  }
+}

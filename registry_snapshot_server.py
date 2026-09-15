@@ -97,7 +97,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.15.1-staging").strip() or "2026.09.15.1-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.15.2-staging").strip() or "2026.09.15.2-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -3712,6 +3712,10 @@ def score_candidate(expected_name: str, expected_ein: str | None, candidate: dic
             score += 80
             decision = "accepted"
             reason = "MATCH_NAME_EXACT" if reason != "MATCH_EIN_EXACT" else reason
+        elif redundant_bracket_acronym_match(expected_name, candidate_name):
+            score += 80
+            decision = "accepted"
+            reason = "MATCH_REDUNDANT_BRACKET_ACRONYM" if reason != "MATCH_EIN_EXACT" else reason
         elif explicit_legal_identity_match(expected_name, candidate_name):
             score += 80
             decision = "accepted"
@@ -3807,6 +3811,8 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
         return False
     if institutional_subunit_identity_conflict(original_name, registry_name):
         return False
+    if redundant_bracket_acronym_match(original_name, registry_name):
+        return True
     if explicit_legal_identity_match(original_name, registry_name):
         return True
     if explicit_acronym_alias_matches_registry(original_name, registry_name):
@@ -6833,15 +6839,29 @@ def search_bundled_extension_state(page, org, state: str):
         external_result = module.search_ar(page, bundle_org)
     elif state == "OR":
         def or_detail_ein_mismatches(registry_name: str = "") -> bool:
-            if registry_name:
-                safe_targets = organization_match_target_variants(org.organization_name, org.ein)
-                if target_name_score(registry_name, safe_targets) >= 450:
-                    return False
             body_text = registry_page_body(page)
             registry_ein = checker.extract_labeled_value_from_text(body_text, ["Federal EIN", "EIN"])
             registry_digits = re.sub(r"\D", "", registry_ein or "")
             requested_digits = re.sub(r"\D", "", org.ein or "")
             return bool(registry_digits and requested_digits and registry_digits != requested_digits)
+
+        def annotate_or_empty_reports(result):
+            # Preserve the existing live-reader classification, but explain its
+            # actual evidence rather than describing an unseen overdue date.
+            if (public_status(result) == "Delinquent"
+                    and "no annual report period was visible" in (result.source_note or "")
+                    and re.match(r"Status: Registered(?:\s*\||$)", result.raw_status_text or "", re.I)
+                    and page.locator("#report").is_visible()
+                    and page.locator("#reports").inner_text().strip() == "Reports"):
+                result.status_reason = "OR_LIVE_EMPTY_REPORTS_INFERRED_DELINQUENT"
+                result.source_note = (
+                    "Oregon's live registry lists the matched organization as Registered. "
+                    "The completed detail page contains no annual report records. "
+                    "CharityClarity therefore infers Delinquent under its existing no-filings rule; "
+                    "this is not an explicit state delinquency determination. No specific overdue "
+                    "deadline was confirmed. Confirm recent filings directly with Oregon."
+                )
+            return result
 
         def or_registry_name_from_detail() -> str:
             body_text = registry_page_body(page)
@@ -6961,7 +6981,7 @@ def search_bundled_extension_state(page, org, state: str):
                     continue
                 if not result.matched_registry_name:
                     result.matched_registry_name = registry_name
-                return result
+                return annotate_or_empty_reports(result)
             best_candidate_name = best_or_registry_name_from_page()
             if best_candidate_name:
                 external_result = module.search_or(
@@ -6998,7 +7018,7 @@ def search_bundled_extension_state(page, org, state: str):
                 if public_status(result) == "Site Not Reachable":
                     return result
                 if not result_is_retryable_name_miss(result):
-                    return result
+                    return annotate_or_empty_reports(result)
             best_result = result
         return best_result or copy_external_result(org, "OR", module.search_or(page, bundle_org))
     else:
@@ -7932,6 +7952,32 @@ def single_plural_token_variant_match(left: str, right: str) -> bool:
     return False
 
 
+def redundant_bracket_acronym_key(value: str) -> tuple[str, bool]:
+    """Remove only an uppercase acronym repeating the immediately preceding words."""
+    value = canonical_name_punctuation(value or "")
+    changed = False
+
+    def remove_verified(match):
+        nonlocal changed
+        acronym = match.group(1) or match.group(2)
+        words = re.findall(r"[A-Za-z]+", value[:match.start()])
+        # The full preceding phrase must spell the acronym; arbitrary labels,
+        # locations and substantive suffixes remain part of the identity.
+        if len(words) >= 3 and "".join(word[0] for word in words).upper() == acronym:
+            changed = True
+            return " "
+        return match.group(0)
+
+    without_acronym = re.sub(r"\(([A-Z]{3,12})\)|\[([A-Z]{3,12})\]", remove_verified, value)
+    return complete_name_identity_key(without_acronym), changed
+
+
+def redundant_bracket_acronym_match(first: str, second: str) -> bool:
+    first_key, first_changed = redundant_bracket_acronym_key(first)
+    second_key, second_changed = redundant_bracket_acronym_key(second)
+    return bool((first_changed or second_changed) and first_key and first_key == second_key)
+
+
 def target_name_score(row_name: str, targets: list[str]) -> int:
     row_norm = normalized_match_name(row_name)
     if not row_norm:
@@ -7945,6 +7991,8 @@ def target_name_score(row_name: str, targets: list[str]) -> int:
             best = max(best, 1000)
         if row_norm == target_norm:
             best = max(best, 1000)
+        elif redundant_bracket_acronym_match(target, row_name):
+            best = max(best, 950)
         elif explicit_acronym_alias_matches_registry(target, row_name):
             best = max(best, 850)
         elif not distinctive_overlap_is_sufficient(row_norm, target_norm):
@@ -11388,6 +11436,7 @@ def ma_capture_completed_response(response, org, evidence: dict) -> None:
                 # A completed all-filings response, not a filtered or loading table.
                 evidence.setdefault("filings", {})[str(query["agoNumber"])] = {
                     "empty": len(rows) == 0, "row_count": len(rows),
+                    "document_years": [str(row.get("filingYear") or "") for row in rows],
                     # Schedule A2 is a supplement, not the annual Form PC.
                     # Unknown labels cannot establish an absent annual report.
                     "only_schedule_a2": bool(rows) and all(
@@ -11465,6 +11514,34 @@ def ma_scanned_period_row_text(scanned, lines, ocr) -> str:
     return "\n".join(str(row[1]) for row in rows or [] if float(row[2]) >= 0.85)
 
 
+def ma_scanned_urs_overdue_evidence(text: str, expected_year: int, account: str, ein: str) -> dict:
+    """Recognize an old URS filed under Annual RPT without calling it a Form PC.
+
+    The caller binds the document to the completed filing list and AGO account.
+    This fallback can establish inferred delinquency only, never current status.
+    """
+    readable = re.sub(r"\s+", " ", text or "")
+    if not account or not re.search(r"Unified\s+Registration\s+Statement\s*\(URS\)\s+for\s+Charitable\s+Organizations", readable, re.I):
+        return {}
+    eins = {re.sub(r"\D", "", x) for x in re.findall(r"(?<!\d)\d{2}[- ]?\d{7}(?!\d)", readable)}
+    if not ein or eins != {ein}:
+        return {}
+    periods = re.findall(r"This\s+URS\s+covers\s+the\s+reporting\s+year\s+which\s+ended\s*\(day/month/year\)\s*(\d{1,2}/\d{1,2}/\d{4})(?!\d)", readable, re.I)
+    if len(periods) != 1:
+        return {}
+    end = parsed_result_date(periods[0])
+    if not end or end.year != expected_year or end > date.today():
+        return {}
+    # Use the latest possible year end, plus the next cycle and full extension,
+    # only as a guard against treating a recent registration as overdue.
+    options = filing_due_date_options("MA", expected_year + 1, (12, 31))
+    latest_possible_due = options["extended_due"] or options["base_due"]
+    if not latest_possible_due or latest_possible_due >= date.today():
+        return {}
+    return {"legacy_urs_overdue": True, "reporting_period_end": format_date(end),
+            "filing_year": expected_year, "ago_account": account}
+
+
 def ma_read_legacy_form_pc(page, completed: dict, account: str) -> dict:
     global _MA_LEGACY_OCR
     record = completed.get("record", {})
@@ -11501,6 +11578,10 @@ def ma_read_legacy_form_pc(page, completed: dict, account: str) -> dict:
                 lines, _ = _MA_LEGACY_OCR(scanned.convert("RGB"))
             text = "\n".join(str(line[1]) for line in lines or [] if float(line[2]) >= 0.85)
             evidence = ma_scanned_form_pc_evidence(text, latest, account, record["ein"])
+            if not evidence:
+                years = completed.get("filings", {}).get(account, {}).get("document_years", [])
+                if years and all(re.fullmatch(r"20\d{2}", year) for year in years) and max(map(int, years)) == latest:
+                    evidence = ma_scanned_urs_overdue_evidence(text, latest, account, record["ein"])
             if not evidence:
                 with _MA_LEGACY_OCR_LOCK:
                     period_text = ma_scanned_period_row_text(scanned, lines, _MA_LEGACY_OCR)
@@ -11653,6 +11734,26 @@ def annotate_ma_visible_form_pc_due(result, evidence=None):
                          "Withdrawn": "Closed / Withdrawn / Canceled"}.get(adverse, adverse)
         result.raw_status_text = f"Registration Status: {adverse}"
         result.source_note = "The explicit Massachusetts registration status controls the result; an automatic extension was not assumed."
+        return result
+    if result.ma_filing_evidence.get("legacy_urs_overdue"):
+        result.status = "Delinquent"
+        result.status_reason = "MA_LEGACY_URS_NO_LATER_ANNUAL"
+        result.matched_registry_identifier = result.ma_filing_evidence["ago_account"]
+        result.source_url = result.ma_filing_evidence.get("source_url") or result.source_url
+        result.computed_due_date = ""
+        result.fiscal_year_end = ""
+        result.next_required_period = ""
+        result.last_year_on_record = result.ma_filing_evidence["filing_year"]
+        result.raw_status_text = ("Document: Unified Registration Statement | Reporting period end: "
+                                  + result.ma_filing_evidence["reporting_period_end"]
+                                  + " | No later annual report in completed filing list | Delinquency inferred")
+        result.source_note = (
+            "The latest document listed under Massachusetts Form PC/Annual RPT is a Unified Registration Statement "
+            f"covering the reporting year ending {result.ma_filing_evidence['reporting_period_end']}. "
+            "The completed public filing list contains no later annual report. CharityClarity therefore infers Delinquent; "
+            "this is not an explicit state determination. A specific overdue deadline is not asserted. "
+            "Recent filings may not yet be public, so confirm time-sensitive decisions directly with Massachusetts."
+        )
         return result
     period_end = parsed_result_date(result.ma_filing_evidence.get("period_end", ""))
     if not period_end or result.ma_filing_evidence.get("filing_status") != "Submitted":
@@ -16598,10 +16699,13 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
                     "a registration expiration date or a specific suspended, revoked, or delinquent status. "
                     "Confirm registration details directly with Virginia.")
 
+    if state == "OR" and reason == "OR_LIVE_EMPTY_REPORTS_INFERRED_DELINQUENT":
+        return note
+
     if state == "MI" and status == "Unable to Verify" and getattr(result, "reason_code", "") == "MI_EIN_TRANSPORT_TIMEOUT":
         return note
 
-    if state == "MA" and reason == "MA_PRIMARY_REGISTRATION_PENDING":
+    if state == "MA" and reason in {"MA_PRIMARY_REGISTRATION_PENDING", "MA_LEGACY_URS_NO_LATER_ANNUAL"}:
         return note
 
     if state == "MA" and reason == "MA_CONFIRMED_EMPTY_HISTORY_INFERRED_DELINQUENT":
@@ -16904,6 +17008,8 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         public_facing_status,
     )
     source_state = (getattr(result, "state", "") or "").upper()
+    if source_state == "OR" and getattr(result, "status_reason", "") == "OR_LIVE_EMPTY_REPORTS_INFERRED_DELINQUENT":
+        return comment
     if source_state == "OK":
         freshness = re.search(r"Certificate freshness note:.*", getattr(result, "source_note", "") or "")
         if freshness and freshness.group(0) not in comment:
@@ -17779,12 +17885,26 @@ def _search_snapshot_or_embedded_state_once(org, state: str):
         module = load_ks_weekly_checker()
         external_result = module.search_ks_snapshot(org.organization_name, ARTIFACTS_DIR / "KS", org.ein)
         original_name = getattr(org, "original_organization_name", org.organization_name)
-        if external_result.status == module.STATUS_NOT_REGISTERED and re.search(r"[/|]\s*[A-Z]{3,8}\b", original_name):
+        if external_result.status == module.STATUS_NOT_REGISTERED:
             records, _, _ = module.load_live_records()
-            aliases = [row for row in records if explicit_acronym_alias_matches_registry(original_name, row.name)
+            aliases = [row for row in records
+                       if (explicit_acronym_alias_matches_registry(original_name, row.name)
+                           or redundant_bracket_acronym_match(original_name, row.name))
                        and (not row.ein or re.sub(r"\D", "", row.ein) == re.sub(r"\D", "", org.ein))]
-            if len(aliases) == 1:
-                external_result = module.search_ks_snapshot(aliases[0].name, ARTIFACTS_DIR / "KS", org.ein)
+            if aliases:
+                # Identity qualifies first; reuse Kansas's active/expiry ordering.
+                selected = max(aliases, key=lambda row: (
+                    (row.status or "").strip().upper() == "REGISTERED",
+                    row.expire_date.toordinal() if row.expire_date else 0,
+                ))
+                recovered = module.search_ks_snapshot(selected.name, ARTIFACTS_DIR / "KS", org.ein)
+                if getattr(recovered, "contact_number", "") == selected.contact_number:
+                    external_result = recovered
+                else:
+                    external_result.status = "Unable to Confirm"
+                    external_result.success = False
+                    external_result.source_note = "Kansas acronym recovery returned a different registration identifier; identity could not be confirmed."
+                    return copy_external_result(org, state, external_result)
         result = copy_external_result(org, state, external_result)
         if public_status(result) not in {"Not Registered", "Site Not Reachable"}:
             original_name = getattr(org, "original_organization_name", org.organization_name)
