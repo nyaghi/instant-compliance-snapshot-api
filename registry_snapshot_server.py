@@ -21,6 +21,8 @@ import time
 import traceback
 import zipfile
 import zlib
+from contextvars import ContextVar, copy_context
+from functools import wraps
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 from datetime import date, datetime, timedelta
 from email.message import EmailMessage
@@ -97,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.15.3-staging").strip() or "2026.09.15.3-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.15.4-staging").strip() or "2026.09.15.4-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -1655,7 +1657,410 @@ def public_profile_name_for_ein(ein: str) -> str:
 
 
 def known_names_for_ein(ein: str) -> list[str]:
-    return []
+    return list(REVIEWED_NAME_CONTEXT.get().get(canonical_ein_digits(ein), ()))
+
+
+# Identity discovery is separate from registration classification. Only the names
+# explicitly submitted after review enter a lookup; cached suggestions never do.
+REVIEWED_NAME_CONTEXT = ContextVar("reviewed_organization_names", default={})
+IDENTITY_SOURCE_CACHE: dict[tuple, tuple[float, dict]] = {}
+IDENTITY_CACHE_LOCK = threading.Lock()
+IDENTITY_SOURCE_POOL = ThreadPoolExecutor(max_workers=12, thread_name_prefix="identity-source")
+# Up to 15 simultaneous discovery requests can queue their four source jobs;
+# only 12 execute at once, and each retains its original 20-second deadline.
+IDENTITY_SOURCE_SLOTS = threading.BoundedSemaphore(64)
+IDENTITY_DEADLINE_SECONDS = 20.0
+IDENTITY_MAX_NAMES = 12
+
+
+def identity_name_key(value: str) -> str:
+    value = re.sub(r"[^\w\s]", "", canonical_name_punctuation(value).casefold())
+    value = re.sub(r"\s+", " ", value).strip()
+    return re.sub(r"(?:\s+(?:inc|incorporated|corp|corporation|llc|ltd|limited))+$", "", value).strip()
+
+
+def normalize_reviewed_names(value) -> list[str]:
+    if not isinstance(value, list) or len(value) > IDENTITY_MAX_NAMES:
+        raise ValueError(f"Provide at most {IDENTITY_MAX_NAMES} alternate names.")
+    result, seen = [], set()
+    for item in value:
+        if not isinstance(item, str) or len(item) > 300 or re.search(r"[\x00-\x1f]", item):
+            raise ValueError("Each alternate name must be plain text of at most 300 characters.")
+        name = re.sub(r"\s+", " ", item).strip()
+        key = identity_name_key(name)
+        if key and key not in seen:
+            result.append(name); seen.add(key)
+    return result
+
+
+def is_reviewed_alias(ein: str, name: str) -> bool:
+    return any(identity_name_key(name) == identity_name_key(alias)
+               for alias in REVIEWED_NAME_CONTEXT.get().get(canonical_ein_digits(ein), ()))
+
+
+def reviewed_name_scope(function):
+    @wraps(function)
+    def wrapped(organizations, states):
+        names = {canonical_ein_digits(org["ein"]): tuple(org["alternate_names"])
+                 for org in organizations if "alternate_names" in org}
+        token = REVIEWED_NAME_CONTEXT.set(names)
+        try:
+            return function(organizations, states)
+        finally:
+            REVIEWED_NAME_CONTEXT.reset(token)
+    return wrapped
+
+
+def submit_with_identity(executor, function, *args, **kwargs):
+    return executor.submit(copy_context().run, function, *args, **kwargs)
+
+
+def identity_fetch(url: str, deadline: float, *, headers=None, max_bytes=4_000_000) -> bytes:
+    """Fixed provider URLs only; bounded time and body size, including gzip."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("Identity source deadline reached")
+    request = urllib.request.Request(url, headers={"User-Agent": "ComplianceExpressRegistrySnapshot/1.0",
+        "Accept": "application/json,text/html,*/*", "Accept-Encoding": "identity", **(headers or {})})
+    with urllib.request.urlopen(request, timeout=min(6.0, remaining)) as response:
+        chunks, size = [], 0
+        while True:
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Identity source deadline reached")
+            chunk = response.read1(65536)
+            if not chunk:
+                break
+            chunks.append(chunk); size += len(chunk)
+            if size > max_bytes:
+                raise ValueError("Identity source exceeds size limit")
+        body = b"".join(chunks)
+    if body[:2] == b"\x1f\x8b":
+        with gzip.GzipFile(fileobj=io.BytesIO(body)) as zipped:
+            body = zipped.read(max_bytes + 1)
+    if len(body) > max_bytes:
+        raise ValueError("Identity source exceeds size limit")
+    return body
+
+
+def identity_candidate(name, source, evidence_type, url, source_date="", historical=False):
+    name = re.sub(r"\s+", " ", str(name or "")).strip()
+    if not name or len(name) > 300:
+        return None
+    return {"name": name, "verified": True, "historical": historical,
+            "evidence": [{"source": source, "type": evidence_type, "url": url,
+                          "retrieved_at": datetime.now(ZoneInfo("UTC")).isoformat(),
+                          "source_date": source_date}]}
+
+
+def identity_ca_names(ein: str, deadline: float) -> dict:
+    query = {"where": {"and": [{"entityStatus": {"neq": "Not Listed"}}, {"fein": format_ein(ein)}]}, "limit": 20}
+    url = checker.CA_EVOKE_API_ROOT + "/data/objects/entity/instances?" + urlencode({"filter": json.dumps(query, separators=(",", ":"))})
+    rows = json.loads(identity_fetch(url, deadline, headers={"Referer": checker.CA_EVOKE_PUBLIC_PORTAL_URL}))
+    if not isinstance(rows, list):
+        raise ValueError("California identity response is incomplete")
+    names = []
+    for row in rows:
+        if canonical_ein_digits(str(row.get("fein") or "")) != ein:
+            continue
+        for field, kind in (("entityName", "Registered name"), ("legalName", "Legal name"), ("dba", "DBA")):
+            item = identity_candidate(row.get(field), "California", kind, checker.CA_EVOKE_PUBLIC_PORTAL_URL)
+            if item: names.append(item)
+    return {"names": names, "complete": len(rows) < 20, "source_url": url}
+
+
+def identity_co_names(ein: str, deadline: float) -> dict:
+    url = "https://data.colorado.gov/resource/37wu-kn3g.json?" + urlencode({
+        "$limit": "100", "$where": f"fein='{format_ein(ein)}'", "$order": "registrationapproveddate DESC"})
+    rows = json.loads(identity_fetch(url, deadline))
+    if not isinstance(rows, list):
+        raise ValueError("Colorado identity response is incomplete")
+    names, entities, seen = [], set(), set()
+    for row in rows:
+        if canonical_ein_digits(str(row.get("fein") or "")) != ein:
+            continue
+        entity = row.get("entityid")
+        historical = entity in entities
+        entities.add(entity)
+        key = identity_name_key(str(row.get("name") or ""))
+        if key in seen: continue
+        seen.add(key)
+        item = identity_candidate(row.get("name"), "Colorado", "Earlier registered name" if historical else "Registered name",
+                                  url, str(row.get("registrationapproveddate") or ""), historical)
+        if item: names.append(item)
+    return {"names": names, "complete": len(rows) < 100, "source_url": url}
+
+
+def identity_or_names(ein: str, deadline: float) -> dict:
+    info = downloadable_data_info("OR")
+    if not info.get("usable"):
+        raise ValueError("Oregon weekly file is unavailable or stale")
+    row = or_snapshot_row_dict_for_ein(ein)
+    if time.monotonic() >= deadline:
+        raise TimeoutError("Oregon identity deadline reached")
+    names = []
+    if row and canonical_ein_digits(str(row.get("EIN") or "")) == ein:
+        item = identity_candidate(row.get("Name"), "Oregon", "Registered name — weekly data",
+                                  "https://justice.oregon.gov/charities", str(info.get("downloaded_at") or info.get("source_date") or ""))
+        if item: names.append(item)
+    return {"names": names, "complete": True, "freshness": info}
+
+
+def irs_header_evidence(source: str, ein: str, url: str) -> dict:
+    """Read only the filer/header paths from the IRS rendering, never schedules."""
+    fields, dba_fields = {}, {}
+    for match in re.finditer(r'<span\b[^>]*\bid="([^"]+)"[^>]*>([^<]*)</span>', source, re.I):
+        path, value = html.unescape(match[1]), html.unescape(match[2]).strip()
+        if "/ReturnHeader[1]/" in path:
+            fields[path.split("/ReturnHeader[1]/", 1)[1]] = value
+        dba_match = re.fullmatch(r"/AppData/SubmissionHeaderAndDocument/SubmissionDocument/IRS990(?:EZ|PF)?\[1\]/DoingBusinessAsName\[1\]/BusinessNameLine([12])Txt\[1\]", path)
+        if dba_match:
+            dba_fields[int(dba_match[1])] = value
+    if canonical_ein_digits(fields.get("Filer[1]/EIN[1]", "")) != ein:
+        raise ValueError("The IRS return header does not confirm the requested EIN")
+    legal = " ".join(fields.get(f"Filer[1]/BusinessName[1]/BusinessNameLine{i}Txt[1]", "") for i in (1, 2)).strip()
+    dba = " ".join(dba_fields[key] for key in sorted(dba_fields) if dba_fields[key]).strip()
+    names = [identity_candidate(legal, "IRS via ProPublica", "Form 990 filer legal name", url)] if legal else []
+    if dba: names.append(identity_candidate(dba, "IRS via ProPublica", "Form 990 DBA", url))
+    begin = parse_due_date(fields.get("TaxPeriodBeginDt[1]", ""))
+    end = parse_due_date(fields.get("TaxPeriodEndDt[1]", ""))
+    label = re.search(r"<title>TY (20\d{2}) Form 990(?:EZ|PF)?</title>", source)
+    if not label or not begin or not end or not (0 <= (end - begin).days <= 371) or begin.year != int(label[1]):
+        raise ValueError("The IRS tax-year label and actual period could not be reconciled")
+    for item in names:
+        if item:
+            item["evidence"][0]["source_date"] = end.isoformat()
+    return {"names": [item for item in names if item], "filing": {"tax_year_label": int(label[1]),
+            "period_begin": begin.isoformat(), "period_end": end.isoformat(), "source_url": url, "ein": ein},
+            "dba_disclosed": bool(dba)}
+
+
+def identity_irs_names(ein: str, deadline: float) -> dict:
+    api_url = f"https://projects.propublica.org/nonprofits/api/v2/organizations/{ein}.json"
+    payload = json.loads(identity_fetch(api_url, deadline))
+    org = payload.get("organization") or {}
+    if canonical_ein_digits(str(org.get("ein") or "")) != ein:
+        raise ValueError("IRS organization metadata does not confirm the requested EIN")
+    item = identity_candidate(org.get("name"), "IRS via ProPublica", "IRS organization record",
+                              f"https://projects.propublica.org/nonprofits/organizations/{ein}", str(org.get("updated_at") or ""))
+    result = {"names": [item] if item else [], "complete": False, "source_revision": org.get("data_source")}
+    object_id = str(org.get("latest_object_id") or "")
+    if not re.fullmatch(r"\d{18}", object_id):
+        result["limitation"] = "IRS organization name checked; a machine-readable latest Form 990 was not available."
+        return result
+    url = f"https://projects.propublica.org/nonprofits/full_text/{object_id}/IRS990"
+    try:
+        evidence = irs_header_evidence(identity_fetch(url, deadline).decode("utf-8", "replace"), ein, url)
+        result["names"].extend(evidence.pop("names")); result.update(evidence, complete=True)
+        if not result["dba_disclosed"]:
+            result["note"] = "The latest available Form 990 discloses no DBA in its DBA field; other sources may list alternate names."
+    except Exception:
+        result["limitation"] = "IRS organization name checked; the latest Form 990 header could not be confirmed."
+    return result
+
+
+def identity_source_result(source: str, ein: str, deadline: float) -> dict:
+    fingerprint = json.dumps(downloadable_data_info("OR"), sort_keys=True) if source == "OR" else "live-v1"
+    key = (ein, source, fingerprint)
+    now = time.time()
+    with IDENTITY_CACHE_LOCK:
+        cached = IDENTITY_SOURCE_CACHE.get(key)
+    if cached and cached[0] > now:
+        return {**cached[1], "cache_hit": True}
+    worker = {"CA": identity_ca_names, "CO": identity_co_names, "OR": identity_or_names, "IRS": identity_irs_names}[source]
+    result = {**worker(ein, deadline), "source": source, "cache_hit": False}
+    # Cache only identity evidence, keyed by weekly revision or a bounded live TTL.
+    with IDENTITY_CACHE_LOCK:
+        if len(IDENTITY_SOURCE_CACHE) >= 1200:
+            IDENTITY_SOURCE_CACHE.clear()
+        IDENTITY_SOURCE_CACHE[key] = (now + (21600 if result.get("complete") else 60), result)
+    return result
+
+
+TAX_PERIOD_EVIDENCE_CACHE: dict[tuple[str, int], tuple[float, dict]] = {}
+TAX_PERIOD_EVIDENCE_LOCK = threading.Lock()
+
+
+def irs_period_for_label(ein: str, label: int, deadline: float) -> dict:
+    """A same-year IRS return resolves the period, never proves another state received it."""
+    ein = canonical_ein_digits(ein); key = (ein, label)
+    with TAX_PERIOD_EVIDENCE_LOCK:
+        cached = TAX_PERIOD_EVIDENCE_CACHE.get(key)
+    if cached and cached[0] > time.time(): return dict(cached[1])
+    try:
+        evidence = identity_source_result("IRS", ein, deadline).get("filing", {})
+        if evidence.get("tax_year_label", label) >= label and evidence.get("tax_year_label") != label:
+            source = identity_fetch(f"https://projects.propublica.org/nonprofits/organizations/{ein}", deadline).decode("utf-8", "replace")
+            object_ids = list(dict.fromkeys(re.findall(r"/organizations/" + ein + r"/(\d{18})/full", source)))[:3]
+            evidence = {}
+            for object_id in object_ids:
+                url = f"https://projects.propublica.org/nonprofits/full_text/{object_id}/IRS990"
+                parsed = irs_header_evidence(identity_fetch(url, deadline).decode("utf-8", "replace"), ein, url)
+                if parsed["filing"]["tax_year_label"] == label:
+                    evidence = parsed["filing"]; break
+    except Exception:
+        evidence = {}
+    if evidence.get("tax_year_label") != label:
+        try:
+            url = f"https://charity.ehawaii.gov/charity/{ein}/details.html"
+            source = identity_fetch(url, deadline, headers={"Accept": "text/html"}).decode("utf-8", "replace")
+            evidence = hi_attachment_period(source, ein, label, deadline)
+            if evidence:
+                evidence["period_basis"] = "Same-EIN, same-tax-year Form 990 publicly filed in Hawaii"
+        except Exception:
+            evidence = {}
+    if evidence.get("tax_year_label") == label:
+        with TAX_PERIOD_EVIDENCE_LOCK:
+            if len(TAX_PERIOD_EVIDENCE_CACHE) >= 1200:
+                TAX_PERIOD_EVIDENCE_CACHE.clear()
+            TAX_PERIOD_EVIDENCE_CACHE[key] = (time.time() + 21600, dict(evidence))
+        return dict(evidence)
+    return {}
+
+
+def form990_pdf_period(body: bytes, ein: str, label: int, url: str) -> dict:
+    """Read the return/8879 header, including fiscal years crossing December."""
+    if not body.startswith(b"%PDF") or not PdfReader: return {}
+    reader = PdfReader(io.BytesIO(body))
+    for page in reader.pages[:6]:
+        text = page.extract_text(extraction_mode="layout").replace("\x00", " ")[:4500]
+        if canonical_ein_digits(ein) not in re.sub(r"\D", "", text): continue
+        if not re.search(r"\b(?:990(?:-EZ|-PF)?|8879-TE)\b|Return\s+of\s+Organization\s+Exempt\s+From\s+Income\s+Tax", text, re.I): continue
+        line = re.search(r"(?:tax|fiscal)\s+year\s+beginning\s*([^\n]+)", text, re.I)
+        if not line: continue
+        period = re.search(r"([A-Z]{3,9}\s+\d{1,2}|\d{1,2}[/.-]\d{1,2})\s*,?\s*(20\d{2})\s*,?\s*and\s+endin[gq]\s*([A-Z]{3,9}\s+\d{1,2}|\d{1,2}[/.-]\d{1,2})\s*,?\s*(20\d{2})", line[1], re.I)
+        if period:
+            begin = parse_due_date(f"{period[1]}, {period[2]}")
+            end = parse_due_date(f"{period[3]}, {period[4]}")
+            if begin and end and begin.year == label and 0 <= (end - begin).days <= 371:
+                return {"ein": canonical_ein_digits(ein), "tax_year_label": label,
+                        "period_begin": begin.isoformat(), "period_end": end.isoformat(), "source_url": url}
+        # A blank fiscal-period header on a calendar-year form is not used to
+        # override any independently evidenced non-calendar period.
+    return {}
+
+
+def hi_attachment_period(source: str, ein: str, label: int, deadline: float) -> dict:
+    digits = canonical_ein_digits(ein)
+    pattern = r'<a\b[^>]*\brel="(/charity/attachments/irs/' + digits + '/' + str(label) + r'/[^"<>]+\.pdf)"[^>]*>([^<]+)'
+    links = [(path, title) for path, title in re.findall(pattern, source, re.I) if re.search(r"IRSForm|990|Annual Financial", title, re.I)]
+    for path, _ in links[:1]:
+        url = "https://charity.ehawaii.gov" + path
+        try:
+            evidence = form990_pdf_period(identity_fetch(url, deadline, max_bytes=12_000_000), ein, label, url)
+            if evidence:
+                return evidence
+        except Exception:
+            pass
+    return {}
+
+
+def hi_public_filing_period(page, ein: str) -> dict:
+    source = page.content()
+    labels = [int(value) for value in re.findall(r'id="irs_(20\d{2})"', source)]
+    if not labels: return {}
+    label = max(labels); deadline = time.monotonic() + 14.0
+    evidence = hi_attachment_period(source, ein, label, deadline)
+    if evidence:
+        return {**evidence, "state_source_url": page.url, "period_basis": "Hawaii filing attachment"}
+    # The exact state label remains the anchor if its attachment is scanned.
+    evidence = irs_period_for_label(ein, label, deadline)
+    return ({**evidence, "state_source_url": page.url, "period_basis": "IRS return with the same tax-year label shown by Hawaii"}
+            if evidence else {"tax_year_label": label, "state_source_url": page.url, "period_unconfirmed": True})
+
+
+def irs_base_return_due(period_end: date) -> date:
+    due = fifteenth_day_after_fiscal_year_end(period_end, 5)
+    def observed(day):
+        return day - timedelta(days=1) if day.weekday() == 5 else day + timedelta(days=1) if day.weekday() == 6 else day
+    # These federal/DC holidays can coincide with a fifteenth-day deadline or
+    # its weekend adjustment. Other holidays cannot affect this base date.
+    holidays = {date(due.year, 1, 1) + timedelta(days=(0 - date(due.year, 1, 1).weekday()) % 7 + 14),
+                date(due.year, 2, 1) + timedelta(days=(0 - date(due.year, 2, 1).weekday()) % 7 + 14),
+                observed(date(due.year, 4, 16))}
+    while due.weekday() >= 5 or due in holidays: due += timedelta(days=1)
+    return due
+
+
+def annotate_irs_based_state_period(result, evidence: dict):
+    if not evidence: return result
+    if public_status(result) in {"Not Registered", "Exempt", "Pending", "Suspended", "Revoked", "Closed / Withdrawn / Canceled", "Site Not Reachable"}: return result
+    if re.search(r"Registration\s+Status\s*:\s*(?:Delinquent|Suspended|Revoked|Pending|Closed|Inactive)\b", result.raw_status_text or "", re.I):
+        return result
+    def unconfirmed_period():
+        result.status = "Unable to Confirm"
+        result.status_reason = f"{result.state}_TAX_PERIOD_UNCONFIRMED"
+        result.raw_status_text = " | ".join(part.strip() for part in (result.raw_status_text or "").split("|")
+            if not re.match(r"\s*(?:Next Required Period|Next Filing Due|IRS Base Due)\s*:", part, re.I))
+        return result
+    if evidence.get("period_unconfirmed"): return unconfirmed_period()
+    if evidence.get("ein") != canonical_ein_digits(result.ein): return result
+    end = parse_due_date(evidence.get("period_end", "")); begin = parse_due_date(evidence.get("period_begin", ""))
+    if not end or not begin or begin.year != evidence.get("tax_year_label"): return result
+    if not 350 <= (end - begin).days <= 371:
+        return unconfirmed_period()  # A short year does not establish the next fiscal calendar.
+    next_period = add_months_preserving_end_of_month(end, 12)
+    due = irs_base_return_due(next_period)
+    result.tax_period_evidence = dict(evidence, next_period_end=next_period.isoformat(), irs_base_due=due.isoformat(), extension_applied=False)
+    result.status = status_from_calendar_date(due)
+    result.status_reason = f"{result.state}_CONFIRMED_TAX_PERIOD"
+    result.last_year_on_record = str(evidence["tax_year_label"])
+    result.fiscal_year_end = format_date(end)
+    result.next_required_period = format_date(next_period)
+    result.computed_due_date = format_date(due)
+    result.raw_status_text = " | ".join(part.strip() for part in (result.raw_status_text or "").split("|")
+        if not re.match(r"\s*(?:Next Required Period|Next Filing Due|IRS Base Due)\s*:", part, re.I))
+    result.raw_status_text += f" | Actual Fiscal Period End: {format_date(end)} | Next Required Period: {format_date(next_period)} | IRS Base Due: {format_date(due)}"
+    return result
+
+
+def discover_organization_names(organization_name: str, ein: str) -> dict:
+    start = time.monotonic(); deadline = start + IDENTITY_DEADLINE_SECONDS
+    if not isinstance(ein, str) or not re.fullmatch(r"\d{2}-?\d{7}", ein.strip()):
+        raise ValueError("Enter a valid nine-digit EIN.")
+    ein = canonical_ein_digits(ein)
+    if not re.fullmatch(r"\d{9}", ein) or ein == "000000000" or not organization_name.strip():
+        raise ValueError("Enter the organization name and a valid nine-digit EIN.")
+    futures, results = {}, []
+    def run(source):
+        try:
+            return identity_source_result(source, ein, deadline)
+        finally:
+            IDENTITY_SOURCE_SLOTS.release()
+    for source in ("CA", "CO", "OR", "IRS"):
+        if IDENTITY_SOURCE_SLOTS.acquire(blocking=False):
+            futures[IDENTITY_SOURCE_POOL.submit(run, source)] = source
+        else:
+            results.append({"source": source, "complete": False, "names": [], "limitation": "Source capacity is busy. You can continue with the names shown."})
+    try:
+        for future in as_completed(futures, timeout=max(0.001, deadline - time.monotonic())):
+            try:
+                results.append(future.result())
+            except Exception:
+                results.append({"source": futures[future], "complete": False, "names": [], "limitation": "This source could not be confirmed during name discovery."})
+    except FuturesTimeoutError:
+        pass
+    finished = {result["source"] for result in results}
+    for future, source in futures.items():
+        if source not in finished:
+            if future.cancel(): IDENTITY_SOURCE_SLOTS.release()
+            results.append({"source": source, "complete": False, "names": [], "limitation": "This source exceeded the discovery time limit."})
+    merged = {}
+    for result in sorted(results, key=lambda x: x["source"]):
+        for item in result.get("names", []):
+            key = identity_name_key(item["name"])
+            if not key: continue
+            if key not in merged:
+                merged[key] = {**item, "evidence": list(item["evidence"])}
+            else:
+                target = merged[key]
+                target["historical"] = target["historical"] and item["historical"]
+                for proof in item["evidence"]:
+                    if proof not in target["evidence"]: target["evidence"].append(proof)
+    names = list(merged.values())
+    return {"organization_name": organization_name.strip(), "ein": format_ein(ein),
+            "names": names[:IDENTITY_MAX_NAMES], "sources": [{k: v for k, v in r.items() if k != "names"} for r in results],
+            "partial": any(not r.get("complete") for r in results) or len(names) > IDENTITY_MAX_NAMES,
+            "seconds": round(time.monotonic() - start, 3), "app_version": APP_VERSION}
 
 
 def public_profile_latest_tax_year_for_ein(ein: str) -> int | None:
@@ -2576,8 +2981,12 @@ def organization_name_variants(
 
     seed_names = [name]
     if ein and include_ein_aliases:
+        reviewed = REVIEWED_NAME_CONTEXT.get().get(canonical_ein_digits(ein), ())
+        if reviewed:
+            add(name)
+            for alias in reviewed: add(alias)
         for alias in known_names_for_ein(ein):
-            if compatible_ein_alias_for_name(name, alias):
+            if is_reviewed_alias(ein, alias) or compatible_ein_alias_for_name(name, alias):
                 seed_names.append(alias)
 
     if include_name_segments:
@@ -3093,7 +3502,7 @@ def organization_match_target_variants(name: str, ein: str = "") -> list[str]:
         include_institutional_reductions=False,
     )
     for alias in known_names_for_ein(ein):
-        if compatible_ein_alias_for_name(name, alias):
+        if is_reviewed_alias(ein, alias) or compatible_ein_alias_for_name(name, alias):
             variants.extend(organization_name_variants(
                 alias,
                 "",
@@ -3633,6 +4042,11 @@ def build_search_queries(
             add(digits)
             add(format_ein(digits))
 
+    if known_names_for_ein(ein or ""):
+        add(org_name)
+        for reviewed_name in known_names_for_ein(ein or ""):
+            add(reviewed_name)
+
     for phrase in possessive_search_phrases(org_name):
         add(phrase)
     for alias in explicit_name_alias_segments(org_name):
@@ -3712,6 +4126,10 @@ def score_candidate(expected_name: str, expected_ein: str | None, candidate: dic
             score += 80
             decision = "accepted"
             reason = "MATCH_NAME_EXACT" if reason != "MATCH_EIN_EXACT" else reason
+        elif is_reviewed_alias(expected_ein or "", candidate_name):
+            score += 80
+            decision = "accepted"
+            reason = "MATCH_REVIEWED_ALTERNATE_NAME" if reason != "MATCH_EIN_EXACT" else reason
         elif redundant_bracket_acronym_match(expected_name, candidate_name):
             score += 80
             decision = "accepted"
@@ -3800,6 +4218,8 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
     original_name = legal_name_without_corporate_description(original_name)
     if not registry_name:
         return False
+    if is_reviewed_alias(ein, registry_name):
+        return True
     safe_targets = organization_match_target_variants(original_name, ein)
     if normalized_match_name(registry_name) == normalized_match_name(original_name):
         return True
@@ -4992,7 +5412,7 @@ def search_with_name_variants(
     if include_ein_aliases:
         alias_priority = [
             alias for alias in known_names_for_ein(org.ein)
-            if compatible_ein_alias_for_name(original_name, alias)
+            if is_reviewed_alias(org.ein, alias) or compatible_ein_alias_for_name(original_name, alias)
         ]
         prioritized = []
         for variant in [variants[0] if variants else original_name, *alias_priority, *variants[1:]]:
@@ -12069,6 +12489,10 @@ def search_hi_precise(page, org):
         result.source_attempts = [
             f"Hawaii attempted prioritized FEIN/name queries: {', '.join(attempted_queries)}."
         ] if attempted_queries else []
+        if exact_detail_ein_match and not hi_indicates_exempt_registration(detail_text):
+            result.source_url = page.url
+            evidence = hi_public_filing_period(page, org.ein)
+            annotate_irs_based_state_period(result, evidence)
         return result
     except Exception as e:
         result.error = f"HI error: {e}"
@@ -14030,6 +14454,8 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
     data["lookup_seconds"] = round(time.perf_counter() - lookup_started, 2)
     data["checked_at_epoch"] = int(time.time())
     data["app_version"] = APP_VERSION
+    if canonical_ein_digits(ein) in REVIEWED_NAME_CONTEXT.get():
+        data["reviewed_alternate_names"] = known_names_for_ein(ein)
     data["reason_code"] = getattr(result, "reason_code", "") or reason_code_for_result(result, data["status"])
     data["runner_reason_code"] = getattr(result, "runner_reason_code", "") or "RUNNER_OK"
     data["identity_anchor"] = getattr(result, "identity_anchor", "") or identity_anchor_for_result(result, org)
@@ -14047,6 +14473,7 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         "next_required_period",
         "computed_due_date",
         "ma_filing_evidence",
+        "tax_period_evidence",
         "ny_filing_evidence",
         "mn_alias_evidence",
         "va_entity_evidence",
@@ -15819,6 +16246,11 @@ def ny_connector_request(payload, origin):
                   "connector_version": connector_version,
                   "issued": now, "expires": now + NY_CONNECTOR_TTL_SECONDS, "version": APP_VERSION,
                   "completed": [], "pending": None}
+        if "alternate_names" in payload:
+            try:
+                record["alternate_names"] = normalize_reviewed_names(payload["alternate_names"])
+            except ValueError as exc:
+                return 400, {"error": str(exc)}
     else:
         try:
             record = ny_connector_unpack(payload.get("check_token"), email, device)
@@ -15839,8 +16271,14 @@ def ny_connector_request(payload, origin):
                 return 200, {"phase": "complete", "result": ny_connector_failure(record, "NY_CONNECTOR_INCOMPLETE")}
             record["completed"].append({"query": pending["query"], "rows": rows})
             record["pending"] = None
-    response = ({"phase": "complete", "result": ny_connector_failure(record, payload.get("reason"))}
-                if action == "fail" else ny_connector_advance(record))
+    names = ({canonical_ein_digits(record["ein"]): tuple(record["alternate_names"])}
+             if "alternate_names" in record else {})
+    context_token = REVIEWED_NAME_CONTEXT.set(names)
+    try:
+        response = ({"phase": "complete", "result": ny_connector_failure(record, payload.get("reason"))}
+                    if action == "fail" else ny_connector_advance(record))
+    finally:
+        REVIEWED_NAME_CONTEXT.reset(context_token)
     if time.time() >= record["expires"]:
         return 410, {"error": "This New York browser check expired. Run the check again."}
     if response["phase"] == "search":
@@ -16346,6 +16784,11 @@ def ca_explicit_primary_registry_status(result) -> str:
 
 
 def true_status_from_body(result, body: str) -> str:
+    if (getattr(result, "state", "") in {"KY", "HI"}
+            and getattr(result, "status_reason", "") == f"{result.state}_CONFIRMED_TAX_PERIOD"):
+        return public_status(result)
+    if getattr(result, "status_reason", "") in {"KY_TAX_PERIOD_UNCONFIRMED", "HI_TAX_PERIOD_UNCONFIRMED"}:
+        return "Unable to Confirm"
     if getattr(result, "reason_code", "") == "FISCAL_PERIOD_UNCONFIRMED":
         return "Unable to Confirm"
     base_status = public_status(result)
@@ -16756,6 +17199,21 @@ def comment_registry_status(raw: str, status: str) -> str:
 
 
 def comments_for_result_base(result, body: str, public_facing_status: str) -> str:
+    evidence = getattr(result, "tax_period_evidence", {})
+    if result.state in {"KY", "HI"} and evidence and getattr(result, "status_reason", "") == f"{result.state}_CONFIRMED_TAX_PERIOD":
+        state_name = "Kentucky" if result.state == "KY" else "Hawaii"
+        due = parse_due_date(evidence["irs_base_due"])
+        timing = ("Kentucky requires the state copy when the return is filed with the IRS." if result.state == "KY" else
+                  "Hawaii requires the state copy within 10 business days after the return is actually filed with the IRS; the IRS date below is a planning reference, not a separately confirmed Hawaii deadline.")
+        return (f"{state_name} lists tax year {evidence['tax_year_label']}. The corresponding return covers "
+                f"{format_date(parse_due_date(evidence['period_begin']))} through {format_date(parse_due_date(evidence['period_end']))}. "
+                f"The next annual period ends {format_date(parse_due_date(evidence['next_period_end']))}, with an IRS base deadline of {format_date(due)}. "
+                f"{comment_date_conclusion(due, public_facing_status)} {timing} No IRS extension has been assumed. "
+                "An earlier IRS filing can trigger the state submission requirement earlier. "
+                f"Period evidence: {evidence['period_basis']}. IRS information is used to interpret the period; the state’s own listing establishes the year on record.")
+    if getattr(result, "status_reason", "") in {"KY_TAX_PERIOD_UNCONFIRMED", "HI_TAX_PERIOD_UNCONFIRMED"}:
+        state_name = "Kentucky" if result.state == "KY" else "Hawaii"
+        return f"{state_name} lists a filing-year label, but the corresponding annual return period could not be confirmed or was a short tax year. CharityClarity cannot safely infer the next annual deadline from that label. Confirm the period on the filed Form 990."
     """Explain the existing decision from its evidence; never change a result or query a registry."""
     status = public_facing_status.strip()
     state = (getattr(result, "state", "") or "").upper()
@@ -17096,6 +17554,17 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         public_facing_status,
     )
     source_state = (getattr(result, "state", "") or "").upper()
+    if source_state == "MA":
+        evidence = getattr(result, "ma_filing_evidence", {})
+        if evidence.get("automatic_extension_inferred") and evidence.get("base_due") and evidence.get("extended_due"):
+            comment += (f" Automatic extension applied: {evidence['base_due']} → {evidence['extended_due']} (six months). "
+                        "Eligibility is inferred from the submitted Form PC history, not separately certified by the state.")
+    if (source_state == "MD" and re.match(r"\s*Current\b", result.raw_status_text or "", re.I)
+            and canonical_ein_digits(result.ein) in PUBLIC_PROFILE_CACHE):
+        context = filing_context(result, body)
+        if context.get("due_date") and context.get("due_date") == context.get("extended_due_date") and context.get("base_due_date"):
+            comment += (f" Automatic extension applied: {format_date(context['base_due_date'])} → "
+                        f"{format_date(context['extended_due_date'])}, through the 15th day of the 11th month after fiscal year end, for the current registration.")
     if source_state == "OR" and getattr(result, "status_reason", "") == "OR_LIVE_EMPTY_REPORTS_INFERRED_DELINQUENT":
         return comment
     if source_state == "OK":
@@ -17427,6 +17896,16 @@ def search_ky_strict_snapshot(org):
     result.source_note = (
         "Kentucky downloadable public charity registration snapshot matched the organization name under strict master-code validation."
     )
+    if filed_year and re.fullmatch(r"20\d{2}", filed_year):
+        evidence = irs_period_for_label(org.ein, int(filed_year), time.monotonic() + 14.0)
+        if evidence:
+            evidence.update(state_source_url=downloadable_data_info("KY").get("source_url", ""))
+            evidence.setdefault("period_basis", "IRS return with the same tax-year label shown by Kentucky")
+            annotate_irs_based_state_period(result, evidence)
+        if (evidence and not hasattr(result, "tax_period_evidence")) or (not evidence and fiscal_end != (12, 31)):
+            result.status = "Unable to Confirm"
+            result.status_reason = "KY_TAX_PERIOD_UNCONFIRMED"
+            result.raw_status_text = f"Yr Last Filed: {filed_year} | KY ID: {registry_id} | Corresponding fiscal period not confirmed"
     return result
 
 
@@ -22186,7 +22665,7 @@ def run_state_lookup_for_batch(
     saw_timeout = False
     for attempt in (1, 2):
         executor = ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(
+        future = submit_with_identity(executor,
             run_state_lookup,
             organization_name,
             ein,
@@ -22234,6 +22713,8 @@ def run_fanout_state_lookup_for_batch(organization_name: str, ein: str, state: s
         "page_url": PUBLIC_BASE_URL,
         "client_user_agent": f"CharityClarity batch fanout/{APP_VERSION}",
     }
+    if canonical_ein_digits(ein) in REVIEWED_NAME_CONTEXT.get():
+        payload["alternate_names"] = known_names_for_ein(ein)
 
     fanout_urls = BATCH_FANOUT_API_URLS or [BATCH_FANOUT_API_URL]
     lane_start = preferred_lane_index(state, ein, len(fanout_urls))
@@ -22373,7 +22854,7 @@ def confirm_fragile_batch_results(results: list[dict]) -> list[dict]:
     if parallel_jobs:
         worker_count = min(BATCH_CONFIRMATION_WORKERS, len(parallel_jobs))
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            for index, confirmed in executor.map(run_confirmation, parallel_jobs):
+            for index, confirmed in (future.result() for future in [submit_with_identity(executor, run_confirmation, job) for job in parallel_jobs]):
                 if confirmed is not None:
                     results[index] = confirmed
     return results
@@ -22681,6 +23162,7 @@ def apply_batch_state_health(results: list[dict]) -> list[dict]:
     return results
 
 
+@reviewed_name_scope
 def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> list[dict]:
     lookup_requests = [
         (org["organization_name"], org["ein"], st)
@@ -22699,7 +23181,7 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
 
         worker_count = min(BATCH_FANOUT_MAX_WORKERS, len(lookup_requests))
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            futures = [executor.submit(run_fanout_request, item) for item in enumerate(lookup_requests)]
+            futures = [submit_with_identity(executor, run_fanout_request, item) for item in enumerate(lookup_requests)]
             for future in as_completed(futures):
                 index, result = future.result()
                 results_by_index[index] = result
@@ -22737,13 +23219,13 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
             isolated_worker_count = min(BATCH_ISOLATED_WORKERS, len(isolated_requests))
             isolated_executor = ThreadPoolExecutor(max_workers=isolated_worker_count)
             executors.append(isolated_executor)
-            futures.extend(isolated_executor.submit(run_isolated_request, item) for item in isolated_requests)
+            futures.extend(submit_with_identity(isolated_executor, run_isolated_request, item) for item in isolated_requests)
 
         if main_requests:
             worker_count = min(MAX_PARALLEL_LOOKUPS, len(main_requests))
             main_executor = ThreadPoolExecutor(max_workers=worker_count)
             executors.append(main_executor)
-            futures.extend(main_executor.submit(run_main_request, item) for item in main_requests)
+            futures.extend(submit_with_identity(main_executor, run_main_request, item) for item in main_requests)
 
         for future in as_completed(futures):
             index, result = future.result()
@@ -22779,6 +23261,9 @@ def run_state_lookups_parallel(organizations: list[dict], states: list[str]) -> 
     retry_jobs = []
     for index, result in enumerate(results):
         ein_key = re.sub(r"\D", "", result.get("ein") or "")
+        if ein_key in REVIEWED_NAME_CONTEXT.get():
+            # The review is authoritative for this run: do not re-add removed names.
+            continue
         original_name = submitted_names_by_ein.get(ein_key, "")
         discovered_name = discovered_names.get(ein_key, "")
         if discovered_name and not (result.get("organization_name") or "").strip():
@@ -22886,12 +23371,14 @@ def normalize_organization_requests(payload: dict, privileged: bool) -> list[dic
             if len(re.sub(r"\D", "", ein)) != 9:
                 continue
             name = resolved_organization_name(ein, item.get("organization_name") or organization_name)
-            organizations.append({"organization_name": name, "ein": ein})
+            organizations.append({"organization_name": name, "ein": ein,
+                                  **({"alternate_names": normalize_reviewed_names(item["alternate_names"])} if "alternate_names" in item else {})})
     else:
         ein = format_ein(payload.get("ein") or "")
         if len(re.sub(r"\D", "", ein)) == 9:
             name = resolved_organization_name(ein, organization_name)
-            organizations.append({"organization_name": name, "ein": ein})
+            organizations.append({"organization_name": name, "ein": ein,
+                                  **({"alternate_names": normalize_reviewed_names(payload["alternate_names"])} if "alternate_names" in payload else {})})
 
     deduped = []
     seen = set()
@@ -22900,6 +23387,9 @@ def normalize_organization_requests(payload: dict, privileged: bool) -> list[dic
         if key in seen:
             continue
         seen.add(key)
+        if "alternate_names" in org:
+            org["alternate_names"] = [alias for alias in org["alternate_names"]
+                                      if identity_name_key(alias) != identity_name_key(org["organization_name"])]
         deduped.append(org)
     return deduped
 
@@ -22923,6 +23413,30 @@ def payload_missing_required_organization_name(payload: dict) -> bool:
 
 
 class RegistrySnapshotHandler(BaseHTTPRequestHandler):
+    def _send_identity_discovery(self):
+        if not APP_VERSION.endswith("-staging"):
+            self._send_json(404, {"error": "Not found"}); return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= 8192:
+                self._send_json(413, {"error": "Name discovery input must be at most 8 KB."}); return
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            if not isinstance(payload, dict): raise ValueError("Invalid name discovery request.")
+            email = normalize_email(str(payload.get("email") or ""))
+            passcode = str(payload.get("admin_passcode") or "").strip()
+            access_error = staging_access_error(email, passcode)
+            if access_error or not is_verified_internal_passcode(email, passcode):
+                self._send_json(403, {"error": access_error or "Unlock staging to find alternate names."}); return
+            name, ein = payload.get("organization_name"), payload.get("ein")
+            if not isinstance(name, str) or not 1 <= len(name.strip()) <= 300 or not isinstance(ein, str):
+                raise ValueError("Enter the organization name and EIN.")
+            self._send_json(200, discover_organization_names(name, ein), {"Cache-Control": "no-store"})
+        except (ValueError, TypeError, UnicodeError) as exc:
+            self._send_json(400, {"error": str(exc)})
+        except Exception as exc:
+            log_error(f"Name discovery failed: {type(exc).__name__}")
+            self._send_json(503, {"error": "Alternate names could not be retrieved. You can enter names manually and continue."})
+
     def _send_ny_connector(self):
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -23160,6 +23674,9 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
         self._send_json(404, {"error": "Open http://127.0.0.1:8765/ to use the registry snapshot page."})
 
     def do_POST(self) -> None:
+        if self.path == "/api/discover-names":
+            self._send_identity_discovery()
+            return
         if self.path == "/api/ny-connector":
             self._send_ny_connector()
             return
@@ -23313,6 +23830,8 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
                     SINGLE_STATE_REQUEST_SEMAPHORE.release()
                 if batch_admitted:
                     BATCH_REQUEST_SEMAPHORE.release()
+        except (ValueError, TypeError) as exc:
+            self._send_json(400, {"error": str(exc)})
         except BaseException as exc:
             log_error(f"POST /api/check failed: {exc}")
             self._send_json(500, {"error": str(exc)})

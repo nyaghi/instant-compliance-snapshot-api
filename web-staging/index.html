@@ -215,7 +215,7 @@
 
                 <input id="organizationName" name="organization_name" required autocomplete="organization" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-[#0B2A5B] focus:ring-2 focus:ring-blue-100" placeholder="Enter the registered organization name" />
 
-                <p class="mt-1 text-xs leading-relaxed text-slate-500">Use the registered or legal name if known. Some state registries use alternate names, so a materially different name may not be found.</p>
+                <p class="mt-1 text-xs leading-relaxed text-slate-500">Enter the legal or registered name. We’ll help find alternate names linked to the same EIN.</p>
 
               </div>
 
@@ -228,6 +228,18 @@
               </div>
 
 
+
+              <section id="organizationIdentity" class="rounded-xl border border-slate-200 bg-slate-50 p-4" aria-label="Organization name review">
+                <button id="findAlternateNames" type="button" class="w-full rounded-full bg-[#0B2A5B] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">1. Find alternate names</button>
+                <p id="identityMessage" role="status" aria-live="polite" class="mt-3 text-xs leading-relaxed text-slate-600">We’ll check EIN-linked state and IRS records. Review the names before running your checks.</p>
+                <div id="identityReview" hidden>
+                  <h3 class="mt-4 text-sm font-semibold text-[#0B2A5B]">2. Review names, then run CharityClarity</h3>
+                  <p id="identitySummary" class="mt-1 text-xs text-slate-600"></p>
+                  <p class="mt-2 text-xs text-slate-600">Your entered name is always included. Edit, uncheck, or remove alternate names as needed.</p>
+                  <div id="alternateNameList" class="mt-3 space-y-2"></div>
+                  <button id="addAlternateName" type="button" class="mt-3 text-xs font-semibold text-[#0B2A5B] underline">Add another name</button>
+                </div>
+              </section>
 
               <fieldset class="rounded-xl border border-slate-200 bg-white p-3">
 
@@ -483,7 +495,7 @@
 
         <div>&copy; <span id="year"></span> Compliance Express</div>
 
-          <div class="font-semibold text-slate-600">CharityClarity v2026.09.15.3 &middot; Staging</div>
+          <div class="font-semibold text-slate-600">CharityClarity v2026.09.15.4 &middot; Staging</div>
         <div>No legal or tax advice.</div>
 
       </div>
@@ -495,6 +507,7 @@
 
 
   <script src="/ny-connector.js"></script>
+  <script src="/organization-identity.js"></script>
   <script>
 
     const API_BASE = "https://instant-compliance-snapshot-api-staging-8dnk.onrender.com";
@@ -530,6 +543,14 @@
     const stateCheckboxes = Array.from(document.querySelectorAll('input[name="states"]'));
 
     const submitButton = document.getElementById("submitButton");
+    submitButton.disabled = true;
+    let runAlternateNames = [];
+    window.CCIdentityConfig = () => ({apiBase: API_BASE, email: email.value.trim(), admin_passcode: adminPasscode.value.trim()});
+    window.addEventListener("cc-identity-change", () => {
+      submitButton.disabled = !window.CCIdentity?.ready();
+      if (!window.CCIdentity?.ready()) submitButton.textContent = "Review organization names first";
+      else submitButton.textContent = "Run CharityClarity";
+    });
 
     const errorBox = document.getElementById("errorBox");
 
@@ -571,7 +592,7 @@
       nyResultRefresh = true;
       submitButton.disabled = true;
       try {
-        const result = await requestSingleState(input.apiBase, input.einValue, input.emailValue, "NY", input.organizationNameValue, true);
+        const result = await requestSingleState(input.apiBase, input.einValue, input.emailValue, "NY", input.organizationNameValue, true, input.alternateNames);
         // A new submission or another result update supersedes this retry.
         if (lastNyInput === input && latestResults.includes(original)) {
           renderResults(latestResults.map(r => r === original ? { ...result, _request_id: original._request_id } : r), true);
@@ -778,7 +799,7 @@
 
       unlockButton.textContent = internalUnlocked ? "Unlocked" : "Unlock";
 
-      submitButton.textContent = internalUnlocked ? "Check selected states" : (STAGING_ACCESS_REQUIRED ? "Unlock staging to continue" : "Check selected state");
+      submitButton.textContent = internalUnlocked ? (window.CCIdentity?.ready() ? "Run CharityClarity" : "Review organization names first") : (STAGING_ACCESS_REQUIRED ? "Unlock staging to continue" : "Check selected state");
 
       if (complimentaryAccessNote) {
 
@@ -1186,12 +1207,13 @@
 
 
 
-    async function requestSingleState(apiBase, einValue, emailValue, state, organizationNameValue, isConnectionRetry = false) {
+    async function requestSingleState(apiBase, einValue, emailValue, state, organizationNameValue, isConnectionRetry = false, alternateNames = runAlternateNames) {
       if (state === "NY" && window.location.origin === "https://staging.compliance-express.com") {
-        if (!isConnectionRetry) lastNyInput = { apiBase, einValue, emailValue, organizationNameValue };
+        if (!isConnectionRetry) lastNyInput = { apiBase, einValue, emailValue, organizationNameValue, alternateNames: [...alternateNames] };
         try {
           if (!window.CCNYConnector) throw new Error("Connector UI unavailable");
           return await window.CCNYConnector.lookup({ organization_name: organizationNameValue, ein: einValue,
+            alternate_names: alternateNames,
             email: emailValue, admin_passcode: adminPasscode.value.trim(), device_id: getDeviceId(),
             onProgress: (message) => {
               let note = document.getElementById("nyQueueProgress");
@@ -1228,6 +1250,7 @@
           body: JSON.stringify({
 
             organization_name: organizationNameValue,
+            alternate_names: alternateNames,
 
             ein: einValue,
 
@@ -1570,6 +1593,13 @@
 
       }
 
+      if (!window.CCIdentity?.ready()) {
+        window.CCIdentity?.focus();
+        return showError("Find and review the organization’s alternate names before running CharityClarity.");
+      }
+      runAlternateNames = Object.freeze([...window.CCIdentity.names()]);
+      window.CCIdentity.setBusy(true);
+
 
 
       latestResults = [];
@@ -1608,8 +1638,8 @@
       } finally {
 
         submitButton.disabled = false;
-
-        submitButton.textContent = internalUnlocked ? "Check selected states" : (STAGING_ACCESS_REQUIRED ? "Unlock staging to continue" : "Run One Organization in One State Free");
+        window.CCIdentity.setBusy(false);
+        submitButton.textContent = internalUnlocked ? "Run CharityClarity" : (STAGING_ACCESS_REQUIRED ? "Unlock staging to continue" : "Run One Organization in One State Free");
       }
 
     });
