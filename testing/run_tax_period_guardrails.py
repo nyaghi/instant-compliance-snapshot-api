@@ -64,6 +64,42 @@ class PeriodTests(unittest.TestCase):
         pdf.drawString(25,710,'National Marrow Donor Program EIN 84-0865803');pdf.save()
         r=c.form990_pdf_period(buffer.getvalue(),'84-0865803',2024,'https://state')
         self.assertEqual(r['period_end'],'2025-09-30')
+    def test_actual_layered_calendar_return_header(self):
+        body=(Path(__file__).parent/'fixtures/hi-good-sports-2025/form990-first-page.pdf').read_bytes()
+        r=c.form990_pdf_period(body,'75-3138664',2025,'https://state')
+        self.assertEqual((r['period_begin'],r['period_end']),('2025-01-01','2025-12-31'))
+        self.assertEqual(c.form990_pdf_period(body,'99-9999999',2025,'https://state'),{})
+        self.assertEqual(c.form990_pdf_period(body,'75-3138664',2024,'https://state'),{})
+    def test_blank_calendar_header_cannot_hide_fiscal_override(self):
+        text='Form 990 EIN 75-3138664'
+        for line in ['For the 2025 calendar year, or tax year beginning JAN 1 and ending',
+                     'For the 2025 calendar year, or tax year beginning and ending DEC 31',
+                     'For the 2025 calendar year, or tax year beginning ??? and ending ???',
+                     'Tax year 2025']:
+            self.assertEqual(c.form990_header_period(text,line,'75-3138664',2025,'https://state'),{})
+        line='For the 2025 calendar year, or tax year beginning JUL 1, 2025 and ending JUN 30, 2026'
+        self.assertEqual(c.form990_header_period(text,line,'75-3138664',2025,'https://state')['period_end'],'2026-06-30')
+    def test_actual_numeric_layered_dates_and_990ez_blank_calendar(self):
+        root=Path(__file__).parent/'fixtures/irs-header-formats'
+        for file,ein,end in [('camp-kesem-layered.pdf','51-0454157','2025-09-30'),('chemical-coaters-990ez.pdf','83-2985088','2024-12-31')]:
+            body=(root/file).read_bytes();r=c.form990_pdf_period(body,ein,2024,'https://state')
+            self.assertEqual(r['period_end'],end)
+            self.assertEqual(c.form990_pdf_period(body,'99-9999999',2024,'https://state'),{})
+    def test_actual_scanned_header_uses_same_row_dates(self):
+        from PIL import Image
+        path=Path(__file__).parent/'fixtures/irs-header-formats/cnas-8879-header.png'
+        r=c.irs_scanned_header_period([(35,Image.open(path))],'208084828',2024,'https://state',c.time.monotonic()+20)
+        self.assertEqual((r['period_begin'],r['period_end'],r['pdf_page']),('2024-10-01','2025-09-30',36))
+    def test_ocr_deadline_and_low_confidence_fail_closed(self):
+        from PIL import Image
+        image=Image.new('RGB',(100,100),'white')
+        with patch.object(c,'IRS_HEADER_OCR') as ocr:
+            self.assertEqual(c.irs_scanned_header_period([(0,image)],'131624103',2024,'https://state',c.time.monotonic()-1),{})
+            ocr.assert_not_called()
+        rows=[([[0,0],[90,0],[90,10],[0,10]],'8879-TE',.8)]
+        with patch.object(c,'IRS_HEADER_TITLE_OCR',return_value=(rows,None)) as ocr:
+            self.assertEqual(c.irs_scanned_header_period([(0,Image.new('RGB',(100,100),'white'))],'131624103',2024,'https://state',c.time.monotonic()+2),{})
+            self.assertEqual(ocr.call_count,1)
     def test_irs_lag_uses_exact_year_ein_public_filing_not_latest_unrelated(self):
         c.TAX_PERIOD_EVIDENCE_CACHE.clear()
         older=evidence(start='2023-07-01',end='2024-06-30');older['tax_year_label']=2023

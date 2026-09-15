@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.15.4-staging").strip() or "2026.09.15.4-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.15.5-staging").strip() or "2026.09.15.5-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -1824,6 +1824,17 @@ def irs_header_evidence(source: str, ein: str, url: str) -> dict:
     begin = parse_due_date(fields.get("TaxPeriodBeginDt[1]", ""))
     end = parse_due_date(fields.get("TaxPeriodEndDt[1]", ""))
     label = re.search(r"<title>TY (20\d{2}) Form 990(?:EZ|PF)?</title>", source)
+    if label and (not begin or not end):
+        # Some 990-EZ renderings split month/day into repeated header spans and
+        # print the year separately. Read that visible period row, not schedules.
+        block = re.search(r"For calendar year\s+" + label[1] + r",?\s+or tax year beginning.{0,2400}?</div>", source, re.S)
+        if block and "ReturnHeader[1]/TaxPeriodBeginDt[1]" in block[0] and "ReturnHeader[1]/TaxPeriodEndDt[1]" in block[0]:
+            row = html.unescape(re.sub(r"<[^>]+>", " ", block[0]))
+            row = re.sub(r"(?<=\d)\s+(?=[\d/-])|(?<=[/-])\s+(?=\d)", "", row)
+            period = re.search(r"beginning\s*(\d{1,2}-\d{1,2})\s*(20\d{2})\s*,?\s*and ending\s*(\d{1,2}-\d{1,2})\s*,?\s*(20\d{2})", row, re.I)
+            if period:
+                begin = parse_due_date(f"{period[1]}-{period[2]}")
+                end = parse_due_date(f"{period[3]}-{period[4]}")
     if not label or not begin or not end or not (0 <= (end - begin).days <= 371) or begin.year != int(label[1]):
         raise ValueError("The IRS tax-year label and actual period could not be reconciled")
     for item in names:
@@ -1832,6 +1843,22 @@ def irs_header_evidence(source: str, ein: str, url: str) -> dict:
     return {"names": [item for item in names if item], "filing": {"tax_year_label": int(label[1]),
             "period_begin": begin.isoformat(), "period_end": end.isoformat(), "source_url": url, "ein": ein},
             "dba_disclosed": bool(dba)}
+
+
+def irs_return_header(ein: str, object_id: str, deadline: float) -> dict:
+    url = f"https://projects.propublica.org/nonprofits/full_text/{object_id}/IRS990"
+    try:
+        source = identity_fetch(url, deadline).decode("utf-8", "replace")
+    except Exception as exc:
+        if getattr(exc, "code", None) != 404: raise
+        # The filing's own index identifies 990-EZ/PF; never guess the form from
+        # its object ID or accept a schedule as the organization's return.
+        index = identity_fetch(f"https://projects.propublica.org/nonprofits/organizations/{ein}/{object_id}/full", deadline).decode("utf-8", "replace")
+        forms = list(dict.fromkeys(re.findall(r"/full_text/" + object_id + r"/(IRS990(?:EZ|PF)?)(?=[\"'?#\s<])", index)))
+        if len(forms) != 1: raise ValueError("The IRS filing index does not identify one main return")
+        url = f"https://projects.propublica.org/nonprofits/full_text/{object_id}/{forms[0]}"
+        source = identity_fetch(url, deadline).decode("utf-8", "replace")
+    return irs_header_evidence(source, ein, url)
 
 
 def identity_irs_names(ein: str, deadline: float) -> dict:
@@ -1847,9 +1874,8 @@ def identity_irs_names(ein: str, deadline: float) -> dict:
     if not re.fullmatch(r"\d{18}", object_id):
         result["limitation"] = "IRS organization name checked; a machine-readable latest Form 990 was not available."
         return result
-    url = f"https://projects.propublica.org/nonprofits/full_text/{object_id}/IRS990"
     try:
-        evidence = irs_header_evidence(identity_fetch(url, deadline).decode("utf-8", "replace"), ein, url)
+        evidence = irs_return_header(ein, object_id, deadline)
         result["names"].extend(evidence.pop("names")); result.update(evidence, complete=True)
         if not result["dba_disclosed"]:
             result["note"] = "The latest available Form 990 discloses no DBA in its DBA field; other sources may list alternate names."
@@ -1878,6 +1904,10 @@ def identity_source_result(source: str, ein: str, deadline: float) -> dict:
 
 TAX_PERIOD_EVIDENCE_CACHE: dict[tuple[str, int], tuple[float, dict]] = {}
 TAX_PERIOD_EVIDENCE_LOCK = threading.Lock()
+IRS_PDF_TEXT_LOCK = threading.Lock()
+IRS_HEADER_OCR = None
+IRS_HEADER_TITLE_OCR = None
+IRS_HEADER_OCR_LOCK = threading.Lock()
 
 
 def irs_period_for_label(ein: str, label: int, deadline: float) -> dict:
@@ -1893,8 +1923,7 @@ def irs_period_for_label(ein: str, label: int, deadline: float) -> dict:
             object_ids = list(dict.fromkeys(re.findall(r"/organizations/" + ein + r"/(\d{18})/full", source)))[:3]
             evidence = {}
             for object_id in object_ids:
-                url = f"https://projects.propublica.org/nonprofits/full_text/{object_id}/IRS990"
-                parsed = irs_header_evidence(identity_fetch(url, deadline).decode("utf-8", "replace"), ein, url)
+                parsed = irs_return_header(ein, object_id, deadline)
                 if parsed["filing"]["tax_year_label"] == label:
                     evidence = parsed["filing"]; break
     except Exception:
@@ -1917,26 +1946,129 @@ def irs_period_for_label(ein: str, label: int, deadline: float) -> dict:
     return {}
 
 
-def form990_pdf_period(body: bytes, ein: str, label: int, url: str) -> dict:
-    """Read the return/8879 header, including fiscal years crossing December."""
-    if not body.startswith(b"%PDF") or not PdfReader: return {}
-    reader = PdfReader(io.BytesIO(body))
-    for page in reader.pages[:6]:
-        text = page.extract_text(extraction_mode="layout").replace("\x00", " ")[:4500]
-        if canonical_ein_digits(ein) not in re.sub(r"\D", "", text): continue
-        if not re.search(r"\b(?:990(?:-EZ|-PF)?|8879-TE)\b|Return\s+of\s+Organization\s+Exempt\s+From\s+Income\s+Tax", text, re.I): continue
-        line = re.search(r"(?:tax|fiscal)\s+year\s+beginning\s*([^\n]+)", text, re.I)
-        if not line: continue
-        period = re.search(r"([A-Z]{3,9}\s+\d{1,2}|\d{1,2}[/.-]\d{1,2})\s*,?\s*(20\d{2})\s*,?\s*and\s+endin[gq]\s*([A-Z]{3,9}\s+\d{1,2}|\d{1,2}[/.-]\d{1,2})\s*,?\s*(20\d{2})", line[1], re.I)
-        if period:
-            begin = parse_due_date(f"{period[1]}, {period[2]}")
-            end = parse_due_date(f"{period[3]}, {period[4]}")
-            if begin and end and begin.year == label and 0 <= (end - begin).days <= 371:
-                return {"ein": canonical_ein_digits(ein), "tax_year_label": label,
-                        "period_begin": begin.isoformat(), "period_end": end.isoformat(), "source_url": url}
-        # A blank fiscal-period header on a calendar-year form is not used to
-        # override any independently evidenced non-calendar period.
+def form990_header_period(text: str, line: str, ein: str, label: int, url: str) -> dict:
+    if canonical_ein_digits(ein) not in re.sub(r"\D", "", text): return {}
+    if not re.search(r"\b(?:990(?:-EZ|-PF)?|8879-TE)\b|Return\s+of\s+Organization\s+Exempt\s+From\s+Income\s+Tax", text, re.I): return {}
+    line = re.sub(r"(?<=[\d/])\s+(?=[\d/])", "", line)
+    period = re.search(r"beginning\s*([A-Z]{3,9}\s*\d{1,2}|\d{1,2}[/.-]\d{1,2})\s*[,/.-]?\s*(20\d{2})\s*,?\s*and\s+endin[gq]\s*([A-Z]{3,9}\s*\d{1,2}|\d{1,2}[/.-]\d{1,2})\s*[,/.-]?\s*(20\d{2})", line, re.I)
+    if period:
+        begin_day = re.sub(r"(?<=[A-Za-z])(?=\d)", " ", period[1]); end_day = re.sub(r"(?<=[A-Za-z])(?=\d)", " ", period[3])
+        begin = parse_due_date(f"{begin_day}, {period[2]}" if begin_day[0].isalpha() else re.sub(r"[.-]", "/", begin_day)+"/"+period[2])
+        end = parse_due_date(f"{end_day}, {period[4]}" if end_day[0].isalpha() else re.sub(r"[.-]", "/", end_day)+"/"+period[4])
+    elif (re.search(r"For\s+the\s+" + str(label) + r"\s+calendar\s+year", line, re.I)
+          and re.search(r"tax\s+year\s+beginning\s*,?\s+and\s+ending\s*$", line, re.I)):
+        # The form explicitly specifies the calendar year and has empty fiscal
+        # override boxes. Never infer this from a state list's year alone.
+        begin, end = date(label, 1, 1), date(label, 12, 31)
+    else: return {}
+    if begin and end and begin.year == label and 0 <= (end - begin).days <= 371:
+        return {"ein": canonical_ein_digits(ein), "tax_year_label": label,
+                "period_begin": begin.isoformat(), "period_end": end.isoformat(), "source_url": url}
     return {}
+
+
+def irs_scanned_header_period(images: list, ein: str, label: int, url: str, deadline: float) -> dict:
+    """Read bounded header crops; OCR never treats empty boxes as calendar proof."""
+    global IRS_HEADER_OCR, IRS_HEADER_TITLE_OCR
+    acquired = False
+    try:
+        if not images or time.monotonic() >= deadline: return {}
+        acquired = IRS_HEADER_OCR_LOCK.acquire(timeout=min(1.0, max(.01, deadline-time.monotonic())))
+        if not acquired: return {}
+        from rapidocr_onnxruntime import RapidOCR
+        if IRS_HEADER_OCR is None:
+            IRS_HEADER_OCR = RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1)
+        if IRS_HEADER_TITLE_OCR is None:
+            IRS_HEADER_TITLE_OCR = RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1, det_limit_type="max", det_limit_side_len=1600)
+        ordered = images[:1] + sorted(images[1:], key=lambda entry:entry[0], reverse=True)
+        for page_index, picture in ordered:
+            if time.monotonic() >= deadline: return {}
+            title = picture.crop((0, 0, picture.width, int(picture.height*8/18)))
+            try: title_rows, _ = IRS_HEADER_TITLE_OCR(title, use_cls=False)
+            finally: title.close()
+            text = " ".join(r[1] for r in title_rows or [] if float(r[2]) >= .95)
+            if not (re.search(r"8879-TE\b", text) or (re.search(r"990(?:-EZ|-PF)?\b", text) and "returnoforganization" in re.sub(r"\s", "", text.lower()))): continue
+            if time.monotonic() >= deadline: return {}
+            rows, _ = IRS_HEADER_OCR(picture, use_cls=False)
+            rows = [r for r in rows or [] if float(r[2]) >= .95]
+            text = "\n".join(r[1] for r in rows)
+            for anchor in rows:
+                if not re.search(r"(?:tax|fiscal)\s+year\s+beginning", anchor[1], re.I): continue
+                center = sum(p[1] for p in anchor[0])/4
+                height = max(p[1] for p in anchor[0])-min(p[1] for p in anchor[0])
+                same_line = sorted((r for r in rows if abs(sum(p[1] for p in r[0])/4-center) <= max(5, height*.65)), key=lambda r:min(p[0] for p in r[0]))
+                line = " ".join(r[1] for r in same_line)
+                evidence = form990_header_period(text, line, ein, label, url)
+                if evidence and re.search(r"beginning\s*(?:[A-Z]{3,9}\s*\d|\d{1,2}[/.-]\d)", line, re.I):
+                    return dict(evidence, period_extraction="Scanned IRS header", pdf_page=page_index+1)
+    except Exception:
+        pass
+    finally:
+        if acquired: IRS_HEADER_OCR_LOCK.release()
+        for _, picture in images: picture.close()
+    return {}
+
+
+def form990_pdf_period(body: bytes, ein: str, label: int, url: str, deadline: float | None = None) -> dict:
+    """Read only the return/8879 header; support separately positioned PDF text."""
+    if not body.startswith(b"%PDF") or not PdfReader: return {}
+    deadline = min(deadline or time.monotonic()+20, time.monotonic()+20)
+    reader = PdfReader(io.BytesIO(body))
+    for page in reader.pages[:1]:
+        text = page.extract_text(extraction_mode="layout").replace("\x00", " ")[:4500]
+        line = re.search(r"[^\n]*(?:tax|fiscal)\s+year\s+beginning[^\n]*", text, re.I)
+        evidence = form990_header_period(text, line[0] if line else "", ein, label, url)
+        if evidence and re.search(r"beginning\s*(?:[A-Z]{3,9}\s+\d|\d{1,2}[/.-]\d)", line[0] if line else "", re.I): return evidence
+    # PDFium (provided by the existing pdfplumber dependency) reads the visible
+    # text layers missed by pypdf. Coordinates keep values on the actual header
+    # row; a printed extension banner cannot become the fiscal period.
+    if not IRS_PDF_TEXT_LOCK.acquire(timeout=2.0): return {}
+    scanned_images = []
+    try:
+        import pypdfium2 as pdfium
+        with pdfium.PdfDocument(body) as document:
+            page_indices = list(dict.fromkeys(list(range(min(6, len(document)))) + list(range(len(document)-1, max(-1, len(document)-9), -1))))
+            scanned_pages = []
+            for page_index in page_indices:
+                if time.monotonic() >= deadline: return {}
+                page = document[page_index]; textpage = page.get_textpage()
+                try:
+                    header = textpage.get_text_bounded(left=0, bottom=page.get_height()*.65, right=page.get_width(), top=page.get_height())
+                    if not header.strip(): scanned_pages.append(page_index)
+                    if canonical_ein_digits(ein) not in re.sub(r"\D", "", header): continue
+                    for phrase in ("tax year beginning", "fiscal year beginning"):
+                        search = textpage.search(phrase)
+                        try: found = search.get_next()
+                        finally: search.close()
+                        if not found: continue
+                        box = textpage.get_charbox(found[0]); characters = []
+                        for index in range(textpage.count_chars()):
+                            bounds = textpage.get_charbox(index); char = textpage.get_text_range(index, 1)
+                            if bounds[1] >= box[1]-6 and bounds[3] <= box[3]+6 and char.strip():
+                                characters.append((bounds[0], bounds[2], char))
+                        line, previous = "", None
+                        for left, right, char in sorted(set(characters)):
+                            if previous is not None and left-previous > 1.8: line += " "
+                            line += char; previous = right
+                        evidence = form990_header_period(header, line, ein, label, url)
+                        if evidence: return dict(evidence, period_extraction="Visible PDF header text")
+                finally:
+                    textpage.close(); page.close()
+            # Capture bounded crops while PDFium is locked, then release it
+            # before OCR so scanned documents do not block ordinary PDFs.
+            for page_index in scanned_pages:
+                if time.monotonic() >= deadline: break
+                page = document[page_index]
+                try:
+                    bitmap = page.render(scale=1.5, crop=(0, page.get_height()*.82, 0, 0))
+                    try: scanned_images.append((page_index, bitmap.to_pil().copy()))
+                    finally: bitmap.close()
+                finally: page.close()
+    except Exception:
+        pass
+    finally:
+        IRS_PDF_TEXT_LOCK.release()
+    return irs_scanned_header_period(scanned_images, ein, label, url, deadline)
 
 
 def hi_attachment_period(source: str, ein: str, label: int, deadline: float) -> dict:
@@ -1946,7 +2078,7 @@ def hi_attachment_period(source: str, ein: str, label: int, deadline: float) -> 
     for path, _ in links[:1]:
         url = "https://charity.ehawaii.gov" + path
         try:
-            evidence = form990_pdf_period(identity_fetch(url, deadline, max_bytes=12_000_000), ein, label, url)
+            evidence = form990_pdf_period(identity_fetch(url, deadline, max_bytes=12_000_000), ein, label, url, deadline)
             if evidence:
                 return evidence
         except Exception:
@@ -1958,7 +2090,7 @@ def hi_public_filing_period(page, ein: str) -> dict:
     source = page.content()
     labels = [int(value) for value in re.findall(r'id="irs_(20\d{2})"', source)]
     if not labels: return {}
-    label = max(labels); deadline = time.monotonic() + 14.0
+    label = max(labels); deadline = time.monotonic() + 24.0
     evidence = hi_attachment_period(source, ein, label, deadline)
     if evidence:
         return {**evidence, "state_source_url": page.url, "period_basis": "Hawaii filing attachment"}

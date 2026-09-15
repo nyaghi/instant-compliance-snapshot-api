@@ -1,0 +1,8 @@
+{
+  "ein": "753138664",
+  "tax_year_label": 2025,
+  "period_begin": "2025-01-01",
+  "period_end": "2025-12-31",
+  "source_url": "https://charity.ehawaii.gov/charity/753138664/details.html",
+  "period_extraction": "Visible PDF header text"
+}

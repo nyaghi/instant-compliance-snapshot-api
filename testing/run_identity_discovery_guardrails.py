@@ -45,6 +45,28 @@ class IdentityTests(unittest.TestCase):
     def test_blank_dba_is_not_global_alias_absence(self):
         r=c.irs_header_evidence(header(),EIN,'https://source')
         self.assertFalse(r['dba_disclosed']);self.assertEqual(len(r['names']),1)
+    def test_actual_990ez_split_date_header_and_ein(self):
+        source=(Path(__file__).parent/'fixtures/irs-header-formats/veterans-990ez.html').read_text(encoding='utf-8')
+        r=c.irs_header_evidence(source,'850979995','https://source')
+        self.assertEqual((r['filing']['period_begin'],r['filing']['period_end']),('2025-01-01','2025-12-31'))
+        self.assertEqual([n['name'] for n in r['names']],['American Veterans Care Association Inc'])
+        with self.assertRaises(ValueError):c.irs_header_evidence(source,EIN,'https://source')
+    def test_main_return_route_uses_filing_index_after_404(self):
+        from urllib.error import HTTPError
+        oid='202522679349200017';base=f'https://projects.propublica.org/nonprofits/full_text/{oid}/'
+        missing=HTTPError(base+'IRS990',404,'Not Found',{},None)
+        index=f'<iframe src="{base}IRS990EZ"></iframe><a href="{base}IRS990ScheduleA">Schedule</a>'
+        with patch.object(c,'identity_fetch',side_effect=[missing,index.encode(),header().encode()]) as fetch:
+            r=c.irs_return_header(EIN,oid,time.monotonic()+5)
+            self.assertEqual(fetch.call_args.args[0],base+'IRS990EZ');self.assertEqual(r['filing']['ein'],EIN)
+        for bad in [f'<a href="{base}IRS990ScheduleA">Only schedule</a>',f'<a href="/full_text/999999999999999999/IRS990EZ">Other filing</a>',index+f'<a href="{base}IRS990PF">Ambiguous</a>']:
+            with patch.object(c,'identity_fetch',side_effect=[missing,bad.encode()]) as fetch:
+                with self.assertRaises(ValueError):c.irs_return_header(EIN,oid,time.monotonic()+5)
+                self.assertEqual(fetch.call_count,2)
+    def test_return_timeout_does_not_trigger_more_routes(self):
+        with patch.object(c,'identity_fetch',side_effect=TimeoutError) as fetch:
+            with self.assertRaises(TimeoutError):c.irs_return_header(EIN,'202522679349200017',time.monotonic()+1)
+            self.assertEqual(fetch.call_count,1)
     def test_irs_wrong_ein_or_invalid_period_rejected(self):
         for source in [header(ein='999999999'),header(end='06-30-2028'),header(begin='bad')]:
             with self.assertRaises(ValueError): c.irs_header_evidence(source,EIN,'https://source')
