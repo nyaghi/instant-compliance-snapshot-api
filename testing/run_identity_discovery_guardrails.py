@@ -45,6 +45,16 @@ class IdentityTests(unittest.TestCase):
     def test_blank_dba_is_not_global_alias_absence(self):
         r=c.irs_header_evidence(header(),EIN,'https://source')
         self.assertFalse(r['dba_disclosed']);self.assertEqual(len(r['names']),1)
+    def test_filer_address_excludes_preparer_and_schedule_addresses(self):
+        prefix='/AppData/SubmissionHeaderAndDocument/'
+        source=header()+''.join(f'<span id="{prefix}{path}">{value}</span>' for path,value in {
+            'ReturnHeader[1]/Filer[1]/USAddress[1]/CityNm[1]':'Washington',
+            'ReturnHeader[1]/Filer[1]/USAddress[1]/StateAbbreviationCd[1]':'DC',
+            'ReturnHeader[1]/PreparerFirmGrp[1]/PreparerUSAddress[1]/CityNm[1]':'Wrong preparer city',
+            'SubmissionDocument/IRS990ScheduleI[1]/USAddress[1]/CityNm[1]':'Wrong recipient city'}.items())
+        r=c.irs_header_evidence(source,EIN,'https://filing')['filer_address']
+        self.assertEqual((r['ein'],r['city'],r['state']),(EIN,'Washington','DC'))
+        with self.assertRaises(ValueError):c.irs_header_evidence(source,'999999999','https://filing')
     def test_actual_990ez_split_date_header_and_ein(self):
         source=(Path(__file__).parent/'fixtures/irs-header-formats/veterans-990ez.html').read_text(encoding='utf-8')
         r=c.irs_header_evidence(source,'850979995','https://source')

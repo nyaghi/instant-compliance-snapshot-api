@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.16.6-staging").strip() or "2026.09.16.6-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.16.7-staging").strip() or "2026.09.16.7-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -1816,6 +1816,20 @@ def registry_address_evidence(ein: str, location: str, *, candidate_ein: str = "
     if not city or not state:
         return {"decision": "unavailable"}
     agrees = city_key(city) == city_key(match[1]) and state == match[2].upper()
+    if not agrees and re.fullmatch(r"\d{18}", str(profile.get("latest_object_id") or "")):
+        # A registry may retain a former office. Corroborate it only against the
+        # same-EIN filer's own return header, never an officer or schedule address.
+        try:
+            filer = identity_source_result("IRS", requested, time.monotonic() + 6.0).get("filer_address", {})
+            if (canonical_ein_digits(str(filer.get("ein", ""))) == requested
+                    and city_key(filer.get("city", "")) == city_key(match[1])
+                    and str(filer.get("state", "")).upper() == match[2].upper()):
+                return {"decision": "corroborated", "registry_location": raw_location,
+                        "ein_linked_location": f"{filer['city']}, {filer['state']}",
+                        "source_url": filer.get("source_url", ""),
+                        "basis": "The same-EIN Form 990 filer address corroborates the registry location; current organization metadata lists a different office. Address alone does not establish identity."}
+        except Exception:
+            pass  # An unreadable filing cannot clear an address conflict.
     return {"decision": "corroborated" if agrees else "conflict", "registry_location": raw_location,
             "ein_linked_location": f"{city}, {state}", "source_url": f"https://projects.propublica.org/nonprofits/organizations/{requested}",
             "basis": "Organization location compared with same-EIN IRS organization metadata; address alone does not establish identity."}
@@ -1890,6 +1904,11 @@ def irs_header_evidence(source: str, ein: str, url: str, *, require_period: bool
             dba_fields[int(dba_match[1])] = value
     if canonical_ein_digits(fields.get("Filer[1]/EIN[1]", "")) != ein:
         raise ValueError("The IRS return header does not confirm the requested EIN")
+    filer_address = {"ein": ein, "source_url": url,
+                     "street": fields.get("Filer[1]/USAddress[1]/AddressLine1Txt[1]", ""),
+                     "city": fields.get("Filer[1]/USAddress[1]/CityNm[1]", ""),
+                     "state": fields.get("Filer[1]/USAddress[1]/StateAbbreviationCd[1]", ""),
+                     "zipcode": fields.get("Filer[1]/USAddress[1]/ZIPCd[1]", "")}
     legal = " ".join(fields.get(f"Filer[1]/BusinessName[1]/BusinessNameLine{i}Txt[1]", "") for i in (1, 2)).strip()
     dba = " ".join(dba_fields[key] for key in sorted(dba_fields) if dba_fields[key]).strip()
     names = [identity_candidate(legal, "IRS via ProPublica", "Form 990 filer legal name", url)] if legal else []
@@ -1912,13 +1931,13 @@ def irs_header_evidence(source: str, ein: str, url: str, *, require_period: bool
         if require_period:
             raise ValueError("The IRS tax-year label and actual period could not be reconciled")
         return {"names": [item for item in names if item], "dba_disclosed": bool(dba),
-                "period_unconfirmed": True}
+                "period_unconfirmed": True, "filer_address": filer_address}
     for item in names:
         if item:
             item["evidence"][0]["source_date"] = end.isoformat()
     return {"names": [item for item in names if item], "filing": {"tax_year_label": int(label[1]),
             "period_begin": begin.isoformat(), "period_end": end.isoformat(), "source_url": url, "ein": ein},
-            "dba_disclosed": bool(dba)}
+            "dba_disclosed": bool(dba), "filer_address": filer_address}
 
 
 def irs_return_header(ein: str, object_id: str, deadline: float, *, require_period: bool = True) -> dict:
@@ -2485,7 +2504,9 @@ def irs_scanned_header_period(images: list, ein: str, label: int, url: str, dead
 def form990_pdf_period(body: bytes, ein: str, label: int, url: str, deadline: float | None = None) -> dict:
     """Read only the return/8879 header; support separately positioned PDF text."""
     if not body.startswith(b"%PDF") or not PdfReader: return {}
-    deadline = min(deadline or time.monotonic()+20, time.monotonic()+20)
+    # Honor the caller's bounded scan allowance for attachments with cover pages.
+    # Standalone callers retain the existing 20-second default.
+    deadline = min(deadline or time.monotonic()+20, time.monotonic()+76)
     reader = PdfReader(io.BytesIO(body))
     for page in reader.pages[:1]:
         text = page.extract_text(extraction_mode="layout").replace("\x00", " ")[:4500]
@@ -2563,8 +2584,8 @@ def hi_public_filing_period(page, ein: str) -> dict:
     source = page.content()
     labels = [int(value) for value in re.findall(r'id="irs_(20\d{2})"', source)]
     if not labels: return {}
-    label = max(labels); deadline = time.monotonic() + 24.0
-    evidence = hi_attachment_period(source, ein, label, min(deadline - 8.0, time.monotonic() + 16.0))
+    label = max(labels); deadline = time.monotonic() + 80.0
+    evidence = hi_attachment_period(source, ein, label, min(deadline - 8.0, time.monotonic() + 72.0))
     if evidence:
         return {**evidence, "state_source_url": page.url, "period_basis": "Hawaii filing attachment"}
     # The exact state label remains the anchor if its attachment is scanned.

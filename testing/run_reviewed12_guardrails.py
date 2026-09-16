@@ -110,6 +110,24 @@ class ReviewedTwelveTests(unittest.TestCase):
     def test_exact_ein_overrides_old_address_and_same_address_never_overrides_wrong_ein(self):
         self.assertEqual(c.registry_address_evidence('123456789','Madison, WI',candidate_ein='123456789')['decision'],'same_ein')
         self.assertEqual(c.registry_address_evidence('123456789','Chicago, IL',candidate_ein='987654321')['decision'],'different_ein')
+    def test_same_ein_filer_address_corroborates_former_office(self):
+        profile={'organization':{'ein':823980782,'city':'Alexandria','state':'VA','latest_object_id':'202501299349302730'}}
+        filer={'ein':'823980782','city':'Washington','state':'DC','source_url':'https://filing'}
+        with patch.object(c,'public_profile_for_ein',return_value=profile),patch.object(c,'identity_source_result',return_value={'filer_address':filer}):
+            r=c.registry_address_evidence('82-3980782','WASHINGTON, DC 20036',registry_state='ME')
+        self.assertEqual(r['decision'],'corroborated');self.assertEqual(r['source_url'],'https://filing')
+    def test_filer_address_does_not_clear_wrong_ein_or_other_city(self):
+        profile={'organization':{'ein':823980782,'city':'Alexandria','state':'VA','latest_object_id':'202501299349302730'}}
+        with patch.object(c,'public_profile_for_ein',return_value=profile):
+            for filer in [{'ein':'999999999','city':'Washington','state':'DC'}, {'ein':'823980782','city':'Madison','state':'WI'}, {}]:
+                with patch.object(c,'identity_source_result',return_value={'filer_address':filer}):
+                    self.assertEqual(c.registry_address_evidence('823980782','Washington, DC')['decision'],'conflict')
+            with patch.object(c,'identity_source_result',side_effect=TimeoutError('Source unavailable')):
+                self.assertEqual(c.registry_address_evidence('823980782','Washington, DC')['decision'],'conflict')
+    def test_filer_address_cannot_override_conflicting_registry_ein(self):
+        with patch.object(c,'public_profile_for_ein') as profile,patch.object(c,'identity_source_result') as source:
+            self.assertEqual(c.registry_address_evidence('823980782','Washington, DC',candidate_ein='999999999')['decision'],'different_ein')
+        profile.assert_not_called();source.assert_not_called()
     def test_missing_address_does_not_reject(self):
         self.assertEqual(c.registry_address_evidence('123456789','')['decision'],'unavailable')
     def test_maine_multiple_location_marker_is_not_part_of_city(self):

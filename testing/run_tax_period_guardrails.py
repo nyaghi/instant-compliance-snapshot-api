@@ -90,6 +90,17 @@ class PeriodTests(unittest.TestCase):
         path=Path(__file__).parent/'fixtures/irs-header-formats/cnas-8879-header.png'
         r=c.irs_scanned_header_period([(35,Image.open(path))],'208084828',2024,'https://state',c.time.monotonic()+20)
         self.assertEqual((r['period_begin'],r['period_end'],r['pdf_page']),('2024-10-01','2025-09-30',36))
+    def test_full_scanned_hawaii_attachment_does_not_assume_calendar_year(self):
+        from types import SimpleNamespace
+        body=(Path(__file__).parent/'fixtures/irs-header-formats/cnas-2024-full.pdf').read_bytes()
+        html='<span id="irs_2024"></span><a rel="/charity/attachments/irs/208084828/2024/return.pdf">Attachment_IRSForm_1</a>'
+        page=SimpleNamespace(content=lambda:html,url='https://charity.ehawaii.gov/charity/208084828/details.html')
+        # The actual return is on page 36, after scanned cover/financial pages.
+        # A single cropped header fixture cannot reveal the cold scan timeout.
+        with patch.object(c,'IRS_HEADER_OCR',None),patch.object(c,'IRS_HEADER_TITLE_OCR',None),patch.object(c,'identity_fetch',return_value=body),patch.object(c,'irs_period_for_label',return_value={}) as fallback:
+            r=c.hi_public_filing_period(page,'20-8084828')
+        self.assertEqual((r['period_begin'],r['period_end'],r['pdf_page']),('2024-10-01','2025-09-30',36))
+        self.assertFalse(r.get('period_assumed'));fallback.assert_not_called()
     def test_ocr_deadline_and_low_confidence_fail_closed(self):
         from PIL import Image
         image=Image.new('RGB',(100,100),'white')
