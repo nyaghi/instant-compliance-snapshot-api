@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.15.8-staging").strip() or "2026.09.15.8-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.16.1-staging").strip() or "2026.09.16.1-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -1752,6 +1752,68 @@ def identity_candidate(name, source, evidence_type, url, source_date="", histori
                           "source_date": source_date}]}
 
 
+def identity_dba_list(value: str) -> list[str]:
+    """Split a provider's DBA list, preserving commas that introduce legal suffixes."""
+    value = re.sub(r"\s+", " ", str(value or "")).strip()
+    parts = []
+    for group in value.split(";"):
+        comma_parts = re.split(r",(?!\s*(?:inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)(?:\s*[,;]|\s*$))\s*", group, flags=re.I)
+        # A comma also belongs inside legal names and geographic qualifiers.
+        # Only expand an unmistakable multi-name list; retain ambiguous fields.
+        list_like = len(comma_parts) >= 3 and all(len(re.findall(r"[A-Za-z0-9]+", item)) >= 3 for item in comma_parts)
+        parts.extend(comma_parts if list_like else [group])
+    return [part.strip(" ,;") for part in parts if part.strip(" ,;")]
+
+
+def registry_identity_preference(candidate: str, original: str, ein: str = "") -> int:
+    """Rank complete identities, never broad retrieval prefixes or word count."""
+    key = normalized_match_name(candidate)
+    if key and key == normalized_match_name(original):
+        return 3
+    if not is_reviewed_alias(ein, candidate):
+        return 0
+    historical, current = False, False
+    with IDENTITY_CACHE_LOCK:
+        sources = [data for (source_ein, _, _), (expires, data) in IDENTITY_SOURCE_CACHE.items()
+                   if source_ein == canonical_ein_digits(ein) and expires > time.time()]
+    for source in sources:
+        for item in source.get("names", []):
+            if normalized_match_name(item.get("name", "")) != key:
+                continue
+            historical |= bool(item.get("historical"))
+            current |= any(proof.get("type") == "Form 990 filer legal name" for proof in item.get("evidence", []))
+    return 3 if current else 1 if historical else 2
+
+
+def registry_address_evidence(ein: str, location: str, *, candidate_ein: str = "", role: str = "organization") -> dict:
+    """Corroborate a registry organization location against same-EIN IRS metadata.
+
+    Different EINs override matching addresses; an agent/mailing location is not
+    headquarters evidence. A conflict must be resolved before a name-only match.
+    """
+    requested = canonical_ein_digits(ein)
+    actual = canonical_ein_digits(candidate_ein)
+    if actual:
+        return {"decision": "same_ein" if actual == requested else "different_ein"}
+    if role != "organization" or not location or len(requested) != 9:
+        return {"decision": "unavailable"}
+    match = re.fullmatch(r"\s*(.+?),\s*([A-Za-z]{2})(?:\s+\d{5}(?:-\d{4})?)?\s*", location)
+    if not match:
+        return {"decision": "unavailable"}
+    profile = (public_profile_for_ein(requested).get("organization") or {})
+    if canonical_ein_digits(str(profile.get("ein", ""))) != requested:
+        return {"decision": "unavailable"}
+    def city_key(value):
+        return re.sub(r"[^a-z0-9]", "", re.sub(r"\bst\.?\s+", "saint ", str(value).casefold()))
+    city, state = profile.get("city", ""), str(profile.get("state", "")).upper()
+    if not city or not state:
+        return {"decision": "unavailable"}
+    agrees = city_key(city) == city_key(match[1]) and state == match[2].upper()
+    return {"decision": "corroborated" if agrees else "conflict", "registry_location": location,
+            "ein_linked_location": f"{city}, {state}", "source_url": f"https://projects.propublica.org/nonprofits/organizations/{requested}",
+            "basis": "Organization location compared with same-EIN IRS organization metadata; address alone does not establish identity."}
+
+
 def identity_ca_names(ein: str, deadline: float) -> dict:
     query = {"where": {"and": [{"entityStatus": {"neq": "Not Listed"}}, {"fein": format_ein(ein)}]}, "limit": 20}
     url = checker.CA_EVOKE_API_ROOT + "/data/objects/entity/instances?" + urlencode({"filter": json.dumps(query, separators=(",", ":"))})
@@ -1763,8 +1825,12 @@ def identity_ca_names(ein: str, deadline: float) -> dict:
         if canonical_ein_digits(str(row.get("fein") or "")) != ein:
             continue
         for field, kind in (("entityName", "Registered name"), ("legalName", "Legal name"), ("dba", "DBA")):
-            item = identity_candidate(row.get(field), "California", kind, checker.CA_EVOKE_PUBLIC_PORTAL_URL)
-            if item: names.append(item)
+            values = identity_dba_list(row.get(field)) if field == "dba" else [row.get(field)]
+            for value in values:
+                item = identity_candidate(value, "California", kind, checker.CA_EVOKE_PUBLIC_PORTAL_URL)
+                if item:
+                    if field == "dba": item["evidence"][0]["original_field"] = row.get(field)
+                    names.append(item)
     return {"names": names, "complete": len(rows) < 20, "source_url": url}
 
 
@@ -1805,7 +1871,7 @@ def identity_or_names(ein: str, deadline: float) -> dict:
     return {"names": names, "complete": True, "freshness": info}
 
 
-def irs_header_evidence(source: str, ein: str, url: str) -> dict:
+def irs_header_evidence(source: str, ein: str, url: str, *, require_period: bool = True) -> dict:
     """Read only the filer/header paths from the IRS rendering, never schedules."""
     fields, dba_fields = {}, {}
     for match in re.finditer(r'<span\b[^>]*\bid="([^"]+)"[^>]*>([^<]*)</span>', source, re.I):
@@ -1835,8 +1901,11 @@ def irs_header_evidence(source: str, ein: str, url: str) -> dict:
             if period:
                 begin = parse_due_date(f"{period[1]}-{period[2]}")
                 end = parse_due_date(f"{period[3]}-{period[4]}")
-    if not label or not begin or not end or not (0 <= (end - begin).days <= 371) or begin.year != int(label[1]):
-        raise ValueError("The IRS tax-year label and actual period could not be reconciled")
+    if not label or not irs_form_period_is_valid(begin, end, int(label[1])):
+        if require_period:
+            raise ValueError("The IRS tax-year label and actual period could not be reconciled")
+        return {"names": [item for item in names if item], "dba_disclosed": bool(dba),
+                "period_unconfirmed": True}
     for item in names:
         if item:
             item["evidence"][0]["source_date"] = end.isoformat()
@@ -1845,7 +1914,7 @@ def irs_header_evidence(source: str, ein: str, url: str) -> dict:
             "dba_disclosed": bool(dba)}
 
 
-def irs_return_header(ein: str, object_id: str, deadline: float) -> dict:
+def irs_return_header(ein: str, object_id: str, deadline: float, *, require_period: bool = True) -> dict:
     url = f"https://projects.propublica.org/nonprofits/full_text/{object_id}/IRS990"
     try:
         source = identity_fetch(url, deadline).decode("utf-8", "replace")
@@ -1858,7 +1927,7 @@ def irs_return_header(ein: str, object_id: str, deadline: float) -> dict:
         if len(forms) != 1: raise ValueError("The IRS filing index does not identify one main return")
         url = f"https://projects.propublica.org/nonprofits/full_text/{object_id}/{forms[0]}"
         source = identity_fetch(url, deadline).decode("utf-8", "replace")
-    return irs_header_evidence(source, ein, url)
+    return irs_header_evidence(source, ein, url, require_period=require_period)
 
 
 def irs_historical_filer_names(source: str, ein: str, url: str) -> list[dict]:
@@ -1905,12 +1974,14 @@ def identity_irs_names(ein: str, deadline: float) -> dict:
     item = identity_candidate(org.get("name"), "IRS via ProPublica", "IRS organization record",
                               f"https://projects.propublica.org/nonprofits/organizations/{ein}", str(org.get("updated_at") or ""))
     result = {"names": [item] if item else [], "complete": False, "source_revision": org.get("data_source")}
+    PUBLIC_PROFILE_CACHE[ein] = payload
+    result["address"] = {key: org.get(key) for key in ("ein", "street", "city", "state", "zipcode")}
     object_id = str(org.get("latest_object_id") or "")
     if not re.fullmatch(r"\d{18}", object_id):
         result["limitation"] = "IRS organization name checked; a machine-readable latest Form 990 was not available."
         return result
     try:
-        evidence = irs_return_header(ein, object_id, deadline)
+        evidence = irs_return_header(ein, object_id, deadline, require_period=False)
         result["names"].extend(evidence.pop("names")); result.update(evidence, complete=True)
         if not result["dba_disclosed"]:
             result["note"] = "The latest available Form 990 discloses no DBA in its DBA field; other sources may list alternate names."
@@ -1927,7 +1998,7 @@ def identity_irs_names(ein: str, deadline: float) -> dict:
 
 
 def identity_source_result(source: str, ein: str, deadline: float) -> dict:
-    fingerprint = json.dumps(downloadable_data_info("OR"), sort_keys=True) if source == "OR" else "live-v1"
+    fingerprint = json.dumps(downloadable_data_info("OR"), sort_keys=True) if source == "OR" else "live-v2"
     key = (ein, source, fingerprint)
     now = time.time()
     with IDENTITY_CACHE_LOCK:
@@ -1952,24 +2023,58 @@ IRS_HEADER_TITLE_OCR = None
 IRS_HEADER_OCR_LOCK = threading.Lock()
 
 
+def irs_form_period_is_valid(begin, end, label: int) -> bool:
+    if not begin or not end or not 0 <= (end - begin).days <= 371:
+        return False
+    # IRS permits a short year ending before December 31 to use the prior form.
+    return begin.year == label or (begin.year == label + 1 == end.year and end < date(end.year, 12, 31))
+
+
+def assumed_calendar_period(ein: str, label: int, source_url: str = "") -> dict:
+    return {"ein": canonical_ein_digits(ein), "tax_year_label": label,
+            "period_begin": f"{label}-01-01", "period_end": f"{label}-12-31",
+            "state_source_url": source_url, "period_assumed": True,
+            "period_basis": "Fiscal year-end could not be confirmed from the available Form 990. December 31 is assumed; the resulting deadline and status are estimates."}
+
+
 def irs_period_for_label(ein: str, label: int, deadline: float) -> dict:
     """A same-year IRS return resolves the period, never proves another state received it."""
     ein = canonical_ein_digits(ein); key = (ein, label)
     with TAX_PERIOD_EVIDENCE_LOCK:
         cached = TAX_PERIOD_EVIDENCE_CACHE.get(key)
     if cached and cached[0] > time.time(): return dict(cached[1])
+    evidence, candidates = {}, []
     try:
-        evidence = identity_source_result("IRS", ein, deadline).get("filing", {})
-        if evidence.get("tax_year_label", label) >= label and evidence.get("tax_year_label") != label:
+        latest = identity_source_result("IRS", ein, deadline).get("filing", {})
+        if latest: candidates.append(latest)
+        begin, end = parse_due_date(latest.get("period_begin", "")), parse_due_date(latest.get("period_end", ""))
+        if latest.get("tax_year_label", label) >= label and (latest.get("tax_year_label") != label or not begin or not end or (end - begin).days < 350):
             source = identity_fetch(f"https://projects.propublica.org/nonprofits/organizations/{ein}", deadline).decode("utf-8", "replace")
             object_ids = list(dict.fromkeys(re.findall(r"/organizations/" + ein + r"/(\d{18})/full", source)))[:3]
-            evidence = {}
             for object_id in object_ids:
-                parsed = irs_return_header(ein, object_id, deadline)
-                if parsed["filing"]["tax_year_label"] == label:
-                    evidence = parsed["filing"]; break
+                if time.monotonic() >= deadline: break
+                try:
+                    parsed = irs_return_header(ein, object_id, deadline)
+                    if parsed.get("filing") and parsed["filing"] not in candidates: candidates.append(parsed["filing"])
+                except Exception:
+                    continue  # One unreadable header must not hide an older usable return.
     except Exception:
-        evidence = {}
+        pass
+    matching = [row for row in candidates if row.get("tax_year_label") == label]
+    if matching:
+        # An annual state label must not silently become a later short return
+        # printed on the same year's form. Preserve the later period separately.
+        evidence = dict(max(matching, key=lambda row: (parse_due_date(row["period_end"]) - parse_due_date(row["period_begin"])).days))
+        later = [row for row in candidates if row["period_begin"] > evidence["period_end"]]
+        if later:
+            evidence["next_known_period_end"] = min(later, key=lambda row: row["period_begin"])["period_end"]
+            evidence["transition_basis"] = "A later same-EIN IRS return identifies the next covered period; it does not establish receipt by the state."
+        begin, end = parse_due_date(evidence["period_begin"]), parse_due_date(evidence["period_end"])
+        if (end - begin).days < 350:
+            fiscal_end = fiscal_year_end_for_ein(ein)
+            if fiscal_end == (end.month, end.day):
+                evidence["short_period_fiscal_end_confirmed"] = True
+                evidence["transition_basis"] = "The short-period ending month and day agree with the same-EIN IRS fiscal-year-end metadata."
     if evidence.get("tax_year_label") != label:
         try:
             url = f"https://charity.ehawaii.gov/charity/{ein}/details.html"
@@ -2003,7 +2108,7 @@ def form990_header_period(text: str, line: str, ein: str, label: int, url: str) 
         # override boxes. Never infer this from a state list's year alone.
         begin, end = date(label, 1, 1), date(label, 12, 31)
     else: return {}
-    if begin and end and begin.year == label and 0 <= (end - begin).days <= 371:
+    if irs_form_period_is_valid(begin, end, label):
         return {"ein": canonical_ein_digits(ein), "tax_year_label": label,
                 "period_begin": begin.isoformat(), "period_end": end.isoformat(), "source_url": url}
     return {}
@@ -2022,7 +2127,7 @@ def irs_scanned_header_period(images: list, ein: str, label: int, url: str, dead
             IRS_HEADER_OCR = RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1)
         if IRS_HEADER_TITLE_OCR is None:
             IRS_HEADER_TITLE_OCR = RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1, det_limit_type="max", det_limit_side_len=1600)
-        ordered = images[:1] + sorted(images[1:], key=lambda entry:entry[0], reverse=True)
+        ordered = sorted(images, key=lambda entry: entry[0])
         for page_index, picture in ordered:
             if time.monotonic() >= deadline: return {}
             title = picture.crop((0, 0, picture.width, int(picture.height*8/18)))
@@ -2133,13 +2238,13 @@ def hi_public_filing_period(page, ein: str) -> dict:
     labels = [int(value) for value in re.findall(r'id="irs_(20\d{2})"', source)]
     if not labels: return {}
     label = max(labels); deadline = time.monotonic() + 24.0
-    evidence = hi_attachment_period(source, ein, label, deadline)
+    evidence = hi_attachment_period(source, ein, label, min(deadline - 8.0, time.monotonic() + 16.0))
     if evidence:
         return {**evidence, "state_source_url": page.url, "period_basis": "Hawaii filing attachment"}
     # The exact state label remains the anchor if its attachment is scanned.
     evidence = irs_period_for_label(ein, label, deadline)
     return ({**evidence, "state_source_url": page.url, "period_basis": "IRS return with the same tax-year label shown by Hawaii"}
-            if evidence else {"tax_year_label": label, "state_source_url": page.url, "period_unconfirmed": True})
+            if evidence else assumed_calendar_period(ein, label, page.url))
 
 
 def irs_base_return_due(period_end: date) -> date:
@@ -2169,10 +2274,10 @@ def annotate_irs_based_state_period(result, evidence: dict):
     if evidence.get("period_unconfirmed"): return unconfirmed_period()
     if evidence.get("ein") != canonical_ein_digits(result.ein): return result
     end = parse_due_date(evidence.get("period_end", "")); begin = parse_due_date(evidence.get("period_begin", ""))
-    if not end or not begin or begin.year != evidence.get("tax_year_label"): return result
-    if not 350 <= (end - begin).days <= 371:
+    if not irs_form_period_is_valid(begin, end, evidence.get("tax_year_label")): return result
+    if (end - begin).days < 350 and not evidence.get("short_period_fiscal_end_confirmed"):
         return unconfirmed_period()  # A short year does not establish the next fiscal calendar.
-    next_period = add_months_preserving_end_of_month(end, 12)
+    next_period = parse_due_date(evidence.get("next_known_period_end", "")) or add_months_preserving_end_of_month(end, 12)
     due = irs_base_return_due(next_period)
     result.tax_period_evidence = dict(evidence, next_period_end=next_period.isoformat(), irs_base_due=due.isoformat(), extension_applied=False)
     result.status = status_from_calendar_date(due)
@@ -2183,7 +2288,8 @@ def annotate_irs_based_state_period(result, evidence: dict):
     result.computed_due_date = format_date(due)
     result.raw_status_text = " | ".join(part.strip() for part in (result.raw_status_text or "").split("|")
         if not re.match(r"\s*(?:Next Required Period|Next Filing Due|IRS Base Due)\s*:", part, re.I))
-    result.raw_status_text += f" | Actual Fiscal Period End: {format_date(end)} | Next Required Period: {format_date(next_period)} | IRS Base Due: {format_date(due)}"
+    period_label = "Assumed Fiscal Period End" if evidence.get("period_assumed") else "Actual Fiscal Period End"
+    result.raw_status_text += f" | {period_label}: {format_date(end)} | Next Required Period: {format_date(next_period)} | IRS Base Due: {format_date(due)}"
     return result
 
 
@@ -2227,10 +2333,13 @@ def discover_organization_names(organization_name: str, ein: str) -> dict:
                 merged[key] = {**item, "evidence": list(item["evidence"])}
             else:
                 target = merged[key]
-                target["historical"] = target["historical"] and item["historical"]
+                target["historical"] = target["historical"] or item["historical"]
                 for proof in item["evidence"]:
                     if proof not in target["evidence"]: target["evidence"].append(proof)
     names = list(merged.values())
+    for item in names:
+        if any(proof.get("type") == "Form 990 filer legal name" for proof in item["evidence"]):
+            item["historical"] = False
     return {"organization_name": organization_name.strip(), "ein": format_ein(ein),
             "names": names[:IDENTITY_MAX_NAMES], "sources": [{k: v for k, v in r.items() if k != "names"} for r in results],
             "partial": any(not r.get("complete") for r in results) or len(names) > IDENTITY_MAX_NAMES,
@@ -6510,6 +6619,9 @@ def me_fast_direct_query_variants(org) -> list[str]:
     if (prefix and len(queries) < ME_FAST_DIRECT_CONFIRMATION_MAX_VARIANTS
             and not any(prefix.casefold().startswith(query.casefold()) for query in queries)):
         queries.append(prefix)
+    # Keep the primary-name prefix ahead of historical identities after deduplication.
+    queries.sort(key=lambda query: 0 if any(value.casefold().startswith(query.casefold())
+                 for value in (original_name, leading_article_removed)) else 1)
     return queries
 
 
@@ -6623,7 +6735,7 @@ def me_fast_direct_confirmation_result(org, page=None, deadline=None):
     deadline = deadline or (time.perf_counter() + 75)
     target_names = organization_match_target_variants(getattr(org, "organization_name", ""), getattr(org, "ein", ""))
     best_row, best_opener = None, None
-    best_score = (-999, -999)
+    best_score = (-999, -999, -999)
     last_error = ""
     completed = set()
     queries = me_fast_direct_query_variants(org)
@@ -6653,6 +6765,10 @@ def me_fast_direct_confirmation_result(org, page=None, deadline=None):
                     score = checker.candidate_selection_score_for_targets(row.get("name", ""), target_names, row_text)
                     if score[0] < 0 or not registry_name_is_safe_for_org(row.get("name", ""), org.organization_name, org.ein):
                         continue
+                    address = registry_address_evidence(org.ein, row.get("location", ""))
+                    row["address_evidence"] = address
+                    score = (score[0], registry_identity_preference(row.get("name", ""), org.organization_name, org.ein),
+                             0 if address["decision"] == "conflict" else 1, score[1])
                     if score > best_score:
                         best_row, best_opener, best_score = row, opener, score
                 log_event(f"ME search phase={phase} query={query!r} seconds={time.perf_counter()-started:.2f} rows={len(rows)}")
@@ -6669,7 +6785,7 @@ def me_fast_direct_confirmation_result(org, page=None, deadline=None):
                     except Exception:
                         pass
                 log_event(f"ME search phase={phase} query={query!r} seconds={time.perf_counter()-started:.2f} error={last_error}")
-            if best_row or time.perf_counter() >= deadline or (phase == "direct" and len(pending) >= 2):
+            if (best_row and best_score[1] == 3 and best_row.get("address_evidence", {}).get("decision") != "conflict") or time.perf_counter() >= deadline or (phase == "direct" and len(pending) >= 2):
                 break
         if best_row or time.perf_counter() >= deadline:
             break
@@ -6704,6 +6820,16 @@ def me_result_from_search(org, best_row, best_opener, checked_any, last_error):
         return None
 
     detail_url = urljoin("https://www.pfr.maine.gov/ALMSOnline/ALMSQuery/", best_row.get("href", ""))
+    address = best_row.get("address_evidence", {})
+    if address.get("decision") == "conflict":
+        result = checker.StateResult(org.organization_name, org.ein, "ME", "Unable to Confirm", detail_url)
+        result.address_evidence = address
+        result.raw_status_text = "Matching name with unresolved organization-address conflict"
+        result.status_reason = "REGISTRY_ADDRESS_CONFLICT"
+        result.source_note = (f"Maine lists {address['registry_location']}, but the EIN-linked organization record lists "
+                              f"{address['ein_linked_location']}. The name-only match requires identity confirmation.")
+        result.success = False
+        return result
     detail_text = ""
     try:
         detail_response = best_opener.open(detail_url, timeout=ME_FAST_DIRECT_DETAIL_TIMEOUT_SECONDS)
@@ -6739,7 +6865,8 @@ def me_result_from_search(org, best_row, best_opener, checked_any, last_error):
         result.source_note += f" Last non-fatal direct-confirmation detail error: {last_error}"
     result.success = True
     result.error = ""
-    setattr(result, "_cc_detail_body", " ".join(part for part in [detail_text, " ".join(best_row.values())] if part))
+    result.address_evidence = address
+    setattr(result, "_cc_detail_body", " ".join(part for part in [detail_text, " ".join(value for value in best_row.values() if isinstance(value, str))] if part))
     return result
 
 
@@ -9185,6 +9312,19 @@ def ct_prioritized_name_variants(original_name: str, variants: list[str]) -> lis
     return prioritized
 
 
+def equivalent_name_queries(original_name: str, ein: str) -> list[str]:
+    """One useful retrieval spelling per complete approved identity."""
+    queries, seen = [], set()
+    for value in [original_name, *known_names_for_ein(ein)]:
+        query = re.sub(r"(?:,?\s+(?:inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited))+$", "", value.strip(), flags=re.I)
+        query = re.sub(r"[.'\u2019]", "", canonical_name_punctuation(query))
+        query = re.sub(r"[^\w\s&-]", " ", query)
+        query = re.sub(r"\s+", " ", query).strip()
+        if query and query.casefold() not in seen:
+            queries.append(query); seen.add(query.casefold())
+    return queries
+
+
 def search_ct_direct(org):
     url = "https://www.elicense.ct.gov/lookup/licenselookup.aspx"
     original_name = org.organization_name
@@ -9205,7 +9345,8 @@ def search_ct_direct(org):
         include_compact_legal_suffixes=True,
         include_leading_article_variants=True,
         max_queries=CT_NAME_VARIANT_LIMIT * 2,
-    ))[:CT_NAME_VARIANT_LIMIT]
+    ))
+    variants = list(dict.fromkeys([*equivalent_name_queries(original_name, org.ein), *variants]))[:CT_NAME_VARIANT_LIMIT]
     best_result = None
     best_score = -10000
     saw_zero_results = False
@@ -9250,7 +9391,7 @@ def search_ct_direct(org):
             if result and (best_result is None or result.selection_rank > best_result.selection_rank):
                 best_result = result
                 best_score = score
-        if best_result:
+        if best_result and public_status(best_result) not in {"Closed / Withdrawn / Canceled", "Revoked", "Suspended"}:
             best_result.queries_attempted = list(searched_variants)
             best_result.source_attempts = [
                 f"Connecticut attempted prioritized name queries: {', '.join(searched_variants)}."
@@ -12793,8 +12934,10 @@ def wi_reader_url(source_url: str) -> str:
     return f"{WI_READER_BASE_URL}{source_url}"
 
 
-def wi_reader_text(source_url: str, no_cache: bool = False) -> str:
+def wi_reader_text(source_url: str, no_cache: bool = False, deadline: float | None = None) -> str:
     for attempt in range(3):
+        remaining = deadline - time.perf_counter() if deadline else WI_READER_TIMEOUT_SECONDS
+        if remaining <= 0: return ""
         try:
             headers = {
                 "User-Agent": "Mozilla/5.0 CharityClarity-WI/1.0",
@@ -12803,7 +12946,7 @@ def wi_reader_text(source_url: str, no_cache: bool = False) -> str:
             if no_cache or attempt:
                 headers["X-No-Cache"] = "true"
             request = urllib.request.Request(wi_reader_url(source_url), headers=headers)
-            with urllib.request.urlopen(request, timeout=WI_READER_TIMEOUT_SECONDS) as response:
+            with urllib.request.urlopen(request, timeout=min(WI_READER_TIMEOUT_SECONDS, remaining)) as response:
                 return response.read().decode("utf-8", errors="replace")
         except Exception:
             if attempt < 2:
@@ -13290,7 +13433,15 @@ def wi_search_names_for_org(org) -> list[str]:
     early = list(dict.fromkeys([*possessive_search_phrases(original_query),
                                *([original_query] if original_query not in filtered_names else [])]))
     filtered_names = [value for value in early if value] + [value for value in filtered_names if value not in early]
-    return filtered_names
+    # Preserve established structural probes, but spend the first slots on
+    # distinct approved identities before case/suffix variants of one name.
+    prioritized = [*equivalent_name_queries(original_name, org.ein), *filtered_names]
+    queries, seen = [], set()
+    for value in prioritized:
+        key = value.casefold()
+        if key not in seen:
+            queries.append(value); seen.add(key)
+    return queries
 
 
 def wi_snapshot_generated_datetime(snapshot: dict) -> datetime | None:
@@ -13710,6 +13861,8 @@ def explicit_acronym_alias_matches_registry(original_name: str, registry_name: s
 
 
 def wi_live_candidate_name_is_safe(registry_name: str, target_names: list[str], original_name: str, ein: str) -> bool:
+    if not reviewed_name_candidate_is_safe(registry_name, original_name, ein):
+        return False
     # A shared acronym alone cannot replace the full organization identity.
     explicit_acronyms = [part.strip() for part in re.split(r"[/|]", original_name or "") if re.fullmatch(r"[A-Z]{3,8}", part.strip())]
     if normalized_match_name(registry_name).upper() in explicit_acronyms and len(normalized_match_name(original_name).split()) >= 3:
@@ -13820,10 +13973,11 @@ def wi_candidate_from_row_html(row_html: str, target_names: list[str], original_
     href_match = re.search(r"<a[^>]+href=[\"']([^\"']+)[\"']", row_html, re.I)
     href = html.unescape(href_match.group(1)) if href_match else ""
     expiration_date = parse_due_date(expiration_text)
-    detail_status = wi_http_detail_status(href)
+    detail_text = wi_http_detail_text(href)
+    detail_status = wi_extract_detail_status(detail_text)
     if not expiration_date and not wi_status_from_detail_status(detail_status):
         return None
-    return {
+    return wi_verify_candidate_identity({
         "score": score,
         "expiration_date": expiration_date,
         "license_number": license_number,
@@ -13832,7 +13986,7 @@ def wi_candidate_from_row_html(row_html: str, target_names: list[str], original_
         "granted_date": granted_date,
         "detail_href": href,
         "detail_status": detail_status,
-    }
+    }, target_names, original_name, ein, detail_text)
 
 
 def wi_candidate_from_markdown_row(row_text: str, target_names: list[str], original_name: str = "", ein: str = "") -> dict | None:
@@ -13853,10 +14007,11 @@ def wi_candidate_from_markdown_row(row_text: str, target_names: list[str], origi
     if score < 4 and not wi_contains_full_target_name(registry_name, target_names):
         return wi_foundation_identity_review(registry_name, original_name, license_number, detail_href, expiration_text)
     expiration_date = parse_due_date(expiration_text)
-    detail_status = wi_reader_detail_status(detail_href)
+    detail_text = wi_reader_text(urljoin(WI_SEARCH_URL, detail_href), no_cache=True) if detail_href else ""
+    detail_status = wi_extract_detail_status(detail_text)
     if not expiration_date and not wi_status_from_detail_status(detail_status):
         return None
-    return {
+    return wi_verify_candidate_identity({
         "score": score,
         "expiration_date": expiration_date,
         "license_number": license_number,
@@ -13865,15 +14020,50 @@ def wi_candidate_from_markdown_row(row_text: str, target_names: list[str], origi
         "granted_date": granted_date,
         "detail_href": detail_href,
         "detail_status": detail_status,
-    }
+    }, target_names, original_name, ein, detail_text)
+
+
+def wi_verify_candidate_identity(candidate: dict, targets: list[str], original: str, ein: str, detail: str) -> dict | None:
+    """Verify the credential's primary entity, not an isolated search-row alias."""
+    primary = re.search(r"\bName\s*:\s*(.*?)\s+Credential\s+Type\s*:", detail, re.I)
+    number = re.search(r"\bCredential\s+Number\s*:\s*([\d-]+)", detail, re.I)
+    if not primary or not number or number[1] != candidate["license_number"]:
+        return dict(candidate, identity_conflict=True, identity_detail_unavailable=True)
+    if not wi_live_candidate_name_is_safe(primary[1], targets, original, ein):
+        if normalized_match_name(candidate.get("registry_name", "")) == normalized_match_name(original):
+            return dict(candidate, identity_conflict=True)
+        return None
+    location = re.search(r"\bLocation\s*:\s*(.*?)\s+Status\b", detail, re.I)
+    address = registry_address_evidence(ein, location[1] if location else candidate.get("location", ""))
+    if address["decision"] == "conflict" and candidate.get("location"):
+        alternate_address = registry_address_evidence(ein, candidate["location"])
+        if alternate_address["decision"] == "corroborated":
+            address = dict(alternate_address, other_registry_location=location[1] if location else "",
+                basis="The same verified credential lists multiple locations; its search-row location agrees with the EIN-linked organization record.")
+    return dict(candidate, primary_registry_name=primary[1], address_evidence=address,
+                identity_conflict=address["decision"] in {"conflict", "different_ein"},
+                identity_preference=registry_identity_preference(primary[1], original, ein))
 
 
 def wi_better_candidate(candidate: dict, best_match: dict | None) -> bool:
     if not best_match:
         return True
+    # A failed detail read for a newer equivalent credential cannot make an
+    # older expired/revoked credential the conclusive answer.
+    same_name = normalized_match_name(candidate.get("registry_name", "")) == normalized_match_name(best_match.get("registry_name", ""))
+    if same_name:
+        candidate_date, best_date = candidate.get("expiration_date") or date.min, best_match.get("expiration_date") or date.min
+        if candidate.get("identity_detail_unavailable") and candidate_date > best_date and wi_status_from_detail_status(best_match.get("detail_status", "")) != "Current":
+            return True
+        if best_match.get("identity_detail_unavailable") and best_date > candidate_date and wi_status_from_detail_status(candidate.get("detail_status", "")) != "Current":
+            return False
+    if bool(candidate.get("identity_conflict")) != bool(best_match.get("identity_conflict")):
+        return not candidate.get("identity_conflict")
     if candidate["score"] > best_match["score"]:
         return True
     if candidate["score"] == best_match["score"]:
+        if candidate.get("identity_preference", 0) != best_match.get("identity_preference", 0):
+            return candidate.get("identity_preference", 0) > best_match.get("identity_preference", 0)
         candidate_name = normalized_match_name(candidate.get("registry_name", ""))
         best_name = normalized_match_name(best_match.get("registry_name", ""))
         if candidate_name and candidate_name == best_name:
@@ -14006,50 +14196,53 @@ def wi_best_match_from_markdown(result_text: str, target_names: list[str], best_
     return best_match
 
 
-def wi_reader_search_best_match(search_names: list[str], target_names: list[str], deadline: float | None = None, no_cache: bool = False, original_name: str = "", ein: str = "") -> tuple[dict | None, bool]:
+def wi_reader_search_best_match(search_names: list[str], target_names: list[str], deadline: float | None = None, no_cache: bool = False, original_name: str = "", ein: str = "", progress: dict | None = None) -> tuple[dict | None, bool]:
     best_match = None
     reader_reached = False
     for search_name in search_names:
+        if progress is not None and search_name in progress["completed"]: continue
         if deadline and time.perf_counter() >= deadline:
             break
         source_url = f"{WI_RESULTS_URL}?{urlencode({'CredentialType': '800', 'FirmName': search_name, 'LicenseNumber': ''})}"
-        result_text = wi_reader_text(source_url, no_cache=no_cache)
-        if re.search(r"Organization Search Results|Search Parameters|Total Search Results", result_text or "", re.I):
+        if progress is not None and search_name not in progress["attempted"]: progress["attempted"].append(search_name)
+        result_text = wi_reader_text(source_url, no_cache=True, deadline=deadline)
+        if re.search(r"\|\s*\d+-800\s*\||There\s+are\s+no\s+query\s+results|No\s+query\s+results", result_text or "", re.I):
             reader_reached = True
+            if progress is not None: progress["completed"].add(search_name)
         best_match = wi_best_match_from_markdown(result_text, target_names, best_match, original_name, ein)
     return best_match, reader_reached
 
 
-def wi_confirm_clean_no_results_page(org, max_seconds: float = 14.0):
+def wi_confirm_clean_no_results_page(org, max_seconds: float = 14.0, progress: dict | None = None):
     deadline = time.perf_counter() + max(3.0, max_seconds)
-    for search_name in (wi_search_names_for_org(org) or [org.organization_name])[:3]:
+    progress = progress if progress is not None else {"attempted": [], "completed": set()}
+    required = list(dict.fromkeys([*equivalent_name_queries(org.organization_name, org.ein),
+                                  *(wi_search_names_for_org(org) or [org.organization_name])[:WI_DIRECT_VARIANT_LIMIT]]))
+    for search_name in required:
+        if search_name in progress["completed"]: continue
         if time.perf_counter() >= deadline:
             break
         source_url = f"{WI_RESULTS_URL}?{urlencode({'CredentialType': '800', 'FirmName': search_name, 'LicenseNumber': ''})}"
-        result_text = wi_reader_text(source_url, no_cache=True)
+        if search_name not in progress["attempted"]: progress["attempted"].append(search_name)
+        result_text = wi_reader_text(source_url, no_cache=True, deadline=deadline)
         if not result_text:
             continue
         if re.search(r"Organization\s+Search\s+Results|Search\s+Parameters|Charitable\s+Organization", result_text, re.I):
             if re.search(r"There\s+are\s+no\s+query\s+results|No\s+query\s+results", result_text, re.I):
-                result = checker.StateResult(
-                    org.organization_name,
-                    org.ein,
-                    "WI",
-                    checker.STATUS_NOT_REGISTERED,
-                    source_url,
-                )
-                result.raw_status_text = "No matching Wisconsin charitable organization credential"
-                result.source_note = (
-                    "Wisconsin DFI returned an Organization Search Results page with no query results "
-                    "for the high-signal organization name searched."
-                )
-                result.success = True
-                return result
+                progress["completed"].add(search_name)
+                continue
             return None
+    if required and set(required).issubset(progress["completed"]):
+        result = checker.StateResult(org.organization_name, org.ein, "WI", checker.STATUS_NOT_REGISTERED, WI_SEARCH_URL)
+        result.raw_status_text = "No matching Wisconsin charitable organization credential"
+        result.source_note = "Wisconsin completed all required organization-name queries without a qualifying credential."
+        result.queries_attempted = list(progress["attempted"])
+        result.success = True
+        return result
     return None
 
 
-def wi_http_search_best_match(search_names: list[str], target_names: list[str], deadline: float | None = None, original_name: str = "", ein: str = "") -> tuple[dict | None, bool]:
+def wi_http_search_best_match(search_names: list[str], target_names: list[str], deadline: float | None = None, original_name: str = "", ein: str = "", progress: dict | None = None) -> tuple[dict | None, bool]:
     best_match = None
     http_reached = False
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
@@ -14061,19 +14254,23 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str], 
         return None, http_reached
 
     for search_name in search_names:
+        if progress is not None and search_name in progress["completed"]: continue
         if deadline and time.perf_counter() >= deadline:
             break
         try:
+            if progress is not None and search_name not in progress["attempted"]: progress["attempted"].append(search_name)
             direct_url = f"{WI_RESULTS_URL}?{urlencode({'CredentialType': '800', 'LicenseNumber': '', 'FirmName': search_name})}"
             request = urllib.request.Request(direct_url, headers=wi_request_headers())
             with opener.open(request, timeout=WI_HTTP_TIMEOUT_SECONDS) as response:
                 result_html = response.read().decode("utf-8", errors="replace")
-            if wi_result_html_requires_verification(result_html):
+            if wi_result_html_requires_verification(result_html) or not wi_has_complete_results(result_html):
                 continue
             http_reached = True
+            if progress is not None: progress["completed"].add(search_name)
             best_match = wi_best_match_from_html(result_html, target_names, best_match, original_name, ein)
-            if best_match and best_match.get("unique_full_identity") and best_match.get("expiration_date"):
+            if best_match and not best_match.get("identity_conflict") and best_match.get("unique_full_identity") and best_match.get("expiration_date"):
                 return best_match, http_reached
+            continue
         except Exception:
             pass
 
@@ -14096,9 +14293,10 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str], 
             )
             with opener.open(request, timeout=WI_HTTP_TIMEOUT_SECONDS) as response:
                 result_html = response.read().decode("utf-8", errors="replace")
-            if wi_result_html_requires_verification(result_html):
+            if wi_result_html_requires_verification(result_html) or not wi_has_complete_results(result_html):
                 continue
             http_reached = True
+            if progress is not None: progress["completed"].add(search_name)
         except Exception:
             continue
 
@@ -14106,13 +14304,20 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str], 
     return best_match, http_reached
 
 
-def search_wi(page, org, max_seconds: float | None = None):
+def wi_has_complete_results(source: str) -> bool:
+    return bool(re.search(r'There\s+are\s+no\s+query\s+results|No\s+query\s+results', source or '', re.I)
+                or ('OrgCredentialSearch_gvCredentialSearchResults' in (source or '')
+                    and re.search(r'<td\b[^>]*>\s*\d+-800\s*</td>', source or '', re.I)))
+
+
+def search_wi(page, org, max_seconds: float | None = None, progress: dict | None = None):
     result = checker.StateResult(org.organization_name, org.ein, "WI", checker.STATUS_UNKNOWN, WI_SEARCH_URL)
     searched_names = wi_search_names_for_org(org) or [org.organization_name]
     started = time.perf_counter()
     deadline = started + (max_seconds if max_seconds is not None else WI_LOOKUP_MAX_SECONDS)
     direct_names = searched_names[:WI_DIRECT_VARIANT_LIMIT]
-    result.queries_attempted = list(direct_names)
+    progress = progress if progress is not None else {"attempted": [], "completed": set()}
+    result.queries_attempted = progress["attempted"]
     original_name = getattr(org, "original_organization_name", org.organization_name)
     ein = getattr(org, "ein", "") or ""
 
@@ -14122,12 +14327,13 @@ def search_wi(page, org, max_seconds: float | None = None):
     wi_http_reached = False
     target_names = organization_match_target_variants(org.organization_name, org.ein)
     try:
-        best_match, wi_http_reached = wi_http_search_best_match(direct_names, target_names, deadline, original_name=original_name, ein=ein)
+        best_match, wi_http_reached = wi_http_search_best_match(direct_names, target_names, deadline, original_name=original_name, ein=ein, progress=progress)
         if not best_match:
-            best_match, wi_reader_reached = wi_reader_search_best_match(direct_names, target_names, deadline, original_name=original_name, ein=ein)
+            best_match, wi_reader_reached = wi_reader_search_best_match(direct_names, target_names, deadline, original_name=original_name, ein=ein, progress=progress)
 
         if not best_match and page is not None and time.perf_counter() < deadline and WI_BROWSER_VARIANT_LIMIT > 0:
             for search_name in searched_names[:WI_BROWSER_VARIANT_LIMIT]:
+                if search_name in progress["completed"]: continue
                 if time.perf_counter() >= deadline:
                     break
                 page.goto(WI_SEARCH_URL, wait_until="domcontentloaded", timeout=min(30000, int(max(5000, (deadline - time.perf_counter()) * 1000))))
@@ -14151,6 +14357,7 @@ def search_wi(page, org, max_seconds: float | None = None):
                     return result
                 input_box.fill("")
                 input_box.fill(search_name)
+                if search_name not in progress["attempted"]: progress["attempted"].append(search_name)
 
                 try:
                     page.locator("#ctl00_cphMainContent_btnSearch").click(timeout=5000)
@@ -14162,6 +14369,7 @@ def search_wi(page, org, max_seconds: float | None = None):
                 except Exception:
                     pass
                 last_body = registry_page_body(page)
+                if wi_has_complete_results(page.content()): progress["completed"].add(search_name)
 
                 best_match = wi_best_match_from_html(
                     page.content(), target_names, best_match, original_name, ein
@@ -14169,20 +14377,21 @@ def search_wi(page, org, max_seconds: float | None = None):
 
         if not best_match and time.perf_counter() < deadline:
             retry_names = direct_names[: min(5, len(direct_names))]
-            retry_match, retry_reached = wi_reader_search_best_match(retry_names, target_names, deadline, no_cache=True, original_name=original_name, ein=ein)
+            retry_match, retry_reached = wi_reader_search_best_match(retry_names, target_names, deadline, no_cache=True, original_name=original_name, ein=ein, progress=progress)
             wi_reader_reached = wi_reader_reached or retry_reached
             if retry_match:
                 best_match = retry_match
 
         if not best_match and time.perf_counter() < deadline and not (wi_reader_reached or wi_http_reached):
-            best_match, reached = wi_reader_search_best_match(direct_names, target_names, deadline, no_cache=True, original_name=original_name, ein=ein)
+            best_match, reached = wi_reader_search_best_match(direct_names, target_names, deadline, no_cache=True, original_name=original_name, ein=ein, progress=progress)
             if not best_match:
-                best_match, reached_http = wi_http_search_best_match(direct_names, target_names, deadline, original_name=original_name, ein=ein)
+                best_match, reached_http = wi_http_search_best_match(direct_names, target_names, deadline, original_name=original_name, ein=ein, progress=progress)
                 wi_http_reached = wi_http_reached or reached_http
             wi_reader_reached = wi_reader_reached or reached
 
         if not best_match:
-            if wi_reader_reached or wi_http_reached:
+            required = set(equivalent_name_queries(original_name, ein)) | set(direct_names)
+            if required and required.issubset(progress["completed"]):
                 result.raw_status_text = "No matching Wisconsin charitable organization credential"
                 result.status = checker.STATUS_NOT_REGISTERED
                 result.source_note = "Wisconsin DFI returned no matching Charitable Organization credential for the organization name searched."
@@ -14220,9 +14429,17 @@ def search_wi(page, org, max_seconds: float | None = None):
             result.status = "Unable to Confirm"
             result.raw_status_text = "Wisconsin credential names require identity confirmation"
             result.source_note = "The search found a credential with conflicting organization names, but its primary detail record could not confirm the requested organization. This is not an empty registry search."
+            address = best_match.get("address_evidence", {})
+            if address.get("decision") == "conflict":
+                result.address_evidence = address
+                result.status_reason = "REGISTRY_ADDRESS_CONFLICT"
+                result.source_note = (f"Wisconsin credential {best_match['license_number']} lists {address['registry_location']}, "
+                    f"but the EIN-linked organization record lists {address['ein_linked_location']}. "
+                    "The address conflict could not be resolved, so this name-only record has not been accepted as the requested organization.")
             result.success = False
             return result
         detail_status = best_match.get("detail_status", "")
+        result.address_evidence = best_match.get("address_evidence", {})
         if best_match.get("detail_href") and page is not None:
             try:
                 page.goto(
@@ -14684,6 +14901,7 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         "computed_due_date",
         "ma_filing_evidence",
         "tax_period_evidence",
+        "address_evidence",
         "ny_filing_evidence",
         "mn_alias_evidence",
         "va_entity_evidence",
@@ -17409,18 +17627,22 @@ def comment_registry_status(raw: str, status: str) -> str:
 
 
 def comments_for_result_base(result, body: str, public_facing_status: str) -> str:
+    if getattr(result, "status_reason", "") == "REGISTRY_ADDRESS_CONFLICT":
+        return result.source_note
     evidence = getattr(result, "tax_period_evidence", {})
     if result.state in {"KY", "HI"} and evidence and getattr(result, "status_reason", "") == f"{result.state}_CONFIRMED_TAX_PERIOD":
         state_name = "Kentucky" if result.state == "KY" else "Hawaii"
         due = parse_due_date(evidence["irs_base_due"])
         timing = ("Kentucky requires the state copy when the return is filed with the IRS." if result.state == "KY" else
                   "Hawaii requires the state copy within 10 business days after the return is actually filed with the IRS; the IRS date below is a planning reference, not a separately confirmed Hawaii deadline.")
-        return (f"{state_name} lists tax year {evidence['tax_year_label']}. The corresponding return covers "
+        period_description = "The assumed period runs" if evidence.get("period_assumed") else "The corresponding return covers"
+        transition = evidence.get("transition_basis", "")
+        return (f"{state_name} lists tax year {evidence['tax_year_label']}. {period_description} "
                 f"{format_date(parse_due_date(evidence['period_begin']))} through {format_date(parse_due_date(evidence['period_end']))}. "
-                f"The next annual period ends {format_date(parse_due_date(evidence['next_period_end']))}, with an IRS base deadline of {format_date(due)}. "
+                f"The next required period ends {format_date(parse_due_date(evidence['next_period_end']))}, with an IRS base deadline of {format_date(due)}. "
                 f"{comment_date_conclusion(due, public_facing_status)} {timing} No IRS extension has been assumed. "
                 "An earlier IRS filing can trigger the state submission requirement earlier. "
-                f"Period evidence: {evidence['period_basis']}. IRS information is used to interpret the period; the state’s own listing establishes the year on record.")
+                f"Period evidence: {evidence['period_basis']}. {transition} IRS information is used to interpret the period; the state’s own listing establishes the year on record.")
     if getattr(result, "status_reason", "") in {"KY_TAX_PERIOD_UNCONFIRMED", "HI_TAX_PERIOD_UNCONFIRMED"}:
         state_name = "Kentucky" if result.state == "KY" else "Hawaii"
         return f"{state_name} lists a filing-year label, but the corresponding annual return period could not be confirmed or was a short tax year. CharityClarity cannot safely infer the next annual deadline from that label. Confirm the period on the filed Form 990."
@@ -18068,7 +18290,7 @@ def search_ky_strict_snapshot(org):
             match_score = target_name_score(candidate_name, targets)
             if not ky_snapshot_registry_name_is_safe(candidate_name, targets, org.organization_name, org.ein) and score < 900:
                 continue
-            composite_score = (score, match_score, len(registry_norm.split()))
+            composite_score = (score, match_score, registry_identity_preference(candidate_name, org.organization_name, org.ein))
             if composite_score > best_score:
                 best_score = composite_score
                 best = (registry_id, registry_name, filed_year, record_text)
@@ -18108,11 +18330,12 @@ def search_ky_strict_snapshot(org):
     )
     if filed_year and re.fullmatch(r"20\d{2}", filed_year):
         evidence = irs_period_for_label(org.ein, int(filed_year), time.monotonic() + 14.0)
-        if evidence:
-            evidence.update(state_source_url=downloadable_data_info("KY").get("source_url", ""))
-            evidence.setdefault("period_basis", "IRS return with the same tax-year label shown by Kentucky")
-            annotate_irs_based_state_period(result, evidence)
-        if (evidence and not hasattr(result, "tax_period_evidence")) or (not evidence and fiscal_end != (12, 31)):
+        if not evidence:
+            evidence = assumed_calendar_period(org.ein, int(filed_year), downloadable_data_info("KY").get("source_url", ""))
+        evidence.update(state_source_url=downloadable_data_info("KY").get("source_url", ""))
+        evidence.setdefault("period_basis", "IRS return with the same tax-year label shown by Kentucky")
+        annotate_irs_based_state_period(result, evidence)
+        if not hasattr(result, "tax_period_evidence"):
             result.status = "Unable to Confirm"
             result.status_reason = "KY_TAX_PERIOD_UNCONFIRMED"
             result.raw_status_text = f"Yr Last Filed: {filed_year} | KY ID: {registry_id} | Corresponding fiscal period not confirmed"
@@ -18467,7 +18690,7 @@ def search_nh_live_pdf(org):
                 continue
             if not safe_match:
                 continue
-            composite = (max(score, 450), len(normalized_match_name(registry_name).split()), registry_exact_active_tiebreak(registry_name, targets, "Good Standing" if record.get("status_code") == "G" else ""))
+            composite = (max(score, 450), registry_identity_preference(registry_name, original_name, org.ein), registry_exact_active_tiebreak(registry_name, targets, "Good Standing" if record.get("status_code") == "G" else ""))
             if composite > best_score:
                 best_score = composite
                 best_candidate = (record, registry_name)
@@ -22144,7 +22367,8 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
         return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
     if state == "WI":
         wi_deadline = lookup_started + min(WI_LOOKUP_MAX_SECONDS, 60.0)
-        result = search_wi(None, org, max_seconds=min(24.0, max(18.0, WI_LOOKUP_MAX_SECONDS / 2.5)))
+        wi_progress = {"attempted": [], "completed": set()}
+        result = search_wi(None, org, max_seconds=min(24.0, max(18.0, WI_LOOKUP_MAX_SECONDS / 2.5)), progress=wi_progress)
         wi_direct_attempt = 1
         while (
             public_status(result) == "Site Not Reachable"
@@ -22158,6 +22382,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 None,
                 org,
                 max_seconds=min(14.0, max(8.0, wi_deadline - time.perf_counter())),
+                progress=wi_progress,
             )
             if public_status(retry_result) != "Site Not Reachable":
                 retry_result.source_note = " ".join(part for part in [
@@ -22195,7 +22420,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 ]).strip()
                 result = sidecar_result
         if public_status(result) == "Site Not Reachable":
-            clean_no_results = wi_confirm_clean_no_results_page(org)
+            clean_no_results = wi_confirm_clean_no_results_page(org, progress=wi_progress)
             if clean_no_results is not None:
                 clean_no_results.source_note = " ".join(part for part in [
                     clean_no_results.source_note or "",
