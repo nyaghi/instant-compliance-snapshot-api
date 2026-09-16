@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.15.7-staging").strip() or "2026.09.15.7-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.15.8-staging").strip() or "2026.09.15.8-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -4401,6 +4401,24 @@ def legal_name_without_corporate_description(name: str) -> str:
         "", name or "", flags=re.I).strip()
 
 
+def reviewed_name_candidate_is_safe(registry_name: str, original_name: str, ein: str = "") -> bool:
+    """An approved alias identifies a full name, not every entity sharing its prefix."""
+    reviewed = known_names_for_ein(ein)
+    if not reviewed:
+        return True
+    # Apply the existing identity rules separately, without alias context letting
+    # one name's broad prefix bypass another name's affiliate/scope safeguards.
+    row_norm = normalized_match_name(registry_name)
+    for target in [original_name, *reviewed]:
+        target_norm = normalized_match_name(target)
+        if (target_norm and row_norm.startswith(target_norm + " ")
+                and distinctive_entity_extension_mismatch(target, registry_name)):
+            continue
+        if registry_name_is_safe_for_org(registry_name, target, ""):
+            return True
+    return False
+
+
 def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: str = "") -> bool:
     registry_name = legal_name_without_corporate_description(clean_registry_name(registry_name or ""))
     original_name = legal_name_without_corporate_description(original_name)
@@ -4408,6 +4426,8 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
         return False
     if is_reviewed_alias(ein, registry_name):
         return True
+    if not reviewed_name_candidate_is_safe(registry_name, original_name, ein):
+        return False
     safe_targets = organization_match_target_variants(original_name, ein)
     if normalized_match_name(registry_name) == normalized_match_name(original_name):
         return True
@@ -9740,6 +9760,8 @@ def search_fl(page, org):
                 row_name = clean_fl_registry_name(row_name)
                 name_score = target_name_score(row_name, safe_targets)
                 if name_score < 0:
+                    continue
+                if not reviewed_name_candidate_is_safe(row_name, original_name, org.ein):
                     continue
                 if re.search(r"\bAdvanced\s+Search\b", row_name, re.I):
                     continue
