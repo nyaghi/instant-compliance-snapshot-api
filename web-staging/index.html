@@ -232,6 +232,7 @@
               <section id="organizationIdentity" class="rounded-xl border border-slate-200 bg-slate-50 p-4" aria-label="Organization name review">
                 <button id="findAlternateNames" type="button" class="w-full rounded-full bg-[#0B2A5B] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">1. Find alternate names</button>
                 <p id="identityMessage" role="status" aria-live="polite" class="mt-3 text-xs leading-relaxed text-slate-600">We’ll check EIN-linked state and IRS records. Review the names before running your checks.</p>
+                <p id="identityElapsed" hidden class="mt-1 text-xs font-semibold text-slate-500"></p>
                 <div id="identityReview" hidden>
                   <h3 class="mt-4 text-sm font-semibold text-[#0B2A5B]">2. Review names, then run CharityClarity</h3>
                   <p id="identitySummary" class="mt-1 text-xs text-slate-600"></p>
@@ -495,7 +496,7 @@
 
         <div>&copy; <span id="year"></span> Compliance Express</div>
 
-          <div class="font-semibold text-slate-600">CharityClarity v2026.09.16.5 &middot; Staging</div>
+          <div class="font-semibold text-slate-600">CharityClarity v2026.09.16.6 &middot; Staging</div>
         <div>No legal or tax advice.</div>
 
       </div>
@@ -507,7 +508,7 @@
 
 
   <script src="/ny-connector.js"></script>
-  <script src="/organization-identity.js"></script>
+  <script src="/organization-identity.js?v=20260916.5-timer"></script>
   <script>
 
     const API_BASE = "https://instant-compliance-snapshot-api-staging-8dnk.onrender.com";

@@ -171,6 +171,29 @@ class ExpandedDiscoveryTests(unittest.TestCase):
         result=c.search_with_name_variants(None,c.checker.Organization(NAME,EIN),search,max_variants=1)
         self.assertEqual(searched[:2],[NAME,'First Responders Childrens Foundation'])
         self.assertEqual(c.public_status(result),'Not Registered')
+    def test_louisiana_full_export_checks_all_reviewed_names_once(self):
+        aliases=tuple(f'Unique Reviewed Identity {i}' for i in range(7));c.REVIEWED_NAME_CONTEXT.set({EIN:aliases})
+        org=c.checker.Organization(NAME,EIN)
+        unrelated=[{'Name':f'Unrelated Charity {i}','Registered Through':'12/31/2027'} for i in range(30)]
+        for match in [False,True]:
+            records=[*unrelated,*([{'Name':aliases[-1],'Registered Through':'12/31/2027'}] if match else [])]
+            with self.subTest(match=match),patch.object(c,'weekly_asset',return_value=Path('fixture.xlsx')),patch.object(c,'la_registered_charities_rows_from_xlsx',return_value=records),patch.object(c,'search_la_downloaded_export',wraps=c.search_la_downloaded_export) as search:
+                result=c.search_with_name_variants(None,org,search,max_variants=10,max_elapsed_seconds=.001)
+                self.assertEqual(c.public_status(result),'Current' if match else 'Not Registered')
+                self.assertEqual(search.call_count,1)
+                if match:self.assertEqual(result.matched_registry_name,aliases[-1])
+                else:self.assertTrue(c.reviewed_identity_queries_completed(result.queries_attempted,[NAME,*aliases]))
+    def test_louisiana_incomplete_export_cannot_certify_no_record(self):
+        c.REVIEWED_NAME_CONTEXT.set({EIN:('Reviewed Alias',)})
+        with patch.object(c,'weekly_asset',return_value=Path('fixture.xlsx')),patch.object(c,'la_registered_charities_rows_from_xlsx',return_value=[]):
+            result=c.search_with_name_variants(None,c.checker.Organization(NAME,EIN),c.search_la_downloaded_export,max_variants=2,max_elapsed_seconds=.001)
+        self.assertNotEqual(c.public_status(result),'Not Registered')
+    def test_louisiana_ein_probe_does_not_count_as_full_name_search(self):
+        records=[{'Name':f'Unrelated Charity {i}'} for i in range(30)]+[{'Name':NAME,'Registered Through':'12/31/2027'}]
+        with patch.object(c,'build_search_queries',return_value=[EIN,NAME]),patch.object(c,'weekly_asset',return_value=Path('fixture.xlsx')),patch.object(c,'la_registered_charities_rows_from_xlsx',return_value=records):
+            result=c.search_with_name_variants(None,c.checker.Organization(NAME,EIN),c.search_la_downloaded_export,max_variants=2)
+        self.assertEqual(c.public_status(result),'Current')
+        self.assertEqual(result.matched_registry_name,NAME)
     def test_shared_name_deadline_cannot_claim_negative_before_reviewed_alias(self):
         c.REVIEWED_NAME_CONTEXT.set({EIN:('First Responders Childrens Foundation',)})
         def search(page,org):

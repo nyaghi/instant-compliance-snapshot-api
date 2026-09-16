@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.16.5-staging").strip() or "2026.09.16.5-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.16.6-staging").strip() or "2026.09.16.6-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -6111,6 +6111,15 @@ def search_with_name_variants(
         result = search_func(page, variant_org)
         if getattr(result, "success", False) and public_status(result) == "Not Registered":
             completed_queries.append(variant)
+            if (variant == original_name and getattr(result, "state", "") == "LA"
+                    and getattr(result, "source_confidence", "") == "official_downloaded_spreadsheet"
+                    and getattr(result, "status_reason", "") == "LA_EXPORT_NO_SAFE_MATCH"):
+                # The complete Louisiana export is already matched against all
+                # reviewed identities together. Repeating it per name adds no
+                # coverage and can exhaust the outer name-search deadline.
+                result.organization_name = original_name
+                result.queries_attempted = [original_name, *known_names_for_ein(org.ein)]
+                return result
         if getattr(result, "organization_name", "") != original_name:
             result.organization_name = original_name
         if public_status(result) == "Site Not Reachable":

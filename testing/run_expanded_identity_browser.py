@@ -4,7 +4,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 W=Path(__file__).resolve().parents[1]
 ORIGIN='https://staging.compliance-express.com'
-HTML='''<input id="organizationName"><input id="ein"><input id="email"><section id="organizationIdentity"><button id="findAlternateNames">Find</button><button id="addAlternateName">Add</button><div id="alternateNameList"></div><p id="identityMessage"></p><div id="identityReview" hidden><p id="identitySummary"></p></div></section>'''
+HTML='''<input id="organizationName"><input id="ein"><input id="email"><section id="organizationIdentity"><button id="findAlternateNames">Find</button><button id="addAlternateName">Add</button><div id="alternateNameList"></div><p id="identityMessage"></p><p id="identityElapsed" hidden></p><div id="identityReview" hidden><p id="identitySummary"></p></div></section>'''
 def item(name,source='California'):
     return {'name':name,'verified':True,'historical':False,'evidence':[{'source':source,'type':'Registered name','url':'https://example.gov','retrieved_at':'2026-09-16'}]}
 
@@ -70,5 +70,34 @@ class IdentityBrowserTests(unittest.TestCase):
         self.assertNotIn('LOCAL-TEST-SECRET',self.page.locator('#results').inner_text())
         self.assertEqual(self.page.evaluate('localStorage.length + sessionStorage.length'),0)
         self.assertEqual(self.page.locator('#settingsFile').input_value(),'')
+    def test_discovery_total_includes_new_york_and_survives_name_review(self):
+        self.page.evaluate("""() => {
+            window.testTime=1000; performance.now=()=>window.testTime;
+            CCNYConnector.lookup=()=>new Promise(resolve=>{window.finishNY=()=>resolve({identity:{complete:true,names:[]}})});
+        }""")
+        self.page.locator('#findAlternateNames').click()
+        self.page.wait_for_function('typeof finishNY === "function"')
+        self.assertFalse(self.page.evaluate('CCIdentity.ready()'))
+        self.assertEqual(self.page.locator('#identityElapsed').inner_text(),'Finding names… 0:00')
+        self.page.evaluate('() => { testTime=43000; finishNY(); }')
+        self.page.wait_for_function('CCIdentity.ready()')
+        self.assertEqual(self.page.locator('#identityElapsed').inner_text(),'Name discovery completed in 0:42')
+        self.page.get_by_label('Alternate name 1',exact=True).fill('Edited Name')
+        self.assertEqual(self.page.locator('#identityElapsed').inner_text(),'Name discovery completed in 0:42')
+        self.assertEqual(self.page.evaluate('CCIdentity.names()'),['Edited Name'])
+        self.page.locator('#ein').fill('98-7654321')
+        self.assertTrue(self.page.locator('#identityElapsed').is_hidden())
+    def test_discovery_timer_restarts_and_reports_failed_attempt_without_success_claim(self):
+        self.discover()
+        self.page.evaluate("""() => {
+            window.testTime=1000; performance.now=()=>window.testTime;
+            window.fetch=()=>new Promise((resolve,reject)=>{window.failDiscovery=()=>reject(Error('test failure'))});
+        }""")
+        self.page.locator('#findAlternateNames').click()
+        self.assertEqual(self.page.locator('#identityElapsed').inner_text(),'Finding names… 0:00')
+        self.page.evaluate('() => { testTime=66000; failDiscovery(); }')
+        self.page.wait_for_function('CCIdentity.ready()')
+        self.assertEqual(self.page.locator('#identityElapsed').inner_text(),'Name discovery stopped after 1:05')
+        self.assertEqual(self.page.evaluate('CCIdentity.names()'),[])
 
 if __name__=='__main__':unittest.main(verbosity=2)

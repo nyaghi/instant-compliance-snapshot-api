@@ -11,12 +11,26 @@
   const message = document.getElementById("identityMessage");
   const review = document.getElementById("identityReview");
   const summary = document.getElementById("identitySummary");
+  const elapsed = document.getElementById("identityElapsed");
   let revision = 0, reviewedIdentity = "", rows = [], busy = false, controller;
+  let discoveryStartedAt = 0, discoveryInterval;
   const identity = () => `${einInput.value.replace(/\D/g, "")}|${nameInput.value.trim()}`;
   const changed = () => window.dispatchEvent(new Event("cc-identity-change"));
   const text = (tag, value, cls) => { const node = document.createElement(tag); node.textContent = value; if (cls) node.className = cls; return node; };
+  function discoveryTime() {
+    const seconds = Math.max(0, Math.floor((performance.now() - discoveryStartedAt) / 1000));
+    return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+  }
+  function startDiscoveryTimer() {
+    clearInterval(discoveryInterval); discoveryStartedAt = performance.now();
+    if (!elapsed) return;
+    elapsed.hidden = false; elapsed.textContent = "Finding names… 0:00";
+    discoveryInterval = setInterval(() => { elapsed.textContent = `Finding names… ${discoveryTime()}`; }, 1000);
+  }
   function invalidate() {
     revision++; controller?.abort(); reviewedIdentity = ""; rows = [];
+    clearInterval(discoveryInterval);
+    if (elapsed) { elapsed.hidden = true; elapsed.textContent = ""; }
     list.replaceChildren(); review.hidden = true; find.disabled = busy;
     find.textContent = "1. Find alternate names";
     message.textContent = "We’ll check EIN-linked state and IRS records. Review the names before running your checks.";
@@ -76,6 +90,8 @@
       document.getElementById("email")?.focus(); return;
     }
     const requestIdentity = identity(), requestRevision = ++revision;
+    let discoveryCompleted = false;
+    startDiscoveryTimer();
     reviewedIdentity = ""; find.disabled = true; find.textContent = "Finding alternate names…";
     nameInput.disabled = true; einInput.disabled = true;
     message.textContent = "Checking EIN-linked records in 15 states and the IRS. Some sources may take longer…"; changed();
@@ -116,6 +132,7 @@
       message.textContent = limitations.length ? `Some sources were unavailable. You can review the names found, add names, and continue. ${limitations.join(" ")}` :
         rows.length ? "Review the names below. Keep only names that belong to this organization." : "No additional names were confirmed. You can add names or continue with your entered name.";
       reviewedIdentity = requestIdentity;
+      discoveryCompleted = true;
     } catch (error) {
       if (requestRevision !== revision || requestIdentity !== identity()) return;
       rows = []; reviewedIdentity = requestIdentity;
@@ -124,6 +141,8 @@
       clearTimeout(timeout);
       nameInput.disabled = busy; einInput.disabled = busy;
       if (requestRevision === revision) {
+        clearInterval(discoveryInterval);
+        if (elapsed) elapsed.textContent = discoveryCompleted ? `Name discovery completed in ${discoveryTime()}` : `Name discovery stopped after ${discoveryTime()}`;
         find.disabled = busy; find.textContent = "Find names again"; review.hidden = !reviewedIdentity;
         summary.textContent = `${nameInput.value.trim()} · EIN ${einInput.value.trim()}`;
         render(); changed();
