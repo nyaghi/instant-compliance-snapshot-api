@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.16.4-staging").strip() or "2026.09.16.4-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.16.5-staging").strip() or "2026.09.16.5-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -9686,8 +9686,15 @@ def reviewed_queries_first(original_name: str, ein: str, generated: list[str], *
 
 
 def reviewed_identity_queries_completed(completed_queries, required_queries) -> bool:
-    completed = {identity_name_key(query) for query in completed_queries}
-    return all(identity_name_key(query) in completed for query in required_queries)
+    # Compare the same complete-name retrieval spelling on both sides. Some
+    # adapters submit the original punctuation while others submit its supported
+    # spelling (for example C/O -> C O); neither is a missing identity search.
+    # This does not count a shorter probe as a completed full-name search.
+    def key(query):
+        spellings = equivalent_name_queries(query, "")
+        return identity_name_key(spellings[0]) if spellings else ""
+    completed = {key(query) for query in completed_queries if key(query)}
+    return all(key(query) and key(query) in completed for query in required_queries)
 
 
 def search_ct_direct(org):
@@ -19955,7 +19962,7 @@ def search_batch_browser_state(page, org, state: str):
             if cleaned and not ms_search_variant_too_broad(cleaned):
                 priority_variants.append(cleaned)
         variants = list(dict.fromkeys([*priority_variants, *variants]))
-        variants = variants[:6]
+        variants = reviewed_queries_first(org.organization_name, org.ein, variants, limit=6)
         if not variants:
             external_result = module.SearchResult(
                 organization_name=org.organization_name,
@@ -19967,16 +19974,19 @@ def search_batch_browser_state(page, org, state: str):
             return copy_external_result(org, state, external_result)
         best_external = None
         completed_identity_queries = []
-        ms_deadline = time.perf_counter() + 32.0
+        attempted_identity_queries = []
+        required_queries = equivalent_name_queries(org.organization_name, org.ein) if known_names_for_ein(org.ein) else []
+        ms_deadline = time.perf_counter() + max(32.0, min(60.0, 8.0 + 6.0 * len(required_queries)))
         for attempt_index, variant_name in enumerate(variants or [org.organization_name]):
             if time.perf_counter() >= ms_deadline:
                 break
             module_org = module.Organization(organization_name=variant_name)
             module_org.ein = org.ein
             module_org.original_organization_name = getattr(org, "original_organization_name", org.organization_name)
+            attempted_identity_queries.append(variant_name)
             external_result = search_ms_fast(page, module_org, navigate=True)
             best_external = best_external or external_result
-            status = external_status_to_checker_status(getattr(external_result, "status", ""))
+            status = public_status(external_status_to_checker_status(getattr(external_result, "status", "")))
             raw_text = " ".join([
                 getattr(external_result, "raw_status_text", "") or "",
                 getattr(external_result, "source_note", "") or "",
@@ -19984,7 +19994,7 @@ def search_batch_browser_state(page, org, state: str):
             if status == "Site Not Reachable":
                 best_external = external_result
                 break
-            if status == "Unknown":
+            if status.lower() in {"unknown", "unable to verify", "unable to confirm", "needs review"}:
                 continue
             if status == "Not Registered" or re.search(r"\b(no matching organization row|no results found)\b", raw_text, re.I):
                 completed_identity_queries.append(variant_name)
@@ -20000,11 +20010,15 @@ def search_batch_browser_state(page, org, state: str):
             best_external = external_result
             break
         external_result = best_external
-        if (known_names_for_ein(org.ein) and external_result is not None
-                and external_status_to_checker_status(getattr(external_result, "status", "")) == "Not Registered"
-                and not reviewed_identity_queries_completed(completed_identity_queries, equivalent_name_queries(org.organization_name, org.ein))):
+        if external_result is not None:
+            external_result.queries_attempted = attempted_identity_queries
+        if (required_queries and external_result is not None
+                and public_status(external_status_to_checker_status(getattr(external_result, "status", ""))) == "Not Registered"
+                and not reviewed_identity_queries_completed(completed_identity_queries, required_queries)):
             external_result.status = "Unable to Verify"
             external_result.success = False
+            external_result.raw_status_text = "Mississippi reviewed-name search incomplete"
+            external_result.source_confidence = "incomplete_search"
             external_result.source_note = "Mississippi did not complete searches for all reviewed identities within the lookup window; non-registration was not established."
     elif state == "OK":
         external_result = search_ok_with_variants(page, org, module)
@@ -21814,10 +21828,12 @@ def search_wv_precise(page, org):
         searched_queries: list[str] = []
         completed_queries: list[str] = []
         saw_result_rows = False
-        deadline = time.perf_counter() + WV_LOOKUP_MAX_SECONDS
         planned_queries = reviewed_queries_first(org.organization_name, org.ein,
             wv_preferred_query_variants(org.organization_name, org.ein), limit=WV_QUERY_LIMIT)
         required_queries = equivalent_name_queries(org.organization_name, org.ein) if known_names_for_ein(org.ein) else []
+        # Reviewed identities add real queries; keep a bounded allowance for them
+        # without changing the established small-name-list lookup window.
+        deadline = time.perf_counter() + max(WV_LOOKUP_MAX_SECONDS, min(60.0, 5.0 + 6.0 * len(required_queries)))
         for query_name in planned_queries:
             if time.perf_counter() >= deadline:
                 break
