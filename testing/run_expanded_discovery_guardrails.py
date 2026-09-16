@@ -39,6 +39,17 @@ class ExpandedDiscoveryTests(unittest.TestCase):
             r=c.identity_nm_names(EIN,time.monotonic()+1)
             self.assertEqual([n['name'] for n in r['names']],["National Law Enforcement and Firefighters Children's Association"])
             with self.assertRaises(ValueError):c.identity_nm_names('131624103',time.monotonic()+1)
+    def test_massachusetts_duplicate_label_is_not_an_identity(self):
+        self.assertIsNone(c.identity_new_source_candidate('DUPLICATE OF #051545','MA','Registered name','https://state'))
+        self.assertIsNotNone(c.identity_new_source_candidate('Duplicate Foundation','MA','Registered name','https://state'))
+    def test_maryland_retains_legal_and_earlier_dbas_without_truncated_last_entry(self):
+        row={'f_aedd5545-808f-4725-9b1d-5fa61e994a75':'Example Foundation','view_data':{'content_element_data':{
+            'ein':'<strong>Charity EIN:</strong><var>05-0536854</var>',
+            'dba':'<strong>Charity DBA Name(s):</strong><var>Complete Alias,Kesem Nationa</var>'}}}
+        with patch.object(c,'identity_fetch',return_value=json.dumps({'success':True,'entries':[row],'total_count':1}).encode()):
+            result=c.identity_md_names(EIN,time.monotonic()+5)
+        self.assertEqual([n['name'] for n in result['names']],['Example Foundation','Complete Alias'])
+        self.assertEqual(result['rejected_name_fields'],['Kesem Nationa'])
     def test_hi_requires_html_and_same_ein(self):
         source='<dt>Primary Name:</dt><dd>First Responders Childrens Foundation</dd><dt>FEIN:</dt><dd>05-0536854</dd>'
         with patch.object(c,'identity_fetch',return_value=source.encode()) as fetch:

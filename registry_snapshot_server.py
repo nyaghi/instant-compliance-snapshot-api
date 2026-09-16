@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.16.3-staging").strip() or "2026.09.16.3-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.16.4-staging").strip() or "2026.09.16.4-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -2020,6 +2020,8 @@ def identity_explicit_aliases(value: str) -> list[str]:
 def identity_new_source_candidate(name, source, kind, url, *, historical=False):
     """Exclude observed malformed fields without inventing corrected names."""
     value = re.sub(r"\s+", " ", str(name or "")).strip()
+    if source == "MA" and re.fullmatch(r"DUPLICATE\s+OF\s*#\s*\d+", value, re.I):
+        return None  # A registry housekeeping label is not an organization name.
     if (re.search(r"\b(?:foundatio|associatio|incorporate)\s*$|\binc\.[A-Za-z]", value, re.I)
             or re.search(r"\b(\w+(?:\s+\w+){3,})\b.*\b\1\b", value, re.I)
             or re.fullmatch(r"(?:inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)", value, re.I)):
@@ -2094,7 +2096,14 @@ def identity_md_names(ein: str, deadline: float) -> dict:
         if re.search(r"\binc\.[A-Za-z]|\b(\w+(?:\s+\w+){3,})\b.*\b\1\b", raw_dba, re.I):
             rejected.append(raw_dba)
         else:
-            values += [(alias, "DBA") for alias in identity_explicit_aliases(raw_dba)]
+            aliases = identity_explicit_aliases(raw_dba)
+            if aliases:
+                # The public display truncates the final DBA entry (observed:
+                # CNAS -> CNA, ELI -> EL, Kesem National -> Kesem Nationa).
+                # Retain earlier entries; never guess the missing character or
+                # promote the incomplete terminal entry to a verified identity.
+                rejected.append(aliases[-1])
+                values += [(alias, "DBA") for alias in aliases[:-1]]
         for value, kind in values:
             item = identity_new_source_candidate(value, "MD", kind, base)
             if item: names.append(item)
