@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.15.5-staging").strip() or "2026.09.15.5-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.15.6-staging").strip() or "2026.09.15.6-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -18366,8 +18366,6 @@ def search_nh_live_pdf(org):
     original_name = getattr(org, "original_organization_name", org.organization_name)
     targets = getattr(org, "match_target_names", None) or organization_match_target_variants(original_name, org.ein)
     target_word_sets = [set(normalized_match_name(target).split()) for target in targets if normalized_match_name(target)]
-    target_words = set().union(*target_word_sets) if target_word_sets else set()
-    minimum_overlap = 1 if len(target_words) <= 2 else 2
 
     def find_best_nh_record(candidate_records: list[dict]) -> tuple[dict, str] | None:
         best_candidate = None
@@ -18377,7 +18375,13 @@ def search_nh_live_pdf(org):
             if not registry_name:
                 continue
             registry_words = record.get("registry_words") or set(normalized_match_name(registry_name).split())
-            if target_words and len(registry_words & target_words) < minimum_overlap:
+            # Each reviewed name is an alternative identity, not extra words
+            # required of the original. Keep short exact names eligible while
+            # leaving the existing scoring and safe-match gates unchanged.
+            if target_word_sets and not any(
+                len(registry_words & words) >= (1 if len(words) <= 2 else 2)
+                for words in target_word_sets
+            ):
                 continue
             score = target_name_score(registry_name, targets)
             safe_match = registry_name_is_safe_against_targets(registry_name, targets, original_name, org.ein)

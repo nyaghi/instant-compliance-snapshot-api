@@ -70,6 +70,41 @@ class PdfGuardrails(unittest.TestCase):
             with self.subTest(name=name),patch.object(c,'nh_live_pdf_records',return_value=(records,'September 10, 2026')):
                 self.assertEqual(c.search_nh_live_pdf(c.checker.Organization(name,'123456789')).status,expected)
 
+    def test_reviewed_longer_name_cannot_hide_exact_short_name(self):
+        records=[c.nh_record_from_cells(['3313','EarthJustice','G','11/14/2026']),
+                 c.nh_record_from_cells(['33701','Earthjustice Action','X','11/15/2024'])]
+        org=c.checker.Organization('Earthjustice','94-1730465')
+        for names in [['Earthjustice'],['Earthjustice','Earthjustice Legal Defense Fund'],
+                      ['Earthjustice Legal Defense Fund','Earthjustice']]:
+            org.match_target_names=names
+            with self.subTest(names=names),patch.object(c,'nh_live_pdf_records',return_value=(records,'September 11, 2026')):
+                result=c.search_nh_live_pdf(org)
+            self.assertEqual(result.matched_registry_identifier,'3313')
+            self.assertEqual(result.matched_registry_name,'EarthJustice')
+            self.assertEqual(result.status,c.status_from_calendar_date(c.date(2026,11,14)))
+
+    def test_short_reviewed_name_can_match_long_original_without_wrong_neighbor(self):
+        org=c.checker.Organization('Earthjustice Legal Defense Fund','94-1730465')
+        org.match_target_names=['Earthjustice Legal Defense Fund','Earthjustice']
+        token=c.REVIEWED_NAME_CONTEXT.set({'941730465':('Earthjustice',)})
+        try:
+            for rows,expected in [([['3313','EarthJustice','G','11/14/2026']],'3313'),
+                                  ([['33701','Earthjustice Action','X','11/15/2024']],'')]:
+                records=[c.nh_record_from_cells(row) for row in rows]
+                with self.subTest(rows=rows),patch.object(c,'nh_live_pdf_records',return_value=(records,'September 11, 2026')):
+                    result=c.search_nh_live_pdf(org)
+                self.assertEqual(result.matched_registry_identifier,expected)
+                if not expected:self.assertEqual(result.status,c.checker.STATUS_NOT_REGISTERED)
+        finally:c.REVIEWED_NAME_CONTEXT.reset(token)
+
+    def test_word_overlap_across_aliases_does_not_establish_identity(self):
+        org=c.checker.Organization('Alpha Animal Rescue','12-3456789')
+        org.match_target_names=['Alpha Animal Rescue','Beta Youth Support']
+        records=[c.nh_record_from_cells(['999','Alpha Youth','G','11/15/2027'])]
+        with patch.object(c,'nh_live_pdf_records',return_value=(records,'September 11, 2026')):
+            result=c.search_nh_live_pdf(org)
+        self.assertEqual(result.status,c.checker.STATUS_NOT_REGISTERED)
+
     def test_snapshot_must_reference_exact_pdf(self):
         with tempfile.TemporaryDirectory() as folder:
             snapshot=Path(folder)/'rows.json';pdf=Path(folder)/'source.pdf';pdf.write_bytes(b'changed')
