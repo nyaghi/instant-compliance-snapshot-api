@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.16.2-staging").strip() or "2026.09.16.2-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.16.3-staging").strip() or "2026.09.16.3-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -1665,12 +1665,13 @@ def known_names_for_ein(ein: str) -> list[str]:
 REVIEWED_NAME_CONTEXT = ContextVar("reviewed_organization_names", default={})
 IDENTITY_SOURCE_CACHE: dict[tuple, tuple[float, dict]] = {}
 IDENTITY_CACHE_LOCK = threading.Lock()
-IDENTITY_SOURCE_POOL = ThreadPoolExecutor(max_workers=12, thread_name_prefix="identity-source")
-# Up to 15 simultaneous discovery requests can queue their four source jobs;
-# only 12 execute at once, and each retains its original 20-second deadline.
-IDENTITY_SOURCE_SLOTS = threading.BoundedSemaphore(64)
-IDENTITY_DEADLINE_SECONDS = 20.0
-IDENTITY_MAX_NAMES = 12
+IDENTITY_STATES = ("AK", "CA", "CO", "HI", "MA", "MD", "MI", "NM", "NJ", "NY", "OH", "OR", "PA", "VA", "WA")
+IDENTITY_SOURCE_POOL = ThreadPoolExecutor(max_workers=24, thread_name_prefix="identity-source")
+# Discovery has its own bounded capacity; it does not change workflow admission.
+IDENTITY_SOURCE_SLOTS = threading.BoundedSemaphore(256)
+IDENTITY_BROWSER_SLOTS = threading.BoundedSemaphore(4)
+IDENTITY_DEADLINE_SECONDS = 60.0
+IDENTITY_MAX_NAMES = 32
 
 
 def identity_name_key(value: str) -> str:
@@ -1744,7 +1745,8 @@ def identity_fetch(url: str, deadline: float, *, headers=None, max_bytes=4_000_0
 
 def identity_candidate(name, source, evidence_type, url, source_date="", historical=False):
     name = re.sub(r"\s+", " ", str(name or "")).strip()
-    if not name or len(name) > 300:
+    if (not name or len(name) > 300 or not re.search(r"[A-Za-z]", name)
+            or name.casefold() in {"n/a", "none", "not applicable", "unknown"}):
         return None
     return {"name": name, "verified": True, "historical": historical,
             "evidence": [{"source": source, "type": evidence_type, "url": url,
@@ -2002,6 +2004,310 @@ def identity_irs_names(ein: str, deadline: float) -> dict:
     return result
 
 
+def identity_source_label(source: str) -> str:
+    return {"AK": "Alaska", "HI": "Hawaii", "MA": "Massachusetts", "MD": "Maryland",
+            "MI": "Michigan", "NM": "New Mexico", "NJ": "New Jersey", "NY": "New York",
+            "OH": "Ohio", "PA": "Pennsylvania", "VA": "Virginia", "WA": "Washington"}.get(source, source)
+
+
+def identity_explicit_aliases(value: str) -> list[str]:
+    """For an explicitly list-valued state alias field, retain suffix commas."""
+    return [part.strip() for part in re.split(
+        r"[;\r\n]+|,(?!\s*(?:inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)(?:\s*[,;]|\s*$))",
+        str(value or ""), flags=re.I) if part.strip()]
+
+
+def identity_new_source_candidate(name, source, kind, url, *, historical=False):
+    """Exclude observed malformed fields without inventing corrected names."""
+    value = re.sub(r"\s+", " ", str(name or "")).strip()
+    if (re.search(r"\b(?:foundatio|associatio|incorporate)\s*$|\binc\.[A-Za-z]", value, re.I)
+            or re.search(r"\b(\w+(?:\s+\w+){3,})\b.*\b\1\b", value, re.I)
+            or re.fullmatch(r"(?:inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)", value, re.I)):
+        return None
+    return identity_candidate(value, identity_source_label(source), kind, url, historical=historical)
+
+
+def identity_rows_names(source: str, rows: list, ein: str, url: str) -> dict:
+    """Read only whitelisted identity fields on exact-EIN records, not officers."""
+    if not isinstance(rows, list):
+        raise ValueError("Incomplete identity record list")
+    fields = {
+        "VA": ("ein", (("name", "Registered name"), ("primaryName", "Legal name")), ()),
+        "WA": ("FEINNumber", (("EntityName", "Registered name"),), ("AKANames",)),
+        "PA": ("EIN", (("EntityName", "Registered name"),), ()),
+        "MA": ("Employer_Idendification_Number_EIN__c", (("Organization_Name__c", "Registered name"),), ()),
+        "NJ": ("crsm_federalein", (("name", "Registered name"),), ()),
+        "NY": ("ein", (("orgName", "Registered name"),), ()),
+    }
+    ein_field, name_fields, alias_fields = fields[source]
+    names, rejected = [], []
+    for row in rows:
+        if not isinstance(row, dict) or canonical_ein_digits(str(row.get(ein_field) or "")) != ein:
+            continue
+        values = [(row.get(field), kind) for field, kind in name_fields]
+        values += [(value, "AKA / DBA") for field in alias_fields for value in identity_explicit_aliases(row.get(field))]
+        for value, kind in values:
+            item = identity_new_source_candidate(value, source, kind, url)
+            if item: names.append(item)
+            elif value: rejected.append(str(value))
+    return {"names": names, "complete": True, "source_url": url, "rejected_name_fields": rejected}
+
+
+def identity_hi_names(ein: str, deadline: float) -> dict:
+    url = f"https://charity.ehawaii.gov/charity/{ein}/details.html"
+    source = identity_fetch(url, deadline, headers={"Accept": "text/html"}).decode("utf-8", "replace")
+    fields = {sc_html_to_text(key).strip().rstrip(":"): sc_html_to_text(value).strip()
+              for key, value in re.findall(r"<dt\b[^>]*>(.*?)</dt>\s*<dd\b[^>]*>(.*?)</dd>", source, re.S | re.I)}
+    if canonical_ein_digits(fields.get("FEIN", "")) != ein:
+        raise ValueError("Hawaii detail did not confirm the requested EIN")
+    item = identity_new_source_candidate(fields.get("Primary Name"), "HI", "Registered name", url)
+    return {"names": [item] if item else [], "complete": bool(item), "source_url": url}
+
+
+def identity_va_names(ein: str, deadline: float) -> dict:
+    query = {"where": {"and": [{"type": "Business/Organization"}, {"status": {"neq": "Excluded"}},
+             {"or": [{"ein": format_ein(ein)}, {"identificationNumber": format_ein(ein)}]}]}, "limit": 50, "order": "name ASC"}
+    url = "https://vdacs.evokeplatform.com/api/data/objects/entity/instances?" + urlencode({"filter": json.dumps(query)})
+    rows = json.loads(identity_fetch(url, deadline, headers={"Referer": "https://vdacs.evokeplatform.com/app/publicPortal/verification"}))
+    result = identity_rows_names("VA", rows, ein, "https://vdacs.evokeplatform.com/app/publicPortal/verification")
+    result["complete"] = len(rows) < 50
+    return result
+
+
+def identity_md_names(ein: str, deadline: float) -> dict:
+    field = "a87e8739-62de-600d-728c-6300bf865f9e"
+    base = "https://onestop.md.gov/list_views/62f3e1797f7e3200016a3dab"
+    url = base + "/entries?" + urlencode({"_method": "get", f"filter[{field}]": format_ein(ein),
+        field: format_ein(ein), "filter[limit]": "50", "limit": "50", "fake": "false", "forceNewQuery": "false", "query[page]": "1", "page": "1"})
+    data = json.loads(identity_fetch(url, deadline, headers={"X-Requested-With": "XMLHttpRequest"}))
+    if data.get("success") is not True or not isinstance(data.get("entries"), list):
+        raise ValueError("Maryland identity search incomplete")
+    names, rejected = [], []
+    for row in data["entries"]:
+        fields = {}
+        for value in row.get("view_data", {}).get("content_element_data", {}).values():
+            match = re.search(r"<strong>(.*?)</strong>.*?<var>(.*?)</var>", str(value), re.I | re.S)
+            if match: fields[sc_html_to_text(match[1]).strip().rstrip(":")] = sc_html_to_text(match[2]).strip()
+        if canonical_ein_digits(fields.get("Charity EIN", "")) != ein: continue
+        values = [(row.get("f_aedd5545-808f-4725-9b1d-5fa61e994a75"), "Registered name")]
+        raw_dba = fields.get("Charity DBA Name(s)", "")
+        if re.search(r"\binc\.[A-Za-z]|\b(\w+(?:\s+\w+){3,})\b.*\b\1\b", raw_dba, re.I):
+            rejected.append(raw_dba)
+        else:
+            values += [(alias, "DBA") for alias in identity_explicit_aliases(raw_dba)]
+        for value, kind in values:
+            item = identity_new_source_candidate(value, "MD", kind, base)
+            if item: names.append(item)
+            elif value: rejected.append(value)
+    return {"names": names, "complete": data.get("total_count", 50) <= len(data["entries"]),
+            "source_url": base, "rejected_name_fields": rejected}
+
+
+def identity_nm_names(ein: str, deadline: float) -> dict:
+    url = "https://secure.nmdoj.gov/CharitySearch/CharityDetail.aspx?" + urlencode({"FEIN": format_ein(ein)})
+    source = identity_fetch(url, deadline).decode("utf-8", "replace")
+    field = re.search(r'<span\b[^>]*id="MainContent_FormViewCharityDetail_LabelCharityName"[^>]*>(.*?)</span>', source, re.I | re.S)
+    identity = re.fullmatch(r"(.+?)\s*\((\d{2}-?\d{7})\)", sc_html_to_text(field[1]).strip()) if field else None
+    if not identity or canonical_ein_digits(identity[2]) != ein:
+        raise ValueError("New Mexico did not expose an exact-EIN detail")
+    item = identity_new_source_candidate(identity[1], "NM", "Registered name", url)
+    return {"names": [item] if item else [], "complete": bool(item), "source_url": url}
+
+
+def identity_ny_names(ein: str, deadline: float) -> dict:
+    # The existing browser connector supplies this source through a signed EIN
+    # continuation. A blocked server request is never a completed empty source.
+    return {"names": [], "complete": False, "requires_connector": True,
+            "limitation": "New York name discovery requires the connected browser.",
+            "source_url": "https://charities-search.ag.ny.gov/RegistrySearch"}
+
+
+def identity_nested_records(value):
+    """Walk a completed structured response; callers still require named EIN fields."""
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from identity_nested_records(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from identity_nested_records(child)
+
+
+def identity_browser_names(source: str, ein: str, deadline: float) -> dict:
+    """EIN-only identity collection, with separate bounded browser capacity.
+
+    This does not invoke registration classification or broaden matching. A
+    blocked, incomplete, or truncated source is explicitly partial discovery.
+    """
+    urls = {
+        "AK": "https://online-registrations-law.alaska.gov/TLP/WebDoc/?link=PubQry",
+        "MA": "https://masscharities.my.site.com/FilingSearch/s/",
+        "MI": "https://www.ag.state.mi.us/CharitableTrust/frmDisclaimer.aspx",
+        "NJ": "https://charportal.dca.njoag.gov/Charity-Registration/CHR-Public-Search-Page/",
+        "OH": "https://charitableregistration.ohioago.gov/Charities/ResearchCharities",
+        "PA": "https://www.charities.pa.gov/#/page/searchCharities",
+        "WA": "https://ccfs.sos.wa.gov/#/cftSearch",
+    }
+    url = urls[source]
+    if not IDENTITY_BROWSER_SLOTS.acquire(timeout=max(0, deadline - time.monotonic())):
+        raise TimeoutError("Identity browser capacity deadline reached")
+    try:
+        remaining = lambda: max(1, int((deadline - time.monotonic()) * 1000))
+        if remaining() < 500: raise TimeoutError("Identity source deadline reached")
+        with checker.sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True, timeout=remaining())
+            try:
+                context = browser.new_context(ignore_https_errors=True, user_agent=BROWSER_USER_AGENT)
+                page = context.new_page()
+                page.set_default_timeout(min(10000, remaining()))
+                page.goto(url, wait_until="domcontentloaded", timeout=min(12000, remaining()))
+                names, rejected = [], []
+                def add(value, kind="Registered name", historical=False):
+                    item = identity_new_source_candidate(value, source, kind, url, historical=historical)
+                    if item: names.append(item)
+                    elif value: rejected.append(value)
+                if source in {"MA", "NJ", "PA", "WA"}:
+                    if source == "MA":
+                        page.get_by_role("combobox").first.select_option(label="Employer Identification Number")
+                        page.get_by_role("textbox").first.press_sequentially(ein, delay=25)
+                        # A search response is identified by its exact-EIN record
+                        # fields, not an unrelated Salesforce initialization call.
+                        responses = []
+                        def capture(response):
+                            if "/aura" in response.url and response.request.method == "POST":
+                                try:
+                                    data = json.loads(response.text().removeprefix("while(1);"))
+                                    actions = data.get("actions", [])
+                                    for action in actions:
+                                        value = action.get("returnValue")
+                                        if isinstance(value, str):
+                                            try: value = json.loads(value)
+                                            except ValueError: continue
+                                        records = list(identity_nested_records(value))
+                                        if any("Employer_Idendification_Number_EIN__c" in row for row in records):
+                                            responses.append(records)
+                                except Exception: pass
+                        page.on("response", capture)
+                        page.get_by_role("button", name="Search", exact=True).click()
+                        while not responses and remaining() > 500:
+                            body = page.locator("body").inner_text()
+                            if re.search(r"no (?:charities|records|results) (?:were )?found", body, re.I):
+                                return {"names": [], "complete": True, "source_url": url}
+                            page.wait_for_timeout(150)
+                        if not responses: raise ValueError("Massachusetts EIN search incomplete")
+                        return identity_rows_names(source, [row for batch in responses for row in batch], ein, url)
+                    paths = {"NJ": "entity-grid-data.json", "PA": "/api/Charities/Search", "WA": "GetCFPublicSearchList"}
+                    if source == "NJ":
+                        page.locator('input[placeholder="Search"]').first.fill(ein)
+                    elif source == "PA":
+                        page.locator('input[name="EIN"]').fill(ein)
+                    else:
+                        page.locator('input[value="FEINNo"]').check()
+                        page.locator("#FEINNoSearchField").fill(ein)
+                        page.locator("#FEINNoSearchField").dispatch_event("change")
+                    def matches_identity_request(response):
+                        if paths[source] not in response.url: return False
+                        if source == "NJ":
+                            try: return json.loads(response.request.post_data or "{}").get("search") == ein
+                            except (TypeError, ValueError): return False
+                        return True
+                    with page.expect_response(matches_identity_request, timeout=remaining()) as pending:
+                        if source == "NJ": page.locator('input[placeholder="Search"]').first.press("Enter")
+                        else: page.get_by_role("button", name=re.compile("Search", re.I)).first.click()
+                    response = pending.value
+                    if response.status != 200: raise ValueError("Identity search HTTP error")
+                    data = response.json()
+                    if source == "NJ":
+                        if not isinstance(data.get("Records"), list): raise ValueError("New Jersey search incomplete")
+                        rows = [{item["Name"]: item.get("Value") for item in row.get("Attributes", [])} for row in data["Records"]]
+                        result = identity_rows_names(source, rows, ein, url)
+                        result["complete"] = data.get("MoreRecords") is False
+                        return result
+                    if source == "WA": return identity_rows_names(source, data, ein, url)
+                    rows = data.get("Table")
+                    result = identity_rows_names(source, rows, ein, url)
+                    count = (data.get("Table1") or [{}])[0].get("RESULTCOUNT")
+                    result["complete"] = count is not None and int(count) == len(rows)
+                    for index, row in enumerate(rows):
+                        if canonical_ein_digits(str(row.get("EIN", ""))) != ein or row.get("HasAdditionalNames") != "Y": continue
+                        links = page.locator("table [ng-click]")
+                        with page.expect_popup(timeout=remaining()) as opened:
+                            links.nth(index).click(timeout=remaining())
+                        detail = opened.value
+                        try:
+                            detail.wait_for_function("ein => document.querySelector('input[name=FederalID]')?.value.replace(/\\D/g,'') === ein", arg=ein, timeout=remaining())
+                            actual = detail.locator('input[name="FederalID"]').input_value()
+                            if canonical_ein_digits(actual) != ein: raise ValueError("Pennsylvania detail EIN mismatch")
+                            # The state's additional-name section pairs a name
+                            # input with its explicit Prior Name / Other Name type.
+                            detail.wait_for_function("count => Array.from(document.querySelectorAll('input[ng-model=\"row.Fullname\"]')).filter(e => e.value.trim()).length >= count", arg=max(1, int(row.get("NameCount", 2)) - 1), timeout=remaining())
+                            inputs = detail.locator('input[ng-model="row.Fullname"], input[ng-model="row.NameTypeName"]').evaluate_all("els => els.map(e => ({name:e.name,value:e.value}))")
+                            for pos, field in enumerate(inputs):
+                                if pos and not field["name"] and field["value"] in {"Prior Name", "Other Name"} and not inputs[pos-1]["name"]:
+                                    item = identity_new_source_candidate(inputs[pos-1]["value"], source, field["value"], detail.url, historical=field["value"] == "Prior Name")
+                                    if item: result["names"].append(item)
+                        except Exception:
+                            result.update(complete=False, limitation="Pennsylvania's registered name was confirmed; additional names could not all be checked.")
+                        finally: detail.close()
+                    return result
+                if source == "AK":
+                    page.locator("select").filter(has=page.locator('option[value="CharOrg"]')).select_option("CharOrg")
+                    year = str(date.today().year)
+                    page.locator("select").filter(has=page.locator(f'option[value="{year}"]')).select_option(year)
+                    page.locator('input[title="Format: 99-9999999"]').fill(format_ein(ein))
+                    with page.expect_response(lambda r: "/EventOccurred" in r.url and r.request.method == "POST", timeout=remaining()) as pending:
+                        page.get_by_role("button", name="Search", exact=True).click()
+                    if pending.value.status != 200: raise ValueError("Alaska search HTTP error")
+                    page.get_by_text("Legal Name", exact=True).first.wait_for(timeout=remaining())
+                    rows = page.locator("tr").evaluate_all("els => els.map(r=>Array.from(r.querySelectorAll('td')).map(c=>c.innerText.trim()))")
+                    for cells in rows:
+                        if len(cells) >= 3 and canonical_ein_digits(cells[1]) == ein: add(cells[2])
+                    return {"names": names, "complete": True, "source_url": url, "rejected_name_fields": rejected}
+                if source == "OH":
+                    page.locator("#EIN").fill(format_ein(ein))
+                    page.locator("#ddlEINFilterCriteriaList").select_option(label="Equals")
+                    with page.expect_navigation(wait_until="domcontentloaded", timeout=remaining()):
+                        page.locator("#OnSubmit").click()
+                    rows = page.locator("tr").evaluate_all("els => els.map(r=>Array.from(r.querySelectorAll('td')).map(c=>c.innerText.trim()))")
+                    for cells in rows:
+                        if len(cells) >= 3 and canonical_ein_digits(cells[2]) == ein:
+                            add(cells[0])
+                            for value in identity_explicit_aliases(cells[1]): add(value, "DBA")
+                    body = page.locator("body").inner_text()
+                    complete = bool(names) and bool(re.search(r"Page\s+1\s+of\s+1", body, re.I))
+                    complete |= bool(re.search(r"no (?:records|results|charities) (?:were )?found", body, re.I))
+                    return {"names": names, "complete": complete, "source_url": url}
+                if source == "MI":
+                    page.locator('[id$="lblYes"]').click()
+                    page.locator('[id$="txtEIN"]').fill(format_ein(ein))
+                    with page.expect_navigation(wait_until="domcontentloaded", timeout=remaining()):
+                        page.locator('[id$="btnTextSearch"]').click(timeout=remaining(), no_wait_after=True)
+                    body = page.locator("body").inner_text()
+                    if re.search(r"\b0\s+record\(s\)\s+found", body, re.I):
+                        return {"names": [], "complete": True, "source_url": url}
+                    # Follow every returned organization, confirming its detail EIN.
+                    links = page.locator('a[id$="btnOrgName"]')
+                    records = [{"name": links.nth(i).inner_text(), "id": links.nth(i).get_attribute("id")} for i in range(links.count())]
+                    if not records: raise ValueError("Michigan detail links unavailable")
+                    for row in records:
+                        with page.expect_popup(timeout=remaining()) as opened:
+                            page.locator('[id="' + row["id"] + '"]').click()
+                        detail = opened.value
+                        try:
+                            detail.wait_for_load_state("domcontentloaded", timeout=remaining())
+                            body = detail.locator("body").inner_text()
+                            match = re.search(r"(?:EIN|Federal (?:ID|Identification)(?: Number)?)\s*:?\s*(\d{2}-?\d{7})", body, re.I)
+                            if match and canonical_ein_digits(match[1]) == ein: add(row["name"])
+                            else: raise ValueError("Michigan detail EIN could not be confirmed")
+                        finally: detail.close()
+                    return {"names": names, "complete": True, "source_url": url}
+                raise ValueError("Unsupported identity source")
+            finally:
+                browser.close()
+    finally:
+        IDENTITY_BROWSER_SLOTS.release()
+
+
 def identity_source_result(source: str, ein: str, deadline: float) -> dict:
     fingerprint = json.dumps(downloadable_data_info("OR"), sort_keys=True) if source == "OR" else "live-v2"
     key = (ein, source, fingerprint)
@@ -2010,8 +2316,14 @@ def identity_source_result(source: str, ein: str, deadline: float) -> dict:
         cached = IDENTITY_SOURCE_CACHE.get(key)
     if cached and cached[0] > now:
         return {**cached[1], "cache_hit": True}
-    worker = {"CA": identity_ca_names, "CO": identity_co_names, "OR": identity_or_names, "IRS": identity_irs_names}[source]
+    worker = {"CA": identity_ca_names, "CO": identity_co_names, "OR": identity_or_names, "IRS": identity_irs_names,
+              "HI": identity_hi_names, "VA": identity_va_names, "MD": identity_md_names,
+              "NM": identity_nm_names, "NY": identity_ny_names}.get(source)
+    if worker is None:
+        worker = lambda value, limit: identity_browser_names(source, value, limit)
     result = {**worker(ein, deadline), "source": source, "cache_hit": False}
+    if result.get("rejected_name_fields"):
+        result.update(complete=False, limitation="Some state name fields were malformed or incomplete and were excluded; usable EIN-confirmed names were retained.")
     # Cache only identity evidence, keyed by weekly revision or a bounded live TTL.
     with IDENTITY_CACHE_LOCK:
         if len(IDENTITY_SOURCE_CACHE) >= 1200:
@@ -2311,7 +2623,7 @@ def discover_organization_names(organization_name: str, ein: str) -> dict:
             return identity_source_result(source, ein, deadline)
         finally:
             IDENTITY_SOURCE_SLOTS.release()
-    for source in ("CA", "CO", "OR", "IRS"):
+    for source in (*IDENTITY_STATES, "IRS"):
         if IDENTITY_SOURCE_SLOTS.acquire(blocking=False):
             futures[IDENTITY_SOURCE_POOL.submit(run, source)] = source
         else:
@@ -5766,14 +6078,21 @@ def search_with_name_variants(
                 prioritized.append(cleaned)
         variants = prioritized or variants
     safe_match_targets = organization_match_target_variants(original_name, org.ein)
-    if max_variants:
-        variants = variants[:max_variants]
+    variants = reviewed_queries_first(original_name, org.ein, variants, limit=max_variants)
+    completed_queries = []
+    def finalize_variant_result(result):
+        if (result is not None and known_names_for_ein(org.ein) and public_status(result) == "Not Registered"
+                and not reviewed_identity_queries_completed(completed_queries, [original_name, *known_names_for_ein(org.ein)])):
+            result.status = "Unable to Verify"
+            result.success = False
+            result.source_note = "The state did not complete searches for all reviewed organization names within the lookup window; non-registration was not established."
+        return result
     started = time.perf_counter()
     for variant in variants:
         if max_elapsed_seconds and best_result is not None and (time.perf_counter() - started) >= max_elapsed_seconds:
             if getattr(best_result, "organization_name", "") != original_name:
                 best_result.organization_name = original_name
-            return best_result
+            return finalize_variant_result(best_result)
         variant_org = org_with_name(org, variant)
         variant_targets = list(dict.fromkeys([
             *safe_match_targets,
@@ -5781,6 +6100,8 @@ def search_with_name_variants(
         ]))
         variant_org.match_target_names = variant_targets
         result = search_func(page, variant_org)
+        if getattr(result, "success", False) and public_status(result) == "Not Registered":
+            completed_queries.append(variant)
         if getattr(result, "organization_name", "") != original_name:
             result.organization_name = original_name
         if public_status(result) == "Site Not Reachable":
@@ -5821,7 +6142,7 @@ def search_with_name_variants(
         best_result = result
     if best_result and getattr(best_result, "organization_name", "") != original_name:
         best_result.organization_name = original_name
-    return best_result
+    return finalize_variant_result(best_result)
 
 
 def search_va_bounded(page, org):
@@ -6627,7 +6948,7 @@ def me_fast_direct_query_variants(org) -> list[str]:
     # Keep the primary-name prefix ahead of historical identities after deduplication.
     queries.sort(key=lambda query: 0 if any(value.casefold().startswith(query.casefold())
                  for value in (original_name, leading_article_removed)) else 1)
-    return queries
+    return reviewed_queries_first(original_name, getattr(org, "ein", ""), queries)
 
 
 def me_request_timeout(deadline: float, maximum: float) -> float:
@@ -9330,6 +9651,36 @@ def equivalent_name_queries(original_name: str, ein: str) -> list[str]:
     return queries
 
 
+def reviewed_queries_first(original_name: str, ein: str, generated: list[str], *, limit=None, transform=None) -> list[str]:
+    """Complete reviewed identities precede generated retrieval probes.
+
+    Keep the former fallback allowance after the approved identities. Matching,
+    EIN confirmation and address checks are deliberately independent of order.
+    """
+    if not known_names_for_ein(ein):
+        return generated[:limit] if limit is not None else generated
+    queries, seen, identity_seen = [], set(), set()
+    for value in [original_name, *known_names_for_ein(ein)]:
+        value = canonical_name_punctuation(value)
+        value = transform(value) if transform else value
+        key = identity_name_key(value)
+        if key and key not in identity_seen:
+            queries.append(value); identity_seen.add(key); seen.add(value.casefold())
+    fallback_count = 0
+    for value in generated:
+        value = transform(value) if transform else value
+        key = value.casefold()
+        if key and key not in seen:
+            queries.append(value); seen.add(key); fallback_count += 1
+            if limit is not None and fallback_count >= limit: break
+    return queries
+
+
+def reviewed_identity_queries_completed(completed_queries, required_queries) -> bool:
+    completed = {identity_name_key(query) for query in completed_queries}
+    return all(identity_name_key(query) in completed for query in required_queries)
+
+
 def search_ct_direct(org):
     url = "https://www.elicense.ct.gov/lookup/licenselookup.aspx"
     original_name = org.organization_name
@@ -9351,7 +9702,9 @@ def search_ct_direct(org):
         include_leading_article_variants=True,
         max_queries=CT_NAME_VARIANT_LIMIT * 2,
     ))
-    variants = list(dict.fromkeys([*equivalent_name_queries(original_name, org.ein), *variants]))[:CT_NAME_VARIANT_LIMIT]
+    variants = reviewed_queries_first(original_name, org.ein,
+        list(dict.fromkeys([*equivalent_name_queries(original_name, org.ein), *variants])), limit=CT_NAME_VARIANT_LIMIT,
+        transform=lambda value: (equivalent_name_queries(value, "") or [value])[0])
     best_result = None
     best_score = -10000
     saw_zero_results = False
@@ -9841,7 +10194,7 @@ def search_fl(page, org):
             variants.append(variant)
     best_result = None
     last_error = None
-    search_variants = list(variants[:8])
+    search_variants = reviewed_queries_first(original_name, org.ein, variants, limit=8)
     final_exact_retry_added = False
     for variant in search_variants:
         if deadline_expired():
@@ -10405,7 +10758,8 @@ def nd_search_queries(org) -> list[str]:
         query = re.sub(r"\s+", " ", re.sub(r"[^A-Za-z0-9 ]", " ", value.replace("'", ""))).strip()
         if query and query.casefold() not in {q.casefold() for q in queries}:
             queries.append(query)
-    return queries[:8]
+    return reviewed_queries_first(original, org.ein, queries, limit=8,
+        transform=lambda value: re.sub(r"\s+", " ", re.sub(r"[^A-Za-z0-9 ]", " ", value.replace("'", ""))).strip())
 
 
 def search_nd_completed(page, org):
@@ -16637,6 +16991,12 @@ def ny_connector_advance(record):
     org = checker.Organization(record["organization_name"], record["ein"])
     started = time.perf_counter()
     try:
+        if record.get("purpose") == "identity":
+            ein = canonical_ein_digits(record["ein"])
+            rows = search_response({"ein": ein}).json()["data"]
+            identity = identity_rows_names("NY", rows, ein, "https://charities-search.ag.ny.gov/RegistrySearch")
+            return {"phase": "complete", "result": {"state": "NY", "source": "NY", "identity": identity,
+                    "ein": format_ein(ein), "checked_at_epoch": time.time(), "app_version": APP_VERSION}}
         result = search_ny_direct(org, registry_search_provider=search_response)
     except NYConnectorQueryNeeded as pending:
         if len(record["completed"]) >= 5:
@@ -16667,6 +17027,9 @@ def ny_connector_request(payload, origin):
         return 400, {"error": "Invalid connector action."}
     now = time.time()
     if action == "start":
+        purpose = payload.get("purpose", "registration")
+        if purpose not in {"registration", "identity"}:
+            return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
         if not isinstance(connector_version, str) or connector_version not in {"0.2.1", "0.3.0", "0.3.1"}:
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the staging connector."}
@@ -16676,6 +17039,7 @@ def ny_connector_request(payload, origin):
                 or not re.fullmatch(r"[0-9]{2}-?[0-9]{7}", ein) or ein.replace("-", "") == "000000000"):
             return 400, {"error": "Enter the organization name and a valid nine-digit EIN."}
         record = {"email": email, "device": device, "organization_name": name.strip(), "ein": format_ein(ein),
+                  "purpose": purpose,
                   "connector_version": connector_version,
                   "issued": now, "expires": now + NY_CONNECTOR_TTL_SECONDS, "version": APP_VERSION,
                   "completed": [], "pending": None}
@@ -19153,7 +19517,7 @@ def ms_preferred_search_variants(name: str, ein: str = "") -> list[str]:
     shared_variants = variants[:shared_variant_count]
     local_variants = variants[shared_variant_count:]
     local_variants.sort(key=priority)
-    return [*shared_variants, *local_variants]
+    return reviewed_queries_first(name, ein, [*shared_variants, *local_variants])
 
 
 def ms_result_row_cells(row) -> list[str]:
@@ -19593,6 +19957,7 @@ def search_batch_browser_state(page, org, state: str):
             external_result.source_note = "Mississippi skipped a one-token acronym search because name-only results would be too broad to certify safely."
             return copy_external_result(org, state, external_result)
         best_external = None
+        completed_identity_queries = []
         ms_deadline = time.perf_counter() + 32.0
         for attempt_index, variant_name in enumerate(variants or [org.organization_name]):
             if time.perf_counter() >= ms_deadline:
@@ -19613,6 +19978,7 @@ def search_batch_browser_state(page, org, state: str):
             if status == "Unknown":
                 continue
             if status == "Not Registered" or re.search(r"\b(no matching organization row|no results found)\b", raw_text, re.I):
+                completed_identity_queries.append(variant_name)
                 continue
             matched_name = getattr(external_result, "matched_registry_name", "") or getattr(external_result, "organization_name", "")
             if matched_name and not ms_registry_name_is_safe(matched_name, org.organization_name, org.ein):
@@ -19625,6 +19991,12 @@ def search_batch_browser_state(page, org, state: str):
             best_external = external_result
             break
         external_result = best_external
+        if (known_names_for_ein(org.ein) and external_result is not None
+                and external_status_to_checker_status(getattr(external_result, "status", "")) == "Not Registered"
+                and not reviewed_identity_queries_completed(completed_identity_queries, equivalent_name_queries(org.organization_name, org.ein))):
+            external_result.status = "Unable to Verify"
+            external_result.success = False
+            external_result.source_note = "Mississippi did not complete searches for all reviewed identities within the lookup window; non-registration was not established."
     elif state == "OK":
         external_result = search_ok_with_variants(page, org, module)
     else:
@@ -19698,7 +20070,8 @@ def search_ok_with_variants(page, org, module):
     started = time.perf_counter()
     attempted_variants: list[str] = []
     completed_no_match_variants: list[str] = []
-    planned_variants = (variants[:OK_QUERY_LIMIT] or [original_name])
+    planned_variants = (reviewed_queries_first(original_name, org.ein, variants, limit=OK_QUERY_LIMIT,
+        transform=lambda value: ok_search_name_for_org(org_with_name(org, value))) or [original_name])
     exhausted_budget = False
     incomplete_result = None
     for variant in planned_variants:
@@ -20679,7 +21052,9 @@ def search_ar_precise(page, org):
     result_shell_without_rows = False
     deadline = time.perf_counter() + AR_NAME_SEARCH_MAX_SECONDS
     attempted_variants: list[str] = []
-    for variant in variants[:AR_NAME_SEARCH_MAX_VARIANTS]:
+    planned_variants = reviewed_queries_first(original_name, org.ein, variants, limit=AR_NAME_SEARCH_MAX_VARIANTS)
+    completed_variants = []
+    for variant in planned_variants:
         remaining = deadline - time.perf_counter()
         if remaining <= 2.0:
             break
@@ -20727,6 +21102,8 @@ def search_ar_precise(page, org):
             if explicit_no_results:
                 explicit_no_results_seen = True
             parsed_rows = ar_result_rows(page)
+            if parsed_rows or explicit_no_results:
+                completed_variants.append(variant)
             if parsed_rows:
                 rows_seen += len(parsed_rows)
             elif result_shell_seen and not explicit_no_results:
@@ -20789,7 +21166,8 @@ def search_ar_precise(page, org):
             result.rejected_candidates = [unconfirmed_name]
             result.reason_code = "AR_RELATED_ENTITY_EIN_UNAVAILABLE"
             result.success = False
-        elif rows_seen or (explicit_no_results_seen and not result_shell_without_rows):
+        elif ((rows_seen or (explicit_no_results_seen and not result_shell_without_rows))
+              and (not known_names_for_ein(org.ein) or reviewed_identity_queries_completed(completed_variants, equivalent_name_queries(original_name, org.ein)))):
             result.status = checker.STATUS_NOT_REGISTERED
             result.raw_status_text = (
                 "No matching organization row"
@@ -21217,12 +21595,14 @@ def wv_preferred_query_variants(name: str, ein: str = "") -> list[str]:
     for variant in organization_match_target_variants(name, ein):
         if registry_name_is_safe_for_org(variant, name, ein):
             add_name_forms(variant)
-    return preferred
+    return reviewed_queries_first(name, ein, preferred)
 
 
-def wv_core_search_completed(completed_queries: list[str], planned_queries: list[str]) -> bool:
+def wv_core_search_completed(completed_queries: list[str], planned_queries: list[str], required_queries=None) -> bool:
     """WV can decide a clean no-match after core legal-name probes finish."""
     if not completed_queries:
+        return False
+    if required_queries and not reviewed_identity_queries_completed(completed_queries, required_queries):
         return False
     if len(completed_queries) >= len(planned_queries):
         return True
@@ -21426,7 +21806,9 @@ def search_wv_precise(page, org):
         completed_queries: list[str] = []
         saw_result_rows = False
         deadline = time.perf_counter() + WV_LOOKUP_MAX_SECONDS
-        planned_queries = wv_preferred_query_variants(org.organization_name, org.ein)[:WV_QUERY_LIMIT]
+        planned_queries = reviewed_queries_first(org.organization_name, org.ein,
+            wv_preferred_query_variants(org.organization_name, org.ein), limit=WV_QUERY_LIMIT)
+        required_queries = equivalent_name_queries(org.organization_name, org.ein) if known_names_for_ein(org.ein) else []
         for query_name in planned_queries:
             if time.perf_counter() >= deadline:
                 break
@@ -21500,7 +21882,7 @@ def search_wv_precise(page, org):
             result.source_attempts = [
                 f"WV completed {len(completed_queries)} of {len(planned_queries)} bounded name/alias query attempts."
             ]
-            if saw_result_rows:
+            if saw_result_rows and wv_core_search_completed(completed_queries, planned_queries, required_queries):
                 wv_completed_no_match_result(
                     result,
                     completed_queries,
@@ -21509,7 +21891,7 @@ def search_wv_precise(page, org):
                 )
                 result.rejection_reason = "WV returned rows, but the best candidate did not meet the safe-match threshold."
                 return result
-            if wv_core_search_completed(completed_queries, planned_queries):
+            if wv_core_search_completed(completed_queries, planned_queries, required_queries):
                 wv_completed_no_match_result(
                     result,
                     completed_queries,

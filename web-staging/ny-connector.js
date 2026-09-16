@@ -87,7 +87,7 @@
     })().finally(() => { refreshing = null; if (button) button.disabled = activeLookups > 0; });
     return refreshing;
   }
-  async function lookup({ organization_name, ein, email, admin_passcode, device_id, onProgress, alternate_names }) {
+  async function lookup({ organization_name, ein, email, admin_passcode, device_id, onProgress, alternate_names, purpose = "registration" }) {
     if (refreshing) {
       onProgress?.("New York: waiting for the connection refresh. Other states can continue.");
       await refreshing;
@@ -118,7 +118,7 @@
       }
       // Start the signed continuation only after queue admission. Waiting cannot
       // consume the master's five-minute evidence lifetime.
-      let state = await api({ action: "start", organization_name, ein, ...(Array.isArray(alternate_names) ? {alternate_names} : {}), connector_version: compatible(connection) ? connection.version : "0.2.1" });
+      let state = await api({ action: "start", organization_name, ein, purpose, ...(Array.isArray(alternate_names) ? {alternate_names} : {}), connector_version: compatible(connection) ? connection.version : "0.2.1" });
       checkToken = state.check_token || "";
       if (!compatible(connection) && state.phase === "search") {
         state = await api({ action: "fail", check_token: checkToken, reason: connection.ok ? "NY_CONNECTOR_UPDATE_REQUIRED" : "NY_CONNECTOR_UNAVAILABLE" });

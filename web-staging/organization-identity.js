@@ -57,10 +57,10 @@
       input.addEventListener("input", () => { input.value = input.value.replace(/[\r\n\t]+/g, " "); row.name = input.value; describe(); }); describe();
       line.append(check, input, remove); box.append(line, proof); list.append(box);
     });
-    add.disabled = busy || rows.length >= 12;
+    add.disabled = busy || rows.length >= 32;
   }
   add.addEventListener("click", () => {
-    if (rows.length >= 12 || busy) return;
+    if (rows.length >= 32 || busy) return;
     rows.push({name: "", original: "", selected: true, verified: false}); render();
     list.lastElementChild?.querySelector('textarea')?.focus();
   });
@@ -77,19 +77,42 @@
     }
     const requestIdentity = identity(), requestRevision = ++revision;
     reviewedIdentity = ""; find.disabled = true; find.textContent = "Finding alternate names…";
-    message.textContent = "Checking California, Colorado, Oregon’s weekly file, and IRS records…"; changed();
-    controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 23000);
+    nameInput.disabled = true; einInput.disabled = true;
+    message.textContent = "Checking EIN-linked records in 15 states and the IRS. Some sources may take longer…"; changed();
+    controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 70000);
+    const requestedName = nameInput.value.trim(), requestedEin = einInput.value.trim();
+    const nyIdentity = window.CCNYConnector?.lookup({organization_name: requestedName, ein: requestedEin,
+      email: config.email, admin_passcode: config.admin_passcode, device_id: config.device_id, purpose: "identity",
+      onProgress: value => { if (value && requestRevision === revision) message.textContent = value.replace("Other states can continue.", "Finding alternate names; registration checks have not started."); }
+    }).catch(() => null);
     try {
       const response = await fetch(`${config.apiBase}/api/discover-names`, {method: "POST", headers: {"Content-Type": "application/json"}, signal: controller.signal,
-        body: JSON.stringify({organization_name: nameInput.value.trim(), ein: einInput.value.trim(), email: config.email, admin_passcode: config.admin_passcode})});
+        body: JSON.stringify({organization_name: requestedName, ein: requestedEin, email: config.email, admin_passcode: config.admin_passcode})});
       const data = await response.json();
+      clearTimeout(timeout);
       if (requestRevision !== revision || requestIdentity !== identity()) return;
       if (!response.ok) {
         if (response.status === 401 || response.status === 403) { message.textContent = data.error || "Unlock staging to continue."; return; }
         throw new Error(data.error || "Name discovery did not complete.");
       }
-      rows = (data.names || []).map(row => ({...row, original: row.name, selected: true}));
+      const ny = await nyIdentity;
+      data.names ||= [];
+      if (requestRevision !== revision || requestIdentity !== identity()) return;
+      if (ny?.identity?.complete) {
+        data.sources = (data.sources || []).filter(source => source.source !== "NY").concat({source: "NY", complete: true});
+        const key = value => value.toLowerCase().replace(/[’']/g, "").replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim().replace(/(?:\s+(?:inc|incorporated|corp|corporation|llc|ltd|limited))+$/, "");
+        for (const candidate of ny.identity.names || []) {
+          const existing = data.names.find(item => key(item.name) === key(candidate.name));
+          if (existing) existing.evidence.push(...candidate.evidence);
+          else data.names.push(candidate);
+        }
+      } else if (ny?.comments) {
+        const source = (data.sources || []).find(item => item.source === "NY");
+        if (source) source.limitation = "The browser could not confirm New York names. Other confirmed names remain available.";
+      }
+      rows = (data.names || []).slice(0, 32).map(row => ({...row, original: row.name, selected: true}));
       const limitations = (data.sources || []).filter(source => !source.complete).map(source => `${source.source}: ${source.limitation || "Some records were unavailable."}`);
+      if (data.names.length > 32) limitations.push("The first 32 confirmed names are shown. Review these names before continuing.");
       message.textContent = limitations.length ? `Some sources were unavailable. You can review the names found, add names, and continue. ${limitations.join(" ")}` :
         rows.length ? "Review the names below. Keep only names that belong to this organization." : "No additional names were confirmed. You can add names or continue with your entered name.";
       reviewedIdentity = requestIdentity;
@@ -99,6 +122,7 @@
       message.textContent = "Alternate-name discovery could not finish. You can enter names manually or continue with your entered name. Registration checks have not started.";
     } finally {
       clearTimeout(timeout);
+      nameInput.disabled = busy; einInput.disabled = busy;
       if (requestRevision === revision) {
         find.disabled = busy; find.textContent = "Find names again"; review.hidden = !reviewedIdentity;
         summary.textContent = `${nameInput.value.trim()} · EIN ${einInput.value.trim()}`;
@@ -112,7 +136,7 @@
     setBusy(value) {
       busy = value; find.disabled = value; nameInput.disabled = value; einInput.disabled = value;
       panel.querySelectorAll("input, textarea, button").forEach(element => { element.disabled = value; });
-      if (!value) add.disabled = rows.length >= 12;
+      if (!value) add.disabled = rows.length >= 32;
     },
     focus: () => { panel.scrollIntoView({block: "center", behavior: "smooth"}); find.focus(); }
   });

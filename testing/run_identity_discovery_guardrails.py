@@ -143,7 +143,7 @@ class IdentityTests(unittest.TestCase):
             base={'organization_name':'Test','ein':EIN}
             self.assertNotIn('alternate_names',c.normalize_organization_requests(base,True)[0])
             self.assertEqual(c.normalize_organization_requests(dict(base,alternate_names=[]),True)[0]['alternate_names'],[])
-        for value in ['bad',[1],['a']*13,['bad\nname']]:
+        for value in ['bad',[1],['a']*33,['bad\nname']]:
             with self.assertRaises(ValueError):c.normalize_reviewed_names(value)
 
 if __name__=='__main__': unittest.main()
