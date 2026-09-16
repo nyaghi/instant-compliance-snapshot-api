@@ -1,0 +1,573 @@
+[
+  {
+    "name": "Good Sports, Inc.",
+    "ein": "75-3138664",
+    "alternate_names": [
+      "GOOD SPORTS, INC."
+    ],
+    "expected": "Current",
+    "observed_rows": [
+      {
+        "name": "Good Sports, Inc",
+        "status": "Current",
+        "registration_date": "2016-06-21",
+        "type": "Charity"
+      }
+    ],
+    "evidence_epoch": 1789515480,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "Focus on the Family",
+    "ein": "95-3188150",
+    "alternate_names": [
+      "FOCUS ON THE FAMILY"
+    ],
+    "expected": "Closed / Withdrawn / Canceled",
+    "observed_rows": [
+      {
+        "name": "Focus on the Family",
+        "status": "Close",
+        "registration_date": "2014-08-14",
+        "type": "Charity"
+      }
+    ],
+    "evidence_epoch": 1789515515,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "GiGi's Playhouse, Inc.",
+    "ein": "20-0058563",
+    "alternate_names": [
+      "GIGI'S PLAYHOUSE, INC."
+    ],
+    "expected": "Closed / Withdrawn / Canceled",
+    "observed_rows": [
+      {
+        "name": "GiGi's Playhouse, Inc.",
+        "status": "Close",
+        "registration_date": "2017-07-20",
+        "type": "Charity"
+      }
+    ],
+    "evidence_epoch": 1789515605,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "Center for a New American Security, Inc.",
+    "ein": "20-8084828",
+    "alternate_names": [
+      "CENTER FOR A NEW AMERICAN SECURITY, INC.",
+      "Center For New American Security Inc"
+    ],
+    "expected": "Not Registered",
+    "observed_rows": [
+      {
+        "name": "American Opportunity and Security, Inc.",
+        "status": "Not Current",
+        "registration_date": "2000-05-30",
+        "type": "Charity"
+      }
+    ],
+    "evidence_epoch": 1789515743,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "Every Woman Treaty Inc.",
+    "ein": "47-3272024",
+    "alternate_names": [
+      "EVERY WOMAN TREATY, INC.",
+      "Every Woman",
+      "INTERNATIONAL COMMISSION ON VIOLENCE AGAINST WOMEN AND GIRLS"
+    ],
+    "expected": "Not Registered",
+    "observed_rows": [],
+    "evidence_epoch": 1789515840,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "Conservation Nation",
+    "ein": "52-0853312",
+    "alternate_names": [
+      "CONSERVATION NATION",
+      "FRIENDS OF THE NATIONAL ZOO"
+    ],
+    "expected": "Delinquent",
+    "observed_rows": [
+      {
+        "name": "Conservation Nation",
+        "status": "Not Current",
+        "registration_date": "2016-12-07",
+        "type": "Charity"
+      }
+    ],
+    "evidence_epoch": 1789515924,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "CMI Employee Appreciation Fund",
+    "ein": "47-4444592",
+    "alternate_names": [
+      "CMI EMPLOYEE APPRECIATION FUND"
+    ],
+    "expected": "Delinquent",
+    "observed_rows": [
+      {
+        "name": "CMI Employee Appreciation Fund",
+        "status": "Not Current",
+        "registration_date": "2019-03-22",
+        "type": "Charity"
+      }
+    ],
+    "evidence_epoch": 1789515994,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "Classical 98.1",
+    "ein": "27-3067797",
+    "alternate_names": [
+      "CLASSICAL 98 1",
+      "CLASSICAL 98.1"
+    ],
+    "expected": "Not Registered",
+    "observed_rows": [
+      {
+        "name": "Anthem Classical Academy Inc",
+        "status": "Current",
+        "registration_date": "2021-11-08",
+        "type": "Charity"
+      }
+    ],
+    "evidence_epoch": 1789516412,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "Association of the United States Army",
+    "ein": "53-0193361",
+    "alternate_names": [
+      "ASSOCIATION OF THE UNITED STATES ARMY (THE)",
+      "Association Of The United State Army Inc",
+      "ASSOCIATION OF THE UNITED STATES ARMY"
+    ],
+    "expected": "Current",
+    "observed_rows": [
+      {
+        "name": "Association of the United States Army",
+        "status": "Current",
+        "registration_date": "2016-07-26",
+        "type": "Charity"
+      }
+    ],
+    "evidence_epoch": 1789516473,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "Education Forward DC",
+    "ein": "81-1823628",
+    "alternate_names": [
+      "EDUCATION FORWARD DC"
+    ],
+    "expected": "Not Registered",
+    "observed_rows": [
+      {
+        "name": "AAMGA Education Foundation",
+        "status": "Close",
+        "registration_date": "2010-07-27",
+        "type": "Charity"
+      }
+    ],
+    "evidence_epoch": 1789516546,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "Gatestone Institute",
+    "ein": "45-4724565",
+    "alternate_names": [
+      "GATESTONE INSTITUTE"
+    ],
+    "expected": "Current",
+    "observed_rows": [
+      {
+        "name": "Gatestone Institute",
+        "status": "Current",
+        "registration_date": "2014-03-24",
+        "type": "Charity"
+      }
+    ],
+    "evidence_epoch": 1789516698,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "Beth Israel Deaconess Hospital – Milton, Inc.",
+    "ein": "04-2103604",
+    "alternate_names": [
+      "BETH ISRAEL DEACONESS HOSPITAL - MILTON, INC."
+    ],
+    "expected": "Current",
+    "observed_rows": [
+      {
+        "name": "Beth Israel Deaconess Hospital-Milton,Inc",
+        "status": "Current",
+        "registration_date": "2021-12-20",
+        "type": "Charity"
+      }
+    ],
+    "evidence_epoch": 1789517021,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "Beth Israel Deaconess Medical Center, Inc.",
+    "ein": "04-2103881",
+    "alternate_names": [
+      "BETH ISRAEL DEACONESS MEDICAL CENTER, INC."
+    ],
+    "expected": "Current",
+    "observed_rows": [
+      {
+        "name": "Beth Israel Deaconess Medical Center, Inc.",
+        "status": "Current",
+        "registration_date": "2014-08-14",
+        "type": "Charity"
+      }
+    ],
+    "evidence_epoch": 1789517072,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "National Arbor Day Foundation",
+    "ein": "23-7169265",
+    "alternate_names": [
+      "NATIONAL ARBOR DAY FOUNDATION",
+      "ARBOR DAY FOUNDATION"
+    ],
+    "expected": "Current",
+    "observed_rows": [
+      {
+        "name": "National Arbor Day Foundation",
+        "status": "Current",
+        "registration_date": "2000-11-28",
+        "type": "Charity"
+      }
+    ],
+    "evidence_epoch": 1789517146,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "Proteus Fund, Inc.",
+    "ein": "04-3243004",
+    "alternate_names": [
+      "PROTEUS FUND, INC."
+    ],
+    "expected": "Current",
+    "observed_rows": [
+      {
+        "name": "Proteus Fund, Inc",
+        "status": "Current",
+        "registration_date": "2020-02-07",
+        "type": "Charity"
+      }
+    ],
+    "evidence_epoch": 1789517194,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "Amirah, Inc.",
+    "ein": "27-1214049",
+    "alternate_names": [
+      "AMIRAH, INC."
+    ],
+    "expected": "Not Registered",
+    "observed_rows": [],
+    "evidence_epoch": 1789517253,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "Federation of Jewish Communities of the CIS, Inc.",
+    "ein": "13-3970940",
+    "alternate_names": [
+      "FEDERATION OF JEWISH COMMUNITIES OF THE C.I.S., INC.",
+      "Federation Of Jewish Communities Of The C I S Inc"
+    ],
+    "expected": "Current",
+    "observed_rows": [
+      {
+        "name": "Federation of Jewish Communities of the CIS, Inc",
+        "status": "Current",
+        "registration_date": "2024-03-12",
+        "type": "Charity"
+      }
+    ],
+    "evidence_epoch": 1789517325,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "American Independent Media",
+    "ein": "81-4770680",
+    "alternate_names": [
+      "AMERICAN INDEPENDENT MEDIA"
+    ],
+    "expected": "Current",
+    "observed_rows": [
+      {
+        "name": "American Independent Media",
+        "status": "Current",
+        "registration_date": "2025-01-29",
+        "type": "Charity"
+      }
+    ],
+    "evidence_epoch": 1789517455,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "Foundation for Angelman Syndrome Therapeutics",
+    "ein": "26-3160079",
+    "alternate_names": [
+      "FOUNDATION FOR ANGELMAN SYNDROME THERAPEUTICS",
+      "FAST",
+      "Angelman Syndrome Therapeutics"
+    ],
+    "expected": "Current",
+    "observed_rows": [
+      {
+        "name": "Foundation for Angelman Syndrome Therapeutics",
+        "status": "Current",
+        "registration_date": "2025-01-23",
+        "type": "Charity"
+      }
+    ],
+    "evidence_epoch": 1789517497,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "National Marrow Donor Program",
+    "ein": "84-0865803",
+    "alternate_names": [
+      "NATIONAL MARROW DONOR PROGRAM",
+      "NMDP"
+    ],
+    "expected": "Current",
+    "observed_rows": [
+      {
+        "name": "National Marrow Donor Program",
+        "status": "Current",
+        "registration_date": "2001-03-08",
+        "type": "Charity"
+      }
+    ],
+    "evidence_epoch": 1789517543,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "ACOEL Foundation",
+    "ein": "82-3980782",
+    "alternate_names": [
+      "ACOEL FOUNDATION"
+    ],
+    "expected": "Delinquent",
+    "observed_rows": [
+      {
+        "name": "ACOEL Foundation",
+        "status": "Not Current",
+        "registration_date": "2020-01-10",
+        "type": "Charity"
+      }
+    ],
+    "evidence_epoch": 1789517601,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "Zearn",
+    "ein": "37-1665745",
+    "alternate_names": [
+      "ZEARN"
+    ],
+    "expected": "Current",
+    "observed_rows": [
+      {
+        "name": "ZEARN",
+        "status": "Current",
+        "registration_date": "2022-01-12",
+        "type": "Charity"
+      }
+    ],
+    "evidence_epoch": 1789517642,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "Canary Impact Lab, Inc.",
+    "ein": "87-2605065",
+    "alternate_names": [
+      "CANARY IMPACT LAB, INC."
+    ],
+    "expected": "Current",
+    "observed_rows": [
+      {
+        "name": "Canary impact Lab Inc",
+        "status": "Current",
+        "registration_date": "2022-08-24",
+        "type": "Charity"
+      }
+    ],
+    "evidence_epoch": 1789517689,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "American Veterans Care Association Inc.",
+    "ein": "85-0979995",
+    "alternate_names": [
+      "AMERICAN VETERANS CARE ASSOCIATION INC."
+    ],
+    "expected": "Current",
+    "observed_rows": [
+      {
+        "name": "American Veterans Care Association Inc.",
+        "status": "Current",
+        "registration_date": "2023-08-22",
+        "type": "Charity"
+      }
+    ],
+    "evidence_epoch": 1789517842,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "American Public Gardens Association",
+    "ein": "23-7110058",
+    "alternate_names": [
+      "AMERICAN PUBLIC GARDENS ASSOCIATION"
+    ],
+    "expected": "Current",
+    "observed_rows": [
+      {
+        "name": "American Public Gardens Association",
+        "status": "Current",
+        "registration_date": "2024-06-03",
+        "type": "Charity"
+      }
+    ],
+    "evidence_epoch": 1789517888,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "Every Kid Sports",
+    "ein": "27-1723872",
+    "alternate_names": [
+      "EVERY KID SPORTS"
+    ],
+    "expected": "Current",
+    "observed_rows": [
+      {
+        "name": "Every Kid Sports",
+        "status": "Current",
+        "registration_date": "2026-08-10",
+        "type": "Charity"
+      }
+    ],
+    "evidence_epoch": 1789517955,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "Classroom Champions, Inc.",
+    "ein": "45-1256761",
+    "alternate_names": [
+      "CLASSROOM CHAMPIONS, INC."
+    ],
+    "expected": "Delinquent",
+    "observed_rows": [
+      {
+        "name": "Classroom Champions, Inc.",
+        "status": "Not Current",
+        "registration_date": "2017-01-25",
+        "type": "Charity"
+      }
+    ],
+    "evidence_epoch": 1789518742,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "Chemical Coaters Association International Finishing Education Foundation, Inc.",
+    "ein": "83-2985088",
+    "alternate_names": [
+      "CHEMICAL COATERS ASSOCIATION INTERNATIONAL FINISHING EDUCATION FOUNDATION, INC.",
+      "Chemical Coaters Assoc Internl Finishing Education Foundation",
+      "CHEMICAL COATERS ASSOCIATION INTERNATIONAL FINISHING EDUCATION FND"
+    ],
+    "expected": "Current",
+    "observed_rows": [
+      {
+        "name": "Chemical Coaters Association International",
+        "status": "Current",
+        "registration_date": "2020-05-28",
+        "type": "Charity"
+      }
+    ],
+    "evidence_epoch": 1789518843,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "Earthjustice",
+    "ein": "94-1730465",
+    "alternate_names": [
+      "EARTHJUSTICE",
+      "EARTHJUSTICE LEGAL DEFENSE FUND"
+    ],
+    "expected": "Current",
+    "observed_rows": [
+      {
+        "name": "Earthjustice",
+        "status": "Current",
+        "registration_date": "2000-12-18",
+        "type": "Charity"
+      }
+    ],
+    "evidence_epoch": 1789518900,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  },
+  {
+    "name": "Camp Kesem National",
+    "ein": "51-0454157",
+    "alternate_names": [
+      "CAMP KESEM NATIONAL"
+    ],
+    "expected": "Current",
+    "observed_rows": [
+      {
+        "name": "Camp Kesem National",
+        "status": "Current",
+        "registration_date": "2015-09-09",
+        "type": "Charity"
+      }
+    ],
+    "evidence_epoch": 1789519269,
+    "source_url": "https://sos-corp-search.ark.org/index.php/charity",
+    "source_app_version": "2026.09.15.5-staging"
+  }
+]

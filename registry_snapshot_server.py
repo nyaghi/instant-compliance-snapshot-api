@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.15.6-staging").strip() or "2026.09.15.6-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.15.7-staging").strip() or "2026.09.15.7-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -1861,6 +1861,41 @@ def irs_return_header(ein: str, object_id: str, deadline: float) -> dict:
     return irs_header_evidence(source, ein, url)
 
 
+def irs_historical_filer_names(source: str, ein: str, url: str) -> list[dict]:
+    """Historical identity only: same-EIN filer fields, never dates or schedules."""
+    fields = {}
+    for path, value in re.findall(r'<span\b[^>]*\bid="([^"]+)"[^>]*>([^<]*)</span>', source, re.I):
+        if "/ReturnHeader[1]/Filer[1]/" in path:
+            fields[path.split("/ReturnHeader[1]/Filer[1]/", 1)[1]] = html.unescape(value).strip()
+    if canonical_ein_digits(fields.get("EIN[1]", "")) != ein:
+        raise ValueError("Historical IRS filer does not confirm the requested EIN")
+    name = " ".join(fields.get(f"BusinessName[1]/BusinessNameLine{i}Txt[1]", "") for i in (1, 2)).strip()
+    if not name:
+        name = " ".join(fields.get(f"Name[1]/BusinessNameLine{i}[1]", "") for i in (1, 2)).strip()
+    candidate = identity_candidate(name, "IRS via ProPublica", "Historical Form 990 filer legal name", url, historical=True)
+    return [candidate] if candidate else []
+
+
+def identity_irs_historical_names(ein: str, latest_object_id: str, deadline: float) -> dict:
+    # The organization-specific index supplies filing IDs. Inspect at most three
+    # oldest electronic returns within the existing discovery deadline.
+    index = identity_fetch(f"https://projects.propublica.org/nonprofits/organizations/{ein}", deadline).decode("utf-8", "replace")
+    ids = sorted(set(re.findall(r"/organizations/" + ein + r"/(\d{18})/full\b", index)) - {latest_object_id})[:3]
+    names, checked, complete = [], 0, True
+    for object_id in ids:
+        try:
+            url = f"https://projects.propublica.org/nonprofits/full_text/{object_id}/IRS990"
+            source = identity_fetch(url, deadline).decode("utf-8", "replace")
+            names.extend(irs_historical_filer_names(source, ein, url)); checked += 1
+        except Exception:
+            complete = False
+        if time.monotonic() >= deadline:
+            break
+    return {"names": names, "historical_returns_checked": checked,
+            "historical_complete": complete and checked == len(ids),
+            "historical_note": "Up to three oldest available electronic IRS filer headers checked for former names; this is not an exhaustive name history."}
+
+
 def identity_irs_names(ein: str, deadline: float) -> dict:
     api_url = f"https://projects.propublica.org/nonprofits/api/v2/organizations/{ein}.json"
     payload = json.loads(identity_fetch(api_url, deadline))
@@ -1881,6 +1916,13 @@ def identity_irs_names(ein: str, deadline: float) -> dict:
             result["note"] = "The latest available Form 990 discloses no DBA in its DBA field; other sources may list alternate names."
     except Exception:
         result["limitation"] = "IRS organization name checked; the latest Form 990 header could not be confirmed."
+    try:
+        history = identity_irs_historical_names(ein, object_id, min(deadline - 0.2, time.monotonic() + 6.0))
+        result["names"].extend(history.pop("names")); result.update(history)
+        if not result["historical_complete"]:
+            result.update(complete=False, limitation="Current IRS names retained; some historical filer headers could not be checked.")
+    except Exception:
+        result.update(complete=False, historical_complete=False, limitation="Current IRS names retained; historical IRS names could not be checked within this discovery request.")
     return result
 
 
@@ -4145,6 +4187,20 @@ def explicit_legal_name_before_alias_segments(name: str) -> list[str]:
         if cleaned.lower() not in {existing.lower() for existing in values}:
             values.append(cleaned)
     return values
+
+
+def reviewed_name_search_probes(ein: str) -> list[tuple[str, str]]:
+    """Bounded retrieval phrases; these are not additional accepted identities."""
+    pairs, seen = [], set()
+    for name in sorted(known_names_for_ein(ein), key=lambda value: len(value.split()), reverse=True):
+        words = canonical_name_punctuation(name).split()
+        if len(words) < 5:
+            continue
+        probe = " ".join(words[:3]).strip(" ,;-")
+        if len(distinctive_match_tokens(probe)) < 2 or probe.casefold() in seen:
+            continue
+        pairs.append((name, probe)); seen.add(probe.casefold())
+    return pairs
 
 
 def build_search_queries(
@@ -20276,7 +20332,22 @@ def ar_registry_name_is_safe(row_name: str, original_name: str, variant_targets:
     ]
     if len(row_words) <= 1 and len(original_words) >= 2:
         return False
-    return registry_name_is_safe_against_targets(row_name, variant_targets, original_name, ein)
+    # A reviewed long name must not admit a generic parent after its named
+    # scope was removed. Arkansas may truncate the end, but must retain the
+    # beginning of that scope (e.g. "of the United"). Search probes cannot
+    # supply missing identity words.
+    safe_targets = []
+    row_key = complete_name_identity_key(row_name)
+    for target in variant_targets:
+        key = complete_name_identity_key(target)
+        scope = re.search(r"\b(?:of|in|for)\s+(?:the\s+)?(\w+)", key)
+        if key.startswith(row_key + " ") and scope and scope.start() >= len(row_key):
+            continue
+        safe_targets.append(target)
+    if not safe_targets:
+        return False
+    # Prevent the context's reviewed-name shortcut from bypassing this filter.
+    return any(registry_name_is_safe_against_targets(row_name, [target], target, "") for target in safe_targets)
 
 
 def ar_user_accepted_name_match(candidate_name: str, original_name: str, ein: str) -> bool:
@@ -20349,7 +20420,7 @@ def search_ar_precise(page, org):
             variants.append(cleaned)
 
     best = None
-    best_score = -10000
+    best_score = None
     first_rejected_row = ""
     unconfirmed_name = ""
     reached = False
@@ -20414,10 +20485,7 @@ def search_ar_precise(page, org):
                 row_name = row.get("name", "")
                 if not row_name:
                     continue
-                variant_targets = list(dict.fromkeys([
-                    *organization_match_target_variants(original_name, getattr(org, "ein", "")),
-                    *organization_match_target_variants(variant, getattr(org, "ein", "")),
-                ]))
+                variant_targets = organization_match_target_variants(original_name, getattr(org, "ein", ""))
                 identity = ar_candidate_identity(row, original_name, variant_targets, getattr(org, "ein", ""))
                 if identity not in {"accept", "accept_with_ein_caution"}:
                     if identity == "unconfirmed":
@@ -20433,15 +20501,14 @@ def search_ar_precise(page, org):
                         )
                     continue
                 name_score = checker.name_match_priority_for_targets(row_name, variant_targets)
-                score = (
-                    (name_score * 100000000)
-                    + (ar_status_priority(row.get("status", "")) * 1000000)
-                    + ar_registration_date_ordinal(row.get("registration_date", ""))
-                )
-                if score > best_score:
+                ein_match = canonical_ein_digits(str(row.get("ein") or row.get("fein") or "")) == canonical_ein_digits(getattr(org, "ein", ""))
+                score = (int(ein_match and bool(getattr(org, "ein", ""))), target_name_score(row_name, variant_targets), name_score,
+                         ar_status_priority(row.get("status", "")),
+                         ar_registration_date_ordinal(row.get("registration_date", "")))
+                if best_score is None or score > best_score:
                     best_score = score
                     best = dict(row, _cc_identity=identity)
-            if best and best_score >= 300:
+            if best:
                 break
         except Exception as exc:
             result.error = f"AR error: {exc}"
@@ -20558,6 +20625,15 @@ def ar_preferred_name_variants(org) -> list[str]:
         add(alias_segment)
         for alias_variant in high_signal_search_phrases(alias_segment):
             add(alias_variant)
+
+    probes = reviewed_name_search_probes(getattr(org, "ein", ""))
+    if probes:
+        add(original, allow_broad=True)
+        # Give the longest reviewed alias one useful retrieval probe before
+        # redundant punctuation forms consume the unchanged eight-query budget.
+        add(probes[0][0]); add(probes[0][1])
+        for alias in known_names_for_ein(getattr(org, "ein", "")):
+            add(alias, allow_broad=not search_query_is_too_broad(alias))
 
     def leading_distinctive_probe(value: str) -> str:
         cleaned = re.sub(r"\([^)]*\)", " ", value or "")
