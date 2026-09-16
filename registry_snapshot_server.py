@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.16.1-staging").strip() or "2026.09.16.1-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.16.2-staging").strip() or "2026.09.16.2-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -1785,7 +1785,7 @@ def registry_identity_preference(candidate: str, original: str, ein: str = "") -
     return 3 if current else 1 if historical else 2
 
 
-def registry_address_evidence(ein: str, location: str, *, candidate_ein: str = "", role: str = "organization") -> dict:
+def registry_address_evidence(ein: str, location: str, *, candidate_ein: str = "", role: str = "organization", registry_state: str = "") -> dict:
     """Corroborate a registry organization location against same-EIN IRS metadata.
 
     Different EINs override matching addresses; an agent/mailing location is not
@@ -1797,6 +1797,11 @@ def registry_address_evidence(ein: str, location: str, *, candidate_ein: str = "
         return {"decision": "same_ein" if actual == requested else "different_ein"}
     if role != "organization" or not location or len(requested) != 9:
         return {"decision": "unavailable"}
+    raw_location = location
+    if registry_state == "ME":
+        # Maine prefixes a shared city with this display marker; it is not
+        # part of the city name and does not establish a different address.
+        location = re.sub(r"^\s*\*MULTIPLES\s+IN\s+", "", location, flags=re.I)
     match = re.fullmatch(r"\s*(.+?),\s*([A-Za-z]{2})(?:\s+\d{5}(?:-\d{4})?)?\s*", location)
     if not match:
         return {"decision": "unavailable"}
@@ -1809,7 +1814,7 @@ def registry_address_evidence(ein: str, location: str, *, candidate_ein: str = "
     if not city or not state:
         return {"decision": "unavailable"}
     agrees = city_key(city) == city_key(match[1]) and state == match[2].upper()
-    return {"decision": "corroborated" if agrees else "conflict", "registry_location": location,
+    return {"decision": "corroborated" if agrees else "conflict", "registry_location": raw_location,
             "ein_linked_location": f"{city}, {state}", "source_url": f"https://projects.propublica.org/nonprofits/organizations/{requested}",
             "basis": "Organization location compared with same-EIN IRS organization metadata; address alone does not establish identity."}
 
@@ -6765,7 +6770,7 @@ def me_fast_direct_confirmation_result(org, page=None, deadline=None):
                     score = checker.candidate_selection_score_for_targets(row.get("name", ""), target_names, row_text)
                     if score[0] < 0 or not registry_name_is_safe_for_org(row.get("name", ""), org.organization_name, org.ein):
                         continue
-                    address = registry_address_evidence(org.ein, row.get("location", ""))
+                    address = registry_address_evidence(org.ein, row.get("location", ""), registry_state="ME")
                     row["address_evidence"] = address
                     score = (score[0], registry_identity_preference(row.get("name", ""), org.organization_name, org.ein),
                              0 if address["decision"] == "conflict" else 1, score[1])

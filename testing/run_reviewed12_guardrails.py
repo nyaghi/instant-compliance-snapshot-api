@@ -112,6 +112,24 @@ class ReviewedTwelveTests(unittest.TestCase):
         self.assertEqual(c.registry_address_evidence('123456789','Chicago, IL',candidate_ein='987654321')['decision'],'different_ein')
     def test_missing_address_does_not_reject(self):
         self.assertEqual(c.registry_address_evidence('123456789','')['decision'],'unavailable')
+    def test_maine_multiple_location_marker_is_not_part_of_city(self):
+        with patch.object(c,'public_profile_for_ein',return_value={'organization':{'ein':226063412,'city':'Charlotte','state':'NC'}}):
+            for location in ['*MULTIPLES IN CHARLOTTE, NC','Charlotte, NC',' *Multiples in Charlotte, NC 28271']:
+                evidence=c.registry_address_evidence('226063412',location,registry_state='ME')
+                self.assertEqual(evidence['decision'],'corroborated')
+                self.assertEqual(evidence['registry_location'],location)
+    def test_maine_marker_keeps_real_location_and_ein_conflicts(self):
+        with patch.object(c,'public_profile_for_ein',return_value={'organization':{'ein':226063412,'city':'Charlotte','state':'NC'}}):
+            for location in ['*MULTIPLES IN CHICAGO, IL','*MULTIPLES IN CHARLOTTE, MI']:
+                self.assertEqual(c.registry_address_evidence('226063412',location,registry_state='ME')['decision'],'conflict')
+            self.assertEqual(c.registry_address_evidence('226063412','*MULTIPLES IN CHARLOTTE, NC',candidate_ein='123456789',registry_state='ME')['decision'],'different_ein')
+            self.assertEqual(c.registry_address_evidence('226063412','*MULTIPLES IN CHICAGO, IL',candidate_ein='226063412',registry_state='ME')['decision'],'same_ein')
+            self.assertEqual(c.registry_address_evidence('226063412','*MULTIPLES IN CHARLOTTE, NC',role='registered_agent',registry_state='ME')['decision'],'unavailable')
+            self.assertEqual(c.registry_address_evidence('226063412','*MULTIPLES IN',registry_state='ME')['decision'],'unavailable')
+    def test_maine_marker_normalization_is_not_a_global_name_relaxation(self):
+        with patch.object(c,'public_profile_for_ein',return_value={'organization':{'ein':226063412,'city':'Charlotte','state':'NC'}}):
+            self.assertEqual(c.registry_address_evidence('226063412','*MULTIPLES IN CHARLOTTE, NC')['decision'],'conflict')
+            self.assertEqual(c.registry_address_evidence('226063412','OTHER LOCATION IN CHARLOTTE, NC',registry_state='ME')['decision'],'conflict')
     def test_same_credential_may_list_more_than_one_organization_address(self):
         detail='Name: YWCA USA INC Credential Type: CHARITABLE ORGANIZATION Credential Number: 3108-800 Location: MESA, AZ Status License is current (Active)'
         row={'license_number':'3108-800','registry_name':'YWCA USA','location':'WASHINGTON, DC'}
