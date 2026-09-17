@@ -47,6 +47,27 @@ class MaineBudgetTests(unittest.TestCase):
   with patch.object(c,'run_state_lookup',return_value={'state':'ME','status':'Site Not Reachable'} ) as run:
    result=c.run_single_state_lookup_reliably('Example Charity','123456789','ME')
   self.assertEqual(run.call_count,1);self.assertEqual(result['semantic_attempts'],1)
+ def test_reviewed_suffix_is_covered_by_maine_prefix(self):
+  with patch.object(c,'known_names_for_ein',return_value=['Example Charity Foundation']):
+   queries=c.me_fast_direct_query_variants(self.org)
+  self.assertIn('Example Charity',queries)
+  self.assertNotIn('Example Charity Foundation',queries)
+ def test_care_of_contact_is_not_an_alias_search(self):
+  with patch.object(c,'known_names_for_ein',return_value=['Example Charity C/O Corporate Agent Inc']):
+   queries=c.me_fast_direct_query_variants(self.org)
+  self.assertIn('Example Charity',queries)
+  self.assertFalse(any('corporate agent' in x.lower() for x in queries))
+ def test_distinct_reviewed_former_name_is_retained(self):
+  with patch.object(c,'known_names_for_ein',return_value=['Historic Support Trust']):
+   queries=c.me_fast_direct_query_variants(self.org)
+  self.assertIn('Historic Support Trust',queries)
+ def test_contact_text_that_is_independently_reviewed_is_preserved(self):
+  with patch.object(c,'known_names_for_ein',return_value=['Example Charity C/O Corporate Agent Inc','Corporate Agent Inc']):
+   queries=c.me_fast_direct_query_variants(self.org)
+  self.assertTrue(any('corporate agent' in x.lower() and not x.lower().startswith('example') for x in queries))
+ def test_punctuation_with_different_search_prefix_is_retained(self):
+  queries=c.me_fast_direct_query_variants(c.checker.Organization('Young Life','840385934'))
+  self.assertIn('Young Life',queries);self.assertIn('Young-Life',queries)
  def test_lock_contention_is_not_negative(self):
   lock=Mock();lock.acquire.return_value=False
   with patch.object(c,'ME_LOOKUP_LOCK',lock):r=c.search_me_serialized(Mock(),self.org)

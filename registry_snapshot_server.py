@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.17.3-staging").strip() or "2026.09.17.3-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.17.4-staging").strip() or "2026.09.17.4-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -7068,7 +7068,25 @@ def me_fast_direct_query_variants(org) -> list[str]:
     queries.sort(key=lambda query: 0 if any(value.casefold().startswith(query.casefold())
                  for value in (original_name, leading_article_removed)) else 1)
     planned = reviewed_queries_first(original_name, getattr(org, "ein", ""), queries)
-    return canonical_legal_query_first(original_name, planned, queries)
+    planned = canonical_legal_query_first(original_name, planned, queries)
+    # Reviewed names are added after the earlier prefix reduction. Apply Maine's
+    # literal Begins With coverage to the final plan too. A C/O mailing contact
+    # split at '/' is not an organization alias; retain it only if independently
+    # supplied as a complete name. Matching and address confirmation are unchanged.
+    sources = [original_name, *known_names_for_ein(getattr(org, "ein", ""))]
+    complete_names = {identity_name_key(value) for value in sources}
+    contact_parts = set()
+    for source in sources:
+        care_of = re.search(r"\bc\s*/\s*o\s+(.+)$", source, re.I)
+        if care_of:
+            contact_parts.update(identity_name_key(value) for value in
+                                 (care_of[1], "o " + care_of[1]))
+    planned = [query for query in planned if identity_name_key(query) not in contact_parts
+               or identity_name_key(query) in complete_names]
+    reduced = [query for query in planned if not any(
+        len(other) < len(query) and query.casefold().startswith(other.casefold())
+        for other in planned)]
+    return canonical_legal_query_first(original_name, reduced, planned)
 
 
 def me_request_timeout(deadline: float, maximum: float) -> float:
