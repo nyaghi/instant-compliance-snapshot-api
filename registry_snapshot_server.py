@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.17.6-staging").strip() or "2026.09.17.6-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.17.7-staging").strip() or "2026.09.17.7-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -14650,9 +14650,11 @@ WI_FINANCIAL_IDENTITY_CACHE: dict[tuple, dict] = {}
 WI_FINANCIAL_IDENTITY_LOCK = threading.Lock()
 
 
-def wi_identity_read(operation, deadline: float, stage: str):
+def wi_identity_read(operation, deadline: float, stage: str, diagnostics: dict | None = None):
     """Retry a transient evidence read once, within the existing total budget."""
     for attempt in (1, 2):
+        if diagnostics is not None:
+            diagnostics.update(stage=stage, read_attempt=attempt)
         if time.monotonic() >= deadline:
             raise TimeoutError(f"Wisconsin identity deadline at {stage}")
         try:
@@ -14660,6 +14662,8 @@ def wi_identity_read(operation, deadline: float, stage: str):
         except (OSError, urllib.error.URLError) as exc:
             code = getattr(exc, "code", None)
             transient = code is None or code in {408, 429, 500, 502, 503, 504}
+            if diagnostics is not None:
+                diagnostics.setdefault("read_failures", []).append({"stage": stage, "attempt": attempt, "error": type(exc).__name__, "http": code})
             log_event(f"WI identity read failed: stage={stage}; attempt={attempt}; error={type(exc).__name__}; http={code}")
             if not transient or attempt == 2 or deadline - time.monotonic() < 1:
                 raise
@@ -14680,42 +14684,51 @@ def wi_identity_page(opener, request, deadline: float) -> str:
     return b"".join(chunks).decode("utf-8", "replace")
 
 
-def wi_financial_identity_evidence(ein: str, href: str, credential: str, hour: int) -> dict:
+def wi_financial_identity_evidence(ein: str, href: str, credential: str, hour: int, diagnostics: dict | None = None) -> dict:
     """Resolve an address spelling conflict from five same-year filing values.
 
     Cached corroboration is identity evidence only; current status is always
     read independently from the selected credential.
     """
     key = (ein, href, credential, hour)
+    diagnostics = diagnostics if diagnostics is not None else {}
+    diagnostics.update(stage="IRS organization metadata", reason="")
     with WI_FINANCIAL_IDENTITY_LOCK:
         if key in WI_FINANCIAL_IDENTITY_CACHE:
+            diagnostics.update(stage="completed", cache_hit=True)
             return dict(WI_FINANCIAL_IDENTITY_CACHE[key])
     deadline = time.monotonic() + 20
     profile = public_profile_for_ein(ein).get("organization") or {}
     object_id = str(profile.get("latest_object_id") or "")
-    if not re.fullmatch(r"\d{18}", object_id): return {}
+    if not re.fullmatch(r"\d{18}", object_id):
+        diagnostics["reason"] = "latest_return_id_unavailable"
+        return {}
     detail_url = urljoin(WI_SEARCH_URL, href)
-    if urlparse(detail_url).hostname != "apps.dfi.wi.gov": return {}
+    if urlparse(detail_url).hostname != "apps.dfi.wi.gov":
+        diagnostics["reason"] = "invalid_credential_source"
+        return {}
     financial_url = urljoin(detail_url, "Financials.aspx") + "?" + urlparse(detail_url).query
     irs_url = f"https://projects.propublica.org/nonprofits/full_text/{object_id}/IRS990"
     stage = "IRS return"
     try:
-        irs_html = wi_identity_read(lambda: identity_fetch(irs_url, deadline).decode("utf-8", "replace"), deadline, stage)
+        irs_html = wi_identity_read(lambda: identity_fetch(irs_url, deadline).decode("utf-8", "replace"), deadline, stage, diagnostics)
         period = irs_header_evidence(irs_html, ein, irs_url)["filing"]
         fiscal_year = str(date.fromisoformat(period["period_end"]).year)
         opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
         stage = "Wisconsin fiscal-year selection"
-        page = wi_identity_read(lambda: wi_identity_page(opener, financial_url, deadline), deadline, stage)
+        page = wi_identity_read(lambda: wi_identity_page(opener, financial_url, deadline), deadline, stage, diagnostics)
         if not re.search(r'<option\b[^>]*value=["\']' + fiscal_year + r'["\']', page):
+            diagnostics.update(reason="fiscal_year_absent", fiscal_year=fiscal_year)
             log_event(f"WI identity evidence unavailable: credential={credential}; stage={stage}; reason=fiscal_year_absent")
             return {}
         fields = html_hidden_inputs(page)
         fields["ctl00$cphMainContent$ddlFiscalYearsList"] = fiscal_year
         request = urllib.request.Request(financial_url, data=urlencode(fields).encode(), headers={"Referer": financial_url})
         stage = "Wisconsin financial values"
-        page = wi_identity_read(lambda: wi_identity_page(opener, request, deadline), deadline, stage)
+        page = wi_identity_read(lambda: wi_identity_page(opener, request, deadline), deadline, stage, diagnostics)
         state_text = html_to_text(page)
         if credential not in state_text:
+            diagnostics["reason"] = "credential_absent"
             log_event(f"WI identity evidence unavailable: credential={credential}; stage={stage}; reason=credential_absent")
             return {}
         fields = {
@@ -14730,18 +14743,23 @@ def wi_financial_identity_evidence(ein: str, href: str, credential: str, hour: i
             reported = re.search(state_label + r"\s+\$([\d,]+)\.00\b", state_text)
             filed = re.search(r'<span\b[^>]*id=["\'][^"\']*/' + irs_field + r'\[1\]["\'][^>]*>\s*([\d,]+)\s*</span>', irs_html)
             if not reported or not filed or reported[1].replace(",", "") != filed[1].replace(",", ""):
+                diagnostics.update(reason="financial_value_mismatch", field=irs_field)
                 log_event(f"WI identity evidence unavailable: credential={credential}; stage={stage}; reason=financial_value_mismatch; field={irs_field}")
                 return {}
             values.append(int(reported[1].replace(",", "")))
-        if sum(value > 0 for value in values) < 4: return {}
+        if sum(value > 0 for value in values) < 4:
+            diagnostics["reason"] = "insufficient_nonzero_amounts"
+            return {}
         evidence = {"decision": "corroborated", "source_url": financial_url, "irs_source_url": irs_url,
-                "fiscal_year": fiscal_year, "basis": "Five financial amounts on the same Wisconsin credential match the same-year IRS return for the requested EIN; this corroborates the minor search-row city spelling difference."}
+                "fiscal_year": fiscal_year, "basis": "Five financial amounts on the same Wisconsin credential match the same-year IRS return for the requested EIN; this corroborates organization identity despite conflicting credential locations."}
         with WI_FINANCIAL_IDENTITY_LOCK:
             if len(WI_FINANCIAL_IDENTITY_CACHE) >= 256:
                 WI_FINANCIAL_IDENTITY_CACHE.pop(next(iter(WI_FINANCIAL_IDENTITY_CACHE)))
             WI_FINANCIAL_IDENTITY_CACHE[key] = evidence
+        diagnostics.update(stage="completed", fiscal_year=fiscal_year)
         return dict(evidence)
     except Exception as exc:
+        diagnostics.update(stage=stage, reason=type(exc).__name__)
         log_event(f"WI identity corroboration unavailable: credential={credential}; stage={stage}; error={type(exc).__name__}")
         return {}
 
@@ -14767,13 +14785,21 @@ def wi_verify_candidate_identity(candidate: dict, targets: list[str], original: 
         return None
     location = re.search(r"\bLocation\s*:\s*(.*?)\s+Status\b", detail, re.I)
     address = registry_address_evidence(ein, location[1] if location else candidate.get("location", ""))
+    if address["decision"] == "conflict":
+        address = dict(address, search_row_location=candidate.get("location", ""), detail_location=location[1] if location else "")
     if address["decision"] == "conflict" and candidate.get("location"):
         alternate_address = registry_address_evidence(ein, candidate["location"])
         if alternate_address["decision"] == "corroborated":
             address = dict(alternate_address, other_registry_location=location[1] if location else "",
                 basis="The same verified credential lists multiple locations; its search-row location agrees with the EIN-linked organization record.")
-        elif wi_minor_city_spelling_difference(ein, candidate["location"]):
-            financial = wi_financial_identity_evidence(canonical_ein_digits(ein), candidate.get("detail_href", ""), candidate["license_number"], int(time.time()//3600))
+        elif (wi_minor_city_spelling_difference(ein, candidate["location"])
+              or registry_identity_preference(primary[1], original, ein) > 0):
+            # Equivalent rows of one credential can expose different offices.
+            # Financial identity belongs to the credential/EIN, not to whichever
+            # location row happened to be returned by this name query.
+            diagnostics = {}
+            financial = wi_financial_identity_evidence(canonical_ein_digits(ein), candidate.get("detail_href", ""), candidate["license_number"], int(time.time()//3600), diagnostics)
+            address["financial_corroboration"] = diagnostics
             if financial:
                 address = dict(financial, registry_location=candidate["location"],
                     ein_linked_location=alternate_address.get("ein_linked_location", ""))

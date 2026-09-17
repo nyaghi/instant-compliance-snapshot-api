@@ -43,13 +43,13 @@ class ThreeStateTests(unittest.TestCase):
   original=c.wi_identity_read
   for selected in ['IRS return','Wisconsin fiscal-year selection','Wisconsin financial values']:
    c.WI_FINANCIAL_IDENTITY_CACHE.clear();attempts=[]
-   def injected(operation,deadline,stage):
-    if stage!=selected:return original(operation,deadline,stage)
+   def injected(operation,deadline,stage,diagnostics=None):
+    if stage!=selected:return original(operation,deadline,stage,diagnostics)
     def once():
      attempts.append(stage)
      if len(attempts)==1:raise TimeoutError('QA injected read failure')
      return operation()
-    return original(once,deadline,stage)
+    return original(once,deadline,stage,diagnostics)
    with self.subTest(stage=selected),patch.object(c,'wi_identity_read',side_effect=injected),patch.object(c.time,'sleep'):
     self.assertEqual(fixtures.RepairTests().financial().get('decision'),'corroborated')
    self.assertEqual(len(attempts),2)
@@ -65,6 +65,23 @@ class ThreeStateTests(unittest.TestCase):
  def test_wi_response_size_is_bounded(self):
   opener=Mock();opener.open.return_value=io.BytesIO(b'x'*2_000_001)
   with self.assertRaises(ValueError):c.wi_identity_page(opener,'https://example.test',time.monotonic()+20)
+ def test_wi_exact_credential_financial_identity_does_not_depend_on_location_row(self):
+  name='Florida Gulf Coast University Foundation Inc'
+  detail='Name: '+name+' Credential Type: Charitable Organization Credential Number: 22812-800 Location: NEW YORK , NY Status: License is current (Active)'
+  conflict={'decision':'conflict','registry_location':'NEW YORK , NY','ein_linked_location':'Fort Myers, FL'}
+  for city in ['NEW YORK , NY','FORT MEYERS, FL']:
+   candidate={'registry_name':name,'license_number':'22812-800','location':city,'detail_href':'CredSummaryDetails.aspx?chid=944852&h=847014605'}
+   for financial in [{},{'decision':'corroborated','fiscal_year':'2025'}]:
+    with self.subTest(city=city,financial=financial),patch.object(c,'registry_address_evidence',return_value=conflict),patch.object(c,'wi_minor_city_spelling_difference',return_value=city.startswith('FORT')),patch.object(c,'wi_financial_identity_evidence',return_value=financial) as read:
+     result=c.wi_verify_candidate_identity(candidate,[name],name,'650403969',detail)
+    read.assert_called_once();self.assertEqual(result['identity_conflict'],not bool(financial))
+ def test_wi_other_primary_entity_cannot_use_financial_fallback(self):
+  name='Example Hospital - Milton'
+  detail='Name: Example Hospital - Needham Credential Type: Charitable Organization Credential Number: 123-800 Location: Boston, MA Status: License is current (Active)'
+  candidate={'registry_name':name,'license_number':'123-800','location':'Boston, MA','detail_href':'CredSummaryDetails.aspx?chid=123'}
+  with patch.object(c,'wi_financial_identity_evidence') as read:
+   result=c.wi_verify_candidate_identity(candidate,[name],name,'123456789',detail)
+  self.assertTrue(result is None or result.get('identity_conflict'));read.assert_not_called()
  def review(self,foreign=None,primary='Example Education Center',alias='National Institute of Experimental Medicine'):
   data={'names':[c.identity_candidate(primary,'WA','Registered name','https://state.test'),c.identity_candidate(alias,'WA','AKA / DBA','https://state.test')],'complete':True}
   candidate={'ein':987654321,'name':alias,'city':'Seattle','state':'WA',**(foreign or {})}
