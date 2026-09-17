@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.17.4-staging").strip() or "2026.09.17.4-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.17.5-staging").strip() or "2026.09.17.5-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -7096,6 +7096,21 @@ def me_request_timeout(deadline: float, maximum: float) -> float:
     return min(maximum, remaining)
 
 
+def me_query_for_form(query: str, form_html: str) -> str:
+    """Honor the live Begins With field limit without shortening match targets."""
+    field = next((tag for tag in re.findall(r"<input\b[^>]*>", form_html, re.I)
+                  if re.search(r'name=["\'][^"\']*scCompanyName["\']', tag, re.I)), None)
+    if not field:
+        raise ValueError("Maine organization-name search field did not load")
+    maximum = re.search(r'maxlength=["\'](\d+)["\']', field, re.I)
+    if maximum:
+        length = int(maximum[1])
+        if length <= 0:
+            raise ValueError("Maine organization-name field has an invalid limit")
+        return query[:length]
+    return query
+
+
 class MaineRegistrySession:
     """One lookup's cookies and WebForms state; never shared across organizations."""
     def __init__(self, deadline):
@@ -7129,7 +7144,7 @@ class MaineRegistrySession:
             raise ValueError("Maine search form did not finish loading")
         fields.update({
             "ctl00$ctl00$mainContent$mainContent$scRegulator": "4076",
-            "ctl00$ctl00$mainContent$mainContent$scCompanyName": query,
+            "ctl00$ctl00$mainContent$mainContent$scCompanyName": me_query_for_form(query, self.form_html),
             "ctl00$ctl00$mainContent$mainContent$ctl24": "BW",
             "ctl00$ctl00$mainContent$mainContent$btnSearch": "Search",
         })
@@ -7138,7 +7153,10 @@ class MaineRegistrySession:
             timeout=me_request_timeout(self.deadline, ME_FAST_DIRECT_POST_TIMEOUT_SECONDS))
         response.raise_for_status()
         rows = me_parse_search_rows(response.text)
-        self.form_html = response.text
+        # A results document can carry its own WebForms state without the search
+        # form. Never submit that document's hidden fields as the next search.
+        self.form_html = (response.text if re.search(
+            r'name=["\'][^"\']*scCompanyName["\']', response.text, re.I) else "")
         return rows, self
 
 
@@ -7180,10 +7198,22 @@ def me_browser_search_rows(page, query, deadline):
     page.goto(NAME_SEARCH_PREFLIGHT_URLS["ME"], wait_until="domcontentloaded",
         timeout=1000 * me_request_timeout(deadline, 10))
     prefix = 'ctl00$ctl00$mainContent$mainContent$'
-    page.locator(f'select[name="{prefix}scRegulator"]').select_option("4076",
+    regulator = page.locator(f'select[name="{prefix}scRegulator"]')
+    if regulator.input_value() != "4076":
+        if "__doPostBack" in (regulator.get_attribute("onchange") or ""):
+            with page.expect_navigation(wait_until="domcontentloaded",
+                    timeout=1000 * me_request_timeout(deadline, 12)):
+                regulator.select_option("4076",
+                    timeout=1000 * me_request_timeout(deadline, 3))
+        else:
+            regulator.select_option("4076",
+                timeout=1000 * me_request_timeout(deadline, 3))
+    submitted_query = me_query_for_form(query, page.content())
+    company = page.locator(f'input[name="{prefix}scCompanyName"]')
+    company.fill(submitted_query,
         timeout=1000 * me_request_timeout(deadline, 3))
-    page.locator(f'input[name="{prefix}scCompanyName"]').fill(query,
-        timeout=1000 * me_request_timeout(deadline, 3))
+    if company.input_value() != submitted_query:
+        raise ValueError("Maine organization-name field changed before search")
     page.locator(f'input[name="{prefix}ctl24"][value="BW"]').check(
         timeout=1000 * me_request_timeout(deadline, 3))
     # WebForms submits a new document. Wait for that document, so an old empty

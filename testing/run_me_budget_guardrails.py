@@ -4,6 +4,45 @@ from unittest.mock import patch,Mock
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import registry_snapshot_server as c
 class MaineBudgetTests(unittest.TestCase):
+ def test_query_limit_is_read_from_live_form(self):
+  name='Example Organization With A Long Legal Name'
+  for limit in [30,40]:
+   body=f'<input name="ctl00$scCompanyName" maxlength="{limit}" />'
+   self.assertEqual(c.me_query_for_form(name,body),name[:limit])
+  self.assertEqual(c.me_query_for_form(name,'<input name="scCompanyName" />'),name)
+ def test_missing_search_field_does_not_produce_negative(self):
+  with self.assertRaises(ValueError):c.me_query_for_form('Example Charity','Loading')
+ def test_direct_search_sends_live_field_length(self):
+  session=object.__new__(c.MaineRegistrySession);session.deadline=time.perf_counter()+30
+  session.url='https://www.pfr.maine.gov/ALMSOnline/ALMSQuery/SearchCompany.aspx'
+  session.form_html='<input type="hidden" name="__VIEWSTATE" value="state" /><input name="scCompanyName" maxlength="30" />'
+  session.session=Mock();session.session.post.return_value.text='0 records found'
+  name='Example Organization With A Long Legal Name'
+  session.search(name)
+  self.assertEqual(session.session.post.call_args.kwargs['data']['ctl00$ctl00$mainContent$mainContent$scCompanyName'],name[:30])
+  self.assertEqual(session.form_html,'')
+  session.session.get.return_value.text='<input type="hidden" name="__VIEWSTATE" value="fresh" /><input name="scCompanyName" maxlength="30" />'
+  session.session.get.return_value.url=session.url
+  session.search('Another Charity')
+  session.session.get.assert_called_once()
+  self.assertEqual(session.session.post.call_args.kwargs['data']['__VIEWSTATE'],'fresh')
+ def test_browser_waits_for_category_postback_before_entering_name(self):
+  from contextlib import contextmanager
+  events=[];page=Mock();reg=Mock();company=Mock();radio=Mock();button=Mock()
+  reg.input_value.return_value='';reg.get_attribute.return_value="setTimeout('__doPostBack()',0)"
+  reg.select_option.side_effect=lambda *a,**k:events.append('category changed')
+  company.fill.side_effect=lambda value,**k:events.append('name entered')
+  company.input_value.return_value='Example Charity'
+  page.content.return_value='<input name="scCompanyName" maxlength="30" />0 records found'
+  page.locator.side_effect=lambda selector:reg if 'scRegulator' in selector else company if 'scCompanyName' in selector else button if 'btnSearch' in selector else radio
+  @contextmanager
+  def navigation(**kwargs):
+   yield
+   events.append('navigation completed')
+  page.expect_navigation.side_effect=navigation
+  c.me_browser_search_rows(page,'Example Charity',time.perf_counter()+30)
+  self.assertLess(events.index('category changed'),events.index('navigation completed'))
+  self.assertLess(events.index('navigation completed'),events.index('name entered'))
  def setUp(self):
   self.org=c.checker.Organization('Example Charity','123456789')
  def run_flow(self,direct,browser=None):
