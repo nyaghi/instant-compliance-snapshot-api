@@ -1,0 +1,11 @@
+# Oregon / Massachusetts / New York staging repair
+
+Release 2026.09.17.10-staging; connector 0.3.3. Baseline b046174a9d83bd4f231f61dbdc065d8f19b82a86.
+
+- Oregon's export may lag its live detail even after a new download. Confirm inferred export delinquency against the CharityID-linked public record, requiring exact EIN and registration number. Retain name/address evidence; a proven address move does not negate those identifiers. Use actual filed periods and existing deadlines; keep explicit adverse status precedence. Failed or conflicting confirmation remains inconclusive. No change to export-based current results or no-record searches.
+- Massachusetts's multiple legacy attachment guard may block the approved completed-stale-history inference. Allow that existing age/identity/completeness check when the obstacle is multiple old documents, preserving all other unreadable/mismatched/recent filing safeguards. Never select the first attachment or infer a precise fiscal period from a title.
+- New York checks actual form readiness, waits 30 seconds for verification, and retries a timeout once within the existing active-job deadline. The retry closes only its owned state tab, cancels pending work, carries the consumed 401 budget, and preserves EIN/query, queue, origin-window and cancellation isolation. Relay/page deadlines accommodate the bounded recovery. No verification tokens are stored; no additional permissions or production host access.
+
+QA evidence is in outputs/or-ma-ny-repair-20260917. Release gates bind tests to the backend and JS source hashes, preserve the existing complete staging web archive, verify both staging API deployments and published assets, and reject production targets. The source spreadsheet and random seed are frozen before post-validation: 30 of its first 111 organizations, with discovery followed by use of the discovered names. Expectations are not changed automatically.
+
+Required gates: saved-source regression; live positive/no-record/mature-EIN-state controls; delayed-valid/never-ready/verification retry/cancellation and 5/10/15 queue controls; live staging smoke and batch; complete 900-check post-validation with discrepancies investigated and documented. Production promotion requires separate user approval.

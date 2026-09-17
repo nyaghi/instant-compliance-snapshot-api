@@ -120,13 +120,26 @@ class MixedHistory(unittest.TestCase):
                 e = c.ma_read_latest_form_pc(self.page(), self.result(), 'AG Account Number 067048', self.completed)
             self.assertEqual(c.annotate_ma_visible_form_pc_due(self.result(), e).status, 'Unable to Confirm')
 
-    def test_ambiguous_latest_uploads_remain_inconclusive(self):
+    def test_multiple_old_uploads_use_completed_stale_history(self):
         reg = self.completed['registration_documents']['067048']
         reg['annual_scans'].append({**reg['annual_scans'][0], 'url': reg['annual_scans'][0]['url']+'other'})
         p = self.page()
         e = c.ma_read_latest_form_pc(p, self.result(), 'AG Account Number 067048', self.completed)
-        self.assertEqual(c.annotate_ma_visible_form_pc_due(self.result(), e).status, 'Unable to Confirm')
+        self.assertEqual(c.annotate_ma_visible_form_pc_due(self.result(), e).status, 'Delinquent')
+        self.assertTrue(e['completed_history_inferred_delinquent'])
         p.context.request.get.assert_not_called()
+
+    def test_multiple_recent_or_incomplete_uploads_remain_inconclusive(self):
+        for mode in ('recent', 'incomplete', 'unknown', 'wrong-account'):
+            value = copy.deepcopy(self.completed)
+            reg = value['registration_documents']['067048']
+            reg['annual_scans'].append({**reg['annual_scans'][0], 'url': reg['annual_scans'][0]['url']+'other'})
+            if mode == 'recent': reg['documents'].append({'year': '2025', 'title': 'Other/Misc'})
+            elif mode == 'incomplete': reg['complete'] = False
+            elif mode == 'unknown': reg['documents'].append({'year': '', 'title': 'Other/Misc'})
+            else: value['record']['ago_account'] = '999999'
+            e = c.ma_read_latest_form_pc(self.page(), self.result(), 'AG Account Number 067048', value)
+            self.assertEqual(c.annotate_ma_visible_form_pc_due(self.result(), e).status, 'Unable to Confirm', mode)
 
     def test_visible_pending_and_adverse_overrides(self):
         for visible, expected in [('Pending', 'Pending'), ('Suspended', 'Suspended'), ('Revoked', 'Revoked'), ('Closed', 'Closed / Withdrawn / Canceled')]:

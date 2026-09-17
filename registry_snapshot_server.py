@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.17.9-staging").strip() or "2026.09.17.9-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.17.10-staging").strip() or "2026.09.17.10-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -1624,6 +1624,102 @@ def or_snapshot_result_for_ein(org):
         ]
     result.success = True
     result.error = ""
+    return result
+
+
+def or_live_period_evidence(source: str, row: list[str]) -> dict:
+    """Read the export-linked public detail; never substitute another identity."""
+    info = re.search(r'<table\b[^>]*\bid="info"[^>]*>(.*?)</table>', source, re.I | re.S)
+    if not info:
+        return {}
+    labels = {}
+    for fragment in re.findall(r'<tr\b[^>]*>(.*?)</tr>', info.group(1), re.I | re.S):
+        cells = html_table_cells(fragment)
+        if len(cells) == 2:
+            labels[cells[0].strip().rstrip(':')] = cells[1].strip()
+    if (canonical_ein_digits(labels.get('Federal EIN', '')) != canonical_ein_digits(row[4])
+            or labels.get('Registration', '').lstrip('#') != row[1].strip()):
+        return {}
+    name = re.search(r'<div\b[^>]*class="name"[^>]*>(.*?)</div>', source, re.I | re.S)
+    address = re.search(r'<div\b[^>]*class="address"[^>]*>(.*?)</div>', source, re.I | re.S)
+    if not name or not address:
+        return {}
+    name, address = html_to_text(name.group(1)), html_to_text(address.group(1))
+    status = labels.get('Status', '')
+    # Exact EIN and registration identify the entity even after a move/name change.
+    # Retain address and name for audit rather than rejecting a confirmed move.
+    if status in {'Suspended', 'Revoked', 'Withdrawn', 'Closed', 'Exempt'}:
+        return {'name': name, 'address': address, 'status': status, 'override_status': True}
+    periods = []
+    blocks = re.findall(r'<div\b[^>]*class="reportperiod"[^>]*>(.*?)</div>', source, re.I | re.S)
+    for block in blocks:
+        match = re.fullmatch(r'Fiscal Year Beginning (\d{1,2}/\d{1,2}/\d{4}) and Ending (\d{1,2}/\d{1,2}/\d{4})', html_to_text(block))
+        if not match:
+            return {}
+        start, end = (parse_ce_date(value) for value in match.groups())
+        if not start or not end or not start <= end <= date.today() or (end - start).days > 370:
+            return {}
+        periods.append((end, start))
+    if not periods or status != 'Registered':
+        return {}  # Unrecognized/overriding statuses require existing state review.
+    end, start = max(periods)
+    exported_end = parse_ce_date(row[15])
+    if exported_end and end < exported_end:
+        return {}
+    return {'period_start': start, 'period_end': end, 'name': name, 'address': address, 'status': status}
+
+
+def or_confirm_snapshot_delinquency(org, result):
+    """Confirm an export-derived delinquency against its live, exact-EIN record."""
+    if public_status(result) != 'Delinquent':
+        return result
+    row = or_snapshot_row_for_ein(org.ein)
+    evidence = {}
+    url = ''
+    try:
+        if row and re.fullmatch(r'\d+', row[0]):
+            url = 'https://justice.oregon.gov/Charities/Charity/details?charityID=' + row[0]
+            request = urllib.request.Request(url, headers={'User-Agent': 'ComplianceExpressRegistrySnapshot/1.0'})
+            with urllib.request.urlopen(request, timeout=15) as response:
+                if urlparse(response.url).hostname != 'justice.oregon.gov':
+                    raise ValueError('Unexpected Oregon detail destination')
+                content = response.read(2_000_001)
+                if len(content) <= 2_000_000:
+                    evidence = or_live_period_evidence(content.decode('utf-8', errors='replace'), row)
+    except Exception as exc:
+        log_event(f'OR live filing confirmation: {type(exc).__name__}')
+    result.or_live_evidence = {k: format_date(v) if k in {'period_start', 'period_end'} else v for k, v in evidence.items()}
+    if not evidence:
+        result.status = 'Unable to Confirm'
+        result.status_reason = 'OR_LIVE_PERIOD_UNCONFIRMED'
+        result.source_note = ('Oregon\'s downloadable list matched the EIN, but its older filing period could not be confirmed against the live record. '
+                              'The export may lag newer filings, so CharityClarity cannot confirm delinquency from that date alone.')
+        result.raw_status_text = 'Exact EIN found in Oregon export; live filing period unconfirmed'
+        result.computed_due_date = ''
+        return result
+    if evidence.get('override_status'):
+        result.status = evidence['status']
+        result.status_reason = 'OR_LIVE_EXPLICIT_STATUS'
+        result.raw_status_text = 'Status: ' + evidence['status']
+        result.matched_registry_name = evidence['name']
+        result.computed_due_date = ''
+        result.source_note = f"Oregon's live record confirms the exact EIN and registration number and explicitly lists {evidence['status']}. That state status overrides an inferred filing deadline."
+        return result
+    end, start = evidence['period_end'], evidence['period_start']
+    due = or_next_due_from_period_end(end)
+    result.status = status_from_calendar_date(due)
+    result.status_reason = 'OR_STATUS_FROM_CONFIRMED_LIVE_PERIOD'
+    result.registry_url = url
+    result.matched_registry_name = evidence['name']
+    result.last_year_on_record = end.year
+    result.fiscal_year_end = f'{end.month}/{end.day}'
+    result.next_required_period = format_date(add_months_preserving_end_of_month(end, 12))
+    result.computed_due_date = format_date(due)
+    result.raw_status_text = (f'Status: Registered | Latest Fiscal Period End Year: {end.year} | Fiscal Period End: {format_date(end)} | '
+                              f'Fiscal Year Start: {format_date(start)} | Next Due: {format_date(due)}')
+    result.source_note = (f'Oregon\'s live record confirms the exact EIN and registration number, with the latest filed fiscal period ending {format_date(end)}. '
+                          f'The next annual filing is due {format_date(due)}; CharityClarity therefore reports {result.status}. '
+                          'The live filing history was checked because the downloadable export can lag newer reports.')
     return result
 
 
@@ -3327,6 +3423,15 @@ def md_represented_year_from_text(body: str, ein: str = "", organization_name: s
 
 
 def filing_context(result, body: str) -> dict:
+    if getattr(result, 'status_reason', '') in {'OR_STATUS_FROM_CONFIRMED_LIVE_PERIOD', 'OR_LIVE_PERIOD_UNCONFIRMED'}:
+        period = parsed_result_date(getattr(result, 'or_live_evidence', {}).get('period_end', ''))
+        due = parsed_result_date(getattr(result, 'computed_due_date', ''))
+        return {'represented_year': period.year if period else None,
+                'fiscal_end': (period.month, period.day) if period else None,
+                'next_report_year': period.year + 1 if period else None,
+                'due_date': due, 'base_due_date': due, 'extended_due_date': None,
+                'uses_extension_assumption': False, 'uses_extension_scenario': False,
+                'comment': result.source_note or ''}
     if (result.state or "").upper() == "MA" and hasattr(result, "ma_filing_evidence"):
         evidence = result.ma_filing_evidence
         period = parsed_result_date(evidence.get("period_end", ""))
@@ -13010,6 +13115,8 @@ def ma_read_legacy_form_pc(page, completed: dict, account: str, read_progress=No
     selected = {r["url"]: r for r in scans if int(r["year"]) == latest}
     # Multiple latest annual returns require reconciliation, not first-row choice.
     if len(selected) != 1:
+        if read_progress is not None and len(selected) > 1:
+            read_progress['multiple_legacy_candidates'] = True
         return {}
     row = next(iter(selected.values()))
     parsed = urlparse(row["url"])
@@ -13119,7 +13226,7 @@ def ma_read_latest_form_pc(page, result, body: str, completed=None) -> dict:
         if not candidates or max(all_form_years) > max(year for year, _ in candidates):
             progress = {}
             legacy = ma_read_legacy_form_pc(page, completed, account.group(1), read_progress=progress)
-            if not legacy and (not progress.get("attempted") or progress.get("complete")):
+            if not legacy and (not progress.get("attempted") or progress.get("complete") or progress.get("multiple_legacy_candidates")):
                 legacy = ma_completed_history_inference(completed, account.group(1))
             return {**legacy, **context}
         latest_year = max(year for year, _ in candidates)
@@ -17529,7 +17636,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2"}:
+        if not isinstance(connector_version, str) or connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3"}:
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the staging connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()
@@ -18079,6 +18186,8 @@ def ca_explicit_primary_registry_status(result) -> str:
 
 
 def true_status_from_body(result, body: str) -> str:
+    if getattr(result, 'status_reason', '') == 'OR_STATUS_FROM_CONFIRMED_LIVE_PERIOD':
+        return public_status(result)
     if (getattr(result, "state", "") in {"KY", "HI"}
             and getattr(result, "status_reason", "") == f"{result.state}_CONFIRMED_TAX_PERIOD"):
         return public_status(result)
@@ -18544,7 +18653,7 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
                     "a registration expiration date or a specific suspended, revoked, or delinquent status. "
                     "Confirm registration details directly with Virginia.")
 
-    if state == "OR" and reason == "OR_LIVE_EMPTY_REPORTS_INFERRED_DELINQUENT":
+    if state == "OR" and reason in {"OR_LIVE_EMPTY_REPORTS_INFERRED_DELINQUENT", "OR_STATUS_FROM_CONFIRMED_LIVE_PERIOD", "OR_LIVE_PERIOD_UNCONFIRMED", "OR_LIVE_EXPLICIT_STATUS"}:
         return note
 
     if state == "MI" and status == "Unable to Verify" and getattr(result, "reason_code", "") == "MI_EIN_TRANSPORT_TIMEOUT":
@@ -18866,7 +18975,7 @@ def comments_for_result(result, body: str, public_facing_status: str) -> str:
         if context.get("due_date") and context.get("due_date") == context.get("extended_due_date") and context.get("base_due_date"):
             comment += (f" Automatic extension applied: {format_date(context['base_due_date'])} → "
                         f"{format_date(context['extended_due_date'])}, through the 15th day of the 11th month after fiscal year end, for the current registration.")
-    if source_state == "OR" and getattr(result, "status_reason", "") == "OR_LIVE_EMPTY_REPORTS_INFERRED_DELINQUENT":
+    if source_state == "OR" and getattr(result, "status_reason", "") in {"OR_LIVE_EMPTY_REPORTS_INFERRED_DELINQUENT", "OR_STATUS_FROM_CONFIRMED_LIVE_PERIOD", "OR_LIVE_EXPLICIT_STATUS"}:
         return comment
     if source_state == "OK":
         freshness = re.search(r"Certificate freshness note:.*", getattr(result, "source_note", "") or "")
@@ -23509,6 +23618,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
         lookup_started = time.perf_counter()
         result = or_snapshot_result_for_ein(org)
         if result is not None:
+            result = or_confirm_snapshot_delinquency(org, result)
             body = " ".join(part for part in [
                 result.raw_status_text or "",
                 result.source_note or "",

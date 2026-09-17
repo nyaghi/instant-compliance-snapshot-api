@@ -88,7 +88,7 @@
       // Verify click when the page already permits this search.
       if (!force && attempt === 0 && button("Search") && !button("Search").disabled) return;
       const verify = await until(() => { const b = button("Verify"); return b && !b.disabled && b; }, 3000, "NY_CONNECTOR_VERIFY_BUTTON_TIMEOUT");
-      const verification = waitResponse("verify", 15000);
+      const verification = waitResponse("verify", 30000);
       verify.click();
       const result = await verification;
       if (result.http_status === 401) {
@@ -133,6 +133,7 @@
     const m = event.data;
     if (m?.channel !== "cc-ny-page-v1" || m.direction !== "request" || !P.validId(m.id) || (m.action !== "verify" && !P.validQuery(m.query)) || active) return;
     const job = { id: m.id, query: m.query, waiter: null }; active = job;
+    verificationRetryUsed ||= m.verificationRetryUsed === true;
     let reply;
     try {
       if (m.action === "verify") { await verifySearch(true); reply = { ok: true, evidence: { verified: true } }; }
@@ -140,6 +141,6 @@
     }
     catch (e) { reply = { ok: false, reason: /^NY_CONNECTOR_[A-Z_]+$/.test(e.message) ? e.message : "NY_CONNECTOR_INCOMPLETE" }; }
     finally { if (job.waiter) clearTimeout(job.waiter.timer); active = null; }
-    window.postMessage({ channel: "cc-ny-page-v1", direction: "response", id: m.id, ...reply }, P.NY);
+    window.postMessage({ channel: "cc-ny-page-v1", direction: "response", id: m.id, ...reply, verificationRetryUsed }, P.NY);
   });
 })();

@@ -97,13 +97,8 @@ async function lookupTab(job) {
     job.tab = tab.id; owned.add(tab.id); await saveRuntime();
   });
   await job.creating; job.creating = null;
-  const deadline = Date.now() + 15000;
-  while (!job.closed && Date.now() < deadline) {
-    const current = await chrome.tabs.get(job.tab);
-    if (current.url?.startsWith(P.NY + "/") && (!current.status || current.status === "complete")) return;
-    await nap(100);
-  }
-  if (!job.closed) throw new Error("NY_CONNECTOR_TAB_READY_TIMEOUT");
+  // The content script's form check below is authoritative. Unrelated page
+  // resources can keep Chrome in "loading" after the search form is usable.
 }
 async function repairConnection(job, id) {
   if (repair.nextAllowedAt > Date.now()) throw new Error("NY_CONNECTOR_RECOVERY_COOLDOWN");
@@ -130,7 +125,7 @@ async function recordRecovery(response) {
   else await saveRepair({ ...repair, phase: "failed", finishedAt: Date.now(), reason: recoveryFailure(response.reason) });
 }
 async function ready(job) {
-  const deadline = Date.now() + 15000;
+  const deadline = Date.now() + 30000;
   while (!job.closed && Date.now() < deadline) {
     let state;
     try { state = await chrome.tabs.sendMessage(job.tab, { action: "ready" }, { frameId: 0 }); }
@@ -147,19 +142,21 @@ async function performSearch(job, query, id) {
   job.pending = id;
   let response;
   try {
-    await lookupTab(job);
     let repaired = false;
     for (;;) {
       if (job.closed) return;
       let documentLimited = false;
       try {
+        await lookupTab(job);
         try { await ready(job); }
         catch (error) { documentLimited = error.message === "NY_CONNECTOR_RATE_LIMITED"; throw error; }
         const current = await chrome.tabs.get(job.tab), url = new URL(current.url);
         if (url.origin !== P.NY || !/^\/RegistrySearch\/?$/.test(url.pathname)) throw new Error("NY_CONNECTOR_INCOMPLETE");
         const generation = job.generation;
-        response = await chrome.tabs.sendMessage(job.tab, { action: "search", id, query }, { frameId: 0 });
+        response = await chrome.tabs.sendMessage(job.tab, { action: "search", id, query, verificationRetryUsed: job.verificationRetryUsed }, { frameId: 0 });
         if (job.closed || generation !== job.generation) return;
+        job.verificationRetryUsed ||= response?.verificationRetryUsed === true;
+        if (response?.reason === "NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT") throw new Error(response.reason);
         if (response?.reason === "NY_CONNECTOR_RATE_LIMITED") throw new Error(response.reason);
         if (!response?.ok || !P.sameQuery(response.evidence?.query, query)) response = { ok: false, reason: response?.reason || "NY_CONNECTOR_INCOMPLETE" };
         if (rejected(response.reason) && !repaired) {
@@ -175,6 +172,17 @@ async function performSearch(job, query, id) {
         }
         break;
       } catch (error) {
+        if (["NY_CONNECTOR_TAB_READY_TIMEOUT", "NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT"].includes(error.message) && job.timeoutRetries < 1) {
+          job.timeoutRetries++;
+          post(job, { id, progress: true, retrying: true });
+          // Closing the owned tab cancels pending verification and isolates late
+          // responses. Carry the used 401 budget across this timeout retry.
+          const tabId = job.tab; job.tab = null; job.generation++;
+          await removeOwned(tabId);
+          if (job.closed) return;
+          await nap(1000);
+          continue;
+        }
         if (error.message !== "NY_CONNECTOR_RATE_LIMITED" || job.rateRetries >= 2) throw error;
         const delay = [5000, 15000][job.rateRetries++];
         post(job, { id, progress: true, retrying: true });
@@ -228,13 +236,13 @@ chrome.tabs.onRemoved.addListener(id => {
 });
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (!allowedSender(sender) || !P.validId(message?.id) || message.action !== "ping") return false;
-  boot.then(() => respond({ ok: true, version: "0.3.2", capabilities: ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "origin-window-v1", "connection-recovery-v1", "recovery-causes-v1", "cleanup-ack-v1"], recovery: { phase: repair.phase || "idle", nextAllowedAt: repair.nextAllowedAt || 0, verifiedAt: repair.finishedAt || 0 } }), () => respond({ ok: false, reason: "NY_CONNECTOR_INTERRUPTED" }));
+  boot.then(() => respond({ ok: true, version: "0.3.3", capabilities: ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "origin-window-v1", "connection-recovery-v1", "recovery-causes-v1", "cleanup-ack-v1", "timeout-recovery-v1"], recovery: { phase: repair.phase || "idle", nextAllowedAt: repair.nextAllowedAt || 0, verifiedAt: repair.finishedAt || 0 } }), () => respond({ ok: false, reason: "NY_CONNECTOR_INTERRUPTED" }));
   return true;
 });
 chrome.runtime.onConnect.addListener(port => {
   const prefix = port.name.startsWith("cc-ny-refresh-v1:") ? "cc-ny-refresh-v1:" : "cc-ny-lookup-v1:";
   if (!allowedSender(port.sender) || !port.name.startsWith(prefix) || !P.validId(port.name.slice(prefix.length))) { port.disconnect(); return; }
-  const job = { port, sender: port.sender, lookupId: port.name.slice(prefix.length), refreshOnly: prefix === "cc-ny-refresh-v1:", enqueuedAt: Date.now(), expiresAt: Date.now() + QUEUE_TTL, generation: 0, tab: null, creating: null, pending: null, acquireId: null, closed: false, timer: null, rateRetries: 0 };
+  const job = { port, sender: port.sender, lookupId: port.name.slice(prefix.length), refreshOnly: prefix === "cc-ny-refresh-v1:", enqueuedAt: Date.now(), expiresAt: Date.now() + QUEUE_TTL, generation: 0, tab: null, creating: null, pending: null, acquireId: null, closed: false, timer: null, rateRetries: 0, timeoutRetries: 0, verificationRetryUsed: false };
   job.timer = setTimeout(() => close(job, "NY_CONNECTOR_QUEUE_TIMEOUT"), QUEUE_TTL);
   port.onDisconnect.addListener(() => close(job, "NY_CONNECTOR_UNAVAILABLE"));
   port.onMessage.addListener(message => { boot.then(() => {

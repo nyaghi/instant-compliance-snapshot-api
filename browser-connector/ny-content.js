@@ -10,7 +10,7 @@
     if (event.source !== window || event.origin !== NY || event.data?.channel !== "cc-ny-page-v1" || event.data.direction !== "response") return;
     if (!pending || event.data.id !== pending.id) return;
     const task = pending; pending = null; clearTimeout(task.timer);
-    task.respond(event.data.ok ? { ok: true, evidence: event.data.evidence } : { ok: false, reason: event.data.reason });
+    task.respond({ ...(event.data.ok ? { ok: true, evidence: event.data.evidence } : { ok: false, reason: event.data.reason }), verificationRetryUsed: event.data.verificationRetryUsed === true });
   });
   chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (sender.id !== chrome.runtime.id) return false;
@@ -21,9 +21,9 @@
     }
     if (!["search", "verify"].includes(message?.action) || typeof message.id !== "string" || message.id.length > 80) return false;
     if (pending) { respond({ ok: false, reason: "NY_CONNECTOR_BUSY" }); return false; }
-    const timer = setTimeout(() => { if (pending?.id === message.id) { pending = null; respond({ ok: false, reason: "NY_CONNECTOR_RELAY_TIMEOUT" }); } }, 55000);
+    const timer = setTimeout(() => { if (pending?.id === message.id) { pending = null; respond({ ok: false, reason: "NY_CONNECTOR_RELAY_TIMEOUT" }); } }, 140000);
     pending = { id: message.id, respond, timer };
-    window.postMessage({ channel: "cc-ny-page-v1", direction: "request", id: message.id, action: message.action, query: message.query }, NY);
+    window.postMessage({ channel: "cc-ny-page-v1", direction: "request", id: message.id, action: message.action, query: message.query, verificationRetryUsed: message.verificationRetryUsed === true }, NY);
     return true;
   });
 })();

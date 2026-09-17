@@ -1,0 +1,190 @@
+{
+  "record": {
+    "record_id": "a095e000009HnGBAA0",
+    "ago_account": "055690",
+    "ein": "262851211",
+    "name": "PARTNERSHIP FOR CIVIL JUSTICE FUND",
+    "registry_status": "In-Progress"
+  },
+  "registration_documents": {
+    "055690": {
+      "complete": true,
+      "empty": false,
+      "row_count": 8,
+      "document_years": [
+        "2013",
+        "2013",
+        "2013",
+        "2013",
+        "2013",
+        "2013",
+        "2013",
+        "2013"
+      ],
+      "documents": [
+        {
+          "year": "2013",
+          "title": "FY2013 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007ib0eAAA"
+        },
+        {
+          "year": "2013",
+          "title": "FY2013 PC - IRS 990.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007ibcXAAQ"
+        },
+        {
+          "year": "2013",
+          "title": "FY2013 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007ib6MAAQ"
+        },
+        {
+          "year": "2013",
+          "title": "FY2013 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000006tDlhAAE"
+        },
+        {
+          "year": "2013",
+          "title": "FY2013 PC - IRS 990.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000006tLaUAAU"
+        },
+        {
+          "year": "2013",
+          "title": "FY2013 PC - IRS 990.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007ibcsAAA"
+        },
+        {
+          "year": "2013",
+          "title": "FY2013 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000006tIb7AAE"
+        },
+        {
+          "year": "2013",
+          "title": "FY2013 PC - IRS 990.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000006tLbDAAU"
+        }
+      ],
+      "annual_scans": [
+        {
+          "year": "2013",
+          "title": "FY2013 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007ib0eAAA"
+        },
+        {
+          "year": "2013",
+          "title": "FY2013 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007ib6MAAQ"
+        },
+        {
+          "year": "2013",
+          "title": "FY2013 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000006tDlhAAE"
+        },
+        {
+          "year": "2013",
+          "title": "FY2013 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000006tIb7AAE"
+        }
+      ]
+    }
+  },
+  "filings": {
+    "055690": {
+      "complete": true,
+      "empty": false,
+      "row_count": 11,
+      "document_years": [
+        "2013",
+        "2013",
+        "2016",
+        "2013",
+        "2013",
+        "2013",
+        "2012",
+        "2012",
+        "2013",
+        "2013",
+        "2013"
+      ],
+      "documents": [
+        {
+          "year": "2013",
+          "title": "FY2013 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007ib0eAAA"
+        },
+        {
+          "year": "2013",
+          "title": "FY2013 PC - IRS 990.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007ibcXAAQ"
+        },
+        {
+          "year": "2016",
+          "title": "FY2016 PC - Other/Misc.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007kWs5AAE"
+        },
+        {
+          "year": "2013",
+          "title": "FY2013 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007ib6MAAQ"
+        },
+        {
+          "year": "2013",
+          "title": "FY2013 PC - IRS 990.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007ibcsAAA"
+        },
+        {
+          "year": "2013",
+          "title": "FY2013 PC - IRS 990.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000006tLbDAAU"
+        },
+        {
+          "year": "2012",
+          "title": "FY2012 PC - Other/Misc.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007mMyZAAU"
+        },
+        {
+          "year": "2012",
+          "title": "FY2012 PC - Other/Misc.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007lr4mAAA"
+        },
+        {
+          "year": "2013",
+          "title": "FY2013 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000006tDlhAAE"
+        },
+        {
+          "year": "2013",
+          "title": "FY2013 PC - IRS 990.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000006tLaUAAU"
+        },
+        {
+          "year": "2013",
+          "title": "FY2013 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000006tIb7AAE"
+        }
+      ],
+      "annual_scans": [
+        {
+          "year": "2013",
+          "title": "FY2013 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007ib0eAAA"
+        },
+        {
+          "year": "2013",
+          "title": "FY2013 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007ib6MAAQ"
+        },
+        {
+          "year": "2013",
+          "title": "FY2013 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000006tDlhAAE"
+        },
+        {
+          "year": "2013",
+          "title": "FY2013 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000006tIb7AAE"
+        }
+      ],
+      "only_schedule_a2": false
+    }
+  }
+}
