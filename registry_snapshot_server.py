@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.16.7-staging").strip() or "2026.09.16.7-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.16.8-staging").strip() or "2026.09.16.8-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -21078,6 +21078,47 @@ def ar_wait_for_search_form(page, timeout_ms: int) -> bool:
     return False
 
 
+def ar_reviewed_search_plan(org, generated):
+    """Short retrieval phrases remain tied to full reviewed identities.
+
+    Only an explicit empty response may complete an identity via its phrase;
+    candidate rows still use the existing full-name/EIN matching rules.
+    """
+    planned = reviewed_queries_first(org.organization_name, org.ein, generated, limit=AR_NAME_SEARCH_MAX_VARIANTS)
+    pairs = reviewed_name_search_probes(org.ein)
+    by_identity = {identity_name_key(name): probe for name, probe in pairs}
+    prefixes = {}
+    for name, probe in pairs:
+        if canonical_name_punctuation(name).casefold().startswith(probe.casefold() + " ") and not re.search(r"[%_]", probe):
+            prefixes.setdefault(probe.casefold(), []).append(name)
+    queries, seen = [], set()
+    for name in [org.organization_name, *known_names_for_ein(org.ein)]:
+        probe = by_identity.get(identity_name_key(name))
+        if probe and probe.casefold() in prefixes and probe.casefold() not in seen:
+            # The phrase occupies its identity's reviewed-name priority slot.
+            queries.append(probe); seen.add(probe.casefold())
+        elif name.casefold() not in seen:
+            queries.append(name); seen.add(name.casefold())
+    if not known_names_for_ein(org.ein):
+        return planned, {}
+    for query in planned:
+        if query.casefold() not in seen:
+            queries.append(query); seen.add(query.casefold())
+    return queries, prefixes
+
+
+def ar_completed_empty_identities(empty_queries, prefixes, planned_queries=()):
+    completed = list(empty_queries)
+    for query in empty_queries:
+        completed.extend(prefixes.get(query.casefold(), []))
+    # A skipped longer literal spelling has the same empty-search evidence.
+    # Keep it distinct from an actual completed request in query diagnostics.
+    completed.extend(query for query in planned_queries if any(
+        query.casefold().startswith(empty.casefold()) for empty in empty_queries
+    ))
+    return completed
+
+
 def search_ar_precise(page, org):
     result = checker.StateResult(org.organization_name, org.ein, "AR", checker.STATUS_UNKNOWN, AR_SEARCH_URL)
     original_name = getattr(org, "organization_name", "") or ""
@@ -21105,13 +21146,31 @@ def search_ar_precise(page, org):
     result_shell_without_rows = False
     deadline = time.perf_counter() + AR_NAME_SEARCH_MAX_SECONDS
     attempted_variants: list[str] = []
-    planned_variants = reviewed_queries_first(original_name, org.ein, variants, limit=AR_NAME_SEARCH_MAX_VARIANTS)
+    planned_variants, empty_prefixes = ar_reviewed_search_plan(org, variants)
     completed_variants = []
+    empty_variants = []
+    required_identities = equivalent_name_queries(original_name, org.ein)
+
+    def record_progress():
+        result.queries_attempted = list(attempted_variants)
+        result.queries_completed = list(completed_variants)
+        result.source_attempts = [
+            f"Arkansas completed name queries: {', '.join(completed_variants) or 'none'}."
+        ]
+
     for variant in planned_variants:
+        # Empty retrieval evidence is literal, not the more permissive name
+        # identity normalization. "Institute Inc." cannot cover "Institute"
+        # or "Institute, Inc."; keep those existing fallback searches.
+        if known_names_for_ein(org.ein) and any(
+            variant.casefold().startswith(query.casefold()) for query in empty_variants
+        ):
+            continue
         remaining = deadline - time.perf_counter()
         if remaining <= 2.0:
             break
         attempted_variants.append(variant)
+        record_progress()
         nav_timeout_ms = max(3000, min(12000, int(remaining * 1000)))
         settle_timeout_ms = max(1000, min(2500, int(remaining * 500)))
         try:
@@ -21157,6 +21216,13 @@ def search_ar_precise(page, org):
             parsed_rows = ar_result_rows(page)
             if parsed_rows or explicit_no_results:
                 completed_variants.append(variant)
+            # A prefix can cover its associated full identity only on this
+            # submitted search's complete, explicitly empty result page.
+            if explicit_no_results and not parsed_rows:
+                submitted = parse_qs(urlparse(str(page.url)).query).get("name", [])
+                if submitted == [variant]:
+                    empty_variants.append(variant)
+            record_progress()
             if parsed_rows:
                 rows_seen += len(parsed_rows)
             elif result_shell_seen and not explicit_no_results:
@@ -21198,7 +21264,7 @@ def search_ar_precise(page, org):
         result.queries_attempted = list(attempted_variants)
         result.source_attempts = [
             f"Arkansas attempted bounded high-signal name/alias queries: {', '.join(attempted_variants)}."
-        ] if attempted_variants else []
+        ] + list(getattr(result, "source_attempts", [])) if attempted_variants else []
         if not reached:
             result.status = "Site Not Reachable"
             result.raw_status_text = "Arkansas public charity search did not return usable results within the bounded lookup window"
@@ -21220,7 +21286,8 @@ def search_ar_precise(page, org):
             result.reason_code = "AR_RELATED_ENTITY_EIN_UNAVAILABLE"
             result.success = False
         elif ((rows_seen or (explicit_no_results_seen and not result_shell_without_rows))
-              and (not known_names_for_ein(org.ein) or reviewed_identity_queries_completed(completed_variants, equivalent_name_queries(original_name, org.ein)))):
+              and (not known_names_for_ein(org.ein) or reviewed_identity_queries_completed(
+                  completed_variants + ar_completed_empty_identities(empty_variants, empty_prefixes, planned_variants), required_identities))):
             result.status = checker.STATUS_NOT_REGISTERED
             result.raw_status_text = (
                 "No matching organization row"
@@ -21231,11 +21298,13 @@ def search_ar_precise(page, org):
             result.success = True
         else:
             result.status = "Unable to Verify"
-            result.raw_status_text = "Arkansas public charity search reached a result page but did not expose stable result rows"
+            missing = [name for name in required_identities if not reviewed_identity_queries_completed(
+                completed_variants + ar_completed_empty_identities(empty_variants, empty_prefixes, planned_variants), [name])]
+            result.raw_status_text = "Arkansas public charity search did not complete every required name search"
             result.source_note = (
-                "Arkansas public charity search was reachable, but the result table did not settle into either "
-                "a parseable row set or a stable explicit no-results response within the bounded lookup window; "
-                "CharityClarity did not finalize Not Registered from an incomplete result page."
+                "Arkansas public charity search was reachable, but a required search did not return a complete result. "
+                + (f"Unconfirmed name searches: {', '.join(missing)}. " if missing else "A result page remained incomplete. ")
+                + "CharityClarity did not finalize Not Registered from an incomplete search."
             )
             result.error = ""
             result.success = False
@@ -21268,7 +21337,7 @@ def ar_transient_unreachable_result(result) -> bool:
         getattr(result, "source_note", "") or "",
         getattr(result, "error", "") or "",
     ])
-    if status == "Unable to Verify" and re.search(r"did not expose stable result rows|result table did not settle", text, re.I):
+    if status == "Unable to Verify" and re.search(r"did not expose stable result rows|result table did not settle|did not complete every required name search", text, re.I):
         return True
     if status == "Not Registered" and re.search(r"did not return usable results", text, re.I):
         return True

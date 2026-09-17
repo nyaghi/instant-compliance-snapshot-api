@@ -99,7 +99,7 @@ class ExpandedDiscoveryTests(unittest.TestCase):
             result=c.search_ar_precise(page,org)
             self.assertEqual(result.status,c.checker.STATUS_NOT_REGISTERED)
             self.assertTrue(result.success)
-            with patch.object(c,'reviewed_queries_first',return_value=[name]):
+            with patch.object(c,'ar_reviewed_search_plan',return_value=([name],{})):
                 partial=c.search_ar_precise(page,org)
             self.assertFalse(partial.success)
             self.assertNotEqual(partial.status,c.checker.STATUS_NOT_REGISTERED)
