@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.17.5-staging").strip() or "2026.09.17.5-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.17.6-staging").strip() or "2026.09.17.6-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -2336,6 +2336,64 @@ def identity_browser_names(source: str, ein: str, deadline: float) -> dict:
         IDENTITY_BROWSER_SLOTS.release()
 
 
+def identity_alias_foreign_name_matches(alias: str, candidate: str) -> bool:
+    """A review flag, never authority to match a registration to another EIN."""
+    first, second = identity_name_key(alias).split(), identity_name_key(candidate).split()
+    if len(first) < 3 or len(second) != len(first): return False
+    if first == second: return True
+    # A long final-word spelling variation can retrieve a review candidate,
+    # but all preceding words, foreign EIN, and incompatible location must agree.
+    return (len(first) >= 4 and first[:-1] == second[:-1]
+            and min(len(first[-1]), len(second[-1])) >= 10
+            and first[-1][:10] == second[-1][:10])
+
+
+def identity_wa_alias_review(result: dict, ein: str, deadline: float) -> dict:
+    """Keep a potentially misattributed WA AKA visible, but require review."""
+    names = [{**item, "evidence": list(item["evidence"])} for item in result.get("names", [])]
+    registered = [item["name"] for item in names if any(p.get("type") == "Registered name" for p in item["evidence"])]
+    tokens = lambda value: set(identity_name_key(value).split()) - {"the", "of", "and", "for", "a", "an"}
+    primary_tokens = set().union(*(tokens(name) for name in registered)) if registered else set()
+    checked = 0; limit = min(deadline, time.monotonic() + 8.0)
+    for item in names:
+        if (checked >= 3 or time.monotonic() >= limit or not primary_tokens
+                or not any(p.get("type") == "AKA / DBA" for p in item["evidence"])
+                or primary_tokens & tokens(item["name"])):
+            continue
+        words = identity_name_key(item["name"]).split()
+        if len(words) < 3: continue
+        checked += 1
+        try:
+            query = '"' + " ".join(words[:-1] if len(words) >= 4 else words) + '"'
+            url = "https://projects.propublica.org/nonprofits/api/v2/search.json?" + urlencode({"q": query})
+            candidates = json.loads(identity_fetch(url, limit)).get("organizations", [])
+            profile = PUBLIC_PROFILE_CACHE.get(ein, {}).get("organization") or {}
+            if canonical_ein_digits(str(profile.get("ein", ""))) != ein:
+                payload = json.loads(identity_fetch(f"https://projects.propublica.org/nonprofits/api/v2/organizations/{ein}.json", limit))
+                profile = payload.get("organization") or {}
+            if canonical_ein_digits(str(profile.get("ein", ""))) != ein: continue
+            if not profile.get("city") or not profile.get("state"): continue
+            for candidate in candidates[:25]:
+                foreign = str(candidate.get("ein") or "").zfill(9)
+                if not re.fullmatch(r"\d{9}", foreign) or foreign == ein: continue
+                if not identity_alias_foreign_name_matches(item["name"], candidate.get("name", "")): continue
+                if not candidate.get("city") or not candidate.get("state"): continue
+                if (str(candidate["city"]).casefold() == str(profile["city"]).casefold()
+                        or str(candidate["state"]).upper() == str(profile["state"]).upper()): continue
+                item.update(verified=False, identity_conflict={
+                    "reason": "Potentially misattributed state alias",
+                    "candidate_name": candidate["name"], "candidate_ein": format_ein(foreign),
+                    "candidate_location": f"{candidate['city']}, {candidate['state']}",
+                    "requested_location": f"{profile['city']}, {profile['state']}",
+                    "source_url": f"https://projects.propublica.org/nonprofits/organizations/{foreign}",
+                    "explanation": "A closely matching IRS organization has a different EIN and location. Confirm this state-listed alias before using it."})
+                break
+        except Exception as exc:
+            # A missing second source cannot invalidate a state-provided name.
+            log_event(f"WA alias cross-check unavailable: ein={ein}; error={type(exc).__name__}")
+    return {**result, "names": names}
+
+
 def identity_source_result(source: str, ein: str, deadline: float) -> dict:
     fingerprint = json.dumps(downloadable_data_info("OR"), sort_keys=True) if source == "OR" else "live-v2"
     key = (ein, source, fingerprint)
@@ -2350,6 +2408,8 @@ def identity_source_result(source: str, ein: str, deadline: float) -> dict:
     if worker is None:
         worker = lambda value, limit: identity_browser_names(source, value, limit)
     result = {**worker(ein, deadline), "source": source, "cache_hit": False}
+    if source == "WA":
+        result = identity_wa_alias_review(result, ein, deadline)
     if result.get("rejected_name_fields"):
         result.update(complete=False, limitation="Some state name fields were malformed or incomplete and were excluded; usable EIN-confirmed names were retained.")
     # Cache only identity evidence, keyed by weekly revision or a bounded live TTL.
@@ -2685,6 +2745,11 @@ def discover_organization_names(organization_name: str, ein: str) -> dict:
                     if proof not in target["evidence"]: target["evidence"].append(proof)
     names = list(merged.values())
     for item in names:
+        if item.get("identity_conflict") and any(proof.get("source") not in {"WA", "Washington"} for proof in item["evidence"]):
+            # An independent exact-EIN source supports this very name. Preserve
+            # legitimate former names and same-name organizations elsewhere.
+            item.pop("identity_conflict", None)
+            item["verified"] = True
         if any(proof.get("type") == "Form 990 filer legal name" for proof in item["evidence"]):
             item["historical"] = False
     return {"organization_name": organization_name.strip(), "ein": format_ein(ein),
@@ -14585,6 +14650,36 @@ WI_FINANCIAL_IDENTITY_CACHE: dict[tuple, dict] = {}
 WI_FINANCIAL_IDENTITY_LOCK = threading.Lock()
 
 
+def wi_identity_read(operation, deadline: float, stage: str):
+    """Retry a transient evidence read once, within the existing total budget."""
+    for attempt in (1, 2):
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"Wisconsin identity deadline at {stage}")
+        try:
+            return operation()
+        except (OSError, urllib.error.URLError) as exc:
+            code = getattr(exc, "code", None)
+            transient = code is None or code in {408, 429, 500, 502, 503, 504}
+            log_event(f"WI identity read failed: stage={stage}; attempt={attempt}; error={type(exc).__name__}; http={code}")
+            if not transient or attempt == 2 or deadline - time.monotonic() < 1:
+                raise
+            time.sleep(.35)
+
+
+def wi_identity_page(opener, request, deadline: float) -> str:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0: raise TimeoutError("Wisconsin identity deadline reached")
+    with opener.open(request, timeout=min(6.0, remaining)) as response:
+        chunks, size = [], 0
+        while True:
+            if time.monotonic() >= deadline: raise TimeoutError("Wisconsin identity deadline reached")
+            chunk = response.read(65536)
+            if not chunk: break
+            chunks.append(chunk); size += len(chunk)
+            if size > 2_000_000: raise ValueError("Wisconsin evidence exceeds size limit")
+    return b"".join(chunks).decode("utf-8", "replace")
+
+
 def wi_financial_identity_evidence(ein: str, href: str, credential: str, hour: int) -> dict:
     """Resolve an address spelling conflict from five same-year filing values.
 
@@ -14605,22 +14700,24 @@ def wi_financial_identity_evidence(ein: str, href: str, credential: str, hour: i
     irs_url = f"https://projects.propublica.org/nonprofits/full_text/{object_id}/IRS990"
     stage = "IRS return"
     try:
-        irs_html = identity_fetch(irs_url, deadline).decode("utf-8", "replace")
+        irs_html = wi_identity_read(lambda: identity_fetch(irs_url, deadline).decode("utf-8", "replace"), deadline, stage)
         period = irs_header_evidence(irs_html, ein, irs_url)["filing"]
         fiscal_year = str(date.fromisoformat(period["period_end"]).year)
         opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
         stage = "Wisconsin fiscal-year selection"
-        with opener.open(financial_url, timeout=max(.5, deadline-time.monotonic())) as response:
-            page = response.read(2_000_000).decode("utf-8", "replace")
-        if not re.search(r'<option\b[^>]*value=["\']' + fiscal_year + r'["\']', page): return {}
+        page = wi_identity_read(lambda: wi_identity_page(opener, financial_url, deadline), deadline, stage)
+        if not re.search(r'<option\b[^>]*value=["\']' + fiscal_year + r'["\']', page):
+            log_event(f"WI identity evidence unavailable: credential={credential}; stage={stage}; reason=fiscal_year_absent")
+            return {}
         fields = html_hidden_inputs(page)
         fields["ctl00$cphMainContent$ddlFiscalYearsList"] = fiscal_year
         request = urllib.request.Request(financial_url, data=urlencode(fields).encode(), headers={"Referer": financial_url})
         stage = "Wisconsin financial values"
-        with opener.open(request, timeout=max(.5, deadline-time.monotonic())) as response:
-            page = response.read(2_000_000).decode("utf-8", "replace")
+        page = wi_identity_read(lambda: wi_identity_page(opener, request, deadline), deadline, stage)
         state_text = html_to_text(page)
-        if credential not in state_text: return {}
+        if credential not in state_text:
+            log_event(f"WI identity evidence unavailable: credential={credential}; stage={stage}; reason=credential_absent")
+            return {}
         fields = {
             "CONTRIBUTIONS": "CYContributionsGrantsAmt",
             r"PROGRAM SERVICE\(S\)": "TotalProgramServiceExpensesAmt",
@@ -14632,7 +14729,9 @@ def wi_financial_identity_evidence(ein: str, href: str, credential: str, hour: i
         for state_label, irs_field in fields.items():
             reported = re.search(state_label + r"\s+\$([\d,]+)\.00\b", state_text)
             filed = re.search(r'<span\b[^>]*id=["\'][^"\']*/' + irs_field + r'\[1\]["\'][^>]*>\s*([\d,]+)\s*</span>', irs_html)
-            if not reported or not filed or reported[1].replace(",", "") != filed[1].replace(",", ""): return {}
+            if not reported or not filed or reported[1].replace(",", "") != filed[1].replace(",", ""):
+                log_event(f"WI identity evidence unavailable: credential={credential}; stage={stage}; reason=financial_value_mismatch; field={irs_field}")
+                return {}
             values.append(int(reported[1].replace(",", "")))
         if sum(value > 0 for value in values) < 4: return {}
         evidence = {"decision": "corroborated", "source_url": financial_url, "irs_source_url": irs_url,
@@ -23827,6 +23926,8 @@ def fragile_batch_result_needs_confirmation(result: dict) -> bool:
     """Identify results that should not be trusted from a busy multi-state batch alone."""
     state = (result.get("state") or "").upper()
     status = (result.get("status") or "").strip().lower()
+    if state == "ME" and result.get("me_attempt_history"):
+        return False  # The normal Maine workflow already owns its bounded recovery.
     if state == "WV" and wv_transient_portal_failure_result(result):
         return True
     if state == "AK" and ak_batch_result_needs_confirmation(result):
@@ -23992,7 +24093,7 @@ def run_state_lookup_for_batch(
     state: str,
     confirm_single_no_match: bool,
 ) -> dict:
-    if state == "MI":
+    if state in {"MI", "ME"}:
         # Use the same bounded, reason-aware recovery as the website. An outer
         # 87/90-second timeout must not abandon a still-running MI attempt.
         return run_single_state_lookup_reliably(organization_name, ein, state)
@@ -24035,7 +24136,7 @@ def run_fanout_state_lookup_for_batch(organization_name: str, ein: str, state: s
     # Completed AK and OK confirmation workflows can exceed the usual 87s.
     # Give only these parallel HTTP requests the existing 115s ceiling.
     timeout_seconds = (2 * MI_LOOKUP_MAX_SECONDS + 30.0) if state == "MI" else (
-        115.0 if state in {"AK", "OK"} else BATCH_FANOUT_STATE_TIMEOUT_SECONDS)
+        200.0 if state == "ME" else 115.0 if state in {"AK", "OK"} else BATCH_FANOUT_STATE_TIMEOUT_SECONDS)
     payload = {
         "organization_name": organization_name,
         "ein": ein,
@@ -24362,17 +24463,26 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
         attempts = max(attempts, 3)
     if state == "AK":
         attempts = max(attempts, 3)
-    if state in {"WA", "NY", "ME"}:
+    if state in {"WA", "NY"}:
         attempts = 1
+    if state == "ME":
+        attempts = 2
     result: dict | None = None
     best_reachable_result: dict | None = None
     best_ak_identity_result: dict | None = None
     mi_attempt_history: list[dict] = []
+    me_attempt_history: list[dict] = []
     mi_progress = {"identity": (organization_name, canonical_ein_digits(ein))} if state == "MI" else None
     for attempt in range(1, attempts + 1):
         result = (run_state_lookup(organization_name, ein, state, mi_progress=mi_progress)
                   if state == "MI" else run_state_lookup(organization_name, ein, state))
         result["semantic_attempts"] = attempt
+        if state == "ME":
+            me_attempt_history.append({key: result.get(key) for key in (
+                "semantic_attempts", "status", "reason_code", "error", "source_note", "lookup_seconds")})
+            result["me_attempt_history"] = list(me_attempt_history)
+            if attempt > 1 and result.get("success"):
+                result["runner_recovery"] = "Maine completed after one delayed recovery attempt."
         if state == "MI":
             mi_attempt_history.append({key: result.get(key) for key in (
                 "semantic_attempts", "status", "reason_code", "error", "source_note",
@@ -24415,6 +24525,10 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
             delay = SINGLE_STATE_SEMANTIC_RETRY_DELAY_SECONDS
             if state == "MI":
                 delay = 2.0 + (int(canonical_ein_digits(ein) or "0") % 3000) / 1000.0
+            if state == "ME":
+                # Release the registry session/lock before waiting. Other state
+                # futures continue; no successful or completed-empty query is retried.
+                delay = 8.0
             time.sleep(delay)
     if state == "AK" and best_ak_identity_result and result:
         final_status = (result.get("status") or "").strip().lower()

@@ -82,10 +82,11 @@ class MaineBudgetTests(unittest.TestCase):
   self.assertIn('Young Life',queries);self.assertIn('Young-Life',queries)
   self.assertIn('The Young Life',queries)
   self.assertNotIn('Young Life Inc',queries)
- def test_maine_does_not_restart_entire_budget_on_failure(self):
-  with patch.object(c,'run_state_lookup',return_value={'state':'ME','status':'Site Not Reachable'} ) as run:
+ def test_maine_gets_only_one_delayed_recovery_on_failure(self):
+  with patch.object(c,'run_state_lookup',return_value={'state':'ME','status':'Site Not Reachable'} ) as run,patch.object(c.time,'sleep') as sleep:
    result=c.run_single_state_lookup_reliably('Example Charity','123456789','ME')
-  self.assertEqual(run.call_count,1);self.assertEqual(result['semantic_attempts'],1)
+  self.assertEqual(run.call_count,2);self.assertEqual(result['semantic_attempts'],2)
+  sleep.assert_called_once_with(8.0)
  def test_reviewed_suffix_is_covered_by_maine_prefix(self):
   with patch.object(c,'known_names_for_ein',return_value=['Example Charity Foundation']):
    queries=c.me_fast_direct_query_variants(self.org)

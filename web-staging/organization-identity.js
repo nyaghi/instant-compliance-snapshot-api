@@ -54,6 +54,15 @@
       const proof = text("p", "", "mt-2 text-xs leading-relaxed text-slate-600");
       const describe = () => {
         proof.replaceChildren();
+        if (row.identity_conflict && row.name === row.original) {
+          const conflict = row.identity_conflict;
+          proof.append(text("span", `${conflict.explanation} ${conflict.candidate_name} · EIN ${conflict.candidate_ein} · ${conflict.candidate_location}. `));
+          if (/^https:\/\//.test(conflict.source_url || "")) {
+            const link = text("a", "Review the IRS record", "underline"); link.href = conflict.source_url;
+            link.target = "_blank"; link.rel = "noopener noreferrer"; proof.append(link);
+          }
+          return;
+        }
         if (!row.verified || row.name !== row.original) {
           proof.textContent = "User-entered name — not independently verified."; return;
         }
@@ -119,14 +128,17 @@
         const key = value => value.toLowerCase().replace(/[’']/g, "").replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim().replace(/(?:\s+(?:inc|incorporated|corp|corporation|llc|ltd|limited))+$/, "");
         for (const candidate of ny.identity.names || []) {
           const existing = data.names.find(item => key(item.name) === key(candidate.name));
-          if (existing) existing.evidence.push(...candidate.evidence);
+          if (existing) {
+            existing.evidence.push(...candidate.evidence);
+            if (candidate.verified) { existing.verified = true; delete existing.identity_conflict; }
+          }
           else data.names.push(candidate);
         }
       } else if (ny?.comments) {
         const source = (data.sources || []).find(item => item.source === "NY");
         if (source) source.limitation = "The browser could not confirm New York names. Other confirmed names remain available.";
       }
-      rows = (data.names || []).slice(0, 32).map(row => ({...row, original: row.name, selected: true}));
+      rows = (data.names || []).slice(0, 32).map(row => ({...row, original: row.name, selected: !row.identity_conflict}));
       const limitations = (data.sources || []).filter(source => !source.complete).map(source => `${source.source}: ${source.limitation || "Some records were unavailable."}`);
       if (data.names.length > 32) limitations.push("The first 32 confirmed names are shown. Review these names before continuing.");
       message.textContent = limitations.length ? `Some sources were unavailable. You can review the names found, add names, and continue. ${limitations.join(" ")}` :
