@@ -98,7 +98,7 @@ class ConnectorTests(unittest.TestCase):
             self.assertFalse(result['result']['success']);self.assertEqual(result['result']['status_reason'],reason)
             self.assertTrue(result['result']['comments']);self.session.get.assert_not_called()
     def test_connector_version_is_bound_to_the_signed_check(self):
-        for version in ['0.2.1','0.3.0','0.3.1']:
+        for version in ['0.2.1','0.3.0','0.3.1','0.3.2','0.3.3','0.3.4']:
             code,state=self.request(action='start',organization_name=ROW['orgName'],ein=ROW['ein'],connector_version=version)
             self.assertEqual(code,200)
             _,result=self.submit(state)

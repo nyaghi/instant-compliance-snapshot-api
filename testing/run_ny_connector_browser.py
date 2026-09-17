@@ -86,7 +86,11 @@ class BrowserIntegration(unittest.TestCase):
                 route.fulfill(status=code,content_type='application/json',body=json.dumps(response),headers={'Access-Control-Allow-Origin':c.NY_CONNECTOR_ORIGIN})
         elif u.hostname=='charities-search.ag.ny.gov':
             body=FORM
-            if cls.failure=='fetch':
+            if cls.failure=='delayed-search-enable':
+                body=body.replace('if(p.verified)search.disabled=false;', 'if(p.verified)setTimeout(()=>{search.disabled=false;},4000);')
+            elif cls.failure=='search-never-enabled':
+                body=body.replace('if(p.verified)search.disabled=false;', '/* Verification response succeeds; the UI never enables Search. */')
+            elif cls.failure=='fetch':
                 body=body.replace("const x=new XMLHttpRequest();", "fetch('https://charities-search-api.ag.ny.gov'+path,{method}).then(r=>r.json()).then(resolve).catch(()=>{});return;const x=new XMLHttpRequest();")
             elif cls.failure=='abort':
                 body=body.replace('x.send();', "x.send();if(path.endsWith('/verify')&&(window.testVerifyCount=(window.testVerifyCount||0)+1)===2)queueMicrotask(()=>x.abort());")
@@ -163,6 +167,16 @@ class BrowserIntegration(unittest.TestCase):
     def test_real_extension_positive_pipeline(self):
         result,session=self.run_case();self.assertEqual(result['status'],'Current');session.get.assert_called_once()
         self.assertEqual(self.trace[0]['query'],{'ein':ROW['ein']});self.assertNotIn('fixture-token',json.dumps(self.trace))
+    def test_delayed_search_enable_uses_real_button_and_exact_ein(self):
+        result,session=self.run_case(failure='delayed-search-enable')
+        self.assertEqual(result['status'],'Current');session.get.assert_called_once()
+        self.assertEqual(self.trace[0]['query'],{'ein':ROW['ein']})
+        self.assertEqual(self.verifies,1)
+    def test_successful_verify_with_disabled_search_stays_inconclusive(self):
+        result,session=self.run_case(failure='search-never-enabled')
+        self.assertEqual(result['status'],'Unable to Confirm');session.get.assert_not_called()
+        self.assertEqual(self.trace,[]);self.assertEqual(self.verifies,1)
+        self.assertIn('did not enable Search',result['comments'])
     def test_real_extension_empty_ein_then_name_fallback(self):
         result,_=self.run_case('name');self.assertEqual(result['status'],'Current')
         self.assertEqual([e['query'] for e in self.trace],[{'ein':ROW['ein']},{'orgName':ROW['orgName']}])
