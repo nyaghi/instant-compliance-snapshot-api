@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.16.8-staging").strip() or "2026.09.16.8-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.16.9-staging").strip() or "2026.09.16.9-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -6132,7 +6132,8 @@ def search_with_name_variants(
         result = search_func(page, variant_org)
         if getattr(result, "success", False) and public_status(result) == "Not Registered":
             completed_queries.append(variant)
-            if (variant == original_name and getattr(result, "state", "") == "LA"
+            if (canonical_name_punctuation(variant) == canonical_name_punctuation(original_name)
+                    and getattr(result, "state", "") == "LA"
                     and getattr(result, "source_confidence", "") == "official_downloaded_spreadsheet"
                     and getattr(result, "status_reason", "") == "LA_EXPORT_NO_SAFE_MATCH"):
                 # The complete Louisiana export is already matched against all
@@ -9677,13 +9678,13 @@ def ct_prioritized_name_variants(original_name: str, variants: list[str]) -> lis
     return prioritized
 
 
-def equivalent_name_queries(original_name: str, ein: str) -> list[str]:
+def equivalent_name_queries(original_name: str, ein: str, *, preserve_at: bool = False) -> list[str]:
     """One useful retrieval spelling per complete approved identity."""
     queries, seen = [], set()
     for value in [original_name, *known_names_for_ein(ein)]:
         query = re.sub(r"(?:,?\s+(?:inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited))+$", "", value.strip(), flags=re.I)
         query = re.sub(r"[.'\u2019]", "", canonical_name_punctuation(query))
-        query = re.sub(r"[^\w\s&-]", " ", query)
+        query = re.sub(r"[^\w\s&@-]" if preserve_at else r"[^\w\s&-]", " ", query)
         query = re.sub(r"\s+", " ", query).strip()
         if query and query.casefold() not in seen:
             queries.append(query); seen.add(query.casefold())
@@ -9749,8 +9750,8 @@ def search_ct_direct(org):
         max_queries=CT_NAME_VARIANT_LIMIT * 2,
     ))
     variants = reviewed_queries_first(original_name, org.ein,
-        list(dict.fromkeys([*equivalent_name_queries(original_name, org.ein), *variants])), limit=CT_NAME_VARIANT_LIMIT,
-        transform=lambda value: (equivalent_name_queries(value, "") or [value])[0])
+        list(dict.fromkeys([*equivalent_name_queries(original_name, org.ein, preserve_at=True), *variants])), limit=CT_NAME_VARIANT_LIMIT,
+        transform=lambda value: (equivalent_name_queries(value, "", preserve_at=True) or [value])[0])
     best_result = None
     best_score = -10000
     saw_zero_results = False
@@ -18687,6 +18688,11 @@ def search_ky_strict_snapshot(org):
         *organization_match_target_variants(org.organization_name, org.ein),
     ]
     targets = list(dict.fromkeys(targets))
+    original_name = getattr(org, "original_organization_name", org.organization_name)
+    original_targets = [
+        *category_preferred_name_variants(original_name),
+        *organization_match_target_variants(original_name, org.ein),
+    ]
     target_norms = {normalized_match_name(target) for target in targets}
     target_first_words = {target.split()[0] for target in target_norms if target.split()}
     best = None
@@ -18694,6 +18700,14 @@ def search_ky_strict_snapshot(org):
     tied_records = []
     for registry_id, registry_name, filed_year, record_text in load_ky_snapshot_records():
         names = ky_registry_name_variants(registry_name)
+        # Some legal-name cells contain an explicit DBA marker themselves.
+        # Keep both stated identities; every segment still needs the guard below.
+        names = list(dict.fromkeys([
+            *names,
+            *(part.strip() for name in names for part in re.split(
+                r"\s+\bd\s*/?\s*b\s*/?\s*a\b\s+", name, flags=re.I)
+              if part.strip()),
+        ]))
         for name_index, candidate_name in enumerate(names):
             registry_norm = normalized_match_name(candidate_name)
             if not ky_candidate_passes_fast_prefilter(registry_norm, target_first_words, target_norms):
@@ -18702,9 +18716,13 @@ def search_ky_strict_snapshot(org):
                     candidate_name, getattr(org, "original_organization_name", org.organization_name), org.ein):
                 continue
             score = ky_strict_name_score(candidate_name, target_norms, org.organization_name)
-            match_score = target_name_score(candidate_name, targets)
-            if not ky_snapshot_registry_name_is_safe(candidate_name, targets, org.organization_name, org.ein) and score < 900:
+            if score < 700:
                 continue
+            # Apply the outer lookup's identity guard before choosing a winner.
+            # Otherwise a generated fragment can hide a valid reviewed alias.
+            if not ky_snapshot_registry_name_is_safe(candidate_name, original_targets, original_name, org.ein):
+                continue
+            match_score = target_name_score(candidate_name, targets)
             composite_score = (score, match_score, registry_identity_preference(candidate_name, org.organization_name, org.ein))
             if composite_score > best_score:
                 best_score = composite_score

@@ -188,6 +188,28 @@ class ExpandedDiscoveryTests(unittest.TestCase):
         with patch.object(c,'weekly_asset',return_value=Path('fixture.xlsx')),patch.object(c,'la_registered_charities_rows_from_xlsx',return_value=[]):
             result=c.search_with_name_variants(None,c.checker.Organization(NAME,EIN),c.search_la_downloaded_export,max_variants=2,max_elapsed_seconds=.001)
         self.assertNotEqual(c.public_status(result),'Not Registered')
+    def test_louisiana_typographic_apostrophe_export_still_completes_once(self):
+        aliases=tuple(f'Unique Reviewed Identity {i}' for i in range(12))
+        c.REVIEWED_NAME_CONTEXT.set({EIN:aliases})
+        unrelated=[{'Name':f'Unrelated Charity {i}'} for i in range(30)]
+        for apostrophe in ["'",'\u2018','\u2019','\u02bc','\uff07']:
+            name=f'First Responders Children{apostrophe}s Foundation'
+            for found in [False,True]:
+                records=[*unrelated,*([{'Name':aliases[-1],'Registered Through':'12/31/2027'}] if found else [])]
+                with self.subTest(apostrophe=apostrophe,found=found),patch.object(c,'weekly_asset',return_value=Path('fixture.xlsx')),patch.object(c,'la_registered_charities_rows_from_xlsx',return_value=records),patch.object(c,'search_la_downloaded_export',wraps=c.search_la_downloaded_export) as search:
+                    result=c.search_with_name_variants(None,c.checker.Organization(name,EIN),search,max_variants=10,max_elapsed_seconds=.001)
+                    self.assertEqual(c.public_status(result),'Current' if found else 'Not Registered')
+                    self.assertEqual(search.call_count,1)
+                    if found:self.assertEqual(result.matched_registry_name,aliases[-1])
+                    else:self.assertTrue(c.reviewed_identity_queries_completed(result.queries_attempted,[name,*aliases]))
+    def test_louisiana_prefix_probe_cannot_claim_complete_primary_search(self):
+        name='First Responders Children\u2019s Foundation'
+        c.REVIEWED_NAME_CONTEXT.set({EIN:('Another Reviewed Identity',)})
+        records=[{'Name':f'Unrelated Charity {i}'} for i in range(30)]
+        with patch.object(c,'reviewed_queries_first',return_value=['First Responders',name]),patch.object(c,'weekly_asset',return_value=Path('fixture.xlsx')),patch.object(c,'la_registered_charities_rows_from_xlsx',return_value=records):
+            result=c.search_with_name_variants(None,c.checker.Organization(name,EIN),c.search_la_downloaded_export,max_elapsed_seconds=.001)
+        self.assertFalse(result.success)
+        self.assertNotEqual(c.public_status(result),'Not Registered')
     def test_louisiana_ein_probe_does_not_count_as_full_name_search(self):
         records=[{'Name':f'Unrelated Charity {i}'} for i in range(30)]+[{'Name':NAME,'Registered Through':'12/31/2027'}]
         with patch.object(c,'build_search_queries',return_value=[EIN,NAME]),patch.object(c,'weekly_asset',return_value=Path('fixture.xlsx')),patch.object(c,'la_registered_charities_rows_from_xlsx',return_value=records):
