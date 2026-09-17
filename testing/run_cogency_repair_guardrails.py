@@ -1,5 +1,5 @@
 """Reported Sept 17 identity/credential defects, with adversarial controls."""
-import io, sys, time, unittest
+import io, json, sys, time, unittest
 from datetime import date
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -49,6 +49,23 @@ class RepairTests(unittest.TestCase):
         self.assertIn('11/30/2026',result.raw_status_text)
         self.assertNotIn('2004',result.raw_status_text)
         self.assertNotIn('Failed to Renew',result.raw_status_text)
+
+    def test_me_empty_widget_never_erases_confirmed_credential(self):
+        r=c.checker.StateResult('Example Foundation','123456789','ME','Upcoming Filing','https://example.test',success=True)
+        r.matched_registry_name='Example Foundation';r.matched_registry_identifier='CO12345'
+        r.raw_status_text='Expiration Date: 11/30/2026'
+        c.enrich_me_result_from_body(r,'Disciplinary actions: No records found')
+        self.assertEqual(r.status,'Upcoming Filing');self.assertEqual(r.matched_registry_identifier,'CO12345')
+
+    def test_me_empty_widget_does_not_turn_failed_search_negative(self):
+        r=c.checker.StateResult('Example Foundation','123456789','ME','Site Not Reachable','https://example.test',success=False)
+        c.enrich_me_result_from_body(r,'No records found')
+        self.assertEqual(r.status,'Site Not Reachable');self.assertFalse(r.success)
+
+    def test_me_completed_empty_search_still_returns_not_registered(self):
+        r=c.checker.StateResult('Example Foundation','123456789','ME','Not Registered','https://example.test',success=True)
+        c.enrich_me_result_from_body(r,'0 records found')
+        self.assertEqual(r.status,'Not Registered');self.assertTrue(r.success)
 
     def test_sc_990_header_ein_excludes_paid_preparer(self):
         self.assertEqual(c.form990_pdf_organization_ein((F/'sc-william-alumni-return.pdf').read_bytes(),time.monotonic()+15),'546054289')
@@ -122,6 +139,39 @@ class RepairTests(unittest.TestCase):
         rows=[{'orgID':str(i),'ein':org.ein,'orgName':org.organization_name} for i in (1,2)]
         with self.assertRaises(ValueError):
             c.ny_select_confirmed_duplicate(org,rows,lambda key:dict(rows[0],ein='987654321'))
+
+    def test_ny_old_blank_date_preserves_newer_confirmed_period(self):
+        detail=json.loads((F/'ny-convention-detail.json').read_text())['data']
+        dates,ignored=c.ny_confirmed_annual_dates(detail['documents']['Annual Filing for Charitable Organizations'])
+        self.assertEqual(max(dates),date(2024,12,31));self.assertEqual(ignored,1)
+        session=Mock();session.__enter__=Mock(return_value=session);session.__exit__=Mock(return_value=False)
+        def response(data):
+            value=Mock();value.json.return_value={'success':True,'statusCode':200,'data':data};return value
+        row={key:detail[key] for key in ('orgID','orgName','ein')}
+        session.get.side_effect=[response([row]),response(detail)]
+        with patch.object(c.curl_requests,'Session',return_value=session):
+            result=c.search_ny_direct(c.checker.Organization(detail['orgName'],detail['ein']))
+        self.assertTrue(result.success);self.assertEqual(result.computed_due_date,'11/15/2026')
+        self.assertEqual(result.matched_registry_identifier,'472245708')
+        c.apply_ny_latest_fye_next_cycle_status(c.checker.Organization(detail['orgName'],detail['ein']),result)
+        comment=c.comments_for_result_base(result,'',c.public_status(result))
+        self.assertIn('older filing',comment);self.assertIn('latest confirmed dated filing',comment)
+        self.assertEqual(session.get.call_args_list[0].kwargs['params'],{'ein':'472245708'})
+
+    def test_ny_undated_recent_or_unordered_receipt_still_fails(self):
+        dated={'fiscalYearEnd':'12/31/2024','received':'03/17/2026'}
+        for unknown in ({'received':'01/01/2025'},{'received':''},{'received':'invalid'},{}):
+            with self.subTest(unknown=unknown),self.assertRaises(ValueError):
+                c.ny_confirmed_annual_dates([dated,unknown])
+
+    def test_ny_only_undated_history_cannot_establish_latest_period(self):
+        with self.assertRaises(ValueError):c.ny_confirmed_annual_dates([{'received':'11/10/2021'}])
+        self.assertEqual(c.ny_confirmed_annual_dates([]),([],0))
+
+    def test_ny_invalid_nonempty_date_or_entry_remains_incomplete(self):
+        for invalid in ({'fiscalYearEnd':'not a date','received':'11/10/2021'},None):
+            with self.subTest(invalid=invalid),self.assertRaises(ValueError):
+                c.ny_confirmed_annual_dates([{'fiscalYearEnd':'12/31/2024'},invalid])
 
     def test_ny_active_is_preferred_only_with_confirmed_same_ein(self):
         org=c.checker.Organization('Example Relief','123456789')

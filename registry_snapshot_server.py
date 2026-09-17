@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.17.2-staging").strip() or "2026.09.17.2-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.17.3-staging").strip() or "2026.09.17.3-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -15627,7 +15627,12 @@ def enrich_me_result_from_body(result, body: str) -> None:
         return
     readable = html.unescape(re.sub(r"<[^>]+>", " ", body or ""))
     readable = re.sub(r"\s+", " ", readable).strip()
-    if re.search(r"0 records found|no records|no results|no companies found|no data", readable, re.I):
+    # Only format an already-completed negative search. Empty widgets on a
+    # credential page must not erase a matched record or an incomplete search.
+    if (public_status(result) == "Not Registered" and result.success
+            and not getattr(result, "matched_registry_identifier", "")
+            and not getattr(result, "matched_registry_name", "")
+            and re.search(r"0 records found|no records|no results|no companies found|no data", readable, re.I)):
         result.raw_status_text = "No record found"
         result.status = "Not Registered"
         result.source_note = "Maine search returned no matching organization result."
@@ -16964,6 +16969,27 @@ def ny_select_confirmed_duplicate(org, rows, read_detail):
     return best[0]
 
 
+def ny_confirmed_annual_dates(annual: list) -> tuple[list[date], int]:
+    """An old undated entry cannot invalidate a demonstrably newer filed period."""
+    dates, undated = [], []
+    for document in annual:
+        if not isinstance(document, dict):
+            raise ValueError("New York annual filing entry was incomplete")
+        raw = str(document.get("fiscalYearEnd") or "").strip()
+        if not raw:
+            undated.append(document)
+            continue
+        parsed = parse_due_date(raw)
+        if parsed is None:
+            raise ValueError("New York annual filing fiscal year end was missing or invalid")
+        dates.append(parsed)
+    for document in undated:
+        received = parse_due_date(str(document.get("received") or ""))
+        if not dates or not received or received > max(dates):
+            raise ValueError("New York undated annual filing could not be confirmed as historical")
+    return dates, len(undated)
+
+
 def search_ny_direct(org, browser_page=None, registry_search_provider=None):
     """Read the official site's completed JSON responses, never its loading table."""
     result = checker.StateResult(org.organization_name, format_ein(org.ein), "NY", "Unable to Confirm",
@@ -17110,12 +17136,7 @@ def search_ny_direct(org, browser_page=None, registry_search_provider=None):
             if not isinstance(documents, dict) or any(not isinstance(v, list) for v in documents.values()):
                 raise ValueError("New York filing documents were incomplete")
             annual = documents.get("Annual Filing for Charitable Organizations", [])
-            fiscal_dates = []
-            for document in annual:
-                fiscal_date = parse_due_date(str(document.get("fiscalYearEnd") or "")) if isinstance(document, dict) else None
-                if fiscal_date is None:
-                    raise ValueError("New York annual filing fiscal year end was missing or invalid")
-                fiscal_dates.append(fiscal_date)
+            fiscal_dates, older_undated_count = ny_confirmed_annual_dates(annual)
             result.source_note = "Organization identity and filing documents confirmed from the New York registry's official data service."
             result.success = True
             if not fiscal_dates:
@@ -17132,6 +17153,9 @@ def search_ny_direct(org, browser_page=None, registry_search_provider=None):
                 result.source_note += " The completed record contains no annual filing documents."
                 return result
             result.raw_status_text = f"Registration category: {category} | Latest FYE: {max(fiscal_dates).isoformat()}"
+            if older_undated_count:
+                result.raw_status_text += f" | Earlier undated annual filings: {older_undated_count}"
+                result.source_note += " Older undated entries were received before the latest confirmed fiscal year ended; they do not change that latest filed period."
             return apply_ny_latest_fye_next_cycle_status(org, result)
     except Exception as exc:
         if isinstance(exc, NYConnectorQueryNeeded):
@@ -18388,9 +18412,11 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
         if evidence and due and status_from_calendar_date(due) == status:
             extension = (f"New York's automatic filing extension moves that deadline to {evidence['extended_due']}. "
                          if evidence["extension_applied"] else "The record states that the extension was denied, so the base deadline applies. ")
+            historical_note = (" An older filing has no fiscal-year-end date in the registry, but was received before the latest dated fiscal year ended. The calculation uses the latest confirmed dated filing."
+                               if re.search(r"Earlier undated annual filings:\s*[1-9]\d*", raw) else "")
             return (f"The state registry shows the latest filed fiscal year ended {result.fiscal_year_end}. "
                     f"The next CHAR500 filing, for the period ending {result.next_required_period}, has a base deadline of {evidence['base_due']}. "
-                    f"{extension}{comment_date_conclusion(due, status)}")
+                    f"{extension}{comment_date_conclusion(due, status)}{historical_note}")
 
     if status == "Site Not Reachable":
         if state == "OK" and "certificate" in combined.lower() and matched:

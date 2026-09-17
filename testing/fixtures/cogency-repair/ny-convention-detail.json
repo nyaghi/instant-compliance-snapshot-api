@@ -1,0 +1,107 @@
+{
+  "success": true,
+  "data": {
+    "zip": "92111",
+    "country": "UNITED STATES",
+    "orgName": "Convention of States Action",
+    "address": "7670 Opportunity Rd",
+    "address2": "null, null",
+    "city": "San Diego",
+    "documents": {
+      "Other Filed Documents": [
+        {
+          "guid": "{D0F9F99C-0000-C618-B2E8-4BC99110C74D}",
+          "canDownload": true,
+          "received": "03/17/2026",
+          "title": "Accountant Report"
+        },
+        {
+          "guid": "{80F8F99C-0000-C219-B105-BAD2C899EAF7}",
+          "canDownload": true,
+          "received": "03/17/2026",
+          "title": "IRS Annual Report"
+        },
+        {
+          "guid": "{90C5CC97-0000-CC17-BC27-1F0FF4F776A0}",
+          "canDownload": true,
+          "received": "07/02/2025",
+          "title": "Accountant Report"
+        },
+        {
+          "guid": "{60C4CC97-0000-C916-8303-7317C74643DC}",
+          "canDownload": true,
+          "received": "07/02/2025",
+          "title": "IRS Annual Report"
+        },
+        {
+          "guid": "{60E6F98E-0000-C124-8D32-C9BD5C30C267}",
+          "canDownload": true,
+          "received": "04/20/2024",
+          "title": "Accountant Report"
+        },
+        {
+          "guid": "{00E5F98E-0000-CA37-AC06-D3D222B1F394}",
+          "canDownload": true,
+          "received": "04/20/2024",
+          "title": "IRS Annual Report"
+        },
+        {
+          "guid": "{40003886-0000-CE12-88C8-F132325E7A41}",
+          "canDownload": true,
+          "received": "02/09/2023",
+          "title": "Accountant Report"
+        },
+        {
+          "guid": "{60FE3786-0000-C61D-9189-B1D8E989239D}",
+          "canDownload": true,
+          "received": "02/09/2023",
+          "title": "IRS Annual Report"
+        }
+      ],
+      "Annual Filing for Charitable Organizations": [
+        {
+          "fiscalYearEnd": "12/31/2024",
+          "guid": "{E0FAF99C-0000-CF32-A989-ACCA824E4D3B}",
+          "canDownload": true,
+          "received": "03/17/2026",
+          "title": "Annual Filing for Charitable Organizations"
+        },
+        {
+          "fiscalYearEnd": "12/31/2023",
+          "guid": "{80C0CC97-0000-C21D-A755-06407B6528BA}",
+          "canDownload": true,
+          "received": "07/02/2025",
+          "title": "Annual Filing for Charitable Organizations"
+        },
+        {
+          "fiscalYearEnd": "12/31/2022",
+          "guid": "{00E5F98E-0000-CE14-9E8E-E5A22D21F654}",
+          "canDownload": true,
+          "received": "04/20/2024",
+          "title": "Annual Filing for Charitable Organizations"
+        },
+        {
+          "fiscalYearEnd": "12/31/2021",
+          "guid": "{40FF3786-0000-CF11-BC51-A8D25BE32D52}",
+          "canDownload": true,
+          "received": "02/09/2023",
+          "title": "Annual Filing for Charitable Organizations"
+        },
+        {
+          "guid": "{D067CE83-0000-C614-BE2B-615A36E52FB8}",
+          "canDownload": true,
+          "received": "11/10/2021",
+          "title": "Annual Filing for Charitable Organizations"
+        }
+      ]
+    },
+    "county": "",
+    "ein": "472245708",
+    "orgID": "44-70-04",
+    "url": "www.converntionofstates.com",
+    "regStatute": "Dual",
+    "state": "CA",
+    "regType": "NFP"
+  },
+  "statusCode": 200
+}
