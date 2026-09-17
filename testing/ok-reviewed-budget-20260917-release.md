@@ -1,0 +1,9 @@
+# Oklahoma timing for expanded reviewed names
+
+The frozen 30-organization post-validation reproduced a timeout for Christian Ministry Alliance, using the exact discovered inputs. Two staging attempts were inconclusive. A local trace confirmed that all ten reviewed identities completed successfully, but the four existing generated fallbacks pushed the plan beyond the unchanged 72-second deadline. The prior diagnostics also displayed only the first four attempted queries even when more had run.
+
+The narrow change is confined to `search_ok_with_variants`. Plans within the former query allowance retain 72 seconds. Larger plans receive four additional seconds per extra planned query, capped at 100 seconds, below the existing 110/115-second outer request limits. The same deadline governs the existing consent retry and individual actions. Query order, matching, EIN/address confirmation, first-page-only policy, negative-result completeness requirements, retry count and status interpretation are unchanged. Diagnostic source notes now retain every query actually attempted rather than truncating at the former allowance.
+
+The new behavioral test completes a 14-query plan in 84 simulated seconds: the prior code returns inconclusive; the change completes all queries. Controls preserve ordinary deadlines, immediate positive returns and inconclusive results when even the extended allowance expires. The full regression, live reported-case/control checks, staging smoke and a repeat of all 30 Oklahoma cases are required before declaring this finding resolved. Earlier failures remain saved.
+
+Connector 0.3.4 and New York behavior are unchanged from .12. Other state logic is unchanged. Keep each retained result's actual release version; do not relabel earlier responses. No organization-specific runtime conditions, environment changes or production deployment are included.

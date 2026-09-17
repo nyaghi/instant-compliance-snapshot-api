@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.17.12-staging").strip() or "2026.09.17.12-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.17.13-staging").strip() or "2026.09.17.13-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -20707,14 +20707,18 @@ def search_ok_with_variants(page, org, module):
     completed_no_match_variants: list[str] = []
     planned_variants = (reviewed_queries_first(original_name, org.ein, variants, limit=OK_QUERY_LIMIT,
         transform=lambda value: ok_search_name_for_org(org_with_name(org, value))) or [original_name])
+    # Reviewed identities can extend the old four-query plan. Give those
+    # additional queries bounded time without changing query order or matching.
+    # Keep headroom below the existing 110/115-second outer request limits.
+    search_budget_seconds = min(100.0, 72.0 + 4.0 * max(0, len(planned_variants) - OK_QUERY_LIMIT))
     exhausted_budget = False
     incomplete_result = None
     for variant in planned_variants:
-        if best_result is not None and time.perf_counter() - started > 72.0:
+        if best_result is not None and time.perf_counter() - started > search_budget_seconds:
             exhausted_budget = True
             break
         variant_org = org_with_name(org, variant)
-        variant_org.ok_search_deadline = started + 72.0
+        variant_org.ok_search_deadline = started + search_budget_seconds
         # Approved Oklahoma policy: complete page one of each bounded query.
         variant_org.ok_search_page_limit = 1
         variant_org.match_target_names = list(dict.fromkeys([
@@ -20725,14 +20729,14 @@ def search_ok_with_variants(page, org, module):
         result.queries_attempted = list(attempted_variants)
         result.source_attempts = [
             *(getattr(result, "source_attempts", []) or []),
-            f"Oklahoma attempted bounded name/alias queries: {', '.join(attempted_variants[:OK_QUERY_LIMIT])}."
+            f"Oklahoma attempted bounded name/alias queries: {', '.join(attempted_variants)}."
         ]
         if getattr(result, "organization_name", "") != original_name:
             result.organization_name = original_name
         if (
             public_status(result) == "Site Not Reachable"
             and re.search(r"Could not click the Oklahoma Ok button", getattr(result, "error", "") or "", re.I)
-            and time.perf_counter() - started <= 72.0
+            and time.perf_counter() - started <= search_budget_seconds
         ):
             retry_result = search_ok_precise(page, variant_org, module)
             retry_result.queries_attempted = list(attempted_variants)
@@ -20801,7 +20805,7 @@ def search_ok_with_variants(page, org, module):
         budget_result.success = False
         budget_result.queries_attempted = list(attempted_variants)
         budget_result.source_attempts = [
-            f"Oklahoma attempted bounded name/alias queries before budget expiration: {', '.join(attempted_variants[:OK_QUERY_LIMIT])}."
+            f"Oklahoma attempted bounded name/alias queries before budget expiration: {', '.join(attempted_variants)}."
         ]
         budget_result.reason_code = "RUNNER_TIMEOUT_RETRY_FAILED"
         return budget_result

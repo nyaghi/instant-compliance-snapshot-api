@@ -70,6 +70,46 @@ class RetrievalTests(unittest.TestCase):
         result,_=self.run_variants(complete_query='responders',error_query='childrens')
         self.assertEqual(result.status,'Site Not Reachable')
 
+class ReviewedNameTimingTests(unittest.TestCase):
+    def run_plan(self, count, seconds, positive=False):
+        now=[0.0];calls=[]
+        queries=['Example Relief']+[f'Confirmed Previous Name {i}' for i in range(1,count)]
+        module=SimpleNamespace(OK_SEARCH_URL='https://www.sos.ok.gov/corp/charityInquiryFind.aspx',
+            SearchResult=lambda **kw:SimpleNamespace(**kw),STATUS_NOT_FOUND='Not Registered')
+        def search(page,org,module):
+            calls.append((org.organization_name,org.ok_search_deadline,org.ok_search_page_limit))
+            now[0]+=seconds
+            return SimpleNamespace(organization_name=org.organization_name,
+                status='Current' if positive else 'Not Registered',success=True,
+                matched_registry_name='',raw_status_text='',source_note='',error='')
+        with patch.object(cc.time,'perf_counter',side_effect=lambda:now[0]), \
+             patch.object(cc,'build_search_queries',return_value=['Example Relief']), \
+             patch.object(cc,'reviewed_queries_first',return_value=queries), \
+             patch.object(cc,'organization_match_target_variants',return_value=['Example Relief']), \
+             patch.object(cc,'search_ok_precise',side_effect=search), \
+             patch.object(cc,'public_status',lambda r:r.status):
+            result=cc.search_ok_with_variants(None,cc.checker.Organization('Example Relief','123456789'),module)
+        return result,calls,queries
+    def test_short_plan_retains_existing_deadline_and_first_page_policy(self):
+        result,calls,_=self.run_plan(4,6)
+        self.assertEqual(result.status,'Not Registered')
+        self.assertEqual({row[1] for row in calls},{72.0})
+        self.assertEqual({row[2] for row in calls},{1})
+    def test_long_reviewed_plan_completes_without_dropping_queries(self):
+        result,calls,queries=self.run_plan(14,6)
+        self.assertEqual(result.status,'Not Registered')
+        self.assertEqual([row[0] for row in calls],queries)
+        self.assertEqual(result.queries_attempted,queries)
+        self.assertIn(queries[-1],result.source_attempts[0])
+    def test_extended_budget_is_bounded_and_incomplete_is_not_negative(self):
+        result,calls,_=self.run_plan(40,10)
+        self.assertNotEqual(result.status,'Not Registered')
+        self.assertLess(len(calls),40)
+        self.assertLessEqual(max(row[1] for row in calls),100.0)
+    def test_positive_still_returns_without_waiting_for_unused_names(self):
+        result,calls,_=self.run_plan(14,6,positive=True)
+        self.assertEqual(result.status,'Current');self.assertEqual(len(calls),1)
+
 class ReadinessTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
