@@ -63,8 +63,11 @@ class BrowserIntegration(unittest.TestCase):
         cls.observations.append({'host':u.hostname,'path':u.path})
         if u.hostname=='staging.compliance-express.com':
             if u.path=='/ny-connector.js':route.fulfill(content_type='application/javascript',body=(WORK/'web-staging/ny-connector.js').read_text())
+            elif u.path=='/organization-identity.js':route.fulfill(content_type='application/javascript',body=(WORK/'web-staging/organization-identity.js').read_text(encoding='utf-8'))
             elif u.path=='/full-ui':route.fulfill(content_type='text/html',body=(WORK/'web-staging/index.html').read_text(encoding='utf-8'))
             else:route.fulfill(content_type='text/html',body=PAGE)
+        elif u.hostname=='instant-compliance-snapshot-api-staging-8dnk.onrender.com' and u.path=='/api/discover-names':
+            route.fulfill(status=200,content_type='application/json',body=json.dumps({'names':[],'sources':[]}),headers={'Access-Control-Allow-Origin':c.NY_CONNECTOR_ORIGIN,'Access-Control-Allow-Headers':'Content-Type','Access-Control-Allow-Methods':'POST'})
         elif u.hostname in {'instant-compliance-snapshot-api-staging-8dnk.onrender.com','instant-compliance-snapshot-api-staging.onrender.com'} and u.path=='/api/check':
             headers={'Access-Control-Allow-Origin':c.NY_CONNECTOR_ORIGIN,'Access-Control-Allow-Headers':'Content-Type','Access-Control-Allow-Methods':'POST'}
             if route.request.method=='OPTIONS':route.fulfill(status=200,headers=headers)
@@ -292,6 +295,8 @@ class BrowserIntegration(unittest.TestCase):
         page.locator('#stagingEmail').fill('browser-test@compliance-express.com')
         page.locator('#stagingPasscode').fill(c.ADMIN_PASSCODE);page.locator('#stagingUnlockButton').click()
         page.locator('#organizationName').fill(ROW['orgName']);page.locator('#ein').fill(ROW['ein'])
+        page.locator('#findAlternateNames').click()
+        page.locator('#identityReview').wait_for(state='visible',timeout=90000)
         page.locator('#clearStatesButton').click()
         page.locator('input[value="CO"]').check();page.locator('input[value="NY"]').check();page.locator('#consent').check()
         with patch.object(c,'public_profile_for_ein',return_value={}):

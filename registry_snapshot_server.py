@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.17.10-staging").strip() or "2026.09.17.10-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.17.11-staging").strip() or "2026.09.17.11-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -10522,10 +10522,8 @@ def search_fl(page, org):
                 return
             except Exception as exc:
                 last_error = exc
-                try:
-                    page.evaluate("window.stop()")
-                except Exception:
-                    pass
+                # A timed-out document may never acquire a JavaScript context.
+                # Navigate away with a deadline instead of evaluating window.stop().
                 try:
                     page.goto("about:blank", wait_until="commit", timeout=remaining_ms(3000))
                 except Exception:
