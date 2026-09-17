@@ -6,11 +6,18 @@
   const NY = "https://charities-search.ag.ny.gov";
   if (location.origin !== NY || window !== window.top) return;
   let pending = null;
+  let completed = null;
+  const same = (a, b) => a.action === b.action && JSON.stringify(a.query || null) === JSON.stringify(b.query || null);
+  function finish(task, response) {
+    completed = { id: task.id, attempt: task.attempt, action: task.action, query: task.query, response };
+    if (pending === task) pending = null;
+    clearTimeout(task.timer);
+    for (const respond of task.responders) try { respond(response); } catch { /* Previous worker has exited. */ }
+  }
   window.addEventListener("message", event => {
     if (event.source !== window || event.origin !== NY || event.data?.channel !== "cc-ny-page-v1" || event.data.direction !== "response") return;
     if (!pending || event.data.id !== pending.id) return;
-    const task = pending; pending = null; clearTimeout(task.timer);
-    task.respond({ ...(event.data.ok ? { ok: true, evidence: event.data.evidence } : { ok: false, reason: event.data.reason }), verificationRetryUsed: event.data.verificationRetryUsed === true });
+    finish(pending, { ...(event.data.ok ? { ok: true, evidence: event.data.evidence } : { ok: false, reason: event.data.reason }), verificationRetryUsed: event.data.verificationRetryUsed === true });
   });
   chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (sender.id !== chrome.runtime.id) return false;
@@ -20,9 +27,12 @@
       return false;
     }
     if (!["search", "verify"].includes(message?.action) || typeof message.id !== "string" || message.id.length > 80) return false;
+    if (completed?.id === message.id && completed.attempt === message.attempt) { respond(same(completed, message) ? completed.response : { ok: false, reason: "NY_CONNECTOR_INVALID_SEQUENCE" }); return false; }
+    if (pending?.id === message.id && pending.attempt === message.attempt && same(pending, message)) { pending.responders.push(respond); return true; }
     if (pending) { respond({ ok: false, reason: "NY_CONNECTOR_BUSY" }); return false; }
-    const timer = setTimeout(() => { if (pending?.id === message.id) { pending = null; respond({ ok: false, reason: "NY_CONNECTOR_RELAY_TIMEOUT" }); } }, 140000);
-    pending = { id: message.id, respond, timer };
+    const task = { id: message.id, attempt: message.attempt, action: message.action, query: message.query, responders: [respond], timer: null };
+    task.timer = setTimeout(() => { if (pending === task) finish(task, { ok: false, reason: "NY_CONNECTOR_RELAY_TIMEOUT" }); }, 140000);
+    pending = task;
     window.postMessage({ channel: "cc-ny-page-v1", direction: "request", id: message.id, action: message.action, query: message.query, verificationRetryUsed: message.verificationRetryUsed === true }, NY);
     return true;
   });

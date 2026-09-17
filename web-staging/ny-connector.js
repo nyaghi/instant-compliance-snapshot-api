@@ -12,7 +12,7 @@
     if (m.progress) { task.onProgress?.(m); return; }
     waiting.delete(m.id); clearTimeout(task.timer); task.resolve(m);
   });
-  const compatible = response => response?.ok && ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "connection-recovery-v1", "recovery-causes-v1", "cleanup-ack-v1", "timeout-recovery-v1"].every(capability => response.capabilities?.includes(capability));
+  const compatible = response => response?.ok && ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "connection-recovery-v1", "recovery-causes-v1", "cleanup-ack-v1", "timeout-recovery-v1", "resume-v1"].every(capability => response.capabilities?.includes(capability));
   let refreshing = null, activeLookups = 0;
   const recoveryMessage = (reason, retryAt) => ({
     NY_CONNECTOR_RECOVERY_PAGE_OPEN: "Close your other New York registry page before refreshing this connection. Your CharityClarity results are saved on this page.",
@@ -20,6 +20,8 @@
     NY_CONNECTOR_RECOVERY_REJECTED: "New York still rejected verification after the connection refresh. Your other state results are unchanged.",
     NY_CONNECTOR_RECOVERY_FAILED: "The New York connection refresh could not finish. Your other state results are unchanged.",
     NY_CONNECTOR_TIMEOUT: "New York verification did not finish within the time allowed. Your other state results are unchanged.",
+    NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT: "New York verification did not finish within the time allowed. Your other state results are unchanged.",
+    NY_CONNECTOR_TAB_READY_TIMEOUT: "The New York registry page did not finish loading in time. Your other state results are unchanged.",
     NY_CONNECTOR_VERIFICATION_NETWORK_ERROR: "The connection to New York was interrupted during verification. Your other state results are unchanged.",
     NY_CONNECTOR_VERIFICATION_REQUIRED: "New York did not confirm verification. Your other state results are unchanged.",
     NY_CONNECTOR_RATE_LIMITED: "New York is limiting requests. Your other state results are unchanged.",
@@ -120,7 +122,7 @@
       if (compatible(connection)) {
         connected = true;
         onProgress?.("New York: waiting for the browser connector. Other states can continue.");
-        acquired = await bridge("acquire", null, lookupId, progress => onProgress?.(`New York: waiting in the browser queue (position ${progress.position}). Other states can continue.`));
+        acquired = await bridge("acquire", null, lookupId, progress => onProgress?.(progress.reconnecting ? "New York: reconnecting and keeping your place in the queue. Other states can continue." : `New York: waiting in the browser queue (position ${progress.position}). Other states can continue.`));
       }
       // Start the signed continuation only after queue admission. Waiting cannot
       // consume the master's five-minute evidence lifetime.
@@ -138,7 +140,7 @@
       while (state.phase === "search" && count++ < 5) {
         checkToken = state.check_token;
         connected = true;
-        const completed = await bridge("search", state.query, lookupId, progress => onProgress?.(progress.recovering ? "New York: refreshing the connection, then retrying this check. Other states can continue." : "New York: the registry requested a pause. Retrying automatically."));
+        const completed = await bridge("search", state.query, lookupId, progress => onProgress?.(progress.reconnecting ? "New York: reconnecting and resuming this check. Other states can continue." : progress.recovering ? "New York: refreshing the connection, then retrying this check. Other states can continue." : "New York: the registry requested a pause. Retrying automatically."));
         state = completed.ok
           ? await api({ action: "advance", check_token: checkToken, query_id: state.query_id, evidence: completed.evidence })
           : await api({ action: "fail", check_token: checkToken, reason: completed.reason });

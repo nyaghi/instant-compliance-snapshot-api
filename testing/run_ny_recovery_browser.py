@@ -7,7 +7,7 @@ class RecoveryIntegration(BrowserIntegration):
     def test_repair_retries_same_ein_and_confirms_detail(self):
         result, session = self.run_case(verification_responses=[(401,False),(401,False),(200,True)], repair_available=True, expected_tabs=2)
         self.assertEqual(result['status'],'Current')
-        self.assertEqual(result['connector_version'],'0.3.1')
+        self.assertEqual(result['connector_version'],self.worker.evaluate('chrome.runtime.getManifest().version'))
         self.assertEqual(self.verifies,3)
         self.assertEqual([e['query'] for e in self.trace],[{'ein':ROW['ein']}])
         session.get.assert_called_once()
@@ -18,7 +18,8 @@ class RecoveryIntegration(BrowserIntegration):
         result, session = self.run_case(accepted=False, repair_available=True, expected_tabs=2)
         self.assertEqual(result['status'],'Unable to Confirm')
         self.assertEqual(result['status_reason'],'NY_CONNECTOR_RECOVERY_REJECTED')
-        self.assertEqual(self.verifies,4)
+        # The single 401 retry remains consumed across the fresh-page repair.
+        self.assertEqual(self.verifies,3)
         self.assertEqual(self.trace,[])
         session.get.assert_not_called()
         state=self.worker.evaluate('repair')
@@ -65,6 +66,8 @@ class RecoveryIntegration(BrowserIntegration):
         page.locator('#stagingEmail').fill('browser-test@compliance-express.com')
         page.locator('#stagingPasscode').fill(c.ADMIN_PASSCODE);page.locator('#stagingUnlockButton').click()
         page.locator('#organizationName').fill(ROW['orgName']);page.locator('#ein').fill(ROW['ein'])
+        page.locator('#findAlternateNames').click()
+        page.locator('#identityReview').wait_for(state='visible',timeout=90000)
         page.locator('#clearStatesButton').click()
         for state in ['CO','NY','PA']:page.locator('input[value="'+state+'"]').check()
         page.locator('#consent').check()
@@ -93,7 +96,7 @@ class RecoveryIntegration(BrowserIntegration):
         self.manual_failure('network','NY_CONNECTOR_VERIFICATION_NETWORK_ERROR','interrupted during verification')
 
     def test_manual_timeout_has_accurate_page_message(self):
-        self.manual_failure('no-response','NY_CONNECTOR_TIMEOUT','did not finish within the time allowed')
+        self.manual_failure('no-response','NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT','did not finish within the time allowed')
 
     def test_manual_unconfirmed_response_is_not_labeled_rejected(self):
         self.manual_failure('unconfirmed','NY_CONNECTOR_VERIFICATION_REQUIRED','did not confirm verification')
@@ -118,7 +121,11 @@ class RecoveryIntegration(BrowserIntegration):
         try:
             page.locator('#stagingEmail').fill('browser-test@compliance-express.com');page.locator('#stagingPasscode').fill(c.ADMIN_PASSCODE);page.locator('#stagingUnlockButton').click()
             page.locator('[data-connector-refresh]').click()
-            page.wait_for_function("text=>document.querySelector('[data-connector-recovery]').textContent.includes(text)",arg=message,timeout=45000)
+            try:
+                page.wait_for_function("text=>document.querySelector('[data-connector-recovery]').textContent.includes(text)",arg=message,timeout=45000)
+            except Exception:
+                print(json.dumps({'recovery_message':page.locator('[data-connector-recovery]').text_content(),'worker_state':self.worker.evaluate('({active:active?{refreshOnly:active.refreshOnly,pending:active.pending,command:active.command}:null,repair,queued:queue.length})'),'requests':self.observations[-12:]}),flush=True)
+                raise
             self.assertNotIn('rejected',page.locator('[data-connector-recovery]').inner_text())
             self.assertEqual(self.worker.evaluate('repair.reason'),reason)
             self.assertEqual(self.trace,[]);self.assertEqual(self.state_calls,[])
@@ -133,7 +140,7 @@ class RecoveryIntegration(BrowserIntegration):
         holder=self.context.new_page();holder.goto(c.NY_CONNECTOR_ORIGIN+'/restart-holder')
         holder.evaluate("""()=>{window.granted=false;window.addEventListener('message',e=>{if(e.data?.direction==='response'&&e.data.id==='aaaaaaaaaaaaaaaaaaaa'&&e.data.ok)granted=true;});window.postMessage({channel:'cc-ny-staging-v1',direction:'request',action:'acquire',id:'aaaaaaaaaaaaaaaaaaaa',lookup_id:'bbbbbbbbbbbbbbbbbbbb'},location.origin);} """)
         holder.wait_for_function('granted',timeout=15000)
-        self.worker.evaluate('async()=>{await lookupTab(active);}')
+        self.worker.evaluate('async()=>{await lookupTab(active);await ready(active);}')
         owned_ids=self.worker.evaluate('[...owned]')
         owned_pages=[p for p in self.context.pages if p.url.startswith('https://charities-search.ag.ny.gov/')]
         self.assertEqual(len(owned_pages),len(owned_ids))

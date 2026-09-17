@@ -38,7 +38,7 @@ test('never-ready form retries once and stays bounded',async()=>{
 test('cancellation during retry delay does not create a replacement tab',async()=>{
  const h=harness(),p=h.connect();
  h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='ready'?{ready:true}:{ok:false,reason:'NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT'};
- await h.query(p,11);p.disconnect();await h.advance(1000);assert.equal(h.created.length,1);
+ await h.query(p,11);h.chrome.tabs.onRemoved.emit(1);await h.advance(1000);assert.equal(h.created.length,1);
 });
 for(const count of [5,10,15])test(count+' queued sessions survive a slow first verification without cross-organization evidence',async()=>{
  const h=harness(),ports=Array.from({length:count},(_,i)=>h.connect(i+1));let first=true;

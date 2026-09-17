@@ -12,8 +12,8 @@ function harness(initial={}) {
   const timers=[],created=[],removed=[],queries=[],repairs=[];
   const data={local:initial.local||{},session:initial.session||{}};
   const area=name=>({get:async key=>({[key]:data[name][key]}),set:async value=>Object.assign(data[name],JSON.parse(JSON.stringify(value))),setAccessLevel:async()=>{}});
-  const tabs=new Map([[1,{id:1,windowId:10,url:'https://staging.compliance-express.com/'}],[2,{id:2,windowId:99,url:'https://charities-search.ag.ny.gov/RegistrySearch'}]]);
-  let next=100, deferred=null, now=10000;
+  const tabs=new Map(initial.tabs||[[1,{id:1,windowId:10,url:'https://staging.compliance-express.com/'}],[2,{id:2,windowId:99,url:'https://charities-search.ag.ny.gov/RegistrySearch'}]]);
+  let next=Math.max(100,...[...tabs.keys()].map(n=>n+1)), deferred=null, now=initial.now??10000;
   const chrome={storage:{local:area('local'),session:area('session')},runtime:{id:'fixture-extension',onMessage:event(),onConnect:event()},tabs:{
     onRemoved:event(),create:async options=>{if(deferred)await deferred;const tab={id:next++,...options};tabs.set(tab.id,tab);created.push(tab.id);return tab;},
     get:async id=>{if(!tabs.has(id))throw Error('Tab absent');return tabs.get(id);},
@@ -25,8 +25,8 @@ function harness(initial={}) {
   const recovery={clearForTab:async(tabId,owned,close)=>{repairs.push({tabId,owned});await close();}};
   const context=vm.createContext({URL,Date:Clock,chrome,CCNYRecovery:recovery,importScripts:()=>{},setTimeout:(fn,ms)=>{const t={fn,ms,due:now+ms,cleared:false};timers.push(t);return t;},clearTimeout:t=>{if(t)t.cleared=true;}});
   for(const file of ['protocol.js','worker.js'])vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),context);
-  function connect(n=1,sender={id:chrome.runtime.id,frameId:0,url:tabs.get(1).url,tab:{id:1}},refresh=false) {
-    const port={name:(refresh?'cc-ny-refresh-v1:':'cc-ny-lookup-v1:')+id(n),sender,onMessage:event(),onDisconnect:event(),messages:[],disconnected:false,
+  function connect(n=1,sender={id:chrome.runtime.id,frameId:0,url:tabs.get(1).url,tab:{id:1}},refresh=false,resume=false) {
+    const port={name:(resume?'cc-ny-resume-v1:':refresh?'cc-ny-refresh-v1:':'cc-ny-lookup-v1:')+id(n),sender,onMessage:event(),onDisconnect:event(),messages:[],disconnected:false,
       postMessage:m=>port.messages.push(JSON.parse(JSON.stringify(m))),disconnect:()=>{if(!port.disconnected){port.disconnected=true;port.onDisconnect.emit();}}};
     chrome.runtime.onConnect.emit(port);return port;
   }
@@ -70,12 +70,13 @@ test('origin disconnect and user closing either involved tab clean up safely',as
   for(const close of ['disconnect','origin','registry']){
     const h=harness(),p=h.connect();await h.query(p,11);
     if(close==='disconnect')p.disconnect();else h.chrome.tabs.onRemoved.emit(close==='origin'?1:100);
-    await tick();assert.deepEqual(h.removed,[100]);assert.ok(h.tabs.has(2));assert.equal(p.disconnected,true);
+    await tick();if(close==='disconnect')await h.advance(90000);
+    assert.deepEqual(h.removed,[100]);assert.ok(h.tabs.has(2));assert.equal(p.disconnected,true);
   }
 });
 test('closing origin during tab creation cannot leak its newly created tab',async()=>{
   const h=harness();let release;h.deferCreate(new Promise(resolve=>{release=resolve;}));const p=h.connect();p.onMessage.emit({action:'search',id:id(11),query:ein});
-  await tick();p.disconnect();release();await tick();assert.deepEqual(h.removed,[100]);assert.deepEqual(h.queries,[]);
+  await tick();h.chrome.tabs.onRemoved.emit(1);release();await tick();assert.deepEqual(h.removed,[100]);assert.deepEqual(h.queries,[]);
 });
 test('overlapping query cannot consume another query response',async()=>{
   const h=harness();let release;h.deferCreate(new Promise(resolve=>{release=resolve;}));const p=h.connect();p.onMessage.emit({action:'search',id:id(11),query:ein});
@@ -119,7 +120,7 @@ test('queued cancellation advances position without touching active tab',async()
 });
 test('queue expiry does not expire or extend the active lookup',async()=>{
   const h=harness(),p=h.connect(1);await h.query(p,11);
-  const q=h.connect(2);h.timers.filter(t=>t.ms===1200000).at(-1).fn();await tick();
+  const q=h.connect(2);await tick();h.timers.filter(t=>t.ms===1200000).at(-1).fn();await tick();
   assert.equal(q.messages.at(-1).reason,'NY_CONNECTOR_QUEUE_TIMEOUT');assert.equal(p.disconnected,false);
   assert.equal(h.timers.filter(t=>t.ms===300000).length,1);
 });
@@ -281,7 +282,7 @@ test('closing an origin during cleanup never sends a late recovered result',asyn
   const h=harness(),p=h.connect();let release;
   h.recovery.clearForTab=async(tabId,ids,close)=>{await close();await new Promise(r=>{release=r;});};
   h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='ready'?{ready:true}:{ok:false,reason:'NY_CONNECTOR_VERIFICATION_REJECTED'};
-  await h.query(p,11);p.disconnect();release();await tick();
+  await h.query(p,11);h.chrome.tabs.onRemoved.emit(1);release();await tick();
   assert.equal(p.messages.some(m=>m.id===id(11)&&m.ok),false);assert.deepEqual(h.created,[100]);
   assert.equal(h.data.local.ccnyRepair.phase,'failed');
 });
