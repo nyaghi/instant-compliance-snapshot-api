@@ -8,6 +8,8 @@ import registry_snapshot_server as c
 F = Path(__file__).parent / 'fixtures' / 'cogency-repair'
 
 class RepairTests(unittest.TestCase):
+    def setUp(self):
+        c.WI_FINANCIAL_IDENTITY_CACHE.clear()
     def test_location_survives_short_reviewed_alias(self):
         name='Beth Israel Deaconess Hospital – Milton, Inc.'
         token=c.REVIEWED_NAME_CONTEXT.set({'042103604':('Beth Israel Deaconess Hospital',)})
@@ -86,7 +88,6 @@ class RepairTests(unittest.TestCase):
         state=(F/'wi-fgcu-financial-2025.html').read_bytes()
         if changed:state=state.replace(b'25,030,298',b'25,030,299')
         opener=Mock();opener.open.side_effect=[io.BytesIO((F/'wi-fgcu-financial.html').read_bytes()),io.BytesIO(state)]
-        c.wi_financial_identity_evidence.cache_clear()
         with patch.object(c,'public_profile_for_ein',return_value={'organization':{'latest_object_id':'202532319349302943'}}), \
              patch.object(c,'identity_fetch',return_value=irs),patch.object(c.urllib.request,'build_opener',return_value=opener):
             return c.wi_financial_identity_evidence('650403969','CredSummaryDetails.aspx?chid=944852&h=847014605','22812-800',0)
@@ -99,6 +100,12 @@ class RepairTests(unittest.TestCase):
 
     def test_wi_wrong_irs_ein_rejects_corroboration(self):
         self.assertEqual(self.financial(wrong_ein=True),{})
+
+    def test_wi_unavailable_evidence_is_not_cached_as_identity_failure(self):
+        self.assertEqual(self.financial(changed=True),{})
+        self.assertEqual(self.financial().get('decision'),'corroborated')
+        with patch.object(c,'identity_fetch',side_effect=TimeoutError('temporary source failure')):
+            self.assertEqual(c.wi_financial_identity_evidence('650403969','CredSummaryDetails.aspx?chid=944852&h=847014605','22812-800',0).get('decision'),'corroborated')
 
     def test_ny_same_ein_and_address_selects_primary_without_recency_guess(self):
         org=c.checker.Organization('American Friends of Sheba Medical Center, Inc.','237076117')

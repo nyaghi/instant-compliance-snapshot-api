@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.17.1-staging").strip() or "2026.09.17.1-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.17.2-staging").strip() or "2026.09.17.2-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -14533,14 +14533,21 @@ def wi_candidate_from_markdown_row(row_text: str, target_names: list[str], origi
     }, target_names, original_name, ein, detail_text)
 
 
-@lru_cache(maxsize=256)
+WI_FINANCIAL_IDENTITY_CACHE: dict[tuple, dict] = {}
+WI_FINANCIAL_IDENTITY_LOCK = threading.Lock()
+
+
 def wi_financial_identity_evidence(ein: str, href: str, credential: str, hour: int) -> dict:
     """Resolve an address spelling conflict from five same-year filing values.
 
     Cached corroboration is identity evidence only; current status is always
     read independently from the selected credential.
     """
-    deadline = time.monotonic() + 10
+    key = (ein, href, credential, hour)
+    with WI_FINANCIAL_IDENTITY_LOCK:
+        if key in WI_FINANCIAL_IDENTITY_CACHE:
+            return dict(WI_FINANCIAL_IDENTITY_CACHE[key])
+    deadline = time.monotonic() + 20
     profile = public_profile_for_ein(ein).get("organization") or {}
     object_id = str(profile.get("latest_object_id") or "")
     if not re.fullmatch(r"\d{18}", object_id): return {}
@@ -14548,17 +14555,20 @@ def wi_financial_identity_evidence(ein: str, href: str, credential: str, hour: i
     if urlparse(detail_url).hostname != "apps.dfi.wi.gov": return {}
     financial_url = urljoin(detail_url, "Financials.aspx") + "?" + urlparse(detail_url).query
     irs_url = f"https://projects.propublica.org/nonprofits/full_text/{object_id}/IRS990"
+    stage = "IRS return"
     try:
         irs_html = identity_fetch(irs_url, deadline).decode("utf-8", "replace")
         period = irs_header_evidence(irs_html, ein, irs_url)["filing"]
         fiscal_year = str(date.fromisoformat(period["period_end"]).year)
         opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        stage = "Wisconsin fiscal-year selection"
         with opener.open(financial_url, timeout=max(.5, deadline-time.monotonic())) as response:
             page = response.read(2_000_000).decode("utf-8", "replace")
         if not re.search(r'<option\b[^>]*value=["\']' + fiscal_year + r'["\']', page): return {}
         fields = html_hidden_inputs(page)
         fields["ctl00$cphMainContent$ddlFiscalYearsList"] = fiscal_year
         request = urllib.request.Request(financial_url, data=urlencode(fields).encode(), headers={"Referer": financial_url})
+        stage = "Wisconsin financial values"
         with opener.open(request, timeout=max(.5, deadline-time.monotonic())) as response:
             page = response.read(2_000_000).decode("utf-8", "replace")
         state_text = html_to_text(page)
@@ -14577,9 +14587,15 @@ def wi_financial_identity_evidence(ein: str, href: str, credential: str, hour: i
             if not reported or not filed or reported[1].replace(",", "") != filed[1].replace(",", ""): return {}
             values.append(int(reported[1].replace(",", "")))
         if sum(value > 0 for value in values) < 4: return {}
-        return {"decision": "corroborated", "source_url": financial_url, "irs_source_url": irs_url,
+        evidence = {"decision": "corroborated", "source_url": financial_url, "irs_source_url": irs_url,
                 "fiscal_year": fiscal_year, "basis": "Five financial amounts on the same Wisconsin credential match the same-year IRS return for the requested EIN; this corroborates the minor search-row city spelling difference."}
-    except Exception:
+        with WI_FINANCIAL_IDENTITY_LOCK:
+            if len(WI_FINANCIAL_IDENTITY_CACHE) >= 256:
+                WI_FINANCIAL_IDENTITY_CACHE.pop(next(iter(WI_FINANCIAL_IDENTITY_CACHE)))
+            WI_FINANCIAL_IDENTITY_CACHE[key] = evidence
+        return dict(evidence)
+    except Exception as exc:
+        log_event(f"WI identity corroboration unavailable: credential={credential}; stage={stage}; error={type(exc).__name__}")
         return {}
 
 
