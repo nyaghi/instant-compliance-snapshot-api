@@ -5,6 +5,16 @@ from unittest.mock import Mock,patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]));import registry_snapshot_server as c
 
 class ThreeStateTests(unittest.TestCase):
+ def test_former_name_label_fragments_are_not_candidates(self):
+  for name in ["(the charitable organization's former name)","Inc. (The Charitable Organization's Former Name)","Inc.(it's former name)","Inc. (It's Former Name)","LLC (its former name)","(the organization’s former name)","(the Charitable Organizations former name)","(the charitable organization former name)"]:
+   with self.subTest(name=name):self.assertIsNone(c.identity_candidate(name,'Example state','DBA','https://state.test'))
+ def test_real_former_names_and_annotations_remain_candidates(self):
+  for name in ["Example Endowment, Inc. (the charitable organization's former name)","First Responders Children's Foundation","F/K/A Example Endowment, Inc.","Former Name Foundation","The Organization's Former Name Foundation","ITS Foundation","YWCA of the USA, National Board"]:
+   with self.subTest(name=name):self.assertEqual(c.identity_candidate(name,'Example state','DBA','https://state.test')['name'],name)
+ def test_state_alias_lists_discard_label_only_fragments(self):
+  result=c.identity_rows_names('WA',[{'FEINNumber':'123456789','EntityName':'Example Foundation','AKANames':"Example Endowment; Inc. (it's former name); (the charitable organization's former name)"}],'123456789','https://state.test')
+  self.assertEqual([r['name'] for r in result['names']],['Example Foundation','Example Endowment'])
+  self.assertEqual(len(result['rejected_name_fields']),2)
  def test_me_success_and_completed_empty_are_not_retried(self):
   for status in ['Current','Not Registered','Unable to Confirm']:
    with self.subTest(status=status),patch.object(c,'run_state_lookup',return_value={'state':'ME','status':status}) as run,patch.object(c.time,'sleep') as sleep:
