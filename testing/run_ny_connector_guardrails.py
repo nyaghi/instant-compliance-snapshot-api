@@ -52,7 +52,9 @@ class ConnectorTests(unittest.TestCase):
         _,result=self.submit(state);self.assertEqual(result['result']['status'],'Current')
     def test_ambiguous_exact_eins_do_not_choose_first(self):
         _,result=self.submit(self.start(),[ROW,{**ROW,'orgID':'11-22-33'}])
-        self.assertEqual(result['result']['status'],'Unable to Confirm');self.session.get.assert_not_called()
+        self.assertEqual(result['result']['status'],'Unable to Confirm')
+        self.assertEqual(self.session.get.call_count,2)
+        self.assertTrue(all(call.args[0].endswith('/RegistryDetail') for call in self.session.get.call_args_list))
     def test_wrong_first_row_does_not_win(self):
         _,result=self.submit(self.start(),[{**ROW,'ein':'987654321','orgName':'Other Corporation','orgID':'11-22-33'},ROW])
         self.assertEqual(result['result']['status'],'Current')

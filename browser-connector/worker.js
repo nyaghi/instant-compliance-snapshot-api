@@ -70,12 +70,17 @@ async function close(job, reason, finishId) {
   if (index >= 0) queue.splice(index, 1);
   if (reason) post(job, { action: "closed", reason });
   // Await tab creation before handing the slot onward, including origin closure.
-  if (job.creating) await job.creating.catch(() => {});
-  const tabId = job.tab; job.tab = null;
-  if (tabId !== null) {
-    try { await removeOwned(tabId); }
-    catch { /* Persisting cleanup must not hold the queue slot indefinitely. */ }
-  }
+  let cleanupTimer;
+  const cleanup = (async () => {
+    if (job.creating) await job.creating.catch(() => {});
+    const tabId = job.tab; job.tab = null;
+    if (tabId !== null) await removeOwned(tabId);
+  })();
+  // Browser tab/storage acknowledgements can stall. Finish stays bounded;
+  // any late cleanup still refers only to this job's own tab.
+  try { await Promise.race([cleanup, new Promise(resolve => { cleanupTimer = setTimeout(resolve, 10000); })]); }
+  catch { /* Closing a vanished tab must not strand other organizations. */ }
+  finally { clearTimeout(cleanupTimer); }
   if (active === job) { active = null; nextStart = Date.now() + PACE_MS; }
   if (finishId) post(job, { id: finishId, ok: true });
   try { job.port.disconnect(); } catch {}
@@ -98,7 +103,7 @@ async function lookupTab(job) {
     if (current.url?.startsWith(P.NY + "/") && (!current.status || current.status === "complete")) return;
     await nap(100);
   }
-  if (!job.closed) throw new Error("NY_CONNECTOR_TIMEOUT");
+  if (!job.closed) throw new Error("NY_CONNECTOR_TAB_READY_TIMEOUT");
 }
 async function repairConnection(job, id) {
   if (repair.nextAllowedAt > Date.now()) throw new Error("NY_CONNECTOR_RECOVERY_COOLDOWN");
@@ -134,7 +139,7 @@ async function ready(job) {
     if (state?.ready) return;
     await nap(250);
   }
-  throw new Error("NY_CONNECTOR_TIMEOUT");
+  throw new Error("NY_CONNECTOR_TAB_READY_TIMEOUT");
 }
 async function performSearch(job, query, id) {
   if (job.closed) return;
@@ -223,7 +228,7 @@ chrome.tabs.onRemoved.addListener(id => {
 });
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (!allowedSender(sender) || !P.validId(message?.id) || message.action !== "ping") return false;
-  boot.then(() => respond({ ok: true, version: "0.3.1", capabilities: ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "origin-window-v1", "connection-recovery-v1", "recovery-causes-v1"], recovery: { phase: repair.phase || "idle", nextAllowedAt: repair.nextAllowedAt || 0, verifiedAt: repair.finishedAt || 0 } }), () => respond({ ok: false, reason: "NY_CONNECTOR_INTERRUPTED" }));
+  boot.then(() => respond({ ok: true, version: "0.3.2", capabilities: ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "origin-window-v1", "connection-recovery-v1", "recovery-causes-v1", "cleanup-ack-v1"], recovery: { phase: repair.phase || "idle", nextAllowedAt: repair.nextAllowedAt || 0, verifiedAt: repair.finishedAt || 0 } }), () => respond({ ok: false, reason: "NY_CONNECTOR_INTERRUPTED" }));
   return true;
 });
 chrome.runtime.onConnect.addListener(port => {

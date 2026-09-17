@@ -47,26 +47,30 @@ class ReportedCases(unittest.TestCase):
         other = {'orgID':'05-64-26', 'orgName':'American Friends of Sheba Medical Center - Tel Hashomer, Inc.', 'ein':'237076117'}
         details = {exact['orgID']:{**exact,'regType':'NFP','regStatute':'7A','documents':{
             'Annual Filing for Charitable Organizations':[{'fiscalYearEnd':'12/31/2023','received':'09/09/2025'}]}}}
+        details[other['orgID']]={**other,'regType':'NFP','regStatute':'7A','documents':{
+            'Annual Filing for Charitable Organizations':[{'fiscalYearEnd':'06/30/2025'}]}}
         for rows in ([other,exact],[exact,other]):
             with self.subTest(order=rows[0]['orgID']):
                 data, session = self.ny(name,'23-7076117',rows,details)
                 self.assertEqual(data['status'],'Delinquent')
                 self.assertEqual(data['matched_registry_name'],name)
                 self.assertEqual(data['computed_due_date'],'11/15/2025')
-                self.assertEqual(session.get.call_args.kwargs['params'],{'orgID':'49-35-56'})
+                self.assertTrue(data['source_url'].endswith('/49-35-56'))
+                self.assertEqual(session.get.call_count,3)
 
     def test_ny_equal_identity_duplicates_remain_ambiguous(self):
         row={'orgID':'10-20-30','orgName':'Example Foundation','ein':'123456789'}
-        data, session=self.ny(row['orgName'],row['ein'],[row,{**row,'orgID':'11-22-33'}],{})
+        other={**row,'orgID':'11-22-33'}
+        data, session=self.ny(row['orgName'],row['ein'],[row,other],{row['orgID']:row,other['orgID']:other})
         self.assertEqual(data['status'],'Unable to Confirm')
-        self.assertEqual(session.get.call_count,1)
+        self.assertEqual(session.get.call_count,3)
 
     def test_ny_tel_hashomer_request_selects_its_own_record(self):
         exact={'orgID':'05-64-26','orgName':'American Friends of Sheba Medical Center - Tel Hashomer, Inc.','ein':'237076117'}
         other={**exact,'orgID':'49-35-56','orgName':'American Friends of Sheba Medical Center, Inc.'}
         detail={**exact,'regType':'NFP','regStatute':'7A','documents':{
             'Annual Filing for Charitable Organizations':[{'fiscalYearEnd':'06/30/2025'}]}}
-        data,session=self.ny(exact['orgName'],exact['ein'],[other,exact],{exact['orgID']:detail})
+        data,session=self.ny(exact['orgName'],exact['ein'],[other,exact],{exact['orgID']:detail,other['orgID']:{**detail,**other}})
         self.assertEqual(data['status'],'Current')
         self.assertEqual(session.get.call_args.kwargs['params'],{'orgID':'05-64-26'})
 

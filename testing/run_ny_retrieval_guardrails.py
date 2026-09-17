@@ -64,9 +64,10 @@ class NewYorkRetrievalTests(unittest.TestCase):
         self.assertEqual(r.status, "Current")
 
     def test_duplicate_ein_different_registrations_is_ambiguous(self):
-        r, s = self.lookup([response([ROW, {**ROW, "orgID": "11-22-33"}])])
+        r, s = self.lookup([response([ROW, {**ROW, "orgID": "11-22-33"}]),
+                            response(DETAIL), response({**DETAIL, "orgID": "11-22-33"})])
         self.assertEqual(r.status, "Unable to Confirm")
-        self.assertEqual(s.get.call_count, 1)
+        self.assertEqual(s.get.call_count, 3)
 
     def test_wrong_detail_identity_is_not_negative(self):
         for field, value in [("ein", "987654321"), ("orgID", "99-99-99")]:

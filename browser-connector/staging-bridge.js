@@ -21,7 +21,12 @@
       if (job.closed) return;
       if (message?.action === "closed") { dispose(job, message.reason); return; }
       if (message?.progress && job.pending.has(message.id)) { reply(message.id, message); return; }
-      if (job.pending.delete(message?.id)) reply(message.id, message);
+      if (job.pending.delete(message?.id)) {
+        // Release the page's slot before acknowledging completion. Otherwise
+        // the caller can start the next job before onDisconnect is delivered.
+        if (message.id === job.finishId) dispose(job);
+        reply(message.id, message);
+      }
     });
     port.onDisconnect.addListener(() => { void chrome.runtime.lastError; dispose(job); });
     // Messages keep MV3 alive only during this bounded lookup (Chrome 114+).
@@ -44,6 +49,7 @@
     if (!P.validId(m.lookup_id)) return;
     if (m.action === "finish") {
       if (active?.lookupId === m.lookup_id) {
+        active.finishId = m.id;
         active.pending.add(m.id);
         try { active.port.postMessage({ action: "finish", id: m.id }); }
         catch { dispose(active); }

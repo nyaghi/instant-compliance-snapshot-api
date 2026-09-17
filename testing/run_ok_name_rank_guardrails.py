@@ -24,7 +24,7 @@ class OklahomaNameRankTests(unittest.TestCase):
         page = self.browser.new_page()
         try:
             page.set_content('<table>' + ''.join(
-                f'<tr><td><a href="#">{identifier}</a></td><td>{html.escape(name)}</td>'
+                f'<tr><td><a href="charityDetail.aspx?id={identifier}">{identifier}</a></td><td>{html.escape(name)}</td>'
                 '<td>Charitable Organization</td><td>Legal In use</td></tr>'
                 for identifier, name in candidates) + '</table>')
             org = c.checker.Organization(requested, '541637257')
@@ -38,6 +38,21 @@ class OklahomaNameRankTests(unittest.TestCase):
         for requested in ('Coptic Orphans Support Association', 'Coptic Orphan Support Association'):
             self.assertEqual(self.choose(requested, [('4312648321', 'COPTIC ORPHANS SUPPORT ORGANIZATION')]),
                              ('COPTIC ORPHANS SUPPORT ORGANIZATION', '4312648321'))
+
+    def test_pagination_numbers_are_not_filing_links(self):
+        page=self.browser.new_page()
+        try:
+            page.set_content('<table><tr><td><a href="javascript:page(2)">2</a></td></tr>'
+                '<tr><td><a href="https://example.com/charityDetail.aspx?id=123">123</a></td></tr>'
+                '<tr><td><a href="charityDetail.aspx?id=4312648321">4312648321</a></td><td>Example Relief</td></tr></table>')
+            org=c.checker.Organization('Example Relief','123456789')
+            with patch.object(c,'known_names_for_ein',return_value=[]):
+                chosen=c.ok_choose_safe_result_row_on_page(page,org,None)
+            self.assertEqual(chosen[3],'4312648321')
+            page.set_content('<table><tr><td><a href="charityDetail.aspx?id=4312648321">4312648321</a></td></tr></table>')
+            with self.assertRaisesRegex(ValueError,'no readable organization name'):
+                c.ok_choose_safe_result_row_on_page(page,org,None)
+        finally:page.close()
 
     def test_generic_terminal_words_do_not_veto_complete_distinctive_core(self):
         for tail in ('Association', 'Organization', 'Foundation'):

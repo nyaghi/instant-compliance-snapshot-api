@@ -150,9 +150,12 @@ class ExpandedDiscoveryTests(unittest.TestCase):
         c.REVIEWED_NAME_CONTEXT.set({EIN:("First Responders Children's Foundation",'NLEAFCF')})
         org=c.checker.Organization(NAME,EIN)
         plans=[c.nd_search_queries(org),c.ms_preferred_search_variants(NAME,EIN),c.me_fast_direct_query_variants(org),c.wv_preferred_query_variants(NAME,EIN)]
-        for plan in plans:
+        for index,plan in enumerate(plans):
             keys=[c.identity_name_key(n) for n in plan]
-            for identity in c.equivalent_name_queries(NAME,EIN):self.assertLess(keys.index(c.identity_name_key(identity)),3)
+            # ME and WV permit one suffixless spelling of the legal name first;
+            # every reviewed identity still precedes speculative probes.
+            if index in {2,3}:self.assertEqual(c.normalized_match_name(plan[0]),c.normalized_match_name(NAME))
+            for identity in c.equivalent_name_queries(NAME,EIN):self.assertLess(keys.index(c.identity_name_key(identity)),4 if index in {2,3} else 3)
     def test_wrong_ein_chapter_address_protection_unchanged(self):
         c.REVIEWED_NAME_CONTEXT.set({EIN:('First Responders Childrens Foundation',)})
         self.assertEqual(c.score_candidate(NAME,EIN,{'name':'First Responders Childrens Foundation','ein':'999999999'})['reason'],'REJECT_DIFFERENT_EIN')

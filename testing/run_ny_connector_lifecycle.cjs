@@ -285,3 +285,13 @@ test('closing an origin during cleanup never sends a late recovered result',asyn
   assert.equal(p.messages.some(m=>m.id===id(11)&&m.ok),false);assert.deepEqual(h.created,[100]);
   assert.equal(h.data.local.ccnyRepair.phase,'failed');
 });
+
+test('stalled tab removal releases the slot within the cleanup bound',async()=>{
+  const h=harness(),p=h.connect(),q=h.connect(2);await h.query(p,11);let release;
+  const remove=h.chrome.tabs.remove;
+  h.chrome.tabs.remove=async id=>{if(id===100)await new Promise(r=>release=r);return remove(id);};
+  p.onMessage.emit({action:'finish',id:id(12)});await tick();
+  await h.advance(10000);assert.ok(p.messages.some(m=>m.id===id(12)&&m.ok));
+  await h.advance(3000);assert.equal((await h.query(q,21)).ok,true);
+  release();await tick();assert.ok(h.tabs.has(101));
+});

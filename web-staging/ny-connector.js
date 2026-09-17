@@ -12,7 +12,7 @@
     if (m.progress) { task.onProgress?.(m); return; }
     waiting.delete(m.id); clearTimeout(task.timer); task.resolve(m);
   });
-  const compatible = response => response?.ok && ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "connection-recovery-v1", "recovery-causes-v1"].every(capability => response.capabilities?.includes(capability));
+  const compatible = response => response?.ok && ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "connection-recovery-v1", "recovery-causes-v1", "cleanup-ack-v1"].every(capability => response.capabilities?.includes(capability));
   let refreshing = null, activeLookups = 0;
   const recoveryMessage = (reason, retryAt) => ({
     NY_CONNECTOR_RECOVERY_PAGE_OPEN: "Close your other New York registry page before refreshing this connection. Your CharityClarity results are saved on this page.",
@@ -31,7 +31,7 @@
     return new Promise(resolve => {
       const id = crypto.randomUUID().replaceAll("-", "");
       // Allow a delayed readiness reply before declaring the connector unavailable.
-      const duration = action === "ping" ? 5000 : action === "acquire" ? 1205000 : ["search", "refresh"].includes(action) ? 180000 : 1500;
+      const duration = action === "ping" ? 5000 : action === "acquire" ? 1205000 : ["search", "refresh"].includes(action) ? 180000 : action === "finish" ? 15000 : 1500;
       const timer = setTimeout(() => { waiting.delete(id); resolve({ ok: false, reason: action === "ping" ? "NY_CONNECTOR_UNAVAILABLE" : action === "acquire" ? "NY_CONNECTOR_QUEUE_TIMEOUT" : "NY_CONNECTOR_TIMEOUT" }); }, duration);
       waiting.set(id, { resolve, timer, onProgress });
       window.postMessage({ channel: "cc-ny-staging-v1", direction: "request", id, action, ...(query ? { query } : {}), ...(lookupId ? { lookup_id: lookupId } : {}), ...(intent ? { intent } : {}) }, ORIGIN);
@@ -87,7 +87,13 @@
     })().finally(() => { refreshing = null; if (button) button.disabled = activeLookups > 0; });
     return refreshing;
   }
-  async function lookup({ organization_name, ein, email, admin_passcode, device_id, onProgress, alternate_names, purpose = "registration" }) {
+  let lookupTail = Promise.resolve();
+  function lookup(input) {
+    const pending = lookupTail.then(() => performLookup(input));
+    lookupTail = pending.catch(() => {});
+    return pending;
+  }
+  async function performLookup({ organization_name, ein, email, admin_passcode, device_id, onProgress, alternate_names, purpose = "registration" }) {
     if (refreshing) {
       onProgress?.("New York: waiting for the connection refresh. Other states can continue.");
       await refreshing;

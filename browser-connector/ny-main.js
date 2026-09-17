@@ -69,21 +69,25 @@
   };
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
   const button = name => Array.from(document.querySelectorAll("button")).find(b => b.textContent.trim() === name);
-  async function until(check, ms) {
+  async function until(check, ms, reason = "NY_CONNECTOR_FORM_TIMEOUT") {
     const deadline = Date.now() + ms;
     while (Date.now() < deadline) { const value = check(); if (value) return value; await pause(100); }
-    throw new Error("NY_CONNECTOR_TIMEOUT");
+    throw new Error(reason);
   }
   function waitResponse(kind, ms) {
     return new Promise((resolve, reject) => {
       const job = active;
-      const timer = setTimeout(() => { if (job.waiter?.timer === timer) job.waiter = null; reject(new Error("NY_CONNECTOR_TIMEOUT")); }, ms);
+      const timer = setTimeout(() => { if (job.waiter?.timer === timer) job.waiter = null; reject(new Error(kind === "verify" ? "NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT" : "NY_CONNECTOR_SEARCH_RESPONSE_TIMEOUT")); }, ms);
       job.waiter = { kind, resolve, reject, timer };
     });
   }
-  async function verifySearch() {
+  async function verifySearch(force = false) {
     for (let attempt = 0; attempt < 2; attempt++) {
-      const verify = await until(() => { const b = button("Verify"); return b && !b.disabled && b; }, 3000);
+      // New York can retain a valid verification across form resets. Its
+      // enabled Search button is the normal UI signal; do not require a second
+      // Verify click when the page already permits this search.
+      if (!force && attempt === 0 && button("Search") && !button("Search").disabled) return;
+      const verify = await until(() => { const b = button("Verify"); return b && !b.disabled && b; }, 3000, "NY_CONNECTOR_VERIFY_BUTTON_TIMEOUT");
       const verification = waitResponse("verify", 15000);
       verify.click();
       const result = await verification;
@@ -97,7 +101,7 @@
       return;
     }
   }
-  async function run(query) {
+  async function run(query, forceVerification = false) {
     const clear = await until(() => button("Clear fields"), 10000);
     clear.click();
     await until(() => ["ein", "orgName", "orgID", "city"].every(id => document.getElementById(id)?.value === ""), 3000);
@@ -107,8 +111,8 @@
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
     await until(() => key === "ein" ? input.value.replace("-", "") === value : input.value === value, 2000);
-    await verifySearch();
-    const search = await until(() => { const b = button("Search"); return b && !b.disabled && b; }, 3000);
+    await verifySearch(forceVerification);
+    const search = await until(() => { const b = button("Search"); return b && !b.disabled && b; }, 3000, "NY_CONNECTOR_SEARCH_BUTTON_TIMEOUT");
     const completed = waitResponse("search", 15000);
     search.click();
     const evidence = await completed;
@@ -118,7 +122,7 @@
       await pause(1000);
       // Clear the form and repeat its normal Verify/Search flow. The shared
       // budget prevents further recursion or another retry on name fallback.
-      return run(query);
+      return run(query, true);
     }
     if (evidence.http_status !== 200 || evidence.success !== true || evidence.statusCode !== 200) throw new Error("NY_CONNECTOR_INCOMPLETE");
     const { kind, ...publicEvidence } = evidence;
@@ -131,7 +135,7 @@
     const job = { id: m.id, query: m.query, waiter: null }; active = job;
     let reply;
     try {
-      if (m.action === "verify") { await verifySearch(); reply = { ok: true, evidence: { verified: true } }; }
+      if (m.action === "verify") { await verifySearch(true); reply = { ok: true, evidence: { verified: true } }; }
       else reply = { ok: true, evidence: await run(m.query) };
     }
     catch (e) { reply = { ok: false, reason: /^NY_CONNECTOR_[A-Z_]+$/.test(e.message) ? e.message : "NY_CONNECTOR_INCOMPLETE" }; }
