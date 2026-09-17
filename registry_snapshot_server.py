@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.17.8-staging").strip() or "2026.09.17.8-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.17.9-staging").strip() or "2026.09.17.9-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -14723,6 +14723,15 @@ def wi_financial_identity_evidence(ein: str, href: str, credential: str, hour: i
         opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
         stage = "Wisconsin fiscal-year selection"
         page = wi_identity_read(lambda: wi_identity_page(opener, financial_url, deadline), deadline, stage, diagnostics)
+        year_option = r'<option\b[^>]*value=["\']' + fiscal_year + r'["\']'
+        if not re.search(year_option, page) and deadline - time.monotonic() >= 1:
+            # A successful HTTP response can still omit the fiscal-year list.
+            # Reload once; acceptance still requires the requested year and all
+            # five same-credential values. Keep the original evidence deadline.
+            diagnostics["fiscal_year_reload"] = True
+            diagnostics["first_page_has_credential"] = credential in html_to_text(page)
+            time.sleep(.35)
+            page = wi_identity_read(lambda: wi_identity_page(opener, financial_url, deadline), deadline, stage, diagnostics)
         if not re.search(r'<option\b[^>]*value=["\']' + fiscal_year + r'["\']', page):
             diagnostics.update(reason="fiscal_year_absent", fiscal_year=fiscal_year)
             log_event(f"WI identity evidence unavailable: credential={credential}; stage={stage}; reason=fiscal_year_absent")

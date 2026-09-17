@@ -68,6 +68,34 @@ class ThreeStateTests(unittest.TestCase):
    operation=Mock(side_effect=error)
    with self.subTest(error=error),self.assertRaises(type(error)):c.wi_identity_read(operation,time.monotonic()+20,'IRS return')
    self.assertEqual(operation.call_count,1)
+ def fiscal_reload(self,pages):
+  import run_cogency_repair_guardrails as fixtures
+  c.WI_FINANCIAL_IDENTITY_CACHE.clear();diagnostics={};deadlines=[]
+  def page(opener,request,deadline):
+   deadlines.append(deadline);return pages[len(deadlines)-1]
+  with patch.object(c,'public_profile_for_ein',return_value={'organization':{'latest_object_id':'202532319349302943'}}),patch.object(c,'identity_fetch',return_value=(fixtures.F/'wi-fgcu-irs990.html').read_bytes()),patch.object(c,'wi_identity_page',side_effect=page),patch.object(c.time,'sleep'):
+   result=c.wi_financial_identity_evidence('650403969','CredSummaryDetails.aspx?chid=944852&h=847014605','22812-800',0,diagnostics)
+  self.assertEqual(len(set(deadlines)),1)
+  return result,diagnostics,len(deadlines)
+ def test_wi_reload_missing_year_then_require_full_evidence(self):
+  import run_cogency_repair_guardrails as fixtures
+  pages=['<html>Temporarily incomplete</html>',(fixtures.F/'wi-fgcu-financial.html').read_text(),(fixtures.F/'wi-fgcu-financial-2025.html').read_text()]
+  result,diagnostic,reads=self.fiscal_reload(pages)
+  self.assertEqual(result.get('decision'),'corroborated');self.assertTrue(diagnostic['fiscal_year_reload']);self.assertEqual(reads,3)
+ def test_wi_missing_year_after_reload_still_rejects(self):
+  result,diagnostic,reads=self.fiscal_reload(['<html>No fiscal years</html>']*2)
+  self.assertEqual(result,{});self.assertEqual(diagnostic['reason'],'fiscal_year_absent');self.assertEqual(reads,2);self.assertFalse(c.WI_FINANCIAL_IDENTITY_CACHE)
+ def test_wi_reload_does_not_accept_wrong_credential_or_amount(self):
+  import run_cogency_repair_guardrails as fixtures
+  first=(fixtures.F/'wi-fgcu-financial.html').read_text();values=(fixtures.F/'wi-fgcu-financial-2025.html').read_text()
+  for bad in [values.replace('25,030,298','25,030,299'),values.replace('22812-800','12345-800')]:
+   with self.subTest(page=bad[:50]):
+    result,diagnostic,reads=self.fiscal_reload(['<html>Incomplete</html>',first,bad])
+    self.assertEqual(result,{});self.assertEqual(reads,3);self.assertFalse(c.WI_FINANCIAL_IDENTITY_CACHE)
+ def test_wi_complete_year_list_does_not_reload(self):
+  import run_cogency_repair_guardrails as fixtures
+  result,diagnostic,reads=self.fiscal_reload([(fixtures.F/'wi-fgcu-financial.html').read_text(),(fixtures.F/'wi-fgcu-financial-2025.html').read_text()])
+  self.assertEqual(result.get('decision'),'corroborated');self.assertEqual(reads,2);self.assertNotIn('fiscal_year_reload',diagnostic)
  def test_wi_deadline_is_not_restarted(self):
   operation=Mock()
   with self.assertRaises(TimeoutError):c.wi_identity_read(operation,time.monotonic()-1,'IRS return')
