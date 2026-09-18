@@ -307,6 +307,31 @@ class CompletionControls(unittest.TestCase):
         self.assertIs(search.call_args.kwargs['progress'],progress)
         lock.release.assert_called_once()
 
+    def test_wisconsin_incomplete_detail_recovers_only_same_credential(self):
+        from datetime import date
+        candidate={'score':5,'license_number':'123-800','registry_name':'Example Charity',
+            'detail_href':'CredSummaryDetails.aspx?chid=123','location':'Chicago, IL',
+            'expiration_date':date(2024,7,31),'identity_conflict':True,'identity_detail_unavailable':True}
+        for number,name,status,expected in [('123-800','Example Charity','Revoked','Revoked'),
+                ('999-800','Example Charity','Active','Unable to Confirm'),
+                ('123-800','Different Charity','Active','Unable to Confirm')]:
+            detail=f'Name : {name} Credential Type : Charitable Organization Credential Number : {number} Location : Chicago, IL Status License is not current ({status})'
+            with self.subTest(number=number,name=name),patch.object(c,'wi_http_search_best_match',return_value=(candidate,True)), \
+                    patch.object(c,'wi_reader_text',return_value=detail) as read, \
+                    patch.object(c,'registry_address_evidence',return_value={'decision':'corroborated'}), \
+                    patch.object(c,'public_profile_for_ein',return_value={}):
+                result=c.search_wi(None,self.org,max_seconds=20)
+            self.assertEqual(c.public_status(result),expected)
+            read.assert_called_once()
+            self.assertLessEqual(read.call_args.kwargs['deadline']-time.perf_counter(),12)
+
+    def test_wisconsin_actual_name_conflict_does_not_trigger_missing_detail_retry(self):
+        candidate={'score':5,'license_number':'123-800','registry_name':'Example Charity',
+            'detail_href':'CredSummaryDetails.aspx?chid=123','identity_conflict':True}
+        with patch.object(c,'wi_http_search_best_match',return_value=(candidate,True)),patch.object(c,'wi_reader_text') as read:
+            result=c.search_wi(None,self.org,max_seconds=20)
+        self.assertEqual(c.public_status(result),'Unable to Confirm');read.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.18.1-staging").strip() or "2026.09.18.1-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.18.2-staging").strip() or "2026.09.18.2-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -1796,8 +1796,11 @@ def known_names_for_ein(ein: str) -> list[str]:
 REVIEWED_NAME_CONTEXT = ContextVar("reviewed_organization_names", default={})
 IDENTITY_SOURCE_CACHE: dict[tuple, tuple[float, dict]] = {}
 IDENTITY_CACHE_LOCK = threading.Lock()
-IDENTITY_STATES = ("AK", "CA", "CO", "HI", "MA", "MD", "MI", "NM", "NJ", "NY", "OH", "OR", "PA", "VA", "WA")
+IDENTITY_STATES = ("AK", "CA", "CO", "HI", "MA", "MD", "MI", "NM", "NJ", "OH", "OR", "PA", "VA", "WA")
 IDENTITY_SOURCE_POOL = ThreadPoolExecutor(max_workers=24, thread_name_prefix="identity-source")
+# Browser admission must not consume the HTTP-source workers while it waits.
+IDENTITY_BROWSER_STATES = frozenset({"AK", "MA", "MI", "NJ", "OH", "PA", "WA"})
+IDENTITY_BROWSER_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="identity-browser")
 # Discovery has its own bounded capacity; it does not change workflow admission.
 IDENTITY_SOURCE_SLOTS = threading.BoundedSemaphore(256)
 IDENTITY_BROWSER_SLOTS = threading.BoundedSemaphore(4)
@@ -2531,14 +2534,25 @@ def identity_wa_alias_review(result: dict, ein: str, deadline: float) -> dict:
     return {**result, "names": names}
 
 
-def identity_source_result(source: str, ein: str, deadline: float) -> dict:
+def identity_source_cache_key(source: str, ein: str) -> tuple:
     fingerprint = json.dumps(downloadable_data_info("OR"), sort_keys=True) if source == "OR" else "live-v2"
-    key = (ein, source, fingerprint)
-    now = time.time()
+    return (ein, source, fingerprint)
+
+
+def identity_cached_source_result(source: str, ein: str) -> dict | None:
     with IDENTITY_CACHE_LOCK:
-        cached = IDENTITY_SOURCE_CACHE.get(key)
-    if cached and cached[0] > now:
+        cached = IDENTITY_SOURCE_CACHE.get(identity_source_cache_key(source, ein))
+    if cached and cached[0] > time.time():
         return {**cached[1], "cache_hit": True}
+    return None
+
+
+def identity_source_result(source: str, ein: str, deadline: float) -> dict:
+    cached = identity_cached_source_result(source, ein)
+    if cached is not None:
+        return cached
+    key = identity_source_cache_key(source, ein)
+    now = time.time()
     worker = {"CA": identity_ca_names, "CO": identity_co_names, "OR": identity_or_names, "IRS": identity_irs_names,
               "HI": identity_hi_names, "VA": identity_va_names, "MD": identity_md_names,
               "NM": identity_nm_names, "NY": identity_ny_names}.get(source)
@@ -2845,14 +2859,26 @@ def discover_organization_names(organization_name: str, ein: str) -> dict:
     if not re.fullmatch(r"\d{9}", ein) or ein == "000000000" or not organization_name.strip():
         raise ValueError("Enter the organization name and a valid nine-digit EIN.")
     futures, results = {}, []
-    def run(source):
+    def run(source, queued):
+        started = time.monotonic()
         try:
-            return identity_source_result(source, ein, deadline)
+            result = identity_source_result(source, ein, deadline)
+            return {**result, "queue_seconds": round(started - queued, 3),
+                    "service_seconds": round(time.monotonic() - started, 3)}
         finally:
             IDENTITY_SOURCE_SLOTS.release()
     for source in (*IDENTITY_STATES, "IRS"):
+        cached = identity_cached_source_result(source, ein)
+        if cached is not None:
+            results.append({**cached, "queue_seconds": 0.0, "service_seconds": 0.0})
+            continue
         if IDENTITY_SOURCE_SLOTS.acquire(blocking=False):
-            futures[IDENTITY_SOURCE_POOL.submit(run, source)] = source
+            pool = IDENTITY_BROWSER_POOL if source in IDENTITY_BROWSER_STATES else IDENTITY_SOURCE_POOL
+            try:
+                futures[pool.submit(run, source, time.monotonic())] = source
+            except Exception:
+                IDENTITY_SOURCE_SLOTS.release()
+                raise
         else:
             results.append({"source": source, "complete": False, "names": [], "limitation": "Source capacity is busy. You can continue with the names shown."})
     try:
@@ -15448,6 +15474,23 @@ def search_wi(page, org, max_seconds: float | None = None, progress: dict | None
             result.success = False
             return result
 
+        if (best_match.get("identity_detail_unavailable") and best_match.get("detail_href")
+                and time.perf_counter() < deadline):
+            # Completed search rows can coexist with an unfinished detail read.
+            # Recover only this credential, retaining every identity safeguard.
+            detail_url = urljoin(WI_SEARCH_URL, html.unescape(best_match["detail_href"]))
+            detail_text = wi_reader_text(detail_url, no_cache=True,
+                                         deadline=min(deadline, time.perf_counter() + 12.0))
+            candidate = dict(best_match)
+            candidate.pop("identity_detail_unavailable", None)
+            candidate["detail_status"] = wi_extract_detail_status(detail_text)
+            confirmed = wi_verify_candidate_identity(candidate, target_names, original_name, ein, detail_text)
+            result.source_attempts = [{"stage": "Wisconsin credential detail recovery",
+                "credential": best_match["license_number"],
+                "complete": bool(confirmed and not confirmed.get("identity_conflict"))}]
+            if confirmed is not None:
+                best_match = confirmed
+
         if best_match.get("identity_conflict") and best_match.get("identity_review_evidence"):
             best_match = wi_confirm_reviewed_credential(best_match, original_name, ein)
         if best_match.get("reviewed_identity_evidence"):
@@ -15466,6 +15509,8 @@ def search_wi(page, org, max_seconds: float | None = None, progress: dict | None
                 result.success = False
                 return result
             result.status = "Unable to Confirm"
+            if best_match.get("identity_detail_unavailable"):
+                result.reason_code = "WI_DETAIL_INCOMPLETE"
             result.raw_status_text = "Wisconsin credential names require identity confirmation"
             result.source_note = "The search found a credential with conflicting organization names, but its primary detail record could not confirm the requested organization. This is not an empty registry search."
             address = best_match.get("address_evidence", {})

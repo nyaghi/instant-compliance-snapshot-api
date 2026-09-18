@@ -496,7 +496,7 @@
 
         <div>&copy; <span id="year"></span> Compliance Express</div>
 
-          <div class="font-semibold text-slate-600">CharityClarity v2026.09.18.1 &middot; Staging</div>
+          <div class="font-semibold text-slate-600">CharityClarity v2026.09.18.2 &middot; Staging</div>
         <div>No legal or tax advice.</div>
 
       </div>
@@ -546,7 +546,13 @@
     const submitButton = document.getElementById("submitButton");
     submitButton.disabled = true;
     let runAlternateNames = [];
-    window.CCIdentityConfig = () => ({apiBase: API_BASE, email: email.value.trim(), admin_passcode: adminPasscode.value.trim(), device_id: getDeviceId()});
+    window.CCIdentityConfig = () => {
+      const discoveryLanes = [API_BASE, "https://instant-compliance-snapshot-api-staging.onrender.com"];
+      const digits = ein.value.replace(/\D/g, "");
+      let hash = 0;
+      for (const digit of digits) hash = ((hash * 31) + digit.charCodeAt(0)) >>> 0;
+      return {apiBase: discoveryLanes[hash % discoveryLanes.length], email: email.value.trim(), admin_passcode: adminPasscode.value.trim(), device_id: getDeviceId()};
+    };
     window.addEventListener("cc-identity-change", () => {
       submitButton.disabled = !window.CCIdentity?.ready();
       if (!window.CCIdentity?.ready()) submitButton.textContent = "Review organization names first";

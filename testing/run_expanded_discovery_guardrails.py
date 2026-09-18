@@ -10,13 +10,13 @@ class ExpandedDiscoveryTests(unittest.TestCase):
     def setUp(self):
         self.token=c.REVIEWED_NAME_CONTEXT.set({}); c.IDENTITY_SOURCE_CACHE.clear()
     def tearDown(self): c.REVIEWED_NAME_CONTEXT.reset(self.token)
-    def test_all_fifteen_states_plus_irs_scheduled(self):
+    def test_all_fourteen_discovery_states_plus_irs_scheduled(self):
         seen=[]
         def source(st,ein,deadline):
             seen.append(st);return {'source':st,'names':[],'complete':True}
         with patch.object(c,'identity_source_result',side_effect=source):r=c.discover_organization_names(NAME,EIN)
-        self.assertEqual(set(seen),set('AK CA CO HI MA MD MI NM NJ NY OH OR PA VA WA IRS'.split()))
-        self.assertEqual(len(seen),16);self.assertFalse(r['partial'])
+        self.assertEqual(set(seen),set('AK CA CO HI MA MD MI NM NJ OH OR PA VA WA IRS'.split()))
+        self.assertEqual(len(seen),15);self.assertFalse(r['partial'])
     def test_structured_sources_never_take_other_ein_or_contact_names(self):
         fields={'VA':('ein','name'),'WA':('FEINNumber','EntityName'),'PA':('EIN','EntityName'),
                 'MA':('Employer_Idendification_Number_EIN__c','Organization_Name__c'),'NJ':('crsm_federalein','name'),'NY':('ein','orgName')}
