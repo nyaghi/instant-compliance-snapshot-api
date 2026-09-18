@@ -29,6 +29,37 @@ test('persistent verification timeout stops after two attempts',async()=>{
  assert.equal(calls,2);assert.equal(p.messages.find(m=>m.id===id(11)&&!m.progress).reason,'NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT');
  assert.equal(p.disconnected,true);assert.deepEqual([...h.removed],[100,101]);
 });
+
+test('search timeout retries the same EIN once on a fresh tab without resetting verification budget',async()=>{
+ const h=harness(),p=h.connect();let calls=0,carried,queries=[];
+ h.chrome.tabs.sendMessage=async(tab,m)=>{
+  if(m.action==='ready')return {ready:true};
+  queries.push(JSON.stringify(m.query));
+  if(++calls===1)return {ok:false,reason:'NY_CONNECTOR_SEARCH_RESPONSE_TIMEOUT',verificationRetryUsed:true};
+  carried=m.verificationRetryUsed;return {ok:true,evidence:{query:m.query,rows:[]}};
+ };
+ await h.query(p,11);await h.advance(1000);
+ const answer=p.messages.find(m=>m.id===id(11)&&!m.progress);
+ assert.equal(answer.ok,true);assert.equal(carried,true);assert.equal(calls,2);
+ assert.equal(queries[0],queries[1]);assert.deepEqual([...h.created],[100,101]);assert.deepEqual([...h.removed],[100]);
+ assert.equal(h.timers.filter(t=>t.ms===300000).length,1);
+});
+
+test('persistent search timeout is inconclusive after exactly two attempts',async()=>{
+ const h=harness(),p=h.connect();let calls=0;
+ h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='ready'?{ready:true}:(calls++,{ok:false,reason:'NY_CONNECTOR_SEARCH_RESPONSE_TIMEOUT'});
+ await h.query(p,11);await h.advance(1000);
+ assert.equal(calls,2);assert.equal(p.messages.find(m=>m.id===id(11)&&!m.progress).reason,'NY_CONNECTOR_SEARCH_RESPONSE_TIMEOUT');
+ assert.equal(p.disconnected,true);assert.deepEqual([...h.removed],[100,101]);
+});
+
+test('verification and search timeouts share one retry allowance',async()=>{
+ const h=harness(),p=h.connect();let calls=0;
+ h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='ready'?{ready:true}:{ok:false,reason:++calls===1?'NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT':'NY_CONNECTOR_SEARCH_RESPONSE_TIMEOUT'};
+ await h.query(p,11);await h.advance(1000);
+ assert.equal(calls,2);assert.equal(p.messages.find(m=>m.id===id(11)&&!m.progress).reason,'NY_CONNECTOR_SEARCH_RESPONSE_TIMEOUT');
+ assert.equal(h.created.length,2);
+});
 test('never-ready form retries once and stays bounded',async()=>{
  const h=harness(),p=h.connect();h.chrome.tabs.sendMessage=async()=>({ready:false});
  await h.query(p,11);await h.advance(61000);
@@ -40,11 +71,12 @@ test('cancellation during retry delay does not create a replacement tab',async()
  h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='ready'?{ready:true}:{ok:false,reason:'NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT'};
  await h.query(p,11);h.chrome.tabs.onRemoved.emit(1);await h.advance(1000);assert.equal(h.created.length,1);
 });
-for(const count of [5,10,15])test(count+' queued sessions survive a slow first verification without cross-organization evidence',async()=>{
+for(const reason of ['NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT','NY_CONNECTOR_SEARCH_RESPONSE_TIMEOUT'])
+for(const count of [5,10,15])test(count+' queued sessions survive '+reason+' without cross-organization evidence',async()=>{
  const h=harness(),ports=Array.from({length:count},(_,i)=>h.connect(i+1));let first=true;
  h.chrome.tabs.sendMessage=async(tab,m)=>{
   if(m.action==='ready')return {ready:true};
-  if(first){first=false;await new Promise(resolve=>h.context.setTimeout(resolve,30000));return {ok:false,reason:'NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT'};}
+  if(first){first=false;await new Promise(resolve=>h.context.setTimeout(resolve,30000));return {ok:false,reason};}
   return {ok:true,evidence:{query:m.query,rows:[]}};
  };
  ports.forEach((p,i)=>p.onMessage.emit({action:'acquire',id:id(1000+i)}));await tick();

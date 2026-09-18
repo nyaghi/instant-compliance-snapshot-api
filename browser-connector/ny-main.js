@@ -115,7 +115,7 @@
     // A successful public verification response can precede the portal's
     // rendered button update. Wait for the real enabled control, still bounded.
     const search = await until(() => { const b = button("Search"); return b && !b.disabled && b; }, 15000, "NY_CONNECTOR_SEARCH_BUTTON_TIMEOUT");
-    const completed = waitResponse("search", 15000);
+    const completed = waitResponse("search", 30000);
     search.click();
     const evidence = await completed;
     if (evidence.http_status === 401) {

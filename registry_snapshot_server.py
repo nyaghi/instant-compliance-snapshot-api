@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.18.9-staging").strip() or "2026.09.18.9-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.18.10-staging").strip() or "2026.09.18.10-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -1801,6 +1801,7 @@ IDENTITY_SOURCE_POOL = ThreadPoolExecutor(max_workers=24, thread_name_prefix="id
 # Browser admission must not consume the HTTP-source workers while it waits.
 IDENTITY_BROWSER_STATES = frozenset({"AK", "MA", "MI", "NJ"})
 IDENTITY_BROWSER_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="identity-browser")
+IDENTITY_WA_POOL = ThreadPoolExecutor(max_workers=3, thread_name_prefix="identity-wa")
 # Discovery has its own bounded capacity; it does not change workflow admission.
 IDENTITY_SOURCE_SLOTS = threading.BoundedSemaphore(256)
 IDENTITY_BROWSER_SLOTS = threading.BoundedSemaphore(4)
@@ -2988,7 +2989,7 @@ def discover_organization_names(organization_name: str, ein: str) -> dict:
             results.append({**cached, "queue_seconds": 0.0, "service_seconds": 0.0})
             continue
         if IDENTITY_SOURCE_SLOTS.acquire(blocking=False):
-            pool = IDENTITY_BROWSER_POOL if source in IDENTITY_BROWSER_STATES else IDENTITY_SOURCE_POOL
+            pool = IDENTITY_WA_POOL if source == "WA" else IDENTITY_BROWSER_POOL if source in IDENTITY_BROWSER_STATES else IDENTITY_SOURCE_POOL
             try:
                 futures[pool.submit(run, source, time.monotonic())] = source
             except Exception:

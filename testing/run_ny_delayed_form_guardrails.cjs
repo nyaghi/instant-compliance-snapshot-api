@@ -1,6 +1,6 @@
 const {test}=require('node:test');const assert=require('node:assert/strict');const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const root=path.resolve(__dirname,'..'),cases=[];const tick=()=>new Promise(r=>setImmediate(r));
-async function lateVerification(delay, enableDelay=0){
+async function lateVerification(delay, enableDelay=0, searchDelay=0){
  let now=0;const timers=[],listeners={},calls=[];
  const timeout=(fn,ms)=>{const t={fn,due:now+ms,clear:false};timers.push(t);return t;};
  const cancel=t=>{if(t)t.clear=true;};
@@ -16,6 +16,7 @@ async function lateVerification(delay, enableDelay=0){
  window.fetch=async url=>{
   const verify=url.includes('/recaptcha/verify');
   if(verify)await new Promise(resolve=>timeout(resolve,delay));
+  else if(searchDelay)await new Promise(resolve=>timeout(resolve,searchDelay));
   // Network completion and the portal's rendered enabled state are separate.
   if(verify)timeout(()=>{buttons[2].disabled=false;},enableDelay);
   const payload=verify?{verified:true}:{success:true,statusCode:200,data:[]};
@@ -30,8 +31,10 @@ async function lateVerification(delay, enableDelay=0){
  const result={case:'Verification after '+delay+' ms; Search enabled '+enableDelay+' ms later',elapsed_ms:now,reply:JSON.parse(JSON.stringify(reply)),calls};
  if(delay>30000){assert.equal(reply.reason,'NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT');assert.deepEqual(calls,['verify']);}
  else if(enableDelay>=15000){assert.equal(reply.reason,'NY_CONNECTOR_SEARCH_BUTTON_TIMEOUT');assert.deepEqual(calls,['verify']);assert.equal(now,delay+15000);}
+ else if(searchDelay>=30000){assert.equal(reply.reason,'NY_CONNECTOR_SEARCH_RESPONSE_TIMEOUT');assert.deepEqual(calls,['verify','search']);}
  else {assert.equal(reply.ok,true);assert.deepEqual(calls,['verify','search']);}
  cases.push(result);
 }
 for(const delay of [14000,16000,29000,31000,999999])test('Real verification response at '+delay+' ms',()=>lateVerification(delay));
 for(const delay of [0,2000,4000,10000,14900,15000,999999])test('Search UI enables '+delay+' ms after successful verification',()=>lateVerification(1000,delay));
+for(const delay of [16000,29000,31000,999999])test('Search response arrives '+delay+' ms after submit',()=>lateVerification(1000,0,delay));

@@ -1,4 +1,4 @@
-# CharityClarity staging New York connector — 0.3.5
+# CharityClarity staging New York connector — 0.3.6
 
 This internal prototype is restricted to staging.compliance-express.com and the New York charities registry. It is not published to the Chrome Web Store and has not been approved for production.
 
@@ -24,6 +24,7 @@ The prototype has no automatic update service. If a test fix is made, reload it 
 - **Refresh New York connection** uses the same coordinated operation and allowance. Successful manual refresh retries only an existing inconclusive NY result for the same organization on that page. Other state results and their original report timestamp remain unchanged. A reconnect resends the same command ID and query. The page relay joins an existing request or returns its completed public response, avoiding duplicate searches. The signed master check is never resumed with an unrelated response. Recovery attempts and original deadlines stay bounded; an interrupted connection-cleanup operation still fails safely and retains its cooldown.
 - Connection cleanup uses exact host-only cookie expiration and origin-filtered local storage, IndexedDB, Cache Storage and service-worker removal for `https://charities-search.ag.ny.gov`. It does not clear browsing history, shared/domain cookies, unrelated sites or third-party verification storage. An open user-owned NY page blocks cleanup. Local persistence contains only repair timing and reason; owned-tab/queue metadata, current public query/response, and bounded connection diagnostics use restricted extension session storage. No sign-in credentials or verification tokens enter this journal. Extension reload/update can interrupt work and must be done between checks.
 - Returns an incomplete result on rejection or failure. It never chooses records or derives a registration status.
+- Search responses have a thirty-second wait. A missing response shares the existing single timeout retry with page-load and verification timeouts, using a new owned tab and the same query. This does not reset the overall lookup deadline or verification-rejection allowance.
 - Reads only whitelisted public search-response fields. Cookies, verification tokens, browser history, and login credentials are not sent to CharityClarity.
 
 Compliance Express · www.compliance-express.com · info@compliance-express.com
