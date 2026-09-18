@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.17.14-staging").strip() or "2026.09.17.14-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.18.1-staging").strip() or "2026.09.18.1-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -234,8 +234,8 @@ ME_NOT_REGISTERED_CONFIRMATION_ATTEMPTS = min(max(1, int(os.environ.get("CE_ME_N
 ME_CONFIRM_NOT_REGISTERED = os.environ.get("CE_ME_CONFIRM_NOT_REGISTERED", "1").strip().lower() in {"1", "true", "yes"}
 ME_FAST_DIRECT_CONFIRMATION_MAX_VARIANTS = min(max(3, int(os.environ.get("CE_ME_FAST_DIRECT_CONFIRMATION_MAX_VARIANTS", "6"))), 12)
 ME_FAST_DIRECT_GET_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_ME_FAST_DIRECT_GET_TIMEOUT_SECONDS", "8"))), 15.0)
-ME_FAST_DIRECT_POST_TIMEOUT_SECONDS = min(max(4.0, float(os.environ.get("CE_ME_FAST_DIRECT_POST_TIMEOUT_SECONDS", "10"))), 18.0)
-ME_FAST_DIRECT_DETAIL_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_ME_FAST_DIRECT_DETAIL_TIMEOUT_SECONDS", "8"))), 15.0)
+ME_FAST_DIRECT_POST_TIMEOUT_SECONDS = min(max(4.0, float(os.environ.get("CE_ME_FAST_DIRECT_POST_TIMEOUT_SECONDS", "15"))), 18.0)
+ME_FAST_DIRECT_DETAIL_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_ME_FAST_DIRECT_DETAIL_TIMEOUT_SECONDS", "12"))), 15.0)
 MD_DIRECT_EIN_TIMEOUT_SECONDS = min(max(3.0, float(os.environ.get("CE_MD_DIRECT_EIN_TIMEOUT_SECONDS", "8"))), 15.0)
 MI_ENABLE_NAME_FALLBACK = os.environ.get("CE_MI_ENABLE_NAME_FALLBACK", "1").strip().lower() in {"1", "true", "yes"}
 MI_CONFIRM_NO_RESULTS_FRAME = os.environ.get("CE_MI_CONFIRM_NO_RESULTS_FRAME", "0").strip().lower() in {"1", "true", "yes"}
@@ -1665,7 +1665,8 @@ def or_live_period_evidence(source: str, row: list[str]) -> dict:
     end, start = max(periods)
     exported_end = parse_ce_date(row[15])
     if exported_end and end < exported_end:
-        return {}
+        return {'period_start': start, 'period_end': end, 'name': name, 'address': address,
+                'status': status, 'export_period_end': format_date(exported_end), 'source_period_conflict': True}
     return {'period_start': start, 'period_end': end, 'name': name, 'address': address, 'status': status}
 
 
@@ -1680,14 +1681,28 @@ def or_confirm_snapshot_delinquency(org, result):
         if row and re.fullmatch(r'\d+', row[0]):
             url = 'https://justice.oregon.gov/Charities/Charity/details?charityID=' + row[0]
             request = urllib.request.Request(url, headers={'User-Agent': 'ComplianceExpressRegistrySnapshot/1.0'})
-            with urllib.request.urlopen(request, timeout=15) as response:
-                if urlparse(response.url).hostname != 'justice.oregon.gov':
-                    raise ValueError('Unexpected Oregon detail destination')
-                content = response.read(2_000_001)
-                if len(content) <= 2_000_000:
-                    evidence = or_live_period_evidence(content.decode('utf-8', errors='replace'), row)
+            attempts = []
+            for attempt in range(2):
+                try:
+                    with urllib.request.urlopen(request, timeout=20) as response:
+                        if urlparse(response.url).hostname != 'justice.oregon.gov':
+                            raise ValueError('Unexpected Oregon detail destination')
+                        content = response.read(2_000_001)
+                        if len(content) > 2_000_000:
+                            raise ValueError('Oregon detail exceeded the document size limit')
+                        source = content.decode('utf-8', errors='replace')
+                        evidence = or_live_period_evidence(source, row)
+                        attempts.append(f'Oregon live detail attempt {attempt + 1}: response received; identity/period confirmed={bool(evidence)}.')
+                        if evidence or re.search(r'<table\b[^>]*\bid="info"', source, re.I):
+                            break
+                except Exception as exc:
+                    attempts.append(f'Oregon live detail attempt {attempt + 1}: {type(exc).__name__}.')
+                    if attempt:
+                        raise
+            result.source_attempts = [*(getattr(result, 'source_attempts', []) or []), *attempts]
     except Exception as exc:
         log_event(f'OR live filing confirmation: {type(exc).__name__}')
+        result.source_attempts = [*(getattr(result, 'source_attempts', []) or []), *locals().get('attempts', [])]
     result.or_live_evidence = {k: format_date(v) if k in {'period_start', 'period_end'} else v for k, v in evidence.items()}
     if not evidence:
         result.status = 'Unable to Confirm'
@@ -1696,6 +1711,26 @@ def or_confirm_snapshot_delinquency(org, result):
                               'The export may lag newer filings, so CharityClarity cannot confirm delinquency from that date alone.')
         result.raw_status_text = 'Exact EIN found in Oregon export; live filing period unconfirmed'
         result.computed_due_date = ''
+        return result
+    if evidence.get('source_period_conflict'):
+        export_end = parse_ce_date(evidence['export_period_end'])
+        live_due = or_next_due_from_period_end(evidence['period_end'])
+        export_due = or_next_due_from_period_end(export_end)
+        result.source_truth_conflict = True
+        if status_from_calendar_date(live_due) == status_from_calendar_date(export_due) == 'Delinquent':
+            # Both official, exact-identity sources establish the same status.
+            # Retain the newer export period; never replace it with an older one.
+            result.status_reason = 'OR_OVERDUE_UNDER_BOTH_CONFIRMED_PERIODS'
+            result.source_note = (f"Oregon's export lists the latest filed period ending {format_date(export_end)}, "
+                                  f"while the live record shows {format_date(evidence['period_end'])}. "
+                                  'Both sources confirm the same EIN and registration number. '
+                                  f"Both periods imply an overdue filing; using the newer export period, the next filing was due {format_date(export_due)}. "
+                                  'CharityClarity reports Delinquent and flags the filing-history difference for confirmation with Oregon.')
+            return result
+        result.status = 'Unable to Confirm'
+        result.status_reason = 'OR_LIVE_PERIOD_UNCONFIRMED'
+        result.computed_due_date = ''
+        result.source_note = 'Oregon confirms the EIN and registration number, but its export and live filing history imply different compliance statuses. The filing-history conflict requires confirmation with the state.'
         return result
     if evidence.get('override_status'):
         result.status = evidence['status']
@@ -7402,33 +7437,39 @@ def me_browser_search_rows(page, query, deadline):
 
 
 def me_fast_direct_confirmation_result(org, page=None, deadline=None):
-    deadline = deadline or (time.perf_counter() + 75)
+    deadline = deadline or (time.perf_counter() + 105)
+    search_deadline = deadline - 24  # Two bounded detail reads cannot be consumed by name queries.
+    progress = getattr(org, "_cc_me_progress", {})
     target_names = organization_match_target_variants(getattr(org, "organization_name", ""), getattr(org, "ein", ""))
     best_row, best_opener = None, None
     best_score = (-999, -999, -999)
     last_error = ""
-    completed = set()
+    completed = progress.setdefault("completed", set())
     queries = me_fast_direct_query_variants(org)
     pending = []
     sessions = []
     session = None
-    for phase in ("direct", "browser", "browser_retry"):
+    if progress.get("best_row"):
+        best_row = dict(progress["best_row"])
+        best_opener = MaineRegistrySession(deadline)
+        sessions.append(best_opener)
+    for phase in (() if best_row else ("direct", "browser", "browser_retry")):
         phase_queries = queries if phase == "direct" else [q for q in queries if q not in completed]
         for query in phase_queries:
             if query in completed:
                 continue
             started = time.perf_counter()
             try:
-                me_request_timeout(deadline, 1)
+                me_request_timeout(search_deadline, 1)
                 if phase == "direct":
                     if session is None:
-                        session = MaineRegistrySession(deadline)
+                        session = MaineRegistrySession(search_deadline)
                         sessions.append(session)
                     rows, opener = session.search(query)
                 else:
                     if page is None:
                         continue
-                    rows, opener = me_browser_search_rows(page, query, deadline)
+                    rows, opener = me_browser_search_rows(page, query, search_deadline)
                 completed.add(query)
                 for row in rows:
                     row_text = " ".join(row.get(key, "") for key in ["name", "number", "location", "profession", "status"])
@@ -7455,15 +7496,19 @@ def me_fast_direct_confirmation_result(org, page=None, deadline=None):
                     except Exception:
                         pass
                 log_event(f"ME search phase={phase} query={query!r} seconds={time.perf_counter()-started:.2f} error={last_error}")
-            if (best_row and best_score[1] == 3 and best_row.get("address_evidence", {}).get("decision") != "conflict") or time.perf_counter() >= deadline or (phase == "direct" and len(pending) >= 2):
+            if (best_row and best_score[1] == 3 and best_row.get("address_evidence", {}).get("decision") != "conflict") or time.perf_counter() >= search_deadline or (phase == "direct" and len(pending) >= 2):
                 break
-        if best_row or time.perf_counter() >= deadline:
+        if best_row or time.perf_counter() >= search_deadline:
             break
     checked_any = bool(completed)
     last_error = "" if len(completed) == len(queries) else (last_error or "Incomplete Maine search")
     # Keep the selected session through detail retrieval, then close every
     # transport regardless of positive, negative, or incomplete result.
     try:
+        if best_opener is not None:
+            best_opener.deadline = deadline
+        if best_row:
+            progress["best_row"] = dict(best_row)
         return me_result_from_search(org, best_row, best_opener, checked_any, last_error)
     finally:
         for transport in sessions:
@@ -7501,17 +7546,25 @@ def me_result_from_search(org, best_row, best_opener, checked_any, last_error):
         result.success = False
         return result
     detail_text = ""
-    try:
-        detail_response = best_opener.open(detail_url, timeout=ME_FAST_DIRECT_DETAIL_TIMEOUT_SECONDS)
-        detail_html = detail_response.read().decode("utf-8", "replace")
-        detail_text = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", detail_html))).strip()
-    except Exception as exc:
-        last_error = f"{type(exc).__name__}: {str(exc)[:120]}"
+    detail_error = ""
+    for detail_attempt in range(2):
+        try:
+            detail_response = best_opener.open(detail_url, timeout=ME_FAST_DIRECT_DETAIL_TIMEOUT_SECONDS)
+            detail_html = detail_response.read().decode("utf-8", "replace")
+            detail_text = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", detail_html))).strip()
+            if not re.search(r"\bStatus\s*:", detail_text, re.I):
+                raise ValueError("Maine credential detail did not finish loading")
+            detail_error = ""
+            break
+        except Exception as exc:
+            detail_text = ""
+            detail_error = f"{type(exc).__name__}: {str(exc)[:120]}"
+            log_event(f"ME credential={best_row.get('number', '')} detail attempt={detail_attempt + 1} error={detail_error}")
 
     status_text = ""
     expiration_text = ""
     if detail_text:
-        blocks = list(re.finditer(r"\bLicense\s+Number:\s*(CO\d+)\b(.*?)(?=\bLicense\s+Number:|$)", detail_text, re.I))
+        blocks = list(re.finditer(r"\b(?:License|Pending)\s+Number:\s*(CO\d+)\b(.*?)(?=\b(?:License|Pending)\s+Number:|$)", detail_text, re.I))
         if blocks:
             # The public detail page can contain historical and active
             # credentials for this same registrant. Never mix their fields.
@@ -7525,7 +7578,7 @@ def me_result_from_search(org, best_row, best_opener, checked_any, last_error):
                 raise ValueError("Maine detail did not confirm the selected credential")
             best_row = dict(best_row, number=selected_block[1])
             detail_text = selected_block[0]
-        status_match = re.search(r"\bStatus:\s*(.+?)\s+Expiration\s+Date:", detail_text, re.I)
+        status_match = re.search(r"\bStatus:\s*(.+?)(?=\s+(?:Expiration|Application|Effective|Issue)\s+Date:|$)", detail_text, re.I)
         expiration_match = re.search(r"\bExpiration\s+Date:\s*(\d{1,2}/\d{1,2}/\d{4})", detail_text, re.I)
         status_text = (status_match.group(1).strip() if status_match else "") or checker.extract_labeled_value_from_text(detail_text, ["Status"])
         expiration_text = (expiration_match.group(1).strip() if expiration_match else "") or checker.extract_labeled_value_from_text(detail_text, ["Expiration Date", "Expiration"])
@@ -7549,6 +7602,13 @@ def me_result_from_search(org, best_row, best_opener, checked_any, last_error):
         result.source_note += f" Last non-fatal direct-confirmation detail error: {last_error}"
     result.success = True
     result.error = ""
+    if detail_error and re.fullmatch(r"active|current|registered", status_text, re.I):
+        result.status = "Unable to Verify"
+        result.reason_code = "ME_DETAIL_INCOMPLETE"
+        result.source_note = ("Maine found the organization with an active registration, but its credential detail did not finish loading. "
+                              "The expiration date could not be checked; this is a retrieval failure, not an empty filing history.")
+        result.success = False
+        result.error = detail_error
     result.address_evidence = address
     setattr(result, "_cc_detail_body", " ".join(part for part in [detail_text, " ".join(value for value in best_row.values() if isinstance(value, str))] if part))
     return result
@@ -7556,12 +7616,14 @@ def me_result_from_search(org, best_row, best_opener, checked_any, last_error):
 
 def search_me_serialized(page, org, confirm_no_match: bool = True):
     global ME_LAST_LOOKUP_FINISHED
-    # Includes queue time and all fallback work, leaving headroom beneath the
-    # existing 87-second batch allowance. No other state's allowance changes.
-    deadline = time.perf_counter() + 75
-    acquired = ME_LOOKUP_LOCK.acquire(timeout=me_request_timeout(deadline, 75))
+    # Queue wait has its own allowance. Maine's longer search/detail allowance
+    # never changes another state's deadline. The workflow still has an outer cap.
+    workflow_deadline = getattr(org, "_cc_me_progress", {}).get("deadline", time.perf_counter() + 265)
+    lane_owned = bool(getattr(org, "_cc_me_progress", {}).get("lane_owned"))
+    acquired = lane_owned or ME_LOOKUP_LOCK.acquire(timeout=me_request_timeout(workflow_deadline, 75))
     try:
         if acquired:
+            deadline = min(workflow_deadline, time.perf_counter() + 105)
             pause = ME_LOOKUP_MIN_INTERVAL_SECONDS - (time.perf_counter() - ME_LAST_LOOKUP_FINISHED)
             if pause > 0:
                 time.sleep(min(pause, me_request_timeout(deadline, pause)))
@@ -7574,6 +7636,9 @@ def search_me_serialized(page, org, confirm_no_match: bool = True):
             success=False, error="Maine lookup incomplete or registry busy")
     finally:
         if acquired:
+            # Registry work is done; do not serialize unrelated browser cleanup.
+            if lane_owned:
+                org._cc_me_progress.pop("lane_owned", None)
             ME_LAST_LOOKUP_FINISHED = time.perf_counter()
             ME_LOOKUP_LOCK.release()
 
@@ -12730,6 +12795,11 @@ def search_ma_master(page, org, completed):
         result.matched_registry_identifier = account
         result.success = True
         evidence = ma_read_latest_form_pc(page, result, body, completed)
+        if evidence.get("detail_read_incomplete"):
+            # Retry only the failed filing detail. The completed empty-list rule
+            # and explicit state statuses never enter this recovery path.
+            result.source_attempts = ["Massachusetts completed its filing list; retried the unavailable Form PC detail once."]
+            evidence = ma_read_latest_form_pc(page, result, body, completed)
         return annotate_ma_visible_form_pc_due(result, evidence), body
     except Exception as exc:
         log_event(f"MA {step} unavailable: {type(exc).__name__}")
@@ -13263,6 +13333,8 @@ def ma_read_latest_form_pc(page, result, body: str, completed=None) -> dict:
         return {**ma_latest_distinct_fiscal_period(forms), **context}
     except Exception as exc:
         log_event(f"MA Form PC detail unavailable for AGO {account.group(1)}: {type(exc).__name__}")
+        if isinstance(exc, OSError) or type(exc).__name__ == "TimeoutError":
+            return {**context, "detail_read_incomplete": True, "detail_error": type(exc).__name__}
         return context
 
 
@@ -13399,6 +13471,71 @@ def annotate_ma_visible_form_pc_due(result, evidence=None):
     return result
 
 
+def hi_completed_search_rows(data):
+    """Only the submitted search's successful response can establish emptiness."""
+    # This endpoint labels its explicit no-record response FAILURE as well.
+    # Only that specific registry message establishes an empty search.
+    if (isinstance(data, dict) and data.get("status") == "FAILURE"
+            and str(data.get("message") or "").strip().startswith(
+                "The charitable organization you entered is not registered in our system.")):
+        return []
+    rows = (data.get("payload") or {}).get("results") if isinstance(data, dict) else None
+    if not isinstance(data, dict) or data.get("status") != "SUCCESS" or not isinstance(rows, list):
+        raise ValueError("Hawaii search did not return a completed results response")
+    if any(not isinstance(row, dict) or not re.fullmatch(r"\d{9}", canonical_ein_digits(row.get("fein", "")))
+           or not str(row.get("organizationName") or "").strip() for row in rows):
+        raise ValueError("Hawaii returned an incomplete organization row")
+    return rows
+
+
+def hi_submit_completed_search(page, name, fein, deadline):
+    def remaining_ms():
+        remaining = int((deadline - time.perf_counter()) * 1000)
+        if remaining <= 0:
+            raise TimeoutError("Hawaii search completion budget exhausted")
+        return min(18000, remaining)
+
+    def is_submitted_response(response):
+        if urlparse(response.url).path != "/charity/search-charity.json" or response.request.method != "POST":
+            return False
+        fields = parse_qs(response.request.post_data or "", keep_blank_values=True)
+        return fields.get("name", [""])[0] == name and fields.get("fein", [""])[0] == fein
+
+    for attempt in range(2):
+        try:
+            page.locator("#name").fill(name, timeout=remaining_ms())
+            page.locator("#fein").fill(fein, timeout=remaining_ms())
+            with page.expect_response(is_submitted_response, timeout=remaining_ms()) as pending:
+                page.locator("#trigger-organization-search").click(timeout=remaining_ms())
+            response = pending.value
+            if response.status != 200:
+                raise ValueError(f"Hawaii search HTTP {response.status}")
+            data = response.json()
+            rows = hi_completed_search_rows(data)
+            if data.get("status") == "FAILURE":
+                page.wait_for_function("""message => window.jQuery &&
+                    jQuery('#searchOrganizationWarning').is(':visible') &&
+                    jQuery('#orgWarning').text().trim() === message.trim() &&
+                    !jQuery('#org-results-container').is(':visible')""",
+                    arg=data['message'], timeout=remaining_ms())
+                return rows
+            page.wait_for_function("""expected => {
+                if (!window.jQuery || !jQuery('#org-results-container').is(':visible')) return false;
+                const actual = jQuery('#searchOrgTable').dataTable().fnGetData();
+                const text = value => { const d = document.createElement('div'); d.innerHTML = value; return d.textContent.trim(); };
+                return actual.length === expected.length && actual.every((row, index) =>
+                    text(row[0]).replace(/\\D/g, '') === expected[index].fein.replace(/\\D/g, '') &&
+                    text(row[1]) === expected[index].organizationName.trim());
+            }""", arg=rows, timeout=remaining_ms())
+            return rows
+        except Exception:
+            if attempt or time.perf_counter() >= deadline:
+                raise
+            # A fresh document prevents an earlier timed-out response from
+            # painting over the retry's table. This is a normal search retry.
+            page.reload(wait_until="domcontentloaded", timeout=remaining_ms())
+
+
 def search_hi_precise(page, org):
     url = "https://charity.ehawaii.gov/charity/new-search.html"
     result = checker.StateResult(org.organization_name, org.ein, "HI", checker.STATUS_UNKNOWN, url)
@@ -13441,38 +13578,28 @@ def search_hi_precise(page, org):
                         attempts.append((variant, ein_value))
         clicked_result_name = ""
         clicked_result_identifier = ""
+        deadline = time.perf_counter() + 80
+        completed_queries = []
+        confirmed_ein_row = False
         for variant, ein_value in attempts[:4]:
             attempted_queries.append(
                 f"{variant or '[blank name]'} / FEIN {ein_value}" if ein_value else variant
             )
-            name_input.fill("")
-            name_input.fill(variant)
-            fein_input.fill("")
-            if ein_value:
-                fein_input.fill(ein_value)
-            clicked = False
-            for sel in ["#trigger-organization-search", 'button[id="trigger-organization-search"]', 'button[type="submit"]', "button"]:
-                try:
-                    buttons = page.locator(sel)
-                    for i in range(min(buttons.count(), 10)):
-                        button = buttons.nth(i)
-                        try:
-                            text = re.sub(r"\s+", " ", button.inner_text(timeout=1000)).strip()
-                        except Exception:
-                            text = (button.get_attribute("value") or "").strip()
-                        if button.is_visible(timeout=750) and re.search(r"\bSearch\b", text, re.I):
-                            button.click(timeout=5000)
-                            clicked = True
-                            break
-                    if clicked:
-                        break
-                except Exception:
-                    continue
-            if not clicked:
-                result.error = "Could not click HI Search button"
+            try:
+                response_rows = hi_submit_completed_search(page, variant, ein_value, deadline)
+            except Exception as exc:
+                result.status = "Unable to Verify"
+                result.error = f"Hawaii search completion failed: {type(exc).__name__}"
+                result.source_note = "Hawaii did not finish returning the submitted search results after a bounded retry. No negative registration conclusion was drawn."
+                result.reason_code = "HI_SEARCH_INCOMPLETE"
+                result.queries_attempted = list(attempted_queries)
+                result.success = False
                 return result
-            checker.safe_wait_for_network_idle(page, timeout=7000)
-            time.sleep(1.25)
+            completed_queries.append(attempted_queries[-1])
+            confirmed_ein_row = confirmed_ein_row or bool(ein_digits and any(
+                canonical_ein_digits(row.get("fein", "")) == ein_digits for row in response_rows))
+            if not response_rows:
+                continue
             wanted_variants = [checker.normalize_name(item) for item in organization_name_variants(org.organization_name, org.ein)]
             for selector in ["#searchOrgTable tbody tr", "#searchResultTable tbody tr", "table tbody tr", "a[href]"]:
                 try:
@@ -13521,9 +13648,15 @@ def search_hi_precise(page, org):
             if re.search(r"no results|no records|0 results|showing 0 to 0 of 0 entries|no data available in table|not registered in our system", body, re.I):
                 continue
         if not clicked_result:
+            if confirmed_ein_row:
+                result.status = "Unable to Verify"
+                result.source_note = "Hawaii returned the requested EIN, but its result row could not be opened. Registration status remains unconfirmed."
+                result.reason_code = "HI_DETAIL_INCOMPLETE"
+                result.success = False
+                return result
             result.raw_status_text = "No record found" if re.search(r"no results|no records|0 results|showing 0 to 0 of 0 entries|no data available in table|not registered in our system", body, re.I) else "No matching organization result"
             result.status = "Not registered"
-            result.source_note = "Hawaii search results did not contain a matching organization/EIN row."
+            result.source_note = "Hawaii completed the submitted search responses without a matching organization/EIN row."
             result.success = True
             result.queries_attempted = list(attempted_queries)
             result.source_attempts = [
@@ -14169,7 +14302,12 @@ def wi_search_names_for_org(org) -> list[str]:
     filtered_names = [value for value in early if value] + [value for value in filtered_names if value not in early]
     # Preserve established structural probes, but spend the first slots on
     # distinct approved identities before case/suffix variants of one name.
-    prioritized = [*equivalent_name_queries(original_name, org.ein), *filtered_names]
+    identities = equivalent_name_queries(original_name, org.ein)
+    # DFI distinguishes separators in search even when the identity is the same.
+    # Keep every word; this expands retrieval only, never candidate acceptance.
+    prioritized = [query for name in identities for query in
+                   (name, re.sub(r"\s+", " ", re.sub(r"[-\u2010-\u2015]+", " ", name)).strip())]
+    prioritized.extend(filtered_names)
     queries, seen = [], set()
     for value in prioritized:
         key = value.casefold()
@@ -14837,6 +14975,19 @@ def wi_financial_identity_evidence(ein: str, href: str, credential: str, hour: i
             diagnostics["first_page_has_credential"] = credential in html_to_text(page)
             time.sleep(.35)
             page = wi_identity_read(lambda: wi_identity_page(opener, financial_url, deadline), deadline, stage, diagnostics)
+        if credential not in html_to_text(page) and not re.search(year_option, page) and deadline - time.monotonic() >= 6:
+            # Two generic/interrupted pages do not prove that a year is absent.
+            # Re-establish this credential without restarting the evidence budget.
+            diagnostics["credential_session_reload"] = True
+            landing = wi_identity_read(lambda: wi_identity_page(opener, detail_url, deadline), deadline, stage, diagnostics)
+            if credential not in html_to_text(landing):
+                diagnostics.update(reason="credential_page_incomplete", fiscal_year=fiscal_year)
+                return {}
+            page = wi_identity_read(lambda: wi_identity_page(opener, financial_url, deadline), deadline, stage, diagnostics)
+        if credential not in html_to_text(page):
+            diagnostics.update(reason="financial_page_incomplete", fiscal_year=fiscal_year)
+            log_event(f"WI identity evidence unavailable: credential={credential}; stage={stage}; reason=financial_page_incomplete")
+            return {}
         if not re.search(r'<option\b[^>]*value=["\']' + fiscal_year + r'["\']', page):
             diagnostics.update(reason="fiscal_year_absent", fiscal_year=fiscal_year)
             log_event(f"WI identity evidence unavailable: credential={credential}; stage={stage}; reason=fiscal_year_absent")
@@ -15095,8 +15246,9 @@ def wi_reader_search_best_match(search_names: list[str], target_names: list[str]
         result_text = wi_reader_text(source_url, no_cache=True, deadline=deadline)
         if re.search(r"\|\s*\d+-800\s*\||There\s+are\s+no\s+query\s+results|No\s+query\s+results", result_text or "", re.I):
             reader_reached = True
-            if progress is not None: progress["completed"].add(search_name)
         best_match = wi_best_match_from_markdown(result_text, target_names, best_match, original_name, ein)
+        if progress is not None and re.search(r"\|\s*\d+-800\s*\||There\s+are\s+no\s+query\s+results|No\s+query\s+results", result_text or "", re.I):
+            progress["completed"].add(search_name)
     return best_match, reader_reached
 
 
@@ -15153,8 +15305,8 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str], 
             if wi_result_html_requires_verification(result_html) or not wi_has_complete_results(result_html):
                 continue
             http_reached = True
-            if progress is not None: progress["completed"].add(search_name)
             best_match = wi_best_match_from_html(result_html, target_names, best_match, original_name, ein)
+            if progress is not None: progress["completed"].add(search_name)
             if best_match and not best_match.get("identity_conflict") and best_match.get("unique_full_identity") and best_match.get("expiration_date"):
                 return best_match, http_reached
             continue
@@ -15183,11 +15335,11 @@ def wi_http_search_best_match(search_names: list[str], target_names: list[str], 
             if wi_result_html_requires_verification(result_html) or not wi_has_complete_results(result_html):
                 continue
             http_reached = True
-            if progress is not None: progress["completed"].add(search_name)
         except Exception:
             continue
 
         best_match = wi_best_match_from_html(result_html, target_names, best_match, original_name, ein)
+        if progress is not None: progress["completed"].add(search_name)
     return best_match, http_reached
 
 
@@ -15256,11 +15408,11 @@ def search_wi(page, org, max_seconds: float | None = None, progress: dict | None
                 except Exception:
                     pass
                 last_body = registry_page_body(page)
-                if wi_has_complete_results(page.content()): progress["completed"].add(search_name)
-
+                result_html = page.content()
                 best_match = wi_best_match_from_html(
-                    page.content(), target_names, best_match, original_name, ein
+                    result_html, target_names, best_match, original_name, ein
                 )
+                if wi_has_complete_results(result_html): progress["completed"].add(search_name)
 
         if not best_match and time.perf_counter() < deadline:
             retry_names = direct_names[: min(5, len(direct_names))]
@@ -15633,7 +15785,7 @@ def _search_wi_sidecar_unlocked(org):
     return result
 
 
-def search_wi_backend_browser_fallback(org, max_seconds: float | None = None):
+def search_wi_backend_browser_fallback(org, max_seconds: float | None = None, progress: dict | None = None):
     acquired = WI_BACKEND_BROWSER_SEMAPHORE.acquire(timeout=WI_BACKEND_BROWSER_ACQUIRE_SECONDS)
     if not acquired:
         result = checker.StateResult(org.organization_name, org.ein, "WI", "Site Not Reachable", WI_SEARCH_URL)
@@ -15653,7 +15805,7 @@ def search_wi_backend_browser_fallback(org, max_seconds: float | None = None):
             previous_browser_variant_limit = WI_BROWSER_VARIANT_LIMIT
             WI_BROWSER_VARIANT_LIMIT = max(previous_browser_variant_limit, 6)
             try:
-                return search_wi(page, org, max_seconds=max_seconds)
+                return search_wi(page, org, max_seconds=max_seconds, progress=progress)
             finally:
                 WI_BROWSER_VARIANT_LIMIT = previous_browser_variant_limit
         except Exception as exc:
@@ -15910,6 +16062,8 @@ def debug_trace_for_result(result, org, state: str, interpreted_status: str) -> 
 
 
 def enrich_me_result_from_body(result, body: str) -> None:
+    if getattr(result, "reason_code", "") == "ME_DETAIL_INCOMPLETE":
+        return  # A search-row ACTIVE label cannot erase a failed expiration read.
     existing_status = " ".join([result.status or "", result.raw_status_text or ""])
     if re.search(r"\bACTIVE\b", existing_status, re.I) and not re.search(r"\b(FAILED\s+TO\s+RENEW|EXPIRED|REVOKED|SUSPENDED|INACTIVE)\b", existing_status, re.I):
         result.raw_status_text = result.raw_status_text or "Active"
@@ -18651,7 +18805,7 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
                     "a registration expiration date or a specific suspended, revoked, or delinquent status. "
                     "Confirm registration details directly with Virginia.")
 
-    if state == "OR" and reason in {"OR_LIVE_EMPTY_REPORTS_INFERRED_DELINQUENT", "OR_STATUS_FROM_CONFIRMED_LIVE_PERIOD", "OR_LIVE_PERIOD_UNCONFIRMED", "OR_LIVE_EXPLICIT_STATUS"}:
+    if state == "OR" and reason in {"OR_LIVE_EMPTY_REPORTS_INFERRED_DELINQUENT", "OR_STATUS_FROM_CONFIRMED_LIVE_PERIOD", "OR_LIVE_PERIOD_UNCONFIRMED", "OR_LIVE_EXPLICIT_STATUS", "OR_OVERDUE_UNDER_BOTH_CONFIRMED_PERIODS"}:
         return note
 
     if state == "MI" and status == "Unable to Verify" and getattr(result, "reason_code", "") == "MI_EIN_TRANSPORT_TIMEOUT":
@@ -22541,17 +22695,26 @@ def search_wv_precise(page, org):
         best_score = -10000
         best_rank = (-1, -10000, -1)
         searched_queries: list[str] = []
-        completed_queries: list[str] = []
-        saw_result_rows = False
+        progress = getattr(org, "_cc_wv_progress", {})
+        completed_queries = progress.setdefault("completed", [])
+        saw_result_rows = bool(progress.get("saw_result_rows"))
         planned_queries = wv_preferred_query_variants(org.organization_name, org.ein, limit=WV_QUERY_LIMIT)
         required_queries = equivalent_name_queries(org.organization_name, org.ein) if known_names_for_ein(org.ein) else []
         # Reviewed identities add real queries; keep a bounded allowance for them
         # without changing the established small-name-list lookup window.
         deadline = time.perf_counter() + max(WV_LOOKUP_MAX_SECONDS, min(60.0, 5.0 + 6.0 * len(required_queries)))
+        deadline = min(deadline, progress.get("deadline", deadline))
+        def action_timeout(cap):
+            remaining = int((deadline - time.perf_counter()) * 1000)
+            if remaining <= 0:
+                raise TimeoutError("West Virginia search budget exhausted")
+            return min(cap, remaining)
         for query_name in planned_queries:
+            if query_name in completed_queries:
+                continue
             if time.perf_counter() >= deadline:
                 break
-            page.goto(WV_SEARCH_URL, wait_until="domcontentloaded", timeout=WV_GOTO_TIMEOUT_MS)
+            page.goto(WV_SEARCH_URL, wait_until="domcontentloaded", timeout=action_timeout(WV_GOTO_TIMEOUT_MS))
             safe_wait_for_network_idle(page, timeout=WV_NETWORK_IDLE_TIMEOUT_MS)
             if time.perf_counter() >= deadline:
                 break
@@ -22562,33 +22725,35 @@ def search_wv_precise(page, org):
 
             name_input = page.locator("#CharitiesSearch-CharitiesSearch_txtName").first
             name_input.wait_for(state="visible", timeout=3000)
-            name_input.fill("")
-            name_input.type(query_name, delay=8)
+            name_input.fill(query_name, timeout=action_timeout(3000))
             searched_queries.append(query_name)
 
-            page.locator("#CharitiesSearch-CharitiesSearch_btnSearch").click(timeout=4000)
+            page.locator("#CharitiesSearch-CharitiesSearch_btnSearch").click(timeout=action_timeout(4000))
             safe_wait_for_network_idle(page, timeout=WV_SEARCH_IDLE_TIMEOUT_MS)
             page.wait_for_timeout(WV_RESULTS_SETTLE_MS)
             if time.perf_counter() >= deadline:
                 break
 
             body = registry_page_body(page)
-            completed_queries.append(query_name)
             query_targets = list(dict.fromkeys([
                 *safe_targets,
                 *organization_match_target_variants(query_name, org.ein),
             ]))
             if re.search(r"\bNo\s+(?:matching\s+)?(?:records?|results?)\b|records\s+0\s+to\s+0\s+of\s+0", body, re.I):
+                completed_queries.append(query_name)
                 continue
 
             rows = page.locator("tr")
             try:
                 row_count = min(rows.count(), 100)
-            except Exception:
-                row_count = 0
+            except Exception as exc:
+                raise TimeoutError("West Virginia result table did not finish loading") from exc
             if row_count:
                 saw_result_rows = True
+                progress["saw_result_rows"] = True
+            readable_record_rows = 0
             for index in range(row_count):
+                action_timeout(1000)
                 row = rows.nth(index)
                 try:
                     cells = row.locator("td")
@@ -22597,10 +22762,11 @@ def search_wv_precise(page, org):
                     registry_id = re.sub(r"\s+", " ", cells.nth(0).inner_text(timeout=1000)).strip()
                     registry_name = useful_registry_name(cells.nth(1).inner_text(timeout=1000))
                     status_text = re.sub(r"\s+", " ", cells.nth(4).inner_text(timeout=1000)).strip()
-                except Exception:
-                    continue
+                except Exception as exc:
+                    raise TimeoutError("West Virginia result rows did not finish loading") from exc
                 if not registry_id or not registry_name:
                     continue
+                readable_record_rows += 1
                 if not location_identity_is_safe(registry_name):
                     continue
                 score = target_name_score(registry_name, query_targets)
@@ -22613,8 +22779,13 @@ def search_wv_precise(page, org):
                     best_rank = rank
                     best_score = score
                     best = (row, registry_id, registry_name, status_text, query_targets)
+            if not readable_record_rows:
+                raise TimeoutError("West Virginia returned neither readable results nor its completed no-record message")
             if best is not None and best_score >= 450:
+                # Keep this query eligible for recovery until the selected
+                # record opens. A found row is not a completed detail read.
                 break
+            completed_queries.append(query_name)
 
         if best is None or best_score < 450:
             result.queries_attempted = completed_queries or searched_queries
@@ -22660,6 +22831,9 @@ def search_wv_precise(page, org):
 
         detail_text = registry_page_body(page)
         detail_name = useful_registry_name(text_between_labels(detail_text, "Organization Name", ["Expiration Date", "Contact Name", "Status", "Street Address"]))
+        if not detail_name or not re.search(r"\b(?:Status|Expiration Date)\b", detail_text):
+            raise TimeoutError("West Virginia selected organization detail did not finish loading")
+        completed_queries.append(query_name)
         matched_name = detail_name or registry_name
         if matched_name and (not location_identity_is_safe(matched_name) or not registry_name_is_safe_against_targets(matched_name, selected_targets, org.organization_name, org.ein)):
             result = wv_completed_no_match_result(
@@ -23477,11 +23651,13 @@ def browser_capacity_busy_result(organization_name: str, ein: str, state: str, u
     return result
 
 
-def run_state_lookup(organization_name: str, ein: str, state: str, capture_source_snapshot: bool = False, confirm_single_no_match: bool = True, mi_progress: dict | None = None) -> dict:
+def run_state_lookup(organization_name: str, ein: str, state: str, capture_source_snapshot: bool = False, confirm_single_no_match: bool = True, mi_progress: dict | None = None, me_progress: dict | None = None, wi_progress: dict | None = None) -> dict:
     lookup_started = time.perf_counter()
     artifact_name = organization_name or f"EIN {format_ein(ein)}"
     lookup_name = organization_name
     org = checker.Organization(organization_name=lookup_name, ein=ein)
+    if state == "ME" and me_progress is not None:
+        org._cc_me_progress = me_progress
     if hasattr(org, "evidence_mode"):
         org.evidence_mode = capture_source_snapshot
     body = ""
@@ -23493,7 +23669,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
         return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
     if state == "WI":
         wi_deadline = lookup_started + min(WI_LOOKUP_MAX_SECONDS, 60.0)
-        wi_progress = {"attempted": [], "completed": set()}
+        wi_progress = wi_progress if wi_progress is not None else {"attempted": [], "completed": set()}
         result = search_wi(None, org, max_seconds=min(24.0, max(18.0, WI_LOOKUP_MAX_SECONDS / 2.5)), progress=wi_progress)
         wi_direct_attempt = 1
         while (
@@ -23525,6 +23701,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             browser_result = search_wi_backend_browser_fallback(
                 org,
                 max_seconds=min(30.0, remaining),
+                progress=wi_progress,
             )
             if public_status(browser_result) != "Site Not Reachable":
                 browser_result.source_note = " ".join(part for part in [
@@ -23950,6 +24127,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 result = search_batch_browser_state(page, org, state)
                 body = registry_page_body(page)
             elif state == "WV":
+                org._cc_wv_progress = {"completed": [], "deadline": lookup_started + 115}
                 reachable, _, preflight_result = preflight_name_search_registry(org, "WV")
                 result = search_wv_precise(page, org)
                 if not reachable and not wv_transient_portal_failure_result(result):
@@ -23964,7 +24142,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     ]).strip()
                 elapsed_before_wv_confirmation = time.perf_counter() - lookup_started
                 wv_retry_count = 0
-                while wv_transient_portal_failure_result(result) and elapsed_before_wv_confirmation < 55.0 and wv_retry_count < 2:
+                while wv_transient_portal_failure_result(result) and elapsed_before_wv_confirmation < 105.0 and wv_retry_count < 2:
                     time.sleep(1.0)
                     wv_retry_count += 1
                     retried_result = search_wv_precise(page, org)
@@ -24289,7 +24467,7 @@ def run_fanout_state_lookup_for_batch(organization_name: str, ein: str, state: s
     # Completed AK and OK confirmation workflows can exceed the usual 87s.
     # Give only these parallel HTTP requests the existing 115s ceiling.
     timeout_seconds = (2 * MI_LOOKUP_MAX_SECONDS + 30.0) if state == "MI" else (
-        200.0 if state == "ME" else 115.0 if state in {"AK", "OK"} else BATCH_FANOUT_STATE_TIMEOUT_SECONDS)
+        285.0 if state == "ME" else 140.0 if state == "WV" else 115.0 if state in {"AK", "OK"} else BATCH_FANOUT_STATE_TIMEOUT_SECONDS)
     payload = {
         "organization_name": organization_name,
         "ein": ein,
@@ -24609,6 +24787,29 @@ def mi_transient_lookup_result(result: dict) -> bool:
         " ".join(str(result.get(key) or "") for key in ("error", "source_note", "raw_status_text")), re.I)))
 
 
+def run_me_lookup_with_lane(organization_name: str, ein: str, progress: dict) -> dict:
+    """Wait for Maine before occupying a browser needed by another state."""
+    global ME_LAST_LOOKUP_FINISHED
+    started = time.perf_counter()
+    remaining = progress['deadline'] - started
+    acquired = remaining > 0 and ME_LOOKUP_LOCK.acquire(timeout=min(75, remaining))
+    if not acquired:
+        result = checker.StateResult(organization_name, ein, 'ME', 'Site Not Reachable', NAME_SEARCH_PREFLIGHT_URLS['ME'],
+            raw_status_text='Maine registry lookup queue did not clear in time',
+            source_note='The Maine lookup could not start within its queue allowance. No negative registration conclusion was drawn.',
+            success=False)
+        result.reason_code = 'ME_QUEUE_TIMEOUT'
+        return response_data_for_lookup(result, '', checker.Organization(organization_name, ein), organization_name, ein, 'ME', started)
+    try:
+        progress['lane_owned'] = True
+        return run_state_lookup(organization_name, ein, 'ME', me_progress=progress)
+    finally:
+        if progress.pop('lane_owned', False):
+            # Covers browser admission/creation failures before Maine runs.
+            ME_LAST_LOOKUP_FINISHED = time.perf_counter()
+            ME_LOOKUP_LOCK.release()
+
+
 def run_single_state_lookup_reliably(organization_name: str, ein: str, state: str) -> dict:
     state = (state or "").upper()
     attempts = SINGLE_STATE_SEMANTIC_RETRY_ATTEMPTS if state in SINGLE_STATE_SEMANTIC_RETRY_STATES else 1
@@ -24626,9 +24827,13 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
     mi_attempt_history: list[dict] = []
     me_attempt_history: list[dict] = []
     mi_progress = {"identity": (organization_name, canonical_ein_digits(ein))} if state == "MI" else None
+    me_progress = {"deadline": time.perf_counter() + 265, "completed": set()} if state == "ME" else None
+    wi_progress = {"attempted": [], "completed": set()} if state == "WI" else None
     for attempt in range(1, attempts + 1):
         result = (run_state_lookup(organization_name, ein, state, mi_progress=mi_progress)
-                  if state == "MI" else run_state_lookup(organization_name, ein, state))
+                  if state == "MI" else run_me_lookup_with_lane(organization_name, ein, me_progress)
+                  if state == "ME" else run_state_lookup(organization_name, ein, state, wi_progress=wi_progress)
+                  if state == "WI" else run_state_lookup(organization_name, ein, state))
         result["semantic_attempts"] = attempt
         if state == "ME":
             me_attempt_history.append({key: result.get(key) for key in (
@@ -24653,6 +24858,10 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
         retryable_statuses = {"site not reachable"}
         if state == "MI" and mi_transient_lookup_result(result):
             retryable_statuses.add(status)
+        if state == "ME" and result.get("reason_code") == "ME_DETAIL_INCOMPLETE":
+            retryable_statuses.add(status)
+        if state == "ME" and time.perf_counter() >= me_progress["deadline"] - 8:
+            return result
         if (state, result.get("reason_code")) in {
             ("FL", "FL_INCOMPLETE_SEARCH"),
             ("NJ", "NJ_INCOMPLETE_EIN_SEARCH"),
@@ -24937,7 +25146,8 @@ def proxy_single_state_request_to_overflow(payload: dict) -> tuple[int, dict, di
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=SINGLE_STATE_OVERFLOW_TIMEOUT_SECONDS) as response:
+        timeout = 285.0 if state.upper() == 'ME' else 140.0 if state.upper() == 'WV' else SINGLE_STATE_OVERFLOW_TIMEOUT_SECONDS
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             data = json.loads(response.read().decode("utf-8"))
         if isinstance(data, dict):
             data["single_state_lane"] = "overflow"

@@ -83,8 +83,11 @@ class ThreeStateTests(unittest.TestCase):
   result,diagnostic,reads=self.fiscal_reload(pages)
   self.assertEqual(result.get('decision'),'corroborated');self.assertTrue(diagnostic['fiscal_year_reload']);self.assertEqual(reads,3)
  def test_wi_missing_year_after_reload_still_rejects(self):
-  result,diagnostic,reads=self.fiscal_reload(['<html>No fiscal years</html>']*2)
+  result,diagnostic,reads=self.fiscal_reload(['<html>Credential Number: 22812-800. No fiscal years</html>']*2)
   self.assertEqual(result,{});self.assertEqual(diagnostic['reason'],'fiscal_year_absent');self.assertEqual(reads,2);self.assertFalse(c.WI_FINANCIAL_IDENTITY_CACHE)
+ def test_wi_missing_credential_is_a_retrieval_failure_not_missing_filing(self):
+  result,diagnostic,reads=self.fiscal_reload(['<html>Incomplete response</html>']*3)
+  self.assertEqual(result,{});self.assertEqual(diagnostic['reason'],'credential_page_incomplete');self.assertEqual(reads,3);self.assertFalse(c.WI_FINANCIAL_IDENTITY_CACHE)
  def test_wi_reload_does_not_accept_wrong_credential_or_amount(self):
   import run_cogency_repair_guardrails as fixtures
   first=(fixtures.F/'wi-fgcu-financial.html').read_text();values=(fixtures.F/'wi-fgcu-financial-2025.html').read_text()

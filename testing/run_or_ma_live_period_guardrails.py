@@ -37,6 +37,23 @@ class Controls(unittest.TestCase):
     def test_current_export_does_not_add_network_work(self):
         self.row[15]='12/31/2025'
         r,request=self.run_live();self.assertEqual(r.status,'Current');request.assert_not_called()
+    def test_temporary_live_read_failure_recovers_same_identity(self):
+        result=c.or_snapshot_result_for_ein(self.org)
+        response=Mock(url='https://justice.oregon.gov/Charities/Charity/details?charityID=8122')
+        response.read.return_value=self.source.encode();response.__enter__=Mock(return_value=response);response.__exit__=Mock(return_value=False)
+        with patch.object(c.urllib.request,'urlopen',side_effect=[TimeoutError('slow'),response]) as request:
+            result=c.or_confirm_snapshot_delinquency(self.org,result)
+        self.assertEqual(result.status,'Current');self.assertEqual(request.call_count,2)
+        self.assertTrue(any('TimeoutError' in attempt for attempt in result.source_attempts))
+    def test_newer_overdue_export_with_older_live_history_keeps_newer_period(self):
+        self.row[14]='5/1/2024';self.row[15]='4/30/2025'
+        source=self.source.replace('1/1/2025 and Ending 12/31/2025','1/1/2024 and Ending 12/31/2024')
+        result,_=self.run_live(source)
+        self.assertEqual(result.status,'Delinquent');self.assertTrue(result.source_truth_conflict)
+        self.assertEqual(result.status_reason,'OR_OVERDUE_UNDER_BOTH_CONFIRMED_PERIODS')
+        comment=c.comments_for_result(result,'',c.true_status_from_body(result,''))
+        self.assertIn('4/30/2025',comment);self.assertIn('12/31/2024',comment)
+        self.assertIn('9/15/2026',comment)
     def test_confirmed_overdue_record_stays_delinquent(self):
         source=self.source.replace('1/1/2025 and Ending 12/31/2025','1/1/2024 and Ending 12/31/2024')
         r,_=self.run_live(source);self.assertEqual(r.status,'Delinquent');self.assertEqual(r.computed_due_date,'5/15/2026')

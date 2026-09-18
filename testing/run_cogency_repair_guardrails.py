@@ -118,6 +118,21 @@ class RepairTests(unittest.TestCase):
     def test_wi_wrong_irs_ein_rejects_corroboration(self):
         self.assertEqual(self.financial(wrong_ein=True),{})
 
+    def test_wi_incomplete_financial_page_recovers_selected_credential_session(self):
+        opener=Mock()
+        opener.open.side_effect=[io.BytesIO(b'<html>Temporarily unavailable</html>'),
+            io.BytesIO(b'<html>Temporarily unavailable</html>'),
+            io.BytesIO(b'Credential Number: 22812-800'),
+            io.BytesIO((F/'wi-fgcu-financial.html').read_bytes()),
+            io.BytesIO((F/'wi-fgcu-financial-2025.html').read_bytes())]
+        diagnostics={}
+        with patch.object(c,'public_profile_for_ein',return_value={'organization':{'latest_object_id':'202532319349302943'}}), \
+             patch.object(c,'identity_fetch',return_value=(F/'wi-fgcu-irs990.html').read_bytes()), \
+             patch.object(c.urllib.request,'build_opener',return_value=opener),patch.object(c.time,'sleep'):
+            result=c.wi_financial_identity_evidence('650403969','CredSummaryDetails.aspx?chid=944852&h=847014605','22812-800',0,diagnostics)
+        self.assertEqual(result.get('decision'),'corroborated')
+        self.assertTrue(diagnostics['credential_session_reload'])
+
     def test_wi_unavailable_evidence_is_not_cached_as_identity_failure(self):
         self.assertEqual(self.financial(changed=True),{})
         self.assertEqual(self.financial().get('decision'),'corroborated')
