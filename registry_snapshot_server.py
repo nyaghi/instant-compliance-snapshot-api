@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.18.6-staging").strip() or "2026.09.18.6-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.18.7-staging").strip() or "2026.09.18.7-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -15124,6 +15124,14 @@ def wi_identity_page(opener, request, deadline: float) -> str:
         diagnostics = getattr(opener, "cc_identity_diagnostics", None)
         if isinstance(diagnostics, dict):
             diagnostics.setdefault("incomplete_pages", []).append(observation)
+        verification_url = urlparse(response_url)
+        if (verification_url.hostname == "apps.dfi.wi.gov"
+                and verification_url.path.rstrip("/").lower() == "/apps/captcha"):
+            if isinstance(diagnostics, dict):
+                diagnostics["verification_required"] = True
+            # This is an explicit access challenge, not an incomplete financial
+            # record. Do not retry it or infer missing filings from its body.
+            raise ValueError("Wisconsin requires human verification for this evidence page")
     return page
 
 
@@ -15669,6 +15677,19 @@ def search_wi(page, org, max_seconds: float | None = None, progress: dict | None
             result.source_url = result.wi_reviewed_identity_evidence["detail_url"]
             result.identity_anchor = "reviewed_credential_filing_identity"
         if best_match.get("identity_conflict"):
+            identity_diagnostics = (best_match.get("financial_identity_diagnostics")
+                or best_match.get("address_evidence", {}).get("financial_corroboration") or {})
+            if identity_diagnostics.get("verification_required"):
+                result.status = "Unable to Confirm"
+                result.reason_code = "WI_IDENTITY_VERIFICATION_REQUIRED"
+                result.wi_identity_diagnostics = identity_diagnostics
+                result.raw_status_text = "Wisconsin requires human verification for the supporting record"
+                result.source_note = ("Wisconsin returned a possible credential, but redirected the supporting "
+                    "record to a human-verification page. CharityClarity could not complete the EIN/address "
+                    "identity confirmation and reports Unable to Confirm. This access restriction does not "
+                    "establish a name mismatch, non-registration, or delinquency.")
+                result.success = False
+                return result
             if best_match.get("identity_review_evidence"):
                 result.status = "Needs Review"
                 result.reason_code = "WI_FOUNDATION_IDENTITY_REVIEW"
@@ -19003,7 +19024,7 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
     observed = comment_registry_status(raw, status)
     matched = bool(getattr(result, "matched_registry_name", "") or getattr(result, "matched_registry_identifier", ""))
 
-    if state == "WI" and getattr(result, "reason_code", "") == "WI_FOUNDATION_IDENTITY_REVIEW":
+    if state == "WI" and getattr(result, "reason_code", "") in {"WI_FOUNDATION_IDENTITY_REVIEW", "WI_IDENTITY_VERIFICATION_REQUIRED"}:
         return note
     if state == "AR" and getattr(result, "reason_code", "") in {
         "AR_RELATED_ENTITY_EIN_UNAVAILABLE", "AR_APPROVED_NAME_EIN_CONFIRMATION"
