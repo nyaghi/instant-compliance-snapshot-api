@@ -6,6 +6,7 @@ import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
+from urllib.parse import urlencode
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import registry_snapshot_server as c
@@ -109,6 +110,32 @@ class CompletionControls(unittest.TestCase):
             with self.subTest(payload=payload), self.assertRaises(ValueError):
                 c.hi_completed_search_rows(payload)
         self.assertEqual(c.hi_completed_search_rows({'status': 'SUCCESS', 'payload': {'results': []}}), [])
+
+    def test_hawaii_input_mask_keeps_the_same_submitted_ein(self):
+        for requested, actual in [('123456789','12-3456789'),('12-3456789','123456789'),('12-3456789','12-3456789')]:
+            response=Mock(url='https://charity.ehawaii.gov/charity/search-charity.json')
+            response.request.method='POST'
+            response.request.post_data=urlencode({'name':'Example Charity','fein':actual})
+            with self.subTest(requested=requested,actual=actual):
+                self.assertTrue(c.hi_response_matches_submitted_query(response,'Example Charity',requested))
+
+    def test_hawaii_response_must_still_match_the_exact_query(self):
+        response=Mock(url='https://charity.ehawaii.gov/charity/search-charity.json')
+        response.request.method='POST'
+        for name,fein in [('Different Charity','12-3456789'),('Example Charity','98-7654321'),('Example Charity',''),('Example Charity','1234'),('Example Charity','abc123456789')]:
+            response.request.post_data=urlencode({'name':name,'fein':fein})
+            with self.subTest(name=name,fein=fein):
+                self.assertFalse(c.hi_response_matches_submitted_query(response,'Example Charity','123456789'))
+        response.request.post_data='name=Example+Charity&fein=12-3456789&fein=98-7654321'
+        self.assertFalse(c.hi_response_matches_submitted_query(response,'Example Charity','123456789'))
+
+    def test_hawaii_name_only_does_not_accept_an_ein_filtered_response(self):
+        response=Mock(url='https://charity.ehawaii.gov/charity/search-charity.json')
+        response.request.method='POST'
+        response.request.post_data='name=Example+Charity&fein='
+        self.assertTrue(c.hi_response_matches_submitted_query(response,'Example Charity',''))
+        response.request.post_data='name=Example+Charity&fein=12-3456789'
+        self.assertFalse(c.hi_response_matches_submitted_query(response,'Example Charity',''))
 
     def test_hawaii_explicit_no_registration_response_is_a_completed_negative(self):
         data={'status':'FAILURE','message':'The charitable organization you entered is not registered in our system. You cannot continue unless you add a registered charitable organization.'}

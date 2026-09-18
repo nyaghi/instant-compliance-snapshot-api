@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.18.3-staging").strip() or "2026.09.18.3-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.18.4-staging").strip() or "2026.09.18.4-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -13525,6 +13525,23 @@ def hi_completed_search_rows(data):
     return rows
 
 
+def hi_response_matches_submitted_query(response, name, fein):
+    if urlparse(response.url).path != "/charity/search-charity.json" or response.request.method != "POST":
+        return False
+    fields = parse_qs(response.request.post_data or "", keep_blank_values=True)
+    if fields.get("name") != [name] or len(fields.get("fein", [])) != 1:
+        return False
+    actual_fein = fields["fein"][0]
+    # The registry's input mask can reinsert the EIN hyphen on blur. Match
+    # equivalent submitted EINs, while still rejecting another EIN or query.
+    if not fein:
+        return actual_fein == ""
+    wanted_digits = canonical_ein_digits(fein)
+    return bool(re.fullmatch(r"\d{9}", wanted_digits)
+                and re.fullmatch(r"(?:\d{9}|\d{2}-\d{7})", actual_fein)
+                and canonical_ein_digits(actual_fein) == wanted_digits)
+
+
 def hi_submit_completed_search(page, name, fein, deadline):
     def remaining_ms():
         remaining = int((deadline - time.perf_counter()) * 1000)
@@ -13533,10 +13550,7 @@ def hi_submit_completed_search(page, name, fein, deadline):
         return min(18000, remaining)
 
     def is_submitted_response(response):
-        if urlparse(response.url).path != "/charity/search-charity.json" or response.request.method != "POST":
-            return False
-        fields = parse_qs(response.request.post_data or "", keep_blank_values=True)
-        return fields.get("name", [""])[0] == name and fields.get("fein", [""])[0] == fein
+        return hi_response_matches_submitted_query(response, name, fein)
 
     for attempt in range(2):
         try:
