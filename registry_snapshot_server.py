@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.18.2-staging").strip() or "2026.09.18.2-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.18.3-staging").strip() or "2026.09.18.3-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -2137,9 +2137,20 @@ def identity_irs_names(ein: str, deadline: float) -> dict:
     org = payload.get("organization") or {}
     if canonical_ein_digits(str(org.get("ein") or "")) != ein:
         raise ValueError("IRS organization metadata does not confirm the requested EIN")
-    item = identity_candidate(org.get("name"), "IRS via ProPublica", "IRS organization record",
+    # IRS affiliation 9 is a subordinate in a group ruling. Its primary BMF
+    # name may be the parent; the distinct secondary line identifies the local
+    # organization. The parent's name alone cannot identify this subordinate.
+    # https://www.irs.gov/irm/part25/irm_25-007-001 (primary/sort name fields)
+    secondary = str(org.get("sort_name") or "").strip()
+    grouped_secondary = (str(org.get("affiliation_code") or "") == "9"
+        and bool(secondary) and identity_name_key(secondary) != identity_name_key(org.get("name") or ""))
+    metadata_name = secondary if grouped_secondary else org.get("name")
+    item = identity_candidate(metadata_name, "IRS via ProPublica",
+                              "IRS group subordinate secondary name" if grouped_secondary else "IRS organization record",
                               f"https://projects.propublica.org/nonprofits/organizations/{ein}", str(org.get("updated_at") or ""))
     result = {"names": [item] if item else [], "complete": False, "source_revision": org.get("data_source")}
+    if grouped_secondary:
+        result["group_name_note"] = "IRS group-ruling metadata identifies this subordinate in its secondary name field. The group primary name was not added as an organization alias."
     PUBLIC_PROFILE_CACHE[ein] = payload
     result["address"] = {key: org.get(key) for key in ("ein", "street", "city", "state", "zipcode")}
     object_id = str(org.get("latest_object_id") or "")
@@ -22445,6 +22456,13 @@ def canonical_legal_query_first(name: str, planned: list[str], spellings: list[s
     return list(dict.fromkeys(([canonical] if canonical else []) + planned))
 
 
+def case_boundary_name_variant(name: str) -> str:
+    """One literal spacing alternative; never drop, add or reorder letters."""
+    original = canonical_name_punctuation(name).strip()
+    spaced = re.sub(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", " ", original)
+    return spaced if spaced != original else ""
+
+
 def wv_preferred_query_variants(name: str, ein: str = "", *, limit=None) -> list[str]:
     """Search suffix-light WV names first while keeping row acceptance strict."""
     name = canonical_name_punctuation(name)
@@ -22532,7 +22550,16 @@ def wv_preferred_query_variants(name: str, ein: str = "", *, limit=None) -> list
     planned = reviewed_queries_first(name, ein, preferred, limit=limit)
     # Full canonical legal-name forms are not speculative truncations. Keep
     # them ahead of aliases so punctuation/suffix noise cannot consume WV's cap.
-    return canonical_legal_query_first(name, planned, preferred)
+    planned = canonical_legal_query_first(name, planned, preferred)
+    spaced = case_boundary_name_variant(name)
+    if spaced:
+        # This is an equivalent full-name spelling, not a broad prefix probe.
+        # It must not depend on another state's discovery source completing.
+        planned = [query for query in planned if query.casefold() != spaced.casefold()]
+        planned.insert(min(1, len(planned)), spaced)
+    # reviewed_queries_first already bounds generated probes while preserving
+    # every reviewed identity. Do not apply the generated-probe cap to aliases.
+    return planned
 
 
 def wv_core_search_completed(completed_queries: list[str], planned_queries: list[str], required_queries=None) -> bool:
@@ -22726,15 +22753,25 @@ def search_wv_precise(page, org):
     )
     try:
         safe_targets = getattr(org, "match_target_names", None) or organization_match_target_variants(org.organization_name, org.ein)
+        spaced_name = case_boundary_name_variant(org.organization_name)
+        if spaced_name:
+            safe_targets = list(dict.fromkeys([*safe_targets, spaced_name]))
+        def safe_identity(registry_name, targets):
+            if spaced_name:
+                spaced_key = complete_name_identity_key(spaced_name)
+                if complete_name_identity_key(registry_name) == spaced_key:
+                    return registry_name_is_safe_against_targets(registry_name, [spaced_name], spaced_name, org.ein)
+                # The added spelling cannot authorize prefix, chapter, article
+                # or extra-word matches that the original name did not support.
+                targets = [target for target in targets if complete_name_identity_key(target) != spaced_key]
+            return registry_name_is_safe_against_targets(registry_name, targets, org.organization_name, org.ein)
         def location_identity_is_safe(registry_name):
             # A dash-delimited branch/location must survive broad discovery.
             # Keep the established WV treatment of other registry name variants.
             location_separator = r"\s-\s*|\s*-\s|[\u2010-\u2015\u2212]"
             if not re.search(location_separator, org.organization_name + " " + registry_name):
                 return True
-            return registry_name_is_safe_against_targets(
-                registry_name, safe_targets, org.organization_name, org.ein,
-            )
+            return safe_identity(registry_name, safe_targets)
 
         best = None
         best_score = -10000
@@ -22745,6 +22782,8 @@ def search_wv_precise(page, org):
         saw_result_rows = bool(progress.get("saw_result_rows"))
         planned_queries = wv_preferred_query_variants(org.organization_name, org.ein, limit=WV_QUERY_LIMIT)
         required_queries = equivalent_name_queries(org.organization_name, org.ein) if known_names_for_ein(org.ein) else []
+        if spaced_name:
+            required_queries = list(dict.fromkeys([*required_queries, spaced_name]))
         # Reviewed identities add real queries; keep a bounded allowance for them
         # without changing the established small-name-list lookup window.
         deadline = time.perf_counter() + max(WV_LOOKUP_MAX_SECONDS, min(60.0, 5.0 + 6.0 * len(required_queries)))
@@ -22815,9 +22854,7 @@ def search_wv_precise(page, org):
                 if not location_identity_is_safe(registry_name):
                     continue
                 score = target_name_score(registry_name, query_targets)
-                safe_candidate = score >= 450 and registry_name_is_safe_against_targets(
-                    registry_name, safe_targets, org.organization_name, org.ein,
-                )
+                safe_candidate = score >= 450 and safe_identity(registry_name, safe_targets)
                 # Status only breaks a tie after safety and name strength.
                 rank = (int(safe_candidate), score, registry_exact_active_tiebreak(registry_name, safe_targets, status_text))
                 if rank > best_rank:
@@ -22880,7 +22917,7 @@ def search_wv_precise(page, org):
             raise TimeoutError("West Virginia selected organization detail did not finish loading")
         completed_queries.append(query_name)
         matched_name = detail_name or registry_name
-        if matched_name and (not location_identity_is_safe(matched_name) or not registry_name_is_safe_against_targets(matched_name, selected_targets, org.organization_name, org.ein)):
+        if matched_name and (not location_identity_is_safe(matched_name) or not safe_identity(matched_name, selected_targets)):
             result = wv_completed_no_match_result(
                 result,
                 completed_queries or searched_queries,
