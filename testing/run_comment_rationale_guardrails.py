@@ -87,6 +87,12 @@ class CommentTests(unittest.TestCase):
         text = self.comment(self.result("ND", "Closed / Withdrawn / Canceled", "Inactive - Involuntary"))
         self.assertIn('"Inactive - Involuntary"', text)
 
+    def test_wisconsin_surrender_preserves_actual_reason(self):
+        text = self.comment(self.result("WI", "Closed / Withdrawn / Canceled", "License is not current (Voluntary surrender); License current through 7/31/2025"))
+        self.assertIn('"Voluntary surrender"', text)
+        self.assertNotIn('does not include', text)
+        self.assertNotIn('Delinquent', text)
+
     def test_exemption_is_not_guessed_from_missing_dates(self):
         text = self.comment(self.result("VA", "Exempt", "Registration Type: Exempt Charity"))
         self.assertIn('"Exempt Charity"', text)

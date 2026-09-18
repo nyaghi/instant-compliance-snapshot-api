@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.18.4-staging").strip() or "2026.09.18.4-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.18.5-staging").strip() or "2026.09.18.5-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -7366,6 +7366,7 @@ class MaineRegistrySession:
         self.session = curl_requests.Session(impersonate="chrome136")
         self.form_html = ""
         self.url = NAME_SEARCH_PREFLIGHT_URLS["ME"]
+        self.stage = "search form"
 
     def close(self):
         self.session.close()
@@ -7377,6 +7378,7 @@ class MaineRegistrySession:
 
     def search(self, query):
         if not self.form_html:
+            self.stage = "search form GET"
             response = self.session.get(self.url, timeout=me_request_timeout(self.deadline, ME_FAST_DIRECT_GET_TIMEOUT_SECONDS))
             response.raise_for_status()
             self.form_html = response.text
@@ -7396,10 +7398,12 @@ class MaineRegistrySession:
             "ctl00$ctl00$mainContent$mainContent$ctl24": "BW",
             "ctl00$ctl00$mainContent$mainContent$btnSearch": "Search",
         })
+        self.stage = "name search POST"
         response = self.session.post(self.url, data=fields,
             headers={"Referer": self.url, "Origin": "https://www.pfr.maine.gov"},
             timeout=me_request_timeout(self.deadline, ME_FAST_DIRECT_POST_TIMEOUT_SECONDS))
         response.raise_for_status()
+        self.stage = "completed search parsing"
         rows = me_parse_search_rows(response.text)
         # A results document can carry its own WebForms state without the search
         # form. Never submit that document's hidden fields as the next search.
@@ -7482,6 +7486,7 @@ def me_fast_direct_confirmation_result(org, page=None, deadline=None):
     best_score = (-999, -999, -999)
     last_error = ""
     completed = progress.setdefault("completed", set())
+    source_attempts = progress.setdefault("source_attempts", [])
     queries = me_fast_direct_query_variants(org)
     pending = []
     sessions = []
@@ -7496,6 +7501,7 @@ def me_fast_direct_confirmation_result(org, page=None, deadline=None):
             if query in completed:
                 continue
             started = time.perf_counter()
+            attempt_evidence = {"phase": phase, "query": query, "complete": False}
             try:
                 me_request_timeout(search_deadline, 1)
                 if phase == "direct":
@@ -7508,6 +7514,7 @@ def me_fast_direct_confirmation_result(org, page=None, deadline=None):
                         continue
                     rows, opener = me_browser_search_rows(page, query, search_deadline)
                 completed.add(query)
+                attempt_evidence.update(complete=True, rows=len(rows))
                 for row in rows:
                     row_text = " ".join(row.get(key, "") for key in ["name", "number", "location", "profession", "status"])
                     score = checker.candidate_selection_score_for_targets(row.get("name", ""), target_names, row_text)
@@ -7522,6 +7529,7 @@ def me_fast_direct_confirmation_result(org, page=None, deadline=None):
                 log_event(f"ME search phase={phase} query={query!r} seconds={time.perf_counter()-started:.2f} rows={len(rows)}")
             except Exception as exc:
                 last_error = f"{type(exc).__name__}: {str(exc)[:120]}"
+                attempt_evidence.update(error=last_error, stage=getattr(session, "stage", phase) if phase == "direct" else phase)
                 if phase == "direct":
                     pending.append(query)
                     session = None  # Failed WebForms state must not poison later searches.
@@ -7533,6 +7541,9 @@ def me_fast_direct_confirmation_result(org, page=None, deadline=None):
                     except Exception:
                         pass
                 log_event(f"ME search phase={phase} query={query!r} seconds={time.perf_counter()-started:.2f} error={last_error}")
+            finally:
+                attempt_evidence["seconds"] = round(time.perf_counter() - started, 3)
+                source_attempts.append(attempt_evidence)
             if (best_row and best_score[1] == 3 and best_row.get("address_evidence", {}).get("decision") != "conflict") or time.perf_counter() >= search_deadline or (phase == "direct" and len(pending) >= 2):
                 break
         if best_row or time.perf_counter() >= search_deadline:
@@ -7651,13 +7662,19 @@ def me_result_from_search(org, best_row, best_opener, checked_any, last_error):
     return result
 
 
+def me_lane_wait_seconds(deadline: float) -> float:
+    # Keep the full admitted-search budget after a busy predecessor. A 75-second
+    # queue cap used to expire while one valid 105-second lookup held the lane.
+    return max(0, min(160, deadline - time.perf_counter() - 105))
+
+
 def search_me_serialized(page, org, confirm_no_match: bool = True):
     global ME_LAST_LOOKUP_FINISHED
     # Queue wait has its own allowance. Maine's longer search/detail allowance
     # never changes another state's deadline. The workflow still has an outer cap.
     workflow_deadline = getattr(org, "_cc_me_progress", {}).get("deadline", time.perf_counter() + 265)
     lane_owned = bool(getattr(org, "_cc_me_progress", {}).get("lane_owned"))
-    acquired = lane_owned or ME_LOOKUP_LOCK.acquire(timeout=me_request_timeout(workflow_deadline, 75))
+    acquired = lane_owned or ME_LOOKUP_LOCK.acquire(timeout=me_lane_wait_seconds(workflow_deadline))
     try:
         if acquired:
             deadline = min(workflow_deadline, time.perf_counter() + 105)
@@ -7666,11 +7683,15 @@ def search_me_serialized(page, org, confirm_no_match: bool = True):
                 time.sleep(min(pause, me_request_timeout(deadline, pause)))
             result = me_fast_direct_confirmation_result(org, page=page, deadline=deadline)
             if result is not None:
+                result.source_attempts = list(getattr(org, "_cc_me_progress", {}).get("source_attempts", []))
                 return result
-        return checker.StateResult(org.organization_name, org.ein, "ME", "Site Not Reachable",
+        result = checker.StateResult(org.organization_name, org.ein, "ME", "Site Not Reachable",
             NAME_SEARCH_PREFLIGHT_URLS["ME"], raw_status_text="Maine registry search could not be completed",
             source_note="Maine did not complete all required searches within the lookup time budget. No negative registration conclusion was drawn.",
             success=False, error="Maine lookup incomplete or registry busy")
+        result.reason_code = "ME_SEARCH_INCOMPLETE" if acquired else "ME_QUEUE_TIMEOUT"
+        result.source_attempts = list(getattr(org, "_cc_me_progress", {}).get("source_attempts", []))
+        return result
     finally:
         if acquired:
             # Registry work is done; do not serialize unrelated browser cleanup.
@@ -14826,45 +14847,147 @@ def wi_foundation_identity_review(registry_name: str, original_name: str, licens
             "detail_url": urljoin(WI_SEARCH_URL, href), "reason": "Registry name omits Foundation; no identity equivalence established."}}
 
 
-def wi_reviewed_credential_identity(original_name: str, ein: str, candidate: dict) -> dict:
-    """One reviewed identity association; never a generic Foundation-name alias.
-
-    Approved September 13, 2026: WI credential 23067-800's 2022 filing matches
-    Foundation EIN 87-2999231: revenue 130869, expenses 9816, net assets 122273.
-    The similarly named Association has a different EIN (61-1424719).
-    Revalidate the public credential and read its status on every lookup.
-    """
+def wi_foundation_credential_source(original_name: str, ein: str, candidate: dict) -> str:
+    """A related Foundation name is a candidate, never proof of shared identity."""
+    if len(canonical_ein_digits(ein)) != 9 or not wi_foundation_identity_review(
+            candidate.get("registry_name", ""), original_name,
+            candidate.get("license_number", ""), candidate.get("detail_href", ""), ""):
+        return ""
     url = urlparse(urljoin(WI_SEARCH_URL, candidate.get("detail_href", "")))
-    if (canonical_ein_digits(ein) != "872999231"
-            or normalized_match_name(original_name) != "american farriers association foundation"
-            or normalized_match_name(candidate.get("registry_name", "")) != "american farriers association"
-            or candidate.get("license_number") != "23067-800"
-            or url.scheme != "https" or url.netloc.lower() != "apps.dfi.wi.gov"
+    source_ids = parse_qs(url.query).get("chid", [])
+    if (url.scheme != "https" or url.netloc.lower() != "apps.dfi.wi.gov"
             or url.path.lower() != "/ice/berg/registration/credsummarydetails.aspx"
-            or parse_qs(url.query).get("chid") != ["945248"]):
-        return {}
-    return {"requested_ein": "872999231", "credential": "23067-800", "source_id": "945248",
-            "registry_name": candidate["registry_name"], "detail_url": url.geturl(),
-            "basis": "Reviewed corresponding 2022 financial filings; Wisconsin does not display an EIN.",
-            "reviewed_on": "2026-09-13",
-            "financial_source": "https://apps.dfi.wi.gov/ice/berg/Registration/Financials.aspx?chid=945248&h=764579286",
-            "tax_source": "https://projects.propublica.org/nonprofits/organizations/872999231"}
+            or len(source_ids) != 1 or not re.fullmatch(r"[1-9]\d*", source_ids[0])):
+        return ""
+    return url.geturl()
 
 
-def wi_confirm_reviewed_credential(candidate: dict, original_name: str, ein: str) -> dict:
-    evidence = wi_reviewed_credential_identity(original_name, ein, candidate)
-    if not evidence:
-        return candidate
-    text = wi_http_detail_text(candidate.get("detail_href", ""))
+def wi_same_credential_text(text: str, candidate: dict) -> bool:
     compact = re.sub(r"\s+", " ", text or "").strip()
     primary = re.search(r"\bName\s*:\s*(.*?)\s+Credential\s+Type\s*:", compact, re.I)
     number = re.search(r"\bCredential\s+Number\s*:\s*([\d-]+)", compact, re.I)
-    status = wi_extract_detail_status(text)
-    if (primary and number and number.group(1) == evidence["credential"]
-            and normalized_match_name(primary.group(1)) == normalized_match_name(evidence["registry_name"])
-            and wi_status_from_detail_status(status)):
-        candidate = {**candidate, "identity_conflict": False, "detail_status": status,
-                     "reviewed_identity_evidence": evidence}
+    return bool(primary and number and number[1] == candidate.get("license_number")
+                and normalized_match_name(primary[1]) == normalized_match_name(candidate.get("registry_name", "")))
+
+
+def wi_990ez_corresponding_amounts(state_text: str, filing: dict) -> dict:
+    """Require five exact, same-year amounts, including four nonzero amounts."""
+    values = {}
+    for label in ("CONTRIBUTIONS", "OTHER REVENUE", "MANAGEMENT", "PROGRAM SERVICE(S)",
+                  "FUND RAISING", "PAYMENT(S) TO AFFILIATE", "NET WORTH AT END", "OTHER CHANGES(S) IN NET WORTH"):
+        matches = re.findall(re.escape(label) + r"\s+(\(?\$-?[\d,]+\.\d{2}\)?)", state_text, re.I)
+        if len(matches) != 1:
+            return {}
+        amount = matches[0].replace("$", "").replace(",", "")
+        if not amount.endswith(".00") and not amount.endswith(".00)"):
+            return {}  # IRS summary values are whole dollars; do not round evidence.
+        values[label] = -int(amount[1:-4]) if amount.startswith("(") else int(amount[:-3])
+    actual = {"totcntrbs": values["CONTRIBUTIONS"],
+              "totrevenue": values["CONTRIBUTIONS"] + values["OTHER REVENUE"],
+              "totfuncexpns": sum(values[k] for k in ("MANAGEMENT", "PROGRAM SERVICE(S)", "FUND RAISING", "PAYMENT(S) TO AFFILIATE")),
+              "totnetassetsend": values["NET WORTH AT END"], "othrchgsnetassetfnd": values["OTHER CHANGES(S) IN NET WORTH"]}
+    if any(type(filing.get(key)) is not int or filing[key] != amount for key, amount in actual.items()):
+        return {}
+    return actual if sum(value != 0 for value in actual.values()) >= 4 else {}
+
+
+def wi_foundation_filing_identity(candidate: dict, original_name: str, ein: str, deadline: float, diagnostics: dict) -> dict:
+    """Corroborate a related name from live same-credential filings, with no identity exceptions."""
+    detail_url = wi_foundation_credential_source(original_name, ein, candidate)
+    if not detail_url:
+        return {}
+    ein = canonical_ein_digits(ein)
+    profile = public_profile_for_ein(ein)
+    if canonical_ein_digits(str((profile.get("organization") or {}).get("ein", ""))) != ein:
+        diagnostics["reason"] = "requested_ein_not_confirmed"
+        return {}
+    financial_url = urljoin(detail_url, "Financials.aspx") + "?" + urlparse(detail_url).query
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+    try:
+        page = wi_identity_read(lambda: wi_identity_page(opener, financial_url, deadline), deadline, "Wisconsin fiscal-year selection", diagnostics)
+        if not wi_same_credential_text(html_to_text(page), candidate):
+            diagnostics["reason"] = "financial_credential_incomplete"
+            return {}
+        years = re.findall(r'<option\b[^>]*value=["\'](\d{4})["\']', page)
+        filings = [row for row in profile.get("filings_with_data", [])
+                   if canonical_ein_digits(str(row.get("ein", ""))) == ein and row.get("formtype") == 1
+                   and re.fullmatch(r"\d{4}(?:0[1-9]|1[0-2])", str(row.get("tax_prd", "")))
+                   and str(row["tax_prd"])[:4] in years]
+        if not filings:
+            diagnostics["reason"] = "no_common_fiscal_year"
+            return {}
+        year = max(str(row["tax_prd"])[:4] for row in filings)
+        filings = [row for row in filings if str(row["tax_prd"])[:4] == year]
+        if len(filings) != 1:
+            diagnostics["reason"] = "ambiguous_same_year_returns"
+            return {}
+        fields = html_hidden_inputs(page)
+        if "__VIEWSTATE" not in fields:
+            diagnostics["reason"] = "financial_form_incomplete"
+            return {}
+        fields["ctl00$cphMainContent$ddlFiscalYearsList"] = year
+        request = urllib.request.Request(financial_url, data=urlencode(fields).encode(), headers={"Referer": financial_url})
+        page = wi_identity_read(lambda: wi_identity_page(opener, request, deadline), deadline, "Wisconsin financial values", diagnostics)
+        selected = next((tag for tag in re.findall(r'<option\b[^>]*>', page, re.I)
+                         if re.search(r'\bselected(?:\s|=|>)', tag, re.I) and re.search(r'value=["\']' + year + r'["\']', tag)), None)
+        text = html_to_text(page)
+        if not selected or not wi_same_credential_text(text, candidate):
+            diagnostics["reason"] = "selected_year_or_credential_unconfirmed"
+            return {}
+        amounts = wi_990ez_corresponding_amounts(text, filings[0])
+        if not amounts:
+            diagnostics["reason"] = "financial_values_not_corroborated"
+            return {}
+        diagnostics.update(stage="completed", fiscal_year=year)
+        return {"requested_ein": ein, "credential": candidate["license_number"],
+                "registry_name": candidate["registry_name"], "detail_url": detail_url,
+                "financial_source": financial_url, "tax_source": f"https://projects.propublica.org/nonprofits/organizations/{ein}",
+                "fiscal_year": year, "tax_period": str(filings[0]["tax_prd"]), "matched_amounts": amounts,
+                "basis": "Five same-year financial amounts on this Wisconsin credential agree with the EIN-linked IRS Form 990-EZ data; Wisconsin does not display an EIN."}
+    except Exception as exc:
+        diagnostics["reason"] = type(exc).__name__
+        return {}
+
+
+def wi_reviewed_credential_identity(original_name: str, ein: str, candidate: dict) -> dict:
+    """Validate evidence already retrieved for this request; no organization-specific allowlist."""
+    evidence = candidate.get("reviewed_identity_evidence") or {}
+    detail_url = wi_foundation_credential_source(original_name, ein, candidate)
+    amounts = evidence.get("matched_amounts", {})
+    keys = {"totcntrbs", "totrevenue", "totfuncexpns", "totnetassetsend", "othrchgsnetassetfnd"}
+    if (not detail_url or evidence.get("detail_url") != detail_url
+            or evidence.get("requested_ein") != canonical_ein_digits(ein)
+            or evidence.get("credential") != candidate.get("license_number")
+            or normalized_match_name(evidence.get("registry_name", "")) != normalized_match_name(candidate.get("registry_name", ""))
+            or not re.fullmatch(r"\d{4}", evidence.get("fiscal_year", ""))
+            or not re.fullmatch(re.escape(evidence.get("fiscal_year", "")) + r"(?:0[1-9]|1[0-2])", evidence.get("tax_period", ""))
+            or set(amounts) != keys or any(type(v) is not int for v in amounts.values())
+            or sum(v != 0 for v in amounts.values()) < 4):
+        return {}
+    return evidence
+
+
+def wi_confirm_reviewed_credential(candidate: dict, original_name: str, ein: str, deadline: float | None = None) -> dict:
+    if not wi_foundation_credential_source(original_name, ein, candidate):
+        return candidate
+    deadline = min(deadline or time.monotonic() + 35, time.monotonic() + 35)
+    diagnostics = {}
+    evidence = wi_foundation_filing_identity(candidate, original_name, ein, deadline, diagnostics)
+    candidate = dict(candidate, financial_identity_diagnostics=diagnostics)
+    if not wi_reviewed_credential_identity(original_name, ein, dict(candidate, reviewed_identity_evidence=evidence)):
+        return candidate
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+    try:
+        for attempt in (1, 2):
+            page = wi_identity_read(lambda: wi_identity_page(opener, evidence["detail_url"], deadline), deadline, "Wisconsin credential status", diagnostics)
+            text = html_to_text(page)
+            status = wi_extract_detail_status(text)
+            if wi_same_credential_text(text, candidate) and wi_status_from_detail_status(status):
+                return {**candidate, "identity_conflict": False, "detail_status": status,
+                        "reviewed_identity_evidence": evidence}
+            diagnostics.update(stage="Wisconsin credential status", reason="credential_detail_incomplete", read_attempt=attempt)
+    except Exception as exc:
+        diagnostics["reason"] = type(exc).__name__
     return candidate
 
 
@@ -14872,7 +14995,7 @@ def wi_result_has_reviewed_identity(result, org) -> bool:
     evidence = getattr(result, "wi_reviewed_identity_evidence", {})
     candidate = {"registry_name": getattr(result, "matched_registry_name", ""),
                  "license_number": getattr(result, "matched_registry_identifier", ""),
-                 "detail_href": evidence.get("detail_url", "")}
+                 "detail_href": evidence.get("detail_url", ""), "reviewed_identity_evidence": evidence}
     expected = wi_reviewed_credential_identity(org.organization_name, org.ein, candidate)
     return bool(result.state == "WI" and expected and evidence == expected)
 
@@ -15517,7 +15640,9 @@ def search_wi(page, org, max_seconds: float | None = None, progress: dict | None
                 best_match = confirmed
 
         if best_match.get("identity_conflict") and best_match.get("identity_review_evidence"):
-            best_match = wi_confirm_reviewed_credential(best_match, original_name, ein)
+            remaining = max(0, progress.get("deadline", started + WI_LOOKUP_MAX_SECONDS) - time.perf_counter())
+            best_match = wi_confirm_reviewed_credential(best_match, original_name, ein, time.monotonic() + remaining)
+            result.wi_identity_diagnostics = best_match.get("financial_identity_diagnostics", {})
         if best_match.get("reviewed_identity_evidence"):
             result.wi_reviewed_identity_evidence = best_match["reviewed_identity_evidence"]
             result.source_url = result.wi_reviewed_identity_evidence["detail_url"]
@@ -15982,9 +16107,10 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
                              f"{alias_evidence['registered_name']}, registered EIN {alias_evidence['registered_ein']}. "
                              f"This confirms the alternate-name listing, not a separate registration for requested EIN {alias_evidence['requested_ein']}.")
     if wi_result_has_reviewed_identity(result, org) and result.success:
-        data["comments"] += (" Identity is based on a reviewed association of credential 23067-800 with the Foundation's "
-                             "corresponding 2022 financial filings. Wisconsin lists AMERICAN FARRIERS ASSOCIATION INC "
-                             "and does not display an EIN; this identity association is inferred from filing evidence. "
+        evidence = result.wi_reviewed_identity_evidence
+        data["comments"] += (f" Identity is corroborated by five matching financial amounts for {evidence['fiscal_year']} "
+                             f"on Wisconsin credential {evidence['credential']} and the IRS Form 990-EZ data for the requested EIN. "
+                             f"Wisconsin lists {evidence['registry_name']} and does not display an EIN; identity is inferred from filing evidence. "
                              "The credential status above was retrieved from Wisconsin for this check.")
     data["evidence_url"] = ""
     data["lookup_seconds"] = round(time.perf_counter() - lookup_started, 2)
@@ -16015,6 +16141,7 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         "mn_alias_evidence",
         "va_entity_evidence",
         "wi_reviewed_identity_evidence",
+        "wi_identity_diagnostics",
         "identity_review_evidence",
         "source_truth_conflict",
     ]:
@@ -18814,7 +18941,7 @@ def comment_registry_status(raw: str, status: str) -> str:
         "Revoked": r"revoked",
         "Pending": r"renewal in progress|registration pending|in process|in review|pending",
         "Failed to Renew": r"failed to renew",
-        "Closed / Withdrawn / Canceled": r"inactive\s*-\s*involuntary|withdrawn/terminated by licensee|voluntarily deactivated|closed/withdrawn|withdrawn|cancell?ed|terminated|inactive|\bclosed?\b",
+        "Closed / Withdrawn / Canceled": r"inactive\s*-\s*involuntary|withdrawn/terminated by licensee|voluntarily deactivated|voluntar(?:y|ily)\s+surrender(?:ed)?|closed/withdrawn|withdrawn|cancell?ed|terminated|inactive|\bclosed?\b",
         "Delinquent": r"not current|non[- ]?compliant|expired/lapsed|delinquent|expired|lapsed|overdue",
         "Current": r"in compliance\s*:\s*yes|current|good standing|compliant|\bactive\b|\bregistered\b|in existence",
         "Exempt": r"exempt charity|exempt|not required to register",
@@ -23766,6 +23893,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
     if state == "WI":
         wi_deadline = lookup_started + min(WI_LOOKUP_MAX_SECONDS, 60.0)
         wi_progress = wi_progress if wi_progress is not None else {"attempted": [], "completed": set()}
+        wi_progress["deadline"] = wi_deadline
         result = search_wi(None, org, max_seconds=min(24.0, max(18.0, WI_LOOKUP_MAX_SECONDS / 2.5)), progress=wi_progress)
         wi_direct_attempt = 1
         while (
@@ -24888,7 +25016,7 @@ def run_me_lookup_with_lane(organization_name: str, ein: str, progress: dict) ->
     global ME_LAST_LOOKUP_FINISHED
     started = time.perf_counter()
     remaining = progress['deadline'] - started
-    acquired = remaining > 0 and ME_LOOKUP_LOCK.acquire(timeout=min(75, remaining))
+    acquired = remaining > 24 and ME_LOOKUP_LOCK.acquire(timeout=me_lane_wait_seconds(progress['deadline']))
     if not acquired:
         result = checker.StateResult(organization_name, ein, 'ME', 'Site Not Reachable', NAME_SEARCH_PREFLIGHT_URLS['ME'],
             raw_status_text='Maine registry lookup queue did not clear in time',
@@ -24898,7 +25026,10 @@ def run_me_lookup_with_lane(organization_name: str, ein: str, progress: dict) ->
         return response_data_for_lookup(result, '', checker.Organization(organization_name, ein), organization_name, ein, 'ME', started)
     try:
         progress['lane_owned'] = True
-        return run_state_lookup(organization_name, ein, 'ME', me_progress=progress)
+        queue_seconds = round(time.perf_counter() - started, 3)
+        result = run_state_lookup(organization_name, ein, 'ME', me_progress=progress)
+        result['me_queue_seconds'] = queue_seconds
+        return result
     finally:
         if progress.pop('lane_owned', False):
             # Covers browser admission/creation failures before Maine runs.
@@ -24933,7 +25064,7 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
         result["semantic_attempts"] = attempt
         if state == "ME":
             me_attempt_history.append({key: result.get(key) for key in (
-                "semantic_attempts", "status", "reason_code", "error", "source_note", "lookup_seconds")})
+                "semantic_attempts", "status", "reason_code", "error", "source_note", "lookup_seconds", "me_queue_seconds", "source_attempts")})
             result["me_attempt_history"] = list(me_attempt_history)
             if attempt > 1 and result.get("success"):
                 result["runner_recovery"] = "Maine completed after one delayed recovery attempt."

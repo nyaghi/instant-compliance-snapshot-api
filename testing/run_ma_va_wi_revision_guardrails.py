@@ -100,8 +100,14 @@ class Revisions(unittest.TestCase):
         candidate = c.wi_foundation_identity_review('AMERICAN FARRIERS ASSOCIATION INC', org.organization_name, license, href or self.href, expiration)
         self.assertIsNotNone(candidate)
         text = '' if detail_missing else f'Name: {primary}\nCredential Type: Charitable Organization\nCredential Number: {detail_number}\nStatus {detail_status}\n'
+        evidence = {'requested_ein':'872999231', 'credential':'23067-800',
+                    'registry_name':'AMERICAN FARRIERS ASSOCIATION INC',
+                    'detail_url':c.urljoin(c.WI_SEARCH_URL,self.href), 'fiscal_year':'2022', 'tax_period':'202212',
+                    'matched_amounts':{'totcntrbs':131315,'totrevenue':130869,'totfuncexpns':9816,
+                                      'totnetassetsend':122273,'othrchgsnetassetfnd':1220}}
         with patch.object(c, 'wi_http_search_best_match', return_value=(copy.deepcopy(candidate), True)), \
-             patch.object(c, 'wi_http_detail_text', return_value=text):
+             patch.object(c, 'wi_foundation_filing_identity', return_value=evidence), \
+             patch.object(c, 'wi_identity_page', return_value=text):
             return self.final(c.search_wi(None, org), org)
 
     def test_wi_reviewed_credential_uses_current_public_status(self):
@@ -111,7 +117,7 @@ class Revisions(unittest.TestCase):
                 self.assertEqual(data['status'], expected)
                 self.assertTrue(data['success'])
                 self.assertEqual(data['matched_registry_identifier'], '23067-800')
-                self.assertIn('reviewed', data['comments'].lower())
+                self.assertIn('corroborated', data['comments'].lower())
                 self.assertIn('2022', data['comments'])
                 self.assertIn('does not display an EIN', data['comments'])
 
