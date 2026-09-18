@@ -1,0 +1,47 @@
+{
+  "ein": "411558711",
+  "expected_names": [
+    "AEON",
+    "CENTRAL COMMUNITY HOUSING TRUST OF MINNEAPOLIS",
+    "AEON HOMES"
+  ],
+  "responses": [
+    {
+      "Table": [
+        {
+          "PersonId": 4122579,
+          "EntityName": "AEON",
+          "EIN": "41-1558711",
+          "HasAdditionalNames": "Y",
+          "NameCount": 3
+        }
+      ],
+      "Table1": [
+        {
+          "RESULTCOUNT": 1
+        }
+      ]
+    },
+    {
+      "Table": [
+        {
+          "PersonId": 4122579,
+          "EIN": "411558711",
+          "EntityName": "AEON"
+        }
+      ],
+      "Table1": [
+        {
+          "PersonId": 4122579,
+          "Fullname": "CENTRAL COMMUNITY HOUSING TRUST OF MINNEAPOLIS",
+          "NameTypeName": "Prior Name"
+        },
+        {
+          "PersonId": 4122579,
+          "Fullname": "AEON HOMES",
+          "NameTypeName": "Prior Name"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "ein": "131624103",
+  "expected_names": [
+    "YWCA USA, INC.",
+    "YWCA OF THE U.S.A.",
+    "Young Women's Christian Association of the United States of America, Inc.",
+    "YWCA USA, Inc"
+  ],
+  "responses": [
+    {
+      "Table": [
+        {
+          "PersonId": 3563393,
+          "EntityName": "YWCA USA, INC.",
+          "EIN": "13-1624103",
+          "HasAdditionalNames": "Y",
+          "NameCount": 4
+        }
+      ],
+      "Table1": [
+        {
+          "RESULTCOUNT": 1
+        }
+      ]
+    },
+    {
+      "Table": [
+        {
+          "PersonId": 3563393,
+          "EIN": "131624103",
+          "EntityName": "YWCA USA, INC."
+        }
+      ],
+      "Table1": [
+        {
+          "PersonId": 3563393,
+          "Fullname": "YWCA USA, Inc",
+          "NameTypeName": "Prior Name"
+        },
+        {
+          "PersonId": 3563393,
+          "Fullname": "Young Women's Christian Association of the United States of America, Inc. ",
+          "NameTypeName": "Prior Name"
+        },
+        {
+          "PersonId": 3563393,
+          "Fullname": "YWCA OF THE U.S.A.",
+          "NameTypeName": "Other Name"
+        }
+      ]
+    }
+  ]
+}

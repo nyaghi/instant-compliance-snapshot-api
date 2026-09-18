@@ -1,0 +1,41 @@
+{
+  "ein": "474444592",
+  "expected_names": [
+    "CMI EMPLOYEE APPRECIATION FUND",
+    "CMI EMPLOYEE APPRECIATION FUND"
+  ],
+  "responses": [
+    {
+      "Table": [
+        {
+          "PersonId": 3603951,
+          "EntityName": "CMI EMPLOYEE APPRECIATION FUND",
+          "EIN": "47-4444592",
+          "HasAdditionalNames": "Y",
+          "NameCount": 2
+        }
+      ],
+      "Table1": [
+        {
+          "RESULTCOUNT": 1
+        }
+      ]
+    },
+    {
+      "Table": [
+        {
+          "PersonId": 3603951,
+          "EIN": "474444592",
+          "EntityName": "CMI EMPLOYEE APPRECIATION FUND"
+        }
+      ],
+      "Table1": [
+        {
+          "PersonId": 3603951,
+          "Fullname": "CMI EMPLOYEE APPRECIATION FUND",
+          "NameTypeName": "Prior Name"
+        }
+      ]
+    }
+  ]
+}

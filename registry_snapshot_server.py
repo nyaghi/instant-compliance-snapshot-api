@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.18.7-staging").strip() or "2026.09.18.7-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.18.8-staging").strip() or "2026.09.18.8-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -1799,7 +1799,7 @@ IDENTITY_CACHE_LOCK = threading.Lock()
 IDENTITY_STATES = ("AK", "CA", "CO", "HI", "MA", "MD", "MI", "NM", "NJ", "OH", "OR", "PA", "VA", "WA")
 IDENTITY_SOURCE_POOL = ThreadPoolExecutor(max_workers=24, thread_name_prefix="identity-source")
 # Browser admission must not consume the HTTP-source workers while it waits.
-IDENTITY_BROWSER_STATES = frozenset({"AK", "MA", "MI", "NJ", "OH", "PA", "WA"})
+IDENTITY_BROWSER_STATES = frozenset({"AK", "MA", "MI", "NJ"})
 IDENTITY_BROWSER_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="identity-browser")
 # Discovery has its own bounded capacity; it does not change workflow admission.
 IDENTITY_SOURCE_SLOTS = threading.BoundedSemaphore(256)
@@ -1850,14 +1850,14 @@ def submit_with_identity(executor, function, *args, **kwargs):
     return executor.submit(copy_context().run, function, *args, **kwargs)
 
 
-def identity_fetch(url: str, deadline: float, *, headers=None, max_bytes=4_000_000) -> bytes:
+def identity_fetch(url: str, deadline: float, *, headers=None, max_bytes=4_000_000, data: bytes | None = None, request_timeout=6.0) -> bytes:
     """Fixed provider URLs only; bounded time and body size, including gzip."""
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise TimeoutError("Identity source deadline reached")
-    request = urllib.request.Request(url, headers={"User-Agent": "ComplianceExpressRegistrySnapshot/1.0",
+    request = urllib.request.Request(url, data=data, headers={"User-Agent": "ComplianceExpressRegistrySnapshot/1.0",
         "Accept": "application/json,text/html,*/*", "Accept-Encoding": "identity", **(headers or {})})
-    with urllib.request.urlopen(request, timeout=min(6.0, remaining)) as response:
+    with urllib.request.urlopen(request, timeout=min(request_timeout, remaining)) as response:
         chunks, size = [], 0
         while True:
             if time.monotonic() >= deadline:
@@ -2246,6 +2246,109 @@ def identity_va_names(ein: str, deadline: float) -> dict:
     return result
 
 
+def identity_wa_names(ein: str, deadline: float) -> dict:
+    """Use the same public EIN query as the Washington search form."""
+    url = "https://ccfs.sos.wa.gov/#/cftSearch"
+    fields = {"Type": "FEINNo", "PageID": 1, "PageCount": 10, "IsSearch": "true",
+        "FEINNo": ein, "PrincipalAddress[ID]": 0, "PrincipalAddress[Country]": "USA",
+        "SortBy": "FEINNo", "SortType": "ASC"}
+    rows = json.loads(identity_fetch("https://ccfs-api.prod.sos.wa.gov/api/CFTPublicSearch/GetCFPublicSearchList", deadline,
+        headers={"Content-Type": "application/x-www-form-urlencoded", "Referer": "https://ccfs.sos.wa.gov/"},
+        data=urlencode(fields).encode(), request_timeout=12.0))
+    result = identity_rows_names("WA", rows, ein, url)
+    result["complete"] = len(rows) < 10 and all(isinstance(row, dict)
+        and canonical_ein_digits(str(row.get("FEINNumber") or "")) == ein for row in rows)
+    return result
+
+
+def identity_oh_names(ein: str, deadline: float) -> dict:
+    """Read the public form's EIN result table without allocating a browser."""
+    url = "https://charitableregistration.ohioago.gov/Charities/ResearchCharities"
+    fields = {"OrgNameFilterCriteria": "1", "OrgNameOrDBAName": "", "EINFilterCriteria": "3",
+        "EIN": format_ein(ein), "OrganizationPurposeCategoryValue": "", "City": "",
+        "StateCode": "", "ZipCode": "", "CountyId": ""}
+    source = identity_fetch(url, deadline, headers={"Content-Type": "application/x-www-form-urlencoded", "Referer": url},
+        data=urlencode(fields).encode()).decode("utf-8", "replace")
+    submitted = re.search(r'<input\b[^>]*\bname=["\']EIN["\'][^>]*>', source, re.I)
+    value = re.search(r'\bvalue=["\']([^"\']*)["\']', submitted[0]) if submitted else None
+    selected = re.search(r'<select\b[^>]*\bname=["\']EINFilterCriteria["\'][^>]*>(.*?)</select>', source, re.I | re.S)
+    equals = selected and any(re.search(r'\bselected(?:\s|=|>)', tag, re.I)
+        and re.search(r'\bvalue=["\']3["\']', tag) for tag in re.findall(r'<option\b[^>]*>', selected[1], re.I))
+    if not value or canonical_ein_digits(value[1]) != ein or not equals:
+        raise ValueError("Ohio identity response did not confirm the submitted EIN query")
+    names, rejected = [], []
+    tables = [table for table in re.findall(r"<table\b[^>]*>.*?</table>", source, re.I | re.S)
+        if re.search(r"<caption>\s*Search results", table, re.I) and "DBA Name" in table and "EIN" in table]
+    if len(tables) > 1: raise ValueError("Ohio identity result table is ambiguous")
+    for row in re.findall(r"<tr\b[^>]*>(.*?)</tr>", tables[0] if tables else "", re.I | re.S):
+        cells = [html_to_text(cell).strip() for cell in re.findall(r"<td\b[^>]*>(.*?)</td>", row, re.I | re.S)]
+        if len(cells) < 3 or canonical_ein_digits(cells[2]) != ein: continue
+        for value, kind in [(cells[0], "Registered name"), *[(value, "DBA") for value in identity_explicit_aliases(cells[1])]]:
+            item = identity_new_source_candidate(value, "OH", kind, url)
+            if item: names.append(item)
+            elif value: rejected.append(value)
+    text = html_to_text(source)
+    complete = bool(names) and bool(re.search(r"Page\s+1\s+of\s+1", text, re.I))
+    complete |= not tables and bool(re.search(r"no (?:records|results|charities) (?:were )?found", text, re.I))
+    return {"names": names, "complete": complete, "source_url": url, "rejected_name_fields": rejected}
+
+
+def identity_pa_names(ein: str, deadline: float) -> dict:
+    """Use the public page's data requests, retaining exact EIN/person binding."""
+    url = "https://www.charities.pa.gov/#/page/searchCharities"
+    detail_url = "https://www.charities.pa.gov/#/page/charitiesEntityDetails"
+    def post(payload):
+        return json.loads(identity_fetch("https://www.charities.pa.gov/api/Charities/Search", deadline,
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            data=json.dumps(payload).encode()))
+    data = post({"SearchMode": "CHARITIES_SEARCH_EXTERNAL", "EntityName": None, "EIN": ein,
+        "CertificateNumber": None, "IsRegistered": False, "SearchCategory": "Charities_IPP",
+        "SearchCriteria": "Starts_With", "AddressLine1": None, "AddressLine2": None, "City": None,
+        "CountyId": None, "CountyCode": None, "StateId": None, "StateCode": None,
+        "CountryId": 1756, "CountryCode": "UNITED_STATES", "Zip": None})
+    rows = data.get("Table")
+    result = identity_rows_names("PA", rows, ein, url)
+    count = (data.get("Table1") or [{}])[0].get("RESULTCOUNT")
+    result["complete"] = count is not None and int(count) == len(rows)
+    seen = set()
+    for row in rows:
+        if not isinstance(row, dict) or canonical_ein_digits(str(row.get("EIN") or "")) != ein:
+            result["complete"] = False
+            continue
+        if row.get("HasAdditionalNames") != "Y":
+            continue
+        person = str(row.get("PersonId") or "")
+        if not person.isdigit():
+            result["complete"] = False
+            continue
+        if person in seen: continue
+        seen.add(person)
+        try:
+            detail = post({"SearchMode": "CHR_ENTITY_DETAILS_GET_EXTERNAL", "PersonID": person})
+            records, aliases = detail.get("Table"), detail.get("Table1")
+            person_records = [record for record in records if isinstance(record, dict)
+                and str(record.get("PersonId")) == person] if isinstance(records, list) else []
+            if (not isinstance(aliases, list) or not person_records
+                    or any(canonical_ein_digits(str(record.get("EIN") or "")) != ein
+                        for record in person_records)):
+                raise ValueError("Pennsylvania detail did not confirm the EIN and person")
+            eligible = [alias for alias in aliases if isinstance(alias, dict)
+                and str(alias.get("PersonId")) == person and alias.get("NameTypeName") in {"Prior Name", "Other Name"}]
+            if len(eligible) < max(1, int(row.get("NameCount") or 2) - 1):
+                result["complete"] = False
+            for alias in eligible:
+                value, kind = alias.get("Fullname"), alias["NameTypeName"]
+                item = identity_new_source_candidate(value, "PA", kind, detail_url, historical=kind == "Prior Name")
+                if item: result["names"].append(item)
+                elif value: result["rejected_name_fields"].append(str(value))
+                else: result["complete"] = False
+        except Exception:
+            result["complete"] = False
+    if not result["complete"]:
+        result["limitation"] = "Pennsylvania's usable EIN-confirmed names were retained; the full name list could not be confirmed."
+    return result
+
+
 def identity_md_names(ein: str, deadline: float) -> dict:
     field = "a87e8739-62de-600d-728c-6300bf865f9e"
     base = "https://onestop.md.gov/list_views/62f3e1797f7e3200016a3dab"
@@ -2566,7 +2669,8 @@ def identity_source_result(source: str, ein: str, deadline: float) -> dict:
     now = time.time()
     worker = {"CA": identity_ca_names, "CO": identity_co_names, "OR": identity_or_names, "IRS": identity_irs_names,
               "HI": identity_hi_names, "VA": identity_va_names, "MD": identity_md_names,
-              "NM": identity_nm_names, "NY": identity_ny_names}.get(source)
+              "NM": identity_nm_names, "NY": identity_ny_names, "PA": identity_pa_names,
+              "WA": identity_wa_names, "OH": identity_oh_names}.get(source)
     if worker is None:
         worker = lambda value, limit: identity_browser_names(source, value, limit)
     result = {**worker(ein, deadline), "source": source, "cache_hit": False}

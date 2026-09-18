@@ -1,0 +1,47 @@
+{
+  "ein": "521704978",
+  "expected_names": [
+    "CUREPSP, INC.",
+    "CURE PSP",
+    "Foundation for PSP/CBD and Related Brain Diseases, Inc."
+  ],
+  "responses": [
+    {
+      "Table": [
+        {
+          "PersonId": 3578780,
+          "EntityName": "CUREPSP, INC.",
+          "EIN": "52-1704978",
+          "HasAdditionalNames": "Y",
+          "NameCount": 3
+        }
+      ],
+      "Table1": [
+        {
+          "RESULTCOUNT": 1
+        }
+      ]
+    },
+    {
+      "Table": [
+        {
+          "PersonId": 3578780,
+          "EIN": "521704978",
+          "EntityName": "CUREPSP, INC."
+        }
+      ],
+      "Table1": [
+        {
+          "PersonId": 3578780,
+          "Fullname": "CURE PSP",
+          "NameTypeName": "Other Name"
+        },
+        {
+          "PersonId": 3578780,
+          "Fullname": "Foundation for PSP/CBD and Related Brain Diseases, Inc.",
+          "NameTypeName": "Prior Name"
+        }
+      ]
+    }
+  ]
+}

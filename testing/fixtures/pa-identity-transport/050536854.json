@@ -1,0 +1,53 @@
+{
+  "ein": "050536854",
+  "expected_names": [
+    "NATIONAL LAW ENFORCEMENT & FIREFIGHTERS CHILDREN'S FOUNDATION",
+    "National Law Enforcement & Firefighters Childern's Foundation",
+    "Law Enforcement & Firefighters Childern's Foundation",
+    "First Responders Children's Foundation"
+  ],
+  "responses": [
+    {
+      "Table": [
+        {
+          "PersonId": 3583063,
+          "EntityName": "NATIONAL LAW ENFORCEMENT & FIREFIGHTERS CHILDREN'S FOUNDATION",
+          "EIN": "05-0536854",
+          "HasAdditionalNames": "Y",
+          "NameCount": 4
+        }
+      ],
+      "Table1": [
+        {
+          "RESULTCOUNT": 1
+        }
+      ]
+    },
+    {
+      "Table": [
+        {
+          "PersonId": 3583063,
+          "EIN": "050536854",
+          "EntityName": "NATIONAL LAW ENFORCEMENT & FIREFIGHTERS CHILDREN'S FOUNDATION"
+        }
+      ],
+      "Table1": [
+        {
+          "PersonId": 3583063,
+          "Fullname": "Law Enforcement & Firefighters Childern's Foundation",
+          "NameTypeName": "Prior Name"
+        },
+        {
+          "PersonId": 3583063,
+          "Fullname": "First Responders Children's Foundation",
+          "NameTypeName": "Other Name"
+        },
+        {
+          "PersonId": 3583063,
+          "Fullname": "National Law Enforcement & Firefighters Childern's Foundation",
+          "NameTypeName": "Prior Name"
+        }
+      ]
+    }
+  ]
+}

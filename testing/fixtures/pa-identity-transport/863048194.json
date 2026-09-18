@@ -1,0 +1,14 @@
+{
+  "ein": "863048194",
+  "expected_names": [],
+  "responses": [
+    {
+      "Table": [],
+      "Table1": [
+        {
+          "RESULTCOUNT": 0
+        }
+      ]
+    }
+  ]
+}
