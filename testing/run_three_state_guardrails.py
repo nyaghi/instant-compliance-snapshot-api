@@ -106,6 +106,23 @@ class ThreeStateTests(unittest.TestCase):
  def test_wi_response_size_is_bounded(self):
   opener=Mock();opener.open.return_value=io.BytesIO(b'x'*2_000_001)
   with self.assertRaises(ValueError):c.wi_identity_page(opener,'https://example.test',time.monotonic()+20)
+ def test_wi_incomplete_response_keeps_metadata_without_query_or_headers(self):
+  opener=Mock();response=io.BytesIO(b'<html><title>Access denied</title>Verification required</html>')
+  response.status=200;response.geturl=lambda:'https://apps.dfi.wi.gov/error?token=secret'
+  opener.open.return_value=response;opener.cc_identity_diagnostics={}
+  page=c.wi_identity_page(opener,'https://apps.dfi.wi.gov/financial?secret=private',time.monotonic()+20)
+  self.assertIn('Verification',page)
+  self.assertEqual(len(opener.cc_identity_diagnostics['incomplete_pages']),1)
+  info=opener.cc_identity_diagnostics['incomplete_pages'][0]
+  self.assertEqual(info['http_status'],200);self.assertEqual(info['title'],'Access denied')
+  self.assertEqual(info['final_url'],'https://apps.dfi.wi.gov/error')
+  self.assertEqual(info['requested_url'],'https://apps.dfi.wi.gov/financial')
+  self.assertNotIn('secret',json.dumps(info));self.assertNotIn('private',json.dumps(info))
+ def test_wi_complete_credential_page_is_returned_without_diagnostic(self):
+  opener=Mock();opener.open.return_value=io.BytesIO(b'<html>Credential Number: 12345-800</html>')
+  opener.cc_identity_diagnostics={}
+  page=c.wi_identity_page(opener,'https://apps.dfi.wi.gov/financial',time.monotonic()+20)
+  self.assertIn('12345-800',page);self.assertEqual(opener.cc_identity_diagnostics,{})
  def test_wi_exact_credential_financial_identity_does_not_depend_on_location_row(self):
   name='Florida Gulf Coast University Foundation Inc'
   detail='Name: '+name+' Credential Type: Charitable Organization Credential Number: 22812-800 Location: NEW YORK , NY Status: License is current (Active)'

@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.18.5-staging").strip() or "2026.09.18.5-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.18.6-staging").strip() or "2026.09.18.6-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -14903,6 +14903,7 @@ def wi_foundation_filing_identity(candidate: dict, original_name: str, ein: str,
         return {}
     financial_url = urljoin(detail_url, "Financials.aspx") + "?" + urlparse(detail_url).query
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+    opener.cc_identity_diagnostics = diagnostics
     try:
         page = wi_identity_read(lambda: wi_identity_page(opener, financial_url, deadline), deadline, "Wisconsin fiscal-year selection", diagnostics)
         if not wi_same_credential_text(html_to_text(page), candidate):
@@ -14977,6 +14978,7 @@ def wi_confirm_reviewed_credential(candidate: dict, original_name: str, ein: str
     if not wi_reviewed_credential_identity(original_name, ein, dict(candidate, reviewed_identity_evidence=evidence)):
         return candidate
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+    opener.cc_identity_diagnostics = diagnostics
     try:
         for attempt in (1, 2):
             page = wi_identity_read(lambda: wi_identity_page(opener, evidence["detail_url"], deadline), deadline, "Wisconsin credential status", diagnostics)
@@ -15097,6 +15099,8 @@ def wi_identity_page(opener, request, deadline: float) -> str:
     remaining = deadline - time.monotonic()
     if remaining <= 0: raise TimeoutError("Wisconsin identity deadline reached")
     with opener.open(request, timeout=min(6.0, remaining)) as response:
+        response_status = getattr(response, "status", None)
+        response_url = response.geturl() if callable(getattr(response, "geturl", None)) else ""
         chunks, size = [], 0
         while True:
             if time.monotonic() >= deadline: raise TimeoutError("Wisconsin identity deadline reached")
@@ -15104,7 +15108,23 @@ def wi_identity_page(opener, request, deadline: float) -> str:
             if not chunk: break
             chunks.append(chunk); size += len(chunk)
             if size > 2_000_000: raise ValueError("Wisconsin evidence exceeds size limit")
-    return b"".join(chunks).decode("utf-8", "replace")
+    page = b"".join(chunks).decode("utf-8", "replace")
+    if not re.search(r"Credential\s+Number\s*:", html_to_text(page), re.I):
+        # A 200 response may be a redirect/error page rather than this credential.
+        # Record only public response metadata, never cookies, headers or tokens.
+        title = re.search(r"<title\b[^>]*>(.*?)</title>", page, re.I | re.S)
+        requested_url = request.full_url if isinstance(request, urllib.request.Request) else str(request)
+        clean_url = lambda value: urlparse(value)._replace(query="", fragment="").geturl()
+        observation = {
+            "requested_url": clean_url(requested_url), "final_url": clean_url(response_url),
+            "http_status": response_status, "bytes": size,
+            "title": html.unescape(re.sub(r"\s+", " ", title[1])).strip()[:160] if title else "",
+            "markers": sorted(set(re.findall(r"access denied|verification|forbidden|invalid request|session expired|application error|page not found", html_to_text(page), re.I))),
+        }
+        diagnostics = getattr(opener, "cc_identity_diagnostics", None)
+        if isinstance(diagnostics, dict):
+            diagnostics.setdefault("incomplete_pages", []).append(observation)
+    return page
 
 
 def wi_financial_identity_evidence(ein: str, href: str, credential: str, hour: int, diagnostics: dict | None = None) -> dict:
@@ -15138,6 +15158,7 @@ def wi_financial_identity_evidence(ein: str, href: str, credential: str, hour: i
         period = irs_header_evidence(irs_html, ein, irs_url)["filing"]
         fiscal_year = str(date.fromisoformat(period["period_end"]).year)
         opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        opener.cc_identity_diagnostics = diagnostics
         stage = "Wisconsin fiscal-year selection"
         page = wi_identity_read(lambda: wi_identity_page(opener, financial_url, deadline), deadline, stage, diagnostics)
         year_option = r'<option\b[^>]*value=["\']' + fiscal_year + r'["\']'
@@ -24110,7 +24131,16 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 result = checker.search_md(page, org)
                 result = ensure_state_result(result, org, "MD", source_note="Maryland checker returned a non-structured result.")
                 md_body = registry_page_body(page)
-                if public_status(result) != "Not Registered" and not md_detail_page_matched(result, md_body):
+                if result.error or not result.success:
+                    # Failed navigation is not a completed empty EIN search.
+                    # Preserve the exception and avoid additional empty-result
+                    # scrolling when no usable registry page was retrieved.
+                    result.status = "Site Not Reachable"
+                    result.raw_status_text = "Maryland registry search did not complete"
+                    result.source_note = "The Maryland registry search could not be completed. No conclusion about registration or filing status was made."
+                    result.success = False
+                    body = md_body
+                elif public_status(result) != "Not Registered" and not md_detail_page_matched(result, md_body):
                     result.raw_status_text = "No matching EIN result"
                     result.status = checker.STATUS_NOT_REGISTERED
                     result.source_note = "Maryland search did not confirm a public registry record matching the requested EIN."
