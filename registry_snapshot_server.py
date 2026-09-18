@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.18.10-staging").strip() or "2026.09.18.10-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.18.11-staging").strip() or "2026.09.18.11-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -2255,7 +2255,7 @@ def identity_wa_names(ein: str, deadline: float) -> dict:
         "SortBy": "FEINNo", "SortType": "ASC"}
     rows = json.loads(identity_fetch("https://ccfs-api.prod.sos.wa.gov/api/CFTPublicSearch/GetCFPublicSearchList", deadline,
         headers={"Content-Type": "application/x-www-form-urlencoded", "Referer": "https://ccfs.sos.wa.gov/"},
-        data=urlencode(fields).encode(), request_timeout=12.0))
+        data=urlencode(fields).encode(), request_timeout=35.0))
     result = identity_rows_names("WA", rows, ein, url)
     result["complete"] = len(rows) < 10 and all(isinstance(row, dict)
         and canonical_ein_digits(str(row.get("FEINNumber") or "")) == ein for row in rows)

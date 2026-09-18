@@ -1,11 +1,25 @@
 """Bound a fragile public source without starving other identity sources."""
-import concurrent.futures,sys,threading,time,unittest
+import concurrent.futures,io,sys,threading,time,unittest
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import registry_snapshot_server as c
 
 class WashingtonQueue(unittest.TestCase):
+    def test_slow_wa_response_has_own_budget_and_retains_absolute_deadline(self):
+        seen=[]
+        def response(request,timeout):
+            seen.append((request.full_url,timeout))
+            return io.BytesIO(b'[]')
+        with patch.object(c.urllib.request,'urlopen',side_effect=response):
+            self.assertTrue(c.identity_wa_names('123456789',time.monotonic()+60)['complete'])
+            self.assertTrue(c.identity_wa_names('123456789',time.monotonic()+4)['complete'])
+            c.identity_fetch('https://example.test/other-source',time.monotonic()+60)
+        self.assertEqual(seen[0][1],35.0)
+        self.assertGreater(seen[1][1],3.0)
+        self.assertLessEqual(seen[1][1],4.0)
+        self.assertEqual(seen[2][1],6.0)
+
     def test_fifteen_distinct_discoveries_keep_every_alias_with_three_wa_requests(self):
         c.IDENTITY_SOURCE_CACHE.clear();lock=threading.Lock();barrier=threading.Barrier(15)
         active=0;maximum=0;calls=[]

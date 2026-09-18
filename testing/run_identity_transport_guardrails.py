@@ -62,7 +62,7 @@ class OtherPublicTransports(unittest.TestCase):
         with patch.object(c,'identity_fetch',return_value=json.dumps(rows).encode()) as fetch:
             result=c.identity_wa_names('131624103',time.monotonic()+30)
         self.assertEqual({n['name'] for n in result['names']},{'YWCA USA, INC.','YWCA OF THE U.S.A.'})
-        self.assertFalse(result['complete']);self.assertEqual(fetch.call_args.kwargs['request_timeout'],12)
+        self.assertFalse(result['complete']);self.assertEqual(fetch.call_args.kwargs['request_timeout'],35)
     def test_wa_full_page_is_partial_not_empty_or_complete(self):
         row=json.loads((F/'wa-ywca.json').read_text())[0]
         with patch.object(c,'identity_fetch',return_value=json.dumps([row]*10).encode()):
