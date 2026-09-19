@@ -133,7 +133,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.19.1-staging").strip() or "2026.09.19.1-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.19.2-staging").strip() or "2026.09.19.2-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -1726,8 +1726,15 @@ def or_confirm_snapshot_delinquency(org, result):
                             raise ValueError('Oregon detail exceeded the document size limit')
                         source = content.decode('utf-8', errors='replace')
                         evidence = or_live_period_evidence(source, row)
-                        attempts.append(f'Oregon live detail attempt {attempt + 1}: response received; identity/period confirmed={bool(evidence)}.')
-                        if evidence or re.search(r'<table\b[^>]*\bid="info"', source, re.I):
+                        info_present = bool(re.search(r'<table\b[^>]*\bid="info"', source, re.I))
+                        note = (f'Oregon live detail attempt {attempt + 1}: response received; '
+                                f'identity/period confirmed={bool(evidence)}; info table present={info_present}.')
+                        attempts.append(note)
+                        if not evidence:
+                            log_event(f'OR live filing confirmation record={row[0]}: {note}')
+                        # An info-table shell is not a completed filing read.
+                        # Reuse the existing second attempt for this same record.
+                        if evidence:
                             break
                 except Exception as exc:
                     attempts.append(f'Oregon live detail attempt {attempt + 1}: {type(exc).__name__}.')
@@ -7558,7 +7565,12 @@ def me_fast_direct_query_variants(org) -> list[str]:
     reduced = [query for query in planned if not any(
         len(other) < len(query) and query.casefold().startswith(other.casefold())
         for other in planned)]
-    return canonical_legal_query_first(original_name, reduced, planned)
+    final = canonical_legal_query_first(original_name, reduced, planned)
+    # Begins With can cover the literal primary with a shorter prefix. Do not
+    # promote an article-prefixed historical spelling above that primary query.
+    final.sort(key=lambda query: 0 if any(value.casefold().startswith(query.casefold())
+               for value in (original_name, leading_article_removed) if value) else 1)
+    return final
 
 
 def me_request_timeout(deadline: float, maximum: float) -> float:
@@ -7768,7 +7780,9 @@ def me_fast_direct_confirmation_result(org, page=None, deadline=None):
             finally:
                 attempt_evidence["seconds"] = round(time.perf_counter() - started, 3)
                 source_attempts.append(attempt_evidence)
-            if (best_row and best_score[1] == 3 and best_row.get("address_evidence", {}).get("decision") != "conflict") or time.perf_counter() >= search_deadline or (phase == "direct" and len(pending) >= 2):
+            if (best_row and best_score[1] == 3
+                    and registry_active_tiebreak(best_row.get("status", "")) > 0
+                    and best_row.get("address_evidence", {}).get("decision") != "conflict") or time.perf_counter() >= search_deadline or (phase == "direct" and len(pending) >= 2):
                 break
         if best_row or time.perf_counter() >= search_deadline:
             break
@@ -9830,6 +9844,37 @@ def useful_registry_name(value: str) -> str:
     return cleaned
 
 
+def structured_registry_name(value: str, original: str, ein: str = "") -> str:
+    """A typed name field may contain a complete, reviewed short identity.
+
+    Free-text extraction keeps its existing noise filter. A short field is
+    retained only by full identity equality, never acronym/prefix similarity.
+    """
+    name = useful_registry_name(value)
+    if name:
+        return name
+    short = clean_registry_name(value)
+    if (re.fullmatch(r"[A-Za-z]{2,3}", short or "")
+            and short.casefold() not in {"dba", "aka", "ein", "inc", "llc", "ltd"}
+            and any(complete_name_identity_key(short) == complete_name_identity_key(target)
+                    for target in [original, *known_names_for_ein(ein)])):
+        return short
+    return ""
+
+
+def literal_name_retrieval_forms(name: str) -> list[str]:
+    """Bounded literal spellings for retrieval, never accepted match targets."""
+    literal = canonical_name_punctuation(name).strip()
+    suffix_light = re.sub(r"(?:,?\s+(?:inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited))+$",
+                          "", literal, flags=re.I).strip(" ,;")
+    forms = [suffix_light] if suffix_light else []
+    words = suffix_light.split()
+    prefix = " ".join(words[:3]).strip(" ,;-")
+    if len(words) >= 5 and len(distinctive_match_tokens(prefix)) >= 2:
+        forms.append(prefix)
+    return list(dict.fromkeys(forms))
+
+
 def registry_identifier_from_raw(raw_status: str, state: str) -> str:
     patterns = [
         r"\b(?:KY|NH|KS|MS|OK|WV|AR)\s+ID\s*:\s*([A-Za-z0-9-]+)\b",
@@ -9868,7 +9913,8 @@ def apply_confirmed_feedback_correction(result) -> str:
 
 def fill_registry_match_from_text(result, body: str, org) -> None:
     if (getattr(result, "matched_registry_name", "") or "").strip():
-        result.matched_registry_name = useful_registry_name(result.matched_registry_name)
+        result.matched_registry_name = (structured_registry_name(result.matched_registry_name, org.organization_name, org.ein)
+                                        if result.state == "WV" else useful_registry_name(result.matched_registry_name))
         return
     if public_status(result) == "Not Registered":
         return
@@ -9966,6 +10012,8 @@ def md_registry_match_from_entries(result, body: str, org) -> None:
 
 def normalize_registry_match_fields(result, org) -> None:
     matched_name = useful_registry_name(getattr(result, "matched_registry_name", "") or "")
+    if result.state == "WV" and not matched_name:
+        matched_name = structured_registry_name(getattr(result, "matched_registry_name", ""), org.organization_name, org.ein)
     matched_identifier = (getattr(result, "matched_registry_identifier", "") or "").strip()
     submitted_name = re.sub(r"\s+", " ", (getattr(org, "organization_name", "") or getattr(result, "organization_name", "") or "").strip())
 
@@ -13004,7 +13052,18 @@ def ma_selection_candidate(org, options):
         return options[0]
     matches = [option for option in options if option.get("value") and
                registry_name_is_safe_for_org(option.get("label", ""), org.organization_name, org.ein)]
-    return matches[0] if len(matches) == 1 else None
+    if len(matches) <= 1:
+        return matches[0] if matches else None
+    primary = org.organization_name
+    # An input may display two independently reviewed names separated by a
+    # dash. Only then is the first complete name a primary identity, not a
+    # truncated campus/location. Existing location guards already filter rows.
+    parts = re.split(r"\s+[-–—]\s+", canonical_name_punctuation(primary), maxsplit=1)
+    reviewed_keys = {complete_name_identity_key(name) for name in known_names_for_ein(org.ein)}
+    if len(parts) == 2 and all(complete_name_identity_key(part) in reviewed_keys for part in parts):
+        primary = parts[0]
+    exact = [option for option in matches if complete_name_identity_key(option["label"]) == complete_name_identity_key(primary)]
+    return exact[0] if len(exact) == 1 else None
 
 
 def search_ma_master(page, org, completed):
@@ -19504,6 +19563,9 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
         failure = "did not respond in time" if re.search(r"timeout|timed out", combined + " " + (getattr(result, "error", "") or ""), re.I) else "could not be accessed"
         return f"{source} {failure}, so CharityClarity could not complete the check and reports Site Not Reachable. This does not mean the organization is unregistered or delinquent."
     if status in {"Needs Review", "Unable to Verify", "Unable to Confirm", "Unknown", "No Confirmed Match"}:
+        if state == "MS" and getattr(result, "reason_code", "") == "MS_REVIEWED_SEARCH_INCOMPLETE":
+            return ("Mississippi did not complete searches for all reviewed organization names within the lookup window. "
+                    "Registration status remains unconfirmed; an incomplete search does not establish non-registration or delinquency.")
         if reason == "FILING_HISTORY_UNAVAILABLE_NO_CONFIRMED_DEADLINE":
             evidence = "The registration record was found, but no annual filing history or overdue deadline could be confirmed"
             if state == "MA":
@@ -19726,6 +19788,8 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
 
 def append_registry_match_comment(result, comment: str, public_facing_status: str) -> str:
     match_name = useful_registry_name(getattr(result, "matched_registry_name", ""))
+    if result.state == "WV" and not match_name:
+        match_name = structured_registry_name(getattr(result, "matched_registry_name", ""), result.organization_name, result.ein)
     match_identifier = (getattr(result, "matched_registry_identifier", "") or "").strip()
     if public_facing_status.lower() in {"not registered", "site not reachable"}:
         return comment
@@ -21343,23 +21407,7 @@ def search_batch_browser_state(page, org, state: str):
     modules = state_batch_modules([state])
     module = modules[load_state_batch_bundle().STATE_TO_MODULE[state]]
     if state == "MS":
-        variants = ms_preferred_search_variants(org.organization_name, org.ein)
-        priority_variants = []
-        for value in [
-            org.organization_name,
-            distinctive_acronym_core_probe(org.organization_name),
-            re.sub(
-                r"(?:,\s*)?\b(?:incorporated|inc\.?|corp\.?|corporation|llc|ltd\.?|limited)\b\.?\s*$",
-                "",
-                org.organization_name or "",
-                flags=re.I,
-            ).strip(" ,;-"),
-        ]:
-            cleaned = re.sub(r"\s+", " ", (value or "").strip())
-            if cleaned and not ms_search_variant_too_broad(cleaned):
-                priority_variants.append(cleaned)
-        variants = list(dict.fromkeys([*priority_variants, *variants]))
-        variants = reviewed_queries_first(org.organization_name, org.ein, variants, limit=6)
+        variants = ms_name_search_plan(org.organization_name, org.ein)
         if not variants:
             external_result = module.SearchResult(
                 organization_name=org.organization_name,
@@ -21416,6 +21464,7 @@ def search_batch_browser_state(page, org, state: str):
             external_result.success = False
             external_result.raw_status_text = "Mississippi reviewed-name search incomplete"
             external_result.source_confidence = "incomplete_search"
+            external_result.reason_code = "MS_REVIEWED_SEARCH_INCOMPLETE"
             external_result.source_note = "Mississippi did not complete searches for all reviewed identities within the lookup window; non-registration was not established."
     elif state == "OK":
         external_result = search_ok_with_variants(page, org, module)
@@ -22376,6 +22425,18 @@ def ar_registry_name_is_safe(row_name: str, original_name: str, variant_targets:
         return False
     if row_norm == original_norm:
         return True
+    # Full reviewed identity equality is stronger than a word-count heuristic.
+    # Keep all master scope/location guards and reject extra distinctive words.
+    if (any(complete_name_identity_key(row_name) == complete_name_identity_key(name)
+            for name in known_names_for_ein(ein))
+            and registry_name_is_safe_against_targets(row_name, variant_targets, original_name, ein)):
+        return True
+    row_key = complete_name_identity_key(row_name)
+    for target in [original_name, *known_names_for_ein(ein)]:
+        key = complete_name_identity_key(target)
+        scope = re.search(r"\b(?:of|in|for)\s+(?:the\s+)?(\w+)", key)
+        if key.startswith(row_key + " ") and scope and scope.start() >= len(row_key):
+            return False
     if len(row_norm.split()) <= 1 and len(original_norm.split()) >= 2:
         return False
     row_words = [
@@ -22490,7 +22551,17 @@ def ar_reviewed_search_plan(org, generated):
             # The phrase occupies its identity's reviewed-name priority slot.
             queries.append(probe); seen.add(probe.casefold())
         elif name.casefold() not in seen:
+            # A literal suffix-free spelling retrieves both "Inc" and
+            # "Inc." without admitting the retrieval phrase as an identity.
+            # The original primary already has its mature fallback ladder.
+            # Add the missing spelling only for a distinct complete alias.
+            forms = literal_name_retrieval_forms(name) if normalized_match_name(name) != normalized_match_name(org.organization_name) else []
             queries.append(name); seen.add(name.casefold())
+            query = forms[0] if forms else name
+            if query.casefold() not in seen:
+                queries.append(query); seen.add(query.casefold())
+            if query != name and canonical_name_punctuation(name).casefold().startswith(query.casefold()):
+                prefixes.setdefault(query.casefold(), []).append(name)
     if not known_names_for_ein(org.ein):
         return planned, {}
     for query in planned:
@@ -23032,6 +23103,17 @@ def canonical_legal_query_first(name: str, planned: list[str], spellings: list[s
     return list(dict.fromkeys(([canonical] if canonical else []) + planned))
 
 
+def ms_name_search_plan(name: str, ein: str = "") -> list[str]:
+    """Reach a bounded primary-name spelling before unrelated program aliases."""
+    priority = [name, distinctive_acronym_core_probe(name), *literal_name_retrieval_forms(name)]
+    priority = [value for value in priority if value and not ms_search_variant_too_broad(value)]
+    generated = list(dict.fromkeys([*priority, *ms_preferred_search_variants(name, ein)]))
+    planned = reviewed_queries_first(name, ein, generated, limit=6)
+    # These are retrieval probes only; search_ms_fast still checks full row and
+    # detail identity against original_organization_name and reviewed names.
+    return list(dict.fromkeys([*priority, *planned]))
+
+
 def case_boundary_name_variant(name: str) -> str:
     """One literal spacing alternative; never drop, add or reorder letters."""
     original = canonical_name_punctuation(name).strip()
@@ -23139,6 +23221,10 @@ def wv_preferred_query_variants(name: str, ein: str = "", *, limit=None) -> list
         # name equivalence does not prove equivalent registry retrieval.
         literal = re.sub(r"(?:,?\s+(?:inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited))+$", "", name.strip(), flags=re.I)
         planned = [literal, *[query for query in planned if query.casefold() != literal.casefold()]]
+    forms = literal_name_retrieval_forms(name)
+    if len(forms) > 1:
+        prefix = forms[-1]
+        planned = [planned[0], prefix, *[query for query in planned[1:] if query.casefold() != prefix.casefold()]]
     # reviewed_queries_first already bounds generated probes while preserving
     # every reviewed identity. Do not apply the generated-probe cap to aliases.
     return planned
@@ -23432,7 +23518,7 @@ def search_wv_precise(page, org):
                     if cells.count() < 5:
                         continue
                     registry_id = re.sub(r"\s+", " ", cells.nth(0).inner_text(timeout=1000)).strip()
-                    registry_name = useful_registry_name(cells.nth(1).inner_text(timeout=1000))
+                    registry_name = structured_registry_name(cells.nth(1).inner_text(timeout=1000), org.organization_name, org.ein)
                     status_text = re.sub(r"\s+", " ", cells.nth(4).inner_text(timeout=1000)).strip()
                 except Exception as exc:
                     raise TimeoutError("West Virginia result rows did not finish loading") from exc
@@ -23500,7 +23586,7 @@ def search_wv_precise(page, org):
         page.wait_for_timeout(WV_RESULTS_SETTLE_MS)
 
         detail_text = registry_page_body(page)
-        detail_name = useful_registry_name(text_between_labels(detail_text, "Organization Name", ["Expiration Date", "Contact Name", "Status", "Street Address"]))
+        detail_name = structured_registry_name(text_between_labels(detail_text, "Organization Name", ["Expiration Date", "Contact Name", "Status", "Street Address"]), org.organization_name, org.ein)
         if not detail_name or not re.search(r"\b(?:Status|Expiration Date)\b", detail_text):
             raise TimeoutError("West Virginia selected organization detail did not finish loading")
         completed_queries.append(query_name)
@@ -23519,6 +23605,24 @@ def search_wv_precise(page, org):
             )
             result.success = True
             return result
+
+        if len(re.sub(r"[^A-Za-z0-9]", "", matched_name)) < 4:
+            # An acronym has little standalone identity information. Confirm
+            # the same detail's DBA or organization address before classifying.
+            dba = text_between_labels(detail_text, "DBA", ["Tax Information", "Restrictions", "Fundraising Counsels"])
+            dba = re.sub(r"^Name\s+", "", dba, flags=re.I)
+            dba_confirmed = any(complete_name_identity_key(dba) == complete_name_identity_key(target)
+                                and len(complete_name_identity_key(target)) >= 4
+                                for target in [org.organization_name, *known_names_for_ein(org.ein)])
+            location = text_between_labels(detail_text, "Street Address", ["County", "Purpose", "Representative Information", "DBA"])
+            address = registry_address_evidence(org.ein, location, registry_state="WV")
+            if address.get("decision") == "conflict" or not (dba_confirmed or address.get("decision") == "corroborated"):
+                result.status = "Needs Review"
+                result.reason_code = "WV_SHORT_NAME_IDENTITY_UNCONFIRMED"
+                result.source_note = "West Virginia returned a short organization name, but its detail DBA and organization address did not establish a consistent identity."
+                result.success = True
+                return result
+            result.identity_evidence = {"detail_dba_confirmed": dba_confirmed, "address": address}
 
         status_text = text_between_labels(detail_text, "Status", ["Street Address", "County", "DBA", "Tax Information", "Restrictions"]) or row_status
         expiration_text = text_between_labels(detail_text, "Expiration Date", ["Contact Name", "Status", "Street Address", "County"]) or ""

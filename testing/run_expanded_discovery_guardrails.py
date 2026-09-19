@@ -123,7 +123,9 @@ class ExpandedDiscoveryTests(unittest.TestCase):
             return r
         with patch.object(c,'search_ms_fast',side_effect=search):r=c.search_batch_browser_state(None,c.checker.Organization(NAME,EIN),'MS')
         self.assertEqual(c.public_status(r),'Current')
-        self.assertEqual(seen[:8],[NAME,*aliases]);self.assertEqual(r.queries_attempted,seen)
+        self.assertEqual(seen[0],NAME)
+        self.assertEqual([name for name in seen if name in aliases],list(aliases))
+        self.assertEqual(r.queries_attempted,seen)
     def test_mississippi_cannot_certify_negative_after_omitted_or_incomplete_alias(self):
         aliases=('Second Reviewed Identity','Third Reviewed Identity')
         c.REVIEWED_NAME_CONTEXT.set({EIN:aliases})
@@ -152,10 +154,14 @@ class ExpandedDiscoveryTests(unittest.TestCase):
         plans=[c.nd_search_queries(org),c.ms_preferred_search_variants(NAME,EIN),c.me_fast_direct_query_variants(org),c.wv_preferred_query_variants(NAME,EIN)]
         for index,plan in enumerate(plans):
             keys=[c.identity_name_key(n) for n in plan]
-            # ME and WV permit one suffixless spelling of the legal name first;
-            # every reviewed identity still precedes speculative probes.
-            if index in {2,3}:self.assertEqual(c.normalized_match_name(plan[0]),c.normalized_match_name(NAME))
-            for identity in c.equivalent_name_queries(NAME,EIN):self.assertLess(keys.index(c.identity_name_key(identity)),4 if index in {2,3} else 3)
+            # Maine Begins With may use the literal primary's shorter covering
+            # query. WV also permits one bounded primary retrieval prefix.
+            if index == 2:
+                self.assertTrue(NAME.casefold().startswith(plan[0].casefold()))
+            elif index == 3:self.assertEqual(c.normalized_match_name(plan[0]),c.normalized_match_name(NAME))
+            for identity in c.equivalent_name_queries(NAME,EIN):
+                if index == 2 and NAME.casefold().startswith(plan[0].casefold()) and identity == NAME:continue
+                self.assertLess(keys.index(c.identity_name_key(identity)),5 if index in {2,3} else 3)
     def test_wrong_ein_chapter_address_protection_unchanged(self):
         c.REVIEWED_NAME_CONTEXT.set({EIN:('First Responders Childrens Foundation',)})
         self.assertEqual(c.score_candidate(NAME,EIN,{'name':'First Responders Childrens Foundation','ein':'999999999'})['reason'],'REJECT_DIFFERENT_EIN')
