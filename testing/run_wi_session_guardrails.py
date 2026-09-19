@@ -153,6 +153,55 @@ class SessionTests(unittest.TestCase):
             self.assertEqual(c.wi_http_detail_text('CredSummaryDetails.aspx?chid=123',deadline=49),'')
         read.assert_not_called()
 
+    def test_reader_rate_limit_respects_retry_after(self):
+        error = c.urllib.error.HTTPError('https://r.jina.ai/',429,'rate limited',{'Retry-After':'2'},None)
+        response = self.response('Completed public response','https://r.jina.ai/')
+        with patch.object(c.urllib.request,'urlopen',side_effect=[error,response]) as read, \
+             patch.object(c.time,'sleep') as pause:
+            self.assertEqual(c.wi_reader_text(c.WI_SEARCH_URL),'Completed public response')
+        self.assertEqual(read.call_count,2)
+        pause.assert_called_once_with(2.05)
+
+    def test_reader_rate_limit_does_not_outlive_existing_deadline(self):
+        error = c.urllib.error.HTTPError('https://r.jina.ai/',429,'rate limited',{'Retry-After':'20'},None)
+        with patch.object(c.urllib.request,'urlopen',side_effect=error) as read, \
+             patch.object(c.time,'perf_counter',return_value=10),patch.object(c.time,'sleep') as pause:
+            self.assertEqual(c.wi_reader_text(c.WI_SEARCH_URL,deadline=15),'')
+        read.assert_called_once();pause.assert_not_called()
+
+    def test_reader_complete_detail_reused_only_within_lookup(self):
+        detail = ('Name: Regional Learning Credential Type: CHARITABLE ORGANIZATION '
+                  'Credential Number:76543-800 Location:CHICAGO, IL Status License is current (Active)')
+        url='https://apps.dfi.wi.gov/ice/berg/Registration/CredSummaryDetails.aspx?chid=765432'
+        @c.wi_lookup_session
+        def run():
+            first=c.wi_reader_text(url,no_cache=True)
+            self.assertEqual(c.wi_reader_text(url,no_cache=True),first)
+        with patch.object(c.urllib.request,'urlopen',side_effect=lambda *a,**kw:self.response(detail,url)) as read:
+            run();run()
+        self.assertEqual(read.call_count,2)
+
+    def test_reader_incomplete_or_challenge_response_is_never_cached(self):
+        url='https://apps.dfi.wi.gov/ice/berg/Registration/CredSummaryDetails.aspx?chid=765432'
+        for body in ('','Human verification required','Credential Number:76543-800 Name:Loading'):
+            @c.wi_lookup_session
+            def run():
+                c.wi_reader_text(url);c.wi_reader_text(url)
+            with self.subTest(body=body),patch.object(c.urllib.request,'urlopen',side_effect=lambda *a,**kw:self.response(body,url)) as read:
+                run()
+            self.assertEqual(read.call_count,2)
+
+    def test_reader_failure_diagnostics_distinguish_throttling_from_identity(self):
+        error=c.urllib.error.HTTPError('https://r.jina.ai/',429,'rate limited',{'Retry-After':'20'},None)
+        @c.wi_lookup_session
+        def run():
+            c.wi_reader_text(c.WI_SEARCH_URL,deadline=15)
+            return c.checker.StateResult('Regional Learning','12-3456789','WI','Unable to Confirm',c.WI_SEARCH_URL)
+        with patch.object(c.urllib.request,'urlopen',side_effect=error),patch.object(c.time,'perf_counter',return_value=10):
+            result=run()
+        self.assertEqual(result.status,'Unable to Confirm')
+        self.assertEqual(result.source_attempts[-1]['rate_limited_reads'],1)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

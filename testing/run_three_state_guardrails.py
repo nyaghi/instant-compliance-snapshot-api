@@ -123,16 +123,16 @@ class ThreeStateTests(unittest.TestCase):
   opener.cc_identity_diagnostics={}
   page=c.wi_identity_page(opener,'https://apps.dfi.wi.gov/financial',time.monotonic()+20)
   self.assertIn('12345-800',page);self.assertEqual(opener.cc_identity_diagnostics,{})
- def test_wi_exact_credential_financial_identity_does_not_depend_on_location_row(self):
+ def test_wi_exact_credential_uses_cross_state_identity_without_financial_reads(self):
   name='Florida Gulf Coast University Foundation Inc'
   detail='Name: '+name+' Credential Type: Charitable Organization Credential Number: 22812-800 Location: NEW YORK , NY Status: License is current (Active)'
   conflict={'decision':'conflict','registry_location':'NEW YORK , NY','ein_linked_location':'Fort Myers, FL'}
   for city in ['NEW YORK , NY','FORT MEYERS, FL']:
    candidate={'registry_name':name,'license_number':'22812-800','location':city,'detail_href':'CredSummaryDetails.aspx?chid=944852&h=847014605'}
-   for financial in [{},{'decision':'corroborated','fiscal_year':'2025'}]:
-    with self.subTest(city=city,financial=financial),patch.object(c,'registry_address_evidence',return_value=conflict),patch.object(c,'wi_minor_city_spelling_difference',return_value=city.startswith('FORT')),patch.object(c,'wi_financial_identity_evidence',return_value=financial) as read:
+   for evidence in [{},{'decision':'corroborated','cross_state_records':[{'source':'CA'}]}]:
+    with self.subTest(city=city,evidence=evidence),patch.object(c,'registry_address_evidence',return_value=conflict),patch.object(c,'registry_cross_state_identity',return_value=evidence) as read,patch.object(c,'wi_financial_identity_evidence') as financial:
      result=c.wi_verify_candidate_identity(candidate,[name],name,'650403969',detail)
-    read.assert_called_once();self.assertEqual(result['identity_conflict'],not bool(financial))
+    read.assert_called_once();financial.assert_not_called();self.assertEqual(result['identity_conflict'],not bool(evidence))
  def test_wi_other_primary_entity_cannot_use_financial_fallback(self):
   name='Example Hospital - Milton'
   detail='Name: Example Hospital - Needham Credential Type: Charitable Organization Credential Number: 123-800 Location: Boston, MA Status: License is current (Active)'

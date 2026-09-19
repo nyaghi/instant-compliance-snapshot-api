@@ -18,7 +18,7 @@ class VerificationTests(unittest.TestCase):
 
     def lookup(self,candidate):
         org=c.checker.Organization('Regional Learning Association Foundation','12-3456789')
-        with patch.object(c,'wi_search_names_for_org',return_value=[org.organization_name]),patch.object(c,'organization_match_target_variants',return_value=[org.organization_name]),patch.object(c,'wi_http_search_best_match',return_value=(candidate,True)),patch.object(c,'wi_confirm_reviewed_credential',return_value=candidate),patch.object(c,'wi_reader_search_best_match') as reader:
+        with patch.object(c,'wi_search_names_for_org',return_value=[org.organization_name]),patch.object(c,'organization_match_target_variants',return_value=[org.organization_name]),patch.object(c,'wi_http_search_best_match',return_value=(candidate,True)),patch.object(c,'wi_confirm_cross_state_credential',return_value=candidate),patch.object(c,'wi_reader_search_best_match') as reader:
             result=c.search_wi(None,org)
         reader.assert_not_called()
         return result
@@ -43,6 +43,12 @@ class VerificationTests(unittest.TestCase):
     def test_completed_identity_disagreement_remains_review(self):
         result=self.lookup({'identity_conflict':True,'registry_name':'Regional Learning Association','license_number':'12345-800','identity_review_evidence':{'reason':'Foundation omitted'},'financial_identity_diagnostics':{'reason':'financial_values_not_corroborated'}})
         self.assertEqual(result.status,'Needs Review');self.assertEqual(result.reason_code,'WI_FOUNDATION_IDENTITY_REVIEW')
+        comment=c.comments_for_result(result,'',c.public_status(result))
+        for evidence in ['Regional Learning Association','12345-800','does not show an EIN',
+                         'organization addresses','identity remains unconfirmed','not because no record was found',
+                         'Confirm with Wisconsin']:
+            self.assertIn(evidence,comment)
+        self.assertNotIn('financial',comment.lower())
 
     def test_generic_incomplete_page_is_not_misclassified_as_verification(self):
         for url in ['https://apps.dfi.wi.gov/ice/berg/Registration/Financials.aspx','https://example.test/apps/captcha/']:

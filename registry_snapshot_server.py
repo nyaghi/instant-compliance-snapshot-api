@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.18.13-staging").strip() or "2026.09.18.13-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.18.14-staging").strip() or "2026.09.18.14-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -1982,10 +1982,18 @@ def identity_ca_names(ein: str, deadline: float) -> dict:
     rows = json.loads(identity_fetch(url, deadline, headers={"Referer": checker.CA_EVOKE_PUBLIC_PORTAL_URL}))
     if not isinstance(rows, list):
         raise ValueError("California identity response is incomplete")
-    names = []
+    names, records = [], []
     for row in rows:
         if canonical_ein_digits(str(row.get("fein") or "")) != ein:
             continue
+        address = row.get("officialAddress") or {}
+        if not isinstance(address, dict):
+            address = {}
+        records.append({"ein": ein, "source": "CA", "source_url": url,
+            "names": [str(row[key]) for key in ("entityName", "legalName") if row.get(key)] + identity_dba_list(row.get("dba")),
+            "city": address.get("city", ""), "state": address.get("state", ""),
+            "street": address.get("line1", ""), "postal_code": address.get("zipCode", ""),
+            "address_role": "organization"})
         for field, kind in (("entityName", "Registered name"), ("legalName", "Legal name"), ("dba", "DBA")):
             values = identity_dba_list(row.get(field)) if field == "dba" else [row.get(field)]
             for value in values:
@@ -1993,7 +2001,7 @@ def identity_ca_names(ein: str, deadline: float) -> dict:
                 if item:
                     if field == "dba": item["evidence"][0]["original_field"] = row.get(field)
                     names.append(item)
-    return {"names": names, "complete": len(rows) < 20, "source_url": url}
+    return {"names": names, "complete": len(rows) < 20, "source_url": url, "organization_records": records}
 
 
 def identity_co_names(ein: str, deadline: float) -> dict:
@@ -2002,20 +2010,96 @@ def identity_co_names(ein: str, deadline: float) -> dict:
     rows = json.loads(identity_fetch(url, deadline))
     if not isinstance(rows, list):
         raise ValueError("Colorado identity response is incomplete")
-    names, entities, seen = [], set(), set()
+    names, entities, seen, records = [], set(), set(), []
     for row in rows:
         if canonical_ein_digits(str(row.get("fein") or "")) != ein:
             continue
         entity = row.get("entityid")
         historical = entity in entities
         entities.add(entity)
+        if not historical:
+            records.append({"ein": ein, "source": "CO", "source_url": url,
+                "names": [str(row.get("name") or "")],
+                "city": row.get("principalcity", ""), "state": row.get("principalstate", ""),
+                "street": row.get("principaladdress", ""), "postal_code": row.get("principalzipcode", ""),
+                "address_role": "organization"})
         key = identity_name_key(str(row.get("name") or ""))
         if key in seen: continue
         seen.add(key)
         item = identity_candidate(row.get("name"), "Colorado", "Earlier registered name" if historical else "Registered name",
                                   url, str(row.get("registrationapproveddate") or ""), historical)
         if item: names.append(item)
-    return {"names": names, "complete": len(rows) < 100, "source_url": url}
+    return {"names": names, "complete": len(rows) < 100, "source_url": url, "organization_records": records}
+
+
+def registry_cross_state_identity(ein: str, registry_name: str, locations: list[str], deadline: float | None = None) -> dict:
+    """Corroborate identity from EIN-bound public names and organization offices.
+
+    This supplies identity evidence only; the searched state's own credential
+    remains the authority for status. Mailing/agent addresses cannot clear a
+    conflict. A minor city typo requires two independent EIN-bound sources.
+    """
+    requested = canonical_ein_digits(ein)
+    name_key = normalized_match_name(registry_name)
+    if len(requested) != 9 or not name_key:
+        return {}
+    deadline = min(deadline or time.monotonic() + 8, time.monotonic() + 8)
+    records = []
+    for source in ("CA", "CO"):
+        cached = identity_cached_source_result(source, requested)
+        try:
+            data = cached if cached is not None else identity_source_result(source, requested, deadline)
+        except Exception:
+            continue
+        for row in data.get("organization_records", []):
+            if (row.get("source") == source and row.get("ein") == requested
+                    and row.get("address_role") == "organization"
+                    and name_key in {normalized_match_name(value) for value in row.get("names", [])}):
+                records.append(row)
+    # Address verification already retrieves the IRS organization/filer header.
+    # Reuse that identity evidence if available; do not fetch financial pages.
+    irs = identity_cached_source_result("IRS", requested) or {}
+    irs_names = [item["name"] for item in irs.get("names", []) if item.get("verified") and item.get("name")]
+    if name_key in {normalized_match_name(value) for value in irs_names}:
+        for field in ("address", "filer_address"):
+            address = irs.get(field) or {}
+            if canonical_ein_digits(str(address.get("ein") or "")) == requested:
+                records.append({"ein": requested, "source": "IRS", "names": irs_names,
+                    "city": address.get("city", ""), "state": address.get("state", ""),
+                    "street": address.get("street", ""), "postal_code": address.get("zipcode", ""),
+                    "source_url": address.get("source_url") or f"https://projects.propublica.org/nonprofits/organizations/{requested}",
+                    "address_role": "organization"})
+    def city_key(value):
+        return re.sub(r"[^a-z0-9]", "", re.sub(r"\bst\.?\s+", "saint ", str(value).casefold()))
+    for location in dict.fromkeys(value for value in locations if value):
+        match = re.fullmatch(r"\s*(.+?),\s*([A-Za-z]{2})(?:\s+\d{5}(?:-\d{4})?)?\s*", location)
+        if not match:
+            continue
+        city, state = city_key(match[1]), match[2].upper()
+        exact = [row for row in records if city_key(row.get("city")) == city and str(row.get("state", "")).upper() == state]
+        evidence, typo = exact, False
+        if not evidence:
+            grouped = {}
+            for row in records:
+                other = city_key(row.get("city", ""))
+                small, large = sorted((city, other), key=len)
+                if (str(row.get("state", "")).upper() == state and len(small) >= 6
+                        and len(large) == len(small) + 1
+                        and any(large[:i] + large[i+1:] == small for i in range(len(large)))):
+                    grouped.setdefault(other, []).append(row)
+            evidence = next((rows for rows in grouped.values() if len({row["source"] for row in rows}) >= 2), [])
+            typo = bool(evidence)
+        if evidence:
+            first = evidence[0]
+            return {"decision": "corroborated", "requested_ein": requested,
+                "registry_name": registry_name, "registry_location": location,
+                "ein_linked_location": f"{first['city']}, {first['state']}",
+                "source_url": first["source_url"], "cross_state_records": evidence,
+                "minor_city_spelling_difference": typo,
+                "basis": "The Wisconsin name and organization location agree with public records retrieved by the requested EIN in "
+                    + ", ".join(sorted({row["source"] for row in evidence}))
+                    + ("; two independent EIN-linked sources corroborate a one-character city spelling difference." if typo else ".")}
+    return {}
 
 
 def identity_or_names(ein: str, deadline: float) -> dict:
@@ -13984,8 +14068,16 @@ def wi_reader_url(source_url: str) -> str:
 
 
 def wi_reader_text(source_url: str, no_cache: bool = False, deadline: float | None = None) -> str:
+    session = WI_REQUEST_SESSION.get()
+    parsed_source = urlparse(html.unescape(source_url))
+    is_detail = (parsed_source.hostname == "apps.dfi.wi.gov"
+                 and parsed_source.path.lower().endswith("/credsummarydetails.aspx"))
+    cache_key = parsed_source.geturl()
+    if is_detail and session is not None and cache_key in session.get("reader_details", {}):
+        return session["reader_details"][cache_key]
+    read_deadline = deadline if deadline is not None else time.perf_counter() + 3 * WI_READER_TIMEOUT_SECONDS
     for attempt in range(3):
-        remaining = deadline - time.perf_counter() if deadline else WI_READER_TIMEOUT_SECONDS
+        remaining = read_deadline - time.perf_counter()
         if remaining <= 0: return ""
         try:
             headers = {
@@ -13996,10 +14088,37 @@ def wi_reader_text(source_url: str, no_cache: bool = False, deadline: float | No
                 headers["X-No-Cache"] = "true"
             request = urllib.request.Request(wi_reader_url(source_url), headers=headers)
             with urllib.request.urlopen(request, timeout=min(WI_READER_TIMEOUT_SECONDS, remaining)) as response:
-                return response.read().decode("utf-8", errors="replace")
-        except Exception:
+                text = response.read().decode("utf-8", errors="replace")
+            # Reuse a complete public detail only within this lookup. Candidate
+            # identity/status checks still run; empty/error pages are not cached.
+            if (is_detail and session is not None and wi_extract_detail_status(text)
+                    and re.search(r"\bCredential\s+Number\s*:\s*\d+-800\b", text, re.I)
+                    and re.search(r"\bName\s*:\s*\S", text, re.I)):
+                session.setdefault("reader_details", {})[cache_key] = text
+            return text
+        except Exception as exc:
+            wait_seconds = 0.35 * (attempt + 1)
+            code = getattr(exc, "code", None)
+            if code == 429:
+                retry_after = str(getattr(exc, "headers", {}).get("Retry-After", "") or "")
+                try:
+                    wait_seconds = max(1.0, float(retry_after)) + 0.05
+                except ValueError:
+                    # Retry-After can be an HTTP date rather than delta seconds.
+                    from email.utils import parsedate_to_datetime
+                    try:
+                        wait_seconds = max(1.0, parsedate_to_datetime(retry_after).timestamp() - time.time()) + 0.05
+                    except (ValueError, TypeError, OverflowError):
+                        wait_seconds = 1.05
+            if session is not None:
+                session.setdefault("reader_failures", []).append({
+                    "stage": "Wisconsin fallback detail" if is_detail else "Wisconsin fallback search",
+                    "http_status": code, "error": type(exc).__name__, "attempt": attempt + 1,
+                    "retry_wait_seconds": round(wait_seconds, 3)})
+            if wait_seconds >= read_deadline - time.perf_counter():
+                return ""
             if attempt < 2:
-                time.sleep(0.35 * (attempt + 1))
+                time.sleep(wait_seconds)
                 continue
             return ""
 
@@ -14092,7 +14211,14 @@ def wi_lookup_session(operation):
             return operation(*args, **kwargs)
         token = WI_REQUEST_SESSION.set({"opener": wi_request_opener()})
         try:
-            return operation(*args, **kwargs)
+            result = operation(*args, **kwargs)
+            failures = WI_REQUEST_SESSION.get().get("reader_failures", [])
+            if failures and hasattr(result, "state"):
+                result.source_attempts = [*(getattr(result, "source_attempts", None) or []),
+                    {"stage": "Wisconsin fallback service", "failed_reads": len(failures),
+                     "rate_limited_reads": sum(row["http_status"] == 429 for row in failures),
+                     "last_failures": failures[-3:]}]
+            return result
         finally:
             WI_REQUEST_SESSION.reset(token)
     return lookup
@@ -14967,7 +15093,7 @@ def wi_live_candidate_name_is_safe(registry_name: str, target_names: list[str], 
     return False
 
 
-def wi_foundation_identity_review(registry_name: str, original_name: str, license_number: str, href: str, expiration_text: str) -> dict | None:
+def wi_foundation_identity_review(registry_name: str, original_name: str, license_number: str, href: str, expiration_text: str, location: str = "") -> dict | None:
     """Retain a closely related credential for review without accepting its identity."""
     original = normalized_match_name(original_name)
     candidate = normalized_match_name(registry_name)
@@ -14978,7 +15104,7 @@ def wi_foundation_identity_review(registry_name: str, original_name: str, licens
     if not re.fullmatch(r"\d+-800", license_number.strip()):
         return None
     return {"score": 0, "expiration_date": parse_due_date(expiration_text), "license_number": license_number,
-        "registry_name": registry_name, "detail_href": href, "detail_status": "", "identity_conflict": True,
+        "registry_name": registry_name, "detail_href": href, "detail_status": "", "identity_conflict": True, "location": location,
         "identity_review_evidence": {"registry_name": registry_name, "credential": license_number,
             "detail_url": urljoin(WI_SEARCH_URL, href), "reason": "Registry name omits Foundation; no identity equivalence established."}}
 
@@ -15091,6 +15217,20 @@ def wi_reviewed_credential_identity(original_name: str, ein: str, candidate: dic
     """Validate evidence already retrieved for this request; no organization-specific allowlist."""
     evidence = candidate.get("reviewed_identity_evidence") or {}
     detail_url = wi_foundation_credential_source(original_name, ein, candidate)
+    if evidence.get("kind") == "cross_state_name_address":
+        address = evidence.get("address_evidence") or {}
+        records = address.get("cross_state_records") or []
+        if (detail_url and evidence.get("detail_url") == detail_url
+                and evidence.get("requested_ein") == canonical_ein_digits(ein)
+                and evidence.get("credential") == candidate.get("license_number")
+                and normalized_match_name(evidence.get("registry_name", "")) == normalized_match_name(candidate.get("registry_name", ""))
+                and address.get("decision") == "corroborated" and address.get("requested_ein") == canonical_ein_digits(ein)
+                and records and all(row.get("ein") == canonical_ein_digits(ein) and row.get("source") in {"CA", "CO", "IRS"}
+                    and row.get("address_role") == "organization"
+                    and normalized_match_name(candidate.get("registry_name", "")) in {normalized_match_name(name) for name in row.get("names", [])}
+                    for row in records)):
+            return evidence
+        return {}
     amounts = evidence.get("matched_amounts", {})
     keys = {"totcntrbs", "totrevenue", "totfuncexpns", "totnetassetsend", "othrchgsnetassetfnd"}
     if (not detail_url or evidence.get("detail_url") != detail_url
@@ -15103,6 +15243,32 @@ def wi_reviewed_credential_identity(original_name: str, ein: str, candidate: dic
             or sum(v != 0 for v in amounts.values()) < 4):
         return {}
     return evidence
+
+
+def wi_confirm_cross_state_credential(candidate: dict, original_name: str, ein: str, deadline: float | None = None) -> dict:
+    """Read normal credential details; never request Wisconsin financial pages."""
+    detail_url = wi_foundation_credential_source(original_name, ein, candidate)
+    if not detail_url:
+        return candidate
+    deadline = min(deadline or time.monotonic() + 18, time.monotonic() + 18)
+    read_deadline = time.perf_counter() + max(0, deadline - time.monotonic())
+    text = wi_http_detail_text(detail_url, deadline=read_deadline)
+    if not wi_same_credential_text(text, candidate) and time.monotonic() < deadline:
+        text = wi_reader_text(detail_url, no_cache=True, deadline=read_deadline)
+    if not wi_same_credential_text(text, candidate):
+        return dict(candidate, identity_detail_unavailable=True)
+    compact = re.sub(r"\s+", " ", text)
+    location = re.search(r"\bLocation\s*:\s*(.*?)\s+Status\b", compact, re.I)
+    address = registry_cross_state_identity(ein, candidate.get("registry_name", ""),
+        [candidate.get("location", ""), location[1] if location else ""], deadline)
+    status = wi_extract_detail_status(text)
+    if not address or not wi_status_from_detail_status(status):
+        return candidate
+    evidence = {"kind": "cross_state_name_address", "requested_ein": canonical_ein_digits(ein),
+        "credential": candidate["license_number"], "registry_name": candidate["registry_name"],
+        "detail_url": detail_url, "address_evidence": address}
+    return dict(candidate, identity_conflict=False, detail_status=status,
+        address_evidence=address, reviewed_identity_evidence=evidence)
 
 
 def wi_confirm_reviewed_credential(candidate: dict, original_name: str, ein: str, deadline: float | None = None) -> dict:
@@ -15149,12 +15315,12 @@ def wi_candidate_from_row_html(row_html: str, target_names: list[str], original_
     href_match = re.search(r"<a[^>]+href=[\"']([^\"']+)[\"']", row_html, re.I)
     review_href = html.unescape(href_match.group(1)) if href_match else ""
     if not wi_live_candidate_name_is_safe(registry_name, target_names, original_name, ein):
-        return wi_foundation_identity_review(registry_name, original_name, license_number, review_href, expiration_text)
+        return wi_foundation_identity_review(registry_name, original_name, license_number, review_href, expiration_text, location)
     score = checker.name_match_priority_for_targets(registry_name, target_names)
     if explicit_acronym_alias_matches_registry(original_name, registry_name):
         score = max(score, 4)
     if score < 4 and not wi_contains_full_target_name(registry_name, target_names):
-        return wi_foundation_identity_review(registry_name, original_name, license_number, review_href, expiration_text)
+        return wi_foundation_identity_review(registry_name, original_name, license_number, review_href, expiration_text, location)
     href_match = re.search(r"<a[^>]+href=[\"']([^\"']+)[\"']", row_html, re.I)
     href = html.unescape(href_match.group(1)) if href_match else ""
     expiration_date = parse_due_date(expiration_text)
@@ -15185,12 +15351,12 @@ def wi_candidate_from_markdown_row(row_text: str, target_names: list[str], origi
         return None
     registry_name, detail_href = wi_markdown_link_parts(registry_cell)
     if not wi_live_candidate_name_is_safe(registry_name, target_names, original_name, ein):
-        return wi_foundation_identity_review(registry_name, original_name, license_number, detail_href, expiration_text)
+        return wi_foundation_identity_review(registry_name, original_name, license_number, detail_href, expiration_text, location)
     score = checker.name_match_priority_for_targets(registry_name, target_names)
     if explicit_acronym_alias_matches_registry(original_name, registry_name):
         score = max(score, 4)
     if score < 4 and not wi_contains_full_target_name(registry_name, target_names):
-        return wi_foundation_identity_review(registry_name, original_name, license_number, detail_href, expiration_text)
+        return wi_foundation_identity_review(registry_name, original_name, license_number, detail_href, expiration_text, location)
     expiration_date = parse_due_date(expiration_text)
     detail_text = wi_reader_text(urljoin(WI_SEARCH_URL, detail_href), no_cache=True) if detail_href else ""
     detail_status = wi_extract_detail_status(detail_text)
@@ -15411,17 +15577,11 @@ def wi_verify_candidate_identity(candidate: dict, targets: list[str], original: 
         if alternate_address["decision"] == "corroborated":
             address = dict(alternate_address, other_registry_location=location[1] if location else "",
                 basis="The same verified credential lists multiple locations; its search-row location agrees with the EIN-linked organization record.")
-        elif (wi_minor_city_spelling_difference(ein, candidate["location"])
-              or registry_identity_preference(primary[1], original, ein) > 0):
-            # Equivalent rows of one credential can expose different offices.
-            # Financial identity belongs to the credential/EIN, not to whichever
-            # location row happened to be returned by this name query.
-            diagnostics = {}
-            financial = wi_financial_identity_evidence(canonical_ein_digits(ein), candidate.get("detail_href", ""), candidate["license_number"], int(time.time()//3600), diagnostics)
-            address["financial_corroboration"] = diagnostics
-            if financial:
-                address = dict(financial, registry_location=candidate["location"],
-                    ein_linked_location=alternate_address.get("ein_linked_location", ""))
+    if address["decision"] == "conflict":
+        cross_state = registry_cross_state_identity(ein, primary[1],
+            [candidate.get("location", ""), location[1] if location else ""])
+        if cross_state:
+            address = cross_state
     return dict(candidate, primary_registry_name=primary[1], address_evidence=address,
                 identity_conflict=address["decision"] in {"conflict", "different_ein"},
                 identity_preference=registry_identity_preference(primary[1], original, ein))
@@ -15822,12 +15982,12 @@ def search_wi(page, org, max_seconds: float | None = None, progress: dict | None
 
         if best_match.get("identity_conflict") and best_match.get("identity_review_evidence"):
             remaining = max(0, progress.get("deadline", started + WI_LOOKUP_MAX_SECONDS) - time.perf_counter())
-            best_match = wi_confirm_reviewed_credential(best_match, original_name, ein, time.monotonic() + remaining)
-            result.wi_identity_diagnostics = best_match.get("financial_identity_diagnostics", {})
+            best_match = wi_confirm_cross_state_credential(best_match, original_name, ein, time.monotonic() + remaining)
         if best_match.get("reviewed_identity_evidence"):
             result.wi_reviewed_identity_evidence = best_match["reviewed_identity_evidence"]
             result.source_url = result.wi_reviewed_identity_evidence["detail_url"]
-            result.identity_anchor = "reviewed_credential_filing_identity"
+            result.identity_anchor = ("cross_state_name_address" if result.wi_reviewed_identity_evidence.get("kind") == "cross_state_name_address"
+                                      else "reviewed_credential_filing_identity")
         if best_match.get("identity_conflict"):
             identity_diagnostics = (best_match.get("financial_identity_diagnostics")
                 or best_match.get("address_evidence", {}).get("financial_corroboration") or {})
@@ -15848,8 +16008,11 @@ def search_wi(page, org, max_seconds: float | None = None, progress: dict | None
                 result.identity_review_evidence = best_match["identity_review_evidence"]
                 result.raw_status_text = "Wisconsin returned a related credential whose name omits Foundation"
                 result.source_note = (f"Wisconsin returned {best_match['registry_name']} (credential {best_match['license_number']}), "
-                    "whose name omits Foundation. The available state evidence does not confirm that this credential belongs to the requested Foundation. "
-                    "CharityClarity reports Needs Review; it has not treated the Association and Foundation as the same organization or concluded that no record exists.")
+                    f"whose name omits Foundation from the requested organization, {original_name}. "
+                    "The Wisconsin search record does not show an EIN, and the available EIN-linked names and organization addresses "
+                    "do not establish that this credential belongs to the requested Foundation. "
+                    "CharityClarity reports Needs Review because identity remains unconfirmed, not because no record was found. "
+                    "Confirm with Wisconsin whether this credential covers the requested EIN before relying on its status.")
                 result.success = False
                 return result
             result.status = "Unable to Confirm"
@@ -16302,7 +16465,10 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
                              f"This confirms the alternate-name listing, not a separate registration for requested EIN {alias_evidence['requested_ein']}.")
     if wi_result_has_reviewed_identity(result, org) and result.success:
         evidence = result.wi_reviewed_identity_evidence
-        data["comments"] += (f" Identity is corroborated by five matching financial amounts for {evidence['fiscal_year']} "
+        if evidence.get("kind") == "cross_state_name_address":
+            data["comments"] += " " + evidence["address_evidence"]["basis"] + " The credential status was retrieved from Wisconsin for this check."
+        else:
+            data["comments"] += (f" Identity is corroborated by five matching financial amounts for {evidence['fiscal_year']} "
                              f"on Wisconsin credential {evidence['credential']} and the IRS Form 990-EZ data for the requested EIN. "
                              f"Wisconsin lists {evidence['registry_name']} and does not display an EIN; identity is inferred from filing evidence. "
                              "The credential status above was retrieved from Wisconsin for this check.")

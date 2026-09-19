@@ -106,8 +106,12 @@ class Revisions(unittest.TestCase):
                     'matched_amounts':{'totcntrbs':131315,'totrevenue':130869,'totfuncexpns':9816,
                                       'totnetassetsend':122273,'othrchgsnetassetfnd':1220}}
         with patch.object(c, 'wi_http_search_best_match', return_value=(copy.deepcopy(candidate), True)), \
+             patch.object(c, 'wi_confirm_cross_state_credential', side_effect=c.wi_confirm_reviewed_credential), \
              patch.object(c, 'wi_foundation_filing_identity', return_value=evidence), \
              patch.object(c, 'wi_identity_page', return_value=text):
+            # Inject the previously retrieved proof for these legacy response/
+            # status controls. New live lookups use cross-state identity; their
+            # no-financial-read contract is covered in wi_cross_state tests.
             return self.final(c.search_wi(None, org), org)
 
     def test_wi_reviewed_credential_uses_current_public_status(self):
