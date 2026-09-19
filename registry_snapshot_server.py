@@ -133,7 +133,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.19.2-staging").strip() or "2026.09.19.2-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.19.3-staging").strip() or "2026.09.19.3-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -20835,6 +20835,12 @@ def ms_short_prefix_name_mismatch(original_name: str, candidate_name: str) -> bo
 
 def ms_registry_name_is_safe(candidate_name: str, original_name: str, ein: str = "") -> bool:
     if normalized_match_name(candidate_name) == normalized_match_name(original_name):
+        return True
+    # A complete reviewed identity is not a speculative truncation of a
+    # combined legal-name/DBA input. Keep the master location/scope safeguards.
+    if (any(complete_name_identity_key(candidate_name) == complete_name_identity_key(name)
+            for name in known_names_for_ein(ein))
+            and registry_name_is_safe_for_org(candidate_name, original_name, ein)):
         return True
     if ms_short_prefix_name_mismatch(original_name, candidate_name):
         return False

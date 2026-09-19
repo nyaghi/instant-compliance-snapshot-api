@@ -100,6 +100,18 @@ class Controls(unittest.TestCase):
   r=c.checker.StateResult('Example Charity','123456789','MS','Unable to Verify','')
   r.reason_code='MS_REVIEWED_SEARCH_INCOMPLETE';r.raw_status_text='Mississippi reviewed-name search incomplete'
   self.assertIn('did not complete searches',c.comments_for_result(r,'','Unable to Verify'))
+ def test_ms_complete_reviewed_alias_is_not_a_truncated_prefix(self):
+  name='TWLOHA, Inc. — To Write Love on Her Arms'
+  self.assertFalse(c.ms_registry_name_is_safe('TWLOHA, Inc.',name,'123456789'))
+  self.context(['TWLOHA, Inc.','To Write Love on Her Arms'])
+  self.assertTrue(c.ms_registry_name_is_safe('TWLOHA, Inc.',name,'123456789'))
+  for candidate in ['TWLOHA Boston Chapter','To Write Love','TWLOHA Community Foundation']:
+   self.assertFalse(c.ms_registry_name_is_safe(candidate,name,'123456789'),candidate)
+  self.assertFalse(c.ms_registry_name_is_safe('TWLOHA, Inc.',name,'987654321'))
+ def test_ms_reviewed_name_does_not_drop_location(self):
+  self.context(['Beth Israel Deaconess Hospital','Beth Israel Deaconess Hospital - Plymouth'])
+  for candidate in ['Beth Israel Deaconess Hospital','Beth Israel Deaconess Hospital - Plymouth']:
+   self.assertFalse(c.ms_registry_name_is_safe(candidate,'Beth Israel Deaconess Hospital - Milton','123456789'))
  def test_alias_context_does_not_leak_to_another_ein(self):
   self.context(['NAF','National Academy Foundation'])
   self.assertEqual(c.structured_registry_name('NAF','Example Charity','987654321'),'')
