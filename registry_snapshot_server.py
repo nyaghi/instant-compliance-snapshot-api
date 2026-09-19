@@ -133,7 +133,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.19.3-staging").strip() or "2026.09.19.3-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.19.4-staging").strip() or "2026.09.19.4-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -13424,14 +13424,42 @@ _MA_LEGACY_OCR = None
 _MA_LEGACY_OCR_LOCK = threading.Lock()
 
 
-def ma_scanned_form_pc_evidence(text: str, expected_year: int, account: str, ein: str, period_text: str = "") -> dict:
-    """Require the actual Form PC, both identity anchors and its labeled period."""
+def ma_scanned_registry_identity(text: str, account: str, ein: str, record: dict, document_url: str) -> bool:
+    """Corroborate an unreadable handwritten AGO number from the selected public record."""
+    if (not isinstance(record, dict) or record.get("ago_account") != account or record.get("ein") != ein
+            or not re.fullmatch(r"a09[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?", str(record.get("record_id", "")))):
+        return False
+    parsed = urlparse(document_url)
+    if (parsed.scheme != "https" or parsed.hostname != "masscharities.my.site.com"
+            or not re.fullmatch(r"/FilingSearch/sfc/servlet\.shepherd/document/download/069[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?", parsed.path)):
+        return False
+    # A readable, explicitly labeled conflicting account is not OCR uncertainty.
+    accounts = re.findall(r"Attorney\s+General(?:['’]s)?\s+Account\s*#?\s*:?\s*(\d{6})(?!\d)", text, re.I)
+    if any(value.lstrip("0") != account.lstrip("0") for value in accounts):
+        return False
+    def words(value):
+        return sorted(re.findall(r"[a-z0-9]+", (value or "").casefold().replace("&", " and ")))
+    expected = words(record.get("name", ""))
+    # Keep every word, including location/entity distinctions. Registry surname
+    # ordering and punctuation can differ; an acronym or partial name cannot pass.
+    return len(expected) >= 3 and any(words(re.sub(r"^\s*Name\s*:\s*", "", line, flags=re.I)) == expected
+                                      for line in text.splitlines())
+
+
+def ma_scanned_form_pc_evidence(text: str, expected_year: int, account: str, ein: str, period_text: str = "", *, registry_record=None, document_url: str = "") -> dict:
+    """Require the actual Form PC, corroborated identity and its labeled period."""
     readable = re.sub(r"\s+", " ", text or "")
     if not re.search(r"\bForm\s+PC\b", readable, re.I):
         return {}
     eins = {re.sub(r"\D", "", x) for x in re.findall(r"(?<!\d)\d{2}[- ]?\d{7}(?!\d)", readable)}
-    if not ein or ein not in eins or not account or not re.search(r"(?<!\d)0*" + re.escape(account.lstrip("0")) + r"(?!\d)", readable):
+    if not ein or ein not in eins or not account:
         return {}
+    account_readable = bool(re.search(r"(?<!\d)0*" + re.escape(account.lstrip("0")) + r"(?!\d)", readable))
+    registry_identity = False
+    if not account_readable:
+        registry_identity = eins == {ein} and ma_scanned_registry_identity(text, account, ein, registry_record, document_url)
+        if not registry_identity:
+            return {}
     label = re.search(r"Report\s+for\s+the\s+Fiscal\s+Period", readable, re.I)
     if not label:
         return {}
@@ -13460,7 +13488,8 @@ def ma_scanned_form_pc_evidence(text: str, expected_year: int, account: str, ein
     if end.year != expected_year or end > date.today() or not 0 < (end-start).days <= 400:
         return {}
     return {"filing_year": expected_year, "period_start": format_date(start), "period_end": format_date(end),
-            "filing_status": "Submitted", "ago_account": account, "legacy_scanned_form_pc": True}
+            "filing_status": "Submitted", "ago_account": account, "legacy_scanned_form_pc": True,
+            **({"legacy_identity_from_registry": True} if registry_identity else {})}
 
 
 def ma_scanned_period_row_text(scanned, lines, ocr) -> str:
@@ -13552,7 +13581,7 @@ def ma_read_legacy_form_pc(page, completed: dict, account: str, read_progress=No
             if read_progress is not None:
                 document_eins = {re.sub(r"\D", "", x) for x in re.findall(r"(?<!\d)\d{2}[- ]?\d{7}(?!\d)", text)}
                 read_progress["complete"] = document_eins == {record["ein"]}
-            evidence = ma_scanned_form_pc_evidence(text, latest, account, record["ein"])
+            evidence = ma_scanned_form_pc_evidence(text, latest, account, record["ein"], registry_record=record, document_url=row["url"])
             if not evidence:
                 years = (completed.get("filings", {}).get(account, {}).get("document_years", [])
                          + completed.get("registration_documents", {}).get(account, {}).get("document_years", []))
@@ -13562,7 +13591,7 @@ def ma_read_legacy_form_pc(page, completed: dict, account: str, read_progress=No
                 with _MA_LEGACY_OCR_LOCK:
                     period_text = ma_scanned_period_row_text(scanned, lines, _MA_LEGACY_OCR)
                 if period_text:
-                    evidence = ma_scanned_form_pc_evidence(text, latest, account, record["ein"], period_text)
+                    evidence = ma_scanned_form_pc_evidence(text, latest, account, record["ein"], period_text, registry_record=record, document_url=row["url"])
                     if evidence:
                         evidence["legacy_period_row_reread"] = True
         if evidence:

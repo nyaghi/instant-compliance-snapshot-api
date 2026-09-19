@@ -1,0 +1,425 @@
+{
+  "record": {
+    "record_id": "a095e000009HmRuAAK",
+    "ago_account": "052619",
+    "ein": "352058177",
+    "name": "BRADLEY, VERA FOUNDATION FOR BREAST CANCER, INC.",
+    "registry_status": "In-Progress"
+  },
+  "registration_documents": {
+    "052619": {
+      "complete": true,
+      "empty": false,
+      "row_count": 4,
+      "document_years": [
+        "2011",
+        "2011",
+        "2023",
+        "2023"
+      ],
+      "documents": [
+        {
+          "year": "2011",
+          "title": "FY2011 PC - IRS 990.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000006tFccAAE"
+        },
+        {
+          "year": "2011",
+          "title": "FY2011 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000006tFZGAA2"
+        },
+        {
+          "year": "2023",
+          "title": "FY2023 PC - Other/Misc.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0694U00000Kp9HBQAZ"
+        },
+        {
+          "year": "2023",
+          "title": "FY2023 PC - Other/Misc.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0694U00000IyJ8vQAF"
+        }
+      ],
+      "annual_scans": [
+        {
+          "year": "2011",
+          "title": "FY2011 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000006tFZGAA2"
+        }
+      ]
+    }
+  },
+  "filings": {
+    "052619": {
+      "complete": true,
+      "empty": false,
+      "row_count": 50,
+      "document_years": [
+        "2015",
+        "2021",
+        "2020",
+        "2020",
+        "2020",
+        "2018",
+        "2019",
+        "2016",
+        "2022",
+        "2019",
+        "2021",
+        "2013",
+        "2014",
+        "2018",
+        "2020",
+        "2017",
+        "2014",
+        "2019",
+        "2019",
+        "2015",
+        "2019",
+        "2021",
+        "2022",
+        "2022",
+        "2022",
+        "2013",
+        "2020",
+        "2021",
+        "2020",
+        "2019",
+        "2019",
+        "2020",
+        "2014",
+        "2021",
+        "2016",
+        "2022",
+        "2022",
+        "2018",
+        "2019",
+        "2015",
+        "2021",
+        "2019",
+        "2021",
+        "2017",
+        "2020",
+        "2020",
+        "2017",
+        "2022",
+        "2013",
+        "2016"
+      ],
+      "documents": [
+        {
+          "year": "2015",
+          "title": "FY2015 PC - IRS 990.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000006tpkzAAA"
+        },
+        {
+          "year": "2021",
+          "title": "FY2021 PC - Other/Misc.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007kcXtAAI"
+        },
+        {
+          "year": "2020",
+          "title": "FY2020 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007j38dAAA"
+        },
+        {
+          "year": "2020",
+          "title": "FY2020 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007kGzdAAE"
+        },
+        {
+          "year": "2020",
+          "title": "FY2020 PC - IRS 990.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000006tT84AAE"
+        },
+        {
+          "year": "2018",
+          "title": "FY2018 PC - IRS 990.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000006sy3cAAA"
+        },
+        {
+          "year": "2019",
+          "title": "FY2019 PC - FIN State/Audit.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007kHsxAAE"
+        },
+        {
+          "year": "2016",
+          "title": "FY2016 PC - FIN State/Audit.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007kEmlAAE"
+        },
+        {
+          "year": "2022",
+          "title": "FY2022 PC - Other/Misc.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0694U00000CYJ3aQAH"
+        },
+        {
+          "year": "2019",
+          "title": "FY2019 PC - FIN State/Audit.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007jQcwAAE"
+        },
+        {
+          "year": "2021",
+          "title": "FY2021 PC - IRS 990.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0694U00000Gw2ldQAB"
+        },
+        {
+          "year": "2013",
+          "title": "FY2013 PC - IRS 990.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007ibHLAAY"
+        },
+        {
+          "year": "2014",
+          "title": "FY2014 PC - FIN State/Audit.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007jPZBAA2"
+        },
+        {
+          "year": "2018",
+          "title": "FY2018 PC - FIN State/Audit.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000006t66yAAA"
+        },
+        {
+          "year": "2020",
+          "title": "FY2020 PC - Other/Misc.tif",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0694U00000SP0oPQAT"
+        },
+        {
+          "year": "2017",
+          "title": "FY2017 PC - IRS 990.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000006tUuuAAE"
+        },
+        {
+          "year": "2014",
+          "title": "FY2014 PC - IRS 990.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000006tVX6AAM"
+        },
+        {
+          "year": "2019",
+          "title": "FY2019 PC - Other/Misc.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007kqNzAAI"
+        },
+        {
+          "year": "2019",
+          "title": "FY2019 PC - Other/Misc.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007kDtOAAU"
+        },
+        {
+          "year": "2015",
+          "title": "FY2015 PC - FIN State/Audit.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007j21PAAQ"
+        },
+        {
+          "year": "2019",
+          "title": "FY2019 PC - FIN State/Audit.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007j0MnAAI"
+        },
+        {
+          "year": "2021",
+          "title": "FY2021 PC - Other/Misc.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007kd1AAAQ"
+        },
+        {
+          "year": "2022",
+          "title": "FY2022 PC - Other/Misc.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0694U00000IzZKHQA3"
+        },
+        {
+          "year": "2022",
+          "title": "FY2022 PC - Other/Misc.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0694U00000IzZKMQA3"
+        },
+        {
+          "year": "2022",
+          "title": "FY2022 PC - Other/Misc.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007ji8wAAA"
+        },
+        {
+          "year": "2013",
+          "title": "FY2013 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007l83GAAQ"
+        },
+        {
+          "year": "2020",
+          "title": "FY2020 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007jKpQAAU"
+        },
+        {
+          "year": "2021",
+          "title": "FY2021 PC - Other/Misc.tif",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0694U00000SP0iuQAD"
+        },
+        {
+          "year": "2020",
+          "title": "FY2020 PC - Other/Misc.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007ka2UAAQ"
+        },
+        {
+          "year": "2019",
+          "title": "FY2019 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007jAKQAA2"
+        },
+        {
+          "year": "2019",
+          "title": "FY2019 PC - IRS 990.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000006tD1gAAE"
+        },
+        {
+          "year": "2020",
+          "title": "FY2020 PC - Other/Misc.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007kZfEAAU"
+        },
+        {
+          "year": "2014",
+          "title": "FY2014 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007jkDjAAI"
+        },
+        {
+          "year": "2021",
+          "title": "FY2021 PC - Other/Misc.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007kbaPAAQ"
+        },
+        {
+          "year": "2016",
+          "title": "FY2016 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007kh7fAAA"
+        },
+        {
+          "year": "2022",
+          "title": "FY2022 PC - Other/Misc.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0694U00000F33tbQAB"
+        },
+        {
+          "year": "2022",
+          "title": "FY2022 PC - Other/Misc.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0694U00000IyJXJQA3"
+        },
+        {
+          "year": "2018",
+          "title": "FY2018 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000006t07NAAQ"
+        },
+        {
+          "year": "2019",
+          "title": "FY2019 PC - Other/Misc.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007kpeBAAQ"
+        },
+        {
+          "year": "2015",
+          "title": "FY2015 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007jSUcAAM"
+        },
+        {
+          "year": "2021",
+          "title": "FY2021 PC - FIN State/Audit.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0694U00000Gw1uKQAR"
+        },
+        {
+          "year": "2019",
+          "title": "FY2019 PC - Other/Misc.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007kFEFAA2"
+        },
+        {
+          "year": "2021",
+          "title": "FY2021 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0694U00000Gw1vtQAB"
+        },
+        {
+          "year": "2017",
+          "title": "FY2017 PC - FIN State/Audit.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007jA5OAAU"
+        },
+        {
+          "year": "2020",
+          "title": "FY2020 PC - IRS 990.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000006tRToAAM"
+        },
+        {
+          "year": "2020",
+          "title": "FY2020 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007kGSDAA2"
+        },
+        {
+          "year": "2017",
+          "title": "FY2017 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007jLZyAAM"
+        },
+        {
+          "year": "2022",
+          "title": "FY2022 PC - Other/Misc.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0694U00000CYJ3IQAX"
+        },
+        {
+          "year": "2013",
+          "title": "FY2013 PC - FIN State/Audit.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007lkS7AAI"
+        },
+        {
+          "year": "2016",
+          "title": "FY2016 PC - IRS 990.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000006sjpgAAA"
+        }
+      ],
+      "annual_scans": [
+        {
+          "year": "2020",
+          "title": "FY2020 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007j38dAAA"
+        },
+        {
+          "year": "2020",
+          "title": "FY2020 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007kGzdAAE"
+        },
+        {
+          "year": "2013",
+          "title": "FY2013 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007l83GAAQ"
+        },
+        {
+          "year": "2020",
+          "title": "FY2020 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007jKpQAAU"
+        },
+        {
+          "year": "2019",
+          "title": "FY2019 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007jAKQAA2"
+        },
+        {
+          "year": "2014",
+          "title": "FY2014 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007jkDjAAI"
+        },
+        {
+          "year": "2016",
+          "title": "FY2016 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007kh7fAAA"
+        },
+        {
+          "year": "2018",
+          "title": "FY2018 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000006t07NAAQ"
+        },
+        {
+          "year": "2015",
+          "title": "FY2015 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007jSUcAAM"
+        },
+        {
+          "year": "2021",
+          "title": "FY2021 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0694U00000Gw1vtQAB"
+        },
+        {
+          "year": "2020",
+          "title": "FY2020 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007kGSDAA2"
+        },
+        {
+          "year": "2017",
+          "title": "FY2017 PC - Form PC/Annual RPT.tiff",
+          "url": "https://masscharities.my.site.com/FilingSearch/sfc/servlet.shepherd/document/download/0695e000007jLZyAAM"
+        }
+      ],
+      "only_schedule_a2": false
+    }
+  }
+}
