@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.18.11-staging").strip() or "2026.09.18.11-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.18.12-staging").strip() or "2026.09.18.12-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -13957,13 +13957,18 @@ def wi_extract_detail_status(detail_text: str) -> str:
     return ""
 
 
-def wi_http_detail_text(detail_href: str) -> str:
+def wi_http_detail_text(detail_href: str, deadline: float | None = None) -> str:
     if not detail_href:
         return ""
     try:
         detail_url = urljoin(WI_SEARCH_URL, html.unescape(detail_href))
-        request = urllib.request.Request(detail_url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(request, timeout=WI_HTTP_TIMEOUT_SECONDS) as response:
+        request = urllib.request.Request(detail_url, headers=wi_request_headers())
+        session = WI_REQUEST_SESSION.get()
+        open_request = session["opener"].open if session else urllib.request.urlopen
+        remaining = deadline - time.perf_counter() if deadline else WI_HTTP_TIMEOUT_SECONDS
+        if remaining <= 0:
+            return ""
+        with open_request(request, timeout=min(WI_HTTP_TIMEOUT_SECONDS, remaining)) as response:
             detail_html = response.read().decode("utf-8", errors="replace")
         return html_to_text(detail_html)
     except Exception:
@@ -14065,6 +14070,32 @@ def wi_request_headers(referer: str = WI_SEARCH_URL) -> dict[str, str]:
         "Accept-Language": "en-US,en;q=0.9",
         "Referer": referer,
     }
+
+
+WI_REQUEST_SESSION = ContextVar("wi_request_session", default=None)
+
+
+def wi_request_opener():
+    """Reuse ordinary registry cookies only within one organization lookup."""
+    session = WI_REQUEST_SESSION.get()
+    if session is not None:
+        return session["opener"]
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+    opener.addheaders = list(wi_request_headers().items())
+    return opener
+
+
+def wi_lookup_session(operation):
+    @wraps(operation)
+    def lookup(*args, **kwargs):
+        if WI_REQUEST_SESSION.get() is not None:
+            return operation(*args, **kwargs)
+        token = WI_REQUEST_SESSION.set({"opener": wi_request_opener()})
+        try:
+            return operation(*args, **kwargs)
+        finally:
+            WI_REQUEST_SESSION.reset(token)
+    return lookup
 
 
 def wi_result_html_requires_verification(source: str) -> bool:
@@ -15007,10 +15038,15 @@ def wi_foundation_filing_identity(candidate: dict, original_name: str, ein: str,
         diagnostics["reason"] = "requested_ein_not_confirmed"
         return {}
     financial_url = urljoin(detail_url, "Financials.aspx") + "?" + urlparse(detail_url).query
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+    opener = wi_request_opener()
     opener.cc_identity_diagnostics = diagnostics
     try:
-        page = wi_identity_read(lambda: wi_identity_page(opener, financial_url, deadline), deadline, "Wisconsin fiscal-year selection", diagnostics)
+        landing = wi_identity_read(lambda: wi_identity_page(opener, detail_url, deadline), deadline, "Wisconsin credential identity", diagnostics)
+        if not wi_same_credential_text(html_to_text(landing), candidate):
+            diagnostics["reason"] = "credential_detail_incomplete"
+            return {}
+        financial_request = urllib.request.Request(financial_url, headers={"Referer": detail_url})
+        page = wi_identity_read(lambda: wi_identity_page(opener, financial_request, deadline), deadline, "Wisconsin fiscal-year selection", diagnostics)
         if not wi_same_credential_text(html_to_text(page), candidate):
             diagnostics["reason"] = "financial_credential_incomplete"
             return {}
@@ -15082,7 +15118,7 @@ def wi_confirm_reviewed_credential(candidate: dict, original_name: str, ein: str
     candidate = dict(candidate, financial_identity_diagnostics=diagnostics)
     if not wi_reviewed_credential_identity(original_name, ein, dict(candidate, reviewed_identity_evidence=evidence)):
         return candidate
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+    opener = wi_request_opener()
     opener.cc_identity_diagnostics = diagnostics
     try:
         for attempt in (1, 2):
@@ -15203,6 +15239,12 @@ def wi_identity_read(operation, deadline: float, stage: str, diagnostics: dict |
 def wi_identity_page(opener, request, deadline: float) -> str:
     remaining = deadline - time.monotonic()
     if remaining <= 0: raise TimeoutError("Wisconsin identity deadline reached")
+    session = WI_REQUEST_SESSION.get()
+    if session and session.get("verification_required"):
+        diagnostics = getattr(opener, "cc_identity_diagnostics", None)
+        if isinstance(diagnostics, dict):
+            diagnostics.update(verification_required=True, repeated_challenge_read_avoided=True)
+        raise ValueError("Wisconsin requires human verification for this evidence page")
     with opener.open(request, timeout=min(6.0, remaining)) as response:
         response_status = getattr(response, "status", None)
         response_url = response.geturl() if callable(getattr(response, "geturl", None)) else ""
@@ -15232,6 +15274,8 @@ def wi_identity_page(opener, request, deadline: float) -> str:
         verification_url = urlparse(response_url)
         if (verification_url.hostname == "apps.dfi.wi.gov"
                 and verification_url.path.rstrip("/").lower() == "/apps/captcha"):
+            if session is not None:
+                session["verification_required"] = True
             if isinstance(diagnostics, dict):
                 diagnostics["verification_required"] = True
             # This is an explicit access challenge, not an incomplete financial
@@ -15270,7 +15314,7 @@ def wi_financial_identity_evidence(ein: str, href: str, credential: str, hour: i
         irs_html = wi_identity_read(lambda: identity_fetch(irs_url, deadline).decode("utf-8", "replace"), deadline, stage, diagnostics)
         period = irs_header_evidence(irs_html, ein, irs_url)["filing"]
         fiscal_year = str(date.fromisoformat(period["period_end"]).year)
-        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        opener = wi_request_opener()
         opener.cc_identity_diagnostics = diagnostics
         stage = "Wisconsin fiscal-year selection"
         page = wi_identity_read(lambda: wi_identity_page(opener, financial_url, deadline), deadline, stage, diagnostics)
@@ -15592,7 +15636,7 @@ def wi_confirm_clean_no_results_page(org, max_seconds: float = 14.0, progress: d
 def wi_http_search_best_match(search_names: list[str], target_names: list[str], deadline: float | None = None, original_name: str = "", ein: str = "", progress: dict | None = None) -> tuple[dict | None, bool]:
     best_match = None
     http_reached = False
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+    opener = wi_request_opener()
     try:
         base_request = urllib.request.Request(WI_SEARCH_URL, headers=wi_request_headers())
         with opener.open(base_request, timeout=WI_HTTP_TIMEOUT_SECONDS) as response:
@@ -15657,6 +15701,7 @@ def wi_has_complete_results(source: str) -> bool:
                     and re.search(r'<td\b[^>]*>\s*\d+-800\s*</td>', source or '', re.I)))
 
 
+@wi_lookup_session
 def search_wi(page, org, max_seconds: float | None = None, progress: dict | None = None):
     result = checker.StateResult(org.organization_name, org.ein, "WI", checker.STATUS_UNKNOWN, WI_SEARCH_URL)
     searched_names = wi_search_names_for_org(org) or [org.organization_name]
@@ -15756,17 +15801,23 @@ def search_wi(page, org, max_seconds: float | None = None, progress: dict | None
             result.success = False
             return result
 
+        detail_deadline = progress.get("deadline", deadline)
         if (best_match.get("identity_detail_unavailable") and best_match.get("detail_href")
-                and time.perf_counter() < deadline):
+                and time.perf_counter() < detail_deadline):
             # Completed search rows can coexist with an unfinished detail read.
             # Recover only this credential, retaining every identity safeguard.
             detail_url = urljoin(WI_SEARCH_URL, html.unescape(best_match["detail_href"]))
-            detail_text = wi_reader_text(detail_url, no_cache=True,
-                                         deadline=min(deadline, time.perf_counter() + 12.0))
             candidate = dict(best_match)
             candidate.pop("identity_detail_unavailable", None)
+            recovery_deadline = min(detail_deadline, time.perf_counter() + 12.0)
+            detail_text = wi_http_detail_text(detail_url, deadline=recovery_deadline)
             candidate["detail_status"] = wi_extract_detail_status(detail_text)
             confirmed = wi_verify_candidate_identity(candidate, target_names, original_name, ein, detail_text)
+            if (confirmed and confirmed.get("identity_detail_unavailable")
+                    and time.perf_counter() < recovery_deadline):
+                detail_text = wi_reader_text(detail_url, no_cache=True, deadline=recovery_deadline)
+                candidate["detail_status"] = wi_extract_detail_status(detail_text)
+                confirmed = wi_verify_candidate_identity(candidate, target_names, original_name, ein, detail_text)
             result.source_attempts = [{"stage": "Wisconsin credential detail recovery",
                 "credential": best_match["license_number"],
                 "complete": bool(confirmed and not confirmed.get("identity_conflict"))}]
