@@ -133,7 +133,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.19.4-staging").strip() or "2026.09.19.4-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.19.5-staging").strip() or "2026.09.19.5-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -11586,6 +11586,35 @@ def search_nd_completed(page, org):
                     continue
                 candidates.sort(key=lambda item: item[0], reverse=True)
                 if len(candidates) > 1 and candidates[0][0] == candidates[1][0]:
+                    identity_rank = checker.candidate_selection_score_for_targets(candidates[0][1]["TITLE"][0], targets, "")
+                    tied = [row for _, row in candidates if
+                            checker.candidate_selection_score_for_targets(row["TITLE"][0], targets, "") == identity_rank]
+                    # A completed search exposes each record's current status.
+                    # Consensus needs full-name equality as well as the existing
+                    # identity guards; a shared fuzzy score is not sufficient.
+                    exact_targets = {normalized_match_name(name) for name in targets}
+                    if all(
+                        normalized_match_name(row["TITLE"][0]) in exact_targets
+                        and re.fullmatch(r"inactive(?:\s*[-\u2013\u2014]\s*(?:involuntary|voluntary))?",
+                                         str(row.get("STATUS") or "").strip(), re.I)
+                        for row in tied
+                    ):
+                        records = sorted(tied, key=lambda row: str(row.get("RECORD_NUM") or row["ID"]))
+                        result.matched_registry_name = records[0]["TITLE"][0]
+                        result.matched_registry_identifier = ", ".join(
+                            str(row.get("RECORD_NUM") or row["ID"]) for row in records)
+                        result.raw_status_text = "; ".join(
+                            f"{row.get('RECORD_NUM') or row['ID']}: {row['STATUS']}" for row in records)
+                        result.status = "Closed / Withdrawn / Canceled"
+                        result.status_reason = "ND_MATCHING_RECORDS_INACTIVE"
+                        result.source_note = (
+                            f"North Dakota's completed public search returned {len(records)} equally strong "
+                            f"full-name matches, all explicitly inactive ({result.raw_status_text}). "
+                            "CharityClarity reports Closed / Withdrawn / Canceled from their shared state status."
+                        )
+                        result._cc_detail_body = ""  # No single record's filing dates are selected.
+                        result.success = True
+                        return result
                     raise ValueError("North Dakota returned equally ranked registration records")
                 selected = candidates[0][1]
                 detail = request("/api/FilingDetail/charitable/" + quote(str(selected["ID"]), safe="") + "/false")
@@ -19474,6 +19503,8 @@ def comment_registry_status(raw: str, status: str) -> str:
 
 
 def comments_for_result_base(result, body: str, public_facing_status: str) -> str:
+    if result.state == "ND" and getattr(result, "status_reason", "") == "ND_MATCHING_RECORDS_INACTIVE":
+        return result.source_note
     if getattr(result, "status_reason", "") == "REGISTRY_ADDRESS_CONFLICT":
         return result.source_note
     evidence = getattr(result, "tax_period_evidence", {})
