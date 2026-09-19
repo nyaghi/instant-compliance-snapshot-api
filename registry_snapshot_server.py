@@ -49,6 +49,40 @@ except Exception:
     PdfWriter = None
 
 BASE_DIR = Path(__file__).resolve().parent
+
+
+@lru_cache(maxsize=1)
+def native_heap_trimmer():
+    """Find optional glibc support without requiring it on other runtimes."""
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        import ctypes
+        trim = ctypes.CDLL(None).malloc_trim
+        trim.argtypes = [ctypes.c_size_t]
+        trim.restype = ctypes.c_int
+        return trim
+    except (ImportError, AttributeError, OSError):
+        return None
+
+
+def release_native_memory_after(operation):
+    """Return unused OCR heap pages after its frame releases temporary images."""
+    @wraps(operation)
+    def wrapped(*args, **kwargs):
+        try:
+            return operation(*args, **kwargs)
+        finally:
+            try:
+                trim = native_heap_trimmer()
+                if trim is not None:
+                    trim(0)
+            except Exception:
+                # Optional housekeeping must never change lookup results/errors.
+                pass
+    return wrapped
+
+
 def first_existing_path(*paths: str) -> Path:
     for path in paths:
         candidate = Path(path)
@@ -99,7 +133,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.18.15-staging").strip() or "2026.09.18.15-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.19.1-staging").strip() or "2026.09.19.1-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -2870,6 +2904,7 @@ def form990_header_period(text: str, line: str, ein: str, label: int, url: str) 
     return {}
 
 
+@release_native_memory_after
 def irs_scanned_header_period(images: list, ein: str, label: int, url: str, deadline: float) -> dict:
     """Read bounded header crops; OCR never treats empty boxes as calendar proof."""
     global IRS_HEADER_OCR, IRS_HEADER_TITLE_OCR
@@ -13414,6 +13449,7 @@ def ma_scanned_urs_overdue_evidence(text: str, expected_year: int, account: str,
             "filing_year": expected_year, "ago_account": account}
 
 
+@release_native_memory_after
 def ma_read_legacy_form_pc(page, completed: dict, account: str, read_progress=None) -> dict:
     global _MA_LEGACY_OCR
     record = completed.get("record", {})
@@ -15665,6 +15701,29 @@ def wi_confirm_same_credential_alias(candidate: dict, original_name: str, reader
     return candidate
 
 
+def wi_row_identity_key(license_number: str, registry_name: str, href: str) -> tuple:
+    # Keep the complete name and credential URL: a shared city or short alias
+    # must not transfer identity evidence between different entities.
+    return (license_number.strip(), re.sub(r"\s+", " ", registry_name).strip().casefold(),
+            urljoin(WI_SEARCH_URL, html.unescape(href)))
+
+
+def wi_reconcile_query_locations(candidate: dict, locations_by_identity: dict, ein: str) -> dict:
+    """Reuse a same-credential row even if that row's detail request failed."""
+    if (not candidate.get("primary_registry_name") or candidate.get("identity_detail_unavailable")
+            or not wi_status_from_detail_status(candidate.get("detail_status", ""))
+            or candidate.get("address_evidence", {}).get("decision") != "conflict"):
+        return candidate
+    key = wi_row_identity_key(candidate["license_number"], candidate["registry_name"], candidate.get("detail_href", ""))
+    for location in sorted(locations_by_identity.get(key, ())):
+        address = registry_address_evidence(ein, location)
+        if address.get("decision") == "corroborated":
+            address = dict(address, other_registry_location=candidate.get("address_evidence", {}).get("registry_location", candidate.get("location", "")),
+                basis="The same verified credential and full name appear in multiple search rows; one official row location agrees with the EIN-linked organization record.")
+            return dict(candidate, address_evidence=address, identity_conflict=False)
+    return candidate
+
+
 def wi_best_match_from_html(result_html: str, target_names: list[str], best_match: dict | None = None, original_name: str = "", ein: str = "") -> dict | None:
     table_match = re.search(
         r"<table[^>]+id=[\"']ctl00_cphMainContent_OrgCredentialSearch_gvCredentialSearchResults[\"'][^>]*>([\s\S]*?)</table>",
@@ -15676,10 +15735,15 @@ def wi_best_match_from_html(result_html: str, target_names: list[str], best_matc
 
     rows = list(re.finditer(r"<tr[^>]*>([\s\S]*?)</tr>", table_match.group(1), re.I))
     names_by_license = {}
+    locations_by_identity = {}
     for row in rows:
         cells = html_table_cells(row.group(1))
         if len(cells) >= 6:
             names_by_license.setdefault(cells[0], set()).add(cells[2])
+            href = re.search(r"<a[^>]+href=[\"']([^\"']+)[\"']", row.group(1), re.I)
+            if href and re.fullmatch(r"\d+-800", cells[0]) and re.search(r"Charitable\s+Organization", cells[1], re.I):
+                key = wi_row_identity_key(cells[0], cells[2], href[1])
+                locations_by_identity.setdefault(key, set()).add(cells[3])
     related_ids = wi_related_chapter_license_ids(names_by_license, target_names, original_name, ein)
     if best_match and best_match.get("license_number") in related_ids:
         best_match = None
@@ -15700,6 +15764,8 @@ def wi_best_match_from_html(result_html: str, target_names: list[str], best_matc
                 if key not in alias_checks:
                     alias_checks[key] = wi_confirm_same_credential_alias(candidate, original_name)
                 candidate = alias_checks[key]
+            else:
+                candidate = wi_reconcile_query_locations(candidate, locations_by_identity, ein)
             qualifying_ids.add(candidate["license_number"])
             if wi_better_candidate(candidate, best_match):
                 best_match = candidate
@@ -15715,14 +15781,18 @@ def wi_best_match_from_html(result_html: str, target_names: list[str], best_matc
 def wi_best_match_from_markdown(result_text: str, target_names: list[str], best_match: dict | None = None, original_name: str = "", ein: str = "") -> dict | None:
     rows = []
     names_by_license = {}
+    locations_by_identity = {}
     for line in (result_text or "").splitlines():
         if not line.strip().startswith("|"):
             continue
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
         if len(cells) < 6:
             continue
-        registry_name, _ = wi_markdown_link_parts(cells[2])
+        registry_name, href = wi_markdown_link_parts(cells[2])
         names_by_license.setdefault(cells[0], set()).add(registry_name)
+        if href and re.fullmatch(r"\d+-800", cells[0]) and re.search(r"Charitable\s+Organization", cells[1], re.I):
+            key = wi_row_identity_key(cells[0], registry_name, href)
+            locations_by_identity.setdefault(key, set()).add(cells[3])
         rows.append((cells[0], line))
     related_ids = wi_related_chapter_license_ids(names_by_license, target_names, original_name, ein)
     if best_match and best_match.get("license_number") in related_ids:
@@ -15739,6 +15809,8 @@ def wi_best_match_from_markdown(result_text: str, target_names: list[str], best_
             if license_id not in alias_checks:
                 alias_checks[license_id] = wi_confirm_same_credential_alias(candidate, original_name, reader=True)
             candidate = alias_checks[license_id]
+        elif candidate:
+            candidate = wi_reconcile_query_locations(candidate, locations_by_identity, ein)
         if candidate and wi_better_candidate(candidate, best_match):
             best_match = candidate
     return best_match
@@ -21739,6 +21811,7 @@ def ok_certificate_date_from_text(text: str, registry_name: str) -> date | None:
     return None
 
 
+@release_native_memory_after
 def ok_certificate_expiration(pdf_bytes: bytes, registry_name: str, *, allow_ocr: bool = True) -> tuple[date | None, str]:
     """Read the date printed on the matched entity's actual registration certificate."""
     from pypdf import PdfReader
