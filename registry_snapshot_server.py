@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.18.12-staging").strip() or "2026.09.18.12-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.18.13-staging").strip() or "2026.09.18.13-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -15041,10 +15041,6 @@ def wi_foundation_filing_identity(candidate: dict, original_name: str, ein: str,
     opener = wi_request_opener()
     opener.cc_identity_diagnostics = diagnostics
     try:
-        landing = wi_identity_read(lambda: wi_identity_page(opener, detail_url, deadline), deadline, "Wisconsin credential identity", diagnostics)
-        if not wi_same_credential_text(html_to_text(landing), candidate):
-            diagnostics["reason"] = "credential_detail_incomplete"
-            return {}
         financial_request = urllib.request.Request(financial_url, headers={"Referer": detail_url})
         page = wi_identity_read(lambda: wi_identity_page(opener, financial_request, deadline), deadline, "Wisconsin fiscal-year selection", diagnostics)
         if not wi_same_credential_text(html_to_text(page), candidate):

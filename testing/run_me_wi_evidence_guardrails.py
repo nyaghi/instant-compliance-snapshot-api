@@ -30,7 +30,7 @@ class EvidenceTests(unittest.TestCase):
     def retrieve(self, *, profile=None, form=None, response=None):
         diagnostics = {}
         with patch.object(c,'public_profile_for_ein',return_value=profile if profile is not None else self.profile), \
-             patch.object(c,'wi_identity_page',side_effect=[self.detail,form or self.form,response or self.response]):
+             patch.object(c,'wi_identity_page',side_effect=[form or self.form,response or self.response]):
             evidence=c.wi_foundation_filing_identity(self.candidate,self.name,self.ein,time.monotonic()+30,diagnostics)
         return evidence,diagnostics
 

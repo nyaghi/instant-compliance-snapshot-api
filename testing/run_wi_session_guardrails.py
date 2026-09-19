@@ -92,7 +92,7 @@ class SessionTests(unittest.TestCase):
     def test_financial_proof_and_live_status_use_same_session_and_credential(self):
         fixture = EvidenceTests(); fixture.setUp()
         seen = []
-        pages = iter([fixture.detail, fixture.form, fixture.response, fixture.detail.replace('(Active)', '(Revoked)')])
+        pages = iter([fixture.form, fixture.response, fixture.detail.replace('(Active)', '(Revoked)')])
         def read(opener, request, deadline):
             seen.append((opener, request))
             return next(pages)
@@ -104,16 +104,16 @@ class SessionTests(unittest.TestCase):
         self.assertFalse(candidate['identity_conflict'])
         self.assertEqual(c.wi_status_from_detail_status(candidate['detail_status']), 'Revoked')
         self.assertEqual(len({id(opener) for opener, _ in seen}), 1)
-        self.assertEqual(len(seen), 4)
-        self.assertIn('CredSummaryDetails.aspx', seen[0][1])
-        self.assertEqual(seen[1][1].get_header('Referer'), seen[0][1])
+        self.assertEqual(len(seen), 3)
+        self.assertIn('Financials.aspx', seen[0][1].full_url)
+        self.assertIn('CredSummaryDetails.aspx', seen[0][1].get_header('Referer'))
 
-    def test_wrong_credential_landing_never_becomes_financial_proof(self):
+    def test_wrong_financial_credential_never_becomes_identity_proof(self):
         fixture = EvidenceTests(); fixture.setUp(); diagnostics = {}
         with patch.object(c, 'public_profile_for_ein', return_value=fixture.profile), patch.object(c, 'wi_identity_page', return_value=fixture.detail.replace('76543-800','99999-800')) as read:
             evidence = c.wi_foundation_filing_identity(fixture.candidate, fixture.name, fixture.ein, time.monotonic()+15, diagnostics)
         self.assertFalse(evidence)
-        self.assertEqual(diagnostics['reason'], 'credential_detail_incomplete')
+        self.assertEqual(diagnostics['reason'], 'financial_credential_incomplete')
         read.assert_called_once()
 
     def test_selected_credential_recovery_uses_remaining_state_budget(self):
