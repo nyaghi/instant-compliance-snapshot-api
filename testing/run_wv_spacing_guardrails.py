@@ -10,6 +10,31 @@ import run_wv_sc_selection_guardrails as selection
 
 
 class SpacingTests(unittest.TestCase):
+    def test_literal_apostrophe_precedes_generated_spellings(self):
+        for name, expected in [("GiGi's Playhouse, Inc.", "GiGi's Playhouse"),
+                               ("Children\u2019s Health Care Foundation", "Children's Health Care Foundation"),
+                               ("O'Brien Relief, Inc.", "O'Brien Relief")]:
+            with self.subTest(name=name), patch.object(c, 'known_names_for_ein', return_value=[]):
+                queries = c.wv_preferred_query_variants(name, '', limit=10)
+                self.assertEqual(queries[0], expected)
+                self.assertEqual(len({q.casefold() for q in queries}), len(queries))
+
+    def test_stripped_or_spaced_probe_cannot_replace_literal_search(self):
+        planned = ["GiGi's Playhouse", 'GiGis Playhouse', "Gi Gi's Playhouse, Inc."]
+        self.assertFalse(c.wv_core_search_completed(planned[1:], planned))
+        self.assertTrue(c.wv_core_search_completed(planned[:2], planned))
+
+    def test_literal_candidate_still_requires_correct_entity(self):
+        fixture = selection.SelectionTests()
+        for candidate, accepted in [("GiGi's Playhouse, Inc.", True),
+                                    ("GiGi's Playhouse - Charleston", False),
+                                    ("GiGi's Playhouse Foundation", False)]:
+            with self.subTest(candidate=candidate), patch.object(c, 'known_names_for_ein', return_value=[]):
+                result, selected = fixture.wv([('control', candidate, 'Closed')], name="GiGi's Playhouse, Inc.")
+                self.assertEqual(bool(result.matched_registry_identifier), accepted)
+                if accepted:
+                    self.assertEqual(result.status, 'Closed / Withdrawn / Canceled')
+
     def test_query_is_early_bounded_and_does_not_depend_on_discovery(self):
         with patch.object(c, 'known_names_for_ein', return_value=[]):
             queries = c.wv_preferred_query_variants('CurePSP, Inc.', '', limit=10)

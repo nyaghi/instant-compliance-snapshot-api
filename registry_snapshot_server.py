@@ -99,7 +99,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.18.14-staging").strip() or "2026.09.18.14-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.18.15-staging").strip() or "2026.09.18.15-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -14238,7 +14238,9 @@ def wi_search_names_for_org(org) -> list[str]:
             if value and value not in names:
                 names.append(value)
 
-    original_name = getattr(org, "organization_name", "")
+    # Normalize typography before query ranking: a curly apostrophe must not
+    # push the intact straight-apostrophe spelling outside the bounded search.
+    original_name = canonical_name_punctuation(getattr(org, "organization_name", ""))
     original_no_article = re.sub(r"^(?:the|a|an)\s+", "", original_name or "", flags=re.I).strip()
     wi_early_distinctive_tokens: set[str] = set()
     wi_early_structural_rank: dict[str, int] = {}
@@ -23058,6 +23060,12 @@ def wv_preferred_query_variants(name: str, ein: str = "", *, limit=None) -> list
         # It must not depend on another state's discovery source completing.
         planned = [query for query in planned if query.casefold() != spaced.casefold()]
         planned.insert(min(1, len(planned)), spaced)
+    if "'" in name:
+        # WV treats an apostrophe as a literal search character. The intact
+        # legal name must precede possessive/spacing experiments; normalized
+        # name equivalence does not prove equivalent registry retrieval.
+        literal = re.sub(r"(?:,?\s+(?:inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited))+$", "", name.strip(), flags=re.I)
+        planned = [literal, *[query for query in planned if query.casefold() != literal.casefold()]]
     # reviewed_queries_first already bounds generated probes while preserving
     # every reviewed identity. Do not apply the generated-probe cap to aliases.
     return planned
@@ -23067,6 +23075,12 @@ def wv_core_search_completed(completed_queries: list[str], planned_queries: list
     """WV can decide a clean no-match after core legal-name probes finish."""
     if not completed_queries:
         return False
+    if planned_queries and "'" in planned_queries[0]:
+        # A completed punctuation-stripped probe cannot stand in for this
+        # literal probe, even when both normalize to the same match identity.
+        completed = {canonical_name_punctuation(query).strip().casefold() for query in completed_queries}
+        if planned_queries[0].strip().casefold() not in completed:
+            return False
     if required_queries and not reviewed_identity_queries_completed(completed_queries, required_queries):
         return False
     if len(completed_queries) >= len(planned_queries):

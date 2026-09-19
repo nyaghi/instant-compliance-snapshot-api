@@ -6,6 +6,18 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import registry_snapshot_server as c
 
 class CrossStateTests(unittest.TestCase):
+    def test_typographic_apostrophes_keep_literal_name_in_bounded_queries(self):
+        for straight in ["Children's Hospital Los Angeles", "O'Brien Relief, Inc.", "Women's Learning Foundation"]:
+            expected = None
+            for apostrophe in ["'", "\u2019", "\u2018", "\u02bc", "\uff07"]:
+                name = straight.replace("'", apostrophe)
+                with self.subTest(name=name), patch.object(c, 'known_names_for_ein', return_value=[]):
+                    queries = c.wi_search_names_for_org(c.checker.Organization(name, '123456789'))[:6]
+                    if expected is None:
+                        expected = queries
+                    self.assertEqual(queries, expected)
+                    self.assertTrue(any("'" in query for query in queries))
+
     def setUp(self):
         c.IDENTITY_SOURCE_CACHE.clear()
         self.ein='123456789';self.name='Regional Learning Association'
