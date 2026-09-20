@@ -133,7 +133,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.20.3-staging").strip() or "2026.09.20.3-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.20.4-staging").strip() or "2026.09.20.4-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -1837,6 +1837,8 @@ def known_names_for_ein(ein: str) -> list[str]:
 REVIEWED_NAME_CONTEXT = ContextVar("reviewed_organization_names", default={})
 IDENTITY_SOURCE_CACHE: dict[tuple, tuple[float, dict]] = {}
 IDENTITY_CACHE_LOCK = threading.Lock()
+IRS_HISTORY_HEADER_CACHE: dict[tuple[str, str], tuple[float, list[dict]]] = {}
+IRS_HISTORY_INDEX_CACHE: dict[tuple[str, str], tuple[float, list[str]]] = {}
 IDENTITY_STATES = ("AK", "CA", "CO", "HI", "MA", "MD", "MI", "NM", "NJ", "OH", "OR", "PA", "VA", "WA")
 IDENTITY_SOURCE_POOL = ThreadPoolExecutor(max_workers=24, thread_name_prefix="identity-source")
 # Browser admission must not consume the HTTP-source workers while it waits.
@@ -2264,20 +2266,53 @@ def irs_historical_filer_names(source: str, ein: str, url: str) -> list[dict]:
 def identity_irs_historical_names(ein: str, latest_object_id: str, deadline: float) -> dict:
     # The organization-specific index supplies filing IDs. Inspect at most three
     # oldest electronic returns within the existing discovery deadline.
-    index = identity_fetch(f"https://projects.propublica.org/nonprofits/organizations/{ein}", deadline).decode("utf-8", "replace")
-    ids = sorted(set(re.findall(r"/organizations/" + ein + r"/(\d{18})/full\b", index)) - {latest_object_id})[:3]
-    names, checked, complete = [], 0, True
+    ein = canonical_ein_digits(ein)
+    key = (ein, latest_object_id)
+    with IDENTITY_CACHE_LOCK:
+        cached_index = IRS_HISTORY_INDEX_CACHE.get(key)
+    if cached_index and cached_index[0] > time.time():
+        ids = list(cached_index[1])
+    else:
+        index = identity_fetch(f"https://projects.propublica.org/nonprofits/organizations/{ein}", deadline).decode("utf-8", "replace")
+        ids = sorted(set(re.findall(r"/organizations/" + ein + r"/(\d{18})/full\b", index)) - {latest_object_id})[:3]
+        # Do not cache a possibly blocked/incomplete index as an empty history.
+        if not ids and latest_object_id not in index:
+            raise ValueError("IRS filing index did not expose the requested filing history")
+        with IDENTITY_CACHE_LOCK:
+            if len(IRS_HISTORY_INDEX_CACHE) >= 1200:
+                IRS_HISTORY_INDEX_CACHE.pop(next(iter(IRS_HISTORY_INDEX_CACHE)))
+            IRS_HISTORY_INDEX_CACHE[key] = (time.time() + 21600, ids)
+    confirmed, failed = {}, []
+    def read_header(object_id):
+        with IDENTITY_CACHE_LOCK:
+            cached = IRS_HISTORY_HEADER_CACHE.get((ein, object_id))
+        if cached and cached[0] > time.time():
+            return [dict(item, evidence=[dict(proof) for proof in item["evidence"]]) for item in cached[1]]
+        url = f"https://projects.propublica.org/nonprofits/full_text/{object_id}/IRS990"
+        source = identity_fetch(url, deadline).decode("utf-8", "replace")
+        names = irs_historical_filer_names(source, ein, url)
+        # Only successfully parsed same-EIN filer evidence is reusable. A failed
+        # sibling header cannot erase this evidence on the next discovery.
+        with IDENTITY_CACHE_LOCK:
+            if len(IRS_HISTORY_HEADER_CACHE) >= 3600:
+                IRS_HISTORY_HEADER_CACHE.pop(next(iter(IRS_HISTORY_HEADER_CACHE)))
+            IRS_HISTORY_HEADER_CACHE[(ein, object_id)] = (time.time() + 21600, names)
+        return names
     for object_id in ids:
         try:
-            url = f"https://projects.propublica.org/nonprofits/full_text/{object_id}/IRS990"
-            source = identity_fetch(url, deadline).decode("utf-8", "replace")
-            names.extend(irs_historical_filer_names(source, ein, url)); checked += 1
+            confirmed[object_id] = read_header(object_id)
         except Exception:
-            complete = False
-        if time.monotonic() >= deadline:
-            break
-    return {"names": names, "historical_returns_checked": checked,
-            "historical_complete": complete and checked == len(ids),
+            failed.append(object_id)
+    for object_id in failed:
+        if time.monotonic() >= deadline - .2: break
+        try:
+            confirmed[object_id] = read_header(object_id)
+        except Exception:
+            pass
+    return {"names": [item for object_id in ids for item in confirmed.get(object_id, [])],
+            "historical_returns_checked": len(confirmed),
+            "historical_complete": len(confirmed) == len(ids),
+            "historical_returns_expected": len(ids),
             "historical_note": "Up to three oldest available electronic IRS filer headers checked for former names; this is not an exhaustive name history."}
 
 
@@ -2315,7 +2350,7 @@ def identity_irs_names(ein: str, deadline: float) -> dict:
     except Exception:
         result["limitation"] = "IRS organization name checked; the latest Form 990 header could not be confirmed."
     try:
-        history = identity_irs_historical_names(ein, object_id, min(deadline - 0.2, time.monotonic() + 6.0))
+        history = identity_irs_historical_names(ein, object_id, min(deadline - 0.2, time.monotonic() + 26.0))
         result["names"].extend(history.pop("names")); result.update(history)
         if not result["historical_complete"]:
             result.update(complete=False, limitation="Current IRS names retained; some historical filer headers could not be checked.")
@@ -2842,6 +2877,11 @@ IRS_PDF_TEXT_LOCK = threading.Lock()
 IRS_HEADER_OCR = None
 IRS_HEADER_TITLE_OCR = None
 IRS_HEADER_OCR_LOCK = threading.Lock()
+HI_DOCUMENT_PERIOD_CACHE: dict[tuple, tuple[float, dict]] = {}
+
+
+class FilingPeriodReadIncomplete(RuntimeError):
+    """A retrieval/extraction failure is not an undated, completely read filing."""
 
 
 def irs_form_period_is_valid(begin, end, label: int) -> bool:
@@ -2936,14 +2976,18 @@ def form990_header_period(text: str, line: str, ein: str, label: int, url: str) 
 
 
 @release_native_memory_after
-def irs_scanned_header_period(images: list, ein: str, label: int, url: str, deadline: float) -> dict:
+def irs_scanned_header_period(images: list, ein: str, label: int, url: str, deadline: float, *, require_complete: bool = False) -> dict:
     """Read bounded header crops; OCR never treats empty boxes as calendar proof."""
     global IRS_HEADER_OCR, IRS_HEADER_TITLE_OCR
     acquired = False
+    header_read = False
+    def incomplete(reason):
+        if require_complete: raise FilingPeriodReadIncomplete(reason)
+        return {}
     try:
-        if not images or time.monotonic() >= deadline: return {}
-        acquired = IRS_HEADER_OCR_LOCK.acquire(timeout=min(1.0, max(.01, deadline-time.monotonic())))
-        if not acquired: return {}
+        if not images or time.monotonic() >= deadline: return incomplete("OCR input or time unavailable")
+        acquired = IRS_HEADER_OCR_LOCK.acquire(timeout=min(21.0 if require_complete else 1.0, max(.01, deadline-time.monotonic())))
+        if not acquired: return incomplete("OCR reader remained busy")
         from rapidocr_onnxruntime import RapidOCR
         if IRS_HEADER_OCR is None:
             IRS_HEADER_OCR = RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1)
@@ -2951,16 +2995,17 @@ def irs_scanned_header_period(images: list, ein: str, label: int, url: str, dead
             IRS_HEADER_TITLE_OCR = RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1, det_limit_type="max", det_limit_side_len=1600)
         ordered = sorted(images, key=lambda entry: entry[0])
         for page_index, picture in ordered:
-            if time.monotonic() >= deadline: return {}
+            if time.monotonic() >= deadline: return incomplete("OCR header scan deadline reached")
             title = picture.crop((0, 0, picture.width, int(picture.height*8/18)))
             try: title_rows, _ = IRS_HEADER_TITLE_OCR(title, use_cls=False)
             finally: title.close()
             text = " ".join(r[1] for r in title_rows or [] if float(r[2]) >= .95)
             if not (re.search(r"8879-TE\b", text) or (re.search(r"990(?:-EZ|-PF)?\b", text) and "returnoforganization" in re.sub(r"\s", "", text.lower()))): continue
-            if time.monotonic() >= deadline: return {}
+            if time.monotonic() >= deadline: return incomplete("OCR header extraction deadline reached")
             rows, _ = IRS_HEADER_OCR(picture, use_cls=False)
             rows = [r for r in rows or [] if float(r[2]) >= .95]
             text = "\n".join(r[1] for r in rows)
+            header_read = header_read or (canonical_ein_digits(ein) in re.sub(r"\D", "", text) and str(label) in text)
             for anchor in rows:
                 if not re.search(r"(?:tax|fiscal)\s+year\s+beginning", anchor[1], re.I): continue
                 center = sum(p[1] for p in anchor[0])/4
@@ -2970,17 +3015,21 @@ def irs_scanned_header_period(images: list, ein: str, label: int, url: str, dead
                 evidence = form990_header_period(text, line, ein, label, url)
                 if evidence and re.search(r"beginning\s*(?:[A-Z]{3,9}\s*\d|\d{1,2}[/.-]\d)", line, re.I):
                     return dict(evidence, period_extraction="Scanned IRS header", pdf_page=page_index+1)
-    except Exception:
-        pass
+    except Exception as exc:
+        if require_complete:
+            raise FilingPeriodReadIncomplete(str(exc)) from exc
     finally:
         if acquired: IRS_HEADER_OCR_LOCK.release()
         for _, picture in images: picture.close()
-    return {}
+    return {} if header_read or not require_complete else incomplete("The same-EIN filing header was not readable")
 
 
-def form990_pdf_period(body: bytes, ein: str, label: int, url: str, deadline: float | None = None) -> dict:
+def form990_pdf_period(body: bytes, ein: str, label: int, url: str, deadline: float | None = None, *, require_complete: bool = False) -> dict:
     """Read only the return/8879 header; support separately positioned PDF text."""
-    if not body.startswith(b"%PDF") or not PdfReader: return {}
+    def incomplete(reason):
+        if require_complete: raise FilingPeriodReadIncomplete(reason)
+        return {}
+    if not body.startswith(b"%PDF") or not PdfReader: return incomplete("A readable PDF was not retrieved")
     # Honor the caller's bounded scan allowance for attachments with cover pages.
     # Standalone callers retain the existing 20-second default.
     deadline = min(deadline or time.monotonic()+20, time.monotonic()+76)
@@ -2993,20 +3042,22 @@ def form990_pdf_period(body: bytes, ein: str, label: int, url: str, deadline: fl
     # PDFium (provided by the existing pdfplumber dependency) reads the visible
     # text layers missed by pypdf. Coordinates keep values on the actual header
     # row; a printed extension banner cannot become the fiscal period.
-    if not IRS_PDF_TEXT_LOCK.acquire(timeout=2.0): return {}
+    if not IRS_PDF_TEXT_LOCK.acquire(timeout=min(2.0, max(.01, deadline-time.monotonic()))): return incomplete("PDF text reader remained busy")
     scanned_images = []
+    header_read = False
     try:
         import pypdfium2 as pdfium
         with pdfium.PdfDocument(body) as document:
             page_indices = list(dict.fromkeys(list(range(min(6, len(document)))) + list(range(len(document)-1, max(-1, len(document)-9), -1))))
             scanned_pages = []
             for page_index in page_indices:
-                if time.monotonic() >= deadline: return {}
+                if time.monotonic() >= deadline: return incomplete("PDF text scan deadline reached")
                 page = document[page_index]; textpage = page.get_textpage()
                 try:
                     header = textpage.get_text_bounded(left=0, bottom=page.get_height()*.65, right=page.get_width(), top=page.get_height())
                     if not header.strip(): scanned_pages.append(page_index)
                     if canonical_ein_digits(ein) not in re.sub(r"\D", "", header): continue
+                    header_read = header_read or (str(label) in header and bool(re.search(r"\b(?:990(?:-EZ|-PF)?|8879-TE)\b", header)))
                     for phrase in ("tax year beginning", "fiscal year beginning"):
                         search = textpage.search(phrase)
                         try: found = search.get_next()
@@ -3028,18 +3079,22 @@ def form990_pdf_period(body: bytes, ein: str, label: int, url: str, deadline: fl
             # Capture bounded crops while PDFium is locked, then release it
             # before OCR so scanned documents do not block ordinary PDFs.
             for page_index in scanned_pages:
-                if time.monotonic() >= deadline: break
+                if time.monotonic() >= deadline: return incomplete("PDF image extraction deadline reached")
                 page = document[page_index]
                 try:
                     bitmap = page.render(scale=1.5, crop=(0, page.get_height()*.82, 0, 0))
                     try: scanned_images.append((page_index, bitmap.to_pil().copy()))
                     finally: bitmap.close()
                 finally: page.close()
-    except Exception:
-        pass
+    except Exception as exc:
+        if require_complete:
+            for _, picture in scanned_images: picture.close()
+            raise FilingPeriodReadIncomplete(str(exc)) from exc
     finally:
         IRS_PDF_TEXT_LOCK.release()
-    return irs_scanned_header_period(scanned_images, ein, label, url, deadline)
+    if not scanned_images:
+        return {} if header_read or not require_complete else incomplete("The same-EIN filing header was not found")
+    return irs_scanned_header_period(scanned_images, ein, label, url, deadline, require_complete=require_complete)
 
 
 def hi_attachment_period(source: str, ein: str, label: int, deadline: float) -> dict:
@@ -3049,11 +3104,22 @@ def hi_attachment_period(source: str, ein: str, label: int, deadline: float) -> 
     for path, _ in links[:1]:
         url = "https://charity.ehawaii.gov" + path
         try:
-            evidence = form990_pdf_period(identity_fetch(url, deadline, max_bytes=12_000_000), ein, label, url, deadline)
+            body = identity_fetch(url, deadline, max_bytes=12_000_000)
+            # Reuse only a verified period for identical document bytes, EIN,
+            # year and URL. A replacement attachment cannot inherit old dates.
+            key = (digits, label, url, hashlib.sha256(body).hexdigest())
+            with TAX_PERIOD_EVIDENCE_LOCK:
+                cached = HI_DOCUMENT_PERIOD_CACHE.get(key)
+            if cached and cached[0] > time.time(): return dict(cached[1])
+            evidence = form990_pdf_period(body, ein, label, url, deadline, require_complete=True)
             if evidence:
+                with TAX_PERIOD_EVIDENCE_LOCK:
+                    if len(HI_DOCUMENT_PERIOD_CACHE) >= 256:
+                        HI_DOCUMENT_PERIOD_CACHE.pop(next(iter(HI_DOCUMENT_PERIOD_CACHE)))
+                    HI_DOCUMENT_PERIOD_CACHE[key] = (time.time() + 21600, dict(evidence))
                 return evidence
-        except Exception:
-            pass
+        except Exception as exc:
+            raise FilingPeriodReadIncomplete(f"Hawaii attachment read incomplete: {type(exc).__name__}: {exc}") from exc
     return {}
 
 
@@ -3062,13 +3128,21 @@ def hi_public_filing_period(page, ein: str) -> dict:
     labels = [int(value) for value in re.findall(r'id="irs_(20\d{2})"', source)]
     if not labels: return {}
     label = max(labels); deadline = time.monotonic() + 80.0
-    evidence = hi_attachment_period(source, ein, label, min(deadline - 8.0, time.monotonic() + 72.0))
+    read_failure = ""
+    try:
+        evidence = hi_attachment_period(source, ein, label, min(deadline - 8.0, time.monotonic() + 72.0))
+    except FilingPeriodReadIncomplete as exc:
+        evidence = {}; read_failure = str(exc)
     if evidence:
         return {**evidence, "state_source_url": page.url, "period_basis": "Hawaii filing attachment"}
     # The exact state label remains the anchor if its attachment is scanned.
     evidence = irs_period_for_label(ein, label, deadline)
-    return ({**evidence, "state_source_url": page.url, "period_basis": "IRS return with the same tax-year label shown by Hawaii"}
-            if evidence else assumed_calendar_period(ein, label, page.url))
+    if evidence:
+        return {**evidence, "state_source_url": page.url, "period_basis": "IRS return with the same tax-year label shown by Hawaii"}
+    if read_failure:
+        return {"ein": canonical_ein_digits(ein), "tax_year_label": label, "state_source_url": page.url,
+                "period_unconfirmed": True, "period_read_failure": read_failure}
+    return assumed_calendar_period(ein, label, page.url)
 
 
 def irs_base_return_due(period_end: date) -> date:
@@ -3095,7 +3169,10 @@ def annotate_irs_based_state_period(result, evidence: dict):
         result.raw_status_text = " | ".join(part.strip() for part in (result.raw_status_text or "").split("|")
             if not re.match(r"\s*(?:Next Required Period|Next Filing Due|IRS Base Due)\s*:", part, re.I))
         return result
-    if evidence.get("period_unconfirmed"): return unconfirmed_period()
+    if evidence.get("period_unconfirmed"):
+        if evidence.get("period_read_failure"):
+            result.period_read_failure = evidence["period_read_failure"]
+        return unconfirmed_period()
     if evidence.get("ein") != canonical_ein_digits(result.ein): return result
     end = parse_due_date(evidence.get("period_end", "")); begin = parse_due_date(evidence.get("period_begin", ""))
     if not irs_form_period_is_valid(begin, end, evidence.get("tax_year_label")): return result
@@ -16722,6 +16799,7 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         "computed_due_date",
         "ma_filing_evidence",
         "tax_period_evidence",
+        "period_read_failure",
         "address_evidence",
         "ny_filing_evidence",
         "mn_alias_evidence",
@@ -19561,7 +19639,11 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
                 f"Period evidence: {evidence['period_basis']}. {transition} IRS information is used to interpret the period; the state’s own listing establishes the year on record.")
     if getattr(result, "status_reason", "") in {"KY_TAX_PERIOD_UNCONFIRMED", "HI_TAX_PERIOD_UNCONFIRMED"}:
         state_name = "Kentucky" if result.state == "KY" else "Hawaii"
+        if getattr(result, "period_read_failure", ""):
+            return f"{state_name} lists the organization and a filing year, but the filing document could not be completely retrieved or read. The IRS fallback did not confirm its fiscal period. CharityClarity has not substituted an assumed December 31 date for that incomplete read."
         return f"{state_name} lists a filing-year label, but the corresponding annual return period could not be confirmed or was a short tax year. CharityClarity cannot safely infer the next annual deadline from that label. Confirm the period on the filed Form 990."
+    if getattr(result, "status_reason", "") == "KY_IDENTITY_DISCOVERY_INCOMPLETE":
+        return result.source_note
     """Explain the existing decision from its evidence; never change a result or query a registry."""
     status = public_facing_status.strip()
     state = (getattr(result, "state", "") or "").upper()
@@ -20814,7 +20896,44 @@ def search_snapshot_or_embedded_state(org, state: str):
         if state in {"KS"} and (getattr(result, "matched_registry_name", "") or getattr(result, "matched_registry_identifier", "")):
             return result
         best_result = result
-    return best_result or run_variant(original_name)
+    final = best_result or run_variant(original_name)
+    return ky_recover_incomplete_discovery(org, final) if state == "KY" else final
+
+
+def ky_recover_incomplete_discovery(org, result):
+    """Recover a known incomplete IRS history only after Kentucky has no match."""
+    ein = canonical_ein_digits(org.ein)
+    previous = identity_cached_source_result("IRS", ein)
+    if public_status(result) != "Not Registered" or not previous or previous.get("historical_complete") is not False:
+        return result
+    try:
+        refreshed = identity_irs_names(ein, time.monotonic() + 26.0)
+    except Exception:
+        refreshed = {"names": [], "complete": False, "historical_complete": False}
+    with IDENTITY_CACHE_LOCK:
+        IDENTITY_SOURCE_CACHE[identity_source_cache_key("IRS", ein)] = (
+            time.time() + (21600 if refreshed.get("complete") else 60), {**refreshed, "source": "IRS"})
+    # This is a new same-EIN filer-header confirmation, not acceptance of a
+    # generated spelling or an unrelated state's unverified name suggestion.
+    recovered = [item["name"] for item in refreshed.get("names", []) if item.get("verified")]
+    if recovered:
+        names = tuple(dict.fromkeys([*known_names_for_ein(ein), *recovered]))
+        token = REVIEWED_NAME_CONTEXT.set({**REVIEWED_NAME_CONTEXT.get(), ein: names})
+        try:
+            confirmed = search_ky_strict_snapshot(org)
+        finally:
+            REVIEWED_NAME_CONTEXT.reset(token)
+        if public_status(confirmed) != "Not Registered":
+            confirmed.source_note += " A bounded same-EIN IRS filer-header recovery supplied the previously incomplete name evidence; Kentucky's name and identity checks were unchanged."
+            return confirmed
+    if refreshed.get("historical_complete"):
+        return result
+    result.status = "Unable to Verify"
+    result.status_reason = "KY_IDENTITY_DISCOVERY_INCOMPLETE"
+    result.success = False
+    result.raw_status_text = "Kentucky's listed names were searched, but the requested EIN's former-name evidence remains incomplete."
+    result.source_note = "Kentucky did not match the available names. The same-EIN IRS former-name check did not finish after recovery, so a definitive Not Registered result would be premature."
+    return result
 
 
 def _search_snapshot_or_embedded_state_once(org, state: str):
