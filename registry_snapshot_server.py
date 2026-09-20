@@ -133,7 +133,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.20.1-staging").strip() or "2026.09.20.1-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.20.2-staging").strip() or "2026.09.20.2-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -23209,10 +23209,14 @@ def canonical_legal_query_first(name: str, planned: list[str], spellings: list[s
 
 def ms_name_search_plan(name: str, ein: str = "") -> list[str]:
     """Reach a bounded primary-name spelling before unrelated program aliases."""
+    # Submit one supported dash spelling per complete identity before fallbacks.
+    # Keeping both typographic and ASCII dashes here delays distinct reviewed
+    # former names without adding identity evidence.
+    name = ascii_dash_search_name(name)
     priority = [name, distinctive_acronym_core_probe(name), *literal_name_retrieval_forms(name)]
     priority = [value for value in priority if value and not ms_search_variant_too_broad(value)]
     generated = list(dict.fromkeys([*priority, *ms_preferred_search_variants(name, ein)]))
-    planned = reviewed_queries_first(name, ein, generated, limit=6)
+    planned = reviewed_queries_first(name, ein, generated, limit=6, transform=ascii_dash_search_name)
     # These are retrieval probes only; search_ms_fast still checks full row and
     # detail identity against original_organization_name and reviewed names.
     return list(dict.fromkeys([*priority, *planned]))

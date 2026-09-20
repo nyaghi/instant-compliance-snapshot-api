@@ -40,6 +40,18 @@ class SearchSpellings(unittest.TestCase):
     def test_alternate_name_bound_and_validation_remain(self):
         with self.assertRaises(ValueError):c.normalize_reviewed_names(['Name']*33)
         with self.assertRaises(ValueError):c.normalize_reviewed_names(['bad\nname'])
+    def test_ms_reaches_distinct_reviewed_names_before_dash_duplicate(self):
+        self.scope(['FII - NATIONAL','UPTOGETHER','FII-NATIONAL','Family Independence Initiative'])
+        plan=c.ms_name_search_plan('FII\u2013National','020784790')
+        self.assertEqual([p.casefold() for p in plan[:4]],['fii-national','fii - national','uptogether','family independence initiative'])
+        self.assertTrue(c.reviewed_identity_queries_completed(plan[:4],c.equivalent_name_queries('FII\u2013National','020784790')))
+        self.assertFalse(any('\u2013' in p for p in plan))
+    def test_ms_dash_normalization_keeps_distinct_alias_and_identity_guard(self):
+        self.scope(['North\u2013South Learning','Different Former Name'])
+        plan=c.ms_name_search_plan('North-South Learning','020784790')
+        self.assertIn('Different Former Name',plan)
+        self.assertEqual(sum(p.casefold()=='north-south learning' for p in plan),1)
+        self.assertFalse(c.ms_registry_name_is_safe('Organization for Autism Research','Autism Research Institute','952548452'))
 
 class OfficeEvidence(unittest.TestCase):
     ein='123456789';name='Regional Learning Association'
