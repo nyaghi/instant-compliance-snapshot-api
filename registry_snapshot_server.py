@@ -133,7 +133,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.20.2-staging").strip() or "2026.09.20.2-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.20.3-staging").strip() or "2026.09.20.3-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -22654,12 +22654,18 @@ def ar_reviewed_search_plan(org, generated):
         if probe and probe.casefold() in prefixes and probe.casefold() not in seen:
             # The phrase occupies its identity's reviewed-name priority slot.
             queries.append(probe); seen.add(probe.casefold())
+            # An empty phrase already covers this literal form. If the phrase
+            # instead returns unrelated rows, the full-name search must remain
+            # available before absence can be established.
+            query = (literal_name_retrieval_forms(name) or [name])[0]
+            if query.casefold() not in seen:
+                queries.append(query); seen.add(query.casefold())
         elif name.casefold() not in seen:
             # A literal suffix-free spelling retrieves both "Inc" and
             # "Inc." without admitting the retrieval phrase as an identity.
-            # The original primary already has its mature fallback ladder.
-            # Add the missing spelling only for a distinct complete alias.
-            forms = literal_name_retrieval_forms(name) if normalized_match_name(name) != normalized_match_name(org.organization_name) else []
+            # Keep this useful spelling in the same priority slot for the
+            # primary name too, before aliases can consume the time budget.
+            forms = literal_name_retrieval_forms(name)
             queries.append(name); seen.add(name.casefold())
             query = forms[0] if forms else name
             if query.casefold() not in seen:
@@ -22717,6 +22723,20 @@ def search_ar_precise(page, org):
     completed_variants = []
     empty_variants = []
     required_identities = equivalent_name_queries(original_name, org.ein)
+
+    # Arkansas searches literal text. Completing "Name, Inc." does not prove
+    # that the suffix-free query completed, even though both identify the same
+    # organization. Require the useful literal form before certifying absence.
+    required_retrieval_queries = list(dict.fromkeys(
+        (literal_name_retrieval_forms(name) or [name])[0]
+        for name in [original_name, *known_names_for_ein(org.ein)] if name
+    ))
+
+    def missing_retrieval_queries():
+        completed = {query.casefold() for query in completed_variants}
+        return [query for query in required_retrieval_queries
+                if query.casefold() not in completed and not any(
+                    query.casefold().startswith(empty.casefold()) for empty in empty_variants)]
 
     def record_progress():
         result.queries_attempted = list(attempted_variants)
@@ -22853,6 +22873,7 @@ def search_ar_precise(page, org):
             result.reason_code = "AR_RELATED_ENTITY_EIN_UNAVAILABLE"
             result.success = False
         elif ((rows_seen or (explicit_no_results_seen and not result_shell_without_rows))
+              and not missing_retrieval_queries()
               and (not known_names_for_ein(org.ein) or reviewed_identity_queries_completed(
                   completed_variants + ar_completed_empty_identities(empty_variants, empty_prefixes, planned_variants), required_identities))):
             result.status = checker.STATUS_NOT_REGISTERED
@@ -22867,6 +22888,7 @@ def search_ar_precise(page, org):
             result.status = "Unable to Verify"
             missing = [name for name in required_identities if not reviewed_identity_queries_completed(
                 completed_variants + ar_completed_empty_identities(empty_variants, empty_prefixes, planned_variants), [name])]
+            missing = list(dict.fromkeys([*missing, *missing_retrieval_queries()]))
             result.raw_status_text = "Arkansas public charity search did not complete every required name search"
             result.source_note = (
                 "Arkansas public charity search was reachable, but a required search did not return a complete result. "

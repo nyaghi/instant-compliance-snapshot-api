@@ -67,7 +67,7 @@ class ArkansasTests(unittest.TestCase):
 
     def lookup(self, rows, ein='832985088', name=None):
         org=cc.checker.Organization(name or self.name,ein)
-        with patch.object(cc,'ar_preferred_name_variants',return_value=[org.organization_name]), \
+        with patch.object(cc,'ar_preferred_name_variants',return_value=[org.organization_name,*cc.literal_name_retrieval_forms(org.organization_name)[:1]]), \
              patch.object(cc,'organization_name_variants',return_value=[]), \
              patch.object(cc,'ar_wait_for_search_form',return_value=True), \
              patch.object(cc,'registry_page_body',return_value='Back to Search Form Registration Date'), \
