@@ -133,7 +133,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.19.5-staging").strip() or "2026.09.19.5-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.20.1-staging").strip() or "2026.09.20.1-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -1856,6 +1856,18 @@ def identity_name_key(value: str) -> str:
     return re.sub(r"(?:\s+(?:inc|incorporated|corp|corporation|llc|ltd|limited))+$", "", value).strip()
 
 
+def search_spelling_key(value: str) -> str:
+    """Keep literal dashes for retrieval deduplication, not identity matching."""
+    value = re.sub(r"[^\w\s\-\u2010-\u2015\u2212]", "", canonical_name_punctuation(value).casefold())
+    value = re.sub(r"\s+", " ", value).strip()
+    return re.sub(r"(?:\s+(?:inc|incorporated|corp|corporation|llc|ltd|limited))+$", "", value).strip()
+
+
+def ascii_dash_search_name(value: str) -> str:
+    """One punctuation-only retrieval alternative; acceptance stays unchanged."""
+    return re.sub(r"[\u2010-\u2015\u2212]", "-", value)
+
+
 def normalize_reviewed_names(value) -> list[str]:
     if not isinstance(value, list) or len(value) > IDENTITY_MAX_NAMES:
         raise ValueError(f"Provide at most {IDENTITY_MAX_NAMES} alternate names.")
@@ -1864,7 +1876,7 @@ def normalize_reviewed_names(value) -> list[str]:
         if not isinstance(item, str) or len(item) > 300 or re.search(r"[\x00-\x1f]", item):
             raise ValueError("Each alternate name must be plain text of at most 300 characters.")
         name = re.sub(r"\s+", " ", item).strip()
-        key = identity_name_key(name)
+        key = search_spelling_key(name)
         if key and key not in seen:
             result.append(name); seen.add(key)
     return result
@@ -2073,7 +2085,7 @@ def identity_co_names(ein: str, deadline: float) -> dict:
     return {"names": names, "complete": len(rows) < 100, "source_url": url, "organization_records": records}
 
 
-def registry_cross_state_identity(ein: str, registry_name: str, locations: list[str], deadline: float | None = None) -> dict:
+def registry_cross_state_identity(ein: str, registry_name: str, locations: list[str], deadline: float | None = None, *, registry_state: str = "WI") -> dict:
     """Corroborate identity from EIN-bound public names and organization offices.
 
     This supplies identity evidence only; the searched state's own credential
@@ -2137,10 +2149,22 @@ def registry_cross_state_identity(ein: str, registry_name: str, locations: list[
                 "ein_linked_location": f"{first['city']}, {first['state']}",
                 "source_url": first["source_url"], "cross_state_records": evidence,
                 "minor_city_spelling_difference": typo,
-                "basis": "The Wisconsin name and organization location agree with public records retrieved by the requested EIN in "
+                "basis": "The " + {"WI": "Wisconsin", "ME": "Maine", "WV": "West Virginia"}.get(registry_state, "registry") + " name and organization location agree with public records retrieved by the requested EIN in "
                     + ", ".join(sorted({row["source"] for row in evidence}))
                     + ("; two independent EIN-linked sources corroborate a one-character city spelling difference." if typo else ".")}
     return {}
+
+
+def reconciled_registry_address(ein: str, registry_name: str, location: str, *, registry_state: str, deadline: float | None = None) -> dict:
+    """Resolve an existing address conflict without creating a new match gate."""
+    evidence = registry_address_evidence(ein, location, registry_state=registry_state)
+    if evidence.get("decision") != "conflict":
+        return evidence
+    if deadline is not None and time.monotonic() >= deadline:
+        return evidence
+    office = re.sub(r"^\s*\*MULTIPLES\s+IN\s+", "", location, flags=re.I) if registry_state == "ME" else location
+    corroborated = registry_cross_state_identity(ein, registry_name, [office], deadline, registry_state=registry_state)
+    return corroborated or evidence
 
 
 def identity_or_names(ein: str, deadline: float) -> dict:
@@ -5166,6 +5190,8 @@ def build_search_queries(
             add(format_ein(digits))
 
     if known_names_for_ein(ein or ""):
+        if ascii_dash_search_name(org_name) != org_name:
+            add(ascii_dash_search_name(org_name))
         add(org_name)
         for reviewed_name in known_names_for_ein(ein or ""):
             add(reviewed_name)
@@ -5182,6 +5208,8 @@ def build_search_queries(
             add(variant)
     for variant in high_signal_search_phrases(org_name):
         add(variant)
+    if ascii_dash_search_name(org_name) != org_name:
+        add(ascii_dash_search_name(org_name))
     add(org_name)
     for variant in organization_name_variants(
         org_name,
@@ -7756,7 +7784,8 @@ def me_fast_direct_confirmation_result(org, page=None, deadline=None):
                     score = checker.candidate_selection_score_for_targets(row.get("name", ""), target_names, row_text)
                     if score[0] < 0 or not registry_name_is_safe_for_org(row.get("name", ""), org.organization_name, org.ein):
                         continue
-                    address = registry_address_evidence(org.ein, row.get("location", ""), registry_state="ME")
+                    address = reconciled_registry_address(org.ein, row.get("name", ""), row.get("location", ""), registry_state="ME",
+                        deadline=time.monotonic() + max(0, search_deadline - time.perf_counter()))
                     row["address_evidence"] = address
                     score = (score[0], registry_identity_preference(row.get("name", ""), org.organization_name, org.ein),
                              0 if address["decision"] == "conflict" else 1, score[1])
@@ -7827,7 +7856,7 @@ def me_result_from_search(org, best_row, best_opener, checked_any, last_error):
         result.address_evidence = address
         result.raw_status_text = "Matching name with unresolved organization-address conflict"
         result.status_reason = "REGISTRY_ADDRESS_CONFLICT"
-        result.source_note = (f"Maine lists {address['registry_location']}, but the EIN-linked organization record lists "
+        result.source_note = (f"Maine lists {address['registry_location']}, but the IRS organization record retrieved through ProPublica lists "
                               f"{address['ein_linked_location']}. The name-only match requires identity confirmation.")
         result.success = False
         return result
@@ -7884,6 +7913,8 @@ def me_result_from_search(org, best_row, best_opener, checked_any, last_error):
         part for part in [status_text, f"Expiration Date: {expiration_text}" if expiration_text else ""] if part
     )
     result.source_note = "Maine public registry search found a safely matched registration record."
+    if address.get("cross_state_records"):
+        result.source_note += " " + address["basis"]
     if last_error:
         result.source_note += f" Last non-fatal direct-confirmation detail error: {last_error}"
     result.success = True
@@ -10402,7 +10433,7 @@ def equivalent_name_queries(original_name: str, ein: str, *, preserve_at: bool =
     queries, seen = [], set()
     for value in [original_name, *known_names_for_ein(ein)]:
         query = re.sub(r"(?:,?\s+(?:inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited))+$", "", value.strip(), flags=re.I)
-        query = re.sub(r"[.'\u2019]", "", canonical_name_punctuation(query))
+        query = re.sub(r"[.'\u2019]", "", ascii_dash_search_name(canonical_name_punctuation(query)))
         query = re.sub(r"[^\w\s&@-]" if preserve_at else r"[^\w\s&-]", " ", query)
         query = re.sub(r"\s+", " ", query).strip()
         if query and query.casefold() not in seen:
@@ -10422,7 +10453,7 @@ def reviewed_queries_first(original_name: str, ein: str, generated: list[str], *
     for value in [original_name, *known_names_for_ein(ein)]:
         value = canonical_name_punctuation(value)
         value = transform(value) if transform else value
-        key = identity_name_key(value)
+        key = search_spelling_key(value)
         if key and key not in identity_seen:
             queries.append(value); identity_seen.add(key); seen.add(value.casefold())
     fallback_count = 0
@@ -16663,6 +16694,10 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
                              f"on Wisconsin credential {evidence['credential']} and the IRS Form 990-EZ data for the requested EIN. "
                              f"Wisconsin lists {evidence['registry_name']} and does not display an EIN; identity is inferred from filing evidence. "
                              "The credential status above was retrieved from Wisconsin for this check.")
+    if result.state in {"ME", "WV"} and result.success:
+        address = getattr(result, "address_evidence", {}) or getattr(result, "identity_evidence", {}).get("address", {})
+        if address.get("cross_state_records") and address.get("basis") not in data["comments"]:
+            data["comments"] += " " + address["basis"] + " Compliance status comes from this state's own registry record."
     data["evidence_url"] = ""
     data["lookup_seconds"] = round(time.perf_counter() - lookup_started, 2)
     data["checked_at_epoch"] = int(time.time())
@@ -18156,10 +18191,13 @@ def ny_select_confirmed_duplicate(org, rows, read_detail):
         active = 1 if re.fullmatch(r"\s*(?:active|current|registered|in good standing)\s*", raw_status, re.I) else 0
         if re.search(r"\b(?:inactive|closed|withdrawn|canceled|cancelled|revoked)\b", raw_status, re.I): active = -1
         exact_name = normalized_match_name(detail["orgName"]) == normalized_match_name(org.organization_name)
-        ranked.append(((address_rank, active, exact_name), detail))
+        # Every detail already confirms the requested EIN. An organization may
+        # have multiple offices; a profile city must not outweigh its active
+        # original-name registration. Address remains a final tie-break only.
+        ranked.append(((active, exact_name, address_rank), detail))
     best_rank = max(rank for rank, _ in ranked)
     best = [detail for rank, detail in ranked if rank == best_rank]
-    if len(best) != 1 or best_rank[0] < 0:
+    if len(best) != 1:
         raise ValueError("New York equivalent registration details remain ambiguous")
     return best[0]
 
@@ -23275,6 +23313,10 @@ def wv_preferred_query_variants(name: str, ein: str = "", *, limit=None) -> list
     # Full canonical legal-name forms are not speculative truncations. Keep
     # them ahead of aliases so punctuation/suffix noise cannot consume WV's cap.
     planned = canonical_legal_query_first(name, planned, preferred)
+    ascii_name = ascii_dash_search_name(name)
+    if ascii_name != name:
+        # Keep the literal ASCII-dash spelling ahead of alternate identities.
+        planned = [ascii_name, *[query for query in planned if query.casefold() != ascii_name.casefold()]]
     spaced = case_boundary_name_variant(name)
     if spaced:
         # This is an equivalent full-name spelling, not a broad prefix probe.
@@ -23681,7 +23723,8 @@ def search_wv_precise(page, org):
                                 and len(complete_name_identity_key(target)) >= 4
                                 for target in [org.organization_name, *known_names_for_ein(org.ein)])
             location = text_between_labels(detail_text, "Street Address", ["County", "Purpose", "Representative Information", "DBA"])
-            address = registry_address_evidence(org.ein, location, registry_state="WV")
+            address = reconciled_registry_address(org.ein, matched_name, location, registry_state="WV",
+                deadline=time.monotonic() + max(0, deadline - time.perf_counter()))
             if address.get("decision") == "conflict" or not (dba_confirmed or address.get("decision") == "corroborated"):
                 result.status = "Needs Review"
                 result.reason_code = "WV_SHORT_NAME_IDENTITY_UNCONFIRMED"
@@ -26053,7 +26096,7 @@ def normalize_organization_requests(payload: dict, privileged: bool) -> list[dic
         seen.add(key)
         if "alternate_names" in org:
             org["alternate_names"] = [alias for alias in org["alternate_names"]
-                                      if identity_name_key(alias) != identity_name_key(org["organization_name"])]
+                                      if search_spelling_key(alias) != search_spelling_key(org["organization_name"])]
         deduped.append(org)
     return deduped
 
