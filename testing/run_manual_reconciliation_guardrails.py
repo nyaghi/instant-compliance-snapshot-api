@@ -157,8 +157,14 @@ class ReconciliationTests(unittest.TestCase):
         self.assertFalse(cc.explicit_acronym_alias_matches_registry("Good Health National Foundation / GHNF", "Good Health Nevada Foundation"))
 
     def test_west_virginia_explicit_alias_core_runs_before_budget_is_spent(self):
-        queries = cc.wv_preferred_query_variants("Ronald McDonald House Global / RMHC", "362934689")
-        self.assertEqual(queries[:2], ["Ronald McDonald House Global", "Ronald McDonald House"])
+        name = "Ronald McDonald House Global / RMHC"
+        queries = cc.wv_preferred_query_variants(name, "362934689")
+        # The September 17 canonical-name priority supersedes the older exact
+        # first-query spelling. Preserve that approved full-identity priority
+        # AND this test's original guarantee that the legacy core runs second.
+        self.assertEqual(cc.normalized_match_name(queries[0]), cc.normalized_match_name(name))
+        self.assertEqual(queries[1], "Ronald McDonald House")
+        self.assertIn("Ronald McDonald House Global", queries[:4])
         self.assertFalse(cc.registry_name_is_safe_for_org("Ronald McDonald House Charities of Greater Houston", "Ronald McDonald House Global / RMHC", "362934689"))
         self.assertEqual(cc.wv_preferred_query_variants("Reading Is Fundamental Inc", "520976257")[0], "Reading Is Fundamental")
 

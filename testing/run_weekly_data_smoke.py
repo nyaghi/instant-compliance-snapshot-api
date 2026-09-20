@@ -6,6 +6,7 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 API = "https://instant-compliance-snapshot-api-staging-8dnk.onrender.com/api/check"
@@ -15,6 +16,13 @@ parser.add_argument("--full", action="store_true")
 parser.add_argument("--output", required=True)
 parser.add_argument("--cases", help="Explicit research/test cases; approved expectations are preserved.")
 args = parser.parse_args()
+# Windows has no system IANA zoneinfo database. Fail before registry requests
+# instead of letting an evidence timestamp failure look like missing IRS data.
+try:
+    for zone in ("UTC", "America/New_York"):
+        ZoneInfo(zone)
+except ZoneInfoNotFoundError:
+    parser.error("Time-zone data is missing. Install this checkout's pinned requirements before running weekly validation.")
 rows = json.loads((Path(args.cases) if args.cases else Path(__file__).with_name("weekly-data-regression-baseline.json")).read_text(encoding="utf-8"))
 if not args.full and not args.cases:
     rows = [r for r in rows if r["state"] in {"KS", "KY", "LA", "NH", "OR"} or (r["state"] == "CO" and r["ein"] == "860481941")]

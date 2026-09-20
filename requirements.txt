@@ -5,3 +5,4 @@ pdfplumber==0.11.9
 curl_cffi==0.15.0
 rapidocr-onnxruntime==1.4.4
 reportlab==4.4.9
+tzdata==2026.3; sys_platform == 'win32'

@@ -9,6 +9,31 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import registry_snapshot_server as cc
 
 class WeeklyDataTests(unittest.TestCase):
+    def test_validation_environment_can_timestamp_identity_evidence(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        for zone in ("UTC", "America/New_York"):
+            self.assertIsNotNone(datetime.now(ZoneInfo(zone)).utcoffset())
+        evidence = cc.identity_candidate("Example Foundation", "IRS", "Filer name", "https://example.test")
+        self.assertIsNotNone(datetime.fromisoformat(evidence["evidence"][0]["retrieved_at"]).utcoffset())
+
+    def test_missing_timezone_stops_smoke_before_registry_requests(self):
+        import io
+        import runpy
+        from contextlib import redirect_stderr
+        from zoneinfo import ZoneInfoNotFoundError
+        runner = Path(__file__).with_name("run_weekly_data_smoke.py")
+        with tempfile.TemporaryDirectory() as folder, redirect_stderr(io.StringIO()) as errors:
+            with patch.object(sys, "argv", [str(runner), "--output", str(Path(folder) / "results.jsonl")]), \
+                 patch("zoneinfo.ZoneInfo", side_effect=ZoneInfoNotFoundError("UTC")), \
+                 patch.object(cc.urllib.request, "urlopen") as network, \
+                 self.assertRaises(SystemExit) as stopped:
+                runpy.run_path(str(runner), run_name="__main__")
+            self.assertEqual(stopped.exception.code, 2)
+            self.assertIn("Time-zone data is missing", errors.getvalue())
+            network.assert_not_called()
+            self.assertFalse((Path(folder) / "results.jsonl").exists())
+
     def test_la_and_or_comments_always_include_result_freshness(self):
         for state in ("LA", "OR"):
             for status in ("Current", "Not Registered", "Site Not Reachable"):
