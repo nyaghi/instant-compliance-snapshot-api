@@ -133,7 +133,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.20.5-staging").strip() or "2026.09.20.5-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.20.6-staging").strip() or "2026.09.20.6-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -17551,8 +17551,113 @@ def search_nj_with_name_fallback(page, org):
     return result
 
 
+def pa_guard_search_completion(result, org, observations):
+    """An empty Angular table is not evidence that PA's search request finished."""
+    status = public_status(result)
+    if status not in {"Not Registered", "Unknown", "Unable to Confirm", "Site Not Reachable"}:
+        return result
+    searches = [row for row in observations if row["step"] == "search"]
+    failures = [row for row in observations if row.get("failure") or row.get("http_status", 0) >= 400]
+    ein = canonical_ein_digits(org.ein)
+    exact = [row for row in searches if canonical_ein_digits(row.get("ein", "")) == ein and ein]
+    query_key = lambda value: re.sub(r"\s+", " ", str(value or "")).strip().casefold()
+    attempted = getattr(result, "queries_attempted", None) or []
+    names_completed = all(any(
+        not row.get("ein") and query_key(row.get("name")) == query_key(query) and row.get("complete")
+        for row in searches
+    ) for query in attempted)
+    # A parsed response containing the requested EIN cannot support a negative,
+    # even when the DOM reader has not seen its row yet.
+    missed_ein_row = any(ein in row.get("row_eins", []) for row in exact)
+    negative_complete = (exact and all(row.get("complete") for row in searches)
+                         and names_completed and not missed_ein_row and not failures)
+    if status == "Not Registered" and negative_complete:
+        return result
+    if status != "Not Registered" and not failures:
+        return result
+    result.status = "Site Not Reachable" if failures else "Unable to Verify"
+    result.success = False
+    result.reason_code = "PA_INCOMPLETE_SEARCH"
+    result.raw_status_text = "Pennsylvania search did not complete"
+    if failures:
+        codes = sorted({row.get("http_status") for row in failures if row.get("http_status", 0) >= 400})
+        detail = "HTTP " + ", ".join(map(str, codes)) if codes else "a network failure"
+        result.error = "Pennsylvania public registry returned " + detail
+        result.source_note = result.error + ". Registration status could not be confirmed."
+    else:
+        result.error = ""
+        result.source_note = ("Pennsylvania did not provide a completed, usable response for the requested EIN "
+                              "and attempted name searches. Registration status could not be confirmed.")
+    result.source_attempts = [{key: row.get(key) for key in
+                              ("step", "ein", "name", "http_status", "complete", "failure")}
+                             for row in observations]
+    return result
+
+
 def search_pa_with_name_fallback(page, org):
+    observations = []
+
+    def observe_request(request):
+        for row in observations:
+            if row["request"] is request:
+                return row
+        parsed = urlparse(request.url)
+        if parsed.hostname != "www.charities.pa.gov":
+            return None
+        path = parsed.path.lower().rstrip("/")
+        step = ("search" if path == "/api/charities/search" else "lookup"
+                if path == "/api/charities/getlookupdata" else "page"
+                if request.resource_type == "document" else "")
+        if not step:
+            return None
+        try:
+            payload = request.post_data_json if step == "search" else {}
+        except Exception:
+            payload = {}
+        payload = payload if isinstance(payload, dict) else {}
+        row = {"request": request, "step": step, "ein": payload.get("EIN") or "",
+               "name": payload.get("EntityName") or "", "complete": False}
+        observations.append(row)
+        return row
+
+    def observe_response(response):
+        row = observe_request(response.request)
+        if row is None:
+            return
+        row["http_status"] = response.status
+        if not 200 <= response.status < 300:
+            return
+        if row["step"] != "search":
+            row["complete"] = True
+            return
+        try:
+            payload = response.json()
+            rows = payload.get("Table") if isinstance(payload, dict) else None
+            if isinstance(rows, list) and all(isinstance(item, dict) for item in rows):
+                row["complete"] = True
+                row["row_eins"] = [canonical_ein_digits(item.get("EIN", "")) for item in rows]
+        except Exception:
+            pass
+
+    def observe_failure(request):
+        row = observe_request(request)
+        if row is not None:
+            row["failure"] = "Public registry request failed"
+
+    listeners = [("request", observe_request), ("response", observe_response), ("requestfailed", observe_failure)]
+    for event, listener in listeners:
+        page.on(event, listener)
+    try:
+        guard = lambda result: pa_guard_search_completion(result, org, observations)
+        return guard(search_pa_with_name_fallback_core(page, org, guard))
+    finally:
+        for event, listener in listeners:
+            page.remove_listener(event, listener)
+
+
+def search_pa_with_name_fallback_core(page, org, completion_guard):
     result = checker.search_pa(page, org)
+    result = completion_guard(result)
     if public_status(result) != "Not Registered":
         return result
     url = "https://www.charities.pa.gov/#/page/searchCharities"
@@ -25906,6 +26011,7 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
         if (state, result.get("reason_code")) in {
             ("FL", "FL_INCOMPLETE_SEARCH"),
             ("NJ", "NJ_INCOMPLETE_EIN_SEARCH"),
+            ("PA", "PA_INCOMPLETE_SEARCH"),
         }:
             retryable_statuses.add(status)
         if state == "AK":
