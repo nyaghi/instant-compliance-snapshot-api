@@ -65,9 +65,14 @@ const boot = (async () => {
     nextStart = Number(previous.nextStart) || 0;
     for (const saved of previous.queue || []) {
       if (!P.validId(saved.id) || !Number.isInteger(saved.tabId) || !Number.isFinite(saved.expiresAt)) continue;
-      try { await chrome.tabs.get(saved.tabId); } catch { continue; }
+      let sourceTab;
+      try { sourceTab = await chrome.tabs.get(saved.tabId); } catch { continue; }
+      // Revalidate the live source tab after restart; never manufacture an
+      // authorized staging origin for a tab that has navigated elsewhere.
+      const sourceSender = { id: chrome.runtime.id, frameId: 0, url: sourceTab.url, documentId: saved.documentId, tab: { id: saved.tabId } };
+      if (!allowedSender(sourceSender)) continue;
       const { id, tabId, documentId, active: wasActive, ...state } = saved;
-      const job = newJob({ id: chrome.runtime.id, frameId: 0, url: P.STAGING, documentId, tab: { id: tabId } }, id, !!saved.refreshOnly, state);
+      const job = newJob(sourceSender, id, !!saved.refreshOnly, state);
       if (wasActive && !active) active = job; else queue.push(job);
       arm(job);
       awaitReconnect(job);
@@ -83,7 +88,7 @@ const boot = (async () => {
 boot.catch(() => {});
 const nap = ms => new Promise(resolve => setTimeout(resolve, ms));
 function allowedSender(sender) {
-  try { return sender.id === chrome.runtime.id && sender.frameId === 0 && new URL(sender.url).origin === P.STAGING && Number.isInteger(sender.tab?.id); }
+  try { return sender.id === chrome.runtime.id && sender.frameId === 0 && P.allowedOrigin(new URL(sender.url).origin) && Number.isInteger(sender.tab?.id); }
   catch { return false; }
 }
 function post(job, message) { try { job.port.postMessage(message); } catch {} }

@@ -1,9 +1,10 @@
 (() => {
   "use strict";
   const P = CCNYProtocol;
-  if (location.origin !== P.STAGING || window !== window.top) return;
+  const ORIGIN = location.origin;
+  if (!P.allowedOrigin(ORIGIN) || window !== window.top) return;
   let active = null;
-  const reply = (id, response) => window.postMessage({ channel: "cc-ny-staging-v1", direction: "response", ...response, id }, P.STAGING);
+  const reply = (id, response) => window.postMessage({ channel: "cc-ny-staging-v1", direction: "response", ...response, id }, ORIGIN);
   function dispose(job, reason = "NY_CONNECTOR_INTERRUPTED") {
     if (job.closed) return;
     job.closed = true;
@@ -72,7 +73,7 @@
     return job;
   }
   window.addEventListener("message", async event => {
-    if (event.source !== window || event.origin !== P.STAGING) return;
+    if (event.source !== window || event.origin !== ORIGIN) return;
     const m = event.data;
     if (m?.channel !== "cc-ny-staging-v1" || m.direction !== "request" || !P.validId(m.id)) return;
     if (m.action === "ping") {

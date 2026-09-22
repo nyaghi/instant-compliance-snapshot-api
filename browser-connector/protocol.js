@@ -2,6 +2,8 @@
 (() => {
   "use strict";
   const STAGING = "https://staging.compliance-express.com";
+  const APP_ORIGINS = Object.freeze([STAGING, "https://www.compliance-express.com", "https://compliance-express.com"]);
+  function allowedOrigin(origin) { return APP_ORIGINS.includes(origin); }
   const NY = "https://charities-search.ag.ny.gov";
   const FIELDS = ["ein", "orgName", "orgID", "regtype", "city", "state"];
   function validId(value) { return typeof value === "string" && /^[a-zA-Z0-9_-]{16,80}$/.test(value); }
@@ -52,5 +54,5 @@
         return { orgID: row.orgID, orgName: row.orgName, ein };
       }) };
   }
-  globalThis.CCNYProtocol = Object.freeze({ STAGING, NY, validId, validQuery, sameQuery, publicRequest, publicResponse });
+  globalThis.CCNYProtocol = Object.freeze({ STAGING, APP_ORIGINS, allowedOrigin, NY, validId, validQuery, sameQuery, publicRequest, publicResponse });
 })();

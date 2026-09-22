@@ -95,7 +95,7 @@
       message.textContent = "Enter the organization name and nine-digit EIN first."; nameInput.focus(); return;
     }
     if (!config.email || !config.admin_passcode) {
-      message.textContent = "Enter your staging email and passcode below, then find alternate names.";
+      message.textContent = "Enter your Compliance Express email and passcode below, then find alternate names.";
       document.getElementById("email")?.focus(); return;
     }
     const requestIdentity = identity(), requestRevision = ++revision;

@@ -43,9 +43,9 @@ test('verification exposes only its outcome',()=>{
 test('only bounded master EIN or name queries are permitted',()=>{
   for(const value of [{ein:'123'}, {ein:'000000000'},{orgID:'10-20-30'},{orgName:''},{orgName:'x'.repeat(501)},{ein:'123456789',orgName:'Example'},[]])assert.equal(P.validQuery(value),false);
 });
-test('recovery permissions stay explicit and hosts remain staging and NY only',()=>{
+test('recovery permissions stay explicit and hosts remain limited to approved app origins and NY',()=>{
   const manifest=JSON.parse(fs.readFileSync(path.join(root,'manifest.json'),'utf8'));
-  assert.deepEqual(manifest.host_permissions,['https://staging.compliance-express.com/*','https://charities-search.ag.ny.gov/*']);
+  assert.deepEqual(manifest.host_permissions,['https://staging.compliance-express.com/*','https://www.compliance-express.com/*','https://compliance-express.com/*','https://charities-search.ag.ny.gov/*']);
   assert.deepEqual(manifest.permissions,['storage','browsingData','cookies']);
   assert.equal(manifest.minimum_chrome_version,'132');assert.equal(manifest.incognito,'not_allowed');
   for(const source of ['worker.js','staging-bridge.js','ny-content.js','ny-main.js'])assert.equal(/admin_passcode|document\.cookie|chrome\.cookies|chrome\.debugger/.test(fs.readFileSync(path.join(root,source),'utf8')),false);
@@ -74,4 +74,9 @@ test('NY explicit null EIN is preserved as blank; missing and malformed fields r
     const bad={...payload,data:[{...payload.data[0],ein:value}]};
     assert.throws(()=>P.publicResponse(request,200,bad));
   }
+});
+
+test('production bridge rejects lookalike, insecure and unrelated origins',()=>{
+  for(const origin of ['https://www.compliance-express.com','https://compliance-express.com',P.STAGING]) assert.equal(P.allowedOrigin(origin),true);
+  for(const origin of ['http://www.compliance-express.com','https://www.compliance-express.com.evil.example','https://example.com','null']) assert.equal(P.allowedOrigin(origin),false);
 });

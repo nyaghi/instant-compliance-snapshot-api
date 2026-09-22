@@ -1,9 +1,11 @@
-/* Staging-only UI integration. Credentials stay between this page and its API. */
+/* Environment-bound UI integration. Credentials stay between this page and its API. */
 (() => {
   "use strict";
-  const ORIGIN = "https://staging.compliance-express.com";
+  const ORIGIN = location.origin;
+  // The release builder sets fixed origins and the matching backend together.
+  const APP_ORIGINS = ["https://staging.compliance-express.com"];
   const API = "https://instant-compliance-snapshot-api-staging-8dnk.onrender.com";
-  if (location.origin !== ORIGIN) return;
+  if (!APP_ORIGINS.includes(ORIGIN)) return;
   const waiting = new Map();
   window.addEventListener("message", event => {
     const m = event.data;

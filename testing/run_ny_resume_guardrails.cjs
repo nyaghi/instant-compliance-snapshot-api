@@ -65,3 +65,13 @@ test('a different document in the same tab cannot resume the saved search',async
  const p=h.connect(1,sender);await h.query(p,11);const r=harness(snapshot(h));const changed=r.connect(1,{...sender,documentId:'new-document'},false,true);await tick();
  assert.equal(changed.messages.at(-1).reason,'NY_CONNECTOR_INTERRUPTED');assert.equal(r.queries.length,0);
 });
+
+test('production job survives worker restart with its actual approved origin',async()=>{
+ const h=harness({tabs:[[1,{id:1,windowId:10,url:'https://www.compliance-express.com/instant-compliance-snapshot.html'}]]});
+ const p=h.connect();await h.query(p,11);const r=harness(snapshot(h));const resumed=r.connect(1,undefined,false,true);await tick();
+ assert.equal((await r.query(resumed,11)).ok,true);assert.equal(r.queries.length,0);
+});
+test('worker restart discards a source tab that navigated outside approved origins',async()=>{
+ const h=harness(),p=h.connect();await h.query(p,11);const saved=snapshot(h);saved.tabs.find(([id])=>id===1)[1].url='https://example.com/';
+ const r=harness(saved);await tick();assert.equal(r.data.session.ccnyRuntime.queue.length,0);
+});

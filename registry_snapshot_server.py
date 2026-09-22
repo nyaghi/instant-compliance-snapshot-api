@@ -133,7 +133,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.20.6-staging").strip() or "2026.09.20.6-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.22.1-staging").strip() or "2026.09.20.6-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -18593,6 +18593,16 @@ def search_ny_direct(org, browser_page=None, registry_search_provider=None):
 
 
 NY_CONNECTOR_ORIGIN = "https://staging.compliance-express.com"
+NY_CONNECTOR_PRODUCTION_ORIGINS = frozenset({"https://www.compliance-express.com", "https://compliance-express.com"})
+
+
+def ny_connector_origin_allowed(origin):
+    # Environment isolation is independent of user authentication. A production
+    # API never accepts staging continuations, or vice versa.
+    return (origin == NY_CONNECTOR_ORIGIN if APP_VERSION.endswith("-staging")
+            else origin in NY_CONNECTOR_PRODUCTION_ORIGINS)
+
+
 NY_CONNECTOR_TTL_SECONDS = 300
 NY_CONNECTOR_SIGNING_KEY = os.environ.get("CE_NY_CONNECTOR_SIGNING_KEY", "")
 
@@ -18636,8 +18646,8 @@ class NYConnectorResponse:
 
 def ny_connector_failure(record, code):
     comments = {
-        "NY_CONNECTOR_UNAVAILABLE": "The New York browser connector is unavailable. Install or enable the staging connector and keep Chrome open while the check runs.",
-        "NY_CONNECTOR_UPDATE_REQUIRED": "The New York browser connector needs an update. Follow the staging connector update steps and refresh CharityClarity before retrying.",
+        "NY_CONNECTOR_UNAVAILABLE": "The New York browser connector is unavailable. Install or enable the New York connector and keep Chrome open while the check runs.",
+        "NY_CONNECTOR_UPDATE_REQUIRED": "The New York browser connector needs an update. Update the New York connector and refresh CharityClarity before retrying.",
         "NY_CONNECTOR_INTERRUPTED": "The New York browser connection was interrupted before this search completed. Other state results remain available. Retry New York when the connector is connected; registration status remains unconfirmed.",
         "NY_CONNECTOR_RECOVERY_PAGE_OPEN": "The New York connection could not be refreshed while another New York registry page was open. Close that registry page and use Refresh New York connection. Registration status remains unconfirmed.",
         "NY_CONNECTOR_RECOVERY_COOLDOWN": "A New York connection refresh was already attempted recently. The connector is pausing further recovery attempts. Other state results remain available; registration status remains unconfirmed.",
@@ -18735,16 +18745,16 @@ def ny_connector_advance(record):
 
 
 def ny_connector_request(payload, origin):
-    """Signed, bounded continuation works across staging instances and restarts."""
-    if not APP_VERSION.endswith("-staging") or origin != NY_CONNECTOR_ORIGIN:
+    """Signed, bounded continuation works across instances in one environment."""
+    if not ny_connector_origin_allowed(origin):
         return 404, {"error": "Not found"}
     if not isinstance(payload, dict):
         return 400, {"error": "Invalid connector request."}
     email = normalize_email(str(payload.get("email") or ""))
     if not is_verified_internal_passcode(email, str(payload.get("admin_passcode") or "")):
-        return 403, {"error": "Unlock staging to use the New York connector prototype."}
+        return 403, {"error": "Sign in with authorized Compliance Express access to use the New York connector."}
     if len(NY_CONNECTOR_SIGNING_KEY) < 32:
-        return 503, {"error": "The staging New York connector is not configured."}
+        return 503, {"error": "The New York connector is not configured for this environment."}
     device = payload.get("device_id")
     if not isinstance(device, str) or not 8 <= len(device) <= 200:
         return 400, {"error": "A valid browser session identifier is required."}
@@ -18757,15 +18767,15 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6"}:
-            return 400, {"error": "The New York connector version is unsupported. Refresh or update the staging connector."}
+        if not isinstance(connector_version, str) or connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0"}:
+            return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()
         if (not isinstance(name, str) or not 1 <= len(name.strip()) <= 500
                 or not re.fullmatch(r"[0-9]{2}-?[0-9]{7}", ein) or ein.replace("-", "") == "000000000"):
             return 400, {"error": "Enter the organization name and a valid nine-digit EIN."}
         record = {"email": email, "device": device, "organization_name": name.strip(), "ein": format_ein(ein),
-                  "purpose": purpose,
+                  "purpose": purpose, "origin": origin,
                   "connector_version": connector_version,
                   "issued": now, "expires": now + NY_CONNECTOR_TTL_SECONDS, "version": APP_VERSION,
                   "completed": [], "pending": None}
@@ -18777,6 +18787,8 @@ def ny_connector_request(payload, origin):
     else:
         try:
             record = ny_connector_unpack(payload.get("check_token"), email, device)
+            if record.get("origin") != origin:
+                raise ValueError("Connector origin changed")
         except (ValueError, TypeError, KeyError, UnicodeError):
             return 410, {"error": "This New York browser check expired or changed. Run the check again."}
         if action == "cancel":
@@ -26372,8 +26384,6 @@ def payload_missing_required_organization_name(payload: dict) -> bool:
 
 class RegistrySnapshotHandler(BaseHTTPRequestHandler):
     def _send_identity_discovery(self):
-        if not APP_VERSION.endswith("-staging"):
-            self._send_json(404, {"error": "Not found"}); return
         try:
             length = int(self.headers.get("Content-Length", "0"))
             if not 0 < length <= 8192:
@@ -26384,7 +26394,7 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
             passcode = str(payload.get("admin_passcode") or "").strip()
             access_error = staging_access_error(email, passcode)
             if access_error or not is_verified_internal_passcode(email, passcode):
-                self._send_json(403, {"error": access_error or "Unlock staging to find alternate names."}); return
+                self._send_json(403, {"error": access_error or "Sign in with authorized Compliance Express access to find alternate names."}); return
             name, ein = payload.get("organization_name"), payload.get("ein")
             if not isinstance(name, str) or not 1 <= len(name.strip()) <= 300 or not isinstance(ein, str):
                 raise ValueError("Enter the organization name and EIN.")
@@ -26412,9 +26422,6 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
 
     def _send_snapshot_report(self) -> None:
         # Report rendering is independent of state lookup capacity and performs no registry calls.
-        if not APP_VERSION.endswith("-staging"):
-            self._send_json(404, {"error": "Not found"})
-            return
         admitted = False
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -26428,7 +26435,7 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
             passcode = str(payload.get("admin_passcode") or "").strip()
             access_error = staging_access_error(email, passcode)
             if access_error or not is_exempt_domain(email_domain(email)) or passcode != ADMIN_PASSCODE:
-                self._send_json(403, {"error": access_error or "Unlock staging internal tools to generate a report."})
+                self._send_json(403, {"error": access_error or "Sign in with authorized Compliance Express access to generate a report."})
                 return
             admitted = REPORT_REQUEST_SEMAPHORE.acquire(blocking=False)
             if not admitted:

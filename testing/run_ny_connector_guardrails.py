@@ -132,6 +132,21 @@ class ConnectorTests(unittest.TestCase):
         self.assertEqual(self.request(action='start',admin_passcode='invalid')[0],403)
         for ein in ['000000000','123','1234567890']:
             self.assertEqual(self.request(action='start',organization_name='Example',ein=ein)[0],400)
+    def test_production_uses_same_ein_rules_with_origin_and_auth_isolation(self):
+        production = 'https://www.compliance-express.com'
+        with patch.object(c, 'APP_VERSION', '2026.09.22.1'):
+            payload = {**self.auth, 'action': 'start', 'organization_name': ROW['orgName'], 'ein': ROW['ein'], 'connector_version': '0.4.0'}
+            code, state = c.ny_connector_request(payload, production)
+            self.assertEqual(code, 200); self.assertEqual(state['query'], {'ein': ROW['ein']})
+            continuation = {**self.auth, 'action': 'advance', 'check_token': state['check_token'], 'query_id': state['query_id'],
+                'evidence': {'query': state['query'], 'http_status': 200, 'success': True, 'statusCode': 200, 'rows': [ROW]}}
+            code, result = c.ny_connector_request(continuation, production)
+            self.assertEqual(code, 200); self.assertEqual(result['result']['status'], 'Current')
+            self.assertEqual(c.ny_connector_request(continuation, 'https://compliance-express.com')[0], 410)
+            self.assertEqual(c.ny_connector_request(continuation, c.NY_CONNECTOR_ORIGIN)[0], 404)
+            for origin in ['', 'https://www.compliance-express.com.evil.example', 'http://www.compliance-express.com']:
+                self.assertEqual(c.ny_connector_request(payload, origin)[0], 404)
+            self.assertEqual(c.ny_connector_request({**payload, 'admin_passcode': 'wrong'}, production)[0], 403)
     def test_missing_or_different_signing_key_fails_closed(self):
         state=self.start()
         with patch.object(c,'NY_CONNECTOR_SIGNING_KEY',''):

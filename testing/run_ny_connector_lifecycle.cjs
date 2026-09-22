@@ -55,7 +55,7 @@ test('different originating lookups cannot share active tab or evidence',async()
   assert.deepEqual(h.queries.map(q=>q.query),[ein]);
 });
 test('cross-origin, wrong-extension and subframe ports cannot start a lookup',async()=>{
-  const h=harness();for(const changes of [{url:'https://compliance-express.com/'},{id:'another-extension'},{frameId:1}]){
+  const h=harness();for(const changes of [{url:'https://example.com/'},{url:'https://www.compliance-express.com.evil.example/'},{id:'another-extension'},{frameId:1}]){
     const p=h.connect(1,{id:h.chrome.runtime.id,frameId:0,url:'https://staging.compliance-express.com/',tab:{id:1},...changes});
     assert.equal(p.disconnected,true);await h.query(p,11);
   }assert.deepEqual(h.created,[]);

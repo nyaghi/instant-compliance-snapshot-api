@@ -1,16 +1,56 @@
 {
   "manifest_version": 3,
-  "name": "CharityClarity — Staging NY Connector",
-  "version": "0.3.6",
+  "name": "CharityClarity — New York Connector",
+  "version": "0.4.0",
   "minimum_chrome_version": "132",
-  "description": "Staging prototype: searches New York in your browser; CharityClarity verifies records and interprets status.",
-  "host_permissions": ["https://staging.compliance-express.com/*", "https://charities-search.ag.ny.gov/*"],
-  "permissions": ["storage", "browsingData", "cookies"],
+  "description": "Connect CharityClarity to New York public charity records in your browser.",
+  "host_permissions": [
+    "https://staging.compliance-express.com/*",
+    "https://www.compliance-express.com/*",
+    "https://compliance-express.com/*",
+    "https://charities-search.ag.ny.gov/*"
+  ],
+  "permissions": [
+    "storage",
+    "browsingData",
+    "cookies"
+  ],
   "incognito": "not_allowed",
-  "background": {"service_worker": "worker.js"},
+  "background": {
+    "service_worker": "worker.js"
+  },
   "content_scripts": [
-    {"matches": ["https://staging.compliance-express.com/*"], "js": ["protocol.js", "staging-bridge.js"], "run_at": "document_start"},
-    {"matches": ["https://charities-search.ag.ny.gov/RegistrySearch*"], "js": ["protocol.js", "ny-main.js"], "run_at": "document_start", "world": "MAIN"},
-    {"matches": ["https://charities-search.ag.ny.gov/RegistrySearch*"], "js": ["ny-content.js"], "run_at": "document_start"}
+    {
+      "matches": [
+        "https://staging.compliance-express.com/*",
+        "https://www.compliance-express.com/*",
+        "https://compliance-express.com/*"
+      ],
+      "js": [
+        "protocol.js",
+        "staging-bridge.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://charities-search.ag.ny.gov/RegistrySearch*"
+      ],
+      "js": [
+        "protocol.js",
+        "ny-main.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://charities-search.ag.ny.gov/RegistrySearch*"
+      ],
+      "js": [
+        "ny-content.js"
+      ],
+      "run_at": "document_start"
+    }
   ]
 }

@@ -132,7 +132,7 @@
             </p>
             <div class="mb-6 flex flex-wrap items-center gap-3">
               <a href="#snapshotForm" class="inline-flex items-center justify-center rounded-full bg-[#C62828] px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-[#A61E1E] focus:outline-none focus:ring-2 focus:ring-[#C62828] focus:ring-offset-2">Run a Free State Check</a>
-              <a href="https://buy.stripe.com/3cI28q59N4JPfb2gaw6AM02" target="_blank" rel="noopener" class="text-sm font-semibold text-[#0B2A5B] underline underline-offset-4">30-state access for 30 days — $49</a>
+              <a href="mailto:info@compliance-express.com?subject=CharityClarity%20information" target="_blank" rel="noopener" class="text-sm font-semibold text-[#0B2A5B] underline underline-offset-4">Ask about CharityClarity</a>
             </div>
 
 
@@ -471,12 +471,12 @@
             <div id="fullPictureCta" class="hidden mt-4 rounded-2xl border border-[#F3B1B1] bg-[#FFF5F5] p-5">
 
               <p class="text-xs font-bold uppercase tracking-[0.15em] text-[#C62828] mb-2">Broaden the view</p>
-              <p class="text-xl font-bold text-[#0B2A5B] mb-2">Get 30-State Access for 30 Days for $49</p>
+              <p class="text-xl font-bold text-[#0B2A5B] mb-2">Learn more about CharityClarity</p>
               <p class="text-sm text-slate-700 mb-4">
-                Check the organization across up to 30 states and maintain access for 30 days. Payment is securely processed through Stripe.
+                For more information on CharityClarity, reach out to info@compliance-express.com.
               </p>
-              <a id="paidOfferLink" href="https://buy.stripe.com/3cI28q59N4JPfb2gaw6AM02" target="_blank" rel="noopener" class="inline-flex items-center justify-center rounded-full bg-[#C62828] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#9F1F1F]">
-                Get 30-State Access for 30 Days for $49
+              <a id="paidOfferLink" href="mailto:info@compliance-express.com?subject=CharityClarity%20information" target="_blank" rel="noopener" class="inline-flex items-center justify-center rounded-full bg-[#C62828] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#9F1F1F]">
+                Learn more about CharityClarity
               </a>
             </div>
 
@@ -554,8 +554,8 @@
       return {apiBase: discoveryLanes[hash % discoveryLanes.length], email: email.value.trim(), admin_passcode: adminPasscode.value.trim(), device_id: getDeviceId()};
     };
     window.addEventListener("cc-identity-change", () => {
-      submitButton.disabled = !window.CCIdentity?.ready();
-      if (!window.CCIdentity?.ready()) submitButton.textContent = "Review organization names first";
+      submitButton.disabled = namesRequired() && !window.CCIdentity?.ready();
+      if (namesRequired() && !window.CCIdentity?.ready()) submitButton.textContent = "Review organization names first";
       else submitButton.textContent = "Run CharityClarity";
     });
 
@@ -608,6 +608,7 @@
     });
 
     let internalUnlocked = false;
+    function namesRequired() { return STAGING_ACCESS_REQUIRED || isComplianceExpressEmail(email.value); }
 
     let timerStartedAt = 0;
 
@@ -773,6 +774,8 @@
       const internal = isComplianceExpressEmail(email.value);
 
       passcodeBox.classList.toggle("hidden", !internal);
+      document.getElementById("organizationIdentity").hidden = !namesRequired();
+      submitButton.disabled = namesRequired() && !window.CCIdentity?.ready();
 
       adminPasscode.required = internal;
 
@@ -1550,7 +1553,7 @@
       }
     });
     paidOfferLink.addEventListener("click", () => {
-      trackFunnelEvent("stripe_checkout_started", { request_id: latestResults[0]?._request_id || "", state: latestResults[0]?.state || "" });
+      trackFunnelEvent("charityclarity_contact_interest", { request_id: latestResults[0]?._request_id || "", state: latestResults[0]?.state || "" });
     });
 
 
@@ -1600,11 +1603,11 @@
 
       }
 
-      if (!window.CCIdentity?.ready()) {
+      if (namesRequired() && !window.CCIdentity?.ready()) {
         window.CCIdentity?.focus();
         return showError("Find and review the organization’s alternate names before running CharityClarity.");
       }
-      runAlternateNames = Object.freeze([...window.CCIdentity.names()]);
+      runAlternateNames = Object.freeze(window.CCIdentity?.ready() ? [...window.CCIdentity.names()] : []);
       window.CCIdentity.setBusy(true);
 
 
