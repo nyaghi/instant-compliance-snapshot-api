@@ -14,7 +14,7 @@ function harness(initial={}) {
   const area=name=>({get:async key=>({[key]:data[name][key]}),set:async value=>Object.assign(data[name],JSON.parse(JSON.stringify(value))),setAccessLevel:async()=>{}});
   const tabs=new Map(initial.tabs||[[1,{id:1,windowId:10,url:'https://staging.compliance-express.com/'}],[2,{id:2,windowId:99,url:'https://charities-search.ag.ny.gov/RegistrySearch'}]]);
   let next=Math.max(100,...[...tabs.keys()].map(n=>n+1)), deferred=null, now=initial.now??10000;
-  const chrome={storage:{local:area('local'),session:area('session')},runtime:{id:'fixture-extension',onMessage:event(),onConnect:event()},tabs:{
+  const chrome={storage:{local:area('local'),session:area('session')},runtime:{id:'fixture-extension',getManifest:()=>JSON.parse(fs.readFileSync(path.join(root,'manifest.json'),'utf8')),onMessage:event(),onConnect:event()},tabs:{
     onRemoved:event(),create:async options=>{if(deferred)await deferred;const tab={id:next++,...options};tabs.set(tab.id,tab);created.push(tab.id);return tab;},
     get:async id=>{if(!tabs.has(id))throw Error('Tab absent');return tabs.get(id);},
     update:async(id,options)=>Object.assign(tabs.get(id),options),
@@ -41,6 +41,12 @@ function harness(initial={}) {
   }
   return {chrome,tabs,timers,created,removed,queries,repairs,recovery,data,context,connect,query,advance,deferCreate:p=>{deferred=p;}};
 }
+test('readiness advertises the installed manifest version',async()=>{
+  const h=harness();let response;
+  h.chrome.runtime.onMessage.emit({action:'ping',id:id(99)}, {id:h.chrome.runtime.id,frameId:0,url:'https://staging.compliance-express.com/',tab:{id:1}}, value=>{response=value;});
+  await tick();assert.equal(response.ok,true);assert.equal(response.version,h.chrome.runtime.getManifest().version);
+});
+
 test('one owned tab serves EIN and name; finish closes only that tab',async()=>{
   const h=harness(),p=h.connect();assert.equal((await h.query(p,11)).ok,true);assert.equal((await h.query(p,12,name)).ok,true);
   assert.equal(h.created.length,1);assert.deepEqual(h.queries.map(q=>q.tab),[100,100]);assert.deepEqual(h.queries.map(q=>q.query),[ein,name]);
