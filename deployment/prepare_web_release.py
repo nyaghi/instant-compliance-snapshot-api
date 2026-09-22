@@ -24,6 +24,10 @@ def build(destination, environment, store_url=''):
     bridge = (source/'ny-connector.js').read_text(encoding='utf-8')
     if environment == 'production':
         html = html.replace(STAGE_API, PROD_API).replace(STAGE_INTERNAL, PROD_INTERNAL)
+        html = html.replace('window.location.origin === "https://staging.compliance-express.com"', '["https://www.compliance-express.com", "https://compliance-express.com"].includes(window.location.origin)')
+        html = html.replace('environment: "staging"', 'environment: "production"')
+        html = html.replace('&middot; Staging', '')
+        html = html.replace('Confirm that staging is unlocked', 'Confirm that you are signed in')
         html = html.replace('const STAGING_ACCESS_REQUIRED = true;', 'const STAGING_ACCESS_REQUIRED = false;')
         html = html.replace('id="stagingGate" class="', 'id="stagingGate" class="hidden ')
         html = html.replace('id="appShell" class="hidden ', 'id="appShell" class="flex ')
