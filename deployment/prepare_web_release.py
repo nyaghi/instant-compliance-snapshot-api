@@ -44,7 +44,8 @@ def build(destination, environment, store_url=''):
     (destination/'ny-connector.js').write_text(bridge, encoding='utf-8')
     shutil.copyfile(source/'organization-identity.js', destination/'organization-identity.js')
     connector=destination/'connector';connector.mkdir(exist_ok=True)
-    for name in ['privacy.html','charityclarity.png']:shutil.copyfile(source/'connector'/name,connector/name)
+    for name in ['privacy.html','charityclarity.png','review.html','review.js']:shutil.copyfile(source/'connector'/name,connector/name)
+    shutil.copyfile(ROOT/'browser-connector/protocol.js',connector/'review-protocol.js')
     if environment == 'staging':
         install=(source/'connector/index.html').read_text(encoding='utf-8').replace('0.3.6','0.4.0')
         (connector/'index.html').write_text(install,encoding='utf-8')
