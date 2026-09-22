@@ -3,13 +3,13 @@ AK,Yes,Yes,FEIN/year public search,Bounded centralized name variants after compl
 AR,No,Yes,Name search with centralized variants,Conservative unavailable result on incomplete search,No EIN path
 CA,Yes,Yes,Registry search using EIN when supplied,Name/registry detail confirmation if EIN does not confirm,No
 CO,Yes,Yes,FEIN browser search,Name fallback only after completed FEIN no-match; incomplete FEIN returns conservative unavailable,No
-CT,Yes,Yes,Direct public credential search using EIN/name evidence,Centralized name variants,No
+CT,No,Yes,Direct public credential search using names with EIN corroboration where exposed,Centralized name variants,No EIN search path
 FL,No,Yes,Name search with centralized variants,Conservative unavailable result on incomplete search,No EIN path
 HI,Yes,Yes,EIN/name precise search,Centralized name variants and safe match confirmation,No
 KS,No,Yes,Weekly downloadable name snapshot,Centralized safe match confirmation,No EIN path
 KY,No,Yes,Downloadable/current snapshot name search,Strict centralized safe match confirmation,No EIN path
 LA,No,Yes,Name search,Centralized variants and safe match confirmation,No EIN path
-MA,No,Yes,Name search,Centralized variants and safe match confirmation,No EIN path
+MA,Yes,Yes,Employer Identification Number search followed by scored charity selection,Centralized variants and safe match confirmation,No
 MD,Yes,Yes,EIN-capable registry search when EIN is supplied,Name fallback and safe match confirmation,No
 ME,No,Yes,Name direct search,Centralized variants and safe match confirmation,No EIN path
 MI,Yes,Yes,EIN/ID-capable registry path when EIN is supplied,Name fallback and safe match confirmation,No
@@ -25,7 +25,7 @@ OK,No,Yes,Name search with latest filing-history detail,Centralized variants and
 OR,Yes,Yes,EIN snapshot/detail path when available,Name fallback and safe match confirmation,No
 PA,Yes,Yes,EIN/name registry search,Name fallback after no confirmed EIN result,No
 SC,No,Yes,Name search,Centralized variants and safe match confirmation,No EIN path
-VA,No,Yes,Name search,Centralized variants and safe match confirmation,No EIN path
+VA,Yes,Yes,Evoke exact FEIN API search,Centralized variants and safe match confirmation,No
 WA,Yes,Yes,FEIN search,Name search fallback after FEIN no-value response completes,No
 WI,No,Yes,Weekly Wisconsin snapshot/name search,Reader/http/browser fallback with centralized variants,No EIN path
 WV,No,Yes,Name search,Centralized variants and safe match confirmation,No EIN path

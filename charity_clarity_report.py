@@ -13,7 +13,7 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.utils import ImageReader
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, CondPageBreak, KeepTogether
 
-REPORT_VERSION = "1.2.0"
+REPORT_VERSION = "1.3.0"
 NAVY = colors.HexColor("#0B2A5B")
 INK = colors.HexColor("#172B45")
 MUTED = colors.HexColor("#536274")
@@ -323,12 +323,20 @@ def validate_results(payload, supported_states):
         if status not in LOW | MODERATE | HIGH | INCOMPLETE:
             raise ValueError("A result status is not supported by this report template.")
         checked = row.get("checked_at_epoch")
+        registration_date = text(row.get("registration_date"), 10)
+        registration_type = text(row.get("registration_date_type"), 50)
+        if registration_date and (not re.fullmatch(r"\d{4}-\d{2}-\d{2}", registration_date)
+                                  or not parse_date(registration_date)
+                                  or registration_type not in {"initial_registration_date", "registry_registration_date"}):
+            raise ValueError("Registration Date must preserve a valid state-supplied date and its meaning.")
         if checked is not None:
             if isinstance(checked, bool) or not isinstance(checked, (int, float)) or not 0 < checked < 4102444800:
                 raise ValueError("Invalid snapshot timestamp.")
         clean.append({
             **{k: text(row.get(k), 10000) for k in ("comments", "raw_status_text", "source_note")},
             **{k: text(row.get(k), 500) for k in ("source_url", "matched_registry_identifier", "app_version", "computed_due_date")},
+            **{k: text(row.get(k), 500) for k in ("registration_date_source_label", "registration_date_source_url", "registration_date_note")},
+            "registration_date": registration_date, "registration_date_type": registration_type,
             "organization_name": name, "ein": ein, "state": state, "status": status,
             "checked_at_epoch": checked,
         })
@@ -527,6 +535,11 @@ def generate_report(payload, supported_states):
         if row["matched_registry_identifier"]:
             link += " | Record ID: " + escape(row["matched_registry_identifier"])
         story.append(p(link, "small", markup=True))
+        registration_text = row["registration_date"] or "Unavailable"
+        if row["registration_date"]:
+            registration_text += " | " + (row["registration_date_source_label"] or "Registration Date")
+        registration_text += ". " + (row["registration_date_note"] or "No confirmed registration date was supplied; no renewal, filing or expiration date was substituted.")
+        story.append(labeled("Registration Date:", registration_text))
         story.append(labeled("Evidence returned with the check:", row["raw_status_text"] or "No separate registry excerpt supplied."))
         if row["source_note"]:
             story.append(labeled("Evidence context:", row["source_note"]))

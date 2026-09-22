@@ -8,7 +8,7 @@ import argparse, hashlib, json, re, shutil, zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = '2026.09.22.1'
+VERSION = '2026.09.22.2'
 STAGE_API = 'https://instant-compliance-snapshot-api-staging-8dnk.onrender.com'
 STAGE_INTERNAL = 'https://instant-compliance-snapshot-api-staging.onrender.com'
 PROD_API = 'https://instant-compliance-snapshot-api-public.onrender.com'
@@ -39,6 +39,7 @@ def build(destination, environment, store_url=''):
     for name in paths: (destination/name).write_text(html, encoding='utf-8')
     (destination/'ny-connector.js').write_text(bridge, encoding='utf-8')
     shutil.copyfile(source/'organization-identity.js', destination/'organization-identity.js')
+    shutil.copyfile(source/'sales-mode.js', destination/'sales-mode.js')
     connector=destination/'connector';connector.mkdir(exist_ok=True)
     for name in ['privacy.html','charityclarity.png']:shutil.copyfile(source/'connector'/name,connector/name)
     if environment == 'staging':

@@ -133,7 +133,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.22.1-staging").strip() or "2026.09.20.6-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.22.2-staging").strip() or "2026.09.22.2-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -16690,7 +16690,62 @@ def mark_fiscal_period_unconfirmed(result):
     return result
 
 
+def registration_date_metadata(result, final_status=None) -> dict:
+    """Expose only labeled dates from the selected registration, without I/O.
+
+    A source's generic Registration Date is not relabeled as an initial date.
+    Renewals, incorporation, issue/approval, expiration and fiscal dates are never
+    used to fill this field. Ambiguous or unmatched records remain unavailable.
+    """
+    value = label = kind = ""
+    confirmed = bool(getattr(result, "success", False) and
+                     getattr(result, "matched_registry_name", "") and
+                     (final_status or public_status(result)) not in {"Not Registered", "Site Not Reachable", "Unknown", "Needs Review", "Unable to Confirm", "Unable to Verify"})
+    state = str(getattr(result, "state", "")).upper()
+    if confirmed and state == "AR":
+        match = re.search(r"(?:^|\|)\s*Registration Date:\s*(\d{4}-\d{2}-\d{2})(?=\s*(?:\||$))", getattr(result, "raw_status_text", ""))
+        if match: value, label, kind = match.group(1), "Registration Date", "registry_registration_date"
+    elif confirmed and state == "ND":
+        match = re.search(r"^registration date:\s*([^\r\n]+)$", getattr(result, "_cc_detail_body", ""), re.I | re.M)
+        if match: value, label, kind = match.group(1).strip(), "Registration Date", "registry_registration_date"
+    elif confirmed and state == "CA":
+        identifier = str(getattr(result, "matched_registry_identifier", "") or "")
+        dates = {str(r.get("initialRegistrationDate") or "").strip()
+                 for r in getattr(result, "_cc_registration_records", [])
+                 if identifier and str(r.get("registrationNumber") or "") == identifier}
+        if len(dates) == 1:
+            value, label, kind = dates.pop(), "Initial Registration Date", "initial_registration_date"
+    parsed = None
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%B %d, %Y", "%b %d, %Y"):
+        try:
+            parsed = datetime.strptime(value, fmt).date()
+            break
+        except (ValueError, TypeError):
+            pass
+    if parsed is not None and not date(1800, 1, 1) <= parsed <= date.today():
+        parsed = None
+    return {
+        "registration_date": parsed.isoformat() if parsed else "",
+        "registration_date_type": kind if parsed else "",
+        "registration_date_source_label": label if parsed else "",
+        "registration_date_source_url": getattr(result, "source_url", "") if parsed else "",
+        "registration_date_note": ("State-labeled registration date; the source does not specify that it is the initial registration." if parsed and kind == "registry_registration_date"
+                                   else "Initial registration date supplied by the state." if parsed
+                                   else "Unavailable in the confirmed data retrieved for this check; no other date was substituted."),
+    }
+
+
+def registration_date_observations(body: str) -> list[dict]:
+    """Audit already-retrieved labels; candidates are never treated as confirmed dates."""
+    pattern = (r"(?:^|[\n|])\s*(Initial Registration Date|Registration Date|Date Registered|"
+               r"Registered On|Original Issue Date|Initial Issue Date|Charity Added)"
+               r"[ :\t\r\n]+(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4})(?!\d)")
+    return [{"source_label": label, "value": value, "confirmed_as_initial_registration": False}
+            for label, value in list(dict.fromkeys(re.findall(pattern, body or "", re.I)))[:12]]
+
+
 def response_data_for_lookup(result, body: str, org, organization_name: str, ein: str, state: str, lookup_started: float) -> dict:
+    response_started = time.perf_counter()
     if result is None:
         result = checker.StateResult(organization_name or f"EIN {format_ein(ein)}", format_ein(ein), state, "Site Not Reachable", "")
         result.raw_status_text = "Lookup did not produce a registry result"
@@ -16750,13 +16805,17 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         data["organization_name"] = "Organization not identified"
         result.organization_name = data["organization_name"]
     try:
+        status_started = time.perf_counter()
         data["status"] = true_status_from_body(result, body)
+        status_finished = time.perf_counter()
         data["comments"] = comments_for_result(result, body, data["status"])
     except FiscalPeriodError:
         mark_fiscal_period_unconfirmed(result)
         data.update(checker.asdict(result))
         data["status"] = "Unable to Confirm"
         data["comments"] = result.source_note
+        status_finished = time.perf_counter()
+    comments_finished = time.perf_counter()
     alias_evidence = mn_confirmed_alias_evidence(result)
     if alias_evidence and result.success:
         data["comments"] += (f" Minnesota explicitly lists {alias_evidence['confirmed_alias']} as an alternate name under "
@@ -16813,6 +16872,16 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         if evidence_value is not None:
             data[evidence_key] = evidence_value
     data["debug_trace"] = json.dumps(debug_trace_for_result(result, org, state, data["status"]), sort_keys=True)
+    metadata_started = time.perf_counter()
+    data.update(registration_date_metadata(result, data["status"]))
+    data["registration_date_observations"] = registration_date_observations(body)
+    data["timing_breakdown"] = {
+        "registry_and_wait_seconds": round(max(0, response_started - lookup_started), 4),
+        "identity_finalization_seconds": round(status_started - response_started, 4),
+        "status_seconds": round(status_finished - status_started, 4),
+        "explanation_seconds": round(comments_finished - status_finished, 4),
+        "registration_date_seconds": round(time.perf_counter() - metadata_started, 6),
+    }
     log_event(f"{state} lookup for {format_ein(ein)} finished in {data['lookup_seconds']}s with status {data.get('status')}")
     return data
 

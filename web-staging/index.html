@@ -174,9 +174,9 @@
 
                 <div class="flex gap-3"><span class="mt-1 h-3 w-3 shrink-0 rounded-full bg-slate-300"></span><p><span class="font-semibold text-slate-900">Not Registered</span> = No records found</p></div>
 
-                <div class="flex gap-3"><span class="mt-1 h-3 w-3 shrink-0 rounded-full bg-emerald-500"></span><p><span class="font-semibold text-slate-900">Current</span> = No filings due within 6 months</p></div>
+                <div class="flex gap-3"><span class="mt-1 h-3 w-3 shrink-0 rounded-full bg-emerald-500"></span><p><span class="font-semibold text-slate-900">Current</span><span id="currentLegend"> = No filings due within 6 months</span></p></div>
 
-                <div class="flex gap-3"><span class="mt-1 h-3 w-3 shrink-0 rounded-full bg-yellow-400"></span><p><span class="font-semibold text-slate-900">Upcoming Filing</span> = Filings due within 6 months</p></div>
+                <div id="upcomingLegend" class="flex gap-3"><span class="mt-1 h-3 w-3 shrink-0 rounded-full bg-yellow-400"></span><p><span class="font-semibold text-slate-900">Upcoming Filing</span> = Filings due within 6 months</p></div>
 
                 <div class="flex gap-3"><span class="mt-1 h-3 w-3 shrink-0 rounded-full bg-amber-300"></span><p><span class="font-semibold text-slate-900">Pending / In Process</span> = Public registry indicates the registration or filing status is pending processing</p></div>
 
@@ -228,6 +228,16 @@
               </div>
 
 
+
+              <section id="workflowOptions" hidden class="rounded-xl border border-slate-200 bg-white p-4">
+                <label for="lookupMode" class="block text-xs font-semibold text-slate-700 mb-1">Choose your workflow</label>
+                <select id="lookupMode" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+                  <option value="detailed">Operations — detailed review</option>
+                  <option value="sales-ein">Sales — quick EIN snapshot (16 states)</option>
+                  <option value="sales-all">Sales — all 30 states</option>
+                </select>
+                <p id="modeDescription" class="mt-2 text-xs leading-relaxed text-slate-600">Discover and review alternate names, then check your selected states with detailed explanations and a companion report.</p>
+              </section>
 
               <section id="organizationIdentity" class="rounded-xl border border-slate-200 bg-slate-50 p-4" aria-label="Organization name review">
                 <button id="findAlternateNames" type="button" class="w-full rounded-full bg-[#0B2A5B] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">1. Find alternate names</button>
@@ -416,6 +426,7 @@
                   <div id="resultTimestamp" class="mt-1 text-sm text-slate-600"></div>
 
                   <div id="resultElapsed" class="mt-1 text-xs font-semibold text-slate-500"></div>
+                  <div id="resultScope" class="mt-2 text-xs text-slate-600" aria-live="polite"></div>
 
                 </div>
 
@@ -447,7 +458,9 @@
 
                       <th class="px-4 py-3 font-semibold">Status</th>
 
-                      <th class="px-4 py-3 font-semibold">Comments</th>
+                      <th class="px-4 py-3 font-semibold">Registration Date</th>
+
+                      <th id="resultDetailHeading" class="px-4 py-3 font-semibold">Comments</th>
 
                     </tr>
 
@@ -509,6 +522,7 @@
 
   <script src="/ny-connector.js"></script>
   <script src="/organization-identity.js?v=20260917.6-alias-review"></script>
+  <script src="/sales-mode.js?v=20260922.2"></script>
   <script>
 
     const API_BASE = "https://instant-compliance-snapshot-api-staging-8dnk.onrender.com";
@@ -546,6 +560,32 @@
     const submitButton = document.getElementById("submitButton");
     submitButton.disabled = true;
     let runAlternateNames = [];
+    let workflowRunning = false;
+    const lookupMode = document.getElementById("lookupMode");
+    let activeResultMode = "detailed";
+    let activeResultStates = [];
+    function selectedMode() { return internalUnlocked ? lookupMode.value : "detailed"; }
+    function updateWorkflowMode(selectScope = false) {
+      const mode = selectedMode();
+      const sales = window.CCSales.isSales(mode);
+      document.getElementById("currentLegend").textContent = sales ? " = Current or upcoming filing; not yet overdue" : " = No filings due within 6 months";
+      document.getElementById("upcomingLegend").hidden = sales;
+      document.getElementById("workflowOptions").hidden = !internalUnlocked;
+      document.getElementById("organizationIdentity").hidden = !namesRequired();
+      document.getElementById("modeDescription").textContent = mode === "sales-ein"
+        ? "Start directly with your EIN in 16 states. State identity safeguards and necessary name fallbacks remain in place. The other 14 states are not checked. Choose all 30 states for broader coverage."
+        : sales ? "Review alternate names, then see concise results as each state completes. Current includes upcoming filings that are not yet overdue."
+        : "Discover and review alternate names, then check your selected states with detailed explanations and a companion report.";
+      stateCheckboxes.forEach(box => {
+        box.disabled = sales;
+        if (selectScope && sales) box.checked = mode === "sales-all" || window.CCSales.EIN_STATES.includes(box.value);
+      });
+      selectAllStatesButton.disabled = sales;
+      clearStatesButton.disabled = sales;
+      submitButton.disabled = workflowRunning || (namesRequired() && !window.CCIdentity?.ready());
+      if (internalUnlocked && !workflowRunning) submitButton.textContent = namesRequired() && !window.CCIdentity?.ready() ? "Review organization names first" : "Run CharityClarity";
+    }
+    lookupMode.addEventListener("change", () => updateWorkflowMode(true));
     window.CCIdentityConfig = () => {
       const discoveryLanes = [API_BASE, "https://instant-compliance-snapshot-api-staging.onrender.com"];
       const digits = ein.value.replace(/\D/g, "");
@@ -554,6 +594,7 @@
       return {apiBase: discoveryLanes[hash % discoveryLanes.length], email: email.value.trim(), admin_passcode: adminPasscode.value.trim(), device_id: getDeviceId()};
     };
     window.addEventListener("cc-identity-change", () => {
+      if (workflowRunning) return;
       submitButton.disabled = namesRequired() && !window.CCIdentity?.ready();
       if (namesRequired() && !window.CCIdentity?.ready()) submitButton.textContent = "Review organization names first";
       else submitButton.textContent = "Run CharityClarity";
@@ -608,7 +649,7 @@
     });
 
     let internalUnlocked = false;
-    function namesRequired() { return STAGING_ACCESS_REQUIRED || isComplianceExpressEmail(email.value); }
+    function namesRequired() { return selectedMode() !== "sales-ein" && (STAGING_ACCESS_REQUIRED || isComplianceExpressEmail(email.value)); }
 
     let timerStartedAt = 0;
 
@@ -809,7 +850,7 @@
 
       unlockButton.textContent = internalUnlocked ? "Unlocked" : "Unlock";
 
-      submitButton.textContent = internalUnlocked ? (window.CCIdentity?.ready() ? "Run CharityClarity" : "Review organization names first") : (STAGING_ACCESS_REQUIRED ? "Unlock staging to continue" : "Check selected state");
+      submitButton.textContent = internalUnlocked ? (!namesRequired() || window.CCIdentity?.ready() ? "Run CharityClarity" : "Review organization names first") : (STAGING_ACCESS_REQUIRED ? "Unlock staging to continue" : "Check selected state");
 
       if (complimentaryAccessNote) {
 
@@ -822,6 +863,7 @@
         downloadLeadLogButton.classList.toggle("hidden", !internalUnlocked || latestResults.length === 0);
 
       }
+      updateWorkflowMode();
 
     }
 
@@ -1027,11 +1069,15 @@
 
 
 
-    function renderResults(results, onlyNewYorkRefreshed = false) {
+    function renderResults(results, onlyNewYorkRefreshed = false, inProgress = false) {
       latestResults = results;
-      generateReportButton.classList.toggle("hidden", !results.length);
-      generateReportButton.disabled = false;
+      const sales = window.CCSales.isSales(activeResultMode);
+      generateReportButton.classList.toggle("hidden", !results.length || sales);
+      generateReportButton.disabled = inProgress;
       reportMessage.textContent = "";
+      document.getElementById("resultDetailHeading").textContent = sales ? "Matched organization / source" : "Comments";
+      document.getElementById("resultScope").textContent = window.CCSales.scopeText(activeResultStates, stateCheckboxes.map(box => box.value), results.length) +
+        (sales ? " Current includes upcoming filings. This snapshot is preliminary; confirm requirements before making fundraising decisions." : "");
 
       resultRows.innerHTML = "";
 
@@ -1051,10 +1097,16 @@
           <td class="px-4 py-4 align-top">${escapeHtml(formatEin(result.ein || ""))}</td>
           <td class="px-4 py-4 align-top">${escapeHtml(result.state || "")}</td>
           <td class="px-4 py-4 align-top">
-            <span class="inline-flex rounded-full px-3 py-1 text-xs font-semibold ${statusClass(result.status)}">${escapeHtml(result.status || "Unknown")}</span>
+            <span class="inline-flex rounded-full px-3 py-1 text-xs font-semibold ${statusClass(sales ? window.CCSales.displayStatus(result.status) : result.status)}">${escapeHtml(sales ? window.CCSales.displayStatus(result.status) : (result.status || "Unknown"))}</span>
           </td>
-
-          <td class="px-4 py-4 align-top text-slate-700 whitespace-pre-line">${boldStatuses(escapeHtml(commentsWithRegistryFooter(result)))}</td>
+          <td class="px-4 py-4 align-top text-xs text-slate-700" title="${escapeHtml(result.registration_date_note || 'No registration date was supplied by the confirmed source.')}">
+            ${escapeHtml(result.registration_date || "Unavailable")}
+            ${result.registration_date ? `<span class="block mt-1 text-slate-500">${escapeHtml(result.registration_date_source_label || "Registration Date")}</span>` : ""}
+          </td>
+          <td class="px-4 py-4 align-top text-slate-700 whitespace-pre-line">${sales
+            ? escapeHtml(result.matched_registry_name || (result.status === "Not Registered" ? "No matching record" : "Identity unconfirmed")) +
+              (/^https:\/\//.test(result.source_url || "") ? `<a class="block mt-1 text-xs underline" href="${escapeHtml(result.source_url)}" target="_blank" rel="noopener">State source</a>` : "")
+            : boldStatuses(escapeHtml(commentsWithRegistryFooter(result)))}</td>
 
         `;
 
@@ -1067,11 +1119,12 @@
       resultPanel.classList.remove("hidden");
 
       downloadExcelButton.classList.remove("hidden");
+      downloadExcelButton.disabled = inProgress;
 
       downloadLeadLogButton.classList.toggle("hidden", !internalUnlocked);
 
       fullPictureCta.classList.remove("hidden");
-      if (onlyNewYorkRefreshed) return;
+      if (onlyNewYorkRefreshed || inProgress) return;
       const requestId = (results[0] && results[0]._request_id) || "";
       trackFunnelEvent("free_result_viewed", { request_id: requestId, state: results[0]?.state || "", status: results[0]?.status || "" });
       trackFunnelEvent("paid_offer_viewed", { request_id: requestId, state: results[0]?.state || "" });
@@ -1108,7 +1161,7 @@
 
     async function generateReport() {
       if (!latestResults.length || generateReportButton.disabled) return;
-      const reportFields = ["organization_name", "ein", "state", "status", "comments", "raw_status_text", "source_note", "source_url", "matched_registry_identifier", "app_version", "computed_due_date", "checked_at_epoch"];
+      const reportFields = ["organization_name", "ein", "state", "status", "comments", "raw_status_text", "source_note", "source_url", "matched_registry_identifier", "app_version", "computed_due_date", "checked_at_epoch", "registration_date", "registration_date_type", "registration_date_source_label", "registration_date_source_url", "registration_date_note"];
       const results = latestResults.map(result => Object.fromEntries(reportFields.map(key => [key, result[key]])));
       generateReportButton.disabled = true;
       reportMessage.textContent = "Generating report from these results...";
@@ -1149,7 +1202,8 @@
 
     function downloadExcel() {
 
-      const header = ["Organization", "EIN", "State", "Status", "Matched Registry Name", "Matched Registry ID", "Comments"];
+      const sales = window.CCSales.isSales(activeResultMode);
+      const header = ["Organization", "EIN", "State", "Status", "Matched Registry Name", "Matched Registry ID", "Registration Date", "Date Meaning", "Date Source", sales ? "Scope" : "Comments"];
 
       const rows = latestResults.map((result) => [
 
@@ -1159,13 +1213,15 @@
 
         result.state || "",
 
-        result.status || "",
+        sales ? window.CCSales.displayStatus(result.status) : (result.status || ""),
 
         result.matched_registry_name || "",
 
         result.matched_registry_identifier || "",
-
-        commentsWithRegistryFooter(result)
+        result.registration_date || "Unavailable",
+        result.registration_date_note || "Unavailable; no other date substituted.",
+        result.registration_date_source_url || "",
+        sales ? document.getElementById("resultScope").textContent : commentsWithRegistryFooter(result)
 
       ]);
 
@@ -1437,16 +1493,15 @@
         progressCount.textContent = `${completed} of ${states.length}`;
 
         progressBar.style.width = `${Math.max(12, Math.round((completed / states.length) * 100))}%`;
+        renderResults([...results].sort((a, b) => states.indexOf(a.state) - states.indexOf(b.state)), false, true);
 
       }
 
 
 
-      // Only NY gets an independent lane; preserve all other state ordering.
+      // Operations preserves its existing ordering; sales bounds non-NY lanes.
       const nyPending = states.includes("NY") ? runOneState("NY") : null;
-      for (const state of states) {
-        if (state !== "NY") await runOneState(state);
-      }
+      await window.CCSales.runBounded(states.filter(state => state !== "NY"), window.CCSales.isSales(activeResultMode) ? 3 : 1, runOneState);
       if (nyPending) await nyPending;
       return results.sort((a, b) => states.indexOf(a.state) - states.indexOf(b.state));
 
@@ -1608,6 +1663,10 @@
         return showError("Find and review the organization’s alternate names before running CharityClarity.");
       }
       runAlternateNames = Object.freeze(window.CCIdentity?.ready() ? [...window.CCIdentity.names()] : []);
+      activeResultMode = selectedMode();
+      activeResultStates = [...states];
+      workflowRunning = true;
+      lookupMode.disabled = true;
       window.CCIdentity.setBusy(true);
 
 
@@ -1647,8 +1706,10 @@
         trackFunnelEvent("search_error", { state: states[0] || "", error_category: "client_or_api_error" });
       } finally {
 
+        workflowRunning = false;
         submitButton.disabled = false;
         window.CCIdentity.setBusy(false);
+        lookupMode.disabled = false;
         submitButton.textContent = internalUnlocked ? "Run CharityClarity" : (STAGING_ACCESS_REQUIRED ? "Unlock staging to continue" : "Run One Organization in One State Free");
       }
 

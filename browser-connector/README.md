@@ -1,8 +1,8 @@
-# CharityClarity staging New York connector — 0.3.6
+# CharityClarity New York connector — 0.4.0
 
-This internal prototype is restricted to staging.compliance-express.com and the New York charities registry. It is not published to the Chrome Web Store and has not been approved for production.
+The connector supports the exact staging and production Compliance Express origins and the New York charities registry. The backend signs and binds each continuation to its environment and origin. The Chrome Web Store package and production compatibility changes are under validation; publication and live installation must be verified before calling customer installation ready.
 
-## Install for testing
+## Install for internal testing
 
 1. Keep this folder on your computer.
 2. In your regular Chrome profile, open `chrome://extensions`.
@@ -11,7 +11,7 @@ This internal prototype is restricted to staging.compliance-express.com and the 
 
 Only install this reviewed folder. No Google login, cookie transfer, API key, or CharityClarity passcode goes into the extension. The extension opens and closes a NY search tab; all record matching and compliance interpretation stay in CharityClarity's backend. Keep Chrome open during checks.
 
-The prototype has no automatic update service. If a test fix is made, reload it on Chrome's Extensions page and refresh the staging page. Remove it there when testing is over.
+The unpacked test installation has no automatic update service. If a test fix is made, reload it on Chrome's Extensions page and refresh the application page. Customer distribution uses the approved Chrome Web Store listing and Store-managed updates; do not give customers the developer-mode instructions above.
 
 ## What it does
 
