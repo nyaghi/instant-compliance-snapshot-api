@@ -1,5 +1,5 @@
 """DC/RI integration controls: identity, source completeness, dates, mature parity."""
-import ast, copy, json, re, subprocess, sys, time, unittest
+import ast, copy, json, subprocess, sys, time, unittest
 from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -189,27 +189,10 @@ class MatureParity(unittest.TestCase):
     def test_discovery_connector_and_state_modules_unchanged(self):
         for path in ['Charity_Checker_Script for 13_states.py','web-staging/organization-identity.js','web-staging/ny-connector.js']:
             self.assertEqual((ROOT/path).read_text(encoding='utf-8').replace('\r\n','\n'),self.previous(path).replace('\r\n','\n'))
-    def test_standard_frontend_concurrency_unchanged(self):
+    def test_frontend_concurrency_unchanged(self):
         start='    async function runStateChecks('
         def body(s):return s[s.index(start):].split('\n    stateCheckboxes.forEach')[0]
-        old=body(self.previous('web-staging/index.html'))
-        current=body((ROOT/'web-staging/index.html').read_text(encoding='utf-8'))
-        # The authorized Sales restoration adds its own branch. Keep comparing the
-        # entire remaining Standard path; executable scheduler controls cover Sales.
-        progress='        if (window.CCSales.isSales(activeResultMode)) renderResults([...results].sort((a, b) => states.indexOf(a.state) - states.indexOf(b.state)), false, true);'
-        sales='''      if (window.CCSales.isSales(activeResultMode)) {
-        await window.CCSales.runBounded(states.filter(state => state !== "NY"), 3, runOneState);
-      } else {
-        for (const state of states) {
-          if (state !== "NY") await runOneState(state);
-        }
-      }'''
-        self.assertIn(progress,current);self.assertIn(sales,current)
-        current=current.replace(progress,'').replace(sales,'''      for (const state of states) {
-        if (state !== "NY") await runOneState(state);
-      }''')
-        def normalized(s):return re.sub(r'\s+','',re.sub(r'//[^\n]*','',s))
-        self.assertEqual(normalized(old),normalized(current))
+        self.assertEqual(body(self.previous('web-staging/index.html')),body((ROOT/'web-staging/index.html').read_text(encoding='utf-8')))
     def test_old_lane_indices_preserved_and_ui_has_32(self):
         tree=ast.parse(self.previous('registry_snapshot_server.py'))
         states=next(ast.literal_eval(n.value) for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='SUPPORTED_STATES' for t in n.targets))
