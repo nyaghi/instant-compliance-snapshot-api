@@ -1056,8 +1056,8 @@
             <span class="inline-flex rounded-full px-3 py-1 text-xs font-semibold ${statusClass(result.status)}">${escapeHtml(result.status || "Unknown")}</span>
           </td>
 
-          <td class="px-4 py-4 align-top text-slate-700" title="${escapeHtml(result.registration_date ? result.registration_date_note || '' : '')}">${escapeHtml(result.registration_date || "")}<span class="block text-xs text-slate-500">${escapeHtml(result.registration_date ? result.registration_date_source_label || "" : "")}</span></td>
-          <td class="px-4 py-4 align-top text-slate-700" title="${escapeHtml((result.renewal_filing_value || result.renewal_date) ? result.renewal_filing_note || result.renewal_date_note || '' : '')}">${escapeHtml(result.renewal_filing_value || result.renewal_date || "")}<span class="block text-xs text-slate-500">${escapeHtml((result.renewal_filing_value || result.renewal_date) ? result.renewal_filing_label || result.renewal_date_source_label || "" : "")}</span></td>
+          <td class="px-4 py-4 align-top text-slate-700" style="min-width:160px" title="${escapeHtml(result.registration_date ? result.registration_date_note || '' : '')}"><span class="whitespace-nowrap">${escapeHtml(result.registration_date || "")}</span><span class="block text-xs text-slate-500">${escapeHtml(result.registration_date ? result.registration_date_source_label || "" : "")}</span></td>
+          <td class="px-4 py-4 align-top text-slate-700" style="min-width:160px" title="${escapeHtml((result.renewal_filing_value || result.renewal_date) ? result.renewal_filing_note || result.renewal_date_note || '' : '')}"><span class="whitespace-nowrap">${escapeHtml(result.renewal_filing_value || result.renewal_date || "")}</span><span class="block text-xs text-slate-500">${escapeHtml((result.renewal_filing_value || result.renewal_date) ? result.renewal_filing_label || result.renewal_date_source_label || "" : "")}</span></td>
           <td class="px-4 py-4 align-top text-slate-700 whitespace-pre-line">${boldStatuses(escapeHtml(commentsWithRegistryFooter(result)))}</td>
 
         `;

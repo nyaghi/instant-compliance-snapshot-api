@@ -27,6 +27,7 @@ for(const [value,label] of [['2024','Filed year'],['2025-06-30','Filed period en
  vm.runInContext('renderResults(input, true); downloadExcel();',context);
  const cells=[...rows.at(-1).matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/g)].map(m=>m[1]);
  assert.equal(cells.length,7);assert(cells[5].includes(value));assert(cells[5].includes(label));
+ assert(cells[5].includes('class="whitespace-nowrap"'));
  assert(cells[5].indexOf(value)<cells[5].indexOf(label));assert(exported.includes(value));assert(exported.includes(label));
  if(value==='2024')assert(!exported.includes('2024-12-31'));
 }
