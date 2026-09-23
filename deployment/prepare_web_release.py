@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = '2026.09.22.3'
 STAGING_VERSION = '2026.09.23.3'
+STAGING_UI_VERSION = '2026.09.23.4'
 STAGE_API = 'https://instant-compliance-snapshot-api-staging-8dnk.onrender.com'
 STAGE_INTERNAL = 'https://instant-compliance-snapshot-api-staging.onrender.com'
 PROD_API = 'https://instant-compliance-snapshot-api-public.onrender.com'
@@ -111,6 +112,8 @@ def build(destination, environment, store_url=''):
     for name in paths: (destination/name).write_text(html, encoding='utf-8')
     (destination/'ny-connector.js').write_text(bridge, encoding='utf-8')
     shutil.copyfile(source/'organization-identity.js', destination/'organization-identity.js')
+    if environment == 'staging':
+        shutil.copyfile(source/'sales-mode.js', destination/'sales-mode.js')
     connector=destination/'connector';connector.mkdir(exist_ok=True)
     for name in ['privacy.html','charityclarity.png','review.html','review.js']:shutil.copyfile(source/'connector'/name,connector/name)
     shutil.copyfile(ROOT/'browser-connector/protocol.js',connector/'review-protocol.js')
@@ -132,7 +135,8 @@ def build(destination, environment, store_url=''):
         expected={STAGE_API,STAGE_INTERNAL} if environment=='staging' else {PROD_API,PROD_INTERNAL}
         assert targets and set(targets)<=expected,(name,targets)
     assert '$49' not in html and 'buy.stripe.com' not in html
-    manifest={'environment':environment,'version':STAGING_VERSION+'-staging' if environment=='staging' else VERSION,
+    manifest={'environment':environment,'version':STAGING_UI_VERSION+'-staging' if environment=='staging' else VERSION,
+              'backend_version':STAGING_VERSION+'-staging' if environment=='staging' else VERSION,
               'store_url':store_url,'customer_installation_ready':bool(store_url),
               'overlay_files':{str(p.relative_to(destination)).replace('\\','/'):hashlib.sha1(p.read_bytes()).hexdigest() for p in destination.rglob('*') if p.is_file()}}
     return manifest

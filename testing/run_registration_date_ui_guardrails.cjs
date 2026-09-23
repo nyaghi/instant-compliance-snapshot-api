@@ -5,16 +5,16 @@ function section(name, next) { return html.slice(html.indexOf('    function '+na
 const rows = [];
 let exported = '';
 const panel = () => ({ classList: {toggle(){},remove(){}}, scrollIntoView(){} });
-const context = {latestResults: [], internalUnlocked:false, resultRows:{appendChild(row){rows.push(row.innerHTML)}},
+const context = {window:{CCSales:require('../web-staging/sales-mode.js')},activeResultMode:'detailed',activeResultStates:[],stateCheckboxes:[],latestResults: [], internalUnlocked:false, resultRows:{appendChild(row){rows.push(row.innerHTML)}},
   generateReportButton:panel(), reportMessage:{}, resultTimestamp:{}, resultPanel:panel(), downloadExcelButton:panel(), downloadLeadLogButton:panel(), fullPictureCta:panel(),
-  document:{createElement(){return {click(){}}}}, Blob: class {constructor(parts){exported=parts.join('')}}, URL:{createObjectURL(){return 'blob:test'},revokeObjectURL(){}},
+  document:{getElementById(){return panel()},createElement(){return {click(){}}}}, Blob: class {constructor(parts){exported=parts.join('')}}, URL:{createObjectURL(){return 'blob:test'},revokeObjectURL(){}},
   formatEin:x=>x,statusClass:()=>'',boldStatuses:x=>x,commentsWithRegistryFooter:r=>r.comments || ''};
 vm.createContext(context);
 vm.runInContext(section('escapeHtml','commentsWithRegistryFooter')+section('renderResults','downloadLeadLog')+section('downloadExcel','fallbackResult'), context);
-const states='AK AR CA CO CT FL HI KS KY LA MA MD ME MI MN MS ND NH NJ NM NY OH OK OR PA SC VA WA WI WV'.split(' ');
+const states='AK AR CA CO CT DC FL HI KS KY LA MA MD ME MI MN MS ND NH NJ NM NY OH OK OR PA RI SC VA WA WI WV'.split(' ');
 context.input=states.map(state=>({state,organization_name:'Example Foundation',ein:'012345678',status:'Current',comments:'Control'}));
 vm.runInContext('renderResults(input, true); downloadExcel();', context);
-assert.equal(rows.length,30);
+assert.equal(rows.length,32);
 for(const row of rows){const cells=[...row.matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/g)].map(m=>m[1]);assert.equal(cells.length,7);assert.equal(cells[4].replace(/<[^>]*>/g,''),'');assert.equal(cells[5].replace(/<[^>]*>/g,''),'');}
 assert(!exported.includes('Unavailable'));assert(!exported.includes('Not available'));
 assert(exported.includes('Initial Registration Date'));assert(exported.includes('Last Renewal / Filed Year'));
@@ -32,5 +32,14 @@ for(const [value,label] of [['2024','Filed year'],['2025-06-30','Filed period en
  if(value==='2024')assert(!exported.includes('2024-12-31'));
 }
 assert(!html.includes('Initial / Original Registration Date'));assert(!html.includes('<th>Last Renewal Date</th>'));
+// Sales changes presentation only: detailed source status, dates and comments survive export.
+context.activeResultMode='sales-ein';
+context.input=['Current','Upcoming Filing','Not Registered','Delinquent','Pending','Exempt','Suspended','Revoked','Unable to Confirm','Site Not Reachable','Unknown','Closed / Withdrawn / Canceled'].map(status=>({state:'WA',status,comments:'Evidence for '+status,registration_date:'2010-02-03',renewal_filing_value:'2025',renewal_filing_label:'Filed year'}));
+const before=JSON.stringify(context.input);
+vm.runInContext('renderResults(input, true); downloadExcel();',context);
+assert.equal(JSON.stringify(context.input),before);
+assert(exported.includes('Sales Status'));assert(exported.includes('Upcoming Filing'));assert(exported.includes('No record found'));
+assert(exported.includes('Evidence for Unable to Confirm'));assert(exported.includes('2010-02-03'));assert(exported.includes('Filed year'));
+assert(rows.at(-1).includes('Details: Closed / Withdrawn / Canceled'));
 for(const script of html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)){if(script[1].trim())new vm.Script(script[1]);}
-console.log('PASS: 30-state blank cells; two populated date columns; Excel labels/values; inline JavaScript syntax');
+console.log('PASS: 32-state blank cells; two populated date columns; 12 Sales status/evidence controls; Excel labels/values; inline JavaScript syntax');
