@@ -865,8 +865,8 @@ def search_ca(page, org: Organization) -> StateResult:
         for entity, match_basis in candidates:
             registrations = ca_evoke_registrations_for_entity(str(entity.get("id") or ""))
             status, raw_status, identifier, expiration_date = ca_evoke_status_from_record(entity, registrations)
-            accepted.append((expiration_date or date.min, identifier, status, raw_status, entity, match_basis))
-        _, identifier, status, raw_status, entity, match_basis = max(accepted, key=lambda item: (
+            accepted.append((expiration_date or date.min, identifier, status, raw_status, entity, match_basis, registrations))
+        _, identifier, status, raw_status, entity, match_basis, registrations = max(accepted, key=lambda item: (
             int(item[5] == "exact FEIN"),
             name_match_priority(ca_evoke_display_name(item[4]), org.organization_name),
             globals().get("registry_exact_active_tiebreak", lambda name, targets, status: 0)(ca_evoke_display_name(item[4]), [org.organization_name], str(item[4].get("entityStatus") or "")),
@@ -880,6 +880,8 @@ def search_ca(page, org: Organization) -> StateResult:
         )
         result.matched_registry_name = ca_evoke_display_name(entity)
         result.matched_registry_identifier = identifier
+        # Retain already-fetched selected-entity data for master metadata extraction.
+        result._cc_registration_records = registrations
         result.success = True
         return result
     except Exception as e:

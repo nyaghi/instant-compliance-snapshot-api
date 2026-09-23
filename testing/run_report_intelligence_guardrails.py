@@ -157,7 +157,7 @@ class IntelligenceTests(unittest.TestCase):
         for phrase in ['Extension eligibility is inferred, not separately confirmed by the state.',
                        'An extension was not confirmed; an approved extension may change the due date.',
                        'no registration record could be reliably matched', 'State source date: 9/7/2026',
-                       'Report template 1.2.0', 'Snapshot version(s): 2026.09.14.2-staging']:
+                       f'Report template {r.REPORT_VERSION}', 'Snapshot version(s): 2026.09.14.2-staging']:
             self.assertIn(phrase, text)
         for value in FIXTURE['results']:
             self.assertIn(' '.join(value['comments'].split()), text)

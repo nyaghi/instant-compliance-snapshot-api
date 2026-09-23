@@ -447,6 +447,7 @@
 
                       <th class="px-4 py-3 font-semibold">Status</th>
 
+                      <th class="px-4 py-3 font-semibold">Registration Date</th>
                       <th class="px-4 py-3 font-semibold">Comments</th>
 
                     </tr>
@@ -496,7 +497,7 @@
 
         <div>&copy; <span id="year"></span> Compliance Express</div>
 
-          <div class="font-semibold text-slate-600">CharityClarity v2026.09.20.6 &middot; Staging</div>
+          <div class="font-semibold text-slate-600">CharityClarity v2026.09.22.3 &middot; Staging</div>
         <div>No legal or tax advice.</div>
 
       </div>
@@ -1054,6 +1055,7 @@
             <span class="inline-flex rounded-full px-3 py-1 text-xs font-semibold ${statusClass(result.status)}">${escapeHtml(result.status || "Unknown")}</span>
           </td>
 
+          <td class="px-4 py-4 align-top text-slate-700" title="${escapeHtml(result.registration_date_note || 'Unavailable; no other date substituted.')}">${escapeHtml(result.registration_date || "Unavailable")}<span class="block text-xs text-slate-500">${escapeHtml(result.registration_date_source_label || "")}</span></td>
           <td class="px-4 py-4 align-top text-slate-700 whitespace-pre-line">${boldStatuses(escapeHtml(commentsWithRegistryFooter(result)))}</td>
 
         `;
@@ -1108,7 +1110,7 @@
 
     async function generateReport() {
       if (!latestResults.length || generateReportButton.disabled) return;
-      const reportFields = ["organization_name", "ein", "state", "status", "comments", "raw_status_text", "source_note", "source_url", "matched_registry_identifier", "app_version", "computed_due_date", "checked_at_epoch"];
+      const reportFields = ["organization_name", "ein", "state", "status", "comments", "raw_status_text", "source_note", "source_url", "matched_registry_identifier", "app_version", "computed_due_date", "checked_at_epoch", "registration_date", "registration_date_type", "registration_date_source_label", "registration_date_source_url", "registration_date_note"];
       const results = latestResults.map(result => Object.fromEntries(reportFields.map(key => [key, result[key]])));
       generateReportButton.disabled = true;
       reportMessage.textContent = "Generating report from these results...";
@@ -1149,7 +1151,7 @@
 
     function downloadExcel() {
 
-      const header = ["Organization", "EIN", "State", "Status", "Matched Registry Name", "Matched Registry ID", "Comments"];
+      const header = ["Organization", "EIN", "State", "Status", "Matched Registry Name", "Matched Registry ID", "Registration Date", "Date Meaning", "Date Source", "Comments"];
 
       const rows = latestResults.map((result) => [
 
@@ -1165,6 +1167,9 @@
 
         result.matched_registry_identifier || "",
 
+        result.registration_date || "Unavailable",
+        result.registration_date_note || "Unavailable; no other date substituted.",
+        result.registration_date_source_url || "",
         commentsWithRegistryFooter(result)
 
       ]);
