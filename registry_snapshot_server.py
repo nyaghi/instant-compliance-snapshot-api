@@ -133,7 +133,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.23.1-staging").strip() or "2026.09.23.1-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.23.2-staging").strip() or "2026.09.23.2-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -16965,6 +16965,130 @@ def registration_date_metadata(result, final_status=None, body="") -> dict:
     }
 
 
+def renewal_filing_metadata(result, dates: dict, final_status=None, body="") -> dict:
+    """Display a verified renewal first, then the state-recorded filed period/year.
+
+    This is presentation metadata only: no requests, inferred calendar dates,
+    outside-state filing substitutions, or changes to the lookup result.
+    Existing renewal_date fields retain their date-only contract.
+    """
+    empty = {"renewal_filing_" + key: "" for key in ("value", "type", "label", "source_url", "note")}
+    if not registration_date_result_confirmed(result, final_status):
+        return empty
+    def output(value, kind, label, note="", url=""):
+        return dict(zip(empty, (value, kind, label, url or getattr(result, "source_url", ""), note)))
+    renewal = registration_source_date(dates.get("renewal_date", ""))
+    if renewal:
+        labels = {"renewal_filing_date": "Renewal filed", "last_registration_date": "Last registration date",
+                  "current_issue_date": "Current registration issued", "current_effective_date": "Current period effective",
+                  "annual_registration_submitted_date": "Registration submitted"}
+        kind = dates.get("renewal_date_type", "")
+        if kind in labels:
+            return output(renewal.isoformat(), kind, labels[kind],
+                          dates.get("renewal_date_note", ""), dates.get("renewal_date_source_url", ""))
+    state = str(getattr(result, "state", "")).upper()
+    raw = str(getattr(result, "raw_status_text", "") or "")
+    detail = re.split(r"<!doctype\b|<html\b", body or "", maxsplit=1, flags=re.I)[0]
+    period = None
+    year = ""
+    note = ""
+    tax_year = False
+    def year_value(value):
+        text = str(value or "").strip()
+        return text if re.fullmatch(r"(?:19|20)\d{2}", text) and int(text) <= date.today().year else ""
+    def labeled_period(text, labels):
+        # Exact labels and delimiters keep 'Next Required Period' and due dates out.
+        found = re.findall(r"(?:^|\|)\s*(?:" + labels + r")(?:\s*:\s*|\s+)(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4})(?=\s*(?:\||$))", text, re.I)
+        values = {registration_source_date(v) for v in found}
+        return next(iter(values)) if len(values) == 1 and None not in values else None
+    if state in {"HI", "KY"}:
+        evidence = getattr(result, "tax_period_evidence", {}) or {}
+        if evidence:
+            if (evidence.get("ein") != canonical_ein_digits(result.ein)
+                    or getattr(result, "status_reason", "") != state + "_CONFIRMED_TAX_PERIOD"):
+                return empty
+            year = year_value(getattr(result, "last_year_on_record", ""))
+            if year != year_value(evidence.get("tax_year_label")):
+                return empty
+            if not evidence.get("period_assumed") and not evidence.get("period_unconfirmed"):
+                period = registration_source_date(evidence.get("period_end", ""))
+            note = f"State-listed tax year {year}. " + str(evidence.get("period_basis", "")) if year else ""
+            if evidence.get("period_assumed"):
+                note = f"State-listed tax year {year}; the fiscal period end was not confirmed, so only the year is shown."
+        else:
+            match = re.search(r"(?:^|\|)\s*(?:Yr Last Filed|Last Year on Record)\s*:\s*((?:19|20)\d{2})(?=\s*(?:\||$))", raw, re.I)
+            year = year_value(match.group(1)) if match else ""
+        tax_year = True
+    elif state in {"MA", "MN", "NY", "OR"}:
+        labels = {"MA": "Latest Filed Fiscal Period End", "MN": "Fiscal Year Ending",
+                  "NY": "Latest FYE", "OR": "Fiscal Period End"}
+        period = labeled_period(raw, labels[state])
+        if state == "MA" and getattr(result, "status_reason", "") == "MA_LEGACY_URS_NO_LATER_ANNUAL":
+            period = labeled_period(raw, "Reporting period end")
+            note = "Reporting period in the latest Unified Registration Statement listed by Massachusetts."
+        if not period:
+            year_labels = "Last Year on Record|Latest Fiscal Period End Year" + ("|Fiscal Year Ending" if state == "MN" else "")
+            match = re.search(r"(?:^|\|)\s*(?:" + year_labels + r")(?:\s*:\s*|\s+)((?:19|20)\d{2})(?=\s*(?:\||$))", raw, re.I)
+            year = year_value(match.group(1)) if match else ""
+    elif state == "NJ":
+        # Use explicit selected-detail dates; do not synthesize one from an IRS FYE.
+        patterns = r"(?:Fiscal Year End|Last Accepted Fiscal Year|Fiscal Period End)\s*:?\s*(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4})(?!\d)"
+        values = [registration_source_date(v) for v in re.findall(patterns, detail, re.I)]
+        if getattr(result, "status_reason", "") == "NJ_STATUS_FROM_REGISTRY_FILING_PERIOD":
+            # Bind the value to the actual selected-detail field, not a date
+            # elsewhere in the document (such as a nearby renewal deadline).
+            for tag in re.findall(r"<input\b[^>]*>", body, re.I):
+                if re.search(r'\bid=[\"\x27]crsm_fiscalyearenddate[\"\x27]', tag, re.I):
+                    match = re.search(r'\bvalue=[\"\x27](\d{4}-\d{2}-\d{2})(?:T[^\"\x27]*)?[\"\x27]', tag, re.I)
+                    if match:
+                        values.append(registration_source_date(match.group(1)))
+            year = year_value(getattr(result, "last_year_on_record", ""))
+        period = max((v for v in values if v), default=None)
+    elif state == "SC":
+        match = re.search(r"(?:^|\|)\s*Fiscal Year:\s*(\d{1,2}/\d{1,2}/\d{4})\s*-\s*(\d{1,2}/\d{1,2}/\d{4})(?=\s*(?:\||$))", raw, re.I)
+        if match:
+            start, end = (registration_source_date(v) for v in match.groups())
+            if start and end and start <= end:
+                period = end
+    elif state == "OH":
+        match = re.search(r"(?:^|\|)\s*Most Recent Report Filing Year:\s*((?:19|20)\d{2})(?=\s*(?:\||$))", raw, re.I)
+        year = year_value(match.group(1)) if match else ""
+    elif state == "MD":
+        # A response may contain several charities. Bind this display field to
+        # the already selected public charity ID and EIN, never a nearby year.
+        try:
+            payload, _ = json.JSONDecoder().raw_decode(body[body.index("{"):])
+            years = set()
+            for entry in payload.get("entries", []):
+                values = [html_fragment_text(re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), str(v)))
+                          for v in entry.get("view_data", {}).get("content_element_data", {}).values()]
+                fields = {}
+                for value in values:
+                    if ":" in value:
+                        key, value = value.split(":", 1)
+                        fields.setdefault(key.strip(), set()).add(value.strip())
+                if (fields.get("Charity ID") != {str(getattr(result, "matched_registry_identifier", ""))}
+                        or {canonical_ein_digits(v) for v in fields.get("Charity EIN", set())} != {canonical_ein_digits(result.ein)}):
+                    continue
+                years.update(fields.get("Year Represented", set()))
+            if len(years) == 1:
+                year = year_value(years.pop())
+        except (ValueError, TypeError, AttributeError):
+            pass
+        note = "Year Represented in the selected Maryland charity record."
+    elif state == "CA":
+        year = year_value(ca_annual_renewal_years_from_text(body).get("latest_submitted_year"))
+        note = "Latest submitted year in the selected record's Annual Renewal Data."
+    if period:
+        return output(period.isoformat(), "filed_period_end", "Filed period ending",
+                      note or "Latest filed fiscal period shown by the state; this is not the submission or renewal date.")
+    if year:
+        return output(year, "filed_tax_year" if tax_year else "filed_year",
+                      "Filed tax year" if tax_year else "Filed year",
+                      note or "Latest filed year shown by the state; no month or day has been inferred.")
+    return empty
+
+
 def response_data_for_lookup(result, body: str, org, organization_name: str, ein: str, state: str, lookup_started: float) -> dict:
     if result is None:
         result = checker.StateResult(organization_name or f"EIN {format_ein(ein)}", format_ein(ein), state, "Site Not Reachable", "")
@@ -17090,6 +17214,7 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
             data[evidence_key] = evidence_value
     data["debug_trace"] = json.dumps(debug_trace_for_result(result, org, state, data["status"]), sort_keys=True)
     data.update(registration_date_metadata(result, data["status"], body))
+    data.update(renewal_filing_metadata(result, data, data["status"], body))
     log_event(f"{state} lookup for {format_ein(ein)} finished in {data['lookup_seconds']}s with status {data.get('status')}")
     return data
 

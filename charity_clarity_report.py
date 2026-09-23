@@ -13,7 +13,7 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.utils import ImageReader
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, CondPageBreak, KeepTogether
 
-REPORT_VERSION = "1.3.1"
+REPORT_VERSION = "1.3.2"
 NAVY = colors.HexColor("#0B2A5B")
 INK = colors.HexColor("#172B45")
 MUTED = colors.HexColor("#536274")
@@ -335,6 +335,26 @@ def validate_results(payload, supported_states):
                              or not parse_date(renewal_date)
                              or renewal_type not in {"last_registration_date", "current_issue_date", "current_effective_date", "renewal_filing_date", "annual_registration_submitted_date"}):
             raise ValueError("Last Renewal Date must preserve a valid state-supplied date and its meaning.")
+        combined_value = text(row.get("renewal_filing_value"), 10)
+        combined_type = text(row.get("renewal_filing_type"), 50)
+        combined_label = text(row.get("renewal_filing_label"), 100)
+        combined_note = text(row.get("renewal_filing_note"), 500)
+        combined_url = text(row.get("renewal_filing_source_url"), 500)
+        if combined_value:
+            year_type = combined_type in {"filed_year", "filed_tax_year"}
+            date_type = combined_type in {"filed_period_end", "last_registration_date", "current_issue_date", "current_effective_date", "renewal_filing_date", "annual_registration_submitted_date"}
+            valid_year = year_type and re.fullmatch(r"(?:19|20)\d{2}", combined_value) and int(combined_value) <= date.today().year
+            valid_date = date_type and re.fullmatch(r"\d{4}-\d{2}-\d{2}", combined_value) and parse_date(combined_value) and parse_date(combined_value) <= date.today()
+            if not combined_label or not (valid_year or valid_date):
+                raise ValueError("Last Renewal / Filed Year must preserve its source value and meaning.")
+        elif renewal_date:
+            # Older completed snapshots remain exportable.
+            combined_value, combined_type = renewal_date, renewal_type
+            combined_label = text(row.get("renewal_date_source_label"), 100)
+            combined_note = text(row.get("renewal_date_note"), 500)
+            combined_url = text(row.get("renewal_date_source_url"), 500)
+        else:
+            combined_type = combined_label = combined_note = combined_url = ""
         if checked is not None:
             if isinstance(checked, bool) or not isinstance(checked, (int, float)) or not 0 < checked < 4102444800:
                 raise ValueError("Invalid snapshot timestamp.")
@@ -345,6 +365,9 @@ def validate_results(payload, supported_states):
             **{k: text(row.get(k), 500) for k in ("renewal_date_source_label", "renewal_date_source_url", "renewal_date_note")},
             "registration_date": registration_date, "registration_date_type": registration_type,
             "renewal_date": renewal_date, "renewal_date_type": renewal_type,
+            "renewal_filing_value": combined_value, "renewal_filing_type": combined_type,
+            "renewal_filing_label": combined_label, "renewal_filing_note": combined_note,
+            "renewal_filing_source_url": combined_url,
             "organization_name": name, "ein": ein, "state": state, "status": status,
             "checked_at_epoch": checked,
         })
@@ -544,14 +567,15 @@ def generate_report(payload, supported_states):
             link += " | Record ID: " + escape(row["matched_registry_identifier"])
         story.append(p(link, "small", markup=True))
         date_cells = []
-        for prefix in ("registration_date", "renewal_date"):
-            content = row[prefix]
-            if content:
-                content += " | " + row[prefix + "_source_label"]
-                if row[prefix + "_note"]:
-                    content += ". " + row[prefix + "_note"]
-            date_cells.append(p(content, "small"))
-        dates_table = Table([[p("Initial / Original Registration Date", "small"), p("Last Renewal Date", "small")], date_cells], colWidths=[252, 252])
+        for value, label, note in ((row["registration_date"], row["registration_date_source_label"], row["registration_date_note"]),
+                                   (row["renewal_filing_value"], row["renewal_filing_label"], row["renewal_filing_note"])):
+            content = ""
+            if value:
+                content = "<b>" + escape(value) + "</b><br/>" + escape(label)
+                if note:
+                    content += "<br/>" + escape(note)
+            date_cells.append(p(content, "small", markup=True))
+        dates_table = Table([[p("Initial Registration Date", "small"), p("Last Renewal / Filed Year", "small")], date_cells], colWidths=[252, 252])
         dates_table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), PALE), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 6), ("RIGHTPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
         story.append(dates_table)
         story.append(labeled("Evidence returned with the check:", row["raw_status_text"] or "No separate registry excerpt supplied."))

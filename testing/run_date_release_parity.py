@@ -14,7 +14,7 @@ class StableDateRelease(unittest.TestCase):
     def test_master_only_adds_metadata_and_version(self):
         tree = ast.parse((ROOT/'registry_snapshot_server.py').read_text(encoding='utf-8'))
         old = ast.parse(previous('registry_snapshot_server.py'))
-        helpers={'registration_date_metadata','registration_source_date','registration_date_result_confirmed','registration_date_budget_available','fl_registration_issue_evidence','enrich_registration_date_sources','co_registration_renewal_evidence'}
+        helpers={'registration_date_metadata','registration_source_date','registration_date_result_confirmed','registration_date_budget_available','fl_registration_issue_evidence','enrich_registration_date_sources','co_registration_renewal_evidence','renewal_filing_metadata'}
         tree.body = [n for n in tree.body if not isinstance(n, ast.FunctionDef) or n.name not in helpers]
         class RemoveDateOnlyChanges(ast.NodeTransformer):
             def visit_Assign(self,node):
@@ -36,7 +36,7 @@ class StableDateRelease(unittest.TestCase):
             if isinstance(node, ast.Assign) and any(isinstance(t,ast.Name) and t.id=='APP_VERSION' for t in node.targets):
                 node.value = next(n.value for n in old.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='APP_VERSION' for t in n.targets))
             if isinstance(node, ast.FunctionDef) and node.name=='response_data_for_lookup':
-                node.body = [n for n in node.body if not (isinstance(n,ast.Expr) and ast.unparse(n)=='data.update(registration_date_metadata(result, data[\'status\'], body))')]
+                node.body = [n for n in node.body if not (isinstance(n,ast.Expr) and ast.unparse(n) in {"data.update(registration_date_metadata(result, data['status'], body))", "data.update(renewal_filing_metadata(result, data, data['status'], body))"})]
         self.assertEqual(ast.dump(tree), ast.dump(old))
 
     def test_state_logic_discovery_and_connector_unchanged(self):
@@ -67,7 +67,7 @@ class StableDateRelease(unittest.TestCase):
                 r.success=True;r.matched_registry_name='Control Foundation'
                 r.raw_status_text='Registration Date: 2010-02-03'
                 before=dict(vars(r));started=time.perf_counter()
-                cc.registration_date_metadata(r,'Current')
+                cc.renewal_filing_metadata(r,cc.registration_date_metadata(r,'Current'),'Current')
                 durations.append(time.perf_counter()-started)
                 self.assertEqual(vars(r),before)
         print('METADATA_TIMING '+json.dumps({'calls':len(durations),'median_ms':statistics.median(durations)*1000,'p99_ms':sorted(durations)[int(.99*len(durations))]*1000,'max_ms':max(durations)*1000}))
