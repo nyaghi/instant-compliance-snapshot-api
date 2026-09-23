@@ -133,7 +133,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.23.2-staging").strip() or "2026.09.23.2-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.23.3-staging").strip() or "2026.09.23.3-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -173,6 +173,8 @@ SUPPORTED_STATES = [
     "AK", "AR", "CA", "CO", "CT", "FL", "HI", "KS", "KY", "LA",
     "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM",
     "NY", "OH", "OK", "OR", "PA", "SC", "VA", "WA", "WI", "WV",
+    # Append new jurisdictions to preserve the mature states' routing-lane indices.
+    "DC", "RI",
 ]
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
@@ -5309,6 +5311,405 @@ def build_search_queries(
     if max_queries is not None:
         return queries[:max_queries]
     return queries
+
+
+DC_LICENSE_API = "https://maps2.dcgis.dc.gov/dcgis/rest/services/FEEDS/DCRA/FeatureServer/0/query"
+RI_PUBLIC_PORTAL = "https://ridbrprod-search.state-reg-eastern.tylerapp.com"
+RI_PUBLIC_SEARCH_API = "https://ridbrprod.state-reg-eastern.tylerapp.com/licensing/api/endpoints/v1/portal/search"
+
+
+def registry_json_request(url, deadline, *, payload=None, form=False, headers=None):
+    """Normal public-registry request, bounded by this lookup's own deadline."""
+    data = None if payload is None else (urlencode(payload) if form else json.dumps(payload)).encode()
+    request_headers = {"Content-Type": "application/x-www-form-urlencoded" if form else "application/json", **(headers or {})}
+    for attempt in range(2):
+        try:
+            return json.loads(identity_fetch(url, deadline, headers=request_headers, data=data,
+                                            request_timeout=15.0, max_bytes=6_000_000))
+        except (urllib.error.URLError, TimeoutError) as exc:
+            if (attempt or deadline - time.monotonic() < 3
+                    or isinstance(exc, urllib.error.HTTPError) and exc.code not in {408, 429, 500, 502, 503, 504}):
+                raise
+    raise ValueError("Registry request did not complete")
+
+
+def dc_source_date(value):
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            return datetime.fromtimestamp(value / 1000, ZoneInfo("America/New_York")).date()
+        except (ValueError, OSError, OverflowError):
+            return None
+    return registration_source_date(str(value or ""))
+
+
+def licensed_charity_status(raw, expiration):
+    """Explicit adverse status precedes the state's own license expiration."""
+    text = re.sub(r"\s+", " ", str(raw or "")).strip().lower()
+    if re.search(r"\b(closed|withdrawn|cancelled|canceled|inactive|terminated|dissolved)\b", text):
+        return "Closed / Withdrawn / Canceled"
+    if "revoked" in text:
+        return "Revoked"
+    if "suspend" in text or "not authorized" in text:
+        return "Suspended"
+    if "exempt" in text:
+        return "Exempt"
+    if any(word in text for word in ("delinquent", "expired", "enforcement", "failed to renew")):
+        return "Delinquent"
+    if "pending" in text or "in process" in text:
+        return "Pending"
+    if text in {"active", "current", "issued", "approved"}:
+        return status_from_calendar_date(expiration) if expiration else "Current"
+    return "Unable to Confirm"
+
+
+def licensed_charity_names(org):
+    """Every reviewed name precedes bounded generated spelling/search variants."""
+    primary = [org.organization_name, *known_names_for_ein(org.ein)]
+    required, generated = [], []
+    seen = set()
+    for value in primary:
+        name = re.sub(r"\s+", " ", canonical_name_punctuation(value)).strip()
+        if not name or name.casefold() in seen:
+            continue
+        seen.add(name.casefold())
+        required.append(name)
+    # Both public searches support partial names. Three high-signal fallback
+    # phrases per reviewed name cover spelling/suffix differences without
+    # querying hundreds of low-information permutations such as "s Foundation".
+    for name in required:
+        added = 0
+        for value in possessive_search_phrases(name) + high_signal_search_phrases(name):
+            value = re.sub(r"\s+", " ", value).strip()
+            if value.casefold() in seen or not distinctive_match_tokens(value): continue
+            seen.add(value.casefold()); generated.append(value); added += 1
+            if added == 3: break
+    return required, generated
+
+
+def licensed_charity_street_evidence(org, row, deadline):
+    """An exact street/state/ZIP can reconcile differing municipal labels.
+
+    Used by the new DC/RI adapters only. Names must already qualify; a shared
+    address, PO box, agent or mailing record cannot establish identity alone.
+    """
+    def street_key(value):
+        text = re.sub(r"[^A-Z0-9]+", " ", str(value or "").upper()).strip()
+        abbreviations = {"ROAD":"RD","STREET":"ST","AVENUE":"AVE","BOULEVARD":"BLVD","DRIVE":"DR","COURT":"CT","LANE":"LN","PARKWAY":"PKWY","HIGHWAY":"HWY","PLACE":"PL","CIRCLE":"CIR","SUITE":"STE"}
+        return " ".join(abbreviations.get(word, word) for word in text.split())
+    street, postal, region = street_key(row.get("street")), str(row.get("postal_code") or "")[:5], row.get("region", "").upper()
+    if not street or not re.match(r"^\d+\s", street) or not re.fullmatch(r"\d{5}", postal) or len(region) != 2:
+        return {}
+    for source in ("CA", "CO"):
+        if time.monotonic() >= deadline: break
+        try:
+            evidence = identity_source_result(source, canonical_ein_digits(org.ein), min(deadline, time.monotonic()+6))
+            for record in evidence.get("organization_records", []):
+                if (record.get("address_role") != "organization" or canonical_ein_digits(record.get("ein", "")) != canonical_ein_digits(org.ein)
+                        or str(record.get("state", "")).upper() != region or str(record.get("postal_code", ""))[:5] != postal
+                        or street_key(record.get("street")) != street): continue
+                if not any(score_candidate(org.organization_name, org.ein, {"name": n})["decision"] == "accepted" for n in record.get("names", [])): continue
+                return {"decision":"corroborated", "registry_location":row.get("location", ""),
+                        "ein_linked_location":f"{record.get('city', '')}, {region}", "source_url":record.get("source_url", ""),
+                        "cross_state_records":[record], "basis":f"The street address, state and ZIP agree with the organization record retrieved by EIN in {source}; the sources use different city labels. Address alone does not establish identity."}
+        except Exception:
+            continue
+    return {}
+
+
+def licensed_charity_identity(org, row, state, deadline):
+    """Shared master name/EIN and cross-state office checks; never address-only."""
+    names = [row["name"], *row.get("aliases", [])]
+    decisions = [(score_candidate(org.organization_name, org.ein, {"name": name, "ein": row.get("ein", "")}), name)
+                 for name in names if name]
+    decision, matched_name = max(decisions, key=lambda item: item[0]["score"])
+    row["match"] = decision
+    if decision["decision"] == "rejected":
+        return "rejected"
+    if decision["decision"] == "possible":
+        # A partial name can preserve word order and omit a suffix, but a
+        # reversed name (Family Focus / Focus on the Family) is another entity.
+        def ordered_subset(left, right):
+            iterator = iter(right)
+            return all(any(word == item for item in iterator) for word in left)
+        candidate_words = normalized_match_name(matched_name).split()
+        targets = [org.organization_name, *known_names_for_ein(org.ein)]
+        if not any(ordered_subset(candidate_words, normalized_match_name(target).split())
+                   or ordered_subset(normalized_match_name(target).split(), candidate_words) for target in targets):
+            return "rejected"
+    address = reconciled_registry_address(org.ein, matched_name, row.get("location", ""), registry_state=state, deadline=deadline)
+    if address.get("decision") == "conflict":
+        address = licensed_charity_street_evidence(org, row, deadline) or address
+    row["address_evidence"] = address
+    if address.get("decision") in {"different_ein", "conflict"}:
+        return "conflict"
+    if decision["decision"] == "possible" and address.get("decision") != "corroborated":
+        return "possible"
+    return "accepted"
+
+
+def select_licensed_charity(org, rows, state, deadline):
+    """Evaluate the full candidate set, then prefer a live record of the same entity.
+
+    A date can break a duplicate-record tie only after identity is established.
+    The return's review text keeps identity failures distinct from no records.
+    """
+    accepted, conflicts, possible = [], [], []
+    for row in rows:
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Registry candidate evaluation did not finish within this lookup's budget")
+        outcome = licensed_charity_identity(org, row, state, deadline)
+        if outcome == "accepted": accepted.append(row)
+        elif outcome == "conflict": conflicts.append(row)
+        elif outcome == "possible": possible.append(row)
+    if not accepted:
+        if conflicts:
+            r = conflicts[0]; evidence = r["address_evidence"]
+            return None, (f"{state} lists {r['name']} ({r['identifier']}) in {r.get('location')}, but the EIN-linked organization "
+                          f"record lists {evidence.get('ein_linked_location', 'a different location')}. The address conflict could not be corroborated.")
+        if possible:
+            return None, f"{state} returned a similar name, {possible[0]['name']}, but the complete name and available identity evidence do not confirm this organization."
+        return None, ""
+    current = [r for r in accepted if r["status"] in {"Current", "Upcoming Filing", "Exempt", "Pending"}]
+    if current:
+        latest_current = max(r.get("expiration") or date.min for r in current)
+        adverse = [r for r in accepted if r["status"] in {"Suspended", "Revoked"}
+                   and (r.get("expiration") or date.min) >= latest_current]
+        if adverse:
+            return None, f"{state} returned equally matching registrations with conflicting statuses; a suspension or revocation could not be resolved against the current record."
+    primary = [r for r in accepted if normalized_match_name(r["name"]) == normalized_match_name(org.organization_name)]
+    # A confirmed current alias can supersede an expired former record. An
+    # alias without location corroboration cannot displace an exact primary.
+    current_primary = [r for r in current if r in primary]
+    corroborated_current = [r for r in current if r.get("address_evidence", {}).get("decision") == "corroborated"]
+    primary_open = [r for r in primary if r["status"] not in {"Closed / Withdrawn / Canceled", "Revoked"}]
+    pool = current_primary or corroborated_current or primary_open or current or primary or accepted
+    if len(pool) > 1:
+        keys = {normalized_match_name(r["name"]) for r in pool}
+        addresses_agree = all(r.get("address_evidence", {}).get("decision") == "corroborated" for r in pool)
+        if len(keys) > 1 and not addresses_agree:
+            return None, f"{state} returned multiple matching registrations whose identities could not be distinguished safely. Confirm the registration number."
+        top_date = max((r.get("expiration") or date.min) for r in pool)
+        tied = [r for r in pool if (r.get("expiration") or date.min) == top_date]
+        if len({r["status"] for r in tied}) > 1:
+            return None, f"{state} returned equally matching registrations with conflicting statuses and no later period to resolve the difference."
+    return max(pool, key=lambda r: (r.get("expiration") or date.min, r["identifier"])), ""
+
+
+def licensed_charity_result(org, state, rows, deadline, source, *, freshness=""):
+    result = checker.StateResult(org.organization_name, format_ein(org.ein), state, "Not Registered", source)
+    result.status_reason = "LICENSED_CHARITY_SOURCE"
+    selected, review = select_licensed_charity(org, rows, state, deadline)
+    if review:
+        result.status = "Needs Review"; result.success = False; result.source_note = review
+    elif selected:
+        result.status = selected["status"]; result.success = result.status != "Unable to Confirm"
+        result.matched_registry_name = selected["name"]
+        result.matched_registry_identifier = selected["identifier"]
+        result.source_url = selected.get("url") or source
+        result.raw_status_text = selected["raw_status"]
+        result._cc_license_record = selected
+        result.identity_evidence = {"name": selected.get("match", {}), "address": selected.get("address_evidence", {})}
+        result.address_evidence = selected.get("address_evidence", {})
+        result.source_note = f"{state} lists {selected['name']} ({selected['identifier']}) as {selected['raw_status']}. "
+        if selected.get("expiration"):
+            result.computed_due_date = selected["expiration"].isoformat()
+            result.source_note += f"The displayed license expiration date is {selected['expiration'].isoformat()}. "
+        if result.status == "Pending":
+            result.source_note += "The state reports a pending application or renewal. Review state communications for outstanding requirements; the displayed expiration alone does not establish delinquency while this pending status is shown. "
+        result.source_note += f"CharityClarity reports {result.status}. The public record does not display an EIN; matching uses the organization name, reviewed alternate names, and available organization-location evidence."
+        address = selected.get("address_evidence", {})
+        if address.get("decision") == "corroborated":
+            result.source_note += " " + address.get("basis", "The organization location agrees with EIN-linked records.")
+        if len(rows) > 1:
+            result.source_note += " Other returned records were evaluated before selecting this registration."
+    else:
+        result.success = True
+        result.source_note = f"The {state} charity-license search completed for the organization and reviewed alternate names without a qualifying registration record."
+    if freshness:
+        result.source_note += " " + freshness
+    return result
+
+
+def licensed_charity_failure(org, state, source, exc):
+    result = checker.StateResult(org.organization_name, format_ein(org.ein), state, "Unable to Confirm", source)
+    result.status_reason = "LICENSED_CHARITY_SOURCE"; result.success = False
+    result.source_note = f"The {state} registry search or selected record could not be completely retrieved. This incomplete lookup does not establish non-registration or delinquency."
+    result.raw_status_text = str(exc)[:250]
+    log_error(f"{state} public license lookup {format_ein(org.ein)} incomplete: {type(exc).__name__}: {str(exc)[:160]}")
+    return result
+
+
+def dc_charity_records(org, deadline):
+    required, generated = licensed_charity_names(org)
+    clauses = []
+    for name in required + generated:
+        tokens = re.findall(r"[A-Z0-9]+", name.upper())
+        if not tokens: continue
+        pattern = "%" + "%".join(tokens) + "%"
+        for field in ("ENTITYNAME", "ENTITYTRADENAME"):
+            clause = f"UPPER({field}) LIKE '{pattern}'"
+            if clause not in clauses: clauses.append(clause)
+    if not clauses:
+        raise ValueError("No searchable organization names")
+    fields = "OBJECTID,CUSTOMERNUMBER,ENTITYNAME,ENTITYTRADENAME,LICENSESTATUS,BUSINESSACTIVITY,PREMISEADDRESS,PREMISEINDC,LICENSEENDDATE,LICENSESTARTDATE,INITIALISSUEDATE,DATAREFRESHEDON"
+    where = "UPPER(BUSINESSACTIVITY) LIKE '%CHARITABLE%' AND (" + " OR ".join(clauses) + ")"
+    offset, raw_rows, seen = 0, [], set()
+    while True:
+        data = registry_json_request(DC_LICENSE_API, deadline, form=True, payload={"where": where, "outFields": fields,
+            "returnGeometry": "false", "f": "json", "orderByFields": "OBJECTID", "resultOffset": offset, "resultRecordCount": 500})
+        if not isinstance(data, dict) or data.get("error") or not isinstance(data.get("features"), list):
+            raise ValueError("DC returned an incomplete or rejected query")
+        batch = [r.get("attributes") for r in data["features"]]
+        if any(not isinstance(r, dict) or not r.get("OBJECTID") or not (r.get("ENTITYNAME") or r.get("ENTITYTRADENAME")) for r in batch):
+            raise ValueError("DC license rows are incomplete")
+        if any(r["OBJECTID"] in seen for r in batch): raise ValueError("DC pagination repeated a record")
+        raw_rows.extend(batch); seen.update(r["OBJECTID"] for r in batch)
+        if not data.get("exceededTransferLimit"): break
+        if not batch or len(raw_rows) >= 3000: raise ValueError("DC result set was truncated")
+        offset += len(batch)
+    refreshed = max((dc_source_date(r.get("DATAREFRESHEDON")) or date.min for r in raw_rows), default=date.min)
+    if not raw_rows:
+        probe = registry_json_request(DC_LICENSE_API, deadline, form=True, payload={"where": "UPPER(BUSINESSACTIVITY) LIKE '%CHARITABLE%'",
+            "outFields": "DATAREFRESHEDON", "orderByFields": "DATAREFRESHEDON DESC", "resultRecordCount": 1, "returnGeometry": "false", "f": "json"})
+        if not isinstance(probe, dict) or probe.get("error") or not probe.get("features"):
+            raise ValueError("DC source freshness could not be verified")
+        refreshed = dc_source_date(probe["features"][0].get("attributes", {}).get("DATAREFRESHEDON")) or date.min
+    if not 0 <= (date.today() - refreshed).days <= 8:
+        raise ValueError("DC public extract is stale or has no verifiable refresh date")
+    rows = []
+    for raw in raw_rows:
+        if "charitable" not in str(raw.get("BUSINESSACTIVITY", "")).lower():
+            raise ValueError("DC returned a non-charity license outside the requested category")
+        expiry = dc_source_date(raw.get("LICENSEENDDATE"))
+        address = str(raw.get("PREMISEADDRESS") or "")
+        parts = [p.strip() for p in address.split(",")]
+        location, street, postal, region = "", "", "", ""
+        for i, part in enumerate(parts):
+            if i and re.fullmatch(r"[A-Z]{2}", part):
+                location, region = f"{parts[i-1]}, {part}", part
+                street = " ".join(parts[:i-1]); postal = parts[i+1] if i+1 < len(parts) else ""
+        # In-DC premises are the licensed local site, not necessarily the
+        # national headquarters. Agent/billing addresses are never substituted.
+        if str(raw.get("PREMISEINDC", "")).lower() == "yes": location = ""
+        status = licensed_charity_status(raw.get("LICENSESTATUS"), expiry)
+        if "exempt" in str(raw.get("BUSINESSACTIVITY", "")).lower() and status in {"Current", "Upcoming Filing"}: status = "Exempt"
+        identifier = str(raw.get("CUSTOMERNUMBER") or "")
+        if not identifier: raise ValueError("DC license identifier is missing")
+        rows.append({"name": raw.get("ENTITYNAME") or raw["ENTITYTRADENAME"], "aliases": [raw.get("ENTITYTRADENAME") or ""], "identifier": identifier,
+            "raw_status": str(raw.get("LICENSESTATUS") or ""), "status": status, "expiration": expiry, "location": location,
+            "street": street, "postal_code": postal, "region": region,
+            "initial": (dc_source_date(raw.get("INITIALISSUEDATE")) or ""), "initial_label": "Initial Issue Date",
+            "renewal": (dc_source_date(raw.get("LICENSESTARTDATE")) or ""), "renewal_label": "License Start Date",
+            "renewal_type": "current_effective_date", "url": DC_LICENSE_API + "?" + urlencode({"where": "CUSTOMERNUMBER='"+identifier.replace("'", "''")+"'", "outFields": "*", "returnGeometry": "false", "f": "pjson"})})
+    return rows, f"Data freshness: DC's public business-license extract was refreshed {refreshed.isoformat()}. It may lag the licensing portal; confirm time-sensitive decisions directly with DC."
+
+
+def search_dc(org):
+    deadline = time.monotonic() + 75
+    try:
+        rows, freshness = dc_charity_records(org, deadline)
+        return licensed_charity_result(org, "DC", rows, deadline, DC_LICENSE_API, freshness=freshness)
+    except Exception as exc:
+        return licensed_charity_failure(org, "DC", DC_LICENSE_API, exc)
+
+
+def ri_charity_search(query, deadline, headers):
+    rows, start, expected = [], 0, None
+    while True:
+        data = registry_json_request(RI_PUBLIC_SEARCH_API, deadline, headers=headers, payload={"highlight": "false", "type": "credential",
+            "formRequest": {"values": {"organizationName": query, "licenseType": "Charitable Organization"}, "metadata": {}},
+            "rows": 100, "start": start})
+        if (not isinstance(data, dict) or not isinstance(data.get("results"), list)
+                or not isinstance(data.get("resultCount"), int) or data.get("message", {}).get("errors")):
+            raise ValueError("Rhode Island search response is incomplete")
+        if expected is None: expected = data["resultCount"]
+        if expected != data["resultCount"] or expected > 1000: raise ValueError("Rhode Island result set is unstable or too broad")
+        batch = data["results"]
+        if any(not re.fullmatch(r"C\d+", str(r.get("id", ""))) or not r.get("title") for r in batch):
+            raise ValueError("Rhode Island returned incomplete candidate identities")
+        rows.extend(batch)
+        if len({r["id"] for r in rows}) != len(rows): raise ValueError("Rhode Island pagination repeated a record")
+        if len(rows) == expected: return rows
+        if not batch or len(rows) > expected: raise ValueError("Rhode Island search page was incomplete")
+        start += len(batch)
+
+
+def ri_charity_detail(raw, deadline, headers):
+    identifier = raw["id"]
+    detail = registry_json_request(RI_PUBLIC_SEARCH_API + "/" + identifier + "/details", deadline, headers=headers)
+    if not isinstance(detail, dict) or detail.get("id") != identifier or detail.get("message", {}).get("errors"):
+        raise ValueError("Rhode Island detail identity was not confirmed")
+    name = str(detail.get("name") or "").removeprefix("Details for ").strip()
+    if normalized_match_name(name) != normalized_match_name(raw["title"]): raise ValueError("Rhode Island detail name changed")
+    values, address = {}, ""
+    for tile in detail.get("tiles", []):
+        for step in tile.get("steps", []):
+            # Relationship/agent start dates are not charity registration dates.
+            if step.get("name") not in {"Summary", "Registration", "Renewal", "Address"}: continue
+            for content in step.get("contents", []):
+                for item in content.get("data", []):
+                    label, value = item.get("label"), item.get("value")
+                    if not label or not isinstance(value, list): continue
+                    if label in values: raise ValueError("Rhode Island repeats a selected detail field")
+                    values[label] = [str(v).strip() for v in value if v is not None and str(v).strip()]
+    credential = values.get("Credential", [])
+    if "Charitable Organization" not in credential or not credential or not re.fullmatch(r"CO\.\d+", credential[0]):
+        raise ValueError("Rhode Island selected record is not a charitable organization credential")
+    raw_status = values.get("Status", [])
+    if len(raw_status) != 1: raise ValueError("Rhode Island status field is incomplete")
+    expiry_text = " ".join(values.get("Expiration Date", []))
+    expiry = parse_due_date(expiry_text)
+    if expiry_text and not expiry:
+        raise ValueError("Rhode Island expiration date could not be interpreted")
+    for line in values.get("Business Address", []):
+        if re.search(r",\s*[A-Za-z ]+\s+\d{5}(?:-\d{4})?$", line):
+            address = line
+    # Full state names are displayed on this portal; retain only city/state for
+    # the existing master address reconciler.
+    state_names = {"Alabama":"AL","Alaska":"AK","Arizona":"AZ","Arkansas":"AR","California":"CA","Colorado":"CO","Connecticut":"CT","Delaware":"DE","District of Columbia":"DC","Florida":"FL","Georgia":"GA","Hawaii":"HI","Idaho":"ID","Illinois":"IL","Indiana":"IN","Iowa":"IA","Kansas":"KS","Kentucky":"KY","Louisiana":"LA","Maine":"ME","Maryland":"MD","Massachusetts":"MA","Michigan":"MI","Minnesota":"MN","Mississippi":"MS","Missouri":"MO","Montana":"MT","Nebraska":"NE","Nevada":"NV","New Hampshire":"NH","New Jersey":"NJ","New Mexico":"NM","New York":"NY","North Carolina":"NC","North Dakota":"ND","Ohio":"OH","Oklahoma":"OK","Oregon":"OR","Pennsylvania":"PA","Rhode Island":"RI","South Carolina":"SC","South Dakota":"SD","Tennessee":"TN","Texas":"TX","Utah":"UT","Vermont":"VT","Virginia":"VA","Washington":"WA","West Virginia":"WV","Wisconsin":"WI","Wyoming":"WY"}
+    location = ""
+    match = re.fullmatch(r"(.+?),\s*([A-Za-z ]+)\s+\d{5}(?:-\d{4})?", address)
+    if match:
+        code = state_names.get(match[2].strip().title(), match[2].strip().upper())
+        if len(code) == 2: location = f"{match[1]}, {code}"
+    row = {"name": name, "identifier": credential[0], "raw_status": raw_status[0], "expiration": expiry,
+           "status": licensed_charity_status(raw_status[0], expiry), "location": location,
+           "url": RI_PUBLIC_PORTAL + "/search/" + identifier + "/detail"}
+    if location and match:
+        row.update(street=" ".join(v for v in values.get("Business Address", []) if v not in {address, "United States"}),
+                   region=code, postal_code=re.search(r"\d{5}", address).group(0))
+    for label in ("Initial Registration Date", "Original Registration Date", "Initial Issue Date"):
+        value = values.get(label, [])
+        if len(value) == 1 and registration_source_date(value[0]):
+            row.update(initial=registration_source_date(value[0]), initial_label=label); break
+    for label in ("Last Renewal Date", "Renewal Date", "Renewal Filed Date"):
+        value = values.get(label, [])
+        if len(value) == 1 and registration_source_date(value[0]):
+            row.update(renewal=registration_source_date(value[0]), renewal_label=label, renewal_type="renewal_filing_date"); break
+    return row
+
+
+def search_ri(org):
+    deadline = time.monotonic() + 90
+    try:
+        token = registry_json_request(RI_PUBLIC_PORTAL + "/api/auth/token", deadline, payload={})
+        if not isinstance(token, dict) or not token.get("access_token"): raise ValueError("Rhode Island public search session unavailable")
+        headers = {"Authorization": "Bearer " + token["access_token"]}
+        required, generated = licensed_charity_names(org)
+        rows, seen = [], set()
+        for index, query in enumerate(required + generated):
+            if index >= len(required) and rows:
+                selected, _ = select_licensed_charity(org, rows, "RI", deadline)
+                if selected: break
+            for candidate in ri_charity_search(query, deadline, headers):
+                if candidate["id"] in seen: continue
+                seen.add(candidate["id"])
+                decision = score_candidate(org.organization_name, org.ein, {"name": candidate["title"]})
+                if decision["decision"] == "rejected": continue
+                rows.append(ri_charity_detail(candidate, deadline, headers))
+        return licensed_charity_result(org, "RI", rows, deadline, RI_PUBLIC_PORTAL)
+    except Exception as exc:
+        return licensed_charity_failure(org, "RI", RI_PUBLIC_PORTAL, exc)
 
 
 def possessive_search_phrases(name: str) -> list[str]:
@@ -16839,7 +17240,13 @@ def registration_date_metadata(result, final_status=None, body="") -> dict:
         return values[0].strip() if len(values) == 1 else ""
     confirmed = registration_date_result_confirmed(result, final_status)
     state = str(getattr(result, "state", "")).upper()
-    if confirmed and state == "AR":
+    if confirmed and state in {"DC", "RI"}:
+        record = getattr(result, "_cc_license_record", {})
+        if identifier and record.get("identifier") == identifier and date_name_matches(record.get("name", "")):
+            value, label, kind = str(record.get("initial") or ""), record.get("initial_label", ""), "initial_registration_date"
+            if label == "Initial Issue Date": kind = "initial_credential_issue_date"
+            renewal, renewal_label, renewal_kind = str(record.get("renewal") or ""), record.get("renewal_label", ""), record.get("renewal_type", "")
+    elif confirmed and state == "AR":
         match = re.search(r"(?:^|\|)\s*Registration Date:\s*(\d{4}-\d{2}-\d{2})(?=\s*(?:\||$))", getattr(result, "raw_status_text", ""))
         if match: value, label, kind = match.group(1), "Registration Date", "registry_registration_date"
     elif confirmed and state == "ND":
@@ -16938,7 +17345,7 @@ def registration_date_metadata(result, final_status=None, body="") -> dict:
                 renewal, renewal_label, renewal_kind = evidence["renewal"], "Renewal — Filed Date", "renewal_filing_date"
                 renewal_url = evidence.get("url") or renewal_url
     parsed, renewed = registration_source_date(value), registration_source_date(renewal)
-    if parsed and renewed and renewed < parsed:
+    if parsed and renewed and renewed < parsed and not (state == "DC" and renewal_kind == "current_effective_date"):
         renewed = None
     notes = {
         "registry_registration_date": "State-labeled registration date; the source does not specify that it is the initial registration.",
@@ -19723,6 +20130,8 @@ def ca_explicit_primary_registry_status(result) -> str:
 
 
 def true_status_from_body(result, body: str) -> str:
+    if result.state in {"DC", "RI"} and getattr(result, "status_reason", "") == "LICENSED_CHARITY_SOURCE":
+        return public_status(result)
     if getattr(result, 'status_reason', '') == 'OR_STATUS_FROM_CONFIRMED_LIVE_PERIOD':
         return public_status(result)
     if (getattr(result, "state", "") in {"KY", "HI"}
@@ -20140,6 +20549,8 @@ def comment_registry_status(raw: str, status: str) -> str:
 
 
 def comments_for_result_base(result, body: str, public_facing_status: str) -> str:
+    if result.state in {"DC", "RI"} and getattr(result, "status_reason", "") == "LICENSED_CHARITY_SOURCE":
+        return result.source_note
     if result.state == "ND" and getattr(result, "status_reason", "") == "ND_MATCHING_RECORDS_INACTIVE":
         return result.source_note
     if getattr(result, "status_reason", "") == "REGISTRY_ADDRESS_CONFLICT":
@@ -25211,6 +25622,9 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
         org.evidence_mode = capture_source_snapshot
     body = ""
     proof_url = None
+    if state in {"DC", "RI"}:
+        result = search_dc(org) if state == "DC" else search_ri(org)
+        return response_data_for_lookup(result, result.raw_status_text, org, organization_name, ein, state, lookup_started)
     if state == "NY":
         result = search_ny_verified(org)
         body = " ".join(filter(None, [result.raw_status_text, result.source_note,

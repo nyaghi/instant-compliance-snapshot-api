@@ -70,10 +70,10 @@ class ReportTests(unittest.TestCase):
             r["matched_registry_identifier"] = "Registry certificate 12345678901234567890"
         reader, text = self.pdf(rows)
         self.assertLessEqual(len(reader.pages), 24)
-        self.assertIn("30 states checked", text)
+        self.assertIn(f"{len(cc.SUPPORTED_STATES)} states checked", text)
         for r in rows:
             self.assertIn(r["state"] + " | " + report.display_status(r), text)
-        self.assertEqual(text.count("Long detailed evidence with registry dates and organization identity."), 600)
+        self.assertEqual(text.count("Long detailed evidence with registry dates and organization identity."), 20 * len(cc.SUPPORTED_STATES))
         for index,page in enumerate(reader.pages,1):
             self.assertIn(f"{index} / {len(reader.pages)}", page.extract_text())
 

@@ -304,8 +304,8 @@ def text(value, limit=10000):
 
 def validate_results(payload, supported_states):
     rows = payload.get("results")
-    if not isinstance(rows, list) or not 1 <= len(rows) <= 30:
-        raise ValueError("Generate a report from 1 to 30 completed state results for one organization.")
+    if not isinstance(rows, list) or not 1 <= len(rows) <= len(supported_states):
+        raise ValueError(f"Generate a report from 1 to {len(supported_states)} completed state results for one organization.")
     clean, seen, identity = [], set(), None
     for row in rows:
         if not isinstance(row, dict):
