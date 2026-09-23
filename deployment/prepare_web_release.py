@@ -14,6 +14,71 @@ STAGE_INTERNAL = 'https://instant-compliance-snapshot-api-staging.onrender.com'
 PROD_API = 'https://instant-compliance-snapshot-api-public.onrender.com'
 PROD_INTERNAL = 'https://instant-compliance-snapshot-api.onrender.com'
 
+def clean_production_copy(html):
+    """Keep the public release contact-led without changing authorized checks."""
+    replacements = {'Try CharityClarity': 'Open CharityClarity',
+     'Try the snapshot': 'Open CharityClarity',
+     'Check status (free)': 'Open CharityClarity',
+     'Run a CharityClarity Snapshot': 'Open CharityClarity',
+     'Run a Free State Check': 'Open CharityClarity',
+     'Instant compliance snapshot': 'CharityClarity',
+     'CharityClarity snapshot': 'CharityClarity review',
+     "Check your organization's charitable compliance in one state. Free, instant, and in one snapshot.": 'Explore '
+                                                                                                          'charitable '
+                                                                                                          'registration '
+                                                                                                          'statuses, '
+                                                                                                          'identify '
+                                                                                                          'potential '
+                                                                                                          'issues, '
+                                                                                                          'and '
+                                                                                                          'prioritize '
+                                                                                                          'follow-up '
+                                                                                                          'with '
+                                                                                                          'CharityClarity.',
+     'Run one organization in one state free.': 'Understand your organization’s registration status.',
+     'CharityClarity interprets public charitable-solicitation records and displays the reported status in plain English, immediately on this page. No credit card is required.': 'CharityClarity '
+                                                                                                                                                                                  'interprets '
+                                                                                                                                                                                  'public '
+                                                                                                                                                                                  'charitable-solicitation '
+                                                                                                                                                                                  'records '
+                                                                                                                                                                                  'to '
+                                                                                                                                                                                  'provide '
+                                                                                                                                                                                  'preliminary '
+                                                                                                                                                                                  'status '
+                                                                                                                                                                                  'findings, '
+                                                                                                                                                                                  'operational '
+                                                                                                                                                                                  'insights, '
+                                                                                                                                                                                  'and '
+                                                                                                                                                                                  'priorities '
+                                                                                                                                                                                  'for '
+                                                                                                                                                                                  'follow-up.',
+     'We use your email to administer the free-search limit and measure this pilot. Your result will appear immediately on this page.': 'We '
+                                                                                                                                        'use '
+                                                                                                                                        'your '
+                                                                                                                                        'email '
+                                                                                                                                        'to '
+                                                                                                                                        'manage '
+                                                                                                                                        'access '
+                                                                                                                                        'and '
+                                                                                                                                        'measure '
+                                                                                                                                        'service '
+                                                                                                                                        'performance. '
+                                                                                                                                        'Results '
+                                                                                                                                        'appear '
+                                                                                                                                        'on '
+                                                                                                                                        'this '
+                                                                                                                                        'page.',
+     'Run One Organization in One State Free': 'Run CharityClarity',
+     'Complimentary access:': 'Standard access:',
+     'The snapshot could not be completed.': 'The CharityClarity check could not be completed.',
+     'Based on the displayed snapshot; no new state checks were run.': 'Based on the displayed results; no '
+                                                                       'new state checks were run.'}
+    for old, new in replacements.items():
+        html = html.replace(old, new)
+    html = html.replace('href="/instant-compliance-snapshot"', 'href="mailto:info@compliance-express.com?subject=CharityClarity%20information"')
+    html = re.sub(r'\s*<a\b[^>]*href="#snapshotForm"[^>]*>Open CharityClarity</a>', '', html)
+    return html
+
 def build(destination, environment, store_url=''):
     if store_url and not re.fullmatch(r'https://chromewebstore\.google\.com/detail/[a-z0-9-]+/[a-p]{32}', store_url):
         raise ValueError('Use the approved HTTPS Chrome Web Store listing URL.')
@@ -37,6 +102,7 @@ def build(destination, environment, store_url=''):
         bridge = bridge.replace(STAGE_API, PROD_API)
         bridge = bridge.replace('three setup steps', 'Chrome Web Store installation steps').replace('three update steps', 'Chrome extension update steps')
         bridge = bridge.replace('Set up New York in 3 steps', 'Install New York connector').replace('Update New York in 3 steps', 'Update New York connector')
+        html = clean_production_copy(html)
         paths = ['instant-compliance-snapshot.html']
     else:
         paths = ['index.html', 'instant-compliance-snapshot.html']
@@ -57,7 +123,7 @@ def build(destination, environment, store_url=''):
     else:
         install_button = (f'<a class="button" href="{store_url}" target="_blank" rel="noopener">Install from Chrome Web Store</a>' if store_url
                           else '<p>The Chrome Web Store release is being finalized. Contact <a href="mailto:info@compliance-express.com">info@compliance-express.com</a> for availability.</p>')
-        (connector/'index.html').write_text('''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect New York | CharityClarity</title><style>body{font:17px/1.6 system-ui;max-width:780px;margin:3rem auto;padding:0 1rem;color:#0b2a5b}img{width:260px}.button{display:inline-block;padding:.7rem 1.2rem;background:#c62828;color:white;border-radius:8px;text-decoration:none}li{margin:1.3rem 0}</style></head><body><img src="charityclarity.png" alt="CharityClarity by Compliance Express"><h1>Connect New York in three steps</h1><ol><li><strong>Install the connector.</strong> '''+install_button+'''</li><li><strong>Return to CharityClarity and refresh the page.</strong> Look for “New York connector connected.”</li><li><strong>Run your check.</strong> Keep Chrome open; the connector manages the New York registry tab and queues concurrent checks.</li></ol><p>If New York cannot complete verification, use “Refresh New York connection” in CharityClarity. The connector protects your open state pages and explains any action needed.</p><p><a href="/instant-compliance-snapshot.html">Open CharityClarity</a> · <a href="privacy.html">Connector privacy</a></p><footer>Compliance Express · <a href="https://www.compliance-express.com">www.compliance-express.com</a> · <a href="mailto:info@compliance-express.com">info@compliance-express.com</a></footer></body></html>''',encoding='utf-8')
+        (connector/'index.html').write_text('''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect New York | CharityClarity</title><style>body{font:17px/1.6 system-ui;max-width:780px;margin:3rem auto;padding:0 1rem;color:#0b2a5b}img{width:260px}.button{display:inline-block;padding:.7rem 1.2rem;background:#c62828;color:white;border-radius:8px;text-decoration:none}li{margin:1.3rem 0}</style></head><body><img src="charityclarity.png" alt="CharityClarity by Compliance Express"><h1>Connect New York in three steps</h1><ol><li><strong>Install the connector.</strong> '''+install_button+'''</li><li><strong>Return to CharityClarity and refresh the page.</strong> Look for “New York connector connected.”</li><li><strong>Run your check.</strong> Keep Chrome open; the connector manages the New York registry tab and queues concurrent checks.</li></ol><p>If New York cannot complete verification, use “Refresh New York connection” in CharityClarity. The connector protects your open state pages and explains any action needed.</p><p><a href="/instant-compliance-snapshot.html">Return to CharityClarity</a> · <a href="privacy.html">Connector privacy</a></p><footer>Compliance Express · <a href="https://www.compliance-express.com">www.compliance-express.com</a> · <a href="mailto:info@compliance-express.com">info@compliance-express.com</a></footer></body></html>''',encoding='utf-8')
     for name in paths+['ny-connector.js']:
         text=(destination/name).read_text(encoding='utf-8')
         targets=re.findall(r'https://instant-compliance-snapshot-api[^\s"\x27<]*\.onrender\.com',text)
