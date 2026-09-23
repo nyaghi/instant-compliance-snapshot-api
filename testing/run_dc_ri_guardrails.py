@@ -154,6 +154,11 @@ class LicenseControls(unittest.TestCase):
         d=self.ri_detail();d['id']='C2'
         with patch.object(cc,'registry_json_request',return_value=d):
             with self.assertRaises(ValueError):cc.ri_charity_detail({'id':'C1','title':self.org.organization_name},self.deadline,{})
+    def test_ri_initial_credential_date_retained_when_present(self):
+        d=self.ri_detail();d['tiles'][0]['steps'][0]['contents'][0]['data'].append({'label':'Initial Credential Date','value':['02/27/2023']})
+        with patch.object(cc,'registry_json_request',return_value=d):
+            r=cc.ri_charity_detail({'id':'C1','title':self.org.organization_name},self.deadline,{})
+        self.assertEqual(r['initial'],date(2023,2,27));self.assertEqual(r['initial_label'],'Initial Credential Date')
     def test_ri_bad_date_cannot_become_current(self):
         with patch.object(cc,'registry_json_request',return_value=self.ri_detail('not a date')):
             with self.assertRaises(ValueError):cc.ri_charity_detail({'id':'C1','title':self.org.organization_name},self.deadline,{})

@@ -5678,7 +5678,7 @@ def ri_charity_detail(raw, deadline, headers):
     if location and match:
         row.update(street=" ".join(v for v in values.get("Business Address", []) if v not in {address, "United States"}),
                    region=code, postal_code=re.search(r"\d{5}", address).group(0))
-    for label in ("Initial Registration Date", "Original Registration Date", "Initial Issue Date"):
+    for label in ("Initial Registration Date", "Original Registration Date", "Initial Issue Date", "Initial Credential Date"):
         value = values.get(label, [])
         if len(value) == 1 and registration_source_date(value[0]):
             row.update(initial=registration_source_date(value[0]), initial_label=label); break
@@ -17244,7 +17244,7 @@ def registration_date_metadata(result, final_status=None, body="") -> dict:
         record = getattr(result, "_cc_license_record", {})
         if identifier and record.get("identifier") == identifier and date_name_matches(record.get("name", "")):
             value, label, kind = str(record.get("initial") or ""), record.get("initial_label", ""), "initial_registration_date"
-            if label == "Initial Issue Date": kind = "initial_credential_issue_date"
+            if label in {"Initial Issue Date", "Initial Credential Date"}: kind = "initial_credential_issue_date"
             renewal, renewal_label, renewal_kind = str(record.get("renewal") or ""), record.get("renewal_label", ""), record.get("renewal_type", "")
     elif confirmed and state == "AR":
         match = re.search(r"(?:^|\|)\s*Registration Date:\s*(\d{4}-\d{2}-\d{2})(?=\s*(?:\||$))", getattr(result, "raw_status_text", ""))
