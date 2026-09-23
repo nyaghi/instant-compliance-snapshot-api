@@ -9,6 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = '2026.09.22.3'
+STAGING_VERSION = '2026.09.23.1'
 STAGE_API = 'https://instant-compliance-snapshot-api-staging-8dnk.onrender.com'
 STAGE_INTERNAL = 'https://instant-compliance-snapshot-api-staging.onrender.com'
 PROD_API = 'https://instant-compliance-snapshot-api-public.onrender.com'
@@ -131,7 +132,7 @@ def build(destination, environment, store_url=''):
         expected={STAGE_API,STAGE_INTERNAL} if environment=='staging' else {PROD_API,PROD_INTERNAL}
         assert targets and set(targets)<=expected,(name,targets)
     assert '$49' not in html and 'buy.stripe.com' not in html
-    manifest={'environment':environment,'version':VERSION+('-staging' if environment=='staging' else ''),
+    manifest={'environment':environment,'version':STAGING_VERSION+'-staging' if environment=='staging' else VERSION,
               'store_url':store_url,'customer_installation_ready':bool(store_url),
               'overlay_files':{str(p.relative_to(destination)).replace('\\','/'):hashlib.sha1(p.read_bytes()).hexdigest() for p in destination.rglob('*') if p.is_file()}}
     return manifest

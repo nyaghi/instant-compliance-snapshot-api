@@ -133,7 +133,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.22.3-staging").strip() or "2026.09.22.3-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.23.1-staging").strip() or "2026.09.23.1-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -7266,6 +7266,7 @@ def search_va_evoke_api(org):
             "match_basis": match_basis,
             "used_name_fallback": used_name_fallback,
             "registration_count": len(registrations),
+            "date_records": registrations,
         })
 
     if not accepted and registration_fetch_errors:
@@ -7292,6 +7293,7 @@ def search_va_evoke_api(org):
     )
     result.matched_registry_name = selected["display_name"]
     result.matched_registry_identifier = selected["identifier"]
+    result._cc_registration_records = selected["date_records"]
     result.reason_code = f"VA_MATCHED_BY_{re.sub(r'[^A-Za-z0-9]+', '_', selected['match_basis']).strip('_').upper()}"
     result.source_confidence = "exact_ein_match" if selected["match_basis"] == "exact FEIN" else "safe_registry_name_match"
     entity = selected["entity"]
@@ -10337,6 +10339,7 @@ def ct_direct_result_from_row(org, row_html: str, safe_targets: list[str], url: 
     status_reason = pairs.get("Status Reason", "")
     combined = " ".join([row_text, detail_text, credential, credential_description, status_text, status_reason])
     result = checker.StateResult(org.organization_name, org.ein, "CT", checker.STATUS_UNKNOWN, url)
+    result._cc_registration_date_detail = detail_text
     result.matched_registry_name = row_name
     credential_match = re.search(r"\b[A-Z]{2,5}\.[0-9A-Z.-]+", combined)
     result.matched_registry_identifier = credential or (credential_match.group(0) if credential_match else "")
@@ -16329,6 +16332,13 @@ def search_wi(page, org, max_seconds: float | None = None, progress: dict | None
             result.success = False
             return result
         detail_status = best_match.get("detail_status", "")
+        result._cc_registration_date_evidence = {
+            "identifier": best_match["license_number"],
+            "name": best_match["registry_name"],
+            "initial": best_match.get("granted_date", ""),
+            "initial_label": "Granted",
+            "initial_type": "initial_credential_issue_date",
+        }
         result.address_evidence = best_match.get("address_evidence", {})
         if best_match.get("detail_href") and page is not None:
             try:
@@ -16690,17 +16700,144 @@ def mark_fiscal_period_unconfirmed(result):
     return result
 
 
-def registration_date_metadata(result, final_status=None) -> dict:
+def registration_source_date(value) -> date | None:
+    """Parse a complete state date only; never invent a month/day or date."""
+    if not value:
+        return None
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%B %d, %Y", "%b %d, %Y", "%b %d %Y"):
+        try:
+            parsed = datetime.strptime(str(value or "").strip(), fmt).date()
+            if date(1800, 1, 1) <= parsed <= date.today():
+                return parsed
+        except (ValueError, TypeError):
+            pass
+    return None
+
+
+def registration_date_result_confirmed(result, final_status=None) -> bool:
+    return bool(getattr(result, "success", False) and getattr(result, "matched_registry_name", "")
+                and (final_status or public_status(result)) not in {
+                    "Not Registered", "Site Not Reachable", "Unknown", "Needs Review", "Unable to Confirm", "Unable to Verify"})
+
+
+def fl_registration_issue_evidence(source: str, identifier: str, selected_name: str) -> dict:
+    """Bind the separate public license issuance row to the accepted CH record."""
+    if not re.fullmatch(r"CH\d+", identifier):
+        return {}
+    text = html_to_text(source)
+    names = re.findall(r'<table\b[^>]*id=["\']cpMainContent_MasterGv_dataTab_\d+["\'][^>]*>.*?<strong[^>]*>(.*?)</strong>', source, re.I | re.S)
+    name_key = lambda s: re.sub(r"[^a-z0-9]", "", html_to_text(s).casefold())
+    if len(names) != 1 or name_key(names[0]) != name_key(selected_name):
+        return {}
+    if "License Type License# Issued Expires Status" not in text:
+        return {}
+    rows = re.findall(r"Charitable Organization\s+(CH\d+)\s+(\d{2}/\d{2}/\d{2,4})\s+(\d{2}/\d{2}/\d{2,4})\s", text)
+    if len(rows) != 1 or rows[0][0] != identifier:
+        return {}
+    return {"identifier": identifier, "name": selected_name, "initial": rows[0][1],
+            "initial_label": "Issued", "initial_type": "initial_credential_issue_date",
+            "url": "https://csapp.fdacs.gov/CSPublicApp/BusinessSearch/BusinessSearch.aspx"}
+
+
+def registration_date_budget_available(lookup_started) -> bool:
+    # Preserve the completed status when a primary lookup used most of its
+    # existing wall-time allowance. Optional dates never extend those budgets.
+    return lookup_started is None or time.perf_counter() - lookup_started < min(
+        BATCH_FANOUT_STATE_TIMEOUT_SECONDS, BATCH_STATE_LOOKUP_TIMEOUT_SECONDS,
+        SINGLE_STATE_OVERFLOW_TIMEOUT_SECONDS) - 10
+
+
+def enrich_registration_date_sources(result, final_status=None, lookup_started=None) -> None:
+    """Optional date-only read after status is settled; failures cannot alter it.
+
+    Florida's existing Check-A-Charity source omits issuance. Its separate public
+    license lookup exposes it using the SAME accepted CH number. Two requests,
+    six seconds total at most, no retry or new identity/matching decision.
+    """
+    if (getattr(result, "state", "") != "FL" or not registration_date_result_confirmed(result, final_status)
+            or curl_requests is None or not registration_date_budget_available(lookup_started)):
+        return
+    identifier = str(getattr(result, "matched_registry_identifier", "") or "")
+    if not re.fullmatch(r"CH\d+", identifier):
+        return
+    url = "https://csapp.fdacs.gov/CSPublicApp/BusinessSearch/BusinessSearch.aspx"
+    try:
+        with curl_requests.Session(impersonate="chrome136") as session:
+            response = session.get(url, timeout=3)
+            response.raise_for_status()
+            fields = html_hidden_inputs(response.text)
+            if "__VIEWSTATE" not in fields:
+                return
+            fields.update({"ctl00$cpMainContent$LicenseTb": identifier, "ctl00$cpMainContent$SingleSearchBt": "Search"})
+            response = session.post(url, data=fields, timeout=3)
+            response.raise_for_status()
+            result._cc_registration_date_evidence = fl_registration_issue_evidence(response.text, identifier, result.matched_registry_name)
+    except Exception:
+        # No status/comment change and no failure propagated to the primary lookup.
+        result._cc_registration_date_evidence = {}
+
+
+def co_registration_renewal_evidence(page, result, summary: str, lookup_started=None) -> dict:
+    """Read the selected charity's public renewal history after its status check."""
+    if not registration_date_budget_available(lookup_started) or not registration_date_metadata(result, body=summary)["registration_date"]:
+        return {}
+    text = re.split(r"<!doctype\b|<html\b", summary or "", maxsplit=1, flags=re.I)[0]
+    ids = re.findall(r"^Registration #[ \t]+(\d+)(?=[ \t\r\n]|$)", text, re.M)
+    if len(ids) != 1:
+        return {}
+    try:
+        # Submit the public History form with its existing view state. This is
+        # the same read-only request as the link, without waiting on deferred
+        # client-side handlers or navigating away from the status evidence.
+        form = re.search(r'<form\b[^>]*id="ccsaSummaryForm"[^>]*>(.*?)</form>', summary, re.I | re.S)
+        if not form:
+            return {}
+        link = re.search(r'<a\b([^>]*)>History</a>', form.group(1), re.I)
+        action = re.search(r"\{'([^']+)':'\1'\}", html.unescape(link.group(1))) if link else None
+        if not action:
+            return {}
+        fields = html_hidden_inputs(form.group(1))
+        fields[action.group(1)] = action.group(1)
+        response = page.request.post(page.url, form=fields, timeout=3000)
+        if not response.ok:
+            return {}
+        source = response.text()
+        history = html_to_text(re.sub(r"<(script|style)\b[^>]*>.*?</\1>", "", source, flags=re.I | re.S))
+        identity = re.search(r"\bName\s+(.+?)\s+Registration #\s+(\d+)\s+Status\b", history)
+        if "Filed Date Document # Event" not in history or not identity or identity.group(2) != ids[0] or identity.group(1) != result.matched_registry_name:
+            return {}
+        dates = []
+        for fragment in re.findall(r"<tr\b[^>]*>(.*?)</tr>", source, re.I | re.S):
+            cells = html_table_cells(fragment)
+            if len(cells) == 3 and re.fullmatch(r"\d+", cells[1]) and re.fullmatch(r"(?:Reinstate renewal|Renewal)(?:\s*view financial statement)?", cells[2], re.I):
+                dates.append(registration_source_date(cells[0]))
+        dates = [d for d in dates if d]
+        return {"identifier": ids[0], "name": result.matched_registry_name,
+                "renewal": max(dates).isoformat() if dates else "", "url": response.url}
+    except Exception as exc:
+        log_event(f"CO optional renewal-date read incomplete: {type(exc).__name__}: {str(exc)[:180]}")
+        return {}
+
+
+def registration_date_metadata(result, final_status=None, body="") -> dict:
     """Expose only labeled dates from the selected registration, without I/O.
 
     A source's generic Registration Date is not relabeled as an initial date.
-    Renewals, incorporation, issue/approval, expiration and fiscal dates are never
-    used to fill this field. Ambiguous or unmatched records remain unavailable.
+    Original/initial and last renewal are separate. Issue/effective/filing dates
+    retain their exact labels. Expiration, fiscal and incorporation dates never
+    fill either column. Ambiguous or unmatched records remain blank.
     """
-    value = label = kind = ""
-    confirmed = bool(getattr(result, "success", False) and
-                     getattr(result, "matched_registry_name", "") and
-                     (final_status or public_status(result)) not in {"Not Registered", "Site Not Reachable", "Unknown", "Needs Review", "Unable to Confirm", "Unable to Verify"})
+    value = label = kind = renewal = renewal_label = renewal_kind = ""
+    source_url = renewal_url = getattr(result, "source_url", "")
+    detail = re.split(r"<!doctype\b|<html\b", body or "", maxsplit=1, flags=re.I)[0]
+    identifier = str(getattr(result, "matched_registry_identifier", "") or "")
+    selected_name = str(getattr(result, "matched_registry_name", "") or "")
+    def date_name_matches(name):
+        return re.sub(r"\s+", " ", name).strip().casefold() == re.sub(r"\s+", " ", selected_name).strip().casefold()
+    def one_value(text, pattern):
+        values = re.findall(pattern, text or "", re.I | re.M)
+        return values[0].strip() if len(values) == 1 else ""
+    confirmed = registration_date_result_confirmed(result, final_status)
     state = str(getattr(result, "state", "")).upper()
     if confirmed and state == "AR":
         match = re.search(r"(?:^|\|)\s*Registration Date:\s*(\d{4}-\d{2}-\d{2})(?=\s*(?:\||$))", getattr(result, "raw_status_text", ""))
@@ -16715,23 +16852,116 @@ def registration_date_metadata(result, final_status=None) -> dict:
                  if identifier and str(r.get("registrationNumber") or "") == identifier}
         if len(dates) == 1:
             value, label, kind = dates.pop(), "Initial Registration Date", "initial_registration_date"
-    parsed = None
-    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%B %d, %Y", "%b %d, %Y"):
-        try:
-            parsed = datetime.strptime(value, fmt).date()
-            break
-        except (ValueError, TypeError):
-            pass
-    if parsed is not None and not date(1800, 1, 1) <= parsed <= date.today():
-        parsed = None
+        issues = {str(r.get("currentIssuanceDate") or "").strip()
+                  for r in getattr(result, "_cc_registration_records", [])
+                  if identifier and str(r.get("registrationNumber") or "") == identifier}
+        if len(issues) == 1:
+            issue = issues.pop()
+            if issue != value:
+                renewal, renewal_label, renewal_kind = issue, "Current Issuance Date", "current_issue_date"
+    elif confirmed and state in {"CO", "WV"}:
+        # These lookups already read the selected detail page. Do not search a
+        # results table, HTML scripts, or a different candidate for a date.
+        detail = re.split(r"<!doctype\b|<html\b", body or "", maxsplit=1, flags=re.I)[0]
+        identifier = str(getattr(result, "matched_registry_identifier", "") or "")
+        if state == "CO" and re.search(r"^Charitable organization\s*$", detail, re.M):
+            eins = re.findall(r"^EIN[ \t]+([\d-]+)(?=[ \t\r\n]|$)", detail, re.M)
+            ids = re.findall(r"^Registration #[ \t]+(\d+)(?=[ \t\r\n]|$)", detail, re.M)
+            names = re.findall(r"^Name[ \t]+([^\r\n]+)", detail, re.M)
+            same_name = len(names) == 1 and re.sub(r"\s+", " ", names[0]).strip().casefold() == re.sub(r"\s+", " ", result.matched_registry_name).strip().casefold()
+            same_record = (len(eins) == 1 and len(ids) == 1 and same_name
+                           and canonical_ein_digits(eins[0]) == canonical_ein_digits(result.ein)
+                           and len(canonical_ein_digits(result.ein)) == 9
+                           and (not identifier or ids[0] == identifier))
+            matches = re.findall(r"(?:^|\t)Initial registration[ \t]+(\d{1,2}/\d{1,2}/\d{4})(?=[ \t\r\n]|$)", detail, re.M)
+            if same_record and len(matches) == 1:
+                value, label, kind = matches[0], "Initial registration", "initial_registration_date"
+                identifier = ids[0]
+        elif state == "WV" and re.search(r"^CHARITIES DETAILS\s*$", detail, re.M):
+            ids = re.findall(r"^ID:[ \t]*\r?\n[ \t]*(\d+)[ \t]*(?=\r?$)", detail, re.M)
+            names = re.findall(r"^Organization Name:[ \t]*\r?\n[ \t]*([^\r\n]+)", detail, re.M)
+            same_name = len(names) == 1 and re.sub(r"\s+", " ", names[0]).strip().casefold() == re.sub(r"\s+", " ", result.matched_registry_name).strip().casefold()
+            matches = re.findall(r"^Initial Registration Date:[ \t]*\r?\n[ \t]*(\d{1,2}/\d{1,2}/\d{4})[ \t]*(?=\r?$)", detail, re.M)
+            if identifier and ids == [identifier] and same_name and len(matches) == 1:
+                value, label, kind = matches[0], "Initial Registration Date", "initial_registration_date"
+            if identifier and ids == [identifier] and same_name:
+                renewal = one_value(detail, r"^Last Registration Date:[ \t]*\r?\n[ \t]*(\d{1,2}/\d{1,2}/\d{4})[ \t]*(?=\r?$)")
+                renewal_label, renewal_kind = "Last Registration Date", "last_registration_date"
+    elif confirmed and state == "VA":
+        records = [r for r in getattr(result, "_cc_registration_records", [])
+                   if identifier and str(r.get("registrationNumber") or r.get("id") or "") == identifier]
+        for field, which in (("initialIssueDate", "initial"), ("issueDate", "renewal")):
+            dates = {str(r.get(field) or "").strip() for r in records}
+            if len(dates) == 1:
+                if which == "initial":
+                    value, label, kind = dates.pop(), "Initial Issue Date", "initial_credential_issue_date"
+                else:
+                    issue = dates.pop()
+                    if issue != value:
+                        renewal, renewal_label, renewal_kind = issue, "Issue Date", "current_issue_date"
+    elif confirmed and state == "CT":
+        text = getattr(result, "_cc_registration_date_detail", "") or ""
+        ids = re.findall(r"\bRegistration\s+(CHR\.[0-9A-Z.-]+)\s+Registration Type\s+PUBLIC CHARITY\b", text)
+        if identifier and ids == [identifier]:
+            renewal = one_value(text, r"\bEffective Date\s+(\d{1,2}/\d{1,2}/\d{4})\b")
+            renewal_label, renewal_kind = "Effective Date", "current_effective_date"
+    elif confirmed and state == "OK":
+        ids = re.findall(r"^Filing Number:\s*\n[ \t]*(\d+)[ \t]*$", detail, re.M)
+        names = re.findall(r"^Entity Name:\s*\n([^\r\n]+)", detail, re.M)
+        if (identifier and ids == [identifier] and len(names) == 1 and date_name_matches(names[0])
+                and re.search(r"^Entity Type:\s*\nCharitable Organization\s*$", detail, re.M)):
+            value = one_value(detail, r"^Original Filing Date:[ \t]*\r?\n([^\r\n]+)")
+            label, kind = "Original Filing Date", "initial_registration_filing_date"
+            history = detail.split("FILING HISTORY", 1)[-1] if "FILING HISTORY" in detail else ""
+            dates = [registration_source_date(v) for v in re.findall(r"^\d+[ \t]+Renewal Registration[ \t]+([A-Za-z]+ \d{1,2}, \d{4})[ \t]+\d+[ \t]*$", history, re.M)]
+            dates = [d for d in dates if d]
+            renewal = max(dates).isoformat() if dates else ""
+            renewal_label, renewal_kind = "Renewal Registration — Filing Date", "renewal_filing_date"
+    elif confirmed and state == "MS":
+        # Read only the single selected details panel, not dates in search rows.
+        panel = detail.split("Printer Friendly Version", 1)[-1] if detail.count("Printer Friendly Version") == 1 else ""
+        header = panel.strip().splitlines()[0] if panel.strip() else ""
+        if date_name_matches(header) and panel.count("Initial Date Filed:") == 1:
+            value = one_value(panel, r"^Initial Date Filed:[ \t]*(\d{1,2}/\d{1,2}/\d{4})[ \t]*$")
+            label, kind = "Initial Date Filed", "initial_registration_filing_date"
+    elif confirmed and state == "NM":
+        renewal = one_value(getattr(result, "raw_status_text", ""), r"(?:^|\|)\s*(?:Tax Year \d{4}\s*\|\s*)?Registration Submitted\s+(\d{1,2}/\d{1,2}/\d{4})(?=\s*(?:\||$))")
+        renewal_label, renewal_kind = "Registration Submitted", "annual_registration_submitted_date"
+    if confirmed:
+        evidence = getattr(result, "_cc_registration_date_evidence", {}) or {}
+        if (state in {"FL", "WI", "CO"} and identifier and evidence.get("identifier") == identifier
+                and date_name_matches(evidence.get("name", ""))):
+            if evidence.get("initial") and state in {"FL", "WI"}:
+                value, label, kind = evidence["initial"], evidence["initial_label"], evidence["initial_type"]
+                source_url = evidence.get("url") or source_url
+            if evidence.get("renewal") and state == "CO":
+                renewal, renewal_label, renewal_kind = evidence["renewal"], "Renewal — Filed Date", "renewal_filing_date"
+                renewal_url = evidence.get("url") or renewal_url
+    parsed, renewed = registration_source_date(value), registration_source_date(renewal)
+    if parsed and renewed and renewed < parsed:
+        renewed = None
+    notes = {
+        "registry_registration_date": "State-labeled registration date; the source does not specify that it is the initial registration.",
+        "initial_registration_date": "Initial registration date supplied by the state.",
+        "initial_credential_issue_date": "State credential issuance date; source label retained. This is not the organization's incorporation date.",
+        "initial_registration_filing_date": "Original registration filing date supplied by the state; filing is not proof of approval on that date.",
+        "last_registration_date": "Last registration date supplied by the state, separate from its expiration date.",
+        "current_issue_date": "Current registration issue date supplied by the state; not the date a renewal application was submitted.",
+        "current_effective_date": "Effective date of the current registration period; the state does not separately identify a completed renewal date.",
+        "renewal_filing_date": "Latest renewal filing recorded in the state history; a filing date does not by itself establish approval.",
+        "annual_registration_submitted_date": "Latest submitted annual registration shown by the state; submission does not by itself establish approval.",
+    }
     return {
         "registration_date": parsed.isoformat() if parsed else "",
         "registration_date_type": kind if parsed else "",
         "registration_date_source_label": label if parsed else "",
-        "registration_date_source_url": getattr(result, "source_url", "") if parsed else "",
-        "registration_date_note": ("State-labeled registration date; the source does not specify that it is the initial registration." if parsed and kind == "registry_registration_date"
-                                   else "Initial registration date supplied by the state." if parsed
-                                   else "Unavailable in the confirmed data retrieved for this check; no other date was substituted."),
+        "registration_date_source_url": source_url if parsed else "",
+        "registration_date_note": notes.get(kind, "") if parsed else "",
+        "renewal_date": renewed.isoformat() if renewed else "",
+        "renewal_date_type": renewal_kind if renewed else "",
+        "renewal_date_source_label": renewal_label if renewed else "",
+        "renewal_date_source_url": renewal_url if renewed else "",
+        "renewal_date_note": notes.get(renewal_kind, "") if renewed else "",
     }
 
 
@@ -16820,6 +17050,7 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         address = getattr(result, "address_evidence", {}) or getattr(result, "identity_evidence", {}).get("address", {})
         if address.get("cross_state_records") and address.get("basis") not in data["comments"]:
             data["comments"] += " " + address["basis"] + " Compliance status comes from this state's own registry record."
+    enrich_registration_date_sources(result, data["status"], lookup_started)
     data["evidence_url"] = ""
     data["lookup_seconds"] = round(time.perf_counter() - lookup_started, 2)
     data["checked_at_epoch"] = int(time.time())
@@ -16858,7 +17089,7 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         if evidence_value is not None:
             data[evidence_key] = evidence_value
     data["debug_trace"] = json.dumps(debug_trace_for_result(result, org, state, data["status"]), sort_keys=True)
-    data.update(registration_date_metadata(result, data["status"]))
+    data.update(registration_date_metadata(result, data["status"], body))
     log_event(f"{state} lookup for {format_ein(ein)} finished in {data['lookup_seconds']}s with status {data.get('status')}")
     return data
 
@@ -25421,6 +25652,8 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 body = registry_page_body(page)
             else:
                 raise ValueError(f"Unsupported state: {state}")
+            if page and state == "CO":
+                result._cc_registration_date_evidence = co_registration_renewal_evidence(page, result, body, lookup_started)
             if page:
                 if not body:
                     body = registry_page_body(page)

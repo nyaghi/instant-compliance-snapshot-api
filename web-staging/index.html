@@ -447,7 +447,8 @@
 
                       <th class="px-4 py-3 font-semibold">Status</th>
 
-                      <th class="px-4 py-3 font-semibold">Registration Date</th>
+                      <th class="px-4 py-3 font-semibold">Initial / Original Registration Date</th>
+                      <th class="px-4 py-3 font-semibold">Last Renewal Date</th>
                       <th class="px-4 py-3 font-semibold">Comments</th>
 
                     </tr>
@@ -497,7 +498,7 @@
 
         <div>&copy; <span id="year"></span> Compliance Express</div>
 
-          <div class="font-semibold text-slate-600">CharityClarity v2026.09.22.3 &middot; Staging</div>
+          <div class="font-semibold text-slate-600">CharityClarity v2026.09.23.1 &middot; Staging</div>
         <div>No legal or tax advice.</div>
 
       </div>
@@ -1055,7 +1056,8 @@
             <span class="inline-flex rounded-full px-3 py-1 text-xs font-semibold ${statusClass(result.status)}">${escapeHtml(result.status || "Unknown")}</span>
           </td>
 
-          <td class="px-4 py-4 align-top text-slate-700" title="${escapeHtml(result.registration_date_note || 'Unavailable; no other date substituted.')}">${escapeHtml(result.registration_date || "Unavailable")}<span class="block text-xs text-slate-500">${escapeHtml(result.registration_date_source_label || "")}</span></td>
+          <td class="px-4 py-4 align-top text-slate-700" title="${escapeHtml(result.registration_date ? result.registration_date_note || '' : '')}">${escapeHtml(result.registration_date || "")}<span class="block text-xs text-slate-500">${escapeHtml(result.registration_date ? result.registration_date_source_label || "" : "")}</span></td>
+          <td class="px-4 py-4 align-top text-slate-700" title="${escapeHtml(result.renewal_date ? result.renewal_date_note || '' : '')}">${escapeHtml(result.renewal_date || "")}<span class="block text-xs text-slate-500">${escapeHtml(result.renewal_date ? result.renewal_date_source_label || "" : "")}</span></td>
           <td class="px-4 py-4 align-top text-slate-700 whitespace-pre-line">${boldStatuses(escapeHtml(commentsWithRegistryFooter(result)))}</td>
 
         `;
@@ -1110,7 +1112,7 @@
 
     async function generateReport() {
       if (!latestResults.length || generateReportButton.disabled) return;
-      const reportFields = ["organization_name", "ein", "state", "status", "comments", "raw_status_text", "source_note", "source_url", "matched_registry_identifier", "app_version", "computed_due_date", "checked_at_epoch", "registration_date", "registration_date_type", "registration_date_source_label", "registration_date_source_url", "registration_date_note"];
+      const reportFields = ["organization_name", "ein", "state", "status", "comments", "raw_status_text", "source_note", "source_url", "matched_registry_identifier", "app_version", "computed_due_date", "checked_at_epoch", "registration_date", "registration_date_type", "registration_date_source_label", "registration_date_source_url", "registration_date_note", "renewal_date", "renewal_date_type", "renewal_date_source_label", "renewal_date_source_url", "renewal_date_note"];
       const results = latestResults.map(result => Object.fromEntries(reportFields.map(key => [key, result[key]])));
       generateReportButton.disabled = true;
       reportMessage.textContent = "Generating report from these results...";
@@ -1151,7 +1153,7 @@
 
     function downloadExcel() {
 
-      const header = ["Organization", "EIN", "State", "Status", "Matched Registry Name", "Matched Registry ID", "Registration Date", "Date Meaning", "Date Source", "Comments"];
+      const header = ["Organization", "EIN", "State", "Status", "Matched Registry Name", "Matched Registry ID", "Initial / Original Registration Date", "Last Renewal Date", "Initial Date Source Label", "Initial Date Meaning", "Initial Date Source", "Renewal Date Source Label", "Renewal Date Meaning", "Renewal Date Source", "Comments"];
 
       const rows = latestResults.map((result) => [
 
@@ -1167,9 +1169,14 @@
 
         result.matched_registry_identifier || "",
 
-        result.registration_date || "Unavailable",
-        result.registration_date_note || "Unavailable; no other date substituted.",
-        result.registration_date_source_url || "",
+        result.registration_date || "",
+        result.renewal_date || "",
+        result.registration_date ? result.registration_date_source_label || "" : "",
+        result.registration_date ? result.registration_date_note || "" : "",
+        result.registration_date ? result.registration_date_source_url || "" : "",
+        result.renewal_date ? result.renewal_date_source_label || "" : "",
+        result.renewal_date ? result.renewal_date_note || "" : "",
+        result.renewal_date ? result.renewal_date_source_url || "" : "",
         commentsWithRegistryFooter(result)
 
       ]);

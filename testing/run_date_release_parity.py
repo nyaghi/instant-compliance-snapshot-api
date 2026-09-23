@@ -14,12 +14,29 @@ class StableDateRelease(unittest.TestCase):
     def test_master_only_adds_metadata_and_version(self):
         tree = ast.parse((ROOT/'registry_snapshot_server.py').read_text(encoding='utf-8'))
         old = ast.parse(previous('registry_snapshot_server.py'))
-        tree.body = [n for n in tree.body if not isinstance(n, ast.FunctionDef) or n.name != 'registration_date_metadata']
+        helpers={'registration_date_metadata','registration_source_date','registration_date_result_confirmed','registration_date_budget_available','fl_registration_issue_evidence','enrich_registration_date_sources','co_registration_renewal_evidence'}
+        tree.body = [n for n in tree.body if not isinstance(n, ast.FunctionDef) or n.name not in helpers]
+        class RemoveDateOnlyChanges(ast.NodeTransformer):
+            def visit_Assign(self,node):
+                if any(isinstance(t,ast.Attribute) and t.attr in {'_cc_registration_records','_cc_registration_date_detail','_cc_registration_date_evidence'} for t in node.targets):
+                    return None
+                return self.generic_visit(node)
+            def visit_Dict(self,node):
+                pairs=[(k,v) for k,v in zip(node.keys,node.values) if not isinstance(k,ast.Constant) or k.value != 'date_records']
+                node.keys=[k for k,v in pairs];node.values=[v for k,v in pairs]
+                return self.generic_visit(node)
+            def visit_Expr(self,node):
+                if isinstance(node.value,ast.Call) and isinstance(node.value.func,ast.Name) and node.value.func.id=='enrich_registration_date_sources':return None
+                return self.generic_visit(node)
+            def visit_If(self,node):
+                if ast.unparse(node.test)=="page and state == 'CO'" and len(node.body)==1 and 'co_registration_renewal_evidence' in ast.unparse(node.body[0]):return None
+                return self.generic_visit(node)
+        tree=RemoveDateOnlyChanges().visit(tree)
         for node in tree.body:
             if isinstance(node, ast.Assign) and any(isinstance(t,ast.Name) and t.id=='APP_VERSION' for t in node.targets):
                 node.value = next(n.value for n in old.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='APP_VERSION' for t in n.targets))
             if isinstance(node, ast.FunctionDef) and node.name=='response_data_for_lookup':
-                node.body = [n for n in node.body if not (isinstance(n,ast.Expr) and ast.unparse(n)=='data.update(registration_date_metadata(result, data[\'status\']))')]
+                node.body = [n for n in node.body if not (isinstance(n,ast.Expr) and ast.unparse(n)=='data.update(registration_date_metadata(result, data[\'status\'], body))')]
         self.assertEqual(ast.dump(tree), ast.dump(old))
 
     def test_state_logic_discovery_and_connector_unchanged(self):

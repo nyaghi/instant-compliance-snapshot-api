@@ -13,7 +13,7 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.utils import ImageReader
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, CondPageBreak, KeepTogether
 
-REPORT_VERSION = "1.3.0"
+REPORT_VERSION = "1.3.1"
 NAVY = colors.HexColor("#0B2A5B")
 INK = colors.HexColor("#172B45")
 MUTED = colors.HexColor("#536274")
@@ -327,8 +327,14 @@ def validate_results(payload, supported_states):
         registration_type = text(row.get("registration_date_type"), 50)
         if registration_date and (not re.fullmatch(r"\d{4}-\d{2}-\d{2}", registration_date)
                                   or not parse_date(registration_date)
-                                  or registration_type not in {"initial_registration_date", "registry_registration_date"}):
+                                  or registration_type not in {"initial_registration_date", "registry_registration_date", "initial_credential_issue_date", "initial_registration_filing_date"}):
             raise ValueError("Registration Date must preserve a valid state-supplied date and its meaning.")
+        renewal_date = text(row.get("renewal_date"), 10)
+        renewal_type = text(row.get("renewal_date_type"), 50)
+        if renewal_date and (not re.fullmatch(r"\d{4}-\d{2}-\d{2}", renewal_date)
+                             or not parse_date(renewal_date)
+                             or renewal_type not in {"last_registration_date", "current_issue_date", "current_effective_date", "renewal_filing_date", "annual_registration_submitted_date"}):
+            raise ValueError("Last Renewal Date must preserve a valid state-supplied date and its meaning.")
         if checked is not None:
             if isinstance(checked, bool) or not isinstance(checked, (int, float)) or not 0 < checked < 4102444800:
                 raise ValueError("Invalid snapshot timestamp.")
@@ -336,7 +342,9 @@ def validate_results(payload, supported_states):
             **{k: text(row.get(k), 10000) for k in ("comments", "raw_status_text", "source_note")},
             **{k: text(row.get(k), 500) for k in ("source_url", "matched_registry_identifier", "app_version", "computed_due_date")},
             **{k: text(row.get(k), 500) for k in ("registration_date_source_label", "registration_date_source_url", "registration_date_note")},
+            **{k: text(row.get(k), 500) for k in ("renewal_date_source_label", "renewal_date_source_url", "renewal_date_note")},
             "registration_date": registration_date, "registration_date_type": registration_type,
+            "renewal_date": renewal_date, "renewal_date_type": renewal_type,
             "organization_name": name, "ein": ein, "state": state, "status": status,
             "checked_at_epoch": checked,
         })
@@ -535,11 +543,17 @@ def generate_report(payload, supported_states):
         if row["matched_registry_identifier"]:
             link += " | Record ID: " + escape(row["matched_registry_identifier"])
         story.append(p(link, "small", markup=True))
-        registration_text = row["registration_date"] or "Unavailable"
-        if row["registration_date"]:
-            registration_text += " | " + (row["registration_date_source_label"] or "Registration Date")
-        registration_text += ". " + (row["registration_date_note"] or "No confirmed registration date was supplied; no renewal, filing or expiration date was substituted.")
-        story.append(labeled("Registration Date:", registration_text))
+        date_cells = []
+        for prefix in ("registration_date", "renewal_date"):
+            content = row[prefix]
+            if content:
+                content += " | " + row[prefix + "_source_label"]
+                if row[prefix + "_note"]:
+                    content += ". " + row[prefix + "_note"]
+            date_cells.append(p(content, "small"))
+        dates_table = Table([[p("Initial / Original Registration Date", "small"), p("Last Renewal Date", "small")], date_cells], colWidths=[252, 252])
+        dates_table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), PALE), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 6), ("RIGHTPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
+        story.append(dates_table)
         story.append(labeled("Evidence returned with the check:", row["raw_status_text"] or "No separate registry excerpt supplied."))
         if row["source_note"]:
             story.append(labeled("Evidence context:", row["source_note"]))
