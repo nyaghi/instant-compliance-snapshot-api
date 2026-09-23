@@ -61,6 +61,11 @@ class RenewalFiling(unittest.TestCase):
             self.assertEqual(out['renewal_filing_value'],'2025-06-30')
             self.assertIn('tax year 2024',out['renewal_filing_note'])
 
+    def test_downloaded_tax_record_retains_its_state_source_link(self):
+        r=self.tax_result('KY',state_source_url='https://registry.example/charities.pdf',source_url='https://registry.example/return.pdf')
+        r.source_url=''
+        self.assertEqual(self.metadata(r)['renewal_filing_source_url'],'https://registry.example/charities.pdf')
+
     def test_assumed_period_displays_only_source_year(self):
         for flag in ('period_assumed','period_unconfirmed'):
             out=self.metadata(self.tax_result(**{flag:True}))

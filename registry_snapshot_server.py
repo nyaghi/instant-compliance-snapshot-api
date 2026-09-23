@@ -16993,6 +16993,7 @@ def renewal_filing_metadata(result, dates: dict, final_status=None, body="") -> 
     year = ""
     note = ""
     tax_year = False
+    filing_url = ""
     def year_value(value):
         text = str(value or "").strip()
         return text if re.fullmatch(r"(?:19|20)\d{2}", text) and int(text) <= date.today().year else ""
@@ -17007,6 +17008,7 @@ def renewal_filing_metadata(result, dates: dict, final_status=None, body="") -> 
             if (evidence.get("ein") != canonical_ein_digits(result.ein)
                     or getattr(result, "status_reason", "") != state + "_CONFIRMED_TAX_PERIOD"):
                 return empty
+            filing_url = evidence.get("state_source_url") or evidence.get("source_url") or ""
             year = year_value(getattr(result, "last_year_on_record", ""))
             if year != year_value(evidence.get("tax_year_label")):
                 return empty
@@ -17081,11 +17083,11 @@ def renewal_filing_metadata(result, dates: dict, final_status=None, body="") -> 
         note = "Latest submitted year in the selected record's Annual Renewal Data."
     if period:
         return output(period.isoformat(), "filed_period_end", "Filed period ending",
-                      note or "Latest filed fiscal period shown by the state; this is not the submission or renewal date.")
+                      note or "Latest filed fiscal period shown by the state; this is not the submission or renewal date.", filing_url)
     if year:
         return output(year, "filed_tax_year" if tax_year else "filed_year",
                       "Filed tax year" if tax_year else "Filed year",
-                      note or "Latest filed year shown by the state; no month or day has been inferred.")
+                      note or "Latest filed year shown by the state; no month or day has been inferred.", filing_url)
     return empty
 
 
