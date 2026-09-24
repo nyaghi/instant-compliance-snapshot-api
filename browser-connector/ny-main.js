@@ -4,6 +4,7 @@
   const P = CCNYProtocol;
   if (location.origin !== P.NY || window !== window.top) return;
   let active = null;
+  let documentDetail = null;
   // Verify and Search share one retry across this page's EIN/name lookup.
   let verificationRetryUsed = false;
   const xhrMetadata = new WeakMap();
@@ -16,6 +17,17 @@
     const waiter = job.waiter; job.waiter = null; clearTimeout(waiter.timer); waiter.resolve(evidence);
   };
   const observe = (request, status, payload, jobId) => {
+    // A normal detail link loads a new document. Its response can finish
+    // before the worker reconnects; retain only that document's public fields.
+    if (request.kind === "detail" && location.pathname === "/RegistrySearch/" + request.query.orgID) {
+      try { documentDetail = { evidence: P.publicResponse(request, status, payload) }; }
+      catch { documentDetail = { reason: status === 429 ? "NY_CONNECTOR_RATE_LIMITED" : "NY_CONNECTOR_DETAIL_INCOMPLETE" }; }
+      if (active?.waiter?.kind === "detail" && P.sameQuery(active.query, request.query)) {
+        if (documentDetail.evidence) publish(documentDetail.evidence);
+        else rejectRequest(request, active.id, documentDetail.reason);
+      }
+      return;
+    }
     if (!active || active.id !== jobId) return;
     if (status === 429) { rejectRequest(request, jobId, "NY_CONNECTOR_RATE_LIMITED"); return; }
     if (request.kind === "search" && status === 401) {
@@ -36,8 +48,14 @@
     if (["search", "detail"].includes(request.kind) && !P.sameQuery(request.query, job.query)) return;
     const waiter = job.waiter; job.waiter = null; clearTimeout(waiter.timer); waiter.reject(new Error(reason));
   };
-  const networkFailure = (request, jobId) => rejectRequest(request, jobId,
-    request.kind === "verify" ? "NY_CONNECTOR_VERIFICATION_NETWORK_ERROR" : "NY_CONNECTOR_SEARCH_NETWORK_ERROR");
+  const networkFailure = (request, jobId) => {
+    if (request.kind === "detail" && location.pathname === "/RegistrySearch/" + request.query.orgID) {
+      documentDetail = { reason: "NY_CONNECTOR_DETAIL_INCOMPLETE" };
+      if (active && P.sameQuery(active.query, request.query)) rejectRequest(request, active.id, documentDetail.reason);
+      return;
+    }
+    rejectRequest(request, jobId, request.kind === "verify" ? "NY_CONNECTOR_VERIFICATION_NETWORK_ERROR" : "NY_CONNECTOR_SEARCH_NETWORK_ERROR");
+  };
   XMLHttpRequest.prototype.open = function(method, url, ...args) {
     const request = P.publicRequest(url);
     if (request && ((["search", "detail"].includes(request.kind) && String(method).toUpperCase() === "GET") || (request.kind === "verify" && String(method).toUpperCase() === "POST"))) xhrMetadata.set(this, request);
@@ -46,7 +64,7 @@
   };
   XMLHttpRequest.prototype.send = function(...args) {
     const request = xhrMetadata.get(this), jobId = active?.id;
-    if (request && jobId) {
+    if (request && (jobId || request.kind === "detail")) {
       for (const event of ["error", "abort", "timeout"]) this.addEventListener(event, () => networkFailure(request, jobId), { once: true });
       this.addEventListener("load", () => {
       let data;
@@ -63,8 +81,8 @@
     const jobId = active?.id;
     let response;
     try { response = await originalFetch.apply(this, arguments); }
-    catch (error) { if (request && jobId) networkFailure(request, jobId); throw error; }
-    if (request && jobId) response.clone().json().then(data => observe(request, response.status, data, jobId)).catch(() => observe(request, response.status, null, jobId));
+    catch (error) { if (request && (jobId || request.kind === "detail")) networkFailure(request, jobId); throw error; }
+    if (request && (jobId || request.kind === "detail")) response.clone().json().then(data => observe(request, response.status, data, jobId)).catch(() => observe(request, response.status, null, jobId));
     return response;
   };
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -109,14 +127,11 @@
     }
   }
   async function runDetail(query) {
-    await returnToResults();
-    const link = await until(() => Array.from(document.querySelectorAll("a")).find(a => {
-      if (a.textContent.trim() !== query.orgID) return false;
-      try { const url = new URL(a.href, P.NY); return url.origin === P.NY && url.pathname === "/RegistrySearch/" + query.orgID; } catch { return false; }
-    }), 5000, "NY_CONNECTOR_DETAIL_LINK_MISSING");
-    const completed = waitResponse("detail", 30000);
-    link.click();
-    const { kind, ...evidence } = await completed;
+    if (location.pathname !== "/RegistrySearch/" + query.orgID) throw new Error("NY_CONNECTOR_DETAIL_LINK_MISSING");
+    if (documentDetail?.reason) throw new Error(documentDetail.reason);
+    const completed = documentDetail?.evidence || await waitResponse("detail", 30000);
+    if (!P.sameQuery(completed.query, query)) throw new Error("NY_CONNECTOR_DETAIL_INCOMPLETE");
+    const { kind, ...evidence } = completed;
     return evidence;
   }
   async function run(query, forceVerification = false) {

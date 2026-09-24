@@ -204,6 +204,33 @@ async function ready(job) {
   }
   throw new Error("NY_CONNECTOR_TAB_READY_TIMEOUT");
 }
+async function waitForRegistryDocument(job, path) {
+  const deadline = Math.min(Date.now() + 10000, job.activeExpiresAt);
+  while (!job.closed && Date.now() < deadline) {
+    const tab = await chrome.tabs.get(job.tab);
+    if (tab.url === P.NY + path) {
+      try { const state = await chrome.tabs.sendMessage(job.tab, { action: "ready" }, { frameId: 0 });
+        if (state?.ready && state.url === tab.url) return;
+      } catch { /* The navigation's new content script is not ready yet. */ }
+    }
+    await nap(100);
+  }
+  throw new Error(job.closed ? "NY_CONNECTOR_INTERRUPTED" : "NY_CONNECTOR_DETAIL_RESPONSE_TIMEOUT");
+}
+async function openDetail(job, query) {
+  let tab = await chrome.tabs.get(job.tab);
+  const path = "/RegistrySearch/" + query.orgID;
+  if (tab.url === P.NY + path) return;
+  if (/^\/RegistrySearch\/[0-9]{2}-[0-9]{2}-[0-9]{2}\/?$/.test(new URL(tab.url).pathname)) {
+    const returned = await chrome.tabs.sendMessage(job.tab, { action: "back-to-results" }, { frameId: 0 });
+    if (!returned?.ok) throw new Error("NY_CONNECTOR_DETAIL_LINK_MISSING");
+    await waitForRegistryDocument(job, "/RegistrySearch");
+  }
+  if (job.closed) throw new Error("NY_CONNECTOR_INTERRUPTED");
+  const opened = await chrome.tabs.sendMessage(job.tab, { action: "open-detail", query }, { frameId: 0 });
+  if (!opened?.ok) throw new Error(opened?.reason || "NY_CONNECTOR_DETAIL_LINK_MISSING");
+  await waitForRegistryDocument(job, path);
+}
 async function performSearch(job, query, id) {
   if (job.closed) return;
   if (job.command?.id === id && !P.sameQuery(job.command.query, query)) { post(job, { id, ok: false, reason: "NY_CONNECTOR_INVALID_SEQUENCE" }); return; }
@@ -231,6 +258,8 @@ async function performSearch(job, query, id) {
         catch (error) { documentLimited = error.message === "NY_CONNECTOR_RATE_LIMITED"; throw error; }
         const current = await chrome.tabs.get(job.tab), url = new URL(current.url);
         if (url.origin !== P.NY || !/^\/RegistrySearch(?:\/[0-9]{2}-[0-9]{2}-[0-9]{2})?\/?$/.test(url.pathname)) throw new Error("NY_CONNECTOR_INCOMPLETE");
+        if (Object.hasOwn(query, "orgID")) await openDetail(job, query);
+        if (job.closed) return;
         const generation = job.generation;
         // Stable across reconnection, distinct for an already permitted retry.
         const attempt = `${job.generation}:${job.rateRetries}`;
@@ -277,6 +306,7 @@ async function performSearch(job, query, id) {
       }
     }
   } catch (error) {
+    diagnostic("lookup-error", job, /^NY_CONNECTOR_[A-Z_]+$/.test(error.message) ? error.message : error.name);
     if (repair.phase === "repairing") await saveRepair({ ...repair, phase: "failed", reason: "NY_CONNECTOR_RECOVERY_FAILED" });
     response = { ok: false, reason: /^NY_CONNECTOR_[A-Z_]+$/.test(error.message) ? error.message : "NY_CONNECTOR_INCOMPLETE" };
   }
@@ -311,6 +341,7 @@ async function performRefresh(job, id) {
       await recordRecovery(response);
     }
   } catch (error) {
+    diagnostic("lookup-error", job, /^NY_CONNECTOR_[A-Z_]+$/.test(error.message) ? error.message : error.name);
     if (repair.phase === "repairing") await saveRepair({ ...repair, phase: "failed", reason: "NY_CONNECTOR_RECOVERY_FAILED" });
     response = { ok: false, reason: /^NY_CONNECTOR_[A-Z_]+$/.test(error.message) ? error.message : "NY_CONNECTOR_RECOVERY_FAILED" };
   }
@@ -328,7 +359,7 @@ chrome.tabs.onRemoved.addListener(id => {
 });
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (!allowedSender(sender) || !P.validId(message?.id) || message.action !== "ping") return false;
-  boot.then(() => respond({ ok: true, version: chrome.runtime.getManifest().version, capabilities: ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "origin-window-v1", "connection-recovery-v1", "recovery-causes-v1", "cleanup-ack-v1", "timeout-recovery-v1", "resume-v1", "verified-detail-v1"], recovery: { phase: repair.phase || "idle", nextAllowedAt: repair.nextAllowedAt || 0, verifiedAt: repair.finishedAt || 0 } }), () => respond({ ok: false, reason: "NY_CONNECTOR_INTERRUPTED" }));
+  boot.then(() => respond({ ok: true, version: chrome.runtime.getManifest().version, capabilities: ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "origin-window-v1", "connection-recovery-v1", "recovery-causes-v1", "cleanup-ack-v1", "timeout-recovery-v1", "resume-v1", "verified-detail-v1", "detail-navigation-v1"], recovery: { phase: repair.phase || "idle", nextAllowedAt: repair.nextAllowedAt || 0, verifiedAt: repair.finishedAt || 0 } }), () => respond({ ok: false, reason: "NY_CONNECTOR_INTERRUPTED" }));
   return true;
 });
 chrome.runtime.onConnect.addListener(port => {

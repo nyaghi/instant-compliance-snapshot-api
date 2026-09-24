@@ -19,7 +19,7 @@ function harness(initial={}) {
     get:async id=>{if(!tabs.has(id))throw Error('Tab absent');return tabs.get(id);},
     update:async(id,options)=>Object.assign(tabs.get(id),options),
     remove:async id=>{tabs.delete(id);removed.push(id);chrome.tabs.onRemoved.emit(id);},
-    sendMessage:async(tab,message)=>{if(message.action==='ready')return {ready:true};queries.push({tab,...message});return {ok:true,evidence:{query:message.query,rows:[]}};}
+    sendMessage:async(tab,message)=>{if(message.action==='ready')return {ready:true,url:tabs.get(tab).url};if(message.action==='back-to-results'){tabs.get(tab).url='https://charities-search.ag.ny.gov/RegistrySearch';return {ok:true};}if(message.action==='open-detail'){tabs.get(tab).url='https://charities-search.ag.ny.gov/RegistrySearch/'+message.query.orgID;return {ok:true};}queries.push({tab,...message});return {ok:true,evidence:{query:message.query,rows:[]}};}
   }};
   class Clock extends Date { static now(){return now;} }
   const recovery={clearForTab:async(tabId,owned,close)=>{repairs.push({tabId,owned});await close();}};

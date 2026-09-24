@@ -17,9 +17,14 @@ FORM='''<!doctype html><input id="orgName"><input id="ein"><input id="orgID"><in
 <div id="records"></div><div id="old">Old table row is deliberately present before the current query finishes.</div>
 <script>
 function request(path,method){return new Promise(resolve=>{const x=new XMLHttpRequest();x.open(method,'https://charities-search-api.ag.ny.gov'+path);x.onload=()=>resolve(JSON.parse(x.responseText));x.send();});}
+function renderRows(rows){records.replaceChildren();for(const row of rows){if(!row.orgID)continue;const a=document.createElement('a');a.href='/RegistrySearch/'+row.orgID;a.textContent=row.orgID;records.append(a);}}
+renderRows(JSON.parse(sessionStorage.getItem('fixtureRows')||'[]'));
 clear.onclick=()=>{document.querySelectorAll('input').forEach(i=>i.value='');search.disabled=true;};
 verify.onclick=async()=>{const p=await request('/api/recaptcha/verify','POST');if(p.verified)search.disabled=false;};
-search.onclick=async()=>{const q=new URLSearchParams();['ein','orgName','orgID','city'].forEach(id=>{if(document.getElementById(id).value)q.set(id,document.getElementById(id).value);});q.set('token','fixture-token-must-not-cross-bridge');const result=await request('/api/FileNet/RegistrySearch?'+q,'GET');records.replaceChildren();for(const row of result.data||[]){if(!row.orgID)continue;const a=document.createElement('a');a.href='/RegistrySearch/'+row.orgID;a.textContent=row.orgID;a.onclick=async e=>{e.preventDefault();history.pushState({},'',a.href);await request('/api/FileNet/RegistryDetail?orgID='+row.orgID+'&token=fixture-token-must-not-cross-bridge','GET');};records.append(a);}};
+search.onclick=async()=>{const q=new URLSearchParams();['ein','orgName','orgID','city'].forEach(id=>{if(document.getElementById(id).value)q.set(id,document.getElementById(id).value);});q.set('token','fixture-token-must-not-cross-bridge');const result=await request('/api/FileNet/RegistrySearch?'+q,'GET');sessionStorage.setItem('fixtureRows',JSON.stringify(result.data||[]));renderRows(result.data||[]);};
+</script>'''
+DETAIL_PAGE='''<!doctype html><div id=detail>Loading record</div><script>
+const id=location.pathname.split('/').pop();const x=new XMLHttpRequest();x.open('GET','https://charities-search-api.ag.ny.gov/api/FileNet/RegistryDetail?orgID='+id+'&token=fixture-token-must-not-cross-bridge');x.onload=()=>{detail.textContent='Public record loaded';};x.send();
 </script>'''
 PAGE='''<!doctype html><title>Connector browser integration fixture</title><script src="/ny-connector.js"></script>'''
 
@@ -85,6 +90,8 @@ class BrowserIntegration(unittest.TestCase):
                 code,response=c.ny_connector_request(payload,c.NY_CONNECTOR_ORIGIN)
                 route.fulfill(status=code,content_type='application/json',body=json.dumps(response),headers={'Access-Control-Allow-Origin':c.NY_CONNECTOR_ORIGIN})
         elif u.hostname=='charities-search.ag.ny.gov':
+            if u.path != '/RegistrySearch':
+                route.fulfill(content_type='text/html',body=DETAIL_PAGE);return
             body=FORM
             if cls.failure=='delayed-search-enable':
                 body=body.replace('if(p.verified)search.disabled=false;', 'if(p.verified)setTimeout(()=>{search.disabled=false;},4000);')
@@ -169,7 +176,7 @@ class BrowserIntegration(unittest.TestCase):
             }''',{'organization_name':requested['orgName'],'ein':requested['ein'],'email':'browser-test@compliance-express.com','admin_passcode':c.ADMIN_PASSCODE,'device_id':'fixture-browser-session'})
             result=timed['result'];self.last_active_seconds=timed['activeSeconds']
         if result.get('status_reason') in {'NY_CONNECTOR_INCOMPLETE','NY_CONNECTOR_TIMEOUT','NY_CONNECTOR_UNAVAILABLE'}:
-            print(json.dumps({'mode':mode,'reason':result.get('status_reason'),'observations':self.observations[-20:]}),flush=True)
+            print(json.dumps({'mode':mode,'reason':result.get('status_reason'),'observations':self.observations[-20:],'worker_diagnostics':self.worker.evaluate('diagnostics.slice(-4)')}),flush=True)
         self.assertEqual(self.worker.evaluate('testCreatedTabs.length')-before,expected_tabs,'Queries share one owned tab except for one explicitly tested connection repair')
         self.assertEqual(self.worker.evaluate('async()=>{const tabs=await chrome.tabs.query({});return tabs.filter(t=>testCreatedTabs.includes(t.id)).length;}'),0,'Completed lookups must close their owned tab')
         page.close();return result,session

@@ -23,8 +23,24 @@
     if (sender.id !== chrome.runtime.id) return false;
     if (message?.action === "ready") {
       const ready = !!document.querySelector("#ein") || /^\/RegistrySearch\/[0-9]{2}-[0-9]{2}-[0-9]{2}\/?$/.test(location.pathname);
-      respond({ ready, rateLimited: !ready && /(?:429\s+Too Many Requests|Too Many Requests\s*429)/i.test(document.body?.innerText || "") });
+      respond({ ready, url: location.href, rateLimited: !ready && /(?:429\s+Too Many Requests|Too Many Requests\s*429)/i.test(document.body?.innerText || "") });
       return false;
+    }
+    if (message?.action === "back-to-results") {
+      if (!/^\/RegistrySearch\/[0-9]{2}-[0-9]{2}-[0-9]{2}\/?$/.test(location.pathname)) {
+        respond({ ok: false }); return false;
+      }
+      respond({ ok: true }); setTimeout(() => window.history.back(), 0); return false;
+    }
+    if (message?.action === "open-detail") {
+      const identifier = message.query?.orgID;
+      if (typeof identifier !== "string" || !/^[0-9]{2}-[0-9]{2}-[0-9]{2}$/.test(identifier) || !/^\/RegistrySearch\/?$/.test(location.pathname)) {
+        respond({ ok: false, reason: "NY_CONNECTOR_DETAIL_LINK_MISSING" }); return false;
+      }
+      const link = Array.from(document.querySelectorAll("a")).find(a => a.textContent.trim() === identifier && a.href === NY + "/RegistrySearch/" + identifier);
+      if (!link) { respond({ ok: false, reason: "NY_CONNECTOR_DETAIL_LINK_MISSING" }); return false; }
+      // Acknowledge before normal full-page navigation destroys this relay.
+      respond({ ok: true }); setTimeout(() => link.click(), 0); return false;
     }
     if (!["search", "verify"].includes(message?.action) || typeof message.id !== "string" || message.id.length > 80) return false;
     if (completed?.id === message.id && completed.attempt === message.attempt) { respond(same(completed, message) ? completed.response : { ok: false, reason: "NY_CONNECTOR_INVALID_SEQUENCE" }); return false; }
