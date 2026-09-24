@@ -54,7 +54,7 @@ services:
       - key: CE_SINGLE_STATE_RETRY_AFTER_SECONDS
         value: "8"
       - key: CE_SINGLE_STATE_QUEUE_TIMEOUT_SECONDS
-        value: "60"
+        value: "150"
       - key: CE_SINGLE_STATE_SEMANTIC_RETRY_DELAY_SECONDS
         value: "1"
       - key: CE_SINGLE_STATE_SEMANTIC_RETRY_ATTEMPTS
@@ -122,7 +122,7 @@ services:
       - key: PUBLIC_BASE_URL
         value: "https://instant-compliance-snapshot-api-hn4v.onrender.com"
       - key: CE_APP_VERSION
-        value: "2026.09.24.perf.2-performance-lab"
+        value: "2026.09.24.perf.3-performance-lab"
       - key: CE_BATCH_FANOUT_SINGLE_STATE_LOOKUPS
         value: "0"
       - key: CE_SINGLE_STATE_OVERFLOW_API_URL
