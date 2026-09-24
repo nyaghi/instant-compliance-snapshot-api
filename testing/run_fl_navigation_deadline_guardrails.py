@@ -7,12 +7,12 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import registry_snapshot_server as c
 
 class FloridaNavigationTests(unittest.TestCase):
- def run_case(self,failures=1,no_record=False,wrong_name=False):
+ def run_case(self,failures=1,no_record=False,wrong_name=False,error='Registry navigation timed out'):
   now=[0.0];page=MagicMock();visits=[];evaluations=[]
   def goto(url,**kw):
    visits.append((url,kw));now[0]+=.1
    if url!='about:blank' and sum(u!='about:blank' for u,_ in visits)<=failures:
-    now[0]+=kw['timeout']/1000;raise TimeoutError('Registry navigation timed out')
+    now[0]+=kw['timeout']/1000;raise TimeoutError(error)
   def evaluate(script,*args):
    evaluations.append(script)
    if 'window.stop' in script:
@@ -41,5 +41,19 @@ class FloridaNavigationTests(unittest.TestCase):
  def test_completed_unrelated_record_not_accepted(self):
   result,*_=self.run_case(failures=0,wrong_name=True)
   self.assertEqual(result.status,c.checker.STATUS_NOT_REGISTERED);self.assertFalse(result.matched_registry_identifier)
+ def test_authority_failure_enables_recovery_once_and_preserves_result(self):
+  def enable(transport):transport.enabled=True
+  with patch.object(c.FloridaVerifiedTransport,'enable',autospec=True,side_effect=enable) as repair:
+   result,*_=self.run_case(failures=1,error='net::ERR_CERT_AUTHORITY_INVALID')
+  self.assertEqual(result.status,'Current');self.assertEqual(result.matched_registry_identifier,'CH12345')
+  self.assertEqual(repair.call_count,1)
+ def test_unrepaired_authority_failure_is_explicit_not_a_negative(self):
+  with patch.object(c.FloridaVerifiedTransport,'enable',autospec=True,side_effect=lambda t:setattr(t,'enabled',True)):
+   result,*_=self.run_case(failures=2,error='net::ERR_CERT_AUTHORITY_INVALID')
+  self.assertFalse(result.success);self.assertEqual(result.reason_code,'FL_CERTIFICATE_ERROR')
+  self.assertEqual(result.status,'Site Not Reachable')
+ def test_ordinary_timeout_does_not_activate_certificate_recovery(self):
+  with patch.object(c.FloridaVerifiedTransport,'enable') as repair:self.run_case(failures=1)
+  repair.assert_not_called()
 
 if __name__=='__main__':unittest.main()

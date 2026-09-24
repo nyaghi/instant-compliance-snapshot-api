@@ -15,6 +15,7 @@ import os
 import re
 import secrets
 import smtplib
+import ssl
 import sys
 import threading
 import time
@@ -133,7 +134,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.24.3-staging").strip() or "2026.09.24.3-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.24.4-staging").strip() or "2026.09.24.4-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -11332,12 +11333,132 @@ def search_ct(page, org):
     return checker.StateResult(original_name, org.ein, "CT", checker.STATUS_NOT_REGISTERED, url, raw_status_text="No matching organization record", source_note="Connecticut public registry returned no matching record for the generated name variants.", success=True)
 
 
+class FloridaCertificateError(RuntimeError):
+    """The bounded Florida recovery could not authenticate the registry."""
+
+
+class FloridaNoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+@lru_cache(maxsize=1)
+def fl_verified_ssl_context():
+    # Public GoDaddy R1-to-G2 cross certificate, NOT a new trusted root.
+    # See certificates/README.md. The chain must still reach a system trust anchor.
+    pem = (BASE_DIR / "certificates" / "godaddy-r1-cross-g2.pem").read_text(encoding="ascii")
+    digest = hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest()
+    if digest != "7bcb0f2f2d1031a6af8d61baa835d2835a3b8bcc26d94a3b048b1655fb81298c":
+        raise FloridaCertificateError("Florida certificate-chain recovery asset failed integrity verification")
+    context = ssl.create_default_context()
+    context.verify_flags &= ~ssl.VERIFY_X509_PARTIAL_CHAIN
+    context.load_verify_locations(cadata=pem)
+    return context
+
+
+class FloridaVerifiedTransport:
+    """On authority failure only, complete FL's TLS chain for the existing browser.
+
+    No system/browser trust store change, HTTP downgrade, disabled verification,
+    external proxy, alternative matching path, or extra lookup time allowance.
+    """
+    pattern = "https://csapp.fdacs.gov/**"
+
+    def __init__(self, page):
+        self.page = page
+        self.enabled = False
+        self.error = None
+        self.deadline = 0.0
+        self.handler = self.route
+
+    @staticmethod
+    def allows(url):
+        parsed = urlparse(url)
+        return (parsed.scheme == "https" and parsed.netloc.lower() == "csapp.fdacs.gov"
+                and not parsed.username and not parsed.password)
+
+    def enable(self):
+        if self.enabled:
+            return
+        try:
+            self.opener = urllib.request.build_opener(
+                urllib.request.HTTPSHandler(context=fl_verified_ssl_context()), FloridaNoRedirect())
+        except Exception as exc:
+            raise FloridaCertificateError("Florida certificate-chain recovery could not be initialized") from exc
+        self.page.route(self.pattern, self.handler)
+        self.enabled = True
+        log_event("FL enabled verified HTTPS certificate-chain recovery")
+
+    def close(self):
+        if self.enabled:
+            self.page.unroute(self.pattern, self.handler)
+
+    def route(self, route):
+        request = route.request
+        if not self.allows(request.url):
+            return route.fallback()
+        if BLOCK_HEAVY_BROWSER_RESOURCES and request.resource_type in {"image", "media", "font"}:
+            return route.abort()
+        try:
+            remaining = self.deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Florida lookup deadline reached during verified transport")
+            if request.method not in {"GET", "POST", "HEAD"}:
+                raise ValueError("Unsupported Florida registry request method")
+            headers = {k: v for k, v in request.all_headers().items()
+                       if k.lower() not in {"host", "content-length", "accept-encoding", "connection"}}
+            headers["Accept-Encoding"] = "identity"
+            outgoing = urllib.request.Request(request.url, data=request.post_data_buffer,
+                                              headers=headers, method=request.method)
+            try:
+                response = self.opener.open(outgoing, timeout=min(8.0, remaining))
+            except urllib.error.HTTPError as exc:
+                response = exc  # Preserve HTTP errors and redirects for the existing lookup.
+            with response:
+                location = response.headers.get("Location")
+                if location and not self.allows(urljoin(request.url, location)):
+                    raise ValueError("Florida registry redirect left the verified HTTPS origin")
+                if response.headers.get("Content-Encoding", "identity").lower() != "identity":
+                    raise ValueError("Unexpected encoding from Florida registry transport")
+                chunks, size = [], 0
+                while True:
+                    if time.monotonic() >= self.deadline:
+                        raise TimeoutError("Florida lookup deadline reached during response read")
+                    chunk = response.read1(65536)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > 5_000_000:
+                        raise ValueError("Florida registry response exceeded the transport size limit")
+                    chunks.append(chunk)
+                response_headers = {k: v for k, v in response.headers.items()
+                                    if k.lower() not in {"content-length", "transfer-encoding", "connection", "set-cookie"}}
+                cookies = response.headers.get_all("Set-Cookie", [])
+                if cookies:
+                    response_headers["Set-Cookie"] = "\n".join(cookies)
+                route.fulfill(status=response.status, headers=response_headers, body=b"".join(chunks))
+        except Exception as exc:
+            cause = getattr(exc, "reason", exc)
+            self.error = (FloridaCertificateError("Florida registry certificate verification failed: " + str(cause))
+                          if isinstance(cause, ssl.SSLCertVerificationError) else exc)
+            route.abort("failed")
+
+
 def search_fl(page, org):
+    transport = FloridaVerifiedTransport(page)
+    try:
+        return search_fl_with_transport(page, org, transport)
+    finally:
+        transport.close()
+
+
+def search_fl_with_transport(page, org, transport):
     url = FL_CHECK_A_CHARITY_URL
     original_name = org.organization_name
     safe_targets = organization_match_target_variants(original_name, org.ein)
     lookup_started = time.monotonic()
     deadline = lookup_started + FL_LOOKUP_MAX_SECONDS
+    transport.deadline = deadline
 
     def remaining_seconds() -> float:
         return max(0.0, deadline - time.monotonic())
@@ -11475,8 +11596,16 @@ def search_fl(page, org):
                 raise TimeoutError("FL lookup exceeded its bounded search window")
             try:
                 page.goto(url, wait_until="commit", timeout=remaining_ms(12000))
+                if transport.error:
+                    raise transport.error
                 return
             except Exception as exc:
+                if transport.error:
+                    raise transport.error
+                if "ERR_CERT_AUTHORITY_INVALID" in str(exc):
+                    if transport.enabled:
+                        raise FloridaCertificateError("Florida registry certificate verification failed") from exc
+                    transport.enable()
                 last_error = exc
                 # A timed-out document may never acquire a JavaScript context.
                 # Navigate away with a deadline instead of evaluating window.stop().
@@ -11559,6 +11688,8 @@ def search_fl(page, org):
                 raise ValueError("Florida search submission did not return a successful document")
             time.sleep(min(0.5, remaining_seconds()))
             text = readable_page_text(page)
+            if transport.error:
+                raise transport.error
             if no_registry_results_seen(text):
                 result.status = checker.STATUS_NOT_REGISTERED
                 result.raw_status_text = "No matching organization record"
@@ -11662,6 +11793,16 @@ def search_fl(page, org):
         except Exception as exc:
             last_error = exc
             result.error = f"FL error: {exc}"
+            if isinstance(exc, FloridaCertificateError):
+                result.status = "Site Not Reachable"
+                result.reason_code = "FL_CERTIFICATE_ERROR"
+                result.raw_status_text = "Florida registry certificate verification failed"
+                result.source_note = (
+                    "Florida's registry security certificate could not be verified, so CharityClarity "
+                    "could not securely complete the search. This does not establish non-registration or delinquency."
+                )
+                result.success = False
+                return result
             if (
                 not final_exact_retry_added
                 and normalized_match_name(original_name) != normalized_match_name(variant)
@@ -17215,6 +17356,7 @@ def enrich_registration_date_sources(result, final_status=None, lookup_started=N
     if not re.fullmatch(r"CH\d+", identifier):
         return
     url = "https://csapp.fdacs.gov/CSPublicApp/BusinessSearch/BusinessSearch.aspx"
+    date_deadline = time.monotonic() + 6.0
     try:
         with curl_requests.Session(impersonate="chrome136") as session:
             response = session.get(url, timeout=3)
@@ -17226,9 +17368,40 @@ def enrich_registration_date_sources(result, final_status=None, lookup_started=N
             response = session.post(url, data=fields, timeout=3)
             response.raise_for_status()
             result._cc_registration_date_evidence = fl_registration_issue_evidence(response.text, identifier, result.matched_registry_name)
-    except Exception:
+    except Exception as exc:
         # No status/comment change and no failure propagated to the primary lookup.
         result._cc_registration_date_evidence = {}
+        if getattr(exc, "code", None) == 60:  # curl certificate verification failure only.
+            result._cc_registration_date_evidence = fl_verified_registration_issue(
+                identifier, result.matched_registry_name, date_deadline)
+
+
+def fl_verified_registration_issue(identifier, selected_name, deadline):
+    """Recover the existing optional date read without extending its six seconds."""
+    url = "https://csapp.fdacs.gov/CSPublicApp/BusinessSearch/BusinessSearch.aspx"
+    try:
+        opener = urllib.request.build_opener(
+            urllib.request.HTTPSHandler(context=fl_verified_ssl_context()), FloridaNoRedirect(),
+            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        def read(data=None):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Florida optional registration-date deadline reached")
+            request = urllib.request.Request(url, data=data, headers={"User-Agent": BROWSER_USER_AGENT,
+                "Accept-Encoding": "identity"})
+            with opener.open(request, timeout=min(3.0, remaining)) as response:
+                body = response.read(2_000_001)
+                if len(body) > 2_000_000 or time.monotonic() >= deadline:
+                    raise ValueError("Incomplete Florida optional registration-date read")
+                return body.decode("utf-8")
+        fields = html_hidden_inputs(read())
+        if "__VIEWSTATE" not in fields:
+            return {}
+        fields.update({"ctl00$cpMainContent$LicenseTb": identifier, "ctl00$cpMainContent$SingleSearchBt": "Search"})
+        source = read(urlencode(fields).encode("utf-8"))
+        return fl_registration_issue_evidence(source, identifier, selected_name)
+    except Exception:
+        return {}  # Optional dates cannot alter a confirmed registration result.
 
 
 def co_registration_renewal_evidence(page, result, summary: str, lookup_started=None) -> dict:
@@ -20648,6 +20821,8 @@ def comment_registry_status(raw: str, status: str) -> str:
 
 
 def comments_for_result_base(result, body: str, public_facing_status: str) -> str:
+    if result.state == "FL" and getattr(result, "reason_code", "") == "FL_CERTIFICATE_ERROR":
+        return result.source_note
     if result.state in {"DC", "RI"} and getattr(result, "status_reason", "") == "LICENSED_CHARITY_SOURCE":
         return result.source_note
     if result.state == "ND" and getattr(result, "status_reason", "") == "ND_MATCHING_RECORDS_INACTIVE":
@@ -26933,6 +27108,8 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
             ):
                 best_ak_identity_result = dict(result)
         retryable_statuses = {"site not reachable"}
+        if state == "FL" and result.get("reason_code") == "FL_CERTIFICATE_ERROR":
+            return result  # Chain recovery was already attempted; repetition cannot repair trust.
         if state == "MI" and mi_transient_lookup_result(result):
             retryable_statuses.add(status)
         if state == "ME" and result.get("reason_code") == "ME_DETAIL_INCOMPLETE":

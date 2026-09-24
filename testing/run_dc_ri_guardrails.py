@@ -190,7 +190,9 @@ class MatureParity(unittest.TestCase):
                  'ma_read_legacy_form_pc','ma_read_latest_form_pc','irs_period_for_label',
                  # September 24: verified-browser detail transport, NY rules unchanged.
                  'search_ny_direct','ny_connector_advance','ny_connector_request',
-                 'ny_connector_clean_response','ny_connector_failure'}
+                 'ny_connector_clean_response','ny_connector_failure',
+                 # September 24: FL-only verified certificate-chain recovery and terminal TLS retry guard.
+                 'search_fl','run_single_state_lookup_reliably','enrich_registration_date_sources'}
         self.assertEqual({k for k,v in old.items() if current.get(k)!=v},allowed)
     def test_discovery_connector_and_state_modules_unchanged(self):
         # NY now accepts optional Sales cancellation; signal-free lifecycle has dedicated controls.
