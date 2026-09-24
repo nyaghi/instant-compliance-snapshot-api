@@ -18,7 +18,13 @@ The optional Florida license-issue date lookup uses the same verified chain only
 
 ## Rollout and postvalidation
 
-Staging only. Both existing staging Render services must receive the same pinned commit, with unchanged environment/capacity. The Netlify overlay must preserve every other live asset and function and change only the application/validation version labels. Verify both backend versions, the live staging label and staging-only API targets, then repeat the 11 live controls and actual Sales/Standard UI checks. Postdeployment results are recorded in the evidence report below.
+Staging deployment completed. Both existing Render services run backend version `2026.09.24.4-staging`, pinned to runtime commit `9092827346f7ebc677f143f8c83671b7475e5649`. Environment variables and instance counts were verified unchanged. Netlify staging deployment `6ab5490601d7acf7af6d5942` preserves other assets and both functions; the main HTML differs only in the footer version. Live Sales and discovery JavaScript hashes are unchanged, both API targets are staging, and all three application/validation HTML pages show the new release label. UI footer follow-up commit: `8a5dbb0`.
+
+Postdeployment: all 11 API controls returned definitive results, with 10 sheet matches and the same documented National Marrow Donor Program discrepancy. Florida checks took 13.75–31.84 seconds. Initial registration dates were recovered where available.
+
+Actual browser UI smoke used three concurrent isolated organization contexts (America's Charities, Make-A-Wish Foundation of America, Junior Achievement USA). Each ran fresh discovery, Standard, then Sales for Florida and Colorado. All six UI runs / 12 state results passed; no Sales cutoff or certificate failures occurred. Standard elapsed times: 19.27, 19.84 and 55.51 seconds. Sales: 16.04, 14.29 and 28.90 seconds. These are two-state controls, not a new 15-organization/32-state capacity benchmark.
+
+Known issues: one expected-sheet discrepancy pending user review; no unresolved Florida code failure in these controls. Recommendation: Needs review for the sheet correction; staging fix is verified. Full evidence and exact commands are in `REPORT.md` in the evidence directory below.
 
 Production touched: No. No production promotion is authorized.
 
