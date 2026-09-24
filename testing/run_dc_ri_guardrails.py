@@ -184,7 +184,10 @@ class MatureParity(unittest.TestCase):
     def test_existing_functions_unchanged_except_scoped_entry_points(self):
         old={n.name:ast.dump(n) for n in ast.parse(self.previous('registry_snapshot_server.py')).body if isinstance(n,ast.FunctionDef)}
         current={n.name:ast.dump(n) for n in ast.parse((ROOT/'registry_snapshot_server.py').read_text(encoding='utf-8')).body if isinstance(n,ast.FunctionDef)}
-        allowed={'registration_date_metadata','true_status_from_body','comments_for_result_base','run_state_lookup'}
+        allowed={'registration_date_metadata','true_status_from_body','comments_for_result_base','run_state_lookup',
+                 # September 23 mixed-mode controls explicitly cover these fixes.
+                 'canonical_name_punctuation','me_fast_direct_query_variants',
+                 'ma_read_legacy_form_pc','ma_read_latest_form_pc','irs_period_for_label'}
         self.assertEqual({k for k,v in old.items() if current.get(k)!=v},allowed)
     def test_discovery_connector_and_state_modules_unchanged(self):
         for path in ['Charity_Checker_Script for 13_states.py','web-staging/organization-identity.js','web-staging/ny-connector.js']:

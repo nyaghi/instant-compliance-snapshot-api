@@ -30,10 +30,12 @@ test('chosen DC RI subset only; rejection cannot become Not Found; next run clea
  assert.equal(c.events[0].detail.results.find(r=>r.state==='DC').status,'Unable to Confirm');assert.equal(c.elements.ccSalesRows.children.length,2);
  c.elements.ccSalesClear.onclick();c.inputs[0].checked=true;run=c.submit();await c.drain();await run;assert.equal(c.elements.ccSalesRows.children.length,1);assert.equal(c.events[1].detail.results.length,1);
 });
-test('Standard inline scripts, master, discovery and connector unchanged from pre-restoration release',()=>{
+test('Standard inline scripts, discovery and connector unchanged from pre-restoration release',()=>{
  const previous=file=>cp.execFileSync('git',['show','e069ad6:'+file],{cwd:root,encoding:'utf8',maxBuffer:20*1024*1024}).replaceAll('\r\n','\n');
  const current=file=>fs.readFileSync(path.join(root,file),'utf8').replaceAll('\r\n','\n');
  const scripts=t=>[...t.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)].map(x=>x[1]).filter(x=>x.trim()).join('\n');
  assert.equal(scripts(current('web-staging/index.html')),scripts(previous('web-staging/index.html')));
- for(const file of ['registry_snapshot_server.py','web-staging/organization-identity.js','web-staging/ny-connector.js'])assert.equal(current(file)===previous(file),true,file);
+ // Master changes are now checked function-by-function in run_dc_ri_guardrails.py
+ // and exercised by run_standard_sales_followup_guardrails.py.
+ for(const file of ['web-staging/organization-identity.js','web-staging/ny-connector.js'])assert.equal(current(file)===previous(file),true,file);
 });

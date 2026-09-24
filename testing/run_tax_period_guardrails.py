@@ -114,7 +114,7 @@ class PeriodTests(unittest.TestCase):
     def test_irs_lag_uses_exact_year_ein_public_filing_not_latest_unrelated(self):
         c.TAX_PERIOD_EVIDENCE_CACHE.clear()
         older=evidence(start='2023-07-01',end='2024-06-30');older['tax_year_label']=2023
-        with patch.object(c,'identity_source_result',return_value={'filing':older}),patch.object(c,'identity_fetch',return_value=b'<html>public filing</html>') as fetch,patch.object(c,'hi_attachment_period',return_value=evidence()) as attachment:
+        with patch.object(c,'irs_latest_period',return_value=older),patch.object(c,'identity_fetch',return_value=b'<html>public filing</html>') as fetch,patch.object(c,'hi_attachment_period',return_value=evidence()) as attachment:
             r=c.irs_period_for_label('13-1624103',2024,c.time.monotonic()+10)
         self.assertEqual(r['period_end'],'2025-06-30');self.assertEqual(attachment.call_args.args[1:3],('131624103',2024))
         self.assertEqual(fetch.call_args.kwargs['headers']['Accept'],'text/html')

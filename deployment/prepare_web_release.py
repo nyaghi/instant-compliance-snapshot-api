@@ -9,8 +9,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = '2026.09.22.3'
-STAGING_VERSION = '2026.09.23.3'
-STAGING_UI_VERSION = '2026.09.23.5'
+STAGING_VERSION = '2026.09.23.4'
+STAGING_UI_VERSION = '2026.09.23.6'
 STAGE_API = 'https://instant-compliance-snapshot-api-staging-8dnk.onrender.com'
 STAGE_INTERNAL = 'https://instant-compliance-snapshot-api-staging.onrender.com'
 PROD_API = 'https://instant-compliance-snapshot-api-public.onrender.com'

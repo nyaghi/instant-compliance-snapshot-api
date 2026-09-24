@@ -104,21 +104,33 @@ class MixedHistory(unittest.TestCase):
             self.completed['registration_documents']['067048'] = c.ma_public_document_collection([row])
             self.assertFalse(self.infer())
 
-    def test_download_failure_does_not_turn_into_delinquent(self):
+    def test_old_scan_failure_does_not_erase_complete_stale_history(self):
         for fail in ('http', 'exception', 'nonimage'):
             p = self.page()
             if fail == 'http': p.context.request.get.return_value.ok = False
             elif fail == 'exception': p.context.request.get.side_effect = TimeoutError()
             else: p.context.request.get.return_value.body.return_value = b'not an image'
             e = c.ma_read_latest_form_pc(p, self.result(), 'AG Account Number 067048', self.completed)
+            self.assertEqual(c.annotate_ma_visible_form_pc_due(self.result(), e).status, 'Delinquent')
+            self.assertTrue(e['completed_history_inferred_delinquent'])
+            incomplete = copy.deepcopy(self.completed)
+            incomplete['filings']['067048']['complete'] = False
+            e = c.ma_read_latest_form_pc(p, self.result(), 'AG Account Number 067048', incomplete)
             self.assertEqual(c.annotate_ma_visible_form_pc_due(self.result(), e).status, 'Unable to Confirm')
 
-    def test_wrong_or_missing_document_ein_blocks_fallback(self):
-        for text in ('Schedule A-2 99-9999999', 'Schedule A-2', '52-1257712 99-9999999'):
+    def test_observed_foreign_document_ein_blocks_fallback(self):
+        for text in ('Schedule A-2 99-9999999', '52-1257712 99-9999999'):
             lines = [[[[0, 0]]*4, text, .99]]
             with patch.object(c, '_MA_LEGACY_OCR', Mock(return_value=(lines, None))):
                 e = c.ma_read_latest_form_pc(self.page(), self.result(), 'AG Account Number 067048', self.completed)
             self.assertEqual(c.annotate_ma_visible_form_pc_due(self.result(), e).status, 'Unable to Confirm')
+
+    def test_missing_scan_ein_keeps_independent_old_history_evidence(self):
+        lines = [[[[0, 0]]*4, 'Schedule A-2', .99]]
+        with patch.object(c, '_MA_LEGACY_OCR', Mock(return_value=(lines, None))):
+            e = c.ma_read_latest_form_pc(self.page(), self.result(), 'AG Account Number 067048', self.completed)
+        self.assertTrue(e['completed_history_inferred_delinquent'])
+        self.assertEqual(c.annotate_ma_visible_form_pc_due(self.result(), e).status, 'Delinquent')
 
     def test_multiple_old_uploads_use_completed_stale_history(self):
         reg = self.completed['registration_documents']['067048']

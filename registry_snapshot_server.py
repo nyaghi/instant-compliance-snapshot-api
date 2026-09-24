@@ -133,7 +133,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.23.3-staging").strip() or "2026.09.23.3-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.23.4-staging").strip() or "2026.09.23.4-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -528,8 +528,18 @@ def load_checker():
 
 
 def canonical_name_punctuation(value: str) -> str:
-    """Give typographic apostrophes the existing straight-apostrophe semantics."""
-    return (value or "").translate(str.maketrans({"\u2018": "'", "\u2019": "'", "\u02bc": "'", "\uff07": "'"}))
+    """Normalize punctuation only, including recognizable UTF-8 decoding damage."""
+    value = value or ""
+    # Repair exact encodings of punctuation, never transliterate letters or
+    # guess a different organization name.
+    for mark in "\u2018\u2019\u201c\u201d\u2013\u2014\u00a0":
+        for codec in ("cp1252", "latin1"):
+            try:
+                damaged = mark.encode("utf-8").decode(codec)
+            except UnicodeDecodeError:
+                continue
+            value = value.replace(damaged, mark)
+    return value.translate(str.maketrans({"\u2018": "'", "\u2019": "'", "\u02bc": "'", "\uff07": "'"}))
 
 
 checker = load_checker()
@@ -2900,15 +2910,43 @@ def assumed_calendar_period(ein: str, label: int, source_url: str = "") -> dict:
             "period_basis": "Fiscal year-end could not be confirmed from the available Form 990. December 31 is assumed; the resulting deadline and status are estimates."}
 
 
+def irs_latest_period(ein: str, deadline: float) -> dict:
+    """Read the latest filer header without running historical name discovery."""
+    cached = identity_cached_source_result("IRS", ein) or {}
+    if cached.get("filing"):
+        return dict(cached["filing"])
+    # A partial name-discovery cache entry is not proof of an undated return.
+    # Retry a failed header once, within the caller's existing time allowance.
+    for attempt in range(2):
+        try:
+            payload = PUBLIC_PROFILE_CACHE.get(ein) or {}
+            org = payload.get("organization") or {}
+            if canonical_ein_digits(str(org.get("ein") or "")) != ein:
+                payload = json.loads(identity_fetch(
+                    f"https://projects.propublica.org/nonprofits/api/v2/organizations/{ein}.json", deadline))
+                org = payload.get("organization") or {}
+                if canonical_ein_digits(str(org.get("ein") or "")) != ein:
+                    raise ValueError("IRS metadata does not confirm the requested EIN")
+                PUBLIC_PROFILE_CACHE[ein] = payload
+            object_id = str(org.get("latest_object_id") or "")
+            if not re.fullmatch(r"\d{18}", object_id):
+                return {}
+            return irs_return_header(ein, object_id, deadline, require_period=False).get("filing", {})
+        except Exception:
+            if attempt or deadline - time.monotonic() < 2:
+                raise
+    return {}
+
+
 def irs_period_for_label(ein: str, label: int, deadline: float) -> dict:
     """A same-year IRS return resolves the period, never proves another state received it."""
     ein = canonical_ein_digits(ein); key = (ein, label)
     with TAX_PERIOD_EVIDENCE_LOCK:
         cached = TAX_PERIOD_EVIDENCE_CACHE.get(key)
     if cached and cached[0] > time.time(): return dict(cached[1])
-    evidence, candidates = {}, []
+    evidence, candidates, read_incomplete = {}, [], False
     try:
-        latest = identity_source_result("IRS", ein, deadline).get("filing", {})
+        latest = irs_latest_period(ein, deadline)
         if latest: candidates.append(latest)
         begin, end = parse_due_date(latest.get("period_begin", "")), parse_due_date(latest.get("period_end", ""))
         if latest.get("tax_year_label", label) >= label and (latest.get("tax_year_label") != label or not begin or not end or (end - begin).days < 350):
@@ -2920,9 +2958,10 @@ def irs_period_for_label(ein: str, label: int, deadline: float) -> dict:
                     parsed = irs_return_header(ein, object_id, deadline)
                     if parsed.get("filing") and parsed["filing"] not in candidates: candidates.append(parsed["filing"])
                 except Exception:
+                    read_incomplete = True
                     continue  # One unreadable header must not hide an older usable return.
     except Exception:
-        pass
+        read_incomplete = True
     matching = [row for row in candidates if row.get("tax_year_label") == label]
     if matching:
         # An annual state label must not silently become a later short return
@@ -2947,12 +2986,16 @@ def irs_period_for_label(ein: str, label: int, deadline: float) -> dict:
                 evidence["period_basis"] = "Same-EIN, same-tax-year Form 990 publicly filed in Hawaii"
         except Exception:
             evidence = {}
+            read_incomplete = True
     if evidence.get("tax_year_label") == label:
         with TAX_PERIOD_EVIDENCE_LOCK:
             if len(TAX_PERIOD_EVIDENCE_CACHE) >= 1200:
                 TAX_PERIOD_EVIDENCE_CACHE.clear()
             TAX_PERIOD_EVIDENCE_CACHE[key] = (time.time() + 21600, dict(evidence))
         return dict(evidence)
+    if read_incomplete:
+        return {"ein": ein, "tax_year_label": label, "period_unconfirmed": True,
+                "period_read_failure": "The corresponding filing could not be completely retrieved; a calendar year was not assumed."}
     return {}
 
 
@@ -8006,6 +8049,12 @@ def me_fast_direct_query_variants(org) -> list[str]:
         if compatible_ein_alias_for_name(original_name, alias):
             add(alias)
             add(re.sub(r"^(?:the|a|an)\s+", "", alias or "", flags=re.I).strip())
+
+    # Maine searches literal prefixes: AND and & are not interchangeable at
+    # the registry. Cover both before spending the same six slots on hyphens.
+    for literal in list(variants):
+        add(re.sub(r"\s*&\s*", " and ", literal, flags=re.I))
+        add(re.sub(r"\band\b", "&", literal, flags=re.I))
 
     for variant in organization_name_variants(
         original_name,
@@ -14122,6 +14171,7 @@ def ma_read_legacy_form_pc(page, completed: dict, account: str, read_progress=No
             if read_progress is not None:
                 document_eins = {re.sub(r"\D", "", x) for x in re.findall(r"(?<!\d)\d{2}[- ]?\d{7}(?!\d)", text)}
                 read_progress["complete"] = document_eins == {record["ein"]}
+                read_progress["identity_conflict"] = bool(document_eins - {record["ein"]})
             evidence = ma_scanned_form_pc_evidence(text, latest, account, record["ein"], registry_record=record, document_url=row["url"])
             if not evidence:
                 years = (completed.get("filings", {}).get(account, {}).get("document_years", [])
@@ -14206,7 +14256,10 @@ def ma_read_latest_form_pc(page, result, body: str, completed=None) -> dict:
         if not candidates or max(all_form_years) > max(year for year, _ in candidates):
             progress = {}
             legacy = ma_read_legacy_form_pc(page, completed, account.group(1), read_progress=progress)
-            if not legacy and (not progress.get("attempted") or progress.get("complete") or progress.get("multiple_legacy_candidates")):
+            # Complete EIN-bound public history independently establishes age
+            # even if an old scan is unreadable. Incomplete histories, recent or
+            # unknown years, and observed foreign EINs still prevent inference.
+            if not legacy and not progress.get("identity_conflict"):
                 legacy = ma_completed_history_inference(completed, account.group(1))
             return {**legacy, **context}
         latest_year = max(year for year, _ in candidates)
@@ -25614,7 +25667,7 @@ def browser_capacity_busy_result(organization_name: str, ein: str, state: str, u
 def run_state_lookup(organization_name: str, ein: str, state: str, capture_source_snapshot: bool = False, confirm_single_no_match: bool = True, mi_progress: dict | None = None, me_progress: dict | None = None, wi_progress: dict | None = None) -> dict:
     lookup_started = time.perf_counter()
     artifact_name = organization_name or f"EIN {format_ein(ein)}"
-    lookup_name = organization_name
+    lookup_name = canonical_name_punctuation(organization_name)
     org = checker.Organization(organization_name=lookup_name, ein=ein)
     if state == "ME" and me_progress is not None:
         org._cc_me_progress = me_progress
