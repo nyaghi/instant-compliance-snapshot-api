@@ -6,6 +6,7 @@ It must never be used to start the staging or production services.
 """
 import base64
 import hmac
+import io
 import json
 import mimetypes
 import os
@@ -102,11 +103,22 @@ def lab_asset(path):
     return data, mimetypes.guess_type(file)[0] or 'application/octet-stream'
 
 
-def build_handler(master, key):
+def build_handler(master, key, capacity=None):
     lock = threading.Lock()
     telemetry = {'started_epoch': time.time(), 'active_requests': 0, 'peak_requests': 0, 'completed_requests': 0}
 
     class LabHandler(master.RegistrySnapshotHandler):
+        def _send_json(self, status_code, payload, extra_headers=None):
+            from deployment.lab_capacity import REQUEST_TIMING
+            timing = REQUEST_TIMING.get()
+            headers = dict(extra_headers or {})
+            if timing is not None:
+                queue = timing.get('queue_seconds', 0)
+                elapsed = time.monotonic() - timing['started']
+                headers['Server-Timing'] = f'queue;dur={queue*1000:.2f}, execution;dur={max(0, elapsed-queue)*1000:.2f}'
+                headers['X-CC-Lab-Version'] = master.APP_VERSION
+            return super()._send_json(status_code, payload, headers)
+
         def authorized(self):
             if valid_authorization(self.headers.get('Authorization', ''), key):
                 return True
@@ -135,6 +147,7 @@ def build_handler(master, key):
                 with lock: data = dict(telemetry)
                 data['app_version'] = master.APP_VERSION
                 data['instance'] = os.environ.get('RENDER_INSTANCE_ID', 'local')
+                if capacity is not None: data['capacity'] = capacity.snapshot()
                 try:
                     import resource
                     data['process_peak_rss_kib'] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
@@ -160,12 +173,31 @@ def build_handler(master, key):
             if not self.authorized(): return
             if self.path == '/api/ny-connector':
                 return self._send_json(503, {'error':'An isolated New York browser collector has not been configured in this lab.'})
+            from deployment.lab_capacity import REQUEST_GROUP, REQUEST_TIMING
+            group = 'lab:other'
+            if self.path in ('/api/check', '/api/discover-names'):
+                try:
+                    length = int(self.headers.get('Content-Length', '0'))
+                    if not 0 < length <= 131072: raise ValueError('Invalid request size')
+                    raw = self.rfile.read(length)
+                    payload = json.loads(raw)
+                    if not isinstance(payload, dict): raise ValueError('Object required')
+                    import re
+                    ein = re.sub(r'\D', '', str(payload.get('ein', '')))
+                    group = 'lab:' + ein if len(ein) == 9 else 'lab:invalid'
+                    self.rfile = io.BytesIO(raw)
+                except (ValueError, TypeError):
+                    return self._send_json(400, {'error': 'Invalid lab request body.'})
+            group_token = REQUEST_GROUP.set(group)
+            timing_token = REQUEST_TIMING.set({'started': time.monotonic()})
             with lock:
                 telemetry['active_requests'] += 1
                 telemetry['peak_requests'] = max(telemetry['peak_requests'], telemetry['active_requests'])
             try:
                 return super().do_POST()
             finally:
+                REQUEST_TIMING.reset(timing_token)
+                REQUEST_GROUP.reset(group_token)
                 with lock:
                     telemetry['active_requests'] -= 1
                     telemetry['completed_requests'] += 1
@@ -178,7 +210,11 @@ def main():
     import registry_snapshot_server as master
     # Private lab credential, distinct from the existing staging access code.
     master.ADMIN_PASSCODE = os.environ['CE_LAB_ACCESS_KEY']
-    master.RegistrySnapshotHandler = build_handler(master, master.ADMIN_PASSCODE)
+    capacity = None
+    if os.environ.get('CE_LAB_FAIR_CAPACITY') == '1':
+        from deployment.lab_capacity import install
+        capacity = install(master, int(os.environ['CE_MAX_BROWSER_LOOKUPS']))
+    master.RegistrySnapshotHandler = build_handler(master, master.ADMIN_PASSCODE, capacity)
     master.main()
 
 

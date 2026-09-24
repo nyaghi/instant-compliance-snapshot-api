@@ -7,6 +7,8 @@ import threading
 import types
 import unittest
 import urllib.request
+import concurrent.futures
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -35,6 +37,43 @@ class Base(BaseHTTPRequestHandler):
 
 
 class LabTests(unittest.TestCase):
+    def test_http_queue_preserves_payloads_and_reports_wait_time(self):
+        from deployment.lab_capacity import FairCapacity, AdmissionSemaphore, REQUEST_GROUP
+        pool = FairCapacity(2)
+        gate = AdmissionSemaphore(pool, 'registration')
+        seen = []
+        class QueuedBase(Base):
+            def do_POST(self):
+                data = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                if not gate.acquire(timeout=3): return self._send_json(429, {'error': 'Capacity busy'})
+                try:
+                    seen.append((REQUEST_GROUP.get(), data))
+                    time.sleep(.03)
+                    self._send_json(200, data)
+                finally: gate.release()
+        master = types.SimpleNamespace(RegistrySnapshotHandler=QueuedBase, APP_VERSION='test-performance-lab')
+        server = ThreadingHTTPServer(('127.0.0.1', 0), lab.build_handler(master, KEY, pool))
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        def check(i):
+            payload = {'ein': f'{i+1:09}', 'organization_name': f'Fixture {i}', 'states': ['MA'],
+                       'alternate_names': [f'Former Name {i}'], 'nested': {'address': 'Oakland, CA'}}
+            req = urllib.request.Request(f'http://127.0.0.1:{server.server_port}/api/check',
+                  data=json.dumps(payload).encode(), headers={'Authorization': 'Bearer '+KEY})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                self.assertEqual(json.load(r), payload)
+                self.assertIn('queue;dur=', r.headers['Server-Timing'])
+                self.assertEqual(r.headers['X-CC-Lab-Version'], 'test-performance-lab')
+        try:
+            with concurrent.futures.ThreadPoolExecutor(10) as executor:
+                list(executor.map(check, range(10)))
+            self.assertEqual(len(seen), 10)
+            self.assertTrue(all(group == 'lab:'+data['ein'] for group, data in seen))
+            self.assertEqual(pool.snapshot()['counts']['peak_active'], 2)
+            self.assertGreater(pool.snapshot()['counts']['peak_waiters'], 1)
+            self.assertEqual(pool.snapshot()['active'], 0)
+        finally:
+            server.shutdown(); server.server_close(); thread.join()
+
     def env(self):
         return {**dict.fromkeys(lab.DISABLED_CONNECTIONS,''), 'PUBLIC_BASE_URL':lab.LAB_ORIGIN,
                 'CE_APP_VERSION':'test-performance-lab','CE_LAB_ACCESS_KEY':KEY,

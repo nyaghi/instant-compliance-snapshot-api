@@ -2,7 +2,11 @@
 
 The user authorized replacing the retired expansion lab on September 24, 2026.
 Only Render service `srv-d8u0hsu7r5hc73aqfsg0` is a deployment target. Its existing
-Standard plan and one instance are retained. There is no extra provisioned spend.
+Standard plan and one instance were retained for the initial baseline. The user
+then authorized increasing actual worker capacity and improving queue handling.
+The next experiment uses one Pro (2 CPU / 4 GB) instance at the documented
+$85/month compute rate instead of $25/month, prorated for use. No staging service
+is a target for these changes.
 
 The branch starts from release commit `35e61ae38f83ec00cba48776712d8fe2b34194c3`.
 The master remains the sole implementation of all 32 states. Its only candidate
@@ -53,3 +57,35 @@ identifies the experimental environment. No production or staging page is used.
 
 No normal staging or production deployment is authorized by this branch. Any
 later change in plan/instance count requires an explicit cost-aware decision.
+
+## Fair admission candidate, perf.4
+
+`lab_capacity.py` replaces the master handler's single-state admission semaphore
+with an eight-slot, bounded, organization-fair queue in the private lab process.
+The same eight reservations cover identity browser work (at most four discovery
+browser tasks). Admission prefers organizations with less active work, then uses
+round-robin order. Excess requests wait at the existing 150-second queue budget.
+The separate browser gate stays at eight: admitted registration plus discovery
+work cannot exceed that reserved total. Registry timeouts, retries, aliases,
+matching, status, dates and source parsing are unchanged.
+
+This is a conservative reservation for a whole state workflow, including direct
+HTTP or download stages. It is not an exact live browser-process counter and
+does not claim that every helper opens at most one browser. Private evidence
+generation and nonbrowser discovery sources are not covered by this admission
+pool. These remain qualification gaps for mixed workloads.
+
+Queue metrics distinguish waiting from execution and expose bounded event
+history without names/credentials. Response data are preserved; timing is added
+in Server-Timing headers. A full/expired queue remains an explicit capacity
+response, not a registration status. Capacity is retained until work returns.
+The queue's cancellation primitive is tested but not wired to a durable workflow
+cancel API; an HTTP client abort does not yet cancel a running registry adapter.
+
+This queue is SINGLE INSTANCE and in memory. It must not be represented as an
+enterprise-global limit or durable acceptance queue. Scaling to hundreds of
+simultaneous submitted workflows still needs persistent jobs, atomic shared
+worker leases, workspace-scoped authorization and deduplication, resumable
+progress and safe cancellation, registry-wide pacing, independent NY collection,
+and multiple-worker failure/restart validation. None of that is proven by one
+larger server or by simulated fixture throughput.
