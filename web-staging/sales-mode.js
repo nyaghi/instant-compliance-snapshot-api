@@ -2,7 +2,9 @@
 (() => {
   'use strict';
   if (location.origin !== 'https://staging.compliance-express.com') return;
-  const VERSION = '2026.09.23-sales.3';
+  const VERSION = '2026.09.24-sales.1';
+  const RUN_LIMIT_MS = 60000;
+  const STATE_CONCURRENCY = 15;
   const STATES = Object.freeze(["AK", "AR", "CA", "CO", "CT", "DC", "FL", "HI", "KS", "KY", "LA", "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM", "NY", "OH", "OK", "OR", "PA", "RI", "SC", "VA", "WA", "WI", "WV"]);
   const NAMES = {"AK": "Alaska", "AR": "Arkansas", "CA": "California", "CO": "Colorado", "CT": "Connecticut", "DC": "District of Columbia", "RI": "Rhode Island", "FL": "Florida", "HI": "Hawaii", "KS": "Kansas", "KY": "Kentucky", "LA": "Louisiana", "MA": "Massachusetts", "MD": "Maryland", "ME": "Maine", "MI": "Michigan", "MN": "Minnesota", "MS": "Mississippi", "ND": "North Dakota", "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico", "NY": "New York", "OH": "Ohio", "OK": "Oklahoma", "OR": "Oregon", "PA": "Pennsylvania", "SC": "South Carolina", "VA": "Virginia", "WA": "Washington", "WI": "Wisconsin", "WV": "West Virginia"};
   // Display grouping only: never infer a registry outcome from a failed request.
@@ -34,7 +36,7 @@
   const bar = document.createElement('div');bar.className='cc-modebar';
   bar.innerHTML='<button id="ccStandardMode" type="button" aria-pressed="true">Standard</button><button id="ccSalesMode" type="button" class="cc-red" aria-pressed="false">Sales <svg class="cc-sales-bolt" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="#FFD54F" d="M13 2 4 14h7l-1 8 10-13h-7l2-7z"/></svg></button>';
   const panel = document.createElement('section');panel.className='cc-sales';panel.hidden=true;panel.id='ccSalesPanel';
-  panel.innerHTML=`<img class="cc-sales-logo" src="/sales-charityclarity.png" alt="CharityClarity"><h1>CharityClarity for Sales</h1><p class="cc-sales-sub">Choose any or all 32 states. Results appear as they finish.</p>
+  panel.innerHTML=`<img class="cc-sales-logo" src="/sales-charityclarity.png" alt="CharityClarity"><h1>CharityClarity for Sales</h1><p class="cc-sales-sub">Choose any or all 32 states. Results appear as they finish. Checks stop after one minute; unfinished states show Unable to Confirm.</p>
     <p class="cc-sales-sub" id="ccSalesDisclaimer">Quick scan: alternate-name discovery is not performed. Registrations under other names may be missed. “Not Found” does not establish that an organization is unregistered. Run a full assessment to confirm.</p><div class="cc-sales-card"><form id="ccSalesForm"><div class="cc-sales-fields"><div><label for="ccSalesName">Organization name</label><input id="ccSalesName" type="text" required maxlength="240" autocomplete="organization"></div><div><label for="ccSalesEin">EIN</label><input id="ccSalesEin" type="text" required inputmode="numeric" placeholder="XX-XXXXXXX" pattern="[0-9]{2}-?[0-9]{7}" maxlength="10"></div><button type="submit" id="ccSalesRun" class="cc-red">Run Sales Check</button></div>
     <fieldset class="cc-sales-states" id="ccSalesStates"><legend>States to check</legend><div class="cc-sales-state-actions"><button id="ccSalesSelectAll" type="button">Select all 32</button><button id="ccSalesClear" type="button">Clear</button><span id="ccSalesSelectedCount" aria-live="polite">0 selected</span></div><div class="cc-sales-state-grid">${STATES.map(state=>`<label><input type="checkbox" name="salesStates" value="${state}">${NAMES[state]}</label>`).join('')}</div></fieldset>
     <label class="cc-sales-consent"><input type="checkbox" id="ccSalesConsent" required> I understand this is an informational compliance snapshot.</label><p id="ccSalesError" class="cc-sales-error" role="alert"></p></form>
@@ -63,29 +65,47 @@
     const selectedStates=stateInputs.filter(el=>el.checked).map(el=>el.value);
     if(!selectedStates.length){$('ccSalesError').textContent='Select at least one state.';return;}
     if(!internalUnlocked || !isComplianceExpressEmail($('email').value) || !$('adminPasscode').value.trim()) {$('ccSalesError').textContent='Unlock staging to run a sales check.';return;}
-    busy=true;const id=++runId,start=performance.now();let completed=0;const results=[];
+    busy=true;const id=++runId,start=performance.now(),deadline=start+RUN_LIMIT_MS;let completed=0,closed=false,cutoff=false;const results=[],settled=new Set(),controller=new AbortController();
     for(const el of [$('ccSalesRun'),$('ccSalesMode'),$('ccStandardMode'),$('ccSalesName'),$('ccSalesEin'),$('ccSalesConsent'),$('ccSalesStates')]) el.disabled=true;
     $('ccSalesOrganization').textContent=org;$('ccSalesResults').hidden=false;$('ccSalesRows').replaceChildren();
     const cells=new Map();
     for(const state of selectedStates){const row=document.createElement('tr');const label=document.createElement('td');row.dataset.state=state;label.textContent=NAMES[state];const value=document.createElement('td');value.textContent='Checking…';row.append(label,value);$('ccSalesRows').append(row);cells.set(state,value);}
     const progress=()=>{$('ccSalesProgress').textContent=`${completed} of ${selectedStates.length} · ${seconds(performance.now()-start)}`;$('ccSalesProgressFill').style.width=(completed/selectedStates.length*100)+'%';};
-    progress();const timer=setInterval(progress,100);
+    const record=(state,result)=>{
+      if(settled.has(state)) return;
+      settled.add(state);
+      const status=displayStatus(result),pill=document.createElement('span');pill.className='cc-sales-pill';pill.dataset.status=status;pill.textContent=status;pill.title=String(result.comments||'');cells.get(state).replaceChildren(pill);
+      if(result.status_reason==='SALES_TIME_LIMIT') { const note=document.createElement('small');note.textContent='One-minute limit reached. Run Standard for a full check.';note.style.display='block';cells.get(state).append(note); }
+      cells.get(state).parentElement.dataset.elapsedSeconds=((performance.now()-start)/1000).toFixed(3);
+      completed++;results.push({state,status,result,elapsed_seconds:(performance.now()-start)/1000});progress();
+    };
+    let releaseDeadline;
+    const expired=new Promise(resolve=>{releaseDeadline=resolve;});
+    const expire=()=>{
+      if(closed) return;
+      closed=true;cutoff=true;controller.abort();
+      for(const state of selectedStates) if(!settled.has(state)) record(state,{state,ein,organization_name:org,status:'Unable to Confirm',success:false,status_reason:'SALES_TIME_LIMIT',comments:`${NAMES[state]} did not finish within the one-minute Sales check limit. Registration status remains unconfirmed. Run Standard mode for a full check.`});
+      releaseDeadline();
+    };
+    progress();const timer=setInterval(()=>{if(performance.now()>=deadline)expire();else progress();},100);
+    const deadlineTimer=setTimeout(expire,Math.max(0,deadline-performance.now()));
     try {
       const queue=[...selectedStates.filter(s=>s==='NY'),...selectedStates.filter(s=>s!=='NY')];let cursor=0,inFlight=0,peak=0;
-      async function worker(){while(cursor<queue.length){const state=queue[cursor++];inFlight++;peak=Math.max(peak,inFlight);
+      async function worker(){while(!closed && cursor<queue.length){if(performance.now()>=deadline){expire();return;}const state=queue[cursor++];inFlight++;peak=Math.max(peak,inFlight);
         let result;
-        try{result=await requestSingleState(API_BASE,ein,$('email').value.trim(),state,org,false,[]);}
-        catch{result={state,status:'Unable to Confirm',success:false};}
-        const status=displayStatus(result);const pill=document.createElement('span');pill.className='cc-sales-pill';pill.dataset.status=status;pill.textContent=status;pill.title=String(result.comments||'');cells.get(state).replaceChildren(pill);
-        cells.get(state).parentElement.dataset.elapsedSeconds=((performance.now()-start)/1000).toFixed(3);
-        inFlight--;completed++;results.push({state,status,result,elapsed_seconds:(performance.now()-start)/1000});progress();
+        try{result=await requestSingleState(API_BASE,ein,$('email').value.trim(),state,org,false,[],{signal:controller.signal});}
+        catch{result={state,status:'Unable to Confirm',success:false,comments:`${NAMES[state]} did not return a complete response. Registration status remains unconfirmed.`};}
+        inFlight--;
+        if(closed)return;
+        if(performance.now()>=deadline){expire();return;}
+        record(state,result);
       }}
-      await Promise.all(Array.from({length:Math.min(15,queue.length)},worker));
+      await Promise.race([Promise.all(Array.from({length:Math.min(STATE_CONCURRENCY,queue.length)},worker)),expired]);
       panel.dataset.peakConcurrency=String(peak);
     } finally {
-      clearInterval(timer);busy=false;progress();
+      closed=true;clearTimeout(deadlineTimer);clearInterval(timer);busy=false;progress();
       for(const el of [$('ccSalesRun'),$('ccSalesMode'),$('ccStandardMode'),$('ccSalesName'),$('ccSalesEin'),$('ccSalesConsent'),$('ccSalesStates')]) el.disabled=false;
-      window.dispatchEvent(new CustomEvent('cc-sales-complete',{detail:{run_id:id,organization:org,ein,seconds:(performance.now()-start)/1000,results,version:VERSION}}));
+      window.dispatchEvent(new CustomEvent('cc-sales-complete',{detail:{run_id:id,organization:org,ein,seconds:(performance.now()-start)/1000,results,version:VERSION,time_limit_reached:cutoff}}));
     }
   });
   window.CCSales=Object.freeze({version:VERSION,states:STATES,displayStatus});

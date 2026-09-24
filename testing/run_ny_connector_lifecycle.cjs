@@ -302,3 +302,14 @@ test('stalled tab removal releases the slot within the cleanup bound',async()=>{
   await h.advance(3000);assert.equal((await h.query(q,21)).ok,true);
   release();await tick();assert.ok(h.tabs.has(101));
 });
+
+
+test('verified detail navigation closes only owned detail tabs and releases queue',async()=>{
+  const h=harness(),p=h.connect();await h.query(p,901);
+  assert.equal((await h.query(p,902,{orgID:'10-20-30'})).ok,true);
+  h.tabs.get(100).url='https://charities-search.ag.ny.gov/RegistrySearch/10-20-30';
+  assert.equal((await h.query(p,903,{orgID:'11-22-33'})).ok,true);
+  p.onMessage.emit({action:'finish',id:id(904)});await tick();
+  assert.deepEqual(h.removed,[100]);assert(h.tabs.has(2));
+  const next=h.connect(2);await h.advance(3000);assert.equal((await h.query(next,905)).ok,true);
+});

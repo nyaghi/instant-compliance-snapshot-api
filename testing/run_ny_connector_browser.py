@@ -14,12 +14,12 @@ WORK=Path(__file__).resolve().parents[1]
 ROW={'orgName':'Example National Foundation','ein':'123456789','orgID':'10-20-30'}
 FORM='''<!doctype html><input id="orgName"><input id="ein"><input id="orgID"><input id="city">
 <button id="clear">Clear fields</button><button id="verify">Verify</button><button id="search" disabled>Search</button>
-<div id="old">Old table row is deliberately present before the current query finishes.</div>
+<div id="records"></div><div id="old">Old table row is deliberately present before the current query finishes.</div>
 <script>
 function request(path,method){return new Promise(resolve=>{const x=new XMLHttpRequest();x.open(method,'https://charities-search-api.ag.ny.gov'+path);x.onload=()=>resolve(JSON.parse(x.responseText));x.send();});}
 clear.onclick=()=>{document.querySelectorAll('input').forEach(i=>i.value='');search.disabled=true;};
 verify.onclick=async()=>{const p=await request('/api/recaptcha/verify','POST');if(p.verified)search.disabled=false;};
-search.onclick=async()=>{const q=new URLSearchParams();['ein','orgName','orgID','city'].forEach(id=>{if(document.getElementById(id).value)q.set(id,document.getElementById(id).value);});q.set('token','fixture-token-must-not-cross-bridge');await request('/api/FileNet/RegistrySearch?'+q,'GET');};
+search.onclick=async()=>{const q=new URLSearchParams();['ein','orgName','orgID','city'].forEach(id=>{if(document.getElementById(id).value)q.set(id,document.getElementById(id).value);});q.set('token','fixture-token-must-not-cross-bridge');const result=await request('/api/FileNet/RegistrySearch?'+q,'GET');records.replaceChildren();for(const row of result.data||[]){if(!row.orgID)continue;const a=document.createElement('a');a.href='/RegistrySearch/'+row.orgID;a.textContent=row.orgID;a.onclick=async e=>{e.preventDefault();history.pushState({},'',a.href);await request('/api/FileNet/RegistryDetail?orgID='+row.orgID+'&token=fixture-token-must-not-cross-bridge','GET');};records.append(a);}};
 </script>'''
 PAGE='''<!doctype html><title>Connector browser integration fixture</title><script src="/ny-connector.js"></script>'''
 
@@ -110,12 +110,20 @@ class BrowserIntegration(unittest.TestCase):
                 payload={'verified':cls.accepted};status=200 if cls.accepted else 401
                 if getattr(cls,'verification_responses',[]):
                     status,verified=cls.verification_responses.pop(0);payload={'verified':verified}
+            elif u.path.endswith('/RegistryDetail'):
+                payload=cls.detail_payload;status=200
+                if cls.failure=='detail-401':status=401;payload={'error':'Invalid recaptcha token.'}
+                elif cls.failure=='detail-wrong-ein':payload={**payload,'data':{**payload['data'],'ein':'987654321'}}
+                elif cls.failure=='duplicate-records':
+                    old=parse_qs(u.query).get('orgID')==['11-22-33']
+                    payload={**payload,'data':{**payload['data'],'orgID':'11-22-33' if old else ROW['orgID'],'status':'Inactive' if old else 'Active'}}
             else:
                 cls.searches=getattr(cls,'searches',0)+1
                 if cls.failure=='search-network':route.abort('failed');return
                 params=parse_qs(u.query);rows=[] if cls.mode=='empty' or (cls.mode=='name' and params.get('ein')) else [ROW]
                 payload={'success':True,'statusCode':200,'data':rows};status=200
-                if cls.failure=='schema-missing':payload['data']=[{k:v for k,v in ROW.items() if k!='ein'}]
+                if cls.failure=='duplicate-records':payload['data']=[{**ROW,'orgID':'11-22-33'},ROW]
+                elif cls.failure=='schema-missing':payload['data']=[{k:v for k,v in ROW.items() if k!='ein'}]
                 elif cls.failure=='schema-null':payload['data']=[{**ROW,'ein':None}]
                 elif cls.failure=='null-wrong-name':payload['data']=[{**ROW,'ein':None,'orgName':'Unrelated Wildlife Society'}]
                 elif cls.failure=='schema-type':payload['data']=[{**ROW,'ein':123456789}]
@@ -147,6 +155,7 @@ class BrowserIntegration(unittest.TestCase):
         if failure=='focus-live-shape':
             fixture=json.loads((WORK/'testing/fixtures/ny_focus_null_ein.json').read_text());requested=fixture['requested']
             detail.json.return_value={'success':True,'statusCode':200,'data':fixture['detail']}
+        type(self).detail_payload=detail.json.return_value
         session=Mock();session.__enter__=Mock(return_value=session);session.__exit__=Mock(return_value=False);session.get.return_value=detail
         page=self.context.new_page();page.goto(c.NY_CONNECTOR_ORIGIN+'/connector-test')
         page.wait_for_function('!!window.CCNYConnector')
@@ -164,12 +173,20 @@ class BrowserIntegration(unittest.TestCase):
         self.assertEqual(self.worker.evaluate('testCreatedTabs.length')-before,expected_tabs,'Queries share one owned tab except for one explicitly tested connection repair')
         self.assertEqual(self.worker.evaluate('async()=>{const tabs=await chrome.tabs.query({});return tabs.filter(t=>testCreatedTabs.includes(t.id)).length;}'),0,'Completed lookups must close their owned tab')
         page.close();return result,session
+    def test_duplicate_records_use_browser_back_and_both_details(self):
+        result,session=self.run_case(failure='duplicate-records')
+        self.assertEqual(result['status'],'Current');session.get.assert_not_called()
+        self.assertEqual([e['query'] for e in self.trace],[{'ein':ROW['ein']},{'orgID':'11-22-33'},{'orgID':ROW['orgID']}])
+    def test_detail_rejection_and_wrong_ein_stay_inconclusive(self):
+        for failure in ['detail-401','detail-wrong-ein']:
+            result,session=self.run_case(failure=failure)
+            self.assertEqual(result['status'],'Unable to Confirm');session.get.assert_not_called()
     def test_real_extension_positive_pipeline(self):
-        result,session=self.run_case();self.assertEqual(result['status'],'Current');session.get.assert_called_once()
+        result,session=self.run_case();self.assertEqual(result['status'],'Current');session.get.assert_not_called()
         self.assertEqual(self.trace[0]['query'],{'ein':ROW['ein']});self.assertNotIn('fixture-token',json.dumps(self.trace))
     def test_delayed_search_enable_uses_real_button_and_exact_ein(self):
         result,session=self.run_case(failure='delayed-search-enable')
-        self.assertEqual(result['status'],'Current');session.get.assert_called_once()
+        self.assertEqual(result['status'],'Current');session.get.assert_not_called()
         self.assertEqual(self.trace[0]['query'],{'ein':ROW['ein']})
         self.assertEqual(self.verifies,1)
     def test_successful_verify_with_disabled_search_stays_inconclusive(self):
@@ -179,7 +196,7 @@ class BrowserIntegration(unittest.TestCase):
         self.assertIn('did not enable Search',result['comments'])
     def test_real_extension_empty_ein_then_name_fallback(self):
         result,_=self.run_case('name');self.assertEqual(result['status'],'Current')
-        self.assertEqual([e['query'] for e in self.trace],[{'ein':ROW['ein']},{'orgName':ROW['orgName']}])
+        self.assertEqual([e['query'] for e in self.trace if 'orgID' not in e['query']],[{'ein':ROW['ein']},{'orgName':ROW['orgName']}])
     def test_real_extension_completed_no_record(self):
         result,session=self.run_case('empty');self.assertEqual(result['status'],'Not Registered');session.get.assert_not_called()
     def test_real_extension_rejected_verification_is_inconclusive(self):
@@ -188,8 +205,8 @@ class BrowserIntegration(unittest.TestCase):
         self.assertEqual(self.verifies,2)
     def test_first_rejection_recovers_with_one_fresh_normal_attempt(self):
         result,session=self.run_case(verification_responses=[(401,False),(200,True)])
-        self.assertEqual(result['status'],'Current');self.assertEqual(self.verifies,2);session.get.assert_called_once()
-        self.assertEqual(len(self.trace),1);self.assertNotIn('fixture-token',json.dumps(self.trace))
+        self.assertEqual(result['status'],'Current');self.assertEqual(self.verifies,2);session.get.assert_not_called()
+        self.assertEqual(len(self.trace),2);self.assertNotIn('fixture-token',json.dumps(self.trace))
     def test_non_401_verification_failures_are_not_retried(self):
         for status in [200,403,500]:
             with self.subTest(status=status):
@@ -201,11 +218,11 @@ class BrowserIntegration(unittest.TestCase):
         result,session=self.run_case('name',verification_responses=[(401,False),(200,True),(401,False)])
         self.assertEqual(result['status_reason'],'NY_CONNECTOR_RECOVERY_REJECTED')
         self.assertEqual(result['status'],'Unable to Confirm');self.assertEqual(self.verifies,3)
-        self.assertEqual([e['query'] for e in self.trace],[{'ein':ROW['ein']}]);session.get.assert_not_called()
+        self.assertEqual([e['query'] for e in self.trace if 'orgID' not in e['query']],[{'ein':ROW['ein']}]);session.get.assert_not_called()
     def test_unused_retry_can_recover_name_fallback(self):
         result,session=self.run_case('name',verification_responses=[(200,True),(401,False),(200,True)])
         self.assertEqual(result['status'],'Current');self.assertEqual(self.verifies,3)
-        self.assertEqual([e['query'] for e in self.trace],[{'ein':ROW['ein']},{'orgName':ROW['orgName']}]);session.get.assert_called_once()
+        self.assertEqual([e['query'] for e in self.trace if 'orgID' not in e['query']],[{'ein':ROW['ein']},{'orgName':ROW['orgName']}]);session.get.assert_not_called()
     def test_recovered_verification_still_requires_completed_empty_searches(self):
         result,session=self.run_case('empty',verification_responses=[(401,False),(200,True),(200,True)])
         self.assertEqual(result['status'],'Not Registered');self.assertEqual(self.verifies,3)
@@ -213,11 +230,11 @@ class BrowserIntegration(unittest.TestCase):
     def test_search_rejection_restarts_normal_verify_and_search_once(self):
         result,session=self.run_case(search_responses=[401,200])
         self.assertEqual(result['status'],'Current');self.assertEqual((self.verifies,self.searches),(2,2))
-        self.assertEqual(len(self.trace),1);session.get.assert_called_once();self.assertNotIn('fixture-token',json.dumps(self.trace))
+        self.assertEqual(len(self.trace),2);session.get.assert_not_called();self.assertNotIn('fixture-token',json.dumps(self.trace))
     def test_search_rejection_with_non_json_body_can_recover(self):
         result,session=self.run_case(search_responses=[401,200],failure='search-html-rejection')
         self.assertEqual(result['status'],'Current');self.assertEqual((self.verifies,self.searches),(2,2))
-        self.assertEqual(len(self.trace),1);session.get.assert_called_once()
+        self.assertEqual(len(self.trace),2);session.get.assert_not_called()
     def test_repeated_search_rejection_is_explicit_and_inconclusive(self):
         result,session=self.run_case(search_responses=[401,401])
         self.assertEqual(result['status'],'Unable to Confirm');self.assertEqual(result['status_reason'],'NY_CONNECTOR_RECOVERY_REJECTED')
@@ -233,11 +250,11 @@ class BrowserIntegration(unittest.TestCase):
     def test_name_search_can_use_remaining_retry(self):
         result,session=self.run_case('name',search_responses=[200,401,200])
         self.assertEqual(result['status'],'Current');self.assertEqual((self.verifies,self.searches),(3,3))
-        self.assertEqual([e['query'] for e in self.trace],[{'ein':ROW['ein']},{'orgName':ROW['orgName']}]);session.get.assert_called_once()
+        self.assertEqual([e['query'] for e in self.trace if 'orgID' not in e['query']],[{'ein':ROW['ein']},{'orgName':ROW['orgName']}]);session.get.assert_not_called()
     def test_name_search_cannot_repeat_consumed_retry(self):
         result,session=self.run_case('name',search_responses=[401,200,401])
         self.assertEqual(result['status_reason'],'NY_CONNECTOR_RECOVERY_REJECTED')
-        self.assertEqual((self.verifies,self.searches),(3,3));self.assertEqual([e['query'] for e in self.trace],[{'ein':ROW['ein']}]);session.get.assert_not_called()
+        self.assertEqual((self.verifies,self.searches),(3,3));self.assertEqual([e['query'] for e in self.trace if 'orgID' not in e['query']],[{'ein':ROW['ein']}]);session.get.assert_not_called()
     def test_non_401_search_errors_are_not_retried(self):
         for status in [403,500]:
             with self.subTest(status=status):
@@ -255,7 +272,7 @@ class BrowserIntegration(unittest.TestCase):
     def test_explicit_null_ein_reaches_existing_master_identity_confirmation(self):
         result,session=self.run_case(failure='schema-null')
         self.assertEqual(result['status'],'Current');self.assertTrue(result['success'])
-        self.assertEqual(self.trace[0]['rows'][0]['ein'],'');session.get.assert_called_once()
+        self.assertEqual(self.trace[0]['rows'][0]['ein'],'');session.get.assert_not_called()
     def test_null_ein_does_not_make_an_unrelated_name_a_positive_match(self):
         result,session=self.run_case(failure='null-wrong-name')
         self.assertEqual(result['status'],'Not Registered');session.get.assert_not_called()
@@ -264,12 +281,12 @@ class BrowserIntegration(unittest.TestCase):
         result,session=self.run_case(failure='focus-live-shape')
         self.assertEqual(result['status'],'Exempt');self.assertTrue(result['success'])
         self.assertEqual(result['matched_registry_identifier'],'20-80-11')
-        self.assertEqual([e['query'] for e in self.trace],[{'ein':'953188150'},{'orgName':'Focus on the Family'}])
-        self.assertEqual(self.trace[1]['rows'][0]['ein'],'');session.get.assert_called_once()
+        self.assertEqual([e['query'] for e in self.trace if 'orgID' not in e['query']],[{'ein':'953188150'},{'orgName':'Focus on the Family'}])
+        self.assertEqual(self.trace[1]['rows'][0]['ein'],'');session.get.assert_not_called()
     def test_blank_string_ein_still_uses_master_identity_confirmation(self):
         result,session=self.run_case(failure='blank-string')
         self.assertEqual(result['status'],'Current');self.assertTrue(result['success'])
-        self.assertEqual(self.trace[0]['rows'][0]['ein'],'');session.get.assert_called_once()
+        self.assertEqual(self.trace[0]['rows'][0]['ein'],'');session.get.assert_not_called()
     def test_search_recovery_requires_both_empty_searches_before_negative(self):
         result,session=self.run_case('empty',search_responses=[401,200,200])
         self.assertEqual(result['status'],'Not Registered');self.assertEqual((self.verifies,self.searches),(3,3))
@@ -281,7 +298,7 @@ class BrowserIntegration(unittest.TestCase):
                 self.assertEqual(result['status'],'Unable to Confirm')
                 self.assertEqual(result['status_reason'],'NY_CONNECTOR_VERIFICATION_NETWORK_ERROR')
                 self.assertLess(self.last_active_seconds,8,'After queue admission, do not wait for the old 15-second timeout')
-                self.assertEqual([e['query'] for e in self.trace],[{'ein':ROW['ein']}])
+                self.assertEqual([e['query'] for e in self.trace if 'orgID' not in e['query']],[{'ein':ROW['ein']}])
                 session.get.assert_not_called()
     def test_search_network_failure_cannot_become_an_empty_result(self):
         result,session=self.run_case('empty',failure='search-network')
@@ -290,7 +307,7 @@ class BrowserIntegration(unittest.TestCase):
     def test_stale_previous_query_network_event_cannot_fail_name_fallback(self):
         result,_=self.run_case('name',failure='stale')
         self.assertEqual(result['status'],'Current')
-        self.assertEqual([e['query'] for e in self.trace],[{'ein':ROW['ein']},{'orgName':ROW['orgName']}])
+        self.assertEqual([e['query'] for e in self.trace if 'orgID' not in e['query']],[{'ein':ROW['ein']},{'orgName':ROW['orgName']}])
     def test_backend_pause_beyond_worker_idle_window_retains_same_lookup_tab(self):
         type(self).advance_delay=35
         try:
@@ -300,7 +317,7 @@ class BrowserIntegration(unittest.TestCase):
         for stage in ['verify','search']:
             kwargs={'verification_responses':[(429,False),(200,True)]} if stage=='verify' else {'search_responses':[429,200]}
             result,session=self.run_case(**kwargs)
-            self.assertEqual(result['status'],'Current');session.get.assert_called_once()
+            self.assertEqual(result['status'],'Current');session.get.assert_not_called()
             self.assertEqual(self.verifies,2)
     def test_full_staging_form_mixed_batch_preserves_mature_state_when_ny_fails(self):
         self.reset_repair(False)

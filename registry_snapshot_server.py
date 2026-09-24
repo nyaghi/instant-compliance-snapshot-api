@@ -133,7 +133,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.23.4-staging").strip() or "2026.09.23.4-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.24.2-staging").strip() or "2026.09.24.2-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -19270,7 +19270,7 @@ def ny_confirmed_annual_dates(annual: list) -> tuple[list[date], int]:
     return dates, len(undated)
 
 
-def search_ny_direct(org, browser_page=None, registry_search_provider=None):
+def search_ny_direct(org, browser_page=None, registry_search_provider=None, registry_detail_provider=None):
     """Read the official site's completed JSON responses, never its loading table."""
     result = checker.StateResult(org.organization_name, format_ein(org.ein), "NY", "Unable to Confirm",
                                  "https://charities-search.ag.ny.gov/RegistrySearch")
@@ -19296,6 +19296,8 @@ def search_ny_direct(org, browser_page=None, registry_search_provider=None):
             try:
                 if operation == "RegistrySearch" and registry_search_provider is not None:
                     response = registry_search_provider(params)
+                elif operation == "RegistryDetail" and registry_detail_provider is not None:
+                    response = registry_detail_provider(params)
                 elif browser_page is not None:
                     response = ny_browser_registry_response(browser_page, operation, params, min(NY_RESPONSE_TIMEOUT_SECONDS, remaining))
                 else:
@@ -19543,6 +19545,9 @@ def ny_connector_failure(record, code):
         "NY_CONNECTOR_SEARCH_EIN_NULL": "A New York search result returned its EIN as a null value. The connector could not validate that response, so registration status could not be confirmed.",
         "NY_CONNECTOR_SEARCH_EIN_TYPE": "A New York search result returned its EIN in an unexpected data format. Registration status could not be confirmed.",
         "NY_CONNECTOR_SEARCH_EIN_FORMAT": "A New York search result contained an EIN in an unrecognized format. Registration status could not be confirmed.",
+        "NY_CONNECTOR_DETAIL_INCOMPLETE": "New York's organization detail response could not be confirmed in the verified browser session. Registration status remains unconfirmed.",
+        "NY_CONNECTOR_DETAIL_RESPONSE_TIMEOUT": "New York's organization detail page did not finish loading in time. Registration status remains unconfirmed.",
+        "NY_CONNECTOR_DETAIL_LINK_MISSING": "The selected New York record was not available in the completed browser search results. No registration conclusion was drawn.",
         "NY_CONNECTOR_INCOMPLETE": "New York did not provide a complete response for the requested search. Registration status could not be confirmed.",
     }
     code = code if isinstance(code, str) and code in comments else "NY_CONNECTOR_INCOMPLETE"
@@ -19558,12 +19563,48 @@ def ny_connector_failure(record, code):
     return data
 
 
+NY_CONNECTOR_DETAIL_FIELDS = frozenset({"orgID", "orgName", "ein", "regType", "regStatute", "address", "city", "state", "zip", "status", "registrationStatus", "orgStatus"})
+
+
+def ny_connector_clean_detail(detail, expected_id):
+    """Allowlisted public identity and filing dates, bound to the selected record."""
+    if (not isinstance(detail, dict) or set(detail) - NY_CONNECTOR_DETAIL_FIELDS - {"documents"}
+            or detail.get("orgID") != expected_id or not isinstance(detail.get("orgName"), str)
+            or not 1 <= len(detail["orgName"].strip()) <= 500
+            or not isinstance(detail.get("ein"), str)
+            or (detail["ein"] and not re.fullmatch(r"[0-9]{2}-?[0-9]{7}", detail["ein"]))):
+        raise ValueError("The New York detail identity is incomplete or mismatched.")
+    for key, value in detail.items():
+        if key != "documents" and value is not None and (not isinstance(value, str) or len(value) > 1000):
+            raise ValueError("Invalid New York detail field.")
+    if "documents" not in detail and any(str(detail.get(key) or "").strip().upper() == "EXEMPT" for key in ("regType", "regStatute")):
+        return detail
+    documents = detail.get("documents")
+    if not isinstance(documents, dict) or len(documents) > 20:
+        raise ValueError("The New York filing history is incomplete.")
+    count = 0
+    for category, entries in documents.items():
+        if not isinstance(category, str) or len(category) > 200 or not isinstance(entries, list):
+            raise ValueError("Invalid New York document category.")
+        count += len(entries)
+        for entry in entries:
+            if not isinstance(entry, dict) or set(entry) - {"fiscalYearEnd", "received"}:
+                raise ValueError("Invalid New York filing entry.")
+            if any(value is not None and (not isinstance(value, str) or len(value) > 100) for value in entry.values()):
+                raise ValueError("Invalid New York filing date.")
+    if count > 1000:
+        raise ValueError("New York filing history exceeded the evidence limit.")
+    return detail
+
+
 def ny_connector_clean_response(payload, expected_query):
     """Accept only complete public search rows for the exact issued query."""
     if not isinstance(payload, dict) or payload.get("query") != expected_query:
         raise ValueError("The connector response does not match the requested search.")
     if payload.get("http_status") != 200 or payload.get("success") is not True or payload.get("statusCode") != 200:
         raise ValueError("The New York search response is incomplete.")
+    if set(expected_query) == {"orgID"}:
+        return ny_connector_clean_detail(payload.get("detail"), expected_query["orgID"])
     rows = payload.get("rows")
     if not isinstance(rows, list) or len(rows) > 1000:
         raise ValueError("The New York result set is incomplete or too large.")
@@ -19582,7 +19623,7 @@ def ny_connector_clean_response(payload, expected_query):
 
 
 def ny_connector_advance(record):
-    """Replay only this check's completed searches; fetch positive details afresh."""
+    """Replay this check's fresh public evidence; never forward state credentials."""
     def search_response(params):
         for completed in record["completed"]:
             if completed["query"] == params:
@@ -19597,12 +19638,17 @@ def ny_connector_advance(record):
             identity = identity_rows_names("NY", rows, ein, "https://charities-search.ag.ny.gov/RegistrySearch")
             return {"phase": "complete", "result": {"state": "NY", "source": "NY", "identity": identity,
                     "ein": format_ein(ein), "checked_at_epoch": time.time(), "app_version": APP_VERSION}}
-        result = search_ny_direct(org, registry_search_provider=search_response)
+        result = search_ny_direct(org, registry_search_provider=search_response,
+                                  registry_detail_provider=search_response if record.get("connector_version") == "0.4.1" else None)
     except NYConnectorQueryNeeded as pending:
-        if len(record["completed"]) >= 5:
+        limit = 5
+        is_detail = "orgID" in pending.params
+        if sum(("orgID" in item["query"]) == is_detail for item in record["completed"]) >= limit:
             return {"phase": "complete", "result": ny_connector_failure(record, "NY_CONNECTOR_INCOMPLETE")}
         record["pending"] = {"query_id": secrets.token_urlsafe(18), "query": pending.params}
         return {"phase": "search", **record["pending"]}
+    if record.get("connector_version") != "0.4.1" and "401" in (getattr(result, "source_note", "") or ""):
+        return {"phase": "complete", "result": ny_connector_failure(record, "NY_CONNECTOR_UPDATE_REQUIRED")}
     data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, "NY", started)
     data["connector_version"] = record.get("connector_version", "0.2.1")
     return {"phase": "complete", "result": data}
@@ -19631,7 +19677,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0"}:
+        if not isinstance(connector_version, str) or connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1"}:
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()

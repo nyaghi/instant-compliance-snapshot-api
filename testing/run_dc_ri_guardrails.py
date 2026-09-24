@@ -187,10 +187,14 @@ class MatureParity(unittest.TestCase):
         allowed={'registration_date_metadata','true_status_from_body','comments_for_result_base','run_state_lookup',
                  # September 23 mixed-mode controls explicitly cover these fixes.
                  'canonical_name_punctuation','me_fast_direct_query_variants',
-                 'ma_read_legacy_form_pc','ma_read_latest_form_pc','irs_period_for_label'}
+                 'ma_read_legacy_form_pc','ma_read_latest_form_pc','irs_period_for_label',
+                 # September 24: verified-browser detail transport, NY rules unchanged.
+                 'search_ny_direct','ny_connector_advance','ny_connector_request',
+                 'ny_connector_clean_response','ny_connector_failure'}
         self.assertEqual({k for k,v in old.items() if current.get(k)!=v},allowed)
     def test_discovery_connector_and_state_modules_unchanged(self):
-        for path in ['Charity_Checker_Script for 13_states.py','web-staging/organization-identity.js','web-staging/ny-connector.js']:
+        # NY now accepts optional Sales cancellation; signal-free lifecycle has dedicated controls.
+        for path in ['Charity_Checker_Script for 13_states.py','web-staging/organization-identity.js']:
             self.assertEqual((ROOT/path).read_text(encoding='utf-8').replace('\r\n','\n'),self.previous(path).replace('\r\n','\n'))
     def test_frontend_concurrency_unchanged(self):
         start='    async function runStateChecks('

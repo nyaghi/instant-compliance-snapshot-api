@@ -502,7 +502,7 @@
 
         <div>&copy; <span id="year"></span> Compliance Express</div>
 
-          <div class="font-semibold text-slate-600">CharityClarity v2026.09.23.6 &middot; Staging</div>
+          <div class="font-semibold text-slate-600">CharityClarity v2026.09.24.2 &middot; Staging</div>
         <div>No legal or tax advice.</div>
 
       </div>
@@ -513,7 +513,7 @@
 
 
 
-  <script src="/ny-connector.js"></script>
+  <script src="/ny-connector.js?v=2026.09.24.2"></script>
   <script src="/organization-identity.js?v=20260917.6-alias-review"></script>
   <script>
 
@@ -1233,13 +1233,14 @@
 
 
 
-    async function requestSingleState(apiBase, einValue, emailValue, state, organizationNameValue, isConnectionRetry = false, alternateNames = runAlternateNames) {
+    async function requestSingleState(apiBase, einValue, emailValue, state, organizationNameValue, isConnectionRetry = false, alternateNames = runAlternateNames, {signal} = {}) {
+      signal?.throwIfAborted();
       if (state === "NY" && window.location.origin === "https://staging.compliance-express.com") {
         if (!isConnectionRetry) lastNyInput = { apiBase, einValue, emailValue, organizationNameValue, alternateNames: [...alternateNames] };
         try {
           if (!window.CCNYConnector) throw new Error("Connector UI unavailable");
           return await window.CCNYConnector.lookup({ organization_name: organizationNameValue, ein: einValue,
-            alternate_names: alternateNames,
+            alternate_names: alternateNames, signal,
             email: emailValue, admin_passcode: adminPasscode.value.trim(), device_id: getDeviceId(),
             onProgress: (message) => {
               let note = document.getElementById("nyQueueProgress");
@@ -1251,6 +1252,7 @@
               note.textContent = message; note.hidden = !message;
             } });
         } catch {
+          if (signal?.aborted) throw signal.reason;
           const result = fallbackResult("NY", einValue, "The New York browser check could not be completed. Confirm that staging is unlocked and the connector is enabled, then retry. Registration status remains unconfirmed.", organizationNameValue);
           result.status = "Unable to Confirm";
           result.success = false;
@@ -1260,6 +1262,8 @@
       }
 
       const controller = new AbortController();
+      const abort = () => controller.abort(signal.reason);
+      signal?.addEventListener('abort', abort, {once:true});
 
       const timeout = setTimeout(() => controller.abort(), 300000);
 
@@ -1329,6 +1333,7 @@
       } finally {
 
         clearTimeout(timeout);
+        signal?.removeEventListener('abort', abort);
 
       }
 
@@ -1672,7 +1677,7 @@
 
   </script>
 
-  <script src="/sales-mode.js?v=2026.09.23-sales.3"></script>
+  <script src="/sales-mode.js?v=2026.09.24-sales.1"></script>
 </body>
 
 </html>

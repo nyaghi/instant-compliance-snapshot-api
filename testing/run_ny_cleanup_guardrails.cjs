@@ -11,8 +11,8 @@ async function run(count,delay,{disconnect=false,failFirst=false}={}){
   const window={top:null,addEventListener:(name,f)=>{if(name==='message')listeners.push(f);},
     postMessage:data=>queueMicrotask(()=>listeners.forEach(f=>f({source:window,origin,data}))),dispatchEvent:()=>{}};
   window.top=window;
-  const capabilities=['lookup-tab-v1','verification-retry-v1','search-verification-retry-v1','search-schema-errors-v1','nullable-ein-v1','queue-v1','connection-recovery-v1','recovery-causes-v1','cleanup-ack-v1','timeout-recovery-v1','resume-v1'];
-  const chrome={runtime:{lastError:null,sendMessage:async()=>({ok:true,version:'0.3.3',capabilities}),connect:()=>{
+  const capabilities=['lookup-tab-v1','verification-retry-v1','search-verification-retry-v1','search-schema-errors-v1','nullable-ein-v1','queue-v1','connection-recovery-v1','recovery-causes-v1','cleanup-ack-v1','timeout-recovery-v1','resume-v1','verified-detail-v1'];
+  const chrome={runtime:{lastError:null,sendMessage:async()=>({ok:true,version:'0.4.1',capabilities}),connect:()=>{
     const port={onMessage:events(),onDisconnect:events(),closed:false,
       disconnect(){if(!this.closed){this.closed=true;this.onDisconnect.emit();}},
       postMessage(m){

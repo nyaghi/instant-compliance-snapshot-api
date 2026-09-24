@@ -9,8 +9,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = '2026.09.22.3'
-STAGING_VERSION = '2026.09.23.4'
-STAGING_UI_VERSION = '2026.09.23.6'
+STAGING_VERSION = '2026.09.24.2'
+STAGING_UI_VERSION = '2026.09.24.2'
 STAGE_API = 'https://instant-compliance-snapshot-api-staging-8dnk.onrender.com'
 STAGE_INTERNAL = 'https://instant-compliance-snapshot-api-staging.onrender.com'
 PROD_API = 'https://instant-compliance-snapshot-api-public.onrender.com'
@@ -119,7 +119,7 @@ def build(destination, environment, store_url=''):
     for name in ['privacy.html','charityclarity.png','review.html','review.js']:shutil.copyfile(source/'connector'/name,connector/name)
     shutil.copyfile(ROOT/'browser-connector/protocol.js',connector/'review-protocol.js')
     if environment == 'staging':
-        install=(source/'connector/index.html').read_text(encoding='utf-8').replace('0.3.6','0.4.0')
+        install=(source/'connector/index.html').read_text(encoding='utf-8').replace('0.3.6','0.4.1').replace('CharityClarity — Staging NY Connector','CharityClarity — New York Connector')
         (connector/'index.html').write_text(install,encoding='utf-8')
         validation=(source/'connector/validation.html').read_text(encoding='utf-8').replace('2026.09.20.6-staging',STAGING_VERSION+'-staging')
         (connector/'validation.html').write_text(validation,encoding='utf-8')

@@ -22,7 +22,7 @@
   chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (sender.id !== chrome.runtime.id) return false;
     if (message?.action === "ready") {
-      const ready = !!document.querySelector("#ein");
+      const ready = !!document.querySelector("#ein") || /^\/RegistrySearch\/[0-9]{2}-[0-9]{2}-[0-9]{2}\/?$/.test(location.pathname);
       respond({ ready, rateLimited: !ready && /(?:429\s+Too Many Requests|Too Many Requests\s*429)/i.test(document.body?.innerText || "") });
       return false;
     }

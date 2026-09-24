@@ -12,7 +12,7 @@
   const publish = evidence => {
     const job = active;
     if (!job || !job.waiter || job.waiter.kind !== evidence.kind) return;
-    if (evidence.kind === "search" && !P.sameQuery(evidence.query, job.query)) return;
+    if (["search", "detail"].includes(evidence.kind) && !P.sameQuery(evidence.query, job.query)) return;
     const waiter = job.waiter; job.waiter = null; clearTimeout(waiter.timer); waiter.resolve(evidence);
   };
   const observe = (request, status, payload, jobId) => {
@@ -26,21 +26,21 @@
     try { publish(P.publicResponse(request, status, payload)); }
     catch (error) {
       const reason = /^NY_CONNECTOR_SEARCH_(HTTP_ERROR|UNSUCCESSFUL|ROWS_INVALID|IDENTITY_INVALID|EIN_MISSING|EIN_NULL|EIN_TYPE|EIN_FORMAT)$/.test(error.message)
-        ? error.message : "NY_CONNECTOR_INCOMPLETE";
+        ? error.message : request.kind === "detail" ? "NY_CONNECTOR_DETAIL_INCOMPLETE" : "NY_CONNECTOR_INCOMPLETE";
       rejectRequest(request, jobId, reason);
     }
   };
   const rejectRequest = (request, jobId, reason) => {
     const job = active;
     if (!job || job.id !== jobId || job.waiter?.kind !== request.kind) return;
-    if (request.kind === "search" && !P.sameQuery(request.query, job.query)) return;
+    if (["search", "detail"].includes(request.kind) && !P.sameQuery(request.query, job.query)) return;
     const waiter = job.waiter; job.waiter = null; clearTimeout(waiter.timer); waiter.reject(new Error(reason));
   };
   const networkFailure = (request, jobId) => rejectRequest(request, jobId,
     request.kind === "verify" ? "NY_CONNECTOR_VERIFICATION_NETWORK_ERROR" : "NY_CONNECTOR_SEARCH_NETWORK_ERROR");
   XMLHttpRequest.prototype.open = function(method, url, ...args) {
     const request = P.publicRequest(url);
-    if (request && ((request.kind === "search" && String(method).toUpperCase() === "GET") || (request.kind === "verify" && String(method).toUpperCase() === "POST"))) xhrMetadata.set(this, request);
+    if (request && ((["search", "detail"].includes(request.kind) && String(method).toUpperCase() === "GET") || (request.kind === "verify" && String(method).toUpperCase() === "POST"))) xhrMetadata.set(this, request);
     else xhrMetadata.delete(this);
     return originalOpen.call(this, method, url, ...args);
   };
@@ -77,7 +77,7 @@
   function waitResponse(kind, ms) {
     return new Promise((resolve, reject) => {
       const job = active;
-      const timer = setTimeout(() => { if (job.waiter?.timer === timer) job.waiter = null; reject(new Error(kind === "verify" ? "NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT" : "NY_CONNECTOR_SEARCH_RESPONSE_TIMEOUT")); }, ms);
+      const timer = setTimeout(() => { if (job.waiter?.timer === timer) job.waiter = null; reject(new Error(kind === "verify" ? "NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT" : kind === "detail" ? "NY_CONNECTOR_DETAIL_RESPONSE_TIMEOUT" : "NY_CONNECTOR_SEARCH_RESPONSE_TIMEOUT")); }, ms);
       job.waiter = { kind, resolve, reject, timer };
     });
   }
@@ -101,7 +101,27 @@
       return;
     }
   }
+  async function returnToResults() {
+    if (/^\/RegistrySearch\/[0-9]{2}-[0-9]{2}-[0-9]{2}\/?$/.test(location.pathname)) {
+      // The state retains the verified result list in browser history.
+      window.history.back();
+      await until(() => /^\/RegistrySearch\/?$/.test(location.pathname) && document.getElementById("ein"), 10000);
+    }
+  }
+  async function runDetail(query) {
+    await returnToResults();
+    const link = await until(() => Array.from(document.querySelectorAll("a")).find(a => {
+      if (a.textContent.trim() !== query.orgID) return false;
+      try { const url = new URL(a.href, P.NY); return url.origin === P.NY && url.pathname === "/RegistrySearch/" + query.orgID; } catch { return false; }
+    }), 5000, "NY_CONNECTOR_DETAIL_LINK_MISSING");
+    const completed = waitResponse("detail", 30000);
+    link.click();
+    const { kind, ...evidence } = await completed;
+    return evidence;
+  }
   async function run(query, forceVerification = false) {
+    if (Object.hasOwn(query, "orgID")) return runDetail(query);
+    await returnToResults();
     const clear = await until(() => button("Clear fields"), 10000);
     clear.click();
     await until(() => ["ein", "orgName", "orgID", "city"].every(id => document.getElementById(id)?.value === ""), 3000);

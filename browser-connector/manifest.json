@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CharityClarity — New York Connector",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "minimum_chrome_version": "132",
   "description": "Connect CharityClarity to New York public charity records in your browser.",
   "host_permissions": [

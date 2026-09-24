@@ -103,6 +103,9 @@ class ConnectorTests(unittest.TestCase):
             code,state=self.request(action='start',organization_name=ROW['orgName'],ein=ROW['ein'],connector_version=version)
             self.assertEqual(code,200)
             _,result=self.submit(state)
+            if version == '0.4.1':
+                self.assertEqual(result['query'], {'orgID': ROW['orgID']})
+                _,result=self.submit(result,detail=DETAIL)
             self.assertEqual(result['result']['connector_version'],version)
             self.assertEqual(result['result']['status'],'Current')
         for invalid in [{},[],None,'99.0.0',42]:
