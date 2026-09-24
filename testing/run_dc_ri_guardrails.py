@@ -198,9 +198,11 @@ class MatureParity(unittest.TestCase):
         # NY now accepts optional Sales cancellation; signal-free lifecycle has dedicated controls.
         for path in ['Charity_Checker_Script for 13_states.py','web-staging/organization-identity.js']:
             self.assertEqual((ROOT/path).read_text(encoding='utf-8').replace('\r\n','\n'),self.previous(path).replace('\r\n','\n'))
-    def test_frontend_concurrency_unchanged(self):
-        start='    async function runStateChecks('
-        def body(s):return s[s.index(start):].split('\n    stateCheckboxes.forEach')[0]
+    def test_frontend_state_retry_transport_unchanged(self):
+        # Standard concurrency is now explicitly authorized; its 15-slot behavior
+        # and all non-scheduler frontend parity are tested in run_standard_concurrency_guardrails.cjs.
+        start='    async function checkSingleState('
+        def body(s):return s[s.index(start):].split('\n    async function runStateChecks')[0]
         self.assertEqual(body(self.previous('web-staging/index.html')),body((ROOT/'web-staging/index.html').read_text(encoding='utf-8')))
     def test_old_lane_indices_preserved_and_ui_has_32(self):
         tree=ast.parse(self.previous('registry_snapshot_server.py'))
