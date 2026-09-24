@@ -3365,6 +3365,10 @@ def public_profile_latest_tax_period_for_ein(ein: str) -> tuple[int, tuple[int, 
 
 def resolved_organization_name(ein: str, supplied_name: str = "") -> str:
     supplied_name = (supplied_name or "").strip()
+    # A supplied name already wins below. Do not fetch unused fallback names
+    # for every state request; EIN/address evidence is obtained by its own checks.
+    if supplied_name:
+        return supplied_name
     reference_name = organization_name_for_ein(ein)
     profile_name = public_profile_name_for_ein(ein)
     known_names = known_names_for_ein(ein)
