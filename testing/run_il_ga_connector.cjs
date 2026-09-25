@@ -42,6 +42,14 @@ test('Georgia normal form navigation produces a completed empty result',async()=
   const result=await h.query(p,20,{state:'GA',orgName:'Nonexistent Control'});
   assert.equal(result.ok,true);assert.equal(result.evidence.total,0);
 });
+
+test('Illinois unopened detail gets one fresh-form retry and preserves final reason',async()=>{
+  const h=harness();registryFixture(h);const p=connect(h,'IL');
+  const original=h.chrome.tabs.sendMessage;let attempts=0;
+  h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='registry-il' ? (++attempts,{ok:false,reason:'NY_CONNECTOR_IL_DETAIL_NOT_OPENED'}) : original(tab,m);
+  const result=await h.query(p,20,{state:'IL',identifier:'01015532'});
+  assert.equal(attempts,2);assert.equal(result.ok,false);assert.equal(result.reason,'NY_CONNECTOR_IL_DETAIL_NOT_OPENED');
+});
 test('a state-specific port rejects evidence requested for a different state',async()=>{
   const h=harness();registryFixture(h);const p=connect(h,'IL');
   const result=await h.query(p,20,{state:'GA',orgName:'Control'});

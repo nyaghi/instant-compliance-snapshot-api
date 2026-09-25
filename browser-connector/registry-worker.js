@@ -39,7 +39,14 @@ async function performRegistryQuery(job, query) {
   if (!P.validQuery(query) || query.state !== job.registryState || new URL(job.sender.url).origin !== P.STAGING) throw new Error("NY_CONNECTOR_INVALID_SEQUENCE");
   if (query.state === "IL") {
     await registryNavigate(job, registryStart("IL"));
-    return registryMessage(job,{action:"registry-il",query});
+    let result = await registryMessage(job,{action:"registry-il",query});
+    // Retry only an unopened/blank detail, once, using a fresh normal form.
+    // A loaded record with missing dates is complete evidence, not retryable.
+    if (query.identifier && ["NY_CONNECTOR_IL_DETAIL_NOT_OPENED", "NY_CONNECTOR_IL_DETAIL_BLANK"].includes(result?.reason)) {
+      await registryNavigate(job, registryStart("IL"));
+      result = await registryMessage(job,{action:"registry-il",query});
+    }
+    return result;
   }
   if (query.identifier) {
     await registryNavigate(job,registryOrigin("GA")+"/verification/Details.aspx?result="+query.detail_key);

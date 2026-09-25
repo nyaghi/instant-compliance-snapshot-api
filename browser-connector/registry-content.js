@@ -79,7 +79,15 @@
         const row = {name:val("Name"), identifier:val("FileNumber"), street:val("Street1"), region:val("State"), postal_code:val("PostalCode"), location:[val("City"),val("State")].filter(Boolean).join(", "), detail_key:""};
         if (query.identifier && row.identifier === query.identifier) {
           tr.querySelector('button[title="View Details"]').click();
-          const dialog = await wait(() => { const d=document.querySelector("#KendoWindowLevel1"); return visible(d) && d.innerText.includes("CO Number: " + query.identifier) && d.innerText.includes("Annual Report Due Date:") && d; });
+          // Identity/status establish a loaded detail. A missing filing date is
+          // evidence for the master to interpret, not a transport timeout.
+          let dialog;
+          try {
+            dialog = await wait(() => { const d=document.querySelector("#KendoWindowLevel1"); return visible(d) && d.innerText.includes("CO Number: " + query.identifier) && /FEIN:\s*\d/.test(d.innerText) && /Status:\s*\S/.test(d.innerText) && d; });
+          } catch {
+            const d=document.querySelector("#KendoWindowLevel1");
+            throw new Error(!visible(d) ? "NY_CONNECTOR_IL_DETAIL_NOT_OPENED" : !text(d) ? "NY_CONNECTOR_IL_DETAIL_BLANK" : "NY_CONNECTOR_IL_DETAIL_IDENTITY_INCOMPLETE");
+          }
           return {query, complete:true, body:dialog.innerText};
         }
         collected.push(row);
@@ -138,7 +146,7 @@
   }
   chrome.runtime.onMessage.addListener((m,sender,reply)=>{
     if(sender.id!==chrome.runtime.id || !m?.action?.startsWith('registry-')) return false;
-    handle(m).then(reply,()=>reply({ok:false,reason:'NY_CONNECTOR_INCOMPLETE'}));
+    handle(m).then(reply,error=>reply({ok:false,reason:/^NY_CONNECTOR_IL_DETAIL_(NOT_OPENED|BLANK|IDENTITY_INCOMPLETE)$/.test(error?.message||'') ? error.message : 'NY_CONNECTOR_INCOMPLETE'}));
     return true;
   });
 })();

@@ -40,6 +40,14 @@ class SourceControls(unittest.TestCase):
         with self.assertRaises(ValueError):cc.il_charity_detail_text(IL.replace('FEIN: 363673599','FEIN:'))
     def test_il_malformed_date_rejected(self):
         with self.assertRaises(ValueError):cc.il_charity_detail_text(IL.replace('12/31/2026','unknown'))
+    def test_il_missing_and_blank_due_dates_are_incomplete_not_current(self):
+        for body in [IL.replace('12/31/2026',''),IL.replace('Annual Report Due Date: 12/31/2026\n','')]:
+            parsed=cc.il_charity_detail_text(body,'01015532')
+            self.assertEqual(parsed['status'],'Unable to Confirm')
+            self.assertEqual(parsed['ein'],'363673599')
+            self.assertIsNone(parsed['expiration'])
+    def test_il_duplicate_due_labels_rejected(self):
+        with self.assertRaises(ValueError):cc.il_charity_detail_text(IL+'\nAnnual Report Due Date: 12/31/2027')
     def test_il_unknown_status_not_current(self):
         self.assertEqual(cc.il_charity_detail_text(IL.replace('Good Standing','Unrecognized'))['status'],'Unable to Confirm')
     def test_ga_associated_licenses_not_used(self):
@@ -98,6 +106,20 @@ class IntegrationControls(unittest.TestCase):
         self.assertNotIn('Registry match',data['comments'])
         self.assertEqual(data['matched_registry_name'],'')
         self.assertEqual(data['matched_registry_identifier'],'')
+    def test_il_loaded_missing_due_preserves_identity_and_explains_missing_date(self):
+        for body in [IL.replace('12/31/2026',''),IL.replace('Annual Report Due Date: 12/31/2026\n','')]:
+            def evidence(q):return {'body':body} if 'identifier' in q else {'rows':[search_row()]}
+            result=cc.il_ga_browser_lookup(self.org,'IL',evidence)
+            self.assertEqual(result.status,'Unable to Confirm')
+            self.assertEqual(result.matched_registry_identifier,'01015532')
+            self.assertIn('record loaded',result.source_note)
+            self.assertNotIn('retry',result.source_note.lower())
+    def test_il_detail_failures_have_distinct_non_negative_explanations(self):
+        record=dict(state='IL',organization_name='Feeding America',ein='36-3673599')
+        for code,phrase in [('NOT_OPENED','did not open'),('BLANK','no readable'),('IDENTITY_INCOMPLETE','could not be confirmed')]:
+            result=cc.il_ga_connector_failure(record,'NY_CONNECTOR_IL_DETAIL_'+code)
+            self.assertEqual(result['status'],'Unable to Confirm')
+            self.assertIn(phrase,result['comments'])
     def test_il_incomplete_fallback_never_negative(self):
         def evidence(q):
             if 'ein' in q:return {'rows':[]}

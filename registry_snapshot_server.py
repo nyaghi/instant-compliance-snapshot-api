@@ -134,7 +134,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.25.1-staging").strip() or "2026.09.25.1-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.25.2-staging").strip() or "2026.09.25.2-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -5377,8 +5377,10 @@ def il_charity_detail_text(body, expected_identifier=""):
     search completeness are checked separately before this evidence is used.
     """
     lines = [re.sub(r"\s+", " ", line).strip() for line in body.splitlines() if line.strip()]
-    def field(label):
+    def field(label, optional=False):
         values = [line[len(label):].strip() for line in lines if line.startswith(label)]
+        if optional and not values:
+            return ""
         if len(values) != 1:
             raise ValueError(f"Illinois detail is missing or duplicates {label}")
         return values[0]
@@ -5389,7 +5391,7 @@ def il_charity_detail_text(body, expected_identifier=""):
         raise ValueError("Illinois charity identity is incomplete")
     if expected_identifier and identifier != expected_identifier:
         raise ValueError("Illinois detail does not match the selected CO number")
-    due_text = field("Annual Report Due Date:")
+    due_text = field("Annual Report Due Date:", optional=True)
     due = il_ga_calendar_date(due_text)
     if due_text and due is None:
         raise ValueError("Illinois annual report due date could not be parsed")
@@ -5397,7 +5399,7 @@ def il_charity_detail_text(body, expected_identifier=""):
     initial = registration_source_date(initial_text)
     if initial_text and initial is None:
         raise ValueError("Illinois registration date could not be parsed")
-    status = (status_from_calendar_date(due) if due else "Current") if raw.casefold() == "good standing" else licensed_charity_status(raw, due)
+    status = (status_from_calendar_date(due) if due else "Unable to Confirm") if raw.casefold() == "good standing" else licensed_charity_status(raw, due)
     return {"name": lines[0], "identifier": identifier, "ein": ein, "raw_status": raw,
             "status": status, "expiration": due, "initial": initial,
             "date_type": "annual_report_due_date", "initial_label": "Registration Date", "aliases": []}
@@ -5533,6 +5535,8 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
                                       f"The detail EIN {format_ein(selected['ein'])} matches the requested organization. ")
                 if selected["expiration"]:
                     result.source_note += f"The state's annual-report due date is {selected['expiration'].isoformat()}. "
+                elif selected["status"] == "Unable to Confirm":
+                    result.source_note += "The selected record loaded, but no annual-report due date is displayed. Missing filing information does not establish delinquency or confirm that filings are current. "
                 result.source_note += f"CharityClarity reports {result.status}."
     return result
 
@@ -5542,6 +5546,14 @@ def il_ga_connector_failure(record, reason=""):
     org = checker.Organization(record["organization_name"], record["ein"])
     result = licensed_charity_failure(org, state, IL_GA_SOURCES[state], ValueError("Browser search incomplete"))
     result.source_note = f"The {state} browser search did not return complete, confirmed public records. Keep Chrome open with the updated CharityClarity connector enabled and retry. This does not establish non-registration or delinquency."
+    if state == "IL":
+        detail_reasons = {
+            "NY_CONNECTOR_IL_DETAIL_NOT_OPENED": "Illinois returned a search record, but its detail panel did not open.",
+            "NY_CONNECTOR_IL_DETAIL_BLANK": "Illinois opened a detail panel, but it contained no readable record information.",
+            "NY_CONNECTOR_IL_DETAIL_IDENTITY_INCOMPLETE": "Illinois opened a detail panel, but the selected registration number, EIN or status could not be confirmed.",
+        }
+        if reason in detail_reasons:
+            result.source_note = detail_reasons[reason] + " CharityClarity reports Unable to Confirm. This incomplete lookup does not establish non-registration or delinquency."
     if record.get("purpose") == "identity":
         return {"state": state, "source": state, "identity": {"source": state, "names": [], "complete": False, "limitation": result.source_note}}
     return response_data_for_lookup(result, "", org, org.organization_name, org.ein, state, time.perf_counter())
@@ -20040,7 +20052,7 @@ def ny_connector_advance(record):
             return {"phase": "complete", "result": {"state": "NY", "source": "NY", "identity": identity,
                     "ein": format_ein(ein), "checked_at_epoch": time.time(), "app_version": APP_VERSION}}
         result = search_ny_direct(org, registry_search_provider=search_response,
-                                  registry_detail_provider=search_response if record.get("connector_version") in {"0.4.1", "0.4.2", "0.5.0"} else None)
+                                  registry_detail_provider=search_response if record.get("connector_version") in {"0.4.1", "0.4.2", "0.5.0", "0.5.1"} else None)
     except NYConnectorQueryNeeded as pending:
         limit = 5
         is_detail = "orgID" in pending.params
@@ -20048,7 +20060,7 @@ def ny_connector_advance(record):
             return {"phase": "complete", "result": ny_connector_failure(record, "NY_CONNECTOR_INCOMPLETE")}
         record["pending"] = {"query_id": secrets.token_urlsafe(18), "query": pending.params}
         return {"phase": "search", **record["pending"]}
-    if record.get("connector_version") not in {"0.4.1", "0.4.2", "0.5.0"} and "401" in (getattr(result, "source_note", "") or ""):
+    if record.get("connector_version") not in {"0.4.1", "0.4.2", "0.5.0", "0.5.1"} and "401" in (getattr(result, "source_note", "") or ""):
         return {"phase": "complete", "result": ny_connector_failure(record, "NY_CONNECTOR_UPDATE_REQUIRED")}
     data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, "NY", started)
     data["connector_version"] = record.get("connector_version", "0.2.1")
@@ -20081,7 +20093,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0"}:
+        if not isinstance(connector_version, str) or connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1"}:
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()
