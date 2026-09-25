@@ -24,7 +24,7 @@ function harness(initial={}) {
   class Clock extends Date { static now(){return now;} }
   const recovery={clearForTab:async(tabId,owned,close)=>{repairs.push({tabId,owned});await close();}};
   const context=vm.createContext({URL,Date:Clock,chrome,CCNYRecovery:recovery,importScripts:()=>{},setTimeout:(fn,ms)=>{const t={fn,ms,due:now+ms,cleared:false};timers.push(t);return t;},clearTimeout:t=>{if(t)t.cleared=true;}});
-  for(const file of ['protocol.js','worker.js'])vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),context);
+  for(const file of ['protocol.js','registry-worker.js','worker.js'])vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),context);
   function connect(n=1,sender={id:chrome.runtime.id,frameId:0,url:tabs.get(1).url,tab:{id:1}},refresh=false,resume=false) {
     const port={name:(resume?'cc-ny-resume-v1:':refresh?'cc-ny-refresh-v1:':'cc-ny-lookup-v1:')+id(n),sender,onMessage:event(),onDisconnect:event(),messages:[],disconnected:false,
       postMessage:m=>port.messages.push(JSON.parse(JSON.stringify(m))),disconnect:()=>{if(!port.disconnected){port.disconnected=true;port.onDisconnect.emit();}}};
@@ -313,3 +313,5 @@ test('verified detail navigation closes only owned detail tabs and releases queu
   assert.deepEqual(h.removed,[100]);assert(h.tabs.has(2));
   const next=h.connect(2);await h.advance(3000);assert.equal((await h.query(next,905)).ok,true);
 });
+
+module.exports={harness,tick,id};

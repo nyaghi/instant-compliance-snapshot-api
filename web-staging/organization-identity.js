@@ -117,6 +117,21 @@
         throw new Error(data.error || "Name discovery did not complete.");
       }
       data.names ||= [];
+      if (window.CCNYConnector && location.origin === "https://staging.compliance-express.com") {
+        message.textContent = "Checking Illinois EIN-linked names through the browser connector…";
+        try {
+          const il = await window.CCNYConnector.lookup({state:"IL", purpose:"identity", organization_name:requestedName,
+            ein:requestedEin, ...config, signal:controller.signal});
+          data.sources ||= [];
+          data.sources.push({source:"IL", ...il.identity});
+          for (const candidate of il.identity?.names || []) {
+            const existing=data.names.find(item=>item.name.toLowerCase()===candidate.name.toLowerCase());
+            if (existing) existing.evidence.push(...candidate.evidence);
+            else data.names.push(candidate);
+          }
+        } catch { data.sources ||= []; data.sources.push({source:"IL",complete:false,limitation:"The browser lookup could not finish."}); }
+      }
+
       if (requestRevision !== revision || requestIdentity !== identity()) return;
       rows = (data.names || []).slice(0, 32).map(row => ({...row, original: row.name, selected: !row.identity_conflict}));
       const limitations = (data.sources || []).filter(source => !source.complete).map(source => `${source.source}: ${source.limitation || "Some records were unavailable."}`);

@@ -1,4 +1,4 @@
-importScripts("protocol.js", "recovery.js");
+importScripts("protocol.js", "recovery.js", "registry-worker.js");
 const P = CCNYProtocol;
 const QUEUE_TTL = 1200000, ACTIVE_TTL = 300000, PACE_MS = 3000;
 const REPAIR_INTERVAL = 1200000;
@@ -25,14 +25,14 @@ function keepAlive() {
 const rejected = reason => ["NY_CONNECTOR_VERIFICATION_REJECTED", "NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED"].includes(reason);
 const recoveryFailure = reason => rejected(reason) ? "NY_CONNECTOR_RECOVERY_REJECTED" :
   typeof reason === "string" && /^NY_CONNECTOR_[A-Z_]+$/.test(reason) ? reason : "NY_CONNECTOR_INCOMPLETE";
-const runtimeState = () => ({ schema: 2, nextStart, ownedTabs: [...owned], diagnostics: [...diagnostics], queue: [active, ...queue].filter(j => j && !j.closed).map(j => ({ id: j.lookupId, tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, expiresAt: j.expiresAt, active: j === active, activeExpiresAt: j.activeExpiresAt, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.command, lastResponse: j.lastResponse, queryRepaired: j.queryRepaired })) });
+const runtimeState = () => ({ schema: 2, nextStart, ownedTabs: [...owned], diagnostics: [...diagnostics], queue: [active, ...queue].filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, expiresAt: j.expiresAt, active: j === active, activeExpiresAt: j.activeExpiresAt, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.command, lastResponse: j.lastResponse, queryRepaired: j.queryRepaired })) });
 function saveRuntime() {
   keepAlive();
   if (!active && !queue.length && keepAliveTimer) { clearTimeout(keepAliveTimer); keepAliveTimer = null; }
   const value = runtimeState(); saving = saving.catch(() => {}).then(() => chrome.storage.session.set({ ccnyRuntime: value })); return saving;
 }
 function newJob(sender, id, refreshOnly, saved = {}) {
-  return { port: null, sender, lookupId: id, refreshOnly, enqueuedAt: Date.now(), expiresAt: Date.now() + QUEUE_TTL, activeExpiresAt: null, generation: 0, tab: null, creating: null, pending: null, acquireId: null, closed: false, timer: null, reconnectTimer: null, rateRetries: 0, timeoutRetries: 0, retryNotBefore: 0, verificationRetryUsed: false, command: null, lastResponse: null, queryRepaired: false, ...saved };
+  return { port: null, sender, lookupId: id, refreshOnly, registryState: "NY", enqueuedAt: Date.now(), expiresAt: Date.now() + QUEUE_TTL, activeExpiresAt: null, generation: 0, tab: null, creating: null, pending: null, acquireId: null, closed: false, timer: null, reconnectTimer: null, rateRetries: 0, timeoutRetries: 0, retryNotBefore: 0, verificationRetryUsed: false, command: null, lastResponse: null, queryRepaired: false, ...saved };
 }
 function arm(job) {
   clearTimeout(job.timer);
@@ -49,7 +49,7 @@ async function removeOwned(tabId) {
   owned.delete(tabId);
   try {
     const tab = await chrome.tabs.get(tabId), url = new URL(tab.url);
-    if (url.origin === P.NY && /^\/RegistrySearch(?:\/[0-9]{2}-[0-9]{2}-[0-9]{2})?\/?$/.test(url.pathname)) await chrome.tabs.remove(tabId);
+    if ((["https://charitable.illinoisattorneygeneral.gov", "https://verify.sos.ga.gov"].includes(url.origin)) || url.origin === P.NY && /^\/RegistrySearch(?:\/[0-9]{2}-[0-9]{2}-[0-9]{2})?\/?$/.test(url.pathname)) await chrome.tabs.remove(tabId);
   } catch { /* The tab has already closed or was taken over by the user. */ }
   await saveRuntime();
 }
@@ -105,7 +105,7 @@ function pump() {
   if (!queue[0].port) return;
   const job = queue.shift();
   if (job.closed) { pump(); return; }
-  if (!job.refreshOnly && repair.phase === "failed" && repair.nextAllowedAt > Date.now()) {
+  if (job.registryState === "NY" && !job.refreshOnly && repair.phase === "failed" && repair.nextAllowedAt > Date.now()) {
     close(job, repair.reason || "NY_CONNECTOR_RECOVERY_REJECTED"); return;
   }
   active = job;
@@ -243,6 +243,9 @@ async function performSearch(job, query, id) {
   let response;
   try {
     await saveRuntime();
+    if (job.registryState !== "NY") {
+      response = await performRegistryQuery(job, query);
+    } else {
     let repaired = job.queryRepaired;
     for (;;) {
       if (job.retryNotBefore > Date.now()) await nap(job.retryNotBefore - Date.now());
@@ -305,6 +308,7 @@ async function performSearch(job, query, id) {
         // existing page so the single 401 retry budget cannot be reset.
       }
     }
+    }
   } catch (error) {
     diagnostic("lookup-error", job, /^NY_CONNECTOR_[A-Z_]+$/.test(error.message) ? error.message : error.name);
     if (repair.phase === "repairing") await saveRepair({ ...repair, phase: "failed", reason: "NY_CONNECTOR_RECOVERY_FAILED" });
@@ -359,12 +363,14 @@ chrome.tabs.onRemoved.addListener(id => {
 });
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (!allowedSender(sender) || !P.validId(message?.id) || message.action !== "ping") return false;
-  boot.then(() => respond({ ok: true, version: chrome.runtime.getManifest().version, capabilities: ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "origin-window-v1", "connection-recovery-v1", "recovery-causes-v1", "cleanup-ack-v1", "timeout-recovery-v1", "resume-v1", "verified-detail-v1", "detail-navigation-v1"], recovery: { phase: repair.phase || "idle", nextAllowedAt: repair.nextAllowedAt || 0, verifiedAt: repair.finishedAt || 0 } }), () => respond({ ok: false, reason: "NY_CONNECTOR_INTERRUPTED" }));
+  boot.then(() => respond({ ok: true, version: chrome.runtime.getManifest().version, capabilities: ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "origin-window-v1", "connection-recovery-v1", "recovery-causes-v1", "cleanup-ack-v1", "timeout-recovery-v1", "resume-v1", "verified-detail-v1", "detail-navigation-v1", "il-ga-public-dom-v1"], recovery: { phase: repair.phase || "idle", nextAllowedAt: repair.nextAllowedAt || 0, verifiedAt: repair.finishedAt || 0 } }), () => respond({ ok: false, reason: "NY_CONNECTOR_INTERRUPTED" }));
   return true;
 });
 chrome.runtime.onConnect.addListener(port => {
   const resume = port.name.startsWith("cc-ny-resume-v1:");
-  const prefix = resume ? "cc-ny-resume-v1:" : port.name.startsWith("cc-ny-refresh-v1:") ? "cc-ny-refresh-v1:" : "cc-ny-lookup-v1:";
+  const registryState = port.name.startsWith("cc-il-lookup-v1:") ? "IL" : port.name.startsWith("cc-ga-lookup-v1:") ? "GA" : "NY";
+  if (registryState !== "NY" && new URL(port.sender.url).origin !== P.STAGING) { port.disconnect(); return; }
+  const prefix = registryState !== "NY" ? `cc-${registryState.toLowerCase()}-lookup-v1:` : resume ? "cc-ny-resume-v1:" : port.name.startsWith("cc-ny-refresh-v1:") ? "cc-ny-refresh-v1:" : "cc-ny-lookup-v1:";
   if (!allowedSender(port.sender) || !port.name.startsWith(prefix) || !P.validId(port.name.slice(prefix.length))) { port.disconnect(); return; }
   let disconnected = false;
   const bound = boot.then(async () => {
@@ -383,11 +389,11 @@ chrome.runtime.onConnect.addListener(port => {
       if (job.closed) return null;
       const deadline = job.activeExpiresAt ?? job.expiresAt;
       if (Date.now() >= deadline) { close(job, job.activeExpiresAt ? "NY_CONNECTOR_TIMEOUT" : "NY_CONNECTOR_QUEUE_TIMEOUT"); return null; }
-      if (!job.lastResponse?.ok && repair.phase === "failed" && repair.nextAllowedAt > Date.now()) { close(job, repair.reason || "NY_CONNECTOR_RECOVERY_FAILED"); return null; }
+      if (job.registryState === "NY" && !job.lastResponse?.ok && repair.phase === "failed" && repair.nextAllowedAt > Date.now()) { close(job, repair.reason || "NY_CONNECTOR_RECOVERY_FAILED"); return null; }
       post(job, { action: "resumed" });
     } else {
       if (job) { port.postMessage({ action: "closed", reason: "NY_CONNECTOR_INVALID_SEQUENCE" }); port.disconnect(); return null; }
-      job = newJob(port.sender, id, prefix === "cc-ny-refresh-v1:"); job.port = port;
+      job = newJob(port.sender, id, prefix === "cc-ny-refresh-v1:", {registryState}); job.port = port;
       arm(job); queue.push(job); await saveRuntime();
     }
     notifyQueue(); pump(); return job;

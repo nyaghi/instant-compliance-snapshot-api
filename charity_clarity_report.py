@@ -20,7 +20,9 @@ MUTED = colors.HexColor("#536274")
 PALE = colors.HexColor("#F3F6FA")
 ASSETS = Path(__file__).resolve().parent / "report-assets"
 LOW = {"Current", "Exempt"}
-MODERATE = {"Upcoming Filing", "Not Registered", "Pending", "Closed / Withdrawn / Canceled"}
+IL_COMBINED = "Not Registered / Non-Compliant"
+NO_LISTING = {"Not Registered", IL_COMBINED}
+MODERATE = {"Upcoming Filing", "Not Registered", IL_COMBINED, "Pending", "Closed / Withdrawn / Canceled"}
 HIGH = {"Delinquent", "Suspended", "Revoked", "Failed to Renew", "Expired"}
 INCOMPLETE = {"Site Not Reachable", "Needs Review", "Unable to Confirm", "Unable to Verify", "Unknown", "No Confirmed Match"}
 DOWNLOADABLE = {"KS", "KY", "LA", "NH", "OR"}
@@ -140,14 +142,15 @@ def report_findings(rows):
             bucket = "Date unconfirmed" if days is None else next((name for limit, name in [(-1, "Overdue"), (30, "0-30 days"), (60, "31-60 days"), (90, "61-90 days"), (180, "91-180 days")] if days <= limit), "Beyond 180 days")
         findings.append(dict(row=row, state=row["state"], status=row["status"], label=display_status(row),
                              obligation="Unknown", deadline=deadline, asof=asof, days=days, bucket=bucket,
-                             filed_period=filed_period(row) if row["status"] not in INCOMPLETE | {"Not Registered"} else None,
-                             year_label=filing_year_label(row) if row["status"] not in INCOMPLETE | {"Not Registered"} else None))
+                             filed_period=filed_period(row) if row["status"] not in INCOMPLETE | NO_LISTING else None,
+                             year_label=filing_year_label(row) if row["status"] not in INCOMPLETE | NO_LISTING else None))
     return findings
 
 
 def summary_groups(findings):
     groups = [("Potentially overdue filings / lapses", OVERDUE), ("Suspended / revoked", RESTRICTED),
               ("Closed / withdrawn / canceled", CLOSED), ("No registration found", {"Not Registered"}),
+              ("Not registered / non-compliant (Illinois)", {IL_COMBINED}),
               ("Pending", {"Pending"}), ("Upcoming filing", {"Upcoming Filing"}),
               ("Exempt", {"Exempt"}), ("Current", {"Current"}), ("Unresolved checks", INCOMPLETE)]
     return [(label, [f["state"] for f in findings if f["status"] in statuses]) for label, statuses in groups
@@ -156,6 +159,8 @@ def summary_groups(findings):
 
 def verification_needed(row):
     status = row["status"]
+    if status == IL_COMBINED:
+        return "Illinois lists compliant charities. Confirm with Illinois whether the absent listing reflects non-registration or non-compliance, and obtain any registration or recent filing acknowledgment."
     if status in CLOSED:
         return "Confirm the closure date and reason, whether withdrawal was intentional, current solicitation activity, and any replacement registration or exemption. Reinstatement depends on those facts."
     if status in RESTRICTED:
@@ -182,6 +187,8 @@ def action_items(rows, findings=None):
     urgent_states = {f["state"] for f in urgent}
     states = lambda statuses: [f["state"] for f in findings if f["status"] in statuses]
     groups = [
+        ("Resolve the Illinois compliant-directory gap", states({IL_COMBINED}),
+         "Confirm whether the absent Illinois listing reflects non-registration or non-compliance before choosing registration or remediation work."),
         ("Confirm suspended or revoked records", states(RESTRICTED),
          "Confirm the restriction and any later state action; determine the steps needed before relying on the registration."),
         ("Reconcile potentially overdue filings", states(OVERDUE),
@@ -213,7 +220,7 @@ def insight_records(findings):
     def add(title, observed, significance, unknown, action):
         insights.append(dict(title=title, observed=observed, significance=significance, unknown=unknown, action=action))
     by_status = lambda statuses: [f["state"] for f in findings if f["status"] in statuses]
-    footprint = by_status((LOW | MODERATE | HIGH) - {"Not Registered"} - CLOSED)
+    footprint = by_status((LOW | MODERATE | HIGH) - NO_LISTING - CLOSED)
     closed = by_status(CLOSED)
     missing = by_status({"Not Registered"})
     if len(footprint) > 15 and missing:
@@ -322,6 +329,8 @@ def validate_results(payload, supported_states):
         status = text(row.get("status"), 100)
         if status not in LOW | MODERATE | HIGH | INCOMPLETE:
             raise ValueError("A result status is not supported by this report template.")
+        if status == IL_COMBINED and state != "IL":
+            raise ValueError("The combined non-registration/non-compliance status is Illinois-only.")
         checked = row.get("checked_at_epoch")
         registration_date = text(row.get("registration_date"), 10)
         registration_type = text(row.get("registration_date_type"), 50)
@@ -333,7 +342,7 @@ def validate_results(payload, supported_states):
         renewal_type = text(row.get("renewal_date_type"), 50)
         if renewal_date and (not re.fullmatch(r"\d{4}-\d{2}-\d{2}", renewal_date)
                              or not parse_date(renewal_date)
-                             or renewal_type not in {"last_registration_date", "current_issue_date", "current_effective_date", "renewal_filing_date", "annual_registration_submitted_date"}):
+                             or renewal_type not in {"last_registration_date", "current_issue_date", "current_effective_date", "renewal_filing_date", "annual_registration_submitted_date", "last_renewal_date"}):
             raise ValueError("Last Renewal Date must preserve a valid state-supplied date and its meaning.")
         combined_value = text(row.get("renewal_filing_value"), 10)
         combined_type = text(row.get("renewal_filing_type"), 50)
@@ -342,7 +351,7 @@ def validate_results(payload, supported_states):
         combined_url = text(row.get("renewal_filing_source_url"), 500)
         if combined_value:
             year_type = combined_type in {"filed_year", "filed_tax_year"}
-            date_type = combined_type in {"filed_period_end", "last_registration_date", "current_issue_date", "current_effective_date", "renewal_filing_date", "annual_registration_submitted_date"}
+            date_type = combined_type in {"filed_period_end", "last_registration_date", "current_issue_date", "current_effective_date", "renewal_filing_date", "annual_registration_submitted_date", "last_renewal_date"}
             valid_year = year_type and re.fullmatch(r"(?:19|20)\d{2}", combined_value) and int(combined_value) <= date.today().year
             valid_date = date_type and re.fullmatch(r"\d{4}-\d{2}-\d{2}", combined_value) and parse_date(combined_value) and parse_date(combined_value) <= date.today()
             if not combined_label or not (valid_year or valid_date):
@@ -470,10 +479,12 @@ def generate_report(payload, supported_states):
              p(f"EIN {ein}  |  {len(rows)} states checked", "small"), p(period, "small"), Spacer(1, 12),
              p("Executive summary", "h2"), p("The findings at a glance", "h3")]
     story.append(table([["Finding", "Count", "States"]] + [[label, str(len(states)), ", ".join(states)] for label, states in groups], [236, 48, 244]))
-    record_count = sum(f["status"] not in INCOMPLETE | {"Not Registered"} for f in findings)
+    record_count = sum(f["status"] not in INCOMPLETE | NO_LISTING for f in findings)
     closed_count = sum(f["status"] in CLOSED for f in findings)
     missing_count = sum(f["status"] == "Not Registered" for f in findings)
-    story.extend([Spacer(1, 10), p(f"Coverage reconciles to {len(rows)} checked states: {record_count} record-based results (including {closed_count} closed), {missing_count} no-registration-found results, and {incomplete} unresolved checks.", "small"),
+    il_count = sum(f["status"] == IL_COMBINED for f in findings)
+    il_coverage = f", {il_count} Illinois not-registered / non-compliant result" if il_count else ""
+    story.extend([Spacer(1, 10), p(f"Coverage reconciles to {len(rows)} checked states: {record_count} record-based results (including {closed_count} closed), {missing_count} no-registration-found results{il_coverage}, and {incomplete} unresolved checks.", "small"),
                   p(f"Follow-up risk indicator: {risk}", "h3"),
                   p("This uses the highest returned signal, not an average or a legal conclusion. High covers overdue, suspended, revoked, expired or failed-to-renew results. Moderate covers upcoming, pending, closed or no-record results. Low covers Current and Exempt. Incomplete checks cannot support an overall Low assessment.", "small"),
                   p('In this report, "No registration found" is the presentation label for the snapshot status "Not Registered." Registration obligation remains Unknown until activity and applicable requirements are reviewed.', "small"),

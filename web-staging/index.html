@@ -24,6 +24,9 @@
 
   <script src="https://cdn.tailwindcss.com"></script>
 
+<style>
+    .status-il-combined { background: linear-gradient(90deg, #cbd5e1 0%, #cbd5e1 50%, #fca5a5 50%, #fca5a5 100%); color: #0f172a; }
+  </style>
 </head>
 
 <body class="bg-slate-50 text-slate-900 antialiased">
@@ -301,6 +304,8 @@
                   <label class="flex min-h-[42px] items-center gap-2 rounded-lg border border-slate-200 px-3 py-2"><input type="checkbox" name="states" value="PA" class="h-4 w-4 shrink-0 border-slate-300 text-[#C62828] focus:ring-[#C62828]" /> <span>Pennsylvania</span></label>
 
                   <label class="flex min-h-[42px] items-center gap-2 rounded-lg border border-slate-200 px-3 py-2"><input type="checkbox" name="states" value="RI" class="h-4 w-4 shrink-0 border-slate-300 text-[#C62828] focus:ring-[#C62828]" /> <span>Rhode Island</span></label>
+                  <label class="flex min-h-[42px] items-center gap-2 rounded-lg border border-slate-200 px-3 py-2"><input type="checkbox" name="states" value="IL" class="h-4 w-4 shrink-0 border-slate-300 text-[#C62828] focus:ring-[#C62828]" /> <span>Illinois</span></label>
+                  <label class="flex min-h-[42px] items-center gap-2 rounded-lg border border-slate-200 px-3 py-2"><input type="checkbox" name="states" value="GA" class="h-4 w-4 shrink-0 border-slate-300 text-[#C62828] focus:ring-[#C62828]" /> <span>Georgia</span></label>
 
                   <label class="flex min-h-[42px] items-center gap-2 rounded-lg border border-slate-200 px-3 py-2"><input type="checkbox" name="states" value="SC" class="h-4 w-4 shrink-0 border-slate-300 text-[#C62828] focus:ring-[#C62828]" /> <span>South Carolina</span></label>
 
@@ -502,7 +507,7 @@
 
         <div>&copy; <span id="year"></span> Compliance Express</div>
 
-          <div class="font-semibold text-slate-600">CharityClarity v2026.09.24.5 &middot; Staging</div>
+          <div class="font-semibold text-slate-600">CharityClarity v2026.09.25.1 &middot; Staging</div>
         <div>No legal or tax advice.</div>
 
       </div>
@@ -866,6 +871,7 @@
     function statusClass(status) {
 
       const normalized = String(status || "").toLowerCase();
+      if (normalized === "not registered / non-compliant") return "status-il-combined";
 
       if (normalized.includes("current") || normalized.includes("good standing")) return "bg-emerald-500 text-white";
 
@@ -897,7 +903,7 @@
 
     function boldStatuses(text) {
 
-      return String(text || "").replace(/\b(Closed \/ Withdrawn \/ Canceled|Current|Upcoming Filing|Pending|Failed to Renew|Delinquent|Suspended|Revoked|Withdrawn|Closed|Not Registered|Exempt|Site Not Reachable)\b/g, "<strong>$1</strong>");
+      return String(text || "").replace(/\b(Not Registered \/ Non-Compliant|Closed \/ Withdrawn \/ Canceled|Current|Upcoming Filing|Pending|Failed to Renew|Delinquent|Suspended|Revoked|Withdrawn|Closed|Not Registered|Exempt|Site Not Reachable)\b/g, "<strong>$1</strong>");
 
     }
 
@@ -1235,11 +1241,11 @@
 
     async function requestSingleState(apiBase, einValue, emailValue, state, organizationNameValue, isConnectionRetry = false, alternateNames = runAlternateNames, {signal} = {}) {
       signal?.throwIfAborted();
-      if (state === "NY" && window.location.origin === "https://staging.compliance-express.com") {
-        if (!isConnectionRetry) lastNyInput = { apiBase, einValue, emailValue, organizationNameValue, alternateNames: [...alternateNames] };
+      if (["NY", "IL", "GA"].includes(state) && window.location.origin === "https://staging.compliance-express.com") {
+        if (state === "NY" && !isConnectionRetry) lastNyInput = { apiBase, einValue, emailValue, organizationNameValue, alternateNames: [...alternateNames] };
         try {
           if (!window.CCNYConnector) throw new Error("Connector UI unavailable");
-          return await window.CCNYConnector.lookup({ organization_name: organizationNameValue, ein: einValue,
+          return await window.CCNYConnector.lookup({ state, organization_name: organizationNameValue, ein: einValue,
             alternate_names: alternateNames, signal,
             email: emailValue, admin_passcode: adminPasscode.value.trim(), device_id: getDeviceId(),
             onProgress: (message) => {
@@ -1253,7 +1259,7 @@
             } });
         } catch {
           if (signal?.aborted) throw signal.reason;
-          const result = fallbackResult("NY", einValue, "The New York browser check could not be completed. Confirm that staging is unlocked and the connector is enabled, then retry. Registration status remains unconfirmed.", organizationNameValue);
+          const result = fallbackResult(state, einValue, `The ${state} browser check could not be completed. Confirm that staging is unlocked and the connector is enabled, then retry. Registration status remains unconfirmed.`, organizationNameValue);
           result.status = "Unable to Confirm";
           result.success = false;
           result.status_reason = "NY_CONNECTOR_UNAVAILABLE";

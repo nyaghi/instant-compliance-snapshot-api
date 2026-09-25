@@ -1,0 +1,42 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Illinois and Georgia connector validation</title>
+<style>body{max-width:1000px;margin:32px auto;padding:16px;font:15px system-ui;color:#0b2a5b}button,input,select{font:inherit;padding:10px;margin:5px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f8fafc;padding:16px}button{cursor:pointer}</style></head><body>
+<h1>Illinois and Georgia · Public evidence validation</h1><p>Staging test collector. This page shows source evidence and does not classify registration status.</p>
+<p id="connection">Checking connector…</p>
+<form id="lookup"><select id="state" aria-label="State"><option>IL</option><option>GA</option></select><select id="method" aria-label="Search method"><option value="ein">EIN</option><option value="orgName">Name</option></select><input id="value" aria-label="Search value" value="363673599" required><button id="run">Collect public records</button></form>
+<p id="progress" role="status"></p><pre id="results">[]</pre>
+<script>
+'use strict';
+if(location.origin!=='https://staging.compliance-express.com')throw Error('Staging only');
+const $=id=>document.getElementById(id);
+function bridge(action,lookupId,query,intent){return new Promise(resolve=>{
+ const id=crypto.randomUUID().replaceAll('-','');
+ const done=value=>{clearTimeout(timer);window.removeEventListener('message',receive);resolve(value);};
+ const receive=e=>{const m=e.data;if(e.source!==window||e.origin!==location.origin||m?.channel!=='cc-ny-staging-v1'||m.direction!=='response'||m.id!==id)return;if(m.progress){$('progress').textContent='Browser operation in progress…';return;}done(m);};
+ const timer=setTimeout(()=>done({ok:false,reason:'VALIDATION_TIMEOUT'}),action==='ping'?7000:300000);
+ window.addEventListener('message',receive);
+ window.postMessage({channel:'cc-ny-staging-v1',direction:'request',id,action,...(lookupId?{lookup_id:lookupId}:{}),...(query?{query}:{}),...(intent?{intent}:{})},location.origin);
+});}
+bridge('ping').then(r=>{$('connection').textContent=r.ok?`Connected: version ${r.version}; IL/GA support: ${r.capabilities?.includes('il-ga-public-dom-v1')?'yes':'no'}`:'No connector response';});
+$('lookup').addEventListener('submit',async e=>{
+ e.preventDefault();$('run').disabled=true;
+ const state=$('state').value,method=$('method').value,value=$('value').value.trim(),lookupId=crypto.randomUUID().replaceAll('-','');
+ const started=Date.now(),evidence=[];
+ const show=()=>{$('results').textContent=JSON.stringify({state,method,value,elapsed_seconds:(Date.now()-started)/1000,evidence},null,2);};
+ try{
+  if(state==='GA'&&method==='ein')throw Error('Georgia supports name search, not EIN search.');
+  const admitted=await bridge('acquire',lookupId,null,state);if(!admitted.ok)throw Error(admitted.reason);
+  $('progress').textContent=`Searching ${state}…`;
+  const result=await bridge('search',lookupId,{state,[method]:value});evidence.push(result);show();
+  if(!result.ok)throw Error(result.reason);
+  const rows=result.evidence.rows;
+  if(rows.length>20)throw Error('Validation detail limit: 20 records.');
+  for(const row of rows){
+   $('progress').textContent=`Reading ${state} ${row.identifier}…`;
+   const query={state,identifier:row.identifier,...(state==='GA'?{detail_key:row.detail_key}:{})};
+   const detail=await bridge('search',lookupId,query);evidence.push(detail);show();if(!detail.ok)throw Error(detail.reason);
+  }
+  $('progress').textContent=`Completed: ${rows.length} source records, ${((Date.now()-started)/1000).toFixed(1)} seconds.`;
+ }catch(error){$('progress').textContent='Incomplete: '+error.message;show();}
+ finally{await bridge('finish',lookupId);$('run').disabled=false;}
+});
+</script></body></html>

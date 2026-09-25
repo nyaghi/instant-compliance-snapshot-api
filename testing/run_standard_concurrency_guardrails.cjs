@@ -39,24 +39,24 @@ function fixture() {
   };
 }
 
-test('all 32 states use exactly 15 slots, including NY, and return the requested order once each', async () => {
+test('all 34 states use exactly 15 slots, including NY, and return the requested order once each', async () => {
   const f=fixture(), run=f.run();
-  assert.equal(states.length,32); assert.equal(f.calls.length,15); assert.equal(f.calls[0].state,'NY');
+  assert.equal(states.length,34); assert.equal(f.calls.length,15); assert.equal(f.calls[0].state,'NY');
   const firstNonNy=f.calls[1].state; f.finish(firstNonNy); await tick();
-  assert.equal(f.calls.length,16); assert.equal(f.active,15); assert.equal(f.context.progressCount.textContent,'1 of 32');
+  assert.equal(f.calls.length,16); assert.equal(f.active,15); assert.equal(f.context.progressCount.textContent,'1 of 34');
   await f.drain(); const result=await run;
-  assert.equal(f.peak,15); assert.equal(f.calls.length,32); assert.equal(new Set(f.calls.map(x=>x.state)).size,32);
+  assert.equal(f.peak,15); assert.equal(f.calls.length,34); assert.equal(new Set(f.calls.map(x=>x.state)).size,34);
   assert.deepEqual(Array.from(result,r=>r.state),states);
-  assert.equal(f.context.progressCount.textContent,'32 of 32'); assert.equal(f.context.progressBar.style.width,'100%');
+  assert.equal(f.context.progressCount.textContent,'34 of 34'); assert.equal(f.context.progressBar.style.width,'100%');
   assert(result.every(r=>r.registration_date==='2001-01-01' && r.comments==='Verified registry evidence'));
 });
 
-test('a slow NY occupies one slot without blocking the other 31 states', async () => {
+test('a slow NY occupies one slot without blocking the other 33 states', async () => {
   const f=fixture(); let done=false; const run=f.run().then(r=>{done=true;return r;});
-  await f.drain(['NY']); assert.equal(done,false); assert.equal(f.completions.length,31);
-  assert.equal(f.peak,15); assert.equal(f.context.progressCount.textContent,'31 of 32');
+  await f.drain(['NY']); assert.equal(done,false); assert.equal(f.completions.length,33);
+  assert.equal(f.peak,15); assert.equal(f.context.progressCount.textContent,'33 of 34');
   f.finish('NY',{status:'Unable to Confirm',success:false,comments:'Verification did not complete'});
-  const result=await run; assert.equal(result.find(r=>r.state==='NY').status,'Unable to Confirm'); assert.equal(result.length,32);
+  const result=await run; assert.equal(result.find(r=>r.state==='NY').status,'Unable to Confirm'); assert.equal(result.length,34);
 });
 
 test('no NY, small selected subsets, single CT routing and empty input stay bounded', async () => {
@@ -73,8 +73,8 @@ test('one unavailable state cannot erase completed results or prevent queued sta
   const f=fixture(), run=f.run();
   f.finish('AK',{status:'Site Not Reachable',success:false,comments:'Registry unavailable; no negative conclusion'});
   await tick(); await f.drain(); const result=await run;
-  assert.equal(result.length,32); assert.equal(result.find(r=>r.state==='AK').status,'Site Not Reachable');
-  assert.equal(result.filter(r=>r.status==='Current').length,31); assert.equal(f.calls.length,32);
+  assert.equal(result.length,34); assert.equal(result.find(r=>r.state==='AK').status,'Site Not Reachable');
+  assert.equal(result.filter(r=>r.status==='Current').length,33); assert.equal(f.calls.length,34);
 });
 
 test('response names cannot replace the entered primary name in later queued requests', async () => {
@@ -82,7 +82,7 @@ test('response names cannot replace the entered primary name in later queued req
   f.calls[0].identity.value='Different returned name';
   f.finish(f.calls[0].state,{organization_name:'Different returned name'}); await tick(); await f.drain(); await run;
   assert(f.calls.every(x=>x.name==='Primary Legal Name' && x.ein==='012345678'));
-  assert.equal(new Set(f.calls.map(x=>x.identity)).size,32);
+  assert.equal(new Set(f.calls.map(x=>x.identity)).size,34);
 });
 
 test('two organization workflows and a subsequent run retain separate inputs and results', async () => {
@@ -95,12 +95,10 @@ test('two organization workflows and a subsequent run retain separate inputs and
   assert.equal(a.calls.at(-1).name,'Gamma');
 });
 
-test('only the Standard scheduler and footer changed; backend, discovery, Sales and NY assets are identical', () => {
-  const prior=file=>cp.execFileSync('git',['show','900cdc0:'+file],{cwd:root,maxBuffer:30*1024*1024}).toString().replaceAll('\r\n','\n');
+test('the 09.24.5 scheduler and existing NY page collectors remain unchanged', () => {
+  const prior=file=>cp.execFileSync('git',['show','35e61ae:'+file],{cwd:root,maxBuffer:30*1024*1024}).toString().replaceAll('\r\n','\n');
   const current=file=>fs.readFileSync(path.join(root,file),'utf8').replaceAll('\r\n','\n');
-  const strip=s=>s.replace(/    async function runStateChecks\([\s\S]*?(?=\n    stateCheckboxes.forEach)/,'').replace('2026.09.24.5 &middot; Staging','2026.09.24.4 &middot; Staging');
-  assert.equal(strip(current('web-staging/index.html')),strip(prior('web-staging/index.html')));
-  for(const file of ['registry_snapshot_server.py','Charity_Checker_Script for 13_states.py','web-staging/organization-identity.js','web-staging/sales-mode.js','web-staging/ny-connector.js','browser-connector/worker.js','browser-connector/ny-content.js','browser-connector/ny-main.js','browser-connector/recovery.js','browser-connector/protocol.js','browser-connector/staging-bridge.js']) {
-    assert.equal(current(file),prior(file),file);
-  }
+  const scheduler=s=>s.slice(s.indexOf('    async function runStateChecks('),s.indexOf('\n    stateCheckboxes.forEach',s.indexOf('    async function runStateChecks(')));
+  assert.equal(scheduler(current('web-staging/index.html')),scheduler(prior('web-staging/index.html')));
+  for(const file of ['Charity_Checker_Script for 13_states.py','browser-connector/ny-content.js','browser-connector/ny-main.js','browser-connector/recovery.js'])assert.equal(current(file),prior(file),file);
 });

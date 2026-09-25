@@ -49,10 +49,10 @@
     const box = document.getElementById("nyConnectorSetup");
     if (!box) return;
     const response = await bridge("ping");
-    const ready = !!compatible(response), update = !!response.ok && !ready;
+    const ready = !!compatible(response) && response.capabilities?.includes("il-ga-public-dom-v1"), update = !!response.ok && !ready;
     box.hidden = false;
     const message = box.querySelector("[data-connector-message]");
-    message.textContent = ready ? "New York connector connected. Keep Chrome open while checks run." : update ? "Your New York connector needs an update. Follow the three update steps, then refresh CharityClarity." : "Connect this browser to New York using the three setup steps.";
+    message.textContent = ready ? "Registry connector connected. Keep Chrome open while checks run." : update ? "Your registry connector needs an update. Follow the three update steps, then refresh CharityClarity." : "Connect this browser to New York, Illinois and Georgia using the three setup steps.";
     const refreshButton = box.querySelector("[data-connector-refresh]");
     if (refreshButton) {
       refreshButton.hidden = !ready; refreshButton.disabled = !!refreshing || activeLookups > 0;
@@ -65,7 +65,7 @@
     document.querySelectorAll("[data-connector-first-install]").forEach(element => { element.hidden = ready || update; });
     document.querySelectorAll("[data-connector-update]").forEach(element => { element.hidden = !update; });
     document.querySelectorAll("[data-connector-ready]").forEach(element => { element.hidden = !ready; });
-    document.querySelectorAll("[data-connector-setup-link]").forEach(element => { element.textContent = update ? "Update New York in 3 steps" : "Set up New York in 3 steps"; });
+    document.querySelectorAll("[data-connector-setup-link]").forEach(element => { element.textContent = update ? "Update the registry connector" : "Set up the registry connector"; });
     box.dataset.state = ready ? "ready" : update ? "update" : "missing";
   }
   function refresh() {
@@ -101,8 +101,11 @@
     lookupTail = pending.catch(() => {});
     return pending;
   }
-  async function performLookup({ organization_name, ein, email, admin_passcode, device_id, onProgress, alternate_names, purpose = "registration", signal }) {
+  async function performLookup({ organization_name, ein, email, admin_passcode, device_id, onProgress, alternate_names, purpose = "registration", state: registryState = "NY", signal }) {
     signal?.throwIfAborted();
+    const label = {NY:"New York",IL:"Illinois",GA:"Georgia"}[registryState];
+    if (!label) throw new Error("Unsupported browser registry");
+    const supported = c => compatible(c) && (registryState === "NY" || c.capabilities?.includes("il-ga-public-dom-v1"));
     if (refreshing) {
       onProgress?.("New York: waiting for the connection refresh. Other states can continue.");
       await refreshing;
@@ -122,39 +125,39 @@
         signal: signal && !cleanup ? AbortSignal.any([signal, timeout]) : timeout, body: JSON.stringify({ ...credentials, ...fields })
       });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "The New York browser check could not be completed.");
+      if (!response.ok) throw new Error(payload.error || `The ${label} browser check could not be completed.`);
       return payload;
     }
     try {
       const connection = await bridge("ping", null, null, null, null, signal);
       let acquired = connection;
-      if (compatible(connection)) {
+      if (supported(connection)) {
         connected = true;
-        onProgress?.("New York: waiting for the browser connector. Other states can continue.");
-        acquired = await bridge("acquire", null, lookupId, progress => onProgress?.(progress.reconnecting ? "New York: reconnecting and keeping your place in the queue. Other states can continue." : `New York: waiting in the browser queue (position ${progress.position}). Other states can continue.`), null, signal);
+        onProgress?.(`${label}: waiting for the browser connector. Other states can continue.`);
+        acquired = await bridge("acquire", null, lookupId, progress => onProgress?.(progress.reconnecting ? `${label}: reconnecting and keeping your place in the queue. Other states can continue.` : `${label}: waiting in the browser queue (position ${progress.position}). Other states can continue.`), registryState === "NY" ? null : registryState, signal);
       }
       // Start the signed continuation only after queue admission. Waiting cannot
       // consume the master's five-minute evidence lifetime.
-      let state = await api({ action: "start", organization_name, ein, purpose, ...(Array.isArray(alternate_names) ? {alternate_names} : {}), connector_version: compatible(connection) ? connection.version : "0.2.1" });
+      let state = await api({ action: "start", state: registryState, organization_name, ein, purpose, ...(Array.isArray(alternate_names) ? {alternate_names} : {}), connector_version: supported(connection) ? connection.version : "0.2.1" });
       checkToken = state.check_token || "";
-      if (!compatible(connection) && state.phase === "search") {
+      if (!supported(connection) && state.phase === "search") {
         state = await api({ action: "fail", check_token: checkToken, reason: connection.ok ? "NY_CONNECTOR_UPDATE_REQUIRED" : "NY_CONNECTOR_UNAVAILABLE" });
         await setup();
       }
-      if (compatible(connection) && !acquired.ok && state.phase === "search") {
+      if (supported(connection) && !acquired.ok && state.phase === "search") {
         state = await api({ action: "fail", check_token: checkToken, reason: acquired.reason });
       }
-      if (acquired.ok && compatible(connection)) onProgress?.("New York: checking the registry.");
+      if (acquired.ok && supported(connection)) onProgress?.(`${label}: checking the registry.`);
       let count = 0;
-      while (state.phase === "search" && count++ < 10) {
+      while (state.phase === "search" && count++ < (registryState === "NY" ? 10 : 36)) {
         checkToken = state.check_token;
         connected = true;
-        const completed = await bridge("search", state.query, lookupId, progress => onProgress?.(progress.reconnecting ? "New York: reconnecting and resuming this check. Other states can continue." : progress.recovering ? "New York: refreshing the connection, then retrying this check. Other states can continue." : "New York: the registry requested a pause. Retrying automatically."), null, signal);
+        const completed = await bridge("search", state.query, lookupId, progress => onProgress?.(progress.reconnecting ? `${label}: reconnecting and resuming this check. Other states can continue.` : progress.recovering ? "New York: refreshing the connection, then retrying this check. Other states can continue." : `${label}: the registry requested a pause. Retrying automatically.`), null, signal);
         state = completed.ok
           ? await api({ action: "advance", check_token: checkToken, query_id: state.query_id, evidence: completed.evidence })
           : await api({ action: "fail", check_token: checkToken, reason: completed.reason });
       }
-      if (state.phase !== "complete" || !state.result || state.result.state !== "NY") throw new Error("New York did not return a complete result.");
+      if (state.phase !== "complete" || !state.result || state.result.state !== registryState) throw new Error(`${label} did not return a complete result.`);
       return state.result;
     } finally {
       if (connected) await bridge("finish", null, lookupId);

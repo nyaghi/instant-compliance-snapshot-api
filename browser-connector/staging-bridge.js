@@ -31,7 +31,7 @@
     if (job.reconnects === 1) retry(); else job.reconnectTimer = setTimeout(retry, 1000 * job.reconnects);
   }
   function openPort(job, resume = false) {
-    const port = chrome.runtime.connect({ name: (resume ? "cc-ny-resume-v1:" : job.refreshOnly ? "cc-ny-refresh-v1:" : "cc-ny-lookup-v1:") + job.lookupId });
+    const port = chrome.runtime.connect({ name: (resume ? "cc-ny-resume-v1:" : job.refreshOnly ? "cc-ny-refresh-v1:" : job.registryState === "IL" ? "cc-il-lookup-v1:" : job.registryState === "GA" ? "cc-ga-lookup-v1:" : "cc-ny-lookup-v1:") + job.lookupId });
     job.port = port;
     port.onMessage.addListener(message => {
       if (job.closed || job.port !== port) return;
@@ -61,8 +61,8 @@
       if (!job.closed && job.reconnecting && job.port === port) port.disconnect();
     }, 10000);
   }
-  function connect(lookupId, refreshOnly = false) {
-    const job = { port: null, lookupId, refreshOnly, pending: new Map(), closed: false, reconnects: 0, reconnecting: false };
+  function connect(lookupId, refreshOnly = false, registryState = "NY") {
+    const job = { port: null, lookupId, refreshOnly, registryState, pending: new Map(), closed: false, reconnects: 0, reconnecting: false };
     active = job; openPort(job);
     // Secondary transport health check; the worker owns active-operation life.
     job.heartbeat = setInterval(() => {
@@ -97,7 +97,7 @@
     if (!["acquire", "refresh"].includes(m.action) && (m.action !== "search" || !P.validQuery(m.query))) return;
     if (active && active.lookupId !== m.lookup_id) { reply(m.id, { ok: false, reason: "NY_CONNECTOR_BUSY" }); return; }
     try {
-      const job = active || connect(m.lookup_id, m.action === "acquire" && m.intent === "refresh");
+      const job = active || connect(m.lookup_id, m.action === "acquire" && m.intent === "refresh", ["IL","GA"].includes(m.intent) ? m.intent : "NY");
       const request = { action: m.action, id: m.id, ...(m.query ? { query: m.query } : {}) };
       job.pending.set(m.id, request);
       try { if (!job.reconnecting) job.port.postMessage(request); } catch { reopen(job); }

@@ -1,3 +1,26 @@
+# CharityClarity registry connector — 0.5.0 candidate
+
+This candidate adds Illinois and Georgia on staging only. New York retains its existing workflow. This package has passed local protocol, queue and backend tests; live IL/GA connector validation remains required before release.
+
+- Illinois: EIN-first search, selected detail EIN confirmation, full result pagination, state annual-report deadline.
+- Georgia: normal charity-search form, reviewed names, complete pagination and primary charity-license details. Associated paid solicitors are not alternate names.
+- The master backend owns all matching and status decisions. The browser returns public evidence only.
+- No verification cookies, CAPTCHA tokens, credentials or hidden form state are forwarded.
+- Incomplete or blocked searches stay inconclusive. Only completed Illinois searches can receive the new combined status.
+
+## Update for live validation
+
+1. Open Chrome's Extensions page yourself (`chrome://extensions`).
+2. If updating an existing unpacked connector, use this candidate folder as its source, or disable the old connector and choose **Load unpacked** with this folder. Keep only one CharityClarity connector enabled.
+3. Verify version **0.5.0**. Refresh the staging tab.
+4. Keep Chrome open. Illinois and Georgia require the corresponding staging frontend/backend candidate before end-to-end checks can run.
+
+The additional host permissions are limited to the official Illinois and Georgia public registries. Production web/backend deployments are not part of this package.
+
+---
+
+## Existing New York workflow reference
+
 # CharityClarity staging New York connector — 0.3.6
 
 This internal prototype is restricted to staging.compliance-express.com and the New York charities registry. It is not published to the Chrome Web Store and has not been approved for production.

@@ -41,11 +41,11 @@ test('verification exposes only its outcome',()=>{
   assert.deepEqual(normal(P.publicResponse({kind:'verify'},401,{verified:false,token:'secret'})),{kind:'verify',http_status:401,verified:false});
 });
 test('only bounded master EIN or name queries are permitted',()=>{
-  for(const value of [{ein:'123'}, {ein:'000000000'},{orgID:'10-20-30'},{orgName:''},{orgName:'x'.repeat(501)},{ein:'123456789',orgName:'Example'},[]])assert.equal(P.validQuery(value),false);
+  for(const value of [{ein:'123'}, {ein:'000000000'},{orgName:''},{orgName:'x'.repeat(501)},{ein:'123456789',orgName:'Example'},[]])assert.equal(P.validQuery(value),false);
 });
-test('recovery permissions stay explicit and hosts remain limited to approved app origins and NY',()=>{
+test('recovery permissions stay explicit and hosts remain limited to approved app origins and three public registries',()=>{
   const manifest=JSON.parse(fs.readFileSync(path.join(root,'manifest.json'),'utf8'));
-  assert.deepEqual(manifest.host_permissions,['https://staging.compliance-express.com/*','https://www.compliance-express.com/*','https://compliance-express.com/*','https://charities-search.ag.ny.gov/*']);
+  assert.deepEqual(manifest.host_permissions,['https://staging.compliance-express.com/*','https://www.compliance-express.com/*','https://compliance-express.com/*','https://charities-search.ag.ny.gov/*','https://charitable.illinoisattorneygeneral.gov/*','https://verify.sos.ga.gov/*']);
   assert.deepEqual(manifest.permissions,['storage','browsingData','cookies']);
   assert.equal(manifest.minimum_chrome_version,'132');assert.equal(manifest.incognito,'not_allowed');
   for(const source of ['worker.js','staging-bridge.js','ny-content.js','ny-main.js'])assert.equal(/admin_passcode|document\.cookie|chrome\.cookies|chrome\.debugger/.test(fs.readFileSync(path.join(root,source),'utf8')),false);

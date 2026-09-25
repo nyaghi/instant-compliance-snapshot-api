@@ -1,0 +1,144 @@
+/* Public DOM collection only. Identity and status are interpreted by the master. */
+(() => {
+  "use strict";
+  if (window !== window.top) return;
+  const IL = location.origin === "https://charitable.illinoisattorneygeneral.gov";
+  const GA = location.origin === "https://verify.sos.ga.gov";
+  if (!IL && !GA) return;
+  const documentId = crypto.randomUUID();
+  const text = el => (el?.innerText || "").replace(/\s+/g, " ").trim();
+  const visible = el => !!el && el.getClientRects().length > 0;
+  const pause = ms => new Promise(r => setTimeout(r, ms));
+  async function wait(fn, ms = 25000) {
+    const end = Date.now() + ms;
+    while (Date.now() < end) { const value = fn(); if (value) return value; await pause(150); }
+    throw new Error("REGISTRY_RESPONSE_INCOMPLETE");
+  }
+  function set(el, value) {
+    if (!el) throw new Error("REGISTRY_FORM_CHANGED");
+    const descriptor = Object.getOwnPropertyDescriptor(el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype, "value");
+    descriptor.set.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    if (el.value !== value) throw new Error("REGISTRY_FILTER_NOT_SET");
+  }
+  function gaRows() {
+    const table = document.querySelector("#datagrid_results");
+    if (!table) return null;
+    const rows = [];
+    for (const tr of table.querySelectorAll(":scope > tbody > tr")) {
+      const cells = [...tr.children];
+      if (cells.length !== 6 || cells[0].tagName !== "TD") continue;
+      const link = cells[0].querySelector("a"), url = link && new URL(link.href);
+      if (!url || url.origin !== location.origin || url.pathname !== "/verification/Details.aspx") throw new Error("REGISTRY_LINK_CHANGED");
+      if (text(cells[2]) !== "Charities") throw new Error("REGISTRY_FILTER_CHANGED");
+      if (text(cells[3]) === "Paid Solicitor") continue;
+      if (!["Charity", "Exempt Charity", "Private Foundations"].includes(text(cells[3]))) throw new Error("REGISTRY_FILTER_CHANGED");
+      rows.push({name:text(cells[0]), identifier:text(cells[1]), location:text(cells[5]), street:"", region:"", postal_code:"", detail_key:url.searchParams.get("result")});
+    }
+    const pager = [...table.querySelectorAll(":scope > tbody > tr")].at(-1);
+    const current = [...pager.querySelectorAll("span")].map(text).find(v => /^\d+$/.test(v));
+    if (!current || pager.children.length !== 1) throw new Error("REGISTRY_PAGINATION_CHANGED");
+    const next = [...pager.querySelectorAll("a")].find(a => text(a) === String(Number(current)+1) || text(a) === "...");
+    return {rows, page:Number(current), next:!!next};
+  }
+  async function illinois(query) {
+    const inputs = key => document.querySelector(`input[data-val-property-name="${key}"]`);
+    const button = await wait(() => [...document.querySelectorAll("button")].find(el => text(el) === "Search" && visible(el) && !el.disabled), 45000);
+    for (const key of ["Name","Address","City","StateCode","Zip","County","FEIN","FileNumber"]) set(inputs(key), "");
+    const field = query.ein ? "FEIN" : query.identifier ? "FileNumber" : "Name";
+    const value = query.ein || query.identifier || query.orgName;
+    set(inputs(field), value);
+    // Use the normal Search button only after the page enables it. Verification
+    // cookies/tokens and Kendo's internal data API are never read or forwarded.
+    const grid = document.querySelector('.k-grid[id^="CharitiesPublicSearch_"]');
+    if (!grid) throw new Error("REGISTRY_GRID_CHANGED");
+    async function changed(action) {
+      let mutated = false;
+      const observer = new MutationObserver(list => { if (list.some(m => m.type === "childList")) mutated = true; });
+      observer.observe(grid, { childList:true, subtree:true });
+      try {
+        action();
+        await wait(() => mutated && ![...grid.querySelectorAll(".k-loading-mask")].some(visible) && grid.querySelector(".k-pager-info"));
+      } finally { observer.disconnect(); }
+    }
+    await changed(() => button.click());
+    const collected = [];
+    let total = null;
+    for (let page=0; page<10; page++) {
+      const info = text(grid.querySelector(".k-pager-info"));
+      const match = info.match(/(?:of\s+([\d,]+)\s+items)|(?:^No items to display$)/i);
+      if (!match) throw new Error("REGISTRY_TOTAL_CHANGED");
+      const count = match[1] ? Number(match[1].replaceAll(",","")) : 0;
+      if (count > 100 || total !== null && total !== count) throw new Error("REGISTRY_RESULT_LIMIT");
+      total = count;
+      const headers = [...grid.querySelectorAll(".k-grid-header thead th")].map(h=>h.dataset.field);
+      const pageRows = [...grid.querySelectorAll(".k-grid-content tbody > tr[data-uid]")];
+      for (const tr of pageRows) {
+        const cells = [...tr.children], val = key => text(cells[headers.indexOf(key)]);
+        const row = {name:val("Name"), identifier:val("FileNumber"), street:val("Street1"), region:val("State"), postal_code:val("PostalCode"), location:[val("City"),val("State")].filter(Boolean).join(", "), detail_key:""};
+        if (query.identifier && row.identifier === query.identifier) {
+          tr.querySelector('button[title="View Details"]').click();
+          const dialog = await wait(() => { const d=document.querySelector("#KendoWindowLevel1"); return visible(d) && d.innerText.includes("CO Number: " + query.identifier) && d.innerText.includes("Annual Report Due Date:") && d; });
+          return {query, complete:true, body:dialog.innerText};
+        }
+        collected.push(row);
+      }
+      if (collected.length === total) break;
+      const next = grid.querySelector('button[aria-label="Go to the next page"]');
+      if (!next || next.getAttribute("aria-disabled") === "true") throw new Error("REGISTRY_PAGINATION_INCOMPLETE");
+      await changed(() => next.click());
+    }
+    if (query.identifier || collected.length !== total) throw new Error("REGISTRY_RESULTS_INCOMPLETE");
+    return {query, complete:true, total, rows:collected};
+  }
+  async function handle(m) {
+    if (m.action === "registry-ready") return {ready:document.readyState !== "loading", url:location.href, documentId};
+    if (m.action === "registry-il" && IL) return {ok:true, evidence:await illinois(m.query)};
+    if (!GA) throw new Error("REGISTRY_WRONG_ORIGIN");
+    if (m.action === "registry-ga-form") {
+      const profession = [...document.querySelectorAll("select")].find(el=>[...el.options].some(o=>text(o)==="Charities"));
+      if (!profession) throw new Error("REGISTRY_FORM_CHANGED");
+      const option = [...profession.options].find(o=>text(o)==="Charities");
+      if (profession.value !== option.value) { setTimeout(()=>set(profession,option.value), 0); return {ok:true, phase:"profession"}; }
+      const name = document.querySelector("#t_web_lookup__full_name");
+      set(name, m.query.orgName + "*");
+      // New search navigation starts from a fresh blank form, no old filters.
+      const search = [...document.querySelectorAll('input[type="submit"],button')].find(el=>/^(Search)$/i.test(el.value || text(el)));
+      if (!search) throw new Error("REGISTRY_SEARCH_CHANGED");
+      setTimeout(()=>search.click(), 0); return {ok:true, phase:"submitted"};
+    }
+    if (m.action === "registry-ga-rows") {
+      const result = gaRows();
+      if (!result) {
+        const body = document.body.innerText;
+        if (/No records found/i.test(body) && location.pathname === "/verification/SearchResults.aspx") return {ok:true, rows:[], page:1, next:false};
+        throw new Error("REGISTRY_RESULTS_INCOMPLETE");
+      }
+      return {ok:true,...result};
+    }
+    if (m.action === "registry-ga-next") {
+      const table=document.querySelector("#datagrid_results"), pager=[...table.querySelectorAll(":scope > tbody > tr")].at(-1);
+      const link=[...pager.querySelectorAll("a")].find(a=>text(a)===String(m.page));
+      if (!link) throw new Error("REGISTRY_PAGINATION_INCOMPLETE");
+      setTimeout(()=>link.click(),0); return {ok:true};
+    }
+    if (m.action === "registry-ga-detail") {
+      // Serialize only public primary-license spans. Never forward forms,
+      // viewstate, cookies, CAPTCHA data or associated paid-solicitor licenses.
+      const all=[...document.querySelectorAll('span[id]')];
+      const boundary=document.querySelector('#more_details');
+      const spans=all.filter(el=>/^_ctl\d+__ctl\d+_(full_name|license_no|profession|license_type|status|issue_date|expiry|last_ren)$/.test(el.id) && (!boundary || !!(el.compareDocumentPosition(boundary)&Node.DOCUMENT_POSITION_FOLLOWING)));
+      const escape=s=>s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
+      const body=spans.map(el=>`<span id="${el.id}">${escape(text(el))}</span>`).join('');
+      if (!body || !body.includes(m.query.identifier)) throw new Error("REGISTRY_DETAIL_INCOMPLETE");
+      return {ok:true,evidence:{query:m.query,complete:true,body}};
+    }
+    throw new Error("REGISTRY_COMMAND_INVALID");
+  }
+  chrome.runtime.onMessage.addListener((m,sender,reply)=>{
+    if(sender.id!==chrome.runtime.id || !m?.action?.startsWith('registry-')) return false;
+    handle(m).then(reply,()=>reply({ok:false,reason:'NY_CONNECTOR_INCOMPLETE'}));
+    return true;
+  });
+})();

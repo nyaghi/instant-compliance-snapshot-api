@@ -83,8 +83,8 @@ class RegistrationDates(unittest.TestCase):
         for state,body in [('CO',self.co_detail()),('WV',self.wv_detail())]:
             for status in ['Not Registered','Site Not Reachable','Unable to Confirm','Unable to Verify','Needs Review','Unknown']:
                 self.assertEqual(cc.registration_date_metadata(self.result(state),status,body)['registration_date'],'')
-    def test_missing_dates_are_completely_blank_for_all_32_jurisdictions(self):
-        self.assertEqual(len(cc.SUPPORTED_STATES),32)
+    def test_missing_dates_are_completely_blank_for_all_34_jurisdictions(self):
+        self.assertEqual(len(cc.SUPPORTED_STATES),34)
         for state in cc.SUPPORTED_STATES:
             self.assertTrue(all(v == '' for v in cc.registration_date_metadata(self.result(state)).values()), state)
     def test_wv_last_registration_keeps_its_own_label(self):

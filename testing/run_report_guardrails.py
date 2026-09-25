@@ -63,7 +63,7 @@ class ReportTests(unittest.TestCase):
         self.assertIn("1 states checked", text)
 
     def test_all_30_states_retain_complete_evidence_with_adverse_and_incomplete(self):
-        statuses = sorted(report.HIGH | report.MODERATE | report.INCOMPLETE | report.LOW)
+        statuses = sorted((report.HIGH | report.MODERATE | report.INCOMPLETE | report.LOW) - {report.IL_COMBINED})
         rows = [row(s, statuses[i % len(statuses)]) for i, s in enumerate(sorted(cc.SUPPORTED_STATES))]
         for r in rows:
             r["comments"] = ("Long detailed evidence with registry dates and organization identity. " * 20)
@@ -91,7 +91,7 @@ class ReportTests(unittest.TestCase):
         self.assertIn("scheduled download not supplied in this snapshot", text)
 
     def test_ok_certificate_retrieval_time_survives_excerpt_shortening(self):
-        statuses = sorted(report.HIGH | report.MODERATE | report.INCOMPLETE | report.LOW)
+        statuses = sorted((report.HIGH | report.MODERATE | report.INCOMPLETE | report.LOW) - {report.IL_COMBINED})
         rows = [row(s, statuses[i % len(statuses)]) for i, s in enumerate(sorted(cc.SUPPORTED_STATES))]
         ok = next(r for r in rows if r["state"] == "OK")
         ok["comments"] = "Long registry evidence. " * 30 + "Certificate freshness note: reused the verified certificate retrieved 2026-09-06 12:34:56 UTC (less than 24 hours old)."

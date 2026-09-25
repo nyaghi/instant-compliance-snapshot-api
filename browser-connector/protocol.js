@@ -8,13 +8,20 @@
   const FIELDS = ["ein", "orgName", "orgID", "regtype", "city", "state"];
   function validId(value) { return typeof value === "string" && /^[a-zA-Z0-9_-]{16,80}$/.test(value); }
   function validQuery(value) {
+    if (value?.state === "IL" || value?.state === "GA") {
+      const keys = Object.keys(value).sort().join(",");
+      if (keys === "ein,state") return value.state === "IL" && typeof value.ein === "string" && /^[0-9]{9}$/.test(value.ein) && value.ein !== "000000000";
+      if (keys === "orgName,state") return typeof value.orgName === "string" && value.orgName.trim().length > 0 && value.orgName.length <= 500;
+      if (keys === "identifier,state") return value.state === "IL" && /^\d{8}$/.test(value.identifier);
+      return keys === "detail_key,identifier,state" && value.state === "GA" && /^CH\d+$/.test(value.identifier) && /^[a-f0-9-]{36}$/.test(value.detail_key);
+    }
     if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length !== 1) return false;
     if (Object.hasOwn(value, "ein")) return typeof value.ein === "string" && /^[0-9]{9}$/.test(value.ein) && value.ein !== "000000000";
     if (Object.hasOwn(value, "orgID")) return typeof value.orgID === "string" && /^[0-9]{2}-[0-9]{2}-[0-9]{2}$/.test(value.orgID);
     return Object.hasOwn(value, "orgName") && typeof value.orgName === "string" && value.orgName.trim().length > 0 && value.orgName.length <= 500;
   }
   function sameQuery(actual, expected) {
-    return validQuery(expected) && actual && Object.keys(actual).length === 1 &&
+    return validQuery(expected) && actual && Object.keys(actual).length === Object.keys(expected).length &&
       Object.entries(expected).every(([key, value]) => actual[key] === value);
   }
   function publicRequest(raw) {
