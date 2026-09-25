@@ -101,6 +101,21 @@ class DurableTests(unittest.TestCase):
         self.finish(first);self.finish(second)
         self.assertEqual(self.q.claim(worker)['state'],'CO')
 
+    def test_worker_headroom_ceiling_cannot_bypass_physical_or_workflow_limit(self):
+        worker=self.worker(slots=12)
+        for i in range(20):self.submit(payload(f'{i+1:09}'))
+        self.assertIsNone(self.q.claim(worker,slot_limit=0))
+        jobs=[self.q.claim(worker,slot_limit=2,admission_evidence={'reason':'fixture'}) for _ in range(3)]
+        self.assertEqual(sum(j is not None for j in jobs),2)
+        more=[self.q.claim(worker,slot_limit=100) for _ in range(12)]
+        self.assertEqual(sum(j is not None for j in more),10)
+        self.assertIsNone(self.q.claim(worker,slot_limit=100))
+        second=self.worker(slots=12)
+        self.assertEqual(sum(self.q.claim(second) is not None for _ in range(12)),3)
+        with self.q.transaction() as (c,_):
+            evidence=c.execute("SELECT detail FROM cc_lab_events WHERE event='claimed' AND detail->'admission'->>'reason'='fixture'").fetchall()
+        self.assertEqual(len(evidence),2)
+
     def test_scope_isolation_and_completed_result_replay(self):
         a, b = self.submit(scope='a'), self.submit(scope='b')
         self.assertNotEqual(a,b)

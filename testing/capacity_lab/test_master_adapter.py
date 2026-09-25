@@ -33,6 +33,19 @@ class MasterIntegration(unittest.TestCase):
         self.assertIsInstance(new.body[1], ast.If)
         self.assertEqual(ast.dump(new.body[1].test), "Name(id='supplied_name', ctx=Load())")
         new.body.pop(1)
+        # CPU optimizations only wrap pure operations; their rule bodies must
+        # remain byte-for-byte equivalent in the AST. The contextual memo key
+        # and Kansas exact-workbook cache have dedicated mutation/isolation tests.
+        for name in ('canonical_name_punctuation','complete_name_identity_key',
+                     'redundant_bracket_acronym_key','organization_match_target_variants'):
+            node=next(n for n in after.body if isinstance(n,ast.FunctionDef) and n.name==name)
+            self.assertEqual(len(node.decorator_list),1)
+            node.decorator_list=[]
+        after.body.remove(next(n for n in after.body if isinstance(n,ast.FunctionDef) and n.name=='memoize_reviewed_name_targets'))
+        loader=next(n for n in after.body if isinstance(n,ast.FunctionDef) and n.name=='load_ks_weekly_checker')
+        cache_assignment=loader.body[1].body.pop()
+        self.assertIsInstance(cache_assignment,ast.Assign)
+        self.assertEqual(ast.unparse(cache_assignment.targets[0]),'KS_WEEKLY_CHECKER.records_from_workbook_bytes')
         # The Sep 25 request explicitly authorizes PA's response-completion fix.
         # All other master functions, including PA classification and shared
         # matching/discovery rules, must still equal the protected baseline.

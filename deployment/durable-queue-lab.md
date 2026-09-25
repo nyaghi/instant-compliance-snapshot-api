@@ -122,6 +122,32 @@ Sources: https://render.com/pricing and https://render.com/docs/postgresql-creat
 
 ## Authorized full-state follow-up (September 25)
 
+The perf.11 lab candidate addresses measured CPU pressure without changing any
+matching or status rule bodies. Bounded caches reuse pure punctuation/acronym
+keys and target variants; the variant key includes the complete reviewed alias
+tuple and returns a fresh list. Kansas's parser caches one exact workbook byte
+sequence, leaving weekly asset validation, current metadata and all record
+selection unchanged. Offline profiles found 24 identical workbook parses in
+one negative KS lookup and almost 20,000 repeated target generations in NH.
+
+The existing two Pro services may each admit up to 12 weighted task slots with
+CE_LAB_RESOURCE_ADMISSION=1. This is not additional paid CPU: cgroup CPU/memory
+measurements pause new starts at 85% CPU or without 384 MiB of memory headroom
+below 85% of the allocation, and pace process launches by at least 250 ms.
+Missing measurements retain the former eight-slot ceiling. Running work keeps
+its reservation and deadline; the 15-workflow global cap, per-registry caps,
+fair organization turns and safe termination rules are preserved. This is a
+candidate to measure, not a claim that 24 CPU-heavy tasks can run at once.
+
+Perf.10's real three-organization discovery-plus-32-state comparison preserved
+all 96 statuses, identities and dates after correcting a Windows UTF-8 read in
+the comparison harness. Florida retained its initial date and NY succeeded for
+all three organizations. Registration averaged 125.4 seconds versus 63.4 solo;
+mean state queue time rose from 12.1 to 57.8 seconds while execution rose from
+19.0 to 19.6. Both workers reached their two-CPU limit; no retries or transport
+errors occurred. The speed stop gate prevents increasing organization load
+until the candidate is tested on the same controls.
+
 The user authorized adding New York, improving queue/CPU pressure and Florida
 date reliability, then increasing the controlled load. The perf.10 candidate
 enables CE_LAB_NY_BROWSER=1 and routes NY through the existing master's verified

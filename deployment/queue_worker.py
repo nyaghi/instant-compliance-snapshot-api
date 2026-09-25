@@ -108,12 +108,66 @@ class ProcessTree:
         self.log.close()
 
 
+class ResourceAdmission:
+    """Lab-only launch pacing; existing tasks always retain their reservations.
+
+    Extra slots are usable only with cgroup CPU/memory evidence. Missing metrics
+    retain the original eight-slot ceiling; they never imply unlimited capacity.
+    """
+    def __init__(self, root=Path('/sys/fs/cgroup'), clock=time.monotonic):
+        self.root, self.clock = root, clock
+        self.previous = None
+        self.last_launch = float('-inf')
+        self.snapshot = {}
+
+    def limit(self, configured, used):
+        now = self.clock()
+        if now-self.last_launch < .25:
+            self.snapshot['reason'] = 'launch_pacing'
+            return used
+        try:
+            quota, period = (self.root/'cpu.max').read_text().split()
+            cores = int(quota)/int(period)
+            if cores <= 0: raise ValueError('Invalid CPU allocation')
+            counters = dict(line.split() for line in (self.root/'cpu.stat').read_text().splitlines())
+            cpu = int(counters['usage_usec'])/1_000_000
+            memory = int((self.root/'memory.current').read_text())
+            maximum = int((self.root/'memory.max').read_text())
+            if not 0 <= memory <= maximum or maximum <= 0: raise ValueError('Invalid memory allocation')
+            previous = self.previous
+            # Keep a >=250 ms interval so short samples do not swing the gate.
+            if previous is None or now-previous[0] >= .25:
+                self.previous = (now,cpu)
+            utilization = ((cpu-previous[1])/(now-previous[0])/cores
+                if previous and now>previous[0] and cpu>=previous[1] else None)
+            self.snapshot = {'cpu_fraction': utilization, 'memory_bytes':memory,
+                'memory_limit_bytes':maximum,'configured_slots':configured,'reason':'available'}
+            # Leave space for a new master process and its browser, if required.
+            if memory + 384*1024*1024 > .85*maximum:
+                self.snapshot['reason']='memory_headroom'
+                return used
+            if utilization is not None and utilization >= .85:
+                self.snapshot['reason']='cpu_pressure'
+                return used
+            if utilization is None:
+                self.snapshot['reason']='cpu_warmup'
+                return min(configured,8)
+            return configured
+        except (OSError, ValueError, KeyError, ZeroDivisionError):
+            self.snapshot={'reason':'metrics_unavailable','configured_slots':configured}
+            return min(configured,8)
+
+    def launched(self): self.last_launch=self.clock()
+
+
 class Supervisor:
     def __init__(self, queue, version, slots=8, command=None, env=None):
         self.queue, self.version, self.slots = queue, version, slots
         self.id = os.environ.get('RENDER_INSTANCE_ID', 'local')+'-'+uuid.uuid4().hex
         self.command = command or [sys.executable, str(ROOT/'deployment/queue_engine.py')]
         self.env = env
+        settings=os.environ if env is None else env
+        self.admission = ResourceAdmission() if settings.get('CE_LAB_RESOURCE_ADMISSION') == '1' else None
         self.stop_event = threading.Event()
         self.active = {}
         self.queue.register_worker(self.id, version, slots)
@@ -167,9 +221,11 @@ class Supervisor:
                         except Exception: continue
                         r['temp'].cleanup(); del self.active[ident]
                 used = sum(r['job']['weight'] for r in self.active.values())
-                if used < self.slots and time.monotonic()-last_heartbeat < 8:
+                ceiling = self.admission.limit(self.slots,used) if self.admission else self.slots
+                if used < ceiling and time.monotonic()-last_heartbeat < 8:
                     claim_started = time.monotonic()
-                    try: job = self.queue.claim(self.id)
+                    try: job = self.queue.claim(self.id,slot_limit=ceiling,
+                        admission_evidence=dict(self.admission.snapshot) if self.admission else None)
                     except Exception: job = None
                     if job:
                         temp = tempfile.TemporaryDirectory(prefix='cc-lab-task-')
@@ -185,6 +241,7 @@ class Supervisor:
                             tree = ProcessTree([*self.command, str(output)], child_job, temp.name, child_env)
                             self.active[job['id']] = dict(job=job, tree=tree, temp=temp, output=output,
                                                         deadline=deadline)
+                            if self.admission:self.admission.launched()
                         except Exception:
                             self.queue.complete(self.id, job['id'], job['token'], error='WORKER_START_FAILED')
                             temp.cleanup()

@@ -55,7 +55,7 @@
   "CE_BATCH_ISOLATED_STATES": "ME,OR,FL,WI,VA,SC,ND",
   "CE_PUBLIC_RESERVED_BROWSER_LOOKUPS": "1",
   "PUBLIC_BASE_URL": "https://instant-compliance-snapshot-api-hn4v.onrender.com",
-  "CE_APP_VERSION": "2026.09.25.perf.10-performance-lab",
+  "CE_APP_VERSION": "2026.09.25.perf.11-performance-lab",
   "CE_BATCH_FANOUT_SINGLE_STATE_LOOKUPS": "0",
   "CE_SINGLE_STATE_OVERFLOW_API_URL": "",
   "CE_SINGLE_STATE_OVERFLOW_API_URLS": "",
@@ -67,6 +67,7 @@
   "CE_LEAD_LOG_WEBHOOK_URL": "",
   "CE_LAB_DURABLE_QUEUE": "1",
   "CE_LAB_QUEUE_WORKER": "1",
-  "CE_LAB_WORKER_SLOTS": "8",
+  "CE_LAB_WORKER_SLOTS": "12",
+  "CE_LAB_RESOURCE_ADMISSION": "1",
   "CE_LAB_NY_BROWSER": "1"
 }

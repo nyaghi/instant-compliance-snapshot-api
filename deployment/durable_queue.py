@@ -137,7 +137,7 @@ class Queue:
             return ident, created
 
     def register_worker(self, ident, version, slots):
-        if not 1 <= slots <= 8: raise ValueError('Worker reservations must be 1–8')
+        if not 1 <= slots <= 12: raise ValueError('Worker reservations must be 1–12')
         with self.transaction() as (c, now):
             cfg = c.execute('SELECT * FROM cc_lab_settings WHERE id=1').fetchone()
             if version != cfg['source_version']: raise Conflict('Worker release differs from queue')
@@ -170,16 +170,17 @@ class Queue:
                   "WHEN stop_reason IS NOT NULL THEN 'stopping' WHEN started IS NOT NULL THEN 'active' ELSE 'queued' END "
                   'WHERE finished IS NULL')
 
-    def claim(self, worker):
+    def claim(self, worker, slot_limit=None, admission_evidence=None):
         with self.transaction() as (c, now):
             self._settle(c, now)
             wk = c.execute('SELECT * FROM cc_lab_workers WHERE id=%s', (worker,)).fetchone()
             if not wk or wk['retired']: raise Conflict('Worker is not registered or is retired')
+            ceiling = wk['slots'] if slot_limit is None else min(wk['slots'],max(0,int(slot_limit)))
             cfg = c.execute('SELECT * FROM cc_lab_settings WHERE id=1').fetchone()
             held = c.execute("SELECT * FROM cc_lab_jobs WHERE phase IN ('running','stopping','quarantined')").fetchall()
             used = sum(j['weight'] for j in held if j['owner'] == worker)
             c.execute('UPDATE cc_lab_workers SET heartbeat=%s WHERE id=%s', (now, worker))
-            if used >= wk['slots']: return None
+            if used >= ceiling: return None
             active = c.execute('SELECT * FROM cc_lab_workflows WHERE started IS NOT NULL AND finished IS NULL').fetchall()
             running = Counter(j['workflow_id'] for j in held)
             busy = Counter(r for j in held for r in j['resources'])
@@ -203,14 +204,15 @@ class Queue:
                 if w['source_version'] != wk['source_version'] or running[w['id']] >= 15: continue
                 if w['started'] is None and len(active) >= cfg['workflow_limit']: continue
                 for j in pending.get(w['id'], []):
-                    if used+j['weight'] > wk['slots']: continue
+                    if used+j['weight'] > ceiling: continue
                     if any(busy[r] >= cfg['registry_limits'].get(r, 4) for r in j['resources']): continue
                     token = str(uuid.uuid4())
                     run_until = min(w['deadline'], now + (90 if j['state'] == '@discovery' else 300))
                     c.execute("UPDATE cc_lab_jobs SET phase='running',owner=%s,token=%s,attempt=attempt+1,claimed=%s,lease_until=%s,run_until=%s WHERE id=%s",
                               (worker, token, now, now+20, run_until, j['id']))
                     c.execute("UPDATE cc_lab_workflows SET phase='active',started=COALESCE(started,%s),dispatched=%s WHERE id=%s", (now, now, w['id']))
-                    self.event(c, now, 'claimed', w['id'], j['id'], worker=worker, token=token)
+                    self.event(c, now, 'claimed', w['id'], j['id'], worker=worker, token=token,
+                               slot_limit=ceiling, admission=admission_evidence)
                     return {**j, 'owner': worker, 'token': token, 'attempt': j['attempt']+1,
                             'payload': w['payload'], 'version': w['source_version'], 'run_seconds': max(0, run_until-now),
                             'submitted': w['submitted'], 'claimed': now}

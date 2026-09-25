@@ -528,6 +528,7 @@ def load_checker():
     return module
 
 
+@lru_cache(maxsize=8192)
 def canonical_name_punctuation(value: str) -> str:
     """Normalize punctuation only, including recognizable UTF-8 decoding damage."""
     value = value or ""
@@ -675,6 +676,11 @@ def load_ks_weekly_checker():
             )
         else:
             KS_WEEKLY_CHECKER = load_module_from_path("charity_ks_weekly_checker", KS_WEEKLY_CHECKER_PATH)
+        # Parsing is pure in the exact workbook bytes. Keep one parsed version;
+        # changed bytes miss the cache, and load_live_records still refreshes
+        # source metadata. The validated weekly asset itself is not modified.
+        KS_WEEKLY_CHECKER.records_from_workbook_bytes = lru_cache(maxsize=1)(
+            KS_WEEKLY_CHECKER.records_from_workbook_bytes)
     return KS_WEEKLY_CHECKER
 
 
@@ -4741,6 +4747,24 @@ def acronym_prefix_expands_to_registry(original_name: str, registry_name: str) -
     return prefix == registry_acronym[: len(prefix)]
 
 
+def memoize_reviewed_name_targets(function):
+    """Reuse pure target generation only for an identical reviewed-name context."""
+    @lru_cache(maxsize=512)
+    def cached(name, ein, reviewed_names):
+        # Called only by wrapped, whose current context supplies this key.
+        return tuple(function(name, ein))
+
+    @wraps(function)
+    def wrapped(name, ein=""):
+        # Include even an empty alias tuple: removing an alias must not restore
+        # an earlier approval. Return a new list so callers cannot mutate cache.
+        return list(cached(name, ein, tuple(known_names_for_ein(ein))))
+    wrapped.cache_clear = cached.cache_clear
+    wrapped.cache_info = cached.cache_info
+    return wrapped
+
+
+@memoize_reviewed_name_targets
 def organization_match_target_variants(name: str, ein: str = "") -> list[str]:
     """Safe names used to accept a registry row after a broad search query.
 
@@ -10184,6 +10208,7 @@ def normalized_match_name(value: str) -> str:
     return re.sub(r"\s+", " ", normalized).strip()
 
 
+@lru_cache(maxsize=8192)
 def complete_name_identity_key(value: str) -> str:
     """Case/punctuation/entity-suffix equality without deleting name articles."""
     value = canonical_name_punctuation(value).casefold()
@@ -10318,6 +10343,7 @@ def single_plural_token_variant_match(left: str, right: str) -> bool:
     return False
 
 
+@lru_cache(maxsize=8192)
 def redundant_bracket_acronym_key(value: str) -> tuple[str, bool]:
     """Remove only an uppercase acronym repeating the immediately preceding words."""
     value = canonical_name_punctuation(value or "")
