@@ -18,8 +18,9 @@ adapter, matching, alias, EIN/address, status, comment, or date rule is copied.
 - No changes to staging, production, user Chrome, or the NY connector.
 
 The additional Pro worker is $85/month at the pricing reviewed September 25,
-2026, prorated. The existing Pro lab is also $85/month: combined compute would
-be $170/month. The temporary database adds no charge. A later paid 256 MB
+2026, prorated. The user approved and activated this worker on September 25.
+The existing Pro lab is also $85/month: combined compute is $170/month.
+The temporary database adds no charge. A later paid 256 MB
 database is $6/month plus applicable storage ($0.30/GB/month), and requires its
 own explicit resource decision. No automatic paid database upgrade is included.
 
@@ -78,7 +79,14 @@ private experiment client. Health/metrics and private assets remain available.
   registry status. NY is explicitly unqualified and returns
   `NY_COLLECTOR_NOT_CONFIGURED`; it never contacts the user's browser.
 
-## Deployment switches (candidate, not active configuration)
+## Active lab deployment
+
+Both services run commit `84d4070b42ec77d99c9692d23fbdc37fae6e7866` as
+`2026.09.25.perf.7-performance-lab`. The API/worker service is
+`srv-d8u0hsu7r5hc73aqfsg0`; the independent background worker is
+`srv-dar7adgu01pc738fsmgg`. Both have automatic deployment disabled.
+The shared free database is `dpg-dar6utvavr4c7380ou60-a`.
+Only the isolated lab has these changes; staging and production are unchanged.
 
 Build: `pip install -r deployment/requirements-lab.txt && PLAYWRIGHT_BROWSERS_PATH=0 python -m playwright install chromium`
 

@@ -202,6 +202,35 @@ class DurableTests(unittest.TestCase):
                 for t in threads:t.join(20)
                 self.assertFalse(any(t.is_alive() for t in threads))
 
+    def test_os_worker_loss_requires_confirmed_death_then_recovers(self):
+        ident=self.submit(payload(states=['CO']))
+        with tempfile.TemporaryDirectory() as temp:
+            marker=Path(temp)/'worker.id'
+            env={**os.environ,'CC_TEST_SCHEMA':self.schema,'CC_FIXTURE_DELAY':'120'}
+            tree=ProcessTree([sys.executable,str(ROOT/'testing/capacity_lab/queue_fixture_worker.py'),str(marker)],{},temp,env)
+            try:
+                end=time.monotonic()+30; job=None
+                while time.monotonic()<end:
+                    with self.q.transaction() as (c,_):
+                        job=c.execute("SELECT * FROM cc_lab_jobs WHERE workflow_id=%s AND phase='running'",(ident,)).fetchone()
+                    if job and marker.is_file():break
+                    time.sleep(.2)
+                self.assertIsNotNone(job)
+                worker=marker.read_text()
+                tree.stop()
+                self.assertFalse(process_running(tree.pid))
+                with self.q.transaction() as (c,now):c.execute('UPDATE cc_lab_jobs SET lease_until=%s WHERE id=%s',(now-1,job['id']))
+                self.assertEqual(self.q.status('a',ident)['phase'],'attention')
+                replacement=self.worker()
+                self.assertIsNone(self.q.claim(replacement))
+                self.q.confirm_worker_stopped(worker,'OS test verified supervisor and descendants terminated via Job Object/process group')
+                newer=self.q.claim(replacement)
+                self.assertEqual(newer['attempt'],2)
+                self.assertFalse(self.q.complete(worker,job['id'],job['token'],error='late stale completion'))
+                self.finish(newer)
+                self.assertEqual(self.q.status('a',ident)['phase'],'completed')
+            finally:tree.stop()
+
 
 class InputTests(unittest.TestCase):
     def test_rejects_credentials_scope_injection_and_invalid_inputs(self):
