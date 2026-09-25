@@ -99,6 +99,19 @@ class LabTests(unittest.TestCase):
             with self.subTest(key=key),self.assertRaises(RuntimeError):
                 lab.validate_environment({**self.env(),key:value})
 
+    def test_durable_database_and_worker_targets_are_explicit(self):
+        env={**self.env(),'CE_LAB_DURABLE_QUEUE':'1',
+             'CE_LAB_DATABASE_URL':'postgresql://fixture:fixture@dpg-dar6utvavr4c7380ou60-a/cc_performance_lab'}
+        lab.validate_environment(env)
+        for dsn in ('postgresql://fixture:fixture@production/cc_performance_lab',
+                    'postgresql://fixture:fixture@dpg-dar6utvavr4c7380ou60-a/other_database'):
+            with self.assertRaises(RuntimeError):lab.validate_environment({**env,'CE_LAB_DATABASE_URL':dsn})
+        worker={**env,'CE_LAB_ROLE':'worker','CE_LAB_WORKER_SERVICE_ID':'fixture-worker',
+                'RENDER_SERVICE_ID':'fixture-worker','RENDER_SERVICE_NAME':'charityclarity-performance-lab-worker-1'}
+        lab.validate_environment(worker)
+        for sid in ('srv-d8a38lnavr4c73d4ib30','srv-d82afqjrjlhs738j7or0'):
+            with self.assertRaises(RuntimeError):lab.validate_environment({**worker,'CE_LAB_WORKER_SERVICE_ID':sid,'RENDER_SERVICE_ID':sid})
+
     def test_authorization_is_exact_and_malformed_input_rejected(self):
         self.assertTrue(lab.valid_authorization('Bearer '+KEY,KEY))
         self.assertTrue(lab.valid_authorization('Basic '+base64.b64encode(('lab:'+KEY).encode()).decode(),KEY))

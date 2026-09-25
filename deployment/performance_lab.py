@@ -31,8 +31,14 @@ DISABLED_CONNECTIONS = (
 def validate_environment(env):
     if env.get('PUBLIC_BASE_URL') != LAB_ORIGIN:
         raise RuntimeError('Performance entry point requires its isolated lab origin')
-    if env.get('RENDER_SERVICE_ID', LAB_SERVICE_ID) != LAB_SERVICE_ID:
+    service = env.get('RENDER_SERVICE_ID', LAB_SERVICE_ID)
+    worker_allowed = (env.get('CE_LAB_ROLE') == 'worker'
+        and service == env.get('CE_LAB_WORKER_SERVICE_ID')
+        and env.get('RENDER_SERVICE_NAME') == 'charityclarity-performance-lab-worker-1')
+    if service != LAB_SERVICE_ID and not worker_allowed:
         raise RuntimeError('Performance entry point refuses another Render service')
+    if service in ('srv-d8a38lnavr4c73d4ib30', 'srv-d82afqjrjlhs738j7or0'):
+        raise RuntimeError('A protected staging service is never a lab worker')
     if not env.get('CE_APP_VERSION', '').endswith('-performance-lab'):
         raise RuntimeError('Performance version label required')
     if len(env.get('CE_LAB_ACCESS_KEY', '')) < 40:
@@ -44,6 +50,12 @@ def validate_environment(env):
     for key in DISABLED_CONNECTIONS:
         if env.get(key) != '':
             raise RuntimeError('Connection must be explicitly disabled: ' + key)
+    if env.get('CE_LAB_DURABLE_QUEUE') == '1':
+        database = urlparse(env.get('CE_LAB_DATABASE_URL', ''))
+        if database.scheme not in ('postgres', 'postgresql') or database.hostname not in (
+            'dpg-dar6utvavr4c7380ou60-a', 'dpg-dar6utvavr4c7380ou60-a.oregon-postgres.render.com'
+        ) or database.path != '/cc_performance_lab':
+            raise RuntimeError('Durable queue requires the isolated lab database')
 
 
 def valid_authorization(header, key):
@@ -103,7 +115,7 @@ def lab_asset(path):
     return data, mimetypes.guess_type(file)[0] or 'application/octet-stream'
 
 
-def build_handler(master, key, capacity=None):
+def build_handler(master, key, capacity=None, durable=None):
     lock = threading.Lock()
     telemetry = {'started_epoch': time.time(), 'active_requests': 0, 'peak_requests': 0, 'completed_requests': 0}
 
@@ -130,6 +142,7 @@ def build_handler(master, key, capacity=None):
             data = {'ok': True, 'app_version': master.APP_VERSION, 'environment': 'performance-lab',
                     'supported_states': master.SUPPORTED_STATES, 'private_access': True,
                     'ny_browser_validation_enabled': False, 'shared_helpers_enabled': False,
+                    'durable_workflows_enabled': durable is not None,
                     'downloadable_data': {s: master.downloadable_data_info(s) for s in ('KS','KY','LA','NH','OR')}}
             body = json.dumps(data).encode()
             self.send_response(200)
@@ -148,11 +161,21 @@ def build_handler(master, key, capacity=None):
                 data['app_version'] = master.APP_VERSION
                 data['instance'] = os.environ.get('RENDER_INSTANCE_ID', 'local')
                 if capacity is not None: data['capacity'] = capacity.snapshot()
+                if durable is not None: data['durable_queue'] = durable.metrics()
                 try:
                     import resource
                     data['process_peak_rss_kib'] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
                 except ImportError: pass
                 return self._send_json(200, data, {'Cache-Control':'no-store'})
+            if self.path.startswith('/api/lab/workflows/') and durable is not None:
+                from deployment.durable_queue import NotFound
+                ident = self.path.removeprefix('/api/lab/workflows/')
+                try: data = durable.status('private-performance-lab', ident)
+                except NotFound: return self._send_json(404, {'error': 'Workflow not found'})
+                except Exception: return self._send_json(503, {'error': 'Saved progress is temporarily unavailable'})
+                return self._send_json(200, data, {'Cache-Control': 'no-store'})
+            if durable is not None and self.path.startswith('/evidence/'):
+                return self._send_json(409, {'error': 'Evidence execution is not enabled in the durable queue experiment'})
             asset = lab_asset(self.path)
             if asset:
                 body, kind = asset
@@ -171,6 +194,29 @@ def build_handler(master, key, capacity=None):
 
         def do_POST(self):
             if not self.authorized(): return
+            if durable is not None:
+                from deployment.durable_queue import normalize_submission, Conflict, QueueFull, NotFound
+                try:
+                    if self.path == '/api/lab/workflows':
+                        length = int(self.headers.get('Content-Length', '0'))
+                        if not 0 < length <= 32768: raise ValueError('Workflow input must be 1–32768 bytes')
+                        payload = normalize_submission(json.loads(self.rfile.read(length)), master.SUPPORTED_STATES)
+                        ident, created = durable.submit('private-performance-lab', self.headers.get('Idempotency-Key'),
+                            payload, master.APP_VERSION, (*master.IDENTITY_STATES, 'IRS'))
+                        return self._send_json(202 if created else 200,
+                            {'id': ident, 'created': created, 'progress_url': '/api/lab/workflows/'+ident}, {'Cache-Control': 'no-store'})
+                    if self.path.startswith('/api/lab/workflows/') and self.path.endswith('/cancel'):
+                        ident = self.path.removeprefix('/api/lab/workflows/').removesuffix('/cancel')
+                        durable.cancel('private-performance-lab', ident)
+                        return self._send_json(202, {'id': ident, 'cancel_requested': True})
+                    if self.path in ('/api/check', '/api/discover-names', '/api/ny-connector'):
+                        return self._send_json(409, {'error': 'Use the durable lab workflow endpoint; direct execution is disabled'})
+                    return self._send_json(404, {'error': 'Not found'})
+                except Conflict as exc: return self._send_json(409, {'error': str(exc)})
+                except QueueFull as exc: return self._send_json(429, {'error': str(exc)})
+                except NotFound: return self._send_json(404, {'error': 'Workflow not found'})
+                except (ValueError, TypeError, UnicodeError): return self._send_json(400, {'error': 'Invalid workflow input or idempotency key'})
+                except Exception: return self._send_json(503, {'error': 'Workflow persistence unavailable; retry with the same idempotency key'})
             if self.path == '/api/ny-connector':
                 return self._send_json(503, {'error':'An isolated New York browser collector has not been configured in this lab.'})
             from deployment.lab_capacity import REQUEST_GROUP, REQUEST_TIMING
@@ -211,11 +257,41 @@ def main():
     # Private lab credential, distinct from the existing staging access code.
     master.ADMIN_PASSCODE = os.environ['CE_LAB_ACCESS_KEY']
     capacity = None
-    if os.environ.get('CE_LAB_FAIR_CAPACITY') == '1':
+    durable = None
+    supervisor = None
+    supervisor_thread = None
+    if os.environ.get('CE_LAB_DURABLE_QUEUE') == '1':
+        from deployment.durable_queue import Queue
+        durable = Queue(os.environ['CE_LAB_DATABASE_URL'])
+        limits = {s: 4 for s in master.SUPPORTED_STATES}
+        limits.update(ME=1, AR=1, FL=3, IRS=4)
+        durable.initialize(master.APP_VERSION, limits)
+        if os.environ.get('CE_LAB_QUEUE_WORKER') == '1':
+            from deployment.queue_worker import Supervisor
+            supervisor = Supervisor(durable, master.APP_VERSION, int(os.environ.get('CE_LAB_WORKER_SLOTS', '8')))
+            supervisor_thread = threading.Thread(target=supervisor.run, daemon=True, name='lab-worker-supervisor')
+            supervisor_thread.start()
+    elif os.environ.get('CE_LAB_FAIR_CAPACITY') == '1':
         from deployment.lab_capacity import install
         capacity = install(master, int(os.environ['CE_MAX_BROWSER_LOOKUPS']))
-    master.RegistrySnapshotHandler = build_handler(master, master.ADMIN_PASSCODE, capacity)
-    master.main()
+    master.RegistrySnapshotHandler = build_handler(master, master.ADMIN_PASSCODE, capacity, durable)
+    if durable is None:
+        master.main()
+        return
+    import signal
+    from http.server import ThreadingHTTPServer
+    ThreadingHTTPServer.request_queue_size = 128
+    with ThreadingHTTPServer((master.HOST, master.PORT), master.RegistrySnapshotHandler) as server:
+        def stop(*args):
+            if supervisor: supervisor.stop()
+            threading.Thread(target=server.shutdown, daemon=True).start()
+        for sig in (signal.SIGINT, signal.SIGTERM): signal.signal(sig, stop)
+        try: server.serve_forever()
+        finally:
+            if supervisor:
+                supervisor.stop()
+                supervisor_thread.join(25)
+            durable.close()
 
 
 if __name__ == '__main__':
