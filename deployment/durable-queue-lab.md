@@ -402,3 +402,25 @@ user-reported source outage. Discovery still uses its normal sources and reports
 incompleteness. Advance load only after reviewing first-response discrepancies;
 record actual timings rather than claiming the requested minute/ten-organization
 target has been achieved before the live trial.
+
+## perf.16: prevent discovery starvation during mixed workflows
+
+The first ten fresh discovery-to-registration workflows on perf.15 completed
+only eight organizations. One discovery never started before its 90-second
+deadline; another waited 69 seconds and had only 21 seconds left to execute.
+Registration jobs repeatedly occupied one of the sources discovery needed to
+reserve together. The registration-only trial had completed all ten, so that
+trial alone does not qualify ten complete user workflows.
+
+The scheduler now protects one permit on each needed source for the oldest
+eligible multi-source job. It does not preempt running work or reserve capacity
+for jobs outside the active-workflow ceiling or beyond the worker's physical
+capacity. Spare permits and unrelated sources remain usable. A ready protected
+job gets the next eligible turn; cancellation removes its priority. Actual
+claims still use the existing atomic cap, version, weight and deadline checks.
+
+Four new real-Postgres controls cover spare-capacity use, the workflow ceiling,
+small-worker fit and cancellation. The master backend, source limits, deadlines,
+CPU/memory admission rules and four-node configuration are unchanged from
+perf.15. Only the lab release version environment value changes. This remains
+a lab candidate until a fresh ten-organization end-to-end repeat passes.

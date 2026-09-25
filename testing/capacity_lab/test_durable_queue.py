@@ -230,6 +230,55 @@ class DurableTests(unittest.TestCase):
         self.assertTrue(all(len(group) <= 12 for group in groups))
         self.assertEqual(sum(r['count'] for r in self.q.metrics()['workflows'] if r['phase'] == 'queued'), 5)
 
+    def test_waiting_multi_source_job_retains_one_permit_without_blocking_spares(self):
+        with self.q.transaction() as (c,_):
+            c.execute("UPDATE cc_lab_settings SET registry_limits=jsonb_set(registry_limits,'{CO}','2'::jsonb)")
+        worker=self.worker(slots=12)
+        self.submit(payload(states=['ME']));held=self.q.claim(worker)
+        discovery=self.submit(normalize_submission({'ein':'222222222','organization_name':'Discovery','kind':'discovery'},STATES))
+        self.submit(payload('333333333',states=['CO','LA']))
+        self.submit(payload('444444444',states=['CO']))
+        spare=self.q.claim(worker);self.assertEqual(spare['state'],'CO')
+        unrelated=self.q.claim(worker);self.assertEqual(unrelated['state'],'LA')
+        self.assertIsNone(self.q.claim(worker))  # Last CO permit stays available.
+        self.finish(held)
+        ready=self.q.claim(worker)
+        self.assertEqual(ready['workflow_id'],discovery)
+        self.assertEqual(ready['state'],'@discovery')
+        self.assertIsNone(self.q.claim(worker))  # Real CO cap includes discovery.
+        self.finish(ready)
+        self.assertEqual(self.q.claim(worker)['state'],'CO')
+
+    def test_waiting_discovery_outside_workflow_ceiling_cannot_block_active_work(self):
+        with self.q.transaction() as (c,_):
+            c.execute('UPDATE cc_lab_settings SET workflow_limit=1')
+        worker=self.worker(slots=12)
+        active=self.submit(payload(states=['CO','ME']))
+        self.assertEqual(self.q.claim(worker)['state'],'CO')
+        self.submit(normalize_submission({'ein':'222222222','organization_name':'Discovery','kind':'discovery'},STATES))
+        next_job=self.q.claim(worker)
+        self.assertEqual(next_job['workflow_id'],active);self.assertEqual(next_job['state'],'ME')
+
+    def test_unfit_multi_source_job_does_not_reserve_small_worker_capacity(self):
+        with self.q.transaction() as (c,_):
+            c.execute("UPDATE cc_lab_settings SET registry_limits=jsonb_set(registry_limits,'{CO}','1'::jsonb)")
+        worker=self.worker(slots=2)
+        self.submit(payload(states=['ME']));self.q.claim(worker)
+        self.submit(normalize_submission({'ein':'222222222','organization_name':'Discovery','kind':'discovery'},STATES))
+        self.submit(payload('333333333',states=['CO']))
+        self.assertEqual(self.q.claim(worker)['state'],'CO')
+
+    def test_canceling_waiting_discovery_removes_its_priority_reservation(self):
+        with self.q.transaction() as (c,_):
+            c.execute("UPDATE cc_lab_settings SET registry_limits=jsonb_set(registry_limits,'{CO}','1'::jsonb)")
+        worker=self.worker(slots=12)
+        self.submit(payload(states=['ME']));self.q.claim(worker)
+        discovery=self.submit(normalize_submission({'ein':'222222222','organization_name':'Discovery','kind':'discovery'},STATES))
+        self.submit(payload('333333333',states=['CO']))
+        self.assertIsNone(self.q.claim(worker))
+        self.q.cancel('a',discovery)
+        self.assertEqual(self.q.claim(worker)['state'],'CO')
+
     def test_cancel_retains_capacity_until_termination_ack(self):
         ident=self.submit(payload(states=['CO','ME'])); w=self.worker(); j=self.q.claim(w)
         self.q.cancel('a',ident)
