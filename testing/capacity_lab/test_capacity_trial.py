@@ -49,6 +49,13 @@ class CapacityTrialTests(unittest.TestCase):
     def test_missing_or_duplicate_supervisor_blocks_scale(self):
         self.metrics['workers'][1]['id'] = self.metrics['workers'][0]['id']
         with self.assertRaises(ValueError): self.plan()
+
+    def test_readonly_preflight_allows_small_cross_machine_clock_skew(self):
+        self.metrics['workers'][0]['heartbeat'] = 100.2
+        self.assertEqual(self.plan()['expected_workers'], 3)
+        self.metrics['workers'][0]['heartbeat'] = 103
+        with self.assertRaises(ValueError): self.plan()
+        self.metrics['workers'][0]['heartbeat'] = 99
         self.metrics['workers'][1]['heartbeat'] = 10
         with self.assertRaises(ValueError): self.plan()
 

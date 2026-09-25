@@ -8,9 +8,10 @@ adapter, matching, alias, EIN/address, status, comment, or date rule is copied.
 
 - Existing private performance-lab web service remains the acceptance/progress
   API and hosts one resource-aware, 12-reservation worker supervisor on its Pro node.
-- A second independent Pro background worker uses the same branch/master code,
-  the same database and its own 12 physical reservations. These are task slots,
-  not CPU cores: each existing Pro node has two CPUs and 4 GB RAM.
+- The independent Pro background service now runs two instances using the same
+  branch/master code and database. Each instance has 12 physical reservations.
+  These are task slots, not CPU cores: each of the three Pro nodes has two CPUs
+  and 4 GB RAM, for six CPUs and 12 GB total.
 - PostgreSQL stores inputs, submission keys, workflow/state jobs, worker leases,
   results and lifecycle events. All schedulers share one transactional authority.
 - The new database `charityclarity-performance-lab-queue` is currently a free
@@ -18,9 +19,10 @@ adapter, matching, alias, EIN/address, status, comment, or date rule is copied.
   high availability, or a backed-up enterprise database.
 - No changes to staging, production, user Chrome, or the NY connector.
 
-The additional Pro worker is $85/month at the pricing reviewed September 25,
-2026, prorated. The user approved and activated this worker on September 25.
-The existing Pro lab is also $85/month: combined compute is $170/month.
+Each Pro instance is $85/month at the pricing reviewed September 25, 2026,
+prorated. The user separately approved the second and third instances on
+September 25. The third was activated for the phase12 hardware-only trial.
+Combined lab compute is now $255/month, up from $170/month.
 The temporary database adds no charge. A later paid 256 MB
 database is $6/month plus applicable storage ($0.30/GB/month), and requires its
 own explicit resource decision. No automatic paid database upgrade is included.
@@ -126,17 +128,18 @@ remain unqualified. Do not promote this candidate based on fixture success alone
 
 Sources: https://render.com/pricing and https://render.com/docs/postgresql-creating-connecting.
 
-## Prepared third-worker capacity trial (not activated)
+## Approved third-worker capacity trial
 
-The next hardware-only proposal scales the existing background service from
+The approved hardware-only trial scales the existing background service from
 one to two identical Pro instances, retaining the single API worker. Total
-capacity would be six CPUs and 12 GB RAM across three instances. Application
+capacity is six CPUs and 12 GB RAM across three instances. Application
 commit, state rules, environment, registry caps and queue limits stay unchanged.
 Render supports manually scaling background workers; each additional instance
 is billed at its compute rate, prorated by the second. The additional instance
 is $85/month, bringing lab compute from $170 to $255/month. Existing workspace
-and other charges are separate and unchanged. This new recurring cost is
-not yet approved. No third instance has been activated.
+and other charges are separate and unchanged. The user approved this new
+recurring cost, and Render accepted the scale action. Three distinct live
+worker identities were verified before beginning fresh solo controls.
 
 `deployment/capacity_trial.py` validates the exact lab services, unchanged live
 code, idle queue, worker identities, slot counts and safe 1-to-2 replica change.
@@ -146,7 +149,7 @@ resources. The external evidence controller `scale_phase12.py` defaults to
 read-only preparation; execution is a separate, explicit approval step. Its
 rollback returns the background service to one instance after draining work.
 
-After approval, verify three live workers before running new solo controls,
+Verify three live workers before running new solo controls,
 then repeat the three-organization full-32-state test using fresh discovered
 names. Compare all 20 result fields, statuses and name sets with solo controls;
 retain first responses. Advance to five organizations only if there are no

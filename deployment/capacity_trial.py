@@ -19,8 +19,10 @@ def require(condition, message):
 
 def fresh_workers(metrics, expected, now=None):
     now = time.time() if now is None else now
+    # This read-only client uses a different clock from PostgreSQL. Permit two
+    # seconds of clock skew; this does not alter the queue's lease enforcement.
     workers = [w for w in metrics['workers']
-               if not w['retired'] and 0 <= now-w['heartbeat'] < 20]
+               if not w['retired'] and -2 <= now-w['heartbeat'] < 20]
     require(len(workers) == expected, 'Unexpected live worker count')
     require(len({w['id'] for w in workers}) == expected, 'Duplicate worker identity')
     require(all(w['slots'] == 12 for w in workers), 'Unexpected physical slot ceiling')
