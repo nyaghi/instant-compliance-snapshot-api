@@ -89,3 +89,9 @@ worker leases, workspace-scoped authorization and deduplication, resumable
 progress and safe cancellation, registry-wide pacing, independent NY collection,
 and multiple-worker failure/restart validation. None of that is proven by one
 larger server or by simulated fixture throughput.
+
+The perf.5 trial changes only the configured reservation/inner browser counts
+from 8 to 12 (same Pro instance, same queue implementation and state budgets).
+Its scope remains two organizations until a same-build comparison passes. The
+perf.4 configuration is retained in Git for rollback if correctness or resource
+health degrades. This does not increase paid hardware again.
