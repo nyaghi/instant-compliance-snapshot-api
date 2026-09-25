@@ -173,19 +173,34 @@ class Queue:
     def claim(self, worker, slot_limit=None, admission_evidence=None):
         with self.transaction() as (c, now):
             self._settle(c, now)
-            wk = c.execute('SELECT * FROM cc_lab_workers WHERE id=%s', (worker,)).fetchone()
+            # All reads remain under the same advisory transaction lock. Pipeline
+            # independent reads rather than paying a network round trip for each.
+            # Capacity and priority are still decided from fresh database rows.
+            with c.pipeline():
+                worker_row = c.execute('SELECT * FROM cc_lab_workers WHERE id=%s', (worker,))
+                settings_row = c.execute('SELECT * FROM cc_lab_settings WHERE id=1')
+                held_rows = c.execute("SELECT * FROM cc_lab_jobs WHERE phase IN ('running','stopping','quarantined')")
+                active_rows = c.execute('SELECT * FROM cc_lab_workflows WHERE started IS NOT NULL AND finished IS NULL')
+                workflow_rows = c.execute("SELECT * FROM cc_lab_workflows WHERE phase IN ('queued','active') AND stop_reason IS NULL")
+                pending_rows = c.execute("SELECT * FROM cc_lab_jobs WHERE phase='queued' ORDER BY state,id")
+            wk = worker_row.fetchone()
             if not wk or wk['retired']: raise Conflict('Worker is not registered or is retired')
             ceiling = wk['slots'] if slot_limit is None else min(wk['slots'],max(0,int(slot_limit)))
-            cfg = c.execute('SELECT * FROM cc_lab_settings WHERE id=1').fetchone()
-            held = c.execute("SELECT * FROM cc_lab_jobs WHERE phase IN ('running','stopping','quarantined')").fetchall()
+            cfg = settings_row.fetchone()
+            held = held_rows.fetchall()
             used = sum(j['weight'] for j in held if j['owner'] == worker)
             c.execute('UPDATE cc_lab_workers SET heartbeat=%s WHERE id=%s', (now, worker))
             if used >= ceiling: return None
-            active = c.execute('SELECT * FROM cc_lab_workflows WHERE started IS NOT NULL AND finished IS NULL').fetchall()
+            active = active_rows.fetchall()
             running = Counter(j['workflow_id'] for j in held)
             busy = Counter(r for j in held for r in j['resources'])
-            workflows = c.execute("SELECT * FROM cc_lab_workflows WHERE phase IN ('queued','active') AND stop_reason IS NULL").fetchall()
+            workflows = workflow_rows.fetchall()
             pending = {}
+            for job in pending_rows:
+                pending.setdefault(job['workflow_id'], []).append(job)
+            # No priority decision is needed when there is no pending work.
+            # Settlement and the worker heartbeat above still run while idle.
+            if not pending or not workflows: return None
             # Start slow state work earlier within each organization's fair turn.
             # Recent measured durations only: no organization or state overrides.
             estimates = {r['state']: r['seconds'] for r in c.execute(
@@ -195,8 +210,6 @@ class Queue:
                 "WHERE phase='done' AND error IS NULL AND attempt=1 AND finished>=%s "
                 "AND claimed IS NOT NULL AND finished>claimed AND finished-claimed<=300) recent "
                 "WHERE n<=20 GROUP BY state", (now-86400,))}
-            for job in c.execute("SELECT * FROM cc_lab_jobs WHERE phase='queued' ORDER BY state,id"):
-                pending.setdefault(job['workflow_id'], []).append(job)
             for jobs in pending.values():
                 jobs.sort(key=lambda j: (-estimates.get(j['state'], 10.0), j['state'], j['id']))
             workflows.sort(key=lambda w: (running[w['id']], w['dispatched'], w['submitted'], w['id']))
@@ -208,11 +221,12 @@ class Queue:
                     if any(busy[r] >= cfg['registry_limits'].get(r, 4) for r in j['resources']): continue
                     token = str(uuid.uuid4())
                     run_until = min(w['deadline'], now + (90 if j['state'] == '@discovery' else 300))
-                    c.execute("UPDATE cc_lab_jobs SET phase='running',owner=%s,token=%s,attempt=attempt+1,claimed=%s,lease_until=%s,run_until=%s WHERE id=%s",
-                              (worker, token, now, now+20, run_until, j['id']))
-                    c.execute("UPDATE cc_lab_workflows SET phase='active',started=COALESCE(started,%s),dispatched=%s WHERE id=%s", (now, now, w['id']))
-                    self.event(c, now, 'claimed', w['id'], j['id'], worker=worker, token=token,
-                               slot_limit=ceiling, admission=admission_evidence)
+                    with c.pipeline():
+                        c.execute("UPDATE cc_lab_jobs SET phase='running',owner=%s,token=%s,attempt=attempt+1,claimed=%s,lease_until=%s,run_until=%s WHERE id=%s",
+                                  (worker, token, now, now+20, run_until, j['id']))
+                        c.execute("UPDATE cc_lab_workflows SET phase='active',started=COALESCE(started,%s),dispatched=%s WHERE id=%s", (now, now, w['id']))
+                        self.event(c, now, 'claimed', w['id'], j['id'], worker=worker, token=token,
+                                   slot_limit=ceiling, admission=admission_evidence)
                     return {**j, 'owner': worker, 'token': token, 'attempt': j['attempt']+1,
                             'payload': w['payload'], 'version': w['source_version'], 'run_seconds': max(0, run_until-now),
                             'submitted': w['submitted'], 'claimed': now}

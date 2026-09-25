@@ -287,6 +287,31 @@ will be preserved in the phase10 evidence before a capacity claim.
 
 ## Pennsylvania completion follow-up (September 25)
 
+### Four-worker queue-efficiency experiment (perf.14)
+
+The approved fourth Pro node remains in place; no capacity purchase is part of
+this experiment. The only runtime-code change is `Queue.claim`: independent
+database reads and the final claim writes use psycopg pipeline mode inside the
+existing advisory-locked transaction. Idle claims skip duration-history
+aggregation when no pending work exists. The worker heartbeat and settlement
+still run. All history used for priority remains fresh; no approximate cached
+capacity, stale results, new source parallelism or shorter search is introduced.
+
+The global 15-workflow ceiling, 15-state per-organization ceiling, source caps,
+12 physical reservations per worker, CPU/memory admission, queue-inclusive
+deadlines, leases, cancellation, process-tree isolation, matching and status
+rules are unchanged. Transaction rollback and idle heartbeat/history behavior
+have dedicated integration controls, in addition to the existing independent
+worker, crash, deadline, fairness and identity tests. All state functions and
+the entire master source must equal perf.13 before a lab deployment is allowed.
+
+The performance comparison separates registration from discovery: the same
+reviewed names are supplied to five simultaneous live 32-state Standard runs
+before and after deployment. Fresh discovery plus registration is also checked
+afterward. A 60-second complete-results maximum is a test target, not a promise:
+state response times and justified recovery can exceed it. Staging, production
+and the user's browser are excluded. Evidence lives under the phase16 trial.
+
 ### Five-organization admission/readiness follow-up
 
 The perf.12 five-organization run retained every discovered-name set and 159/160

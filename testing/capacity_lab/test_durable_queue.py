@@ -5,6 +5,7 @@ uses a random schema and drops only that schema; it cannot erase the live queue.
 No registry network calls and no customer browser are involved.
 """
 import concurrent.futures
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -114,6 +115,45 @@ class DurableTests(unittest.TestCase):
         self.assertEqual([first['state'],second['state']],['LA','LA'])
         self.finish(first);self.finish(second)
         self.assertEqual(self.q.claim(worker)['state'],'CO')
+
+    def test_idle_claim_skips_history_but_refreshes_worker(self):
+        worker = self.worker()
+        with self.q.transaction() as (c, now):
+            c.execute('UPDATE cc_lab_workers SET heartbeat=%s WHERE id=%s', (now-100, worker))
+        queries = []
+        original = self.q.transaction
+
+        class ObservedConnection:
+            def __init__(self, conn): self.conn = conn
+            def pipeline(self): return self.conn.pipeline()
+            def execute(self, query, *args, **kwargs):
+                queries.append(query)
+                return self.conn.execute(query, *args, **kwargs)
+
+        @contextmanager
+        def observed():
+            with original() as (c, now):
+                yield ObservedConnection(c), now
+
+        with patch.object(self.q, 'transaction', observed):
+            self.assertIsNone(self.q.claim(worker))
+        self.assertFalse(any('percentile_cont' in query for query in queries))
+        with original() as (c, now):
+            heartbeat = c.execute('SELECT heartbeat FROM cc_lab_workers WHERE id=%s', (worker,)).fetchone()['heartbeat']
+            self.assertLess(now-heartbeat, 5)
+
+    def test_pipelined_claim_failure_rolls_back_job_and_dispatch(self):
+        ident = self.submit()
+        worker = self.worker()
+        with patch.object(self.q, 'event', side_effect=RuntimeError('Fixture claim event failure')):
+            with self.assertRaisesRegex(RuntimeError, 'Fixture claim event failure'):
+                self.q.claim(worker)
+        state = self.q.status('a', ident)
+        self.assertEqual(state['phase'], 'queued')
+        self.assertIsNone(state['started'])
+        self.assertEqual(state['jobs'][0]['phase'], 'queued')
+        self.assertEqual(state['jobs'][0]['attempt'], 0)
+        self.assertIsNotNone(self.q.claim(worker))
 
     def test_worker_headroom_ceiling_cannot_bypass_physical_or_workflow_limit(self):
         worker=self.worker(slots=12)
