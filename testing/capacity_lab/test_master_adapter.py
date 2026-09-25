@@ -36,11 +36,18 @@ class MasterIntegration(unittest.TestCase):
         # The Sep 25 request explicitly authorizes PA's response-completion fix.
         # All other master functions, including PA classification and shared
         # matching/discovery rules, must still equal the protected baseline.
-        for name in ('search_pa_with_name_fallback', 'search_pa_with_name_fallback_core'):
+        for name in ('search_pa_with_name_fallback', 'search_pa_with_name_fallback_core',
+                     'enrich_registration_date_sources', 'fl_verified_registration_issue'):
             for tree in (before,after):
                 nodes=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name==name]
                 self.assertEqual(len(nodes),1)
                 tree.body.remove(nodes[0])
+        # FL date diagnostics are additive metadata, not a classification edit.
+        response = next(n for n in after.body if isinstance(n,ast.FunctionDef) and n.name=='response_data_for_lookup')
+        lists=[n for n in ast.walk(response) if isinstance(n,ast.List) and any(
+            isinstance(e,ast.Constant) and e.value=='registration_date_diagnostics' for e in n.elts)]
+        self.assertEqual(len(lists),1)
+        lists[0].elts=[e for e in lists[0].elts if not isinstance(e,ast.Constant) or e.value!='registration_date_diagnostics']
         self.assertEqual(ast.dump(before), ast.dump(after))
 
     def test_supplied_name_does_not_fetch_unused_fallback_metadata(self):

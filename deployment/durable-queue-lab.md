@@ -120,6 +120,33 @@ unqualified. Do not promote this candidate based on fixture success alone.
 
 Sources: https://render.com/pricing and https://render.com/docs/postgresql-creating-connecting.
 
+## Authorized full-state follow-up (September 25)
+
+The user authorized adding New York, improving queue/CPU pressure and Florida
+date reliability, then increasing the controlled load. The perf.10 candidate
+enables CE_LAB_NY_BROWSER=1 and routes NY through the existing master's verified
+browser flow. It does not use a user profile, extension, alternate status engine
+or runtime sidecar. NY has two registry reservations; its search and details
+must both complete through the verified session. Customer extension behavior is
+still a separate qualification from this headless backend transport.
+
+Within each fair organization turn, the scheduler now starts historically
+slower states first, using a median of up to 20 completed, unretried jobs per
+state from the previous day. Unknown states retain a neutral estimate. This
+does not change organization fairness, registry caps, deadlines or the current
+eight physical reservations per worker. Per-task import and execution CPU/wall
+measurements will guide subsequent capacity changes rather than guessing.
+
+Florida's optional initial-date lookup now records its failing step and permits
+one fresh, TLS-verified transport recovery. Its allowance is at most 12 seconds,
+clamped to the remaining existing state budget. A wrong identity, malformed
+date or incomplete response cannot supply a date, and optional date failure
+cannot change the accepted status. No global budgets or matching rules changed.
+
+All automated controls passed before lab deployment. Staging and production
+remain excluded. Live results, including any cloud NY verification limitation,
+will be preserved in the phase10 evidence before a capacity claim.
+
 ## Pennsylvania completion follow-up (September 25)
 
 The user explicitly authorized fixing Pennsylvania and resuming the three-org

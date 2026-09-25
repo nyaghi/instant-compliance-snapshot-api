@@ -206,7 +206,7 @@ def main():
     from deployment.performance_lab import validate_environment
     from deployment.durable_queue import Queue
     validate_environment(os.environ)
-    queue = Queue(os.environ['CE_LAB_DATABASE_URL'])
+    queue = Queue(os.environ['CE_LAB_DATABASE_URL'], ny_enabled=os.environ.get('CE_LAB_NY_BROWSER') == '1')
     supervisor = Supervisor(queue, os.environ['CE_APP_VERSION'], int(os.environ.get('CE_LAB_WORKER_SLOTS', '8')))
     for sig in (signal.SIGINT, signal.SIGTERM): signal.signal(sig, lambda *args: supervisor.stop())
     try: supervisor.run()

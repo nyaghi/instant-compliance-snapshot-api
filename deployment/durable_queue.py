@@ -60,9 +60,10 @@ def normalize_submission(payload, supported):
 
 
 class Queue:
-    def __init__(self, dsn, max_connections=6, test_schema=None):
+    def __init__(self, dsn, max_connections=6, test_schema=None, ny_enabled=False):
         options = {'options': '-c statement_timeout=10000'}
         self.lock = LOCK
+        self.ny_enabled = ny_enabled
         if test_schema is not None:
             if not re.fullmatch(r'cc_test_[a-f0-9]{32}', test_schema): raise ValueError('Invalid test schema')
             options['options'] += ' -c search_path='+test_schema
@@ -125,7 +126,7 @@ class Queue:
                           (ident, scope, payload['ein'], fingerprint, Jsonb(payload), payload['kind'], payload['mode'], version, now, now+seconds))
                 for state in (['@discovery'] if payload['kind'] == 'discovery' else payload['states']):
                     resources = sorted(set(discovery_sources)) if state == '@discovery' else [state]
-                    error = 'NY_COLLECTOR_NOT_CONFIGURED' if state == 'NY' else None
+                    error = 'NY_COLLECTOR_NOT_CONFIGURED' if state == 'NY' and not self.ny_enabled else None
                     c.execute('INSERT INTO cc_lab_jobs(id,workflow_id,state,resources,weight,phase,finished,error) '
                               'VALUES (%s,%s,%s,%s,%s,%s,%s,%s)',
                               (str(uuid.uuid4()), ident, state, Jsonb(resources), 4 if state == '@discovery' else 1,
@@ -184,8 +185,19 @@ class Queue:
             busy = Counter(r for j in held for r in j['resources'])
             workflows = c.execute("SELECT * FROM cc_lab_workflows WHERE phase IN ('queued','active') AND stop_reason IS NULL").fetchall()
             pending = {}
+            # Start slow state work earlier within each organization's fair turn.
+            # Recent measured durations only: no organization or state overrides.
+            estimates = {r['state']: r['seconds'] for r in c.execute(
+                "SELECT state, percentile_cont(0.5) WITHIN GROUP (ORDER BY seconds) AS seconds FROM "
+                "(SELECT state,finished-claimed AS seconds,row_number() OVER "
+                "(PARTITION BY state ORDER BY finished DESC) AS n FROM cc_lab_jobs "
+                "WHERE phase='done' AND error IS NULL AND attempt=1 AND finished>=%s "
+                "AND claimed IS NOT NULL AND finished>claimed AND finished-claimed<=300) recent "
+                "WHERE n<=20 GROUP BY state", (now-86400,))}
             for job in c.execute("SELECT * FROM cc_lab_jobs WHERE phase='queued' ORDER BY state,id"):
                 pending.setdefault(job['workflow_id'], []).append(job)
+            for jobs in pending.values():
+                jobs.sort(key=lambda j: (-estimates.get(j['state'], 10.0), j['state'], j['id']))
             workflows.sort(key=lambda w: (running[w['id']], w['dispatched'], w['submitted'], w['id']))
             for w in workflows:
                 if w['source_version'] != wk['source_version'] or running[w['id']] >= 15: continue

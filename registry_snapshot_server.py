@@ -17350,8 +17350,8 @@ def enrich_registration_date_sources(result, final_status=None, lookup_started=N
     """Optional date-only read after status is settled; failures cannot alter it.
 
     Florida's existing Check-A-Charity source omits issuance. Its separate public
-    license lookup exposes it using the SAME accepted CH number. Two requests,
-    six seconds total at most, no retry or new identity/matching decision.
+    license lookup exposes it using the SAME accepted CH number. A bounded
+    transport recovery never changes the accepted organization or its status.
     """
     if (getattr(result, "state", "") != "FL" or not registration_date_result_confirmed(result, final_status)
             or curl_requests is None or not registration_date_budget_available(lookup_started)):
@@ -17360,29 +17360,57 @@ def enrich_registration_date_sources(result, final_status=None, lookup_started=N
     if not re.fullmatch(r"CH\d+", identifier):
         return
     url = "https://csapp.fdacs.gov/CSPublicApp/BusinessSearch/BusinessSearch.aspx"
-    date_deadline = time.monotonic() + 6.0
+    # The optional date gets at most 12 seconds, still inside the state's
+    # existing budget. It may recover one transient transport failure.
+    remaining = 12.0 if lookup_started is None else max(0.0, min(
+        BATCH_FANOUT_STATE_TIMEOUT_SECONDS, BATCH_STATE_LOOKUP_TIMEOUT_SECONDS,
+        SINGLE_STATE_OVERFLOW_TIMEOUT_SECONDS) - (time.perf_counter()-lookup_started))
+    date_deadline = time.monotonic() + min(12.0, remaining)
+    diagnostics = result.registration_date_diagnostics = []
+    started = time.monotonic()
+    step = "session"
+    response = None
     try:
         with curl_requests.Session(impersonate="chrome136") as session:
-            response = session.get(url, timeout=3)
+            step = "form"
+            response = session.get(url, timeout=min(3.0, max(.001, date_deadline-time.monotonic())))
             response.raise_for_status()
             fields = html_hidden_inputs(response.text)
             if "__VIEWSTATE" not in fields:
+                diagnostics.append({"transport": "curl", "step": step, "reason": "FORM_INCOMPLETE"})
                 return
             fields.update({"ctl00$cpMainContent$LicenseTb": identifier, "ctl00$cpMainContent$SingleSearchBt": "Search"})
-            response = session.post(url, data=fields, timeout=3)
+            step = "credential"
+            if time.monotonic() >= date_deadline:
+                raise TimeoutError("Florida optional registration-date deadline reached")
+            response = session.post(url, data=fields, timeout=min(3.0, date_deadline-time.monotonic()))
             response.raise_for_status()
+            if time.monotonic() >= date_deadline:
+                raise TimeoutError("Florida optional registration-date deadline reached")
             result._cc_registration_date_evidence = fl_registration_issue_evidence(response.text, identifier, result.matched_registry_name)
+            diagnostics.append({"transport": "curl", "step": step,
+                "reason": "CONFIRMED" if result._cc_registration_date_evidence else "DATE_EVIDENCE_UNCONFIRMED",
+                "seconds": round(time.monotonic()-started, 3)})
     except Exception as exc:
         # No status/comment change and no failure propagated to the primary lookup.
         result._cc_registration_date_evidence = {}
-        if getattr(exc, "code", None) == 60:  # curl certificate verification failure only.
+        code = getattr(exc, "code", None)
+        status = getattr(response, "status_code", None)
+        recoverable = (code in {6, 7, 28, 35, 52, 55, 56, 60} or isinstance(exc, (TimeoutError, OSError))
+                       or status in {408, 429, 500, 502, 503, 504})
+        diagnostics.append({"transport": "curl", "step": step, "reason": type(exc).__name__,
+            "curl_code": code, "http_status": status, "seconds": round(time.monotonic()-started, 3)})
+        if recoverable and date_deadline-time.monotonic() >= 1.0:
             result._cc_registration_date_evidence = fl_verified_registration_issue(
-                identifier, result.matched_registry_name, date_deadline)
+                identifier, result.matched_registry_name, date_deadline, diagnostics)
 
 
-def fl_verified_registration_issue(identifier, selected_name, deadline):
-    """Recover the existing optional date read without extending its six seconds."""
+def fl_verified_registration_issue(identifier, selected_name, deadline, diagnostics=None):
+    """One fresh, TLS-verified optional date read within its remaining deadline."""
     url = "https://csapp.fdacs.gov/CSPublicApp/BusinessSearch/BusinessSearch.aspx"
+    diagnostics = diagnostics if diagnostics is not None else []
+    started = time.monotonic()
+    step = "form"
     try:
         opener = urllib.request.build_opener(
             urllib.request.HTTPSHandler(context=fl_verified_ssl_context()), FloridaNoRedirect(),
@@ -17393,18 +17421,37 @@ def fl_verified_registration_issue(identifier, selected_name, deadline):
                 raise TimeoutError("Florida optional registration-date deadline reached")
             request = urllib.request.Request(url, data=data, headers={"User-Agent": BROWSER_USER_AGENT,
                 "Accept-Encoding": "identity"})
-            with opener.open(request, timeout=min(3.0, remaining)) as response:
-                body = response.read(2_000_001)
-                if len(body) > 2_000_000 or time.monotonic() >= deadline:
+            with opener.open(request, timeout=min(4.0, remaining)) as response:
+                chunks, size = [], 0
+                while True:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("Florida optional registration-date deadline reached")
+                    chunk = response.read1(min(65536, 2_000_001-size))
+                    if not chunk:
+                        break
+                    chunks.append(chunk); size += len(chunk)
+                    if size > 2_000_000:
+                        raise ValueError("Incomplete Florida optional registration-date read")
+                declared = response.headers.get("Content-Length")
+                if (time.monotonic() >= deadline or declared and
+                        (not declared.isdigit() or int(declared) != size)):
                     raise ValueError("Incomplete Florida optional registration-date read")
-                return body.decode("utf-8")
+                return b"".join(chunks).decode("utf-8")
         fields = html_hidden_inputs(read())
         if "__VIEWSTATE" not in fields:
+            diagnostics.append({"transport": "verified_tls", "step": step, "reason": "FORM_INCOMPLETE"})
             return {}
         fields.update({"ctl00$cpMainContent$LicenseTb": identifier, "ctl00$cpMainContent$SingleSearchBt": "Search"})
+        step = "credential"
         source = read(urlencode(fields).encode("utf-8"))
-        return fl_registration_issue_evidence(source, identifier, selected_name)
-    except Exception:
+        evidence = fl_registration_issue_evidence(source, identifier, selected_name)
+        diagnostics.append({"transport": "verified_tls", "step": step,
+            "reason": "CONFIRMED" if evidence else "DATE_EVIDENCE_UNCONFIRMED",
+            "seconds": round(time.monotonic()-started, 3)})
+        return evidence
+    except Exception as exc:
+        diagnostics.append({"transport": "verified_tls", "step": step, "reason": type(exc).__name__,
+            "seconds": round(time.monotonic()-started, 3)})
         return {}  # Optional dates cannot alter a confirmed registration result.
 
 
@@ -17846,6 +17893,7 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         "wi_reviewed_identity_evidence",
         "wi_identity_diagnostics",
         "identity_review_evidence",
+        "registration_date_diagnostics",
         "source_truth_conflict",
     ]:
         evidence_value = getattr(result, evidence_key, None)

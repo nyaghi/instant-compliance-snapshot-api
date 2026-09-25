@@ -143,9 +143,10 @@ class RegistrationDates(unittest.TestCase):
     def test_fl_date_failure_cannot_change_primary_status_or_comments(self):
         r=self.result('FL',matched_registry_identifier='CH123',raw_status_text='Expiration Date 10/22/2026')
         before=copy.deepcopy(vars(r))
-        with patch.object(cc.curl_requests,'Session',side_effect=TimeoutError('test timeout')):
+        with patch.object(cc.curl_requests,'Session',side_effect=TimeoutError('test timeout')),patch.object(cc,'fl_verified_registration_issue',return_value={}):
             cc.enrich_registration_date_sources(r,'Current')
-        self.assertEqual({k:v for k,v in vars(r).items() if k != '_cc_registration_date_evidence'},before)
+        self.assertEqual({k:v for k,v in vars(r).items() if k not in {'_cc_registration_date_evidence','registration_date_diagnostics'}},before)
+        self.assertEqual(r.registration_date_diagnostics[0]['reason'],'TimeoutError')
     def test_co_history_excludes_notices_and_binds_the_selected_record(self):
         summary=self.co_detail()+'''<html><form id="ccsaSummaryForm"><input type="hidden" name="javax.faces.ViewState" value="opaque"/><a onclick="mojarra.jsfcljs(document.getElementById('ccsaSummaryForm'),{'history':'history'},'')">History</a></form></html>'''
         history='<h1>History</h1><p>Name Example Foundation Registration # 123 Status Good</p><table><tr><td>Filed Date</td><td>Document #</td><td>Event</td></tr><tr><td>09/01/2026</td><td>10</td><td>Second notice of expired registration sent</td></tr><tr><td>08/01/2026</td><td>9</td><td>Extension</td></tr><tr><td>06/03/2026</td><td>8</td><td>Renewal view financial statement</td></tr><tr><td>06/03/2025</td><td>7</td><td>Renewal</td></tr></table>'

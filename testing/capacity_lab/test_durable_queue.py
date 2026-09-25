@@ -74,6 +74,33 @@ class DurableTests(unittest.TestCase):
         with self.assertRaises(Conflict): self.submit(payload(alternate_names=[]), key='same')
         with self.assertRaises(Conflict): self.submit(payload(mode='sales'))
 
+    def test_ny_explicit_activation_claims_real_work_and_preserves_limits(self):
+        disabled=self.submit(payload(states=['NY']))
+        self.assertEqual(self.q.status('a',disabled)['jobs'][0]['error'],'NY_COLLECTOR_NOT_CONFIGURED')
+        self.q.ny_enabled=True
+        enabled=self.submit(payload('987654321',states=['NY']))
+        job=self.q.claim(self.worker())
+        self.assertEqual(job['workflow_id'],enabled)
+        self.assertEqual(job['state'],'NY')
+        self.assertEqual(job['resources'],['NY'])
+        self.finish(job)
+
+    def test_recent_measured_duration_priority_keeps_organization_fairness(self):
+        old=self.submit(payload(states=['CO','LA']))
+        worker=self.worker()
+        for _ in range(2):
+            job=self.q.claim(worker);self.finish(job)
+        with self.q.transaction() as (c,now):
+            c.execute('UPDATE cc_lab_jobs SET claimed=%s,finished=%s WHERE workflow_id=%s AND state=%s',(now-70,now-10,old,'LA'))
+            c.execute('UPDATE cc_lab_jobs SET claimed=%s,finished=%s WHERE workflow_id=%s AND state=%s',(now-12,now-10,old,'CO'))
+        a=self.submit(payload(states=['CO','LA']))
+        b=self.submit(payload('987654321',states=['CO','LA']))
+        first,second=self.q.claim(worker),self.q.claim(worker)
+        self.assertEqual({first['workflow_id'],second['workflow_id']},{a,b})
+        self.assertEqual([first['state'],second['state']],['LA','LA'])
+        self.finish(first);self.finish(second)
+        self.assertEqual(self.q.claim(worker)['state'],'CO')
+
     def test_scope_isolation_and_completed_result_replay(self):
         a, b = self.submit(scope='a'), self.submit(scope='b')
         self.assertNotEqual(a,b)

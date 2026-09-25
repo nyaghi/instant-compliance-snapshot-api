@@ -1,5 +1,6 @@
 """Master adapter integration. Network disabled, only registry execution stubbed."""
 import socket
+import os
 import unittest
 from unittest.mock import patch
 
@@ -32,8 +33,15 @@ class EngineTests(unittest.TestCase):
             call.assert_called_once_with('Legal Name','123456789')
 
     def test_wrong_release_and_ny_refused_before_execution(self):
-        for change in ({'state':'NY'},{'state':'XX'},{'version':'wrong'}):
-            with self.subTest(change=change),self.assertRaises(ValueError):execute(master,self.job(**change))
+        with patch.dict(os.environ,{'CE_LAB_NY_BROWSER':'0'}):
+            for change in ({'state':'NY'},{'state':'XX'},{'version':'wrong'}):
+                with self.subTest(change=change),self.assertRaises(ValueError):execute(master,self.job(**change))
+
+    def test_enabled_ny_uses_same_master_routing_and_reviewed_names(self):
+        result={'ein':'123456789','state':'NY','status':'Current','app_version':master.APP_VERSION}
+        with patch.dict(os.environ,{'CE_LAB_NY_BROWSER':'1'}),patch.object(master,'run_single_state_lookup_reliably',return_value=result) as call:
+            self.assertEqual(execute(master,self.job(state='NY')),result)
+            call.assert_called_once_with('Legal Name','12-3456789','NY')
 
 
 if __name__=='__main__':unittest.main(verbosity=2)

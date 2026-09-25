@@ -108,7 +108,8 @@ def lab_asset(path):
         if file.name == 'index.html':
             text = text.replace('<title>', '<title>Performance Lab — ', 1)
             text = text.replace('<body', '<body data-performance-lab="true"', 1)
-            marker = '<div style="padding:10px;background:#fff3cd;color:#533f03;text-align:center">Isolated performance lab. Capacity is under evaluation. New York browser validation is not enabled.</div>'
+            ny_note = 'New York uses an isolated backend browser.' if os.environ.get('CE_LAB_NY_BROWSER') == '1' else 'New York browser validation is not enabled.'
+            marker = '<div style="padding:10px;background:#fff3cd;color:#533f03;text-align:center">Isolated performance lab. Capacity is under evaluation. '+ny_note+'</div>'
             import re
             text = re.sub(r'(<body\b[^>]*>)', lambda m: m.group(1) + marker, text, count=1)
         data = text.encode('utf-8')
@@ -141,7 +142,7 @@ def build_handler(master, key, capacity=None, durable=None):
         def _send_healthz(self, include_body=True):
             data = {'ok': True, 'app_version': master.APP_VERSION, 'environment': 'performance-lab',
                     'supported_states': master.SUPPORTED_STATES, 'private_access': True,
-                    'ny_browser_validation_enabled': False, 'shared_helpers_enabled': False,
+                    'ny_browser_validation_enabled': os.environ.get('CE_LAB_NY_BROWSER') == '1', 'shared_helpers_enabled': False,
                     'durable_workflows_enabled': durable is not None,
                     'downloadable_data': {s: master.downloadable_data_info(s) for s in ('KS','KY','LA','NH','OR')}}
             body = json.dumps(data).encode()
@@ -262,9 +263,9 @@ def main():
     supervisor_thread = None
     if os.environ.get('CE_LAB_DURABLE_QUEUE') == '1':
         from deployment.durable_queue import Queue
-        durable = Queue(os.environ['CE_LAB_DATABASE_URL'])
+        durable = Queue(os.environ['CE_LAB_DATABASE_URL'], ny_enabled=os.environ.get('CE_LAB_NY_BROWSER') == '1')
         limits = {s: 4 for s in master.SUPPORTED_STATES}
-        limits.update(ME=1, AR=1, FL=3, IRS=4)
+        limits.update(ME=1, AR=1, FL=3, IRS=4, NY=2)
         durable.initialize(master.APP_VERSION, limits)
         if os.environ.get('CE_LAB_QUEUE_WORKER') == '1':
             from deployment.queue_worker import Supervisor
