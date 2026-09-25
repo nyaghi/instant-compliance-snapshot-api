@@ -7,9 +7,10 @@ adapter, matching, alias, EIN/address, status, comment, or date rule is copied.
 ## Concrete topology
 
 - Existing private performance-lab web service remains the acceptance/progress
-  API and hosts one eight-reservation worker supervisor on its existing Pro node.
+  API and hosts one resource-aware, 12-reservation worker supervisor on its Pro node.
 - A second independent Pro background worker uses the same branch/master code,
-  the same database and its own eight physical reservations.
+  the same database and its own 12 physical reservations. These are task slots,
+  not CPU cores: each existing Pro node has two CPUs and 4 GB RAM.
 - PostgreSQL stores inputs, submission keys, workflow/state jobs, worker leases,
   results and lifecycle events. All schedulers share one transactional authority.
 - The new database `charityclarity-performance-lab-queue` is currently a free
@@ -54,10 +55,12 @@ private experiment client. Health/metrics and private assets remain available.
 
 - At most 15 started, unfinished workflows across every worker/connection.
   Additional accepted workflows remain queued. Backlog is bounded at 1,000.
-- Each node has at most eight reservations. A complete discovery reserves four
+- Each node has at most 12 reservations, subject to CPU/memory admission.
+  Missing resource measurements retain the eight-slot fallback.
+  A complete discovery reserves four
   and also reserves each participating registry for its lifetime; ordinary
   state jobs reserve one. This conservative starting policy must be measured.
-- Registry-wide whole-job caps: ME/AR one each, FL three, other states four.
+- Registry-wide whole-job caps: ME/AR one each, NY two, FL three, other states four.
   These cover top-level state/discovery jobs; indirect cross-state identity
   helpers can still consult other sources. They are not a complete per-request
   rate limiter. Existing master limits remain in place within each task.
@@ -76,13 +79,14 @@ private experiment client. Health/metrics and private assets remain available.
   evidence, may fence/requeue them. Old owners cannot overwrite replacement jobs.
   Confirmed-loss retries are bounded to two attempts and remain in the audit.
 - Unfinished tasks have explicit transport/lifecycle error codes, no invented
-  registry status. NY is explicitly unqualified and returns
-  `NY_COLLECTOR_NOT_CONFIGURED`; it never contacts the user's browser.
+  registry status. NY is enabled through the master headless registry flow.
+  If deliberately disabled, it returns `NY_COLLECTOR_NOT_CONFIGURED`.
+  Neither path contacts the user's browser.
 
 ## Active lab deployment
 
-Both services run commit `07e6924fddcddfc5aabaaeae3d47b4bec7167434` as
-`2026.09.25.perf.9-performance-lab`. The API/worker service is
+Both services run commit `36a8c466d814b9090fa811ba4f894484264a96c4` as
+`2026.09.25.perf.11-performance-lab`. The API/worker service is
 `srv-d8u0hsu7r5hc73aqfsg0`; the independent background worker is
 `srv-dar7adgu01pc738fsmgg`. Both have automatic deployment disabled.
 The shared free database is `dpg-dar6utvavr4c7380ou60-a`.
@@ -116,10 +120,41 @@ Cloud post-validation must still compare the same one/two-org controls, then
 increase to 3/5/10/15 only while identities/status/dates remain consistent and
 mean per-org time is below the agreed 50% slowdown stop rule. Preserve first
 responses and explicitly separate registry availability from capacity failures.
-NY, customer authorization, mixed workload capacity and hundreds of users remain
-unqualified. Do not promote this candidate based on fixture success alone.
+NY passed the small real-registry sample below. Customer Chrome-extension
+behavior, customer authorization, mixed workload capacity and hundreds of users
+remain unqualified. Do not promote this candidate based on fixture success alone.
 
 Sources: https://render.com/pricing and https://render.com/docs/postgresql-creating-connecting.
+
+## Prepared third-worker capacity trial (not activated)
+
+The next hardware-only proposal scales the existing background service from
+one to two identical Pro instances, retaining the single API worker. Total
+capacity would be six CPUs and 12 GB RAM across three instances. Application
+commit, state rules, environment, registry caps and queue limits stay unchanged.
+Render supports manually scaling background workers; each additional instance
+is billed at its compute rate, prorated by the second. The additional instance
+is $85/month, bringing lab compute from $170 to $255/month. Existing workspace
+and other charges are separate and unchanged. This new recurring cost is
+not yet approved. No third instance has been activated.
+
+`deployment/capacity_trial.py` validates the exact lab services, unchanged live
+code, idle queue, worker identities, slot counts and safe 1-to-2 replica change.
+It also keeps CPU/memory measurements separate per replica and calculates
+aggregate values only at complete, aligned timestamps. It never provisions
+resources. The external evidence controller `scale_phase12.py` defaults to
+read-only preparation; execution is a separate, explicit approval step. Its
+rollback returns the background service to one instance after draining work.
+
+After approval, verify three live workers before running new solo controls,
+then repeat the three-organization full-32-state test using fresh discovered
+names. Compare all 20 result fields, statuses and name sets with solo controls;
+retain first responses. Advance to five organizations only if there are no
+unresolved differences and mean registration and end-to-end time remain below
+1.5 times solo. A third worker is a test hypothesis, not a capacity guarantee.
+
+Sources: https://render.com/docs/scaling,
+https://api-docs.render.com/reference/scale-service and https://render.com/pricing.
 
 ## Authorized full-state follow-up (September 25)
 

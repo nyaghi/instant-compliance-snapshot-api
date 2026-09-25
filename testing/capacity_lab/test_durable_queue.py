@@ -154,6 +154,28 @@ class DurableTests(unittest.TestCase):
         if j['state']!='@discovery': self.finish(j); j=q2.claim(w2)
         self.assertEqual(j['weight'],4)
 
+    def test_three_twelve_slot_replicas_keep_global_workflow_and_ny_caps(self):
+        queues = [self.q, self.second(), self.second()]
+        for q in queues:
+            q.ny_enabled = True
+        # Production NY cap is two; use the same shared cap in this isolated schema.
+        with self.q.transaction() as (c, _):
+            c.execute("UPDATE cc_lab_settings SET registry_limits=jsonb_set(registry_limits,'{NY}','2'::jsonb)")
+        for i in range(20):
+            self.submit(payload(f'{i+1:09}', states=['CO', 'NY']))
+        workers = [self.worker(q, slots=12) for q in queues]
+        def claim(pair):
+            q, w = pair
+            return [j for _ in range(12) if (j := q.claim(w))]
+        with concurrent.futures.ThreadPoolExecutor(3) as pool:
+            groups = list(pool.map(claim, zip(queues, workers)))
+        jobs = [j for group in groups for j in group]
+        self.assertEqual(len({j['id'] for j in jobs}), len(jobs))
+        self.assertEqual(len({j['workflow_id'] for j in jobs}), 15)
+        self.assertEqual(sum(j['state'] == 'NY' for j in jobs), 2)
+        self.assertTrue(all(len(group) <= 12 for group in groups))
+        self.assertEqual(sum(r['count'] for r in self.q.metrics()['workflows'] if r['phase'] == 'queued'), 5)
+
     def test_cancel_retains_capacity_until_termination_ack(self):
         ident=self.submit(payload(states=['CO','ME'])); w=self.worker(); j=self.q.claim(w)
         self.q.cancel('a',ident)
