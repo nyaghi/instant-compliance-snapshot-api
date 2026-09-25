@@ -18637,6 +18637,7 @@ def pa_guard_search_completion(result, org, observations):
 
 def search_pa_with_name_fallback(page, org):
     observations = []
+    started = time.monotonic()
 
     def observe_request(request):
         for row in observations:
@@ -18657,7 +18658,8 @@ def search_pa_with_name_fallback(page, org):
             payload = {}
         payload = payload if isinstance(payload, dict) else {}
         row = {"request": request, "step": step, "ein": payload.get("EIN") or "",
-               "name": payload.get("EntityName") or "", "complete": False}
+               "name": payload.get("EntityName") or "", "complete": False,
+               "started_seconds": round(time.monotonic() - started, 3)}
         observations.append(row)
         return row
 
@@ -18666,6 +18668,7 @@ def search_pa_with_name_fallback(page, org):
         if row is None:
             return
         row["http_status"] = response.status
+        row["response_seconds"] = round(time.monotonic() - started, 3)
         if not 200 <= response.status < 300:
             return
         if row["step"] != "search":
@@ -18677,6 +18680,8 @@ def search_pa_with_name_fallback(page, org):
             if isinstance(rows, list) and all(isinstance(item, dict) for item in rows):
                 row["complete"] = True
                 row["row_eins"] = [canonical_ein_digits(item.get("EIN", "")) for item in rows]
+                row["completed_seconds"] = round(time.monotonic() - started, 3)
+                row["row_count"] = len(rows)
         except Exception:
             pass
 
@@ -18685,18 +18690,45 @@ def search_pa_with_name_fallback(page, org):
         if row is not None:
             row["failure"] = "Public registry request failed"
 
+    def wait_for_search(query, request_offset, deadline):
+        # Pump Playwright events while waiting for this submitted query, not an
+        # earlier response or the temporarily empty Angular results table.
+        key = lambda value: re.sub(r"\s+", " ", str(value or "")).strip().casefold()
+        while True:
+            if time.monotonic() > deadline:
+                return False
+            matching = [row for row in observations[request_offset:]
+                        if row["step"] == "search" and not row.get("ein")
+                        and key(row.get("name")) == key(query)]
+            if matching:
+                row = matching[-1]
+                if row.get("complete"):
+                    return True
+                if row.get("failure") or row.get("http_status", 0) >= 400:
+                    return False
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            page.wait_for_timeout(min(100, max(1, remaining * 1000)))
+
     listeners = [("request", observe_request), ("response", observe_response), ("requestfailed", observe_failure)]
     for event, listener in listeners:
         page.on(event, listener)
     try:
         guard = lambda result: pa_guard_search_completion(result, org, observations)
-        return guard(search_pa_with_name_fallback_core(page, org, guard))
+        result = guard(search_pa_with_name_fallback_core(page, org, guard,
+                       wait_for_search, lambda: len(observations)))
+        result.source_attempts = [{key: row.get(key) for key in
+            ("step", "ein", "name", "http_status", "complete", "failure",
+             "started_seconds", "response_seconds", "completed_seconds", "row_count")}
+            for row in observations]
+        return result
     finally:
         for event, listener in listeners:
             page.remove_listener(event, listener)
 
 
-def search_pa_with_name_fallback_core(page, org, completion_guard):
+def search_pa_with_name_fallback_core(page, org, completion_guard, completion_wait, request_offset):
     result = checker.search_pa(page, org)
     result = completion_guard(result)
     if public_status(result) != "Not Registered":
@@ -18792,10 +18824,16 @@ def search_pa_with_name_fallback_core(page, org, completion_guard):
                     continue
             name_input.fill("")
             name_input.fill(variant)
+            offset = request_offset()
             if not checker.click_pa_search_button(page):
                 continue
-            checker.safe_wait_for_network_idle(page, timeout=5000)
-            result_wait_deadline = time.monotonic() + 4.0
+            # Replace the former 5s network-idle + 4s DOM heuristic with a
+            # bounded wait for the response body belonging to this exact query.
+            # Finish an already-submitted request before navigating or returning.
+            result_wait_deadline = time.monotonic() + 9.0
+            if not completion_wait(variant, offset, result_wait_deadline):
+                result.queries_attempted = list(attempted_variants)
+                return completion_guard(result)
             while time.monotonic() < result_wait_deadline:
                 try:
                     body_probe = page.locator("body").inner_text(timeout=1500)

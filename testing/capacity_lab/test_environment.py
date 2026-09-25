@@ -42,6 +42,9 @@ class LabTests(unittest.TestCase):
         pool = FairCapacity(2)
         gate = AdmissionSemaphore(pool, 'registration')
         seen = []
+        finished = []
+        finish_lock = threading.Lock()
+        all_released = threading.Event()
         class QueuedBase(Base):
             def do_POST(self):
                 data = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
@@ -50,7 +53,11 @@ class LabTests(unittest.TestCase):
                     seen.append((REQUEST_GROUP.get(), data))
                     time.sleep(.03)
                     self._send_json(200, data)
-                finally: gate.release()
+                finally:
+                    gate.release()
+                    with finish_lock:
+                        finished.append(True)
+                        if len(finished) == 10: all_released.set()
         master = types.SimpleNamespace(RegistrySnapshotHandler=QueuedBase, APP_VERSION='test-performance-lab')
         server = ThreadingHTTPServer(('127.0.0.1', 0), lab.build_handler(master, KEY, pool))
         thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
@@ -70,6 +77,8 @@ class LabTests(unittest.TestCase):
             self.assertTrue(all(group == 'lab:'+data['ein'] for group, data in seen))
             self.assertEqual(pool.snapshot()['counts']['peak_active'], 2)
             self.assertGreater(pool.snapshot()['counts']['peak_waiters'], 1)
+            # Reading the flushed HTTP body can precede the handler's finally.
+            self.assertTrue(all_released.wait(2), 'Request handlers did not release capacity')
             self.assertEqual(pool.snapshot()['active'], 0)
         finally:
             server.shutdown(); server.server_close(); thread.join()

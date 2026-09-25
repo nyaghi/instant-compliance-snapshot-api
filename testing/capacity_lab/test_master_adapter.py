@@ -23,7 +23,7 @@ from router import CapacityRouter, Request, Worker, Control
 
 
 class MasterIntegration(unittest.TestCase):
-    def test_only_supplied_name_short_circuit_changes_in_master_ast(self):
+    def test_only_supplied_name_and_authorized_pa_completion_changes_in_master_ast(self):
         root = Path(__file__).resolve().parents[2]
         baseline = subprocess.check_output(['git', 'show', '35e61ae:registry_snapshot_server.py'], cwd=root).decode('utf-8')
         current = (root / 'registry_snapshot_server.py').read_text(encoding='utf-8')
@@ -33,6 +33,14 @@ class MasterIntegration(unittest.TestCase):
         self.assertIsInstance(new.body[1], ast.If)
         self.assertEqual(ast.dump(new.body[1].test), "Name(id='supplied_name', ctx=Load())")
         new.body.pop(1)
+        # The Sep 25 request explicitly authorizes PA's response-completion fix.
+        # All other master functions, including PA classification and shared
+        # matching/discovery rules, must still equal the protected baseline.
+        for name in ('search_pa_with_name_fallback', 'search_pa_with_name_fallback_core'):
+            for tree in (before,after):
+                nodes=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name==name]
+                self.assertEqual(len(nodes),1)
+                tree.body.remove(nodes[0])
         self.assertEqual(ast.dump(before), ast.dump(after))
 
     def test_supplied_name_does_not_fetch_unused_fallback_metadata(self):
