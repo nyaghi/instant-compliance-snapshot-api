@@ -91,8 +91,9 @@ Only the isolated lab has these changes; staging and production are unchanged.
 Build: `pip install -r deployment/requirements-lab.txt && PLAYWRIGHT_BROWSERS_PATH=0 python -m playwright install chromium`
 
 Existing lab API start remains `python -u deployment/performance_lab.py`.
-Set CE_LAB_DURABLE_QUEUE=1, CE_LAB_QUEUE_WORKER=1, CE_LAB_WORKER_SLOTS=8,
-CE_APP_VERSION=2026.09.25.perf.9-performance-lab, and the separate internal
+Set CE_LAB_DURABLE_QUEUE=1, CE_LAB_QUEUE_WORKER=1, CE_LAB_WORKER_SLOTS=12,
+CE_LAB_RESOURCE_ADMISSION=1, CE_LAB_NY_BROWSER=1,
+CE_APP_VERSION=2026.09.25.perf.11-performance-lab, and the separate internal
 CE_LAB_DATABASE_URL. Preserve all disabled helper/fanout values. Keep secrets
 outside Git. The new worker starts `python -u deployment/queue_worker.py` with
 CE_LAB_ROLE=worker, its exact CE_LAB_WORKER_SERVICE_ID and fixed Render name
@@ -121,6 +122,26 @@ unqualified. Do not promote this candidate based on fixture success alone.
 Sources: https://render.com/pricing and https://render.com/docs/postgresql-creating-connecting.
 
 ## Authorized full-state follow-up (September 25)
+
+Perf.11 is live on the two existing services at code commit 36a8c466d814b9090fa811ba4f894484264a96c4.
+Seven live smoke controls passed. Three complete solo and three concurrent
+discovery-plus-32-state workflows preserved all 96 statuses, 20 compared result
+fields and returned name sets. Concurrent discovery averaged 25.5 seconds;
+registration averaged 95.9 seconds, versus 56.0 solo. Group elapsed time was
+143.2 seconds. This improves perf.10's 125.4-second concurrent registration
+average, but still exceeds the 50% slowdown stop threshold. No five/ten/fifteen
+organization qualification was attempted. Both workers reached full CPU;
+memory peaks were below limits. The queue is drained, staging is unchanged,
+and production was not touched. Additional actual CPU capacity is the next
+controlled trial; no further paid service was activated.
+
+Name-source completeness is not perfect: some source responses remained
+partial, although alias sets stayed identical and all registration checks
+completed. Cloud NY checks use the real registry through the existing master
+headless transport; customer Chrome-extension behavior is a separate scope.
+The detailed evidence is in FULL-STATE-CAPACITY-RESULTS-20260925.md under the
+project's outputs/performance-lab-live-20260924 directory. Do not promote this
+lab build as enterprise-ready based on this small sample.
 
 The perf.11 lab candidate addresses measured CPU pressure without changing any
 matching or status rule bodies. Bounded caches reuse pure punctuation/acronym
