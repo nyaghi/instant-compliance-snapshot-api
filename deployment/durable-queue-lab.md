@@ -81,8 +81,8 @@ private experiment client. Health/metrics and private assets remain available.
 
 ## Active lab deployment
 
-Both services run commit `84d4070b42ec77d99c9692d23fbdc37fae6e7866` as
-`2026.09.25.perf.7-performance-lab`. The API/worker service is
+Both services run commit `07e6924fddcddfc5aabaaeae3d47b4bec7167434` as
+`2026.09.25.perf.9-performance-lab`. The API/worker service is
 `srv-d8u0hsu7r5hc73aqfsg0`; the independent background worker is
 `srv-dar7adgu01pc738fsmgg`. Both have automatic deployment disabled.
 The shared free database is `dpg-dar6utvavr4c7380ou60-a`.
@@ -92,7 +92,7 @@ Build: `pip install -r deployment/requirements-lab.txt && PLAYWRIGHT_BROWSERS_PA
 
 Existing lab API start remains `python -u deployment/performance_lab.py`.
 Set CE_LAB_DURABLE_QUEUE=1, CE_LAB_QUEUE_WORKER=1, CE_LAB_WORKER_SLOTS=8,
-CE_APP_VERSION=2026.09.25.perf.7-performance-lab, and the separate internal
+CE_APP_VERSION=2026.09.25.perf.9-performance-lab, and the separate internal
 CE_LAB_DATABASE_URL. Preserve all disabled helper/fanout values. Keep secrets
 outside Git. The new worker starts `python -u deployment/queue_worker.py` with
 CE_LAB_ROLE=worker, its exact CE_LAB_WORKER_SERVICE_ID and fixed Render name
@@ -119,3 +119,42 @@ NY, customer authorization, mixed workload capacity and hundreds of users remain
 unqualified. Do not promote this candidate based on fixture success alone.
 
 Sources: https://render.com/pricing and https://render.com/docs/postgresql-creating-connecting.
+
+## Pennsylvania completion follow-up (September 25)
+
+The user explicitly authorized fixing Pennsylvania and resuming the three-org
+trial. The update changes only the master's two PA fallback access functions.
+It waits for the response body for the exact submitted name query, excluding
+earlier requests. A completed empty response advances directly to the next
+variant. A nonempty response retains the bounded DOM parsing and existing
+matching/classification. Request start/response/completion times and row counts
+are saved with source observations. The existing incomplete-response guard,
+fallback-query policy, queue capacity and all other state budgets are unchanged.
+
+The first perf.9 live smoke completed the EIN query and all five existing name
+queries for Junior Achievement USA. PA returned the expected Not Registered in
+54.5 seconds with one semantic attempt; perf.7 had returned Unable to Verify in
+113.8 seconds with two semantic attempts. The positive PA control and CO/LA
+controls kept their expected results. This is a timing correction, not an
+organization-specific override. Broader same-build solo/concurrent results are
+recorded in the associated cloud-trial evidence before any capacity claim.
+
+The resumed three-organization Standard trial completed on perf.9. Same-build
+solo registration times were 56.8, 54.7 and 86.3 seconds; concurrent times were
+99.8, 106.6 and 148.4 seconds (148.5-second group wall time). All 93 statuses and
+matched identities agreed with the controls, including PA's complete EIN plus
+five-name negative search. One Florida optional initial issue date disappeared
+for Make-A-Wish; its CH164 identity and Suspended status stayed unchanged. Thus
+92/93 state records retained all compared identity/status/date fields. The
+average per-organization slowdown was 79.4%, exceeding the 50% stop threshold;
+load was not increased. The trial does not qualify three organizations against
+the complete acceptance gate.
+
+Queue evidence shows no transport errors, reclaims or retries: mean state wait
+rose from 6.6 to 38.2 seconds, while mean execution rose from 16.3 to 18.8 seconds.
+Both two-CPU workers briefly reached full CPU; memory peaks stayed below their
+limits. The Florida date helper silently returns an empty value for several
+failure conditions, so its exact failure cause is unproven. Do not attribute it
+to concurrency solely from this observation. NY and simultaneous discovery
+were excluded from this registration comparison. See the separate
+PA-COMPLETION-THREE-ORG-RESULTS.md evidence report for the full scope and commands.
