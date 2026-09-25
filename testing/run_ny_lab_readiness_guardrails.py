@@ -107,6 +107,18 @@ class ReadinessTests(unittest.TestCase):
         root=Path(__file__).resolve().parents[1]
         old=ast.parse(subprocess.check_output(['git','show','73a262f:registry_snapshot_server.py'],cwd=root).decode())
         new=ast.parse((root/'registry_snapshot_server.py').read_text(encoding='utf-8'))
+        # Subsequent authorized WA input-readiness change has its own complete
+        # perf.14 AST guard. Exempt only that exact hook/helper from this older
+        # NY comparison; all remaining operations must still be identical.
+        new.body.remove(next(n for n in new.body if isinstance(n,ast.FunctionDef)
+            and n.name=='wa_fill_ready_name_and_search'))
+        loader=next(n for n in new.body if isinstance(n,ast.FunctionDef) and n.name=='load_wa_nm_module')
+        removed=0
+        for branch in [n for n in ast.walk(loader) if isinstance(n,ast.If)]:
+            for node in list(branch.body):
+                if isinstance(node,ast.Assign) and ast.unparse(node)=='module.fill_name_and_search = wa_fill_ready_name_and_search':
+                    branch.body.remove(node);removed+=1
+        self.assertEqual(removed,1)
         for tree in (old,new):
             node=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='search_ny_verified')
             tree.body.remove(node)

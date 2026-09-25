@@ -659,6 +659,7 @@ def load_wa_nm_module():
         module.apply_wa_detail_to_result = wa_apply_detail_master
         module.read_wa_detail = wa_read_completed_detail
         module.switch_to_fein_mode = wa_select_ready_fein_mode
+        module.fill_name_and_search = wa_fill_ready_name_and_search
         module.original_nm_apply_status_history = module.apply_nm_rows_to_result
         module.apply_nm_rows_to_result = lambda result, rows, fye_text="", context=None: nm_apply_status_history_master(
             module, result, rows, fye_text=fye_text, context=context
@@ -25367,6 +25368,41 @@ def wa_select_ready_fein_mode(page, timeout_seconds: float = 24.0) -> None:
             last_error = (str(exc) or type(exc).__name__).splitlines()[0][:160]
             log_event(f"WA EIN mode attempt={attempt + 1} incomplete: {last_error}")
     raise TimeoutError("Washington EIN search mode did not become ready; no EIN search was submitted. " + last_error)
+
+
+def wa_fill_ready_name_and_search(page, org_name: str) -> bool:
+    """Do not wait for a hidden EIN field after switching to name search."""
+    try:
+        ein_box = page.locator("#FEINNoSearchField").first
+        if ein_box.is_visible():
+            ein_box.fill("")
+    except Exception:
+        pass
+    name_box = page.locator("#txtKeywordSearch").first
+    name_box.wait_for(state="visible", timeout=10000)
+    name_box.click(timeout=5000, force=True)
+    time.sleep(1)
+    name_box.fill("")
+    name_box.type(org_name, delay=35)
+    page.evaluate("""() => {
+        const nameBox = document.querySelector('#txtKeywordSearch');
+        if (nameBox) {
+            nameBox.dispatchEvent(new Event('input', { bubbles: true }));
+            nameBox.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+    }""")
+    time.sleep(1)
+    for candidate in [
+        page.get_by_role("button", name=re.compile(r"^Search$", re.I)),
+        page.locator("button").filter(has_text=re.compile(r"^Search$", re.I)).first,
+        page.locator("input[value='Search']").first,
+    ]:
+        try:
+            candidate.click(timeout=5000, force=True)
+            return True
+        except Exception:
+            continue
+    return False
 
 
 def wa_detail_field(body: str, label: str) -> str:

@@ -109,6 +109,55 @@ class ProcessTree:
         self.log.close()
 
 
+class ForkProcessTree:
+    """Linux only: reuse imports, never an organization process or browser."""
+    def __init__(self, input_data, output, directory, env, target=None):
+        import multiprocessing
+        from deployment.queue_engine import forked_main
+        if not sys.platform.startswith('linux'):
+            raise RuntimeError('Warm task isolation requires Linux')
+        ctx=multiprocessing.get_context('forkserver')
+        ctx.set_forkserver_preload(['deployment.engine_preload'])
+        reader, writer=ctx.Pipe(duplex=True)
+        self.stopped=False
+        self.process=ctx.Process(target=target or forked_main,
+            args=(input_data,str(output),str(Path(directory)/'task.log'),writer,os.getpid(),env))
+        try:
+            self.process.start();self.pid=self.process.pid;writer.close()
+            if not reader.poll(8) or reader.recv()!=self.pid or os.getpgid(self.pid)!=self.pid:
+                raise RuntimeError('Task did not confirm private process-group readiness')
+            reader.send('accepted')
+        except BaseException:
+            # Before readiness it may still share the forkserver's group.
+            # Kill only the child until its independent group is established.
+            try:
+                if self.process.pid:
+                    if os.getpgid(self.process.pid)==self.process.pid: os.killpg(self.process.pid,signal.SIGKILL)
+                    else: self.process.kill()
+            except ProcessLookupError: pass
+            if self.process.pid:
+                self.process.join(10)
+                if self.process.is_alive(): raise RuntimeError('Failed warm child still alive')
+            self.process.close()
+            raise
+        finally:
+            reader.close();writer.close()
+
+    def poll(self): return self.process.exitcode
+
+    def stop(self):
+        if self.stopped:return
+        try: os.killpg(self.pid,signal.SIGKILL)
+        except ProcessLookupError:pass
+        self.process.join(10)
+        if self.process.is_alive():raise RuntimeError('Warm task termination not confirmed')
+        end=time.monotonic()+10
+        while group_running(self.pid):
+            if time.monotonic()>=end:raise RuntimeError('Warm task descendants still alive')
+            time.sleep(.05)
+        self.process.close();self.stopped=True
+
+
 class ResourceAdmission:
     """Lab-only launch pacing; existing tasks always retain their reservations.
 
@@ -293,13 +342,18 @@ class Supervisor:
                         output = Path(temp.name)/'result.json'
                         try:
                             deadline = claim_started+job['run_seconds']
-                            child_job = {**job, 'run_seconds': max(0, deadline-time.monotonic())}
+                            child_job = {**job, 'run_seconds': max(0, deadline-time.monotonic()),
+                                         '_deadline_monotonic': deadline}
                             child_env = dict(os.environ if self.env is None else self.env)
                             child_env.pop('CE_LAB_DATABASE_URL', None)
                             child_env.pop('CE_TEST_DATABASE_URL', None)
                             child_env.pop('RENDER_API_KEY', None)
                             child_env['CE_LAB_DURABLE_QUEUE'] = '0'
-                            tree = ProcessTree([*self.command, str(output)], child_job, temp.name, child_env)
+                            if (child_env.get('CE_LAB_WARM_ENGINE')=='1' and sys.platform.startswith('linux')
+                                    and self.command==[sys.executable,str(ROOT/'deployment/queue_engine.py')]):
+                                tree = ForkProcessTree(child_job,output,temp.name,child_env)
+                            else:
+                                tree = ProcessTree([*self.command, str(output)], child_job, temp.name, child_env)
                             self.active[job['id']] = dict(job=job, tree=tree, temp=temp, output=output,
                                                         deadline=deadline)
                             if self.admission:self.admission.launched()

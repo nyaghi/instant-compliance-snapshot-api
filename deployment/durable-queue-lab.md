@@ -371,3 +371,34 @@ failure conditions, so its exact failure cause is unproven. Do not attribute it
 to concurrency solely from this observation. NY and simultaneous discovery
 were excluded from this registration comparison. See the separate
 PA-COMPLETION-THREE-ORG-RESULTS.md evidence report for the full scope and commands.
+
+
+## perf.15: isolated import reuse and Washington hidden-input wait
+
+The authorized lab optimization adds an import-only Linux forkserver template.
+It never receives organization data or runs a lookup. Each task receives a new
+process, its own session/process group, result file and browsers. A readiness
+handshake confirms isolation before execution. Cancellation, deadline and lost
+supervisor handling terminate the group before releasing its queue reservation.
+The absolute task deadline includes startup. No completed result, alias cache,
+registry session or browser is reused between organizations.
+
+This is process-startup infrastructure inside the existing master worker, not
+a state sidecar or an additional service. CE_LAB_WARM_ENGINE=1 activates it only
+for the Linux master command; the cold process path is retained. The private lab
+build additionally runs test_warm_engine against actual Linux processes before
+Render can replace live instances. No worker count, price, registry cap or lookup
+budget changes. The existing database is not exposed to task processes/template.
+
+The sole master lookup edit prevents Washington name fallback from clearing a
+hidden EIN input. All existing name submission, search, identity and status
+rules remain intact. Whole-master AST controls compare every other operation
+to perf.14. Local negative timing was 61.1 -> 30.8 seconds with the same completed
+Not Registered result; the positive control retained the verified EIN/status.
+These two local controls are not a cloud throughput qualification.
+
+Pennsylvania is excluded from the next 31-state registration trials due to the
+user-reported source outage. Discovery still uses its normal sources and reports
+incompleteness. Advance load only after reviewing first-response discrepancies;
+record actual timings rather than claiming the requested minute/ten-organization
+target has been achieved before the live trial.

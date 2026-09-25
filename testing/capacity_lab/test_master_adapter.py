@@ -28,6 +28,19 @@ class MasterIntegration(unittest.TestCase):
         baseline = subprocess.check_output(['git', 'show', '35e61ae:registry_snapshot_server.py'], cwd=root).decode('utf-8')
         current = (root / 'registry_snapshot_server.py').read_text(encoding='utf-8')
         before, after = ast.parse(baseline), ast.parse(current)
+        # Phase17 skips clearing a hidden EIN input after switching WA to name.
+        # Dedicated controls compare this hook and the rest of the master against
+        # perf.14 as well, so this exemption cannot hide other state edits.
+        after.body.remove(next(n for n in after.body if isinstance(n,ast.FunctionDef)
+            and n.name=='wa_fill_ready_name_and_search'))
+        loader=next(n for n in after.body if isinstance(n,ast.FunctionDef) and n.name=='load_wa_nm_module')
+        branches=[n for n in ast.walk(loader) if isinstance(n,ast.If)]
+        removed=0
+        for branch in branches:
+            for n in list(branch.body):
+                if isinstance(n,ast.Assign) and ast.unparse(n)=='module.fill_name_and_search = wa_fill_ready_name_and_search':
+                    branch.body.remove(n);removed+=1
+        self.assertEqual(removed,1)
         old = next(n for n in before.body if isinstance(n, ast.FunctionDef) and n.name == 'resolved_organization_name')
         new = next(n for n in after.body if isinstance(n, ast.FunctionDef) and n.name == 'resolved_organization_name')
         self.assertIsInstance(new.body[1], ast.If)

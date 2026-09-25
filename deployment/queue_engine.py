@@ -25,40 +25,74 @@ def execute(master, job):
     return results[0]
 
 
-def main():
+def run_job(job, output, supervisor_pid=None, warmed=None):
     from deployment.performance_lab import validate_environment, install_http_egress_guard
     validate_environment(os.environ)
     install_http_egress_guard()
-    job = json.load(sys.stdin)
     if os.name != 'nt':
         import threading, time, signal
         parent = os.getppid()
-        deadline = time.monotonic()+job['run_seconds']
+        deadline = min(time.monotonic()+job['run_seconds'], job.get('_deadline_monotonic', float('inf')))
         def guard():
             while time.monotonic() < deadline and os.getppid() == parent:
+                if supervisor_pid:
+                    from deployment.queue_worker import process_running
+                    if not process_running(supervisor_pid): break
                 time.sleep(.25)
             os.killpg(os.getpgrp(), signal.SIGKILL)
         threading.Thread(target=guard, daemon=True).start()
     import time
     import_started, cpu_started = time.monotonic(), time.process_time()
-    import registry_snapshot_server as master
+    if warmed is None:
+        import registry_snapshot_server as master
+    else:
+        master = warmed.master
     import_seconds, import_cpu = time.monotonic()-import_started, time.process_time()-cpu_started
     # The child has a private result file. Logs never mix into the result payload.
     execution_started, cpu_started = time.monotonic(), time.process_time()
     result = execute(master, job)
     result['lab_task_metrics'] = {'import_seconds': import_seconds, 'import_cpu_seconds': import_cpu,
         'execution_seconds': time.monotonic()-execution_started, 'execution_cpu_seconds': time.process_time()-cpu_started}
+    result['lab_task_metrics']['engine_preloaded'] = warmed is not None
+    if warmed is not None:
+        result['lab_task_metrics']['template_pid'] = warmed.PRELOAD_PID
+        result['lab_task_metrics']['template_import_cpu_seconds'] = warmed.IMPORT_CPU_SECONDS
     if os.name != 'nt':
         import resource
         children = resource.getrusage(resource.RUSAGE_CHILDREN)
         result['lab_task_metrics'].update(child_cpu_seconds=children.ru_utime+children.ru_stime,
             self_peak_rss_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss, child_peak_rss_kib=children.ru_maxrss)
-    output = Path(sys.argv[1])
+    output = Path(output)
     temp = output.with_suffix('.partial')
     temp.write_text(json.dumps(result, ensure_ascii=False), encoding='utf-8')
     temp.replace(output)
     # Discovery can leave deadline-exceeded executor threads alive. The parent
     # kills/reaps the process tree before accepting this saved result.
+
+
+def prepare_forked_child(log_path, ready, env):
+    """One isolated child of an organization-free, single-threaded template."""
+    os.setsid()
+    with open(log_path, 'ab', buffering=0) as log:
+        os.dup2(log.fileno(),1); os.dup2(log.fileno(),2)
+    os.environ.clear(); os.environ.update(env)
+    from deployment import engine_preload as warmed
+    if warmed.PRELOAD_PID != os.getppid():
+        raise RuntimeError('Warm template was not preloaded by the forkserver')
+    ready.send(os.getpid())
+    if not ready.poll(8) or ready.recv() != 'accepted':
+        raise RuntimeError('Supervisor did not accept isolated child')
+    ready.close()
+    return warmed
+
+
+def forked_main(job, output, log_path, ready, supervisor_pid, env):
+    warmed = prepare_forked_child(log_path, ready, env)
+    run_job(job, output, supervisor_pid=supervisor_pid, warmed=warmed)
+
+
+def main():
+    run_job(json.load(sys.stdin),sys.argv[1])
 
 
 if __name__ == '__main__': main()
