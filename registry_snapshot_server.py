@@ -10787,6 +10787,12 @@ def md_registry_match_from_entries(result, body: str, org) -> None:
 
 
 def normalize_registry_match_fields(result, org) -> None:
+    if result.state == "IL" and public_status(result) == "Not Registered / Non-Compliant":
+        # A completed empty compliant-directory search has no matched record.
+        # Do not substitute the submitted name as registry evidence.
+        result.matched_registry_name = ""
+        result.matched_registry_identifier = ""
+        return
     matched_name = useful_registry_name(getattr(result, "matched_registry_name", "") or "")
     if result.state == "WV" and not matched_name:
         matched_name = structured_registry_name(getattr(result, "matched_registry_name", ""), org.organization_name, org.ein)

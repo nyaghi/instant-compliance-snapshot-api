@@ -95,6 +95,9 @@ class IntegrationControls(unittest.TestCase):
         data=cc.response_data_for_lookup(result,'',self.org,self.org.organization_name,self.org.ein,'IL',time.perf_counter())
         self.assertEqual(data['status'],'Not Registered / Non-Compliant')
         self.assertIn('does not distinguish',data['comments'])
+        self.assertNotIn('Registry match',data['comments'])
+        self.assertEqual(data['matched_registry_name'],'')
+        self.assertEqual(data['matched_registry_identifier'],'')
     def test_il_incomplete_fallback_never_negative(self):
         def evidence(q):
             if 'ein' in q:return {'rows':[]}
@@ -179,7 +182,7 @@ class IntegrationControls(unittest.TestCase):
         changed={k for k in old if old[k]!=new.get(k)}
         self.assertEqual(changed,{'public_status','identity_rows_names','licensed_charity_identity','registration_date_metadata',
             'true_status_from_body','comments_for_result_base','run_state_lookup','ny_connector_failure',
-            'ny_connector_clean_response','ny_connector_advance','ny_connector_request'})
+            'ny_connector_clean_response','ny_connector_advance','ny_connector_request','normalize_registry_match_fields'})
 
 
 if __name__=='__main__':unittest.main()
