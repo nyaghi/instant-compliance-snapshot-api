@@ -27,6 +27,59 @@ The temporary database adds no charge. A later paid 256 MB
 database is $6/month plus applicable storage ($0.30/GB/month), and requires its
 own explicit resource decision. No automatic paid database upgrade is included.
 
+### Phase12 five-organization follow-up
+
+The three-worker trial passed at three simultaneous organizations: 96/96 state
+results, compared fields and name sets unchanged; mean registration 72.2 seconds
+versus 56.4 solo. Five simultaneous organizations completed all 160 state checks
+in 146.5 seconds, with all statuses matching after the user's accepted
+Conservation Nation DC correction. However, five did not pass the advancement
+gate: mean registration was 92.6 versus 51.5 seconds solo (80% slower), three
+organizations lost source-provided name entries, and one WA diagnostic identity
+anchor changed. No higher-load trial was started.
+
+All missing entries returned in separate solo discovery diagnostics. Four were
+PA prior names; one CA DBA was a prefixed form of a name retained elsewhere.
+Source exceptions are currently swallowed, so the exact failure type cannot be
+recovered from the original responses. WA selected the same FEIN detail and
+status, but its serialized identity anchor was recomputed from the changed alias
+list. Neither observation supports changing matching or status rules broadly.
+
+Mean state queue wait rose from 8.7 to 42.4 seconds; execution from 12.2 to 16.3.
+All three nodes reached two CPU cores in sparse Render samples. Claim-only
+admission logs cannot separate CPU blocking from other dispatch waits. The next
+narrow work is source-failure and admission-block diagnostics, evidence-based
+transient-source recovery, and preserving verified WA FEIN audit provenance.
+These changes were not made during the hardware-only comparison. Staging,
+production and the user's browser remain untouched. Raw first responses and
+separate follow-ups are preserved in the phase12 evidence beside
+THIRD-WORKER-RESULTS-20260925.md in the project's performance-lab output directory.
+
+### Authorized phase13 corrections
+
+The next lab release preserves all state selection/classification rules and all
+capacity/deadline settings. CA and PA discovery may recover once from a timeout,
+connection failure, or eligible transient HTTP status, within the original
+60-second discovery deadline. Completed/invalid responses, identity conflicts,
+TLS errors and access-denied responses are not retried. Retry-After advice must
+fit a bounded delay; otherwise the source remains explicitly partial. Safe
+failure category, request step, elapsed time and attempts are retained without
+exception messages, request URLs, credentials or headers.
+
+WA retains the exact FEIN verified on its selected detail as audit provenance.
+It clears that provenance on a missing/conflicting detail and does not replace
+the registry credential identifier. Existing status/date interpretation is
+AST-identical to perf.11. All unrelated master functions remain protected by
+the earlier baseline AST comparison, with these authorized functions isolated.
+
+The worker groups admission observations into constant-size heartbeat windows:
+CPU pressure, memory headroom, launch pacing, physical slots, claim transactions
+and no eligible work. These observations do not alter dispatch decisions or
+limits. They share the existing heartbeat transaction; no new database schema
+or extra per-loop network request is introduced. Only the lab release label and
+idle queue source-version guard change at deployment. Three existing Pro nodes
+remain the only paid compute; staging and production are excluded.
+
 ## Public-to-private contract
 
 All endpoints require the existing unique private lab Bearer/Basic credential.

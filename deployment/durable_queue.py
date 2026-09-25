@@ -218,13 +218,15 @@ class Queue:
                             'submitted': w['submitted'], 'claimed': now}
             return None
 
-    def heartbeat(self, worker, jobs):
+    def heartbeat(self, worker, jobs, observation=None):
         allowed = []
         with self.transaction() as (c, now):
             self._settle(c, now)
             wk = c.execute('SELECT * FROM cc_lab_workers WHERE id=%s', (worker,)).fetchone()
             if not wk or wk['retired']: return []
             c.execute('UPDATE cc_lab_workers SET heartbeat=%s WHERE id=%s', (now, worker))
+            if observation is not None:
+                self.event(c, now, 'worker_admission', worker=worker, **observation)
             for job, token in jobs:
                 row = c.execute("UPDATE cc_lab_jobs SET lease_until=%s WHERE id=%s AND token=%s AND owner=%s AND phase='running' AND run_until>%s RETURNING id",
                                 (now+20, job, token, worker, now)).fetchone()

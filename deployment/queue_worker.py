@@ -15,6 +15,7 @@ import tempfile
 import threading
 import time
 import uuid
+from collections import Counter
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -160,6 +161,32 @@ class ResourceAdmission:
     def launched(self): self.last_launch=self.clock()
 
 
+class AdmissionWindow:
+    """Constant-size observations; never make scheduling decisions."""
+    def __init__(self, now):
+        self.started = self.last = now
+        self.reason = 'starting'
+        self.seconds = Counter()
+        self.counts = Counter()
+        self.had_work = False
+
+    def observe(self, reason, now, had_work=False):
+        self.seconds[self.reason] += max(0, now-self.last)
+        self.last, self.reason = now, reason
+        self.counts[reason] += 1
+        self.had_work |= had_work
+
+    def snapshot(self, now):
+        seconds = self.seconds.copy()
+        seconds[self.reason] += max(0, now-self.last)
+        return {'window_seconds': max(0, now-self.started),
+            'seconds_by_reason': dict(seconds), 'counts_by_reason': dict(self.counts)}
+
+    def reset(self, now):
+        self.started = self.last = now
+        self.seconds.clear(); self.counts.clear(); self.had_work = False
+
+
 class Supervisor:
     def __init__(self, queue, version, slots=8, command=None, env=None):
         self.queue, self.version, self.slots = queue, version, slots
@@ -170,6 +197,7 @@ class Supervisor:
         self.admission = ResourceAdmission() if settings.get('CE_LAB_RESOURCE_ADMISSION') == '1' else None
         self.stop_event = threading.Event()
         self.active = {}
+        self.observations = AdmissionWindow(time.monotonic())
         self.queue.register_worker(self.id, version, slots)
 
     def stop(self): self.stop_event.set()
@@ -182,7 +210,11 @@ class Supervisor:
                 now = time.monotonic()
                 if now >= next_heartbeat:
                     try:
-                        allowed = self.queue.heartbeat(self.id, [(j, r['job']['token']) for j, r in self.active.items()])
+                        observed = self.observations.snapshot(now) if self.observations.had_work else None
+                        self.observations.observe('heartbeat_transaction',now,bool(self.active))
+                        allowed = self.queue.heartbeat(self.id, [(j, r['job']['token']) for j, r in self.active.items()],
+                            observation=observed)
+                        self.observations.reset(now)
                         last_heartbeat = time.monotonic()
                         for ident, r in self.active.items():
                             if ident not in allowed: r['stop_reason'] = 'LEASE_OR_WORKFLOW_STOP'
@@ -222,11 +254,19 @@ class Supervisor:
                         r['temp'].cleanup(); del self.active[ident]
                 used = sum(r['job']['weight'] for r in self.active.values())
                 ceiling = self.admission.limit(self.slots,used) if self.admission else self.slots
+                reason = ('physical_slots' if used >= self.slots else
+                    (self.admission.snapshot.get('reason', 'available') if self.admission else 'available'))
+                self.observations.observe(reason, time.monotonic(), bool(self.active))
                 if used < ceiling and time.monotonic()-last_heartbeat < 8:
                     claim_started = time.monotonic()
+                    self.observations.observe('claim_transaction', claim_started, bool(self.active))
                     try: job = self.queue.claim(self.id,slot_limit=ceiling,
                         admission_evidence=dict(self.admission.snapshot) if self.admission else None)
-                    except Exception: job = None
+                    except Exception:
+                        job = None
+                        self.observations.observe('claim_error', time.monotonic(), bool(self.active))
+                    else:
+                        self.observations.observe('launch' if job else 'no_eligible_job', time.monotonic(), bool(self.active) or bool(job))
                     if job:
                         temp = tempfile.TemporaryDirectory(prefix='cc-lab-task-')
                         output = Path(temp.name)/'result.json'

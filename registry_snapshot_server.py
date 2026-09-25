@@ -1869,6 +1869,7 @@ IDENTITY_SOURCE_SLOTS = threading.BoundedSemaphore(256)
 IDENTITY_BROWSER_SLOTS = threading.BoundedSemaphore(4)
 IDENTITY_DEADLINE_SECONDS = 60.0
 IDENTITY_MAX_NAMES = 32
+IDENTITY_REQUEST_TRACE = ContextVar("identity_request_trace", default=None)
 
 
 def identity_name_key(value: str) -> str:
@@ -1950,6 +1951,60 @@ def identity_fetch(url: str, deadline: float, *, headers=None, max_bytes=4_000_0
     if len(body) > max_bytes:
         raise ValueError("Identity source exceeds size limit")
     return body
+
+
+def identity_failure_evidence(exc) -> dict:
+    """Bounded diagnostics: never expose exception messages, URLs or headers."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return {"failure_kind": "http_error", "http_status": exc.code}
+    cause = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    if isinstance(cause, ssl.SSLError):
+        return {"failure_kind": "tls_error"}
+    if isinstance(cause, TimeoutError):
+        return {"failure_kind": "timeout"}
+    if isinstance(cause, ConnectionError):
+        return {"failure_kind": "connection_error"}
+    if isinstance(exc, (ValueError, TypeError, KeyError)):
+        return {"failure_kind": "invalid_response"}
+    return {"failure_kind": "source_error"}
+
+
+def identity_discovery_fetch(url, deadline, *, stage, **kwargs):
+    """One bounded recovery for transient CA/PA discovery transport failures.
+
+    The original discovery deadline is shared by both attempts. Completed or
+    invalid responses, EIN conflicts and TLS failures never trigger recovery.
+    """
+    trace = IDENTITY_REQUEST_TRACE.get()
+    for attempt in (1, 2):
+        started = time.monotonic()
+        try:
+            body = identity_fetch(url, deadline, **kwargs)
+        except Exception as exc:
+            detail = identity_failure_evidence(exc)
+            if trace is not None and len(trace) < 32:
+                trace.append({"stage": stage, "attempt": attempt,
+                    "seconds": round(time.monotonic() - started, 3), **detail})
+            transient = detail["failure_kind"] in {"timeout", "connection_error"}
+            pause = 0.35
+            if isinstance(exc, urllib.error.HTTPError):
+                transient = exc.code in {408, 429, 502, 503, 504}
+                retry_after = (exc.headers or {}).get("Retry-After")
+                if retry_after is not None:
+                    # Unknown/date-form advice is not permission to retry early.
+                    if re.fullmatch(r"\d+(?:\.\d+)?", str(retry_after).strip()):
+                        pause = max(pause, float(retry_after))
+                    else:
+                        transient = False
+                exc.close()
+            if attempt == 2 or not transient or not 0 <= pause <= 2 or deadline - time.monotonic() < pause + 1:
+                raise
+            time.sleep(pause)
+        else:
+            if trace is not None and len(trace) < 32:
+                trace.append({"stage": stage, "attempt": attempt,
+                    "seconds": round(time.monotonic() - started, 3), "completed": True})
+            return body
 
 
 def identity_candidate(name, source, evidence_type, url, source_date="", historical=False):
@@ -2053,7 +2108,8 @@ def registry_address_evidence(ein: str, location: str, *, candidate_ein: str = "
 def identity_ca_names(ein: str, deadline: float) -> dict:
     query = {"where": {"and": [{"entityStatus": {"neq": "Not Listed"}}, {"fein": format_ein(ein)}]}, "limit": 20}
     url = checker.CA_EVOKE_API_ROOT + "/data/objects/entity/instances?" + urlencode({"filter": json.dumps(query, separators=(",", ":"))})
-    rows = json.loads(identity_fetch(url, deadline, headers={"Referer": checker.CA_EVOKE_PUBLIC_PORTAL_URL}))
+    rows = json.loads(identity_discovery_fetch(url, deadline, stage="CA_EIN_search",
+        headers={"Referer": checker.CA_EVOKE_PUBLIC_PORTAL_URL}))
     if not isinstance(rows, list):
         raise ValueError("California identity response is incomplete")
     names, records = [], []
@@ -2502,7 +2558,8 @@ def identity_pa_names(ein: str, deadline: float) -> dict:
     url = "https://www.charities.pa.gov/#/page/searchCharities"
     detail_url = "https://www.charities.pa.gov/#/page/charitiesEntityDetails"
     def post(payload):
-        return json.loads(identity_fetch("https://www.charities.pa.gov/api/Charities/Search", deadline,
+        return json.loads(identity_discovery_fetch("https://www.charities.pa.gov/api/Charities/Search", deadline,
+            stage="PA_EIN_search" if payload["SearchMode"] == "CHARITIES_SEARCH_EXTERNAL" else "PA_alias_detail",
             headers={"Content-Type": "application/json", "Accept": "application/json"},
             data=json.dumps(payload).encode()))
     data = post({"SearchMode": "CHARITIES_SEARCH_EXTERNAL", "EntityName": None, "EIN": ein,
@@ -2546,8 +2603,9 @@ def identity_pa_names(ein: str, deadline: float) -> dict:
                 if item: result["names"].append(item)
                 elif value: result["rejected_name_fields"].append(str(value))
                 else: result["complete"] = False
-        except Exception:
+        except Exception as exc:
             result["complete"] = False
+            result.setdefault("detail_failures", []).append(identity_failure_evidence(exc))
     if not result["complete"]:
         result["limitation"] = "Pennsylvania's usable EIN-confirmed names were retained; the full name list could not be confirmed."
     return result
@@ -3256,11 +3314,21 @@ def discover_organization_names(organization_name: str, ein: str) -> dict:
     futures, results = {}, []
     def run(source, queued):
         started = time.monotonic()
+        trace = []
+        token = IDENTITY_REQUEST_TRACE.set(trace)
         try:
-            result = identity_source_result(source, ein, deadline)
+            try:
+                result = identity_source_result(source, ein, deadline)
+            except Exception as exc:
+                result = {"source": source, "complete": False, "names": [],
+                    "limitation": "This source could not be confirmed during name discovery.",
+                    **identity_failure_evidence(exc)}
+                if isinstance(exc, urllib.error.HTTPError): exc.close()
             return {**result, "queue_seconds": round(started - queued, 3),
-                    "service_seconds": round(time.monotonic() - started, 3)}
+                    "service_seconds": round(time.monotonic() - started, 3),
+                    **({"request_attempts": trace} if trace else {})}
         finally:
+            IDENTITY_REQUEST_TRACE.reset(token)
             IDENTITY_SOURCE_SLOTS.release()
     for source in (*IDENTITY_STATES, "IRS"):
         cached = identity_cached_source_result(source, ein)
@@ -8756,6 +8824,9 @@ def copy_external_result(org, state: str, external_result):
     ]:
         if hasattr(external_result, attr):
             setattr(result, attr, getattr(external_result, attr))
+    if state_upper == "WA" and getattr(external_result, "verified_registry_ein", "") and external_result.verified_registry_ein == canonical_ein_digits(org.ein):
+        result.verified_registry_ein = external_result.verified_registry_ein
+        result.identity_anchor = "EIN"
     return result
 
 
@@ -17921,6 +17992,7 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         "identity_review_evidence",
         "registration_date_diagnostics",
         "source_truth_conflict",
+        "verified_registry_ein",
     ]:
         evidence_value = getattr(result, evidence_key, None)
         if evidence_value is not None:
@@ -17987,11 +18059,16 @@ def debug_trace_for_result(result, org, state: str, interpreted_status: str) -> 
     if matched_name:
         matched_identifier = getattr(result, "matched_registry_identifier", "") or ""
         candidate_ein = matched_identifier if normalized_ein_key(matched_identifier) == normalized_ein_key(getattr(org, "ein", "")) else ""
+        verified_ein = getattr(result, "verified_registry_ein", "")
+        if state == "WA" and verified_ein and normalized_ein_key(verified_ein) == normalized_ein_key(getattr(org, "ein", "")):
+            candidate_ein = verified_ein
         decision = score_candidate(
             getattr(org, "organization_name", ""),
             getattr(org, "ein", ""),
             {"name": matched_name, "ein": candidate_ein},
         )
+        if state == "WA" and verified_ein and normalized_ein_key(verified_ein) == normalized_ein_key(getattr(org, "ein", "")):
+            decision = {"decision": "accepted", "reason": "MATCH_EIN_EXACT", "score": max(100, decision["score"])}
         if mn_confirmed_alias_evidence(result):
             decision = {"decision": "accepted", "reason": "MATCH_STATE_CONFIRMED_ALTERNATE_NAME", "score": 80}
         status_reason_code = getattr(result, "reason_code", "") or reason_code_for_result(result, interpreted_status)
@@ -25309,6 +25386,11 @@ def wa_apply_detail_master(result, body: str):
     module = load_wa_nm_module()
     requested = re.sub(r"\D", "", result.ein or "")
     observed = re.sub(r"\D", "", wa_detail_field(body, "FEIN Number"))
+    # Clear prior provenance if this result object is reused for an incomplete
+    # or conflicting detail. Only the loaded matching field can restore it.
+    result.verified_registry_ein = ""
+    result.identity_anchor = ""
+    result.reason_code = ""
     if not requested or requested != observed:
         result.status = "Unable to Confirm"
         result.raw_status_text = ("Washington detail page returned a different EIN." if observed else
@@ -25317,6 +25399,9 @@ def wa_apply_detail_master(result, body: str):
                              "The selected detail record remained incomplete after a bounded wait; registration status was not inferred.")
         result.success = False
         return result
+    result.verified_registry_ein = observed
+    result.identity_anchor = "EIN"
+    result.reason_code = "MATCH_EIN_EXACT"
     status = wa_detail_field(body, "Status")
     renewal = next((v for label in ("Renewal Date", "Renewal Due Date", "Renewal")
                     if (v := wa_detail_field(body, label))), "")

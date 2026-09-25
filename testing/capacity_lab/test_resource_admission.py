@@ -2,7 +2,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from deployment.queue_worker import ResourceAdmission
+from deployment.queue_worker import ResourceAdmission, AdmissionWindow
 
 
 class AdmissionTests(unittest.TestCase):
@@ -56,6 +56,30 @@ class AdmissionTests(unittest.TestCase):
     def test_regressed_cpu_counter_does_not_prove_headroom(self):
         self.metrics(1000000);self.gate.limit(12,0);self.now=1;self.metrics(500000)
         self.assertEqual(self.gate.limit(12,0),8)
+
+
+class ObservationTests(unittest.TestCase):
+    def test_seconds_are_partitioned_without_changing_admission(self):
+        window=AdmissionWindow(0)
+        window.observe('cpu_pressure',1,True)
+        window.observe('claim_transaction',3,True)
+        window.observe('no_eligible_job',4,True)
+        data=window.snapshot(5)
+        self.assertEqual(data['seconds_by_reason'],{'starting':1,'cpu_pressure':2,'claim_transaction':1,'no_eligible_job':1})
+        self.assertEqual(sum(data['seconds_by_reason'].values()),data['window_seconds'])
+        self.assertTrue(window.had_work)
+
+    def test_reset_does_not_duplicate_previous_intervals(self):
+        window=AdmissionWindow(0);window.observe('launch_pacing',1,True)
+        self.assertEqual(window.snapshot(3)['window_seconds'],3)
+        window.reset(3)
+        self.assertFalse(window.had_work)
+        self.assertEqual(window.snapshot(5)['seconds_by_reason'],{'launch_pacing':2})
+
+    def test_failed_persistence_can_retake_snapshot_without_losing_data(self):
+        window=AdmissionWindow(0);window.observe('memory_headroom',1,True)
+        window.snapshot(3)
+        self.assertEqual(window.snapshot(5)['seconds_by_reason']['memory_headroom'],4)
 
 
 if __name__=='__main__':unittest.main(verbosity=2)

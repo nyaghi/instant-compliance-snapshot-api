@@ -74,6 +74,20 @@ class DurableTests(unittest.TestCase):
         with self.assertRaises(Conflict): self.submit(payload(alternate_names=[]), key='same')
         with self.assertRaises(Conflict): self.submit(payload(mode='sales'))
 
+    def test_admission_observation_does_not_change_job_or_capacity(self):
+        ident=self.submit();worker=self.worker();job=self.q.claim(worker)
+        observation={'window_seconds':3,'seconds_by_reason':{'cpu_pressure':2,'claim_transaction':1},
+                     'counts_by_reason':{'cpu_pressure':4,'claim_transaction':1}}
+        allowed=self.q.heartbeat(worker,[(job['id'],job['token'])],observation=observation)
+        self.assertIn(job['id'],allowed)
+        with self.q.transaction() as (conn,now):
+            row=conn.execute("SELECT detail FROM cc_lab_events WHERE event='worker_admission'").fetchone()
+            held=conn.execute("SELECT count(*) AS n FROM cc_lab_jobs WHERE phase='running'").fetchone()['n']
+        self.assertEqual(row['detail'],{'worker':worker,**observation})
+        self.assertEqual(held,1)
+        self.finish(job)
+        self.assertEqual(self.q.status('a',ident)['phase'],'completed')
+
     def test_ny_explicit_activation_claims_real_work_and_preserves_limits(self):
         disabled=self.submit(payload(states=['NY']))
         self.assertEqual(self.q.status('a',disabled)['jobs'][0]['error'],'NY_COLLECTOR_NOT_CONFIGURED')
