@@ -2,7 +2,7 @@
 import sys, unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import registry_snapshot_server as c
 
@@ -163,6 +163,7 @@ class EventControls(unittest.TestCase):
             out['offset']=offset();p.emit(ein='',name='Completion Control',delay=6)
         out,actual=self.wait_case(setup)
         self.assertTrue(out['complete']);self.assertGreaterEqual(out['elapsed'],6)
+        self.assertEqual(out['complete']['row_count'],0)
         self.assertTrue(actual.source_attempts[0]['complete'])
         self.assertGreaterEqual(actual.source_attempts[0]['completed_seconds'],6)
 
@@ -208,5 +209,38 @@ class EventControls(unittest.TestCase):
             p.pending.append((1,lambda:p.listeners['requestfailed'](req)))
         out,_=self.wait_case(setup)
         self.assertFalse(out['complete']);self.assertLess(out['elapsed'],2)
+
+class FallbackFlowControls(unittest.TestCase):
+    def core(self,complete):
+        page=MagicMock()
+        page.get_by_role.return_value.count.return_value=0
+        page.locator.return_value.count.return_value=0
+        page.locator.return_value.first.count.return_value=0
+        wait=MagicMock(return_value=complete)
+        original=result()
+        with patch.object(c.checker,'search_pa',return_value=original), \
+             patch.object(c,'build_search_queries',return_value=['Verified Alias']), \
+             patch.object(c,'high_signal_search_phrases',return_value=[]), \
+             patch.object(c,'distinctive_core_words',return_value=[]), \
+             patch.object(c,'organization_match_target_variants',return_value=['Verified Alias']), \
+             patch.object(c.checker,'find_visible_input',return_value=MagicMock()), \
+             patch.object(c.checker,'click_pa_search_button',return_value=True), \
+             patch.object(c.checker,'safe_wait_for_network_idle'), \
+             patch.object(c.time,'sleep'):
+            actual=c.search_pa_with_name_fallback_core(page,ORG,lambda r:r,wait,lambda:7)
+        return actual,page,wait
+
+    def test_empty_completed_query_skips_dom_and_retains_alias_attempt(self):
+        actual,page,wait=self.core({'row_count':0})
+        self.assertEqual(actual.queries_attempted,['Verified Alias'])
+        self.assertEqual(wait.call_args.args[:2],('Verified Alias',7))
+        self.assertNotIn('body',[v.args[0] for v in page.locator.call_args_list])
+        page.wait_for_timeout.assert_not_called()
+
+    def test_incomplete_query_is_not_parsed_as_empty_dom(self):
+        actual,page,wait=self.core(False)
+        self.assertEqual(actual.queries_attempted,['Verified Alias'])
+        self.assertNotIn('body',[v.args[0] for v in page.locator.call_args_list])
+        wait.assert_called_once()
 
 if __name__=='__main__':unittest.main(verbosity=2)

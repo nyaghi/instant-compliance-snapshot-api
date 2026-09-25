@@ -18703,7 +18703,7 @@ def search_pa_with_name_fallback(page, org):
             if matching:
                 row = matching[-1]
                 if row.get("complete"):
-                    return True
+                    return row
                 if row.get("failure") or row.get("http_status", 0) >= 400:
                     return False
             remaining = deadline - time.monotonic()
@@ -18831,9 +18831,15 @@ def search_pa_with_name_fallback_core(page, org, completion_guard, completion_wa
             # bounded wait for the response body belonging to this exact query.
             # Finish an already-submitted request before navigating or returning.
             result_wait_deadline = time.monotonic() + 9.0
-            if not completion_wait(variant, offset, result_wait_deadline):
+            completed_search = completion_wait(variant, offset, result_wait_deadline)
+            if not completed_search:
                 result.queries_attempted = list(attempted_variants)
                 return completion_guard(result)
+            if completed_search["row_count"] == 0:
+                # A validated, query-bound empty response needs no DOM wait.
+                # Spend the remaining fallback budget on the next name instead.
+                continue
+            result_wait_deadline = min(result_wait_deadline, time.monotonic() + 4.0)
             while time.monotonic() < result_wait_deadline:
                 try:
                     body_probe = page.locator("body").inner_text(timeout=1500)
