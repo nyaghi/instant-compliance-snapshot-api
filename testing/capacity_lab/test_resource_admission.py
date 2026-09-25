@@ -57,6 +57,49 @@ class AdmissionTests(unittest.TestCase):
         self.metrics(1000000);self.gate.limit(12,0);self.now=1;self.metrics(500000)
         self.assertEqual(self.gate.limit(12,0),8)
 
+    def test_sub_sample_poll_cannot_turn_short_spike_into_pressure(self):
+        self.gate.limit(12,0);self.now=1;self.metrics(500000)
+        self.assertEqual(self.gate.limit(12,8),12)
+        self.now=1.1;self.metrics(700000)
+        self.assertEqual(self.gate.limit(12,8),12)
+        self.assertEqual(self.gate.snapshot['cpu_fraction'],.25)
+
+    def test_sub_sample_poll_cannot_turn_short_quiet_period_into_headroom(self):
+        self.gate.limit(12,0);self.now=1;self.metrics(1900000)
+        self.assertEqual(self.gate.limit(12,8),8)
+        self.now=1.1;self.metrics(1900000)
+        self.assertEqual(self.gate.limit(12,8),8)
+
+    def test_sustained_pressure_still_blocks_and_then_clears(self):
+        self.gate.limit(12,0)
+        for tick in range(1,13):
+            self.now=tick*.25;self.metrics(tick*500000)
+            self.assertEqual(self.gate.limit(12,7),7)
+            self.assertLessEqual(self.gate.snapshot['cpu_window_seconds'],2)
+        self.now=5;self.metrics(6000000)
+        self.assertEqual(self.gate.limit(12,7),12)
+
+    def test_long_observation_gap_requires_fresh_headroom(self):
+        self.gate.limit(12,0);self.now=1;self.metrics(500000)
+        self.assertEqual(self.gate.limit(12,8),12)
+        self.now=5;self.metrics(600000)
+        self.assertEqual(self.gate.limit(12,8),8)
+        self.assertEqual(self.gate.snapshot['reason'],'cpu_warmup')
+
+    def test_memory_is_checked_even_between_cpu_samples(self):
+        self.gate.limit(12,0);self.now=1;self.metrics(500000)
+        self.gate.limit(12,8)
+        self.now=1.1;self.metrics(600000,memory=3_400_000_000)
+        self.assertEqual(self.gate.limit(12,8),8)
+        self.assertEqual(self.gate.snapshot['reason'],'memory_headroom')
+
+    def test_missing_metrics_cannot_reuse_previous_headroom(self):
+        self.gate.limit(12,0);self.now=1;self.metrics(500000)
+        self.gate.limit(12,8)
+        (self.root/'cpu.stat').unlink();self.gate.limit(12,8)
+        self.now=1.1;self.metrics(600000)
+        self.assertEqual(self.gate.limit(12,8),8)
+
 
 class ObservationTests(unittest.TestCase):
     def test_seconds_are_partitioned_without_changing_admission(self):

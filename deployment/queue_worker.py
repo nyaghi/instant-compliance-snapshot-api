@@ -15,7 +15,7 @@ import tempfile
 import threading
 import time
 import uuid
-from collections import Counter
+from collections import Counter, deque
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -118,6 +118,9 @@ class ResourceAdmission:
     def __init__(self, root=Path('/sys/fs/cgroup'), clock=time.monotonic):
         self.root, self.clock = root, clock
         self.previous = None
+        self.samples = deque(maxlen=12)
+        self.cpu_fraction = None
+        self.cpu_window_seconds = 0
         self.last_launch = float('-inf')
         self.snapshot = {}
 
@@ -136,12 +139,27 @@ class ResourceAdmission:
             maximum = int((self.root/'memory.max').read_text())
             if not 0 <= memory <= maximum or maximum <= 0: raise ValueError('Invalid memory allocation')
             previous = self.previous
-            # Keep a >=250 ms interval so short samples do not swing the gate.
-            if previous is None or now-previous[0] >= .25:
+            # A sub-250ms poll reuses the last completed observation. Previously
+            # only the counter update was bounded, so the ratio still used tiny
+            # intervals. Smooth measured CPU over at most two seconds, keeping
+            # the same pressure threshold and conservative warm-up ceiling.
+            if previous is None or cpu < previous[1] or now-previous[0] > 3:
+                self.samples.clear()
+                self.samples.append((now,cpu))
                 self.previous = (now,cpu)
-            utilization = ((cpu-previous[1])/(now-previous[0])/cores
-                if previous and now>previous[0] and cpu>=previous[1] else None)
+                self.cpu_fraction, self.cpu_window_seconds = None, 0
+            elif now-previous[0] >= .25:
+                self.samples.append((now,cpu))
+                self.previous = (now,cpu)
+                while len(self.samples)>1 and now-self.samples[0][0]>2:
+                    self.samples.popleft()
+                first = self.samples[0]
+                self.cpu_window_seconds = now-first[0]
+                self.cpu_fraction = ((cpu-first[1])/self.cpu_window_seconds/cores
+                    if self.cpu_window_seconds>=.25 else None)
+            utilization = self.cpu_fraction
             self.snapshot = {'cpu_fraction': utilization, 'memory_bytes':memory,
+                'cpu_window_seconds': self.cpu_window_seconds,
                 'memory_limit_bytes':maximum,'configured_slots':configured,'reason':'available'}
             # Leave space for a new master process and its browser, if required.
             if memory + 384*1024*1024 > .85*maximum:
@@ -155,6 +173,9 @@ class ResourceAdmission:
                 return min(configured,8)
             return configured
         except (OSError, ValueError, KeyError, ZeroDivisionError):
+            self.previous = None
+            self.samples.clear()
+            self.cpu_fraction = None
             self.snapshot={'reason':'metrics_unavailable','configured_slots':configured}
             return min(configured,8)
 

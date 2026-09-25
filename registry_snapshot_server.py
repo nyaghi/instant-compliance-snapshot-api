@@ -19559,6 +19559,8 @@ def search_ny_verified(org):
     """Use the same master matching/status code with the verified browser transport."""
     if not BROWSER_LOOKUP_SEMAPHORE.acquire(timeout=10.0):
         return browser_capacity_busy_result(org.organization_name, org.ein, "NY")
+    stage, attempts = "browser startup", []
+    started = time.perf_counter()
     try:
         with checker.sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
@@ -19566,16 +19568,33 @@ def search_ny_verified(org):
                 context = browser.new_context(user_agent=BROWSER_USER_AGENT, locale="en-US")
                 # Verification resources must load normally; no heavy-resource filter.
                 page = context.new_page()
-                page.goto("https://charities-search.ag.ny.gov/RegistrySearch", wait_until="domcontentloaded", timeout=15000)
-                page.get_by_role("button", name="Verify", exact=True).wait_for(timeout=12000)
-                return search_ny_direct(org, browser_page=page)
+                # Preserve the existing 15+12 second readiness allowance, but
+                # wait for the actual Verify control after navigation commits.
+                # DOMContentLoaded can lag that control during script startup.
+                ready_deadline = time.perf_counter() + 27
+                stage = "page navigation"
+                response = page.goto("https://charities-search.ag.ny.gov/RegistrySearch", wait_until="commit", timeout=15000)
+                if response is not None and response.status >= 400:
+                    raise RuntimeError("New York navigation HTTP error")
+                attempts.append(f"NY {stage}: complete in {time.perf_counter()-started:.2f}s")
+                stage = "verification control readiness"
+                remaining_ms = int((ready_deadline-time.perf_counter())*1000)
+                if remaining_ms <= 0:
+                    raise TimeoutError("New York readiness time limit reached")
+                page.get_by_role("button", name="Verify", exact=True).wait_for(timeout=remaining_ms)
+                attempts.append(f"NY {stage}: complete in {time.perf_counter()-started:.2f}s")
+                stage = "verified registry lookup"
+                result = search_ny_direct(org, browser_page=page)
+                result.source_attempts = attempts + list(getattr(result, "source_attempts", []) or [])
+                return result
             finally:
                 browser.close()
     except Exception as exc:
         result = checker.StateResult(org.organization_name, org.ein, "NY", "Unable to Confirm", "https://charities-search.ag.ny.gov/RegistrySearch")
-        result.raw_status_text = "New York verification/search page did not become ready"
-        result.source_note = "New York's verified search could not be completed. Confirm directly in the state registry."
-        result.status_reason = "NY_VERIFICATION_REQUIRED"
+        result.raw_status_text = f"New York {stage} did not complete"
+        result.source_note = f"New York {stage} did not complete, so registration status could not be confirmed."
+        result.status_reason = "NY_BROWSER_READINESS_INCOMPLETE"
+        result.source_attempts = attempts + [f"NY {stage}: {type(exc).__name__} after {time.perf_counter()-started:.2f}s"]
         result.success = False
         log_event(f"NY verified browser unavailable: {type(exc).__name__}")
         return result

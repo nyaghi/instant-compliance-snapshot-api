@@ -52,7 +52,8 @@ class MasterIntegration(unittest.TestCase):
         for name in ('search_pa_with_name_fallback', 'search_pa_with_name_fallback_core',
                      'enrich_registration_date_sources', 'fl_verified_registration_issue',
                      'identity_ca_names', 'identity_pa_names', 'discover_organization_names',
-                     'wa_apply_detail_master', 'copy_external_result', 'debug_trace_for_result'):
+                     'wa_apply_detail_master', 'copy_external_result', 'debug_trace_for_result',
+                     'search_ny_verified'):
             for tree in (before,after):
                 nodes=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name==name]
                 self.assertEqual(len(nodes),1)

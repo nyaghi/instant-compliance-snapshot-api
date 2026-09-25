@@ -287,6 +287,29 @@ will be preserved in the phase10 evidence before a capacity claim.
 
 ## Pennsylvania completion follow-up (September 25)
 
+### Five-organization admission/readiness follow-up
+
+The perf.12 five-organization run retained every discovered-name set and 159/160
+reviewed statuses, but one NY browser failed before lookup with an undifferentiated
+readiness error. Mean registration was 92.0 seconds, total 129.9 seconds;
+same-build solo means were 53.0 and 81.9 seconds. Both slowdown gates failed.
+No higher load was launched. Each node reached its two-core CPU allocation;
+memory remained below the admission limit. Admission observations show 211.7
+aggregate worker-seconds held for CPU; these are not attributed job-wait seconds.
+
+The next lab candidate corrects undersized CPU samples: sub-250ms polls reuse
+the previous measurement, and completed samples use at most a two-second window.
+The 85% threshold, memory headroom, physical slots, global/per-org/registry limits,
+launch pacing and workflow deadlines remain unchanged. This is a measured lab
+experiment; improved capacity is not asserted before live comparison.
+
+NY navigation now waits for navigation commit followed by its actual Verify
+control, sharing the original 27-second readiness allowance. No resource block,
+verification bypass, extra verification retry, matching or status change is
+introduced. Failures retain the precise startup/navigation/control step without
+exception messages or secrets. The old failed response does not identify its
+exact step, so CPU causation of that individual NY failure remains unproven.
+
 The user explicitly authorized fixing Pennsylvania and resuming the three-org
 trial. The update changes only the master's two PA fallback access functions.
 It waits for the response body for the exact submitted name query, excluding
