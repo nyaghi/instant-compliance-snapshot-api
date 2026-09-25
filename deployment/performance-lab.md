@@ -95,3 +95,10 @@ from 8 to 12 (same Pro instance, same queue implementation and state budgets).
 Its scope remains two organizations until a same-build comparison passes. The
 perf.4 configuration is retained in Git for rollback if correctness or resource
 health degrades. This does not increase paid hardware again.
+
+The perf.5 single controls took 94/98 seconds versus perf.4's 86/89, and DC
+returned a transport read timeout for both organizations. No paired or higher
+load was started on perf.5. Perf.6 restores the eight-slot configuration. The
+timeouts must remain visible in the evidence; a retry is diagnostic, not a
+replacement for those first results. The timeout mechanism alone does not prove
+that 12 slots caused the DC transport failure.
