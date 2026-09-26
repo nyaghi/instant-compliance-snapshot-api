@@ -2600,7 +2600,7 @@ def identity_wa_names(ein: str, deadline: float) -> dict:
     return result
 
 
-def identity_oh_names(ein: str, deadline: float) -> dict:
+def oh_ein_search_source(ein: str, deadline: float) -> tuple[str, str]:
     """Read the public form's EIN result table without allocating a browser."""
     url = "https://charitableregistration.ohioago.gov/Charities/ResearchCharities"
     fields = {"OrgNameFilterCriteria": "1", "OrgNameOrDBAName": "", "EINFilterCriteria": "3",
@@ -2615,6 +2615,11 @@ def identity_oh_names(ein: str, deadline: float) -> dict:
         and re.search(r'\bvalue=["\']3["\']', tag) for tag in re.findall(r'<option\b[^>]*>', selected[1], re.I))
     if not value or canonical_ein_digits(value[1]) != ein or not equals:
         raise ValueError("Ohio identity response did not confirm the submitted EIN query")
+    return url, source
+
+
+def identity_oh_names(ein: str, deadline: float) -> dict:
+    url, source = oh_ein_search_source(ein, deadline)
     names, rejected = [], []
     tables = [table for table in re.findall(r"<table\b[^>]*>.*?</table>", source, re.I | re.S)
         if re.search(r"<caption>\s*Search results", table, re.I) and "DBA Name" in table and "EIN" in table]
@@ -12690,13 +12695,111 @@ def ohio_detail_url(page_name: str, detail_id: str) -> str:
     return f"https://charitableregistration.ohioago.gov/Charities/{quote(page_name)}?Id={quote(detail_id)}"
 
 
+def search_oh_direct_details(org):
+    """Use the public EIN form and detail HTML; incomplete evidence falls back."""
+    ein = canonical_ein_digits(org.ein)
+    if len(ein) != 9:
+        return None
+    deadline = time.monotonic() + 10.0
+    try:
+        url, source = oh_ein_search_source(ein, deadline)
+        if not re.search(r"</html\s*>", source, re.I):
+            return None
+        tables = [table for table in re.findall(r"<table\b[^>]*>.*?</table>", source, re.I | re.S)
+                  if re.search(r"<caption>\s*Search results", table, re.I) and "DBA Name" in table and "EIN" in table]
+        # A missing result table still uses the existing no-record/name-fallback
+        # workflow. Never infer a negative from an unavailable direct response.
+        if len(tables) != 1 or not re.search(r"Page\s+1\s+of\s+1", html_to_text(source), re.I):
+            return None
+        refs = []
+        for row in re.findall(r"<tr\b[^>]*>(.*?)</tr>", tables[0], re.I | re.S):
+            cells = [html_to_text(cell).strip() for cell in re.findall(r"<td\b[^>]*>(.*?)</td>", row, re.I | re.S)]
+            if len(cells) < 9 or canonical_ein_digits(cells[2]) != ein:
+                continue
+            for kind, identifier in re.findall(r"OpenDetailsLink\('([^']+)','(\d+)'\)", html.unescape(row)):
+                refs.append({'pageName':kind, 'id':identifier, 'registryName':cells[0], 'inCompliance':cells[8]})
+        targets = organization_match_target_variants(org.organization_name, org.ein)
+        detail = max(refs, key=lambda item: (
+            target_name_score(item['registryName'], targets),
+            registry_exact_active_tiebreak(item['registryName'], targets,
+                'Active' if item['inCompliance'].strip().casefold() == 'yes' else '')), default=None)
+        if detail is None:
+            return None
+        detail_url = ohio_detail_url(detail['pageName'], detail['id'])
+        source = identity_fetch(detail_url, deadline, headers={'Accept':'text/html'}).decode('utf-8', 'replace')
+        if not re.search(r"</html\s*>", source, re.I):
+            return None
+        markup = re.sub(r"<(script|style|noscript)\b[^>]*>.*?</\1\s*>", '', source, flags=re.I | re.S)
+        body = html_to_text(markup)
+        confirmed = re.search(r'Employer Identification Number\s*\(EIN\)\s*:?[\s]*(\d{2}-?\d{7})\b', body, re.I)
+        if not confirmed or canonical_ein_digits(confirmed[1]) != ein:
+            return None
+        if not all(label in body for label in ('Organization Name', 'Fiscal Year End')):
+            return None
+        if not any(label in body for label in ('Registration Status', 'Exemption Status')):
+            return None
+        result = checker.StateResult(org.organization_name, org.ein, 'OH', checker.STATUS_UNKNOWN, url)
+        return oh_result_from_detail_text(result, body, detail_url, detail['id']), body
+    except Exception:
+        return None
+
+
+def oh_result_from_detail_text(result, detail_text, detail_url, detail_id):
+    month_names = {name.lower(): index for index, name in enumerate(calendar.month_name) if name}
+    month_names.update({name.lower(): index for index, name in enumerate(calendar.month_abbr) if name})
+    site_name = text_between_labels(detail_text, "Organization Name", ["Organization Phone", "EIN", "Registration Status"])
+    registration_status = text_between_labels(detail_text, "Registration Status", ["Annual Reports Filed", "Most Recent Report Filing Year", "Fiscal Year End"])
+    exemption_status = text_between_labels(detail_text, "Exemption Status", ["Annual Reports Filed", "Most Recent Report Filing Year", "Fiscal Year End", "Street Address", "Organization Phone"])
+    filing_year_raw = text_between_labels(detail_text, "Most Recent Report Filing Year", ["The financial information below", "Fiscal Year End", "Total Revenue"])
+    fiscal_year_end_raw = text_between_labels(detail_text, "Fiscal Year End", ["Street Address", "Organization Phone", "Most Recent Report Filing Year"])
+    filing_year_match = re.search(r"\b(20\d{2})\b", filing_year_raw or "")
+    fiscal_month = month_names.get((fiscal_year_end_raw or "").split()[0].lower()) if fiscal_year_end_raw else None
+    result.source_url = detail_url
+    result.matched_registry_name = clean_registry_name(site_name)
+    result.matched_registry_identifier = detail_id
+    result.raw_status_text = (
+        f"Registration Status: {registration_status or 'N/A'} | "
+        f"Exemption Status: {exemption_status or 'N/A'} | "
+        f"Most Recent Report Filing Year: {filing_year_raw or 'N/A'} | "
+        f"Fiscal Year End: {fiscal_year_end_raw or 'N/A'}"
+    )
+    if re.search(r"\bnot\s+required\s+to\s+register\b", " ".join([exemption_status or "", registration_status or ""]), re.I):
+        result.status = "Exempt"
+    elif re.search(r"\bexempt\b", " ".join([exemption_status or "", registration_status or ""]), re.I):
+        result.status = "Exempt"
+    elif re.search(r"\bpending\b", registration_status or "", re.I):
+        result.status = "Pending"
+    elif re.search(r"\b(dissolved|closed|withdrawn|cancel(?:ed|led)|terminated|inactive)\b", registration_status or "", re.I):
+        result.status = "Closed / Withdrawn / Canceled"
+    elif re.search(r"\b(revoked|suspended)\b", registration_status or "", re.I):
+        result.status = registration_status.title()
+    elif filing_year_match and fiscal_month:
+        due = ohio_due_date(int(filing_year_match.group(1)), fiscal_month)
+        result.status = classify_expiration_date(due)
+        result.raw_status_text += f" | Next Due: {format_date(due)}"
+    elif re.search(r"\bregistered\b|\bin\s+compliance\b|\byes\b", registration_status or "", re.I):
+        result.status = checker.STATUS_CURRENT
+    elif re.search(r"\b(?:N/A|none|no\s+annual\s+reports?)\b", filing_year_raw or "", re.I) or not filing_year_raw:
+        result.status = "Delinquent"
+        result.raw_status_text += " | Filing record not available"
+        result.source_note = (
+            "OH confirmed a matching organization record, but the public detail page did not show an exemption "
+            "or a usable annual-report filing year. CharityClarity treats confirmed non-exempt Ohio records "
+            "without filing evidence as Delinquent rather than Unknown."
+        )
+    else:
+        result.status = checker.STATUS_UNKNOWN
+    if not result.source_note:
+        result.source_note = "OH uses EIN search first and computes the next base annual-report due date from the public detail page."
+    result.success = True
+    return result
+
+
 def search_oh(page, org):
     url = "https://charitableregistration.ohioago.gov/Charities/ResearchCharities"
     result = checker.StateResult(org.organization_name or format_ein(org.ein), org.ein, "OH", checker.STATUS_UNKNOWN, url)
     ein_digits = re.sub(r"\D", "", org.ein or "")
     formatted_ein = format_ein(org.ein)
-    month_names = {name.lower(): index for index, name in enumerate(calendar.month_name) if name}
-    month_names.update({name.lower(): index for index, name in enumerate(calendar.month_abbr) if name})
     search_summary_text = ""
     if len(ein_digits) != 9:
         result.error = "OH: EIN search requires a 9-digit EIN."
@@ -12856,52 +12959,7 @@ def search_oh(page, org):
                 result.source_note = "Ohio returned a matching search record, but its detail page was unavailable or incomplete after a retry."
                 result.success = False
             return result
-        site_name = text_between_labels(detail_text, "Organization Name", ["Organization Phone", "EIN", "Registration Status"])
-        registration_status = text_between_labels(detail_text, "Registration Status", ["Annual Reports Filed", "Most Recent Report Filing Year", "Fiscal Year End"])
-        exemption_status = text_between_labels(detail_text, "Exemption Status", ["Annual Reports Filed", "Most Recent Report Filing Year", "Fiscal Year End", "Street Address", "Organization Phone"])
-        filing_year_raw = text_between_labels(detail_text, "Most Recent Report Filing Year", ["The financial information below", "Fiscal Year End", "Total Revenue"])
-        fiscal_year_end_raw = text_between_labels(detail_text, "Fiscal Year End", ["Street Address", "Organization Phone", "Most Recent Report Filing Year"])
-        filing_year_match = re.search(r"\b(20\d{2})\b", filing_year_raw or "")
-        fiscal_month = month_names.get((fiscal_year_end_raw or "").split()[0].lower()) if fiscal_year_end_raw else None
-        result.source_url = detail_url
-        result.matched_registry_name = clean_registry_name(site_name)
-        result.matched_registry_identifier = detail_id
-        result.raw_status_text = (
-            f"Registration Status: {registration_status or 'N/A'} | "
-            f"Exemption Status: {exemption_status or 'N/A'} | "
-            f"Most Recent Report Filing Year: {filing_year_raw or 'N/A'} | "
-            f"Fiscal Year End: {fiscal_year_end_raw or 'N/A'}"
-        )
-        if re.search(r"\bnot\s+required\s+to\s+register\b", " ".join([exemption_status or "", registration_status or ""]), re.I):
-            result.status = "Exempt"
-        elif re.search(r"\bexempt\b", " ".join([exemption_status or "", registration_status or ""]), re.I):
-            result.status = "Exempt"
-        elif re.search(r"\bpending\b", registration_status or "", re.I):
-            result.status = "Pending"
-        elif re.search(r"\b(dissolved|closed|withdrawn|cancel(?:ed|led)|terminated|inactive)\b", registration_status or "", re.I):
-            result.status = "Closed / Withdrawn / Canceled"
-        elif re.search(r"\b(revoked|suspended)\b", registration_status or "", re.I):
-            result.status = registration_status.title()
-        elif filing_year_match and fiscal_month:
-            due = ohio_due_date(int(filing_year_match.group(1)), fiscal_month)
-            result.status = classify_expiration_date(due)
-            result.raw_status_text += f" | Next Due: {format_date(due)}"
-        elif re.search(r"\bregistered\b|\bin\s+compliance\b|\byes\b", registration_status or "", re.I):
-            result.status = checker.STATUS_CURRENT
-        elif re.search(r"\b(?:N/A|none|no\s+annual\s+reports?)\b", filing_year_raw or "", re.I) or not filing_year_raw:
-            result.status = "Delinquent"
-            result.raw_status_text += " | Filing record not available"
-            result.source_note = (
-                "OH confirmed a matching organization record, but the public detail page did not show an exemption "
-                "or a usable annual-report filing year. CharityClarity treats confirmed non-exempt Ohio records "
-                "without filing evidence as Delinquent rather than Unknown."
-            )
-        else:
-            result.status = checker.STATUS_UNKNOWN
-        if not result.source_note:
-            result.source_note = "OH uses EIN search first and computes the next base annual-report due date from the public detail page."
-        result.success = True
-        return result
+        return oh_result_from_detail_text(result, detail_text, detail_url, detail_id)
     except Exception as exc:
         result.error = f"OH error: {exc}"
         return result
@@ -26597,8 +26655,8 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
         result = ensure_state_result(result, org, state)
         return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
 
-    if state == "HI" and not capture_source_snapshot:
-        direct = search_hi_direct_details(org)
+    if state in {"HI", "OH"} and not capture_source_snapshot:
+        direct = search_hi_direct_details(org) if state == "HI" else search_oh_direct_details(org)
         if direct is not None:
             result, body = direct
             return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
