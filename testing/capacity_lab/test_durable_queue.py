@@ -100,6 +100,52 @@ class DurableTests(unittest.TestCase):
         self.assertEqual(job['resources'],['NY'])
         self.finish(job)
 
+    def test_batched_heartbeat_preserves_owner_token_phase_and_deadline_guards(self):
+        worker=self.worker();other=self.worker();jobs=[]
+        for i in range(5):
+            self.submit(payload(ein=f'{100000001+i:09d}'))
+            jobs.append(self.q.claim(other if i==4 else worker))
+        self.finish(jobs[2])
+        with self.q.transaction() as (c,now):
+            c.execute('UPDATE cc_lab_jobs SET lease_until=%s WHERE id=ANY(%s)',(now+10,[j['id'] for j in jobs]))
+            c.execute('UPDATE cc_lab_jobs SET run_until=%s WHERE id=%s',(now-1,jobs[3]['id']))
+            before={r['id']:r['lease_until'] for r in c.execute('SELECT id,lease_until FROM cc_lab_jobs')}
+        pairs=[(j['id'],j['token']) for j in jobs]
+        pairs[1]=(jobs[1]['id'],str(uuid.uuid4()))
+        pairs.append((str(uuid.uuid4()),str(uuid.uuid4())))
+        self.assertEqual(self.q.heartbeat(worker,pairs),[jobs[0]['id']])
+        with self.q.transaction() as (c,now):
+            after={r['id']:r['lease_until'] for r in c.execute('SELECT id,lease_until FROM cc_lab_jobs')}
+        self.assertGreater(after[jobs[0]['id']],before[jobs[0]['id']])
+        self.assertTrue(all(after[j['id']]==before[j['id']] for j in jobs[1:]))
+        self.assertEqual(self.q.heartbeat(worker,[]),[])
+
+    def test_batched_heartbeat_failure_rolls_back_every_lease_and_recovers(self):
+        worker=self.worker();self.submit(payload(states=['CO','LA']))
+        jobs=[self.q.claim(worker),self.q.claim(worker)]
+        with self.q.transaction() as (c,now):
+            c.execute('UPDATE cc_lab_jobs SET lease_until=%s',(now+10,))
+            before={r['id']:r['lease_until'] for r in c.execute('SELECT id,lease_until FROM cc_lab_jobs')}
+        original=self.q.transaction
+        class BrokenConnection:
+            def __init__(self,c):self.c=c;self.updates=0
+            def pipeline(self):return self.c.pipeline()
+            def execute(self,query,*args,**kwargs):
+                if query.startswith('UPDATE cc_lab_jobs SET lease_until='):
+                    self.updates+=1
+                    if self.updates==2:return self.c.execute('SELECT * FROM nonexistent_heartbeat_failure_fixture')
+                return self.c.execute(query,*args,**kwargs)
+        @contextmanager
+        def broken():
+            with original() as (c,now):yield BrokenConnection(c),now
+        pairs=[(j['id'],j['token']) for j in jobs]
+        with patch.object(self.q,'transaction',broken):
+            with self.assertRaises(psycopg.errors.UndefinedTable):self.q.heartbeat(worker,pairs)
+        with self.q.transaction() as (c,now):
+            after={r['id']:r['lease_until'] for r in c.execute('SELECT id,lease_until FROM cc_lab_jobs')}
+        self.assertEqual(before,after)
+        self.assertEqual(self.q.heartbeat(worker,pairs),[j['id'] for j in jobs])
+
     def test_recent_measured_duration_priority_keeps_organization_fairness(self):
         old=self.submit(payload(states=['CO','LA']))
         worker=self.worker()

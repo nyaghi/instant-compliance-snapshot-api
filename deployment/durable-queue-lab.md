@@ -507,3 +507,24 @@ removed. Generated-candidate controls and an ABBA official API comparison
 confirm an identical complete result set, including the separate same-address
 Policy Center. This reduces query complexity; it is not evidence that all
 source-side timeouts have been eliminated.
+
+## perf.20: pipeline independent job lease renewals
+
+Perf.19 completed two actual twenty-organization, fresh-discovery trials across
+31 states (Florida deferred by the user). Both reached twenty active registration
+workflows, produced 620 conclusive first responses without retries, and preserved
+all controlled identities, statuses, dates and name lists. Twelve weighted slots
+per node finished the batch in 416.2 seconds; eight slots finished in 425.5 seconds.
+This small difference does not establish a universal optimum. Eight slots did
+not improve average registration time and made discovery slower, so twelve slots
+remain the selected tested configuration on the existing four Pro nodes.
+
+Worker observations also recorded substantial time in queue transactions. The
+heartbeat previously waited for a separate database round trip per running job.
+Independent lease updates are now pipelined inside the original advisory-locked
+transaction. The owner, token, running phase and execution-deadline predicates,
+20-second lease, input order, settlement and worker heartbeat are unchanged.
+New real-database controls cover mixed eligible/ineligible leases and atomic
+rollback if a renewal fails. Actual whole-workflow timing must confirm any speed
+benefit; aggregated worker transaction time is not a causal partition of a
+user's elapsed time. All state interpreters are unchanged from perf.19.

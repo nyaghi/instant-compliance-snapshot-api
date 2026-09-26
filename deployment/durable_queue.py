@@ -275,10 +275,15 @@ class Queue:
             c.execute('UPDATE cc_lab_workers SET heartbeat=%s WHERE id=%s', (now, worker))
             if observation is not None:
                 self.event(c, now, 'worker_admission', worker=worker, **observation)
-            for job, token in jobs:
-                row = c.execute("UPDATE cc_lab_jobs SET lease_until=%s WHERE id=%s AND token=%s AND owner=%s AND phase='running' AND run_until>%s RETURNING id",
-                                (now+20, job, token, worker, now)).fetchone()
-                if row: allowed.append(job)
+            # Lease updates are independent inside the same advisory-locked
+            # transaction. Pipeline their round trips; retain every ownership,
+            # token, phase and deadline predicate and the original input order.
+            with c.pipeline():
+                renewals = [(job, c.execute("UPDATE cc_lab_jobs SET lease_until=%s WHERE id=%s AND token=%s AND owner=%s AND phase='running' AND run_until>%s RETURNING id",
+                                           (now+20, job, token, worker, now)))
+                            for job, token in jobs]
+            for job, cursor in renewals:
+                if cursor.fetchone(): allowed.append(job)
         return allowed
 
     def complete(self, worker, job, token, result=None, error=None):
