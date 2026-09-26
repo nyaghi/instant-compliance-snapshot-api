@@ -719,6 +719,17 @@ def evidence_url(state: str, org_name: str, ein: str = "") -> str:
     return f"{url}?{'&'.join(query)}" if query else url
 
 
+def launch_lookup_browser(playwright, **kwargs):
+    """Lab-only startup reuse; private launch remains the default and fallback."""
+    if os.environ.get("CE_LAB_BROWSER_POOL_CONFIG"):
+        from deployment.browser_pool import leased_browser
+        browser = leased_browser(playwright, kwargs)
+        if browser is not None:
+            launch_lookup_browser.lab_reused = True
+            return browser
+    return playwright.chromium.launch(**kwargs)
+
+
 def configure_browser_context(context) -> None:
     if not BLOCK_HEAVY_BROWSER_RESOURCES:
         return
@@ -2845,7 +2856,7 @@ def identity_browser_names(source: str, ein: str, deadline: float) -> dict:
         remaining = lambda: max(1, int((deadline - time.monotonic()) * 1000))
         if remaining() < 500: raise TimeoutError("Identity source deadline reached")
         with checker.sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True, timeout=remaining())
+            browser = launch_lookup_browser(playwright, headless=True, timeout=remaining())
             try:
                 context = browser.new_context(ignore_https_errors=True, user_agent=BROWSER_USER_AGENT)
                 page = context.new_page()
@@ -17769,7 +17780,7 @@ def search_wi_backend_browser_fallback(org, max_seconds: float | None = None, pr
         browser = None
         context = None
         try:
-            browser = p.chromium.launch(headless=True)
+            browser = launch_lookup_browser(p, headless=True)
             context = browser.new_context(user_agent=BROWSER_USER_AGENT, locale="en-US")
             configure_browser_context(context)
             page = context.new_page()
@@ -20088,7 +20099,7 @@ def search_ny_verified(org):
     started = time.perf_counter()
     try:
         with checker.sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = launch_lookup_browser(p, headless=True)
             try:
                 context = browser.new_context(user_agent=BROWSER_USER_AGENT, locale="en-US")
                 # Verification resources must load normally; no heavy-resource filter.
@@ -26726,7 +26737,7 @@ def search_nm_status_history_fallback(org, module):
     )
     try:
         with checker.sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = launch_lookup_browser(p, headless=True)
             context = browser.new_context(user_agent=BROWSER_USER_AGENT, locale="en-US")
             page = context.new_page()
             try:
@@ -27049,7 +27060,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     "--no-sandbox",
                     "--disable-dev-shm-usage",
                 ]
-            browser = p.chromium.launch(headless=True, **launch_kwargs)
+            browser = launch_lookup_browser(p, headless=True, **launch_kwargs)
             if state == "AK":
                 result, body = search_ak_with_registration_evidence(browser, org, artifact_name)
                 if public_status(result) not in {"Not Registered", "Site Not Reachable"} and not (result.matched_registry_name or "").strip():

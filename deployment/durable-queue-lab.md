@@ -805,3 +805,36 @@ stale or missing source evidence keeps the normal live fetch. Each child has its
 own source copy; the warm template never stores organization data. The internal
 queue payload is not a customer input field. No deadline, worker count, registry
 permit, matching, classification or date rules change. Standard remains unchanged.
+
+
+### Lab Chromium startup reuse trial (perf.39 candidate)
+
+Technical reason: repeated Chromium startup and shutdown are paid for by every
+isolated state job. Local Playwright 1.51 fixtures showed material savings from
+prestarted browsers, independent of source parsing. deployment/browser_pool.py
+is internal worker resource management, not a state runtime sidecar or separately
+provisioned service. All queries, identity, aliases, interpretation and dates
+remain in the master unchanged.
+
+CE_LAB_BROWSER_POOL_SIZE=4 starts at most four Chromium servers inside each of
+the existing four Pro nodes. This adds no paid workers. A filesystem hard-link
+lease binds each browser exclusively to one queue job, whose contexts are new.
+A busy pool, unavailable browser or custom launch arguments keeps the original
+private launch. AR's existing special launch flags are preserved. Only localhost
+Playwright endpoints, current lab version and worker-issued owner files qualify.
+No user Chrome profile, customer extension or public management port is used.
+
+After the isolated job tree terminates, the supervisor disposes any remaining
+leased contexts and verifies an empty context list before releasing source/CPU
+reservations. Failed verification kills that exclusively owned browser and marks
+it disabled. Cleanup failures prevent queue completion. Shutdown confirms owned
+process groups terminated before reporting worker stop. System-only environment
+variables reach the browser manager; no API/database/application credentials.
+
+Existing Sales60s deadline, Standard rules, four-node compute, 12 slots/node,
+20 workflows, 15 state jobs/org, resource-pressure gates and source caps remain.
+Pooled Chromium CPU is outside each private child process: child CPU telemetry
+alone is no longer total state CPU for pooled tasks; use instance CPU metrics.
+Controls must cover abrupt child death, cookie isolation, exclusive lease/fallback,
+context cleanup ordering, expiry, actual Linux fork/process cleanup, and all32
+state regression before considering this trial qualified.

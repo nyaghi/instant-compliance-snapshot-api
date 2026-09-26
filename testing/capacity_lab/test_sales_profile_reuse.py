@@ -105,13 +105,14 @@ class Reuse(unittest.TestCase):
             with self.assertRaises(ValueError):execute(m,{**job,'payload':{**job['payload'],**changes}})
 
     def test_remaining_master_and_queue_behavior_unchanged(self):
-        from testing.capacity_lab.parsing_scope import strip_sales_profile_reuse
+        from testing.capacity_lab.parsing_scope import strip_sales_profile_reuse, strip_browser_pool_metric
         root=Path(m.__file__).parent
         old=ast.parse(subprocess.check_output(['git','show',BASE_COMMIT+':registry_snapshot_server.py'],cwd=root).decode('utf-8'))
         new=ast.parse(Path(m.__file__).read_text(encoding='utf-8'));strip_sales_profile_reuse(new)
         self.assertEqual(ast.dump(old),ast.dump(new))
         old=ast.parse(subprocess.check_output(['git','show',BASE_COMMIT+':deployment/queue_engine.py'],cwd=root).decode('utf-8'))
         new=ast.parse((root/'deployment/queue_engine.py').read_text(encoding='utf-8'))
+        strip_browser_pool_metric(new)
         for n in ast.walk(new):
             if isinstance(n,ast.Assign) and isinstance(n.value,ast.IfExp) and 'run_sales_lookups_with_source_evidence' in ast.unparse(n.value):
                 n.value=n.value.orelse

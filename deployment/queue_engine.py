@@ -165,6 +165,7 @@ def run_job(job, output, supervisor_pid=None, warmed=None):
     result['lab_task_metrics'] = {'import_seconds': import_seconds, 'import_cpu_seconds': import_cpu,
         'execution_seconds': time.monotonic()-execution_started, 'execution_cpu_seconds': time.process_time()-cpu_started}
     result['lab_task_metrics']['engine_preloaded'] = warmed is not None
+    result['lab_task_metrics']['pooled_browser_used'] = bool(getattr(master.launch_lookup_browser, 'lab_reused', False))
     if warmed is not None:
         result['lab_task_metrics']['template_pid'] = warmed.PRELOAD_PID
         result['lab_task_metrics']['template_import_cpu_seconds'] = warmed.IMPORT_CPU_SECONDS

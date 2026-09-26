@@ -277,6 +277,14 @@ class Supervisor:
         self.command = command or [sys.executable, str(ROOT/'deployment/queue_engine.py')]
         self.env = env
         settings=os.environ if env is None else env
+        self.browser_pool = None
+        self.browser_pool_temp = None
+        if (settings.get('CE_LAB_BROWSER_POOL_SIZE', '0') != '0' and sys.platform.startswith('linux')
+                and self.command == [sys.executable, str(ROOT/'deployment/queue_engine.py')]):
+            from deployment.browser_pool import BrowserPool
+            self.browser_pool_temp = tempfile.TemporaryDirectory(prefix='cc-lab-worker-browsers-')
+            self.browser_pool = BrowserPool(Path(self.browser_pool_temp.name)/('cc-lab-browser-'+uuid.uuid4().hex),
+                int(settings['CE_LAB_BROWSER_POOL_SIZE']), version, env=dict(settings))
         self.admission = ResourceAdmission() if settings.get('CE_LAB_RESOURCE_ADMISSION') == '1' else None
         self.stop_event = threading.Event()
         self.active = {}
@@ -336,6 +344,9 @@ class Supervisor:
                             except (ValueError, OSError): error = 'INVALID_WORKER_OUTPUT'
                         if result is None and not error: error = 'WORKER_TASK_FAILED'
                         r['tree'].stop()  # Must succeed before releasing capacity.
+                        if self.browser_pool:
+                            self.observations.observe('browser_cleanup', time.monotonic(), True)
+                            self.browser_pool.release(r['owner'])
                         r['terminated'] = True
                         r['result'],r['error'] = result,error
                 self.persist_terminated()
@@ -357,6 +368,7 @@ class Supervisor:
                     if job:
                         temp = tempfile.TemporaryDirectory(prefix='cc-lab-task-')
                         output = Path(temp.name)/'result.json'
+                        owner = Path(temp.name)/'browser-owner.json'
                         try:
                             deadline = claim_started+job['run_seconds']
                             child_job = {**job, 'run_seconds': max(0, deadline-time.monotonic()),
@@ -366,15 +378,18 @@ class Supervisor:
                             child_env.pop('CE_TEST_DATABASE_URL', None)
                             child_env.pop('RENDER_API_KEY', None)
                             child_env['CE_LAB_DURABLE_QUEUE'] = '0'
+                            if self.browser_pool:
+                                child_env.update(self.browser_pool.owner(owner, job['token'], job['id']))
                             if (child_env.get('CE_LAB_WARM_ENGINE')=='1' and sys.platform.startswith('linux')
                                     and self.command==[sys.executable,str(ROOT/'deployment/queue_engine.py')]):
                                 tree = ForkProcessTree(child_job,output,temp.name,child_env)
                             else:
                                 tree = ProcessTree([*self.command, str(output)], child_job, temp.name, child_env)
                             self.active[job['id']] = dict(job=job, tree=tree, temp=temp, output=output,
-                                                        deadline=deadline)
+                                                        deadline=deadline, owner=owner)
                             if self.admission:self.admission.launched()
                         except Exception:
+                            if self.browser_pool and owner.exists():self.browser_pool.release(owner)
                             self.queue.complete(self.id, job['id'], job['token'], error='WORKER_START_FAILED')
                             temp.cleanup()
                         continue
@@ -384,8 +399,13 @@ class Supervisor:
             for r in self.active.values():
                 try:
                     if not r.get('terminated'): r['tree'].stop()
+                    if self.browser_pool:self.browser_pool.release(r['owner'])
                     r['temp'].cleanup()
                 except Exception: all_stopped = False
+            if self.browser_pool:
+                try:self.browser_pool.close()
+                except Exception:all_stopped=False
+            if self.browser_pool_temp and all_stopped:self.browser_pool_temp.cleanup()
             if all_stopped:
                 # Requeues only after actual local process-tree termination.
                 self.queue.confirm_worker_stopped(self.id, 'Supervisor shutdown: all owned process trees terminated and reaped')

@@ -51,6 +51,7 @@ def strip_or_snapshot_index_optimization(tree):
 
 
 def strip_sales_profile_reuse(tree):
+    strip_browser_startup_reuse(tree)
     if not any(getattr(n, 'name', '') == 'run_sales_lookups_with_source_evidence' for n in tree.body):
         return
     old = ast.parse(subprocess.check_output(['git', 'show', 'e3b09d5a3cc031374925a17fe0211ff4398273f2:registry_snapshot_server.py'],
@@ -60,3 +61,37 @@ def strip_sales_profile_reuse(tree):
     tree.body = [originals.get(getattr(n, 'name', ''), n) for n in tree.body
                  if getattr(n, 'name', '') != 'run_sales_lookups_with_source_evidence'
                  and not (isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id=='SALES_PROFILE_CONTEXT' for t in n.targets))]
+
+
+def strip_browser_startup_reuse(tree):
+    tree.body = [n for n in tree.body if getattr(n, 'name', '') != 'launch_lookup_browser']
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id=='launch_lookup_browser':
+            assert node.args and isinstance(node.args[0], ast.Name)
+            node.func=ast.Attribute(value=ast.Attribute(value=node.args.pop(0),attr='chromium',ctx=ast.Load()),attr='launch',ctx=ast.Load())
+
+
+def strip_browser_pool_metric(tree):
+    for fn in tree.body:
+        if getattr(fn, 'name', '')=='run_job':
+            fn.body=[n for n in fn.body if not (isinstance(n, ast.Assign) and any("['pooled_browser_used']" in ast.unparse(t) for t in n.targets))]
+
+
+def strip_browser_pool_worker(tree):
+    """Remove only the separately tested browser ownership integration."""
+    class Restore(ast.NodeTransformer):
+        def visit_Assign(self, node):
+            targets={ast.unparse(t) for t in node.targets}
+            if targets & {'self.browser_pool','self.browser_pool_temp','owner'}:
+                return None
+            return self.generic_visit(node)
+        def visit_If(self, node):
+            condition=ast.unparse(node.test)
+            if 'self.browser_pool' in condition or "settings.get('CE_LAB_BROWSER_POOL_SIZE'" in condition:
+                return None
+            return self.generic_visit(node)
+        def visit_Call(self, node):
+            if ast.unparse(node.func)=='dict':
+                node.keywords=[k for k in node.keywords if k.arg!='owner']
+            return self.generic_visit(node)
+    return Restore().visit(tree)

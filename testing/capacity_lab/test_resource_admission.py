@@ -71,6 +71,8 @@ class AdmissionTests(unittest.TestCase):
         root=Path(__file__).resolve().parents[2]
         before=ast.parse(subprocess.check_output(['git','show','b50e4ec:deployment/queue_worker.py'],cwd=root).decode())
         after=ast.parse((root/'deployment/queue_worker.py').read_text())
+        from testing.capacity_lab.parsing_scope import strip_browser_pool_worker
+        strip_browser_pool_worker(after)
         cls=next(n for n in before.body if isinstance(n,ast.ClassDef) and n.name=='ResourceAdmission')
         after.body=[cls if isinstance(n,ast.ClassDef) and n.name=='ResourceAdmission' else n for n in after.body]
         self.assertEqual(ast.dump(before),ast.dump(after))
