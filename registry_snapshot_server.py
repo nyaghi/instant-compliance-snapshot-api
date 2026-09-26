@@ -134,7 +134,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.26.3-staging").strip() or "2026.09.26.3-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.26.4-staging").strip() or "2026.09.26.4-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -5512,7 +5512,8 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
     required, generated = licensed_charity_names(org)
     queries = ([{"state": state, "ein": canonical_ein_digits(org.ein)}] if state == "IL" else [])
     if purpose != "identity":
-        queries += [{"state": state, "orgName": name} for name in required + generated]
+        names = il_browser_name_queries(required, generated) if state == "IL" else required + generated
+        queries += [{"state": state, "orgName": name} for name in names]
     records, seen, completed = [], set(), []
     unresolved_primary_names = {}
     for query_index, query in enumerate(queries):
@@ -5596,6 +5597,8 @@ def il_ga_connector_failure(record, reason=""):
     result.source_note = f"The {state} browser search did not return complete, confirmed public records. Keep Chrome open with the updated CharityClarity connector enabled and retry. This does not establish non-registration or delinquency."
     if reason == "NY_CONNECTOR_QUERY_LIMIT":
         result.source_note = f"The {state} search reached its candidate-review limit before every required record was evaluated. CharityClarity reports Unable to Confirm; an incomplete search does not establish non-registration or delinquency."
+    if reason == "NY_CONNECTOR_TIMEOUT":
+        result.source_note = f"The {state} registry lookup used its five-minute search budget before all required searches completed. CharityClarity reports Unable to Confirm; an incomplete search does not establish non-registration or delinquency."
     if state == "IL":
         detail_reasons = {
             "NY_CONNECTOR_IL_FORM_READY_TIMEOUT": "The Illinois search controls did not become ready within the lookup time limit.",
@@ -5723,6 +5726,22 @@ def licensed_charity_names(org):
             seen.add(value.casefold()); generated.append(value); added += 1
             if added == 3: break
     return required, generated
+
+
+def il_browser_name_queries(required, generated):
+    """Retain reviewed names; avoid redundant generated contains searches.
+
+    Illinois returns complete, paginated substring matches (for example,
+    'air force' includes 'THE AIR FORCE MUSEUM FOUNDATION'). A generated
+    phrase cannot add a row beyond a shorter literal substring already in
+    this plan. Every retained query must still finish and every candidate
+    must pass the existing EIN checks. Failed/truncated broad queries never
+    become negative evidence. Punctuation is not normalized for coverage.
+    """
+    planned = required + generated
+    return required + [name for name in generated if not any(
+        other.casefold() != name.casefold() and other.casefold() in name.casefold()
+        for other in planned)]
 
 
 def licensed_charity_street_evidence(org, row, deadline):
@@ -19986,6 +20005,7 @@ def ny_connector_origin_allowed(origin):
 
 
 NY_CONNECTOR_TTL_SECONDS = 300
+IL_GA_CONNECTOR_CLEANUP_SECONDS = 60
 NY_CONNECTOR_SIGNING_KEY = os.environ.get("CE_NY_CONNECTOR_SIGNING_KEY", "")
 
 
@@ -20007,8 +20027,9 @@ def ny_connector_unpack(token, email, device):
         raise ValueError("Invalid check signature")
     record = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
     now = time.time()
+    ttl = NY_CONNECTOR_TTL_SECONDS + (IL_GA_CONNECTOR_CLEANUP_SECONDS if record.get("state") in IL_GA_SOURCES else 0)
     if (record["email"] != email or record["device"] != device or record["version"] != APP_VERSION
-            or not record["issued"] <= now + 5 or not now < record["expires"] <= record["issued"] + NY_CONNECTOR_TTL_SECONDS):
+            or not record["issued"] <= now + 5 or not now < record["expires"] <= record["issued"] + ttl):
         raise ValueError("Expired or mismatched check")
     return record
 
@@ -20161,7 +20182,7 @@ def ny_connector_advance(record):
             return {"phase": "complete", "result": {"state": "NY", "source": "NY", "identity": identity,
                     "ein": format_ein(ein), "checked_at_epoch": time.time(), "app_version": APP_VERSION}}
         result = search_ny_direct(org, registry_search_provider=search_response,
-                                  registry_detail_provider=search_response if record.get("connector_version") in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6"} else None)
+                                  registry_detail_provider=search_response if record.get("connector_version") in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7"} else None)
     except NYConnectorQueryNeeded as pending:
         limit = 5
         is_detail = "orgID" in pending.params
@@ -20169,7 +20190,7 @@ def ny_connector_advance(record):
             return {"phase": "complete", "result": ny_connector_failure(record, "NY_CONNECTOR_INCOMPLETE")}
         record["pending"] = {"query_id": secrets.token_urlsafe(18), "query": pending.params}
         return {"phase": "search", **record["pending"]}
-    if record.get("connector_version") not in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6"} and "401" in (getattr(result, "source_note", "") or ""):
+    if record.get("connector_version") not in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7"} and "401" in (getattr(result, "source_note", "") or ""):
         return {"phase": "complete", "result": ny_connector_failure(record, "NY_CONNECTOR_UPDATE_REQUIRED")}
     data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, "NY", started)
     data["connector_version"] = record.get("connector_version", "0.2.1")
@@ -20202,7 +20223,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6"}:
+        if not isinstance(connector_version, str) or connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7"}:
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()
@@ -20214,7 +20235,7 @@ def ny_connector_request(payload, origin):
         record = {"email": email, "device": device, "state": state, "organization_name": name.strip(), "ein": format_ein(ein),
                   "purpose": purpose, "origin": origin,
                   "connector_version": connector_version,
-                  "issued": now, "expires": now + NY_CONNECTOR_TTL_SECONDS, "version": APP_VERSION,
+                  "issued": now, "expires": now + NY_CONNECTOR_TTL_SECONDS + (IL_GA_CONNECTOR_CLEANUP_SECONDS if state in IL_GA_SOURCES else 0), "version": APP_VERSION,
                   "completed": [], "pending": None}
         if "alternate_names" in payload:
             try:
@@ -20233,6 +20254,11 @@ def ny_connector_request(payload, origin):
             return 200, {"phase": "canceled"}
         if action not in {"advance", "fail"}:
             return 400, {"error": "Invalid connector action."}
+        # Keep the signed continuation briefly available only to save a safe
+        # terminal result. This does not extend the active registry budget or
+        # accept late evidence, and New York keeps its original expiry rules.
+        if record.get("state") in IL_GA_SOURCES and now >= record["issued"] + NY_CONNECTOR_TTL_SECONDS:
+            return 200, {"phase": "complete", "result": il_ga_connector_failure(record, "NY_CONNECTOR_TIMEOUT")}
         if action == "advance":
             pending = record["pending"]
             if not pending or payload.get("query_id") != pending["query_id"]:
@@ -20251,6 +20277,8 @@ def ny_connector_request(payload, origin):
                     if action == "fail" else ny_connector_advance(record))
     finally:
         REVIEWED_NAME_CONTEXT.reset(context_token)
+    if record.get("state") in IL_GA_SOURCES and time.time() >= record["issued"] + NY_CONNECTOR_TTL_SECONDS:
+        return 200, {"phase": "complete", "result": il_ga_connector_failure(record, "NY_CONNECTOR_TIMEOUT")}
     if time.time() >= record["expires"]:
         return 410, {"error": "This New York browser check expired. Run the check again."}
     if response["phase"] == "search":

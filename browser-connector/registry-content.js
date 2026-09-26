@@ -93,6 +93,25 @@
       } finally { observer.disconnect(); }
     }
     await changed(() => button.click());
+    // Use the registry's visible page-size menu to reduce long fallback scans.
+    // This is the same public control a reviewer uses, not Kendo's data API.
+    const initialInfo = text(grid.querySelector('.k-pager-info'));
+    const initialCount = Number(initialInfo.match(/of\s+([\d,]+)\s+items/i)?.[1]?.replaceAll(',', '') || 0);
+    if (initialCount > 1000) throw new Error('REGISTRY_RESULT_LIMIT');
+    const pageSize = grid.querySelector('[role="combobox"][aria-label="Page sizes drop down"]');
+    if (initialCount > 10 && pageSize && text(pageSize).replace(/\u200b/g, '') !== '100') {
+      pageSize.click();
+      const listId = pageSize.getAttribute('aria-controls');
+      const option = await wait(() => {
+        const list = listId && document.getElementById(listId);
+        return list && [...list.querySelectorAll('[role="option"]')].find(el => visible(el) && text(el).replace(/\u200b/g, '') === '100');
+      }, 5000);
+      await changed(() => option.click());
+      if (!/^1\s*-\s*\d+\s+of\s+[\d,]+\s+items$/i.test(text(grid.querySelector('.k-pager-info'))))
+        throw new Error('REGISTRY_PAGINATION_INCOMPLETE');
+      const resizedCount = Number(text(grid.querySelector('.k-pager-info')).match(/of\s+([\d,]+)\s+items/i)?.[1]?.replaceAll(',', '') || 0);
+      if (resizedCount !== initialCount) throw new Error('REGISTRY_TOTAL_CHANGED');
+    }
     const collected = [];
     let total = null;
     for (let page=0; page<100; page++) {

@@ -5,14 +5,14 @@ const path = require('node:path');
 const vm = require('node:vm');
 const {webcrypto} = require('node:crypto');
 const source = fs.readFileSync(path.join(__dirname,'../web-staging/ny-connector.js'),'utf8');
-const capabilities = ['lookup-tab-v1','verification-retry-v1','search-verification-retry-v1','search-schema-errors-v1','nullable-ein-v1','queue-v1','connection-recovery-v1','recovery-causes-v1','cleanup-ack-v1','timeout-recovery-v1','resume-v1','verified-detail-v1','detail-navigation-v1','il-ga-public-dom-v1','il-ga-complete-search-v2','il-session-reuse-v1','ga-exempt-record-v1','ga-legacy-rows-v1'];
+const capabilities = ['lookup-tab-v1','verification-retry-v1','search-verification-retry-v1','search-schema-errors-v1','nullable-ein-v1','queue-v1','connection-recovery-v1','recovery-causes-v1','cleanup-ack-v1','timeout-recovery-v1','resume-v1','verified-detail-v1','detail-navigation-v1','il-ga-public-dom-v1','il-ga-complete-search-v2','il-session-reuse-v1','il-large-pages-v1','ga-exempt-record-v1','ga-legacy-rows-v1'];
 
 async function exercise({state='GA',commands=42,elapsedPerCommand=100,stopStatus='Delinquent'}={}) {
   const actions=[];let advance=0,clock=0,listener;
   const window={addEventListener:(kind,fn)=>{if(kind==='message')listener=fn;},postMessage(message){
     actions.push(message.action);
     queueMicrotask(()=>listener({source:window,origin:'https://staging.compliance-express.com',data:{
-      ...message,direction:'response',ok:true,version:'0.5.5',capabilities,evidence:{complete:true,rows:[]}
+      ...message,direction:'response',ok:true,version:'0.5.7',capabilities,evidence:{complete:true,rows:[]}
     }}));
   }};
   const context=vm.createContext({window,location:{origin:'https://staging.compliance-express.com'},

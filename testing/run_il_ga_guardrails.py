@@ -335,7 +335,7 @@ class IntegrationControls(unittest.TestCase):
         changed={k for k in old if old[k]!=new.get(k)}
         self.assertEqual(changed,{'public_status','identity_rows_names','licensed_charity_identity','registration_date_metadata',
             'true_status_from_body','comments_for_result_base','run_state_lookup','ny_connector_failure',
-            'ny_connector_clean_response','ny_connector_advance','ny_connector_request','normalize_registry_match_fields',
+            'ny_connector_clean_response','ny_connector_advance','ny_connector_request','ny_connector_unpack','normalize_registry_match_fields',
             # Shared verified-acronym fix covered above and by release regression.
             'redundant_bracket_acronym_key',
             # DC-specific transient recovery; RI policy independently tested.
