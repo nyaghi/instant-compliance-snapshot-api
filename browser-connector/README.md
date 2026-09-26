@@ -1,4 +1,10 @@
-# CharityClarity registry connector — 0.5.5 candidate
+# CharityClarity registry connector — 0.5.6 candidate
+
+Version 0.5.6 reuses Illinois's ordinary public search form during one
+organization's name fallbacks, while clearing every public filter each time.
+It reloads after a detail panel or failed command and retains one bounded
+fresh-form retry. No verification is bypassed. The staging webpage now follows
+the master's IL/GA command plan without a second 36-command cap.
 
 This candidate adds Illinois and Georgia on staging only. New York retains its existing workflow. This package has passed local protocol, queue and backend tests; live IL/GA connector validation remains required before release.
 
@@ -12,7 +18,7 @@ This candidate adds Illinois and Georgia on staging only. New York retains its e
 
 1. Open Chrome's Extensions page yourself (`chrome://extensions`).
 2. If updating an existing unpacked connector, use this candidate folder as its source, or disable the old connector and choose **Load unpacked** with this folder. Keep only one CharityClarity connector enabled.
-3. Verify version **0.5.5**. Refresh the staging tab.
+3. Verify version **0.5.6**. Refresh the staging tab.
 4. Keep Chrome open. Illinois and Georgia require the corresponding staging frontend/backend candidate before end-to-end checks can run.
 
 The additional host permissions are limited to the official Illinois and Georgia public registries. Production web/backend deployments are not part of this package.

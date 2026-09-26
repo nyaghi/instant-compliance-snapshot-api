@@ -50,12 +50,21 @@ test('IL exact EIN query returns complete evidence through the existing queue',a
   assert.match(h.tabs.get(h.created[0]).url,/illinoisattorneygeneral/);
   p.onMessage.emit({action:'finish',id:id(21)});await tick();assert.deepEqual(h.removed,h.created);assert.ok(h.tabs.has(2));
 });
-test('Illinois follow-up explicitly reloads the same URL before reading a new document',async()=>{
+test('Illinois reuses the verified public form between name and EIN fallbacks',async()=>{
   const h=harness();registryFixture(h);const p=connect(h,'IL');
   assert.equal((await h.query(p,20,{state:'IL',ein:'363673599'})).ok,true);
   let reloaded=0;const reload=h.chrome.tabs.reload;
   h.chrome.tabs.reload=async id=>{reloaded++;return reload(id);};
-  assert.equal((await h.query(p,21,{state:'IL',identifier:'01015532'})).ok,true);
+  assert.equal((await h.query(p,21,{state:'IL',orgName:'Control Foundation'})).ok,true);
+  assert.equal(reloaded,0);assert.equal(h.created.length,1);
+});
+
+test('Illinois starts a fresh form after an opened detail instead of reusing its dialog',async()=>{
+  const h=harness();registryFixture(h);const p=connect(h,'IL');
+  assert.equal((await h.query(p,20,{state:'IL',identifier:'01015532'})).ok,true);
+  let reloaded=0;const reload=h.chrome.tabs.reload;
+  h.chrome.tabs.reload=async id=>{reloaded++;return reload(id);};
+  assert.equal((await h.query(p,21,{state:'IL',orgName:'Control Foundation'})).ok,true);
   assert.equal(reloaded,1);assert.equal(h.created.length,1);
 });
 test('Georgia normal form navigation produces a completed empty result',async()=>{

@@ -134,7 +134,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.26.2-staging").strip() or "2026.09.26.2-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.26.3-staging").strip() or "2026.09.26.3-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -5826,7 +5826,13 @@ def select_licensed_charity(org, rows, state, deadline):
     current_primary = [r for r in current if r in primary]
     corroborated_current = [r for r in current if r.get("address_evidence", {}).get("decision") == "corroborated"]
     primary_open = [r for r in primary if r["status"] not in {"Closed / Withdrawn / Canceled", "Revoked"}]
-    pool = current_primary or corroborated_current or primary_open or current or primary or accepted
+    # User-confirmed GA policy: retain an explicitly Exempt, identity-confirmed
+    # record instead of allowing a dated ordinary registration to displace it.
+    # Category names alone (e.g. DC Charitable Exempt) do not establish status.
+    # The adverse suspension/revocation conflict guard above still applies.
+    explicit_ga_exempt = [r for r in current if state == "GA" and r["status"] == "Exempt"
+                          and r["raw_status"].strip().casefold() == "exempt"]
+    pool = explicit_ga_exempt or current_primary or corroborated_current or primary_open or current or primary or accepted
     if len(pool) > 1:
         keys = {normalized_match_name(r["name"]) for r in pool}
         addresses_agree = all(r.get("address_evidence", {}).get("decision") == "corroborated" for r in pool)
@@ -5866,6 +5872,28 @@ def licensed_charity_result(org, state, rows, deadline, source, *, freshness="")
             result.source_note += " " + address.get("basis", "The organization location agrees with EIN-linked records.")
         if len(rows) > 1:
             result.source_note += " Other returned records were evaluated before selecting this registration."
+        if state in {"DC", "GA"}:
+            category = selected.get("license_category", "")
+            if category:
+                result.source_note += f" License category: {category}."
+            if state == "DC" and "exempt" in category.casefold() and result.status != "Exempt":
+                result.source_note += " Charitable Exempt is the license category; the displayed license status does not establish a current exemption."
+            alternatives = []
+            seen_alternatives = set()
+            for other in rows:
+                if other is selected or other.get("match", {}).get("decision") != "accepted": continue
+                if other.get("address_evidence", {}).get("decision") in {"conflict", "different_ein"}: continue
+                key = (other["identifier"], other["raw_status"], other.get("expiration"))
+                if key in seen_alternatives: continue
+                seen_alternatives.add(key)
+                description = f"{other['identifier'] or 'unnumbered legacy record'}: {other['raw_status']}"
+                if other.get("license_category"): description += f" ({other['license_category']})"
+                if other.get("expiration"): description += f", expiration {other['expiration'].isoformat()}"
+                alternatives.append(description)
+            if alternatives:
+                result.source_note += " Other confirmed record(s): " + "; ".join(alternatives[:4]) + "."
+            if state == "GA" and selected["raw_status"].strip().casefold() == "exempt":
+                result.source_note += " CharityClarity retains Georgia's explicit Exempt status; an ordinary registration's filing date does not override this confirmed exemption."
     else:
         result.success = True
         result.source_note = f"The {state} charity-license search completed for the organization and reviewed alternate names without a qualifying registration record."
@@ -5941,11 +5969,12 @@ def dc_charity_records(org, deadline):
         if not identifier: raise ValueError("DC license identifier is missing")
         rows.append({"name": raw.get("ENTITYNAME") or raw["ENTITYTRADENAME"], "aliases": [raw.get("ENTITYTRADENAME") or ""], "identifier": identifier,
             "raw_status": str(raw.get("LICENSESTATUS") or ""), "status": status, "expiration": expiry, "location": location,
+            "license_category": str(raw.get("BUSINESSACTIVITY") or ""),
             "street": street, "postal_code": postal, "region": region,
             "initial": (dc_source_date(raw.get("INITIALISSUEDATE")) or ""), "initial_label": "Initial Issue Date",
             "renewal": (dc_source_date(raw.get("LICENSESTARTDATE")) or ""), "renewal_label": "License Start Date",
             "renewal_type": "current_effective_date", "url": DC_LICENSE_API + "?" + urlencode({"where": "CUSTOMERNUMBER='"+identifier.replace("'", "''")+"'", "outFields": "*", "returnGeometry": "false", "f": "pjson"})})
-    return rows, f"Data freshness: DC's public business-license extract was refreshed {refreshed.isoformat()}. It may lag the licensing portal; confirm time-sensitive decisions directly with DC."
+    return rows, f"Data freshness: DC's public business-license extract was refreshed {refreshed.isoformat()}. It may lag the licensing portal; confirm time-sensitive decisions in DC's BOSS license search (https://boss.dc.gov/business/business-license-search)."
 
 
 def search_dc(org):
@@ -20132,7 +20161,7 @@ def ny_connector_advance(record):
             return {"phase": "complete", "result": {"state": "NY", "source": "NY", "identity": identity,
                     "ein": format_ein(ein), "checked_at_epoch": time.time(), "app_version": APP_VERSION}}
         result = search_ny_direct(org, registry_search_provider=search_response,
-                                  registry_detail_provider=search_response if record.get("connector_version") in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5"} else None)
+                                  registry_detail_provider=search_response if record.get("connector_version") in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6"} else None)
     except NYConnectorQueryNeeded as pending:
         limit = 5
         is_detail = "orgID" in pending.params
@@ -20140,7 +20169,7 @@ def ny_connector_advance(record):
             return {"phase": "complete", "result": ny_connector_failure(record, "NY_CONNECTOR_INCOMPLETE")}
         record["pending"] = {"query_id": secrets.token_urlsafe(18), "query": pending.params}
         return {"phase": "search", **record["pending"]}
-    if record.get("connector_version") not in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5"} and "401" in (getattr(result, "source_note", "") or ""):
+    if record.get("connector_version") not in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6"} and "401" in (getattr(result, "source_note", "") or ""):
         return {"phase": "complete", "result": ny_connector_failure(record, "NY_CONNECTOR_UPDATE_REQUIRED")}
     data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, "NY", started)
     data["connector_version"] = record.get("connector_version", "0.2.1")
@@ -20173,7 +20202,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5"}:
+        if not isinstance(connector_version, str) or connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6"}:
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()

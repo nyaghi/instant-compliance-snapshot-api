@@ -273,7 +273,7 @@ class IntegrationControls(unittest.TestCase):
         cleaned=cc.il_ga_clean_evidence({'query':q,'complete':True,'total':2,'rows':rows},q)
         self.assertEqual(len(cleaned['rows']),2)
         with self.assertRaises(ValueError):cc.il_ga_clean_evidence({'query':q,'complete':True,'total':2,'rows':[rows[0],rows[0]]},q)
-    def test_ga_current_numbered_registration_is_evaluated_alongside_old_exemption(self):
+    def test_ga_numbered_registration_is_evaluated_but_explicit_exemption_is_preserved(self):
         org=cc.checker.Organization('ACOEL Foundation','82-3980782')
         rows=[search_row(org.organization_name,'EXEMPT','11111111-1111-1111-1111-111111111111'),search_row(org.organization_name,'CH015274','22222222-2222-2222-2222-222222222222')]
         seen=[]
@@ -282,7 +282,7 @@ class IntegrationControls(unittest.TestCase):
             seen.append(q['identifier']);exempt=q['identifier']=='EXEMPT'
             return {'body':ga_html(full_name=org.organization_name,license_no=q['identifier'],license_type='Exempt Charity' if exempt else 'Charity',status='Exempt' if exempt else 'Active',expiry='' if exempt else '9/28/2099')}
         result=cc.il_ga_browser_lookup(org,'GA',evidence)
-        self.assertEqual(seen,['EXEMPT','CH015274']);self.assertEqual(result.status,'Current');self.assertEqual(result.matched_registry_identifier,'CH015274')
+        self.assertEqual(seen,['EXEMPT','CH015274']);self.assertEqual(result.status,'Exempt');self.assertEqual(result.matched_registry_identifier,'EXEMPT')
     def test_detail_record_change_rejected(self):
         def evidence(q):return {'body':IL.replace('FEEDING AMERICA','DIFFERENT ORGANIZATION')} if 'identifier' in q else {'rows':[search_row()]}
         with self.assertRaises(ValueError):cc.il_ga_browser_lookup(self.org,'IL',evidence)
@@ -339,7 +339,9 @@ class IntegrationControls(unittest.TestCase):
             # Shared verified-acronym fix covered above and by release regression.
             'redundant_bracket_acronym_key',
             # DC-specific transient recovery; RI policy independently tested.
-            'registry_json_request'})
+            'registry_json_request',
+            # User-reviewed GA exemption priority and DC/GA source transparency.
+            'select_licensed_charity','licensed_charity_result','dc_charity_records'})
 
 
 if __name__=='__main__':unittest.main()

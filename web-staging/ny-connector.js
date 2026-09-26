@@ -49,7 +49,7 @@
     const box = document.getElementById("nyConnectorSetup");
     if (!box) return;
     const response = await bridge("ping");
-    const ready = !!compatible(response) && response.capabilities?.includes("il-ga-public-dom-v1") && response.capabilities?.includes("ga-exempt-record-v1") && response.capabilities?.includes("ga-legacy-rows-v1") && response.capabilities?.includes("il-ga-complete-search-v2"), update = !!response.ok && !ready;
+    const ready = !!compatible(response) && response.capabilities?.includes("il-ga-public-dom-v1") && response.capabilities?.includes("ga-exempt-record-v1") && response.capabilities?.includes("ga-legacy-rows-v1") && response.capabilities?.includes("il-ga-complete-search-v2") && response.capabilities?.includes("il-session-reuse-v1"), update = !!response.ok && !ready;
     box.hidden = false;
     const message = box.querySelector("[data-connector-message]");
     message.textContent = ready ? "Registry connector connected. Keep Chrome open while checks run." : update ? "Your registry connector needs an update. Follow the three update steps, then refresh CharityClarity." : "Connect this browser to New York, Illinois and Georgia using the three setup steps.";
@@ -105,7 +105,7 @@
     signal?.throwIfAborted();
     const label = {NY:"New York",IL:"Illinois",GA:"Georgia"}[registryState];
     if (!label) throw new Error("Unsupported browser registry");
-    const supported = c => compatible(c) && (registryState === "NY" || c.capabilities?.includes("il-ga-public-dom-v1") && c.capabilities?.includes("il-ga-complete-search-v2")) && (registryState !== "GA" || c.capabilities?.includes("ga-exempt-record-v1") && c.capabilities?.includes("ga-legacy-rows-v1"));
+    const supported = c => compatible(c) && (registryState === "NY" || c.capabilities?.includes("il-ga-public-dom-v1") && c.capabilities?.includes("il-ga-complete-search-v2") && c.capabilities?.includes("il-session-reuse-v1")) && (registryState !== "GA" || c.capabilities?.includes("ga-exempt-record-v1") && c.capabilities?.includes("ga-legacy-rows-v1"));
     if (refreshing) {
       onProgress?.("New York: waiting for the connection refresh. Other states can continue.");
       await refreshing;
@@ -149,7 +149,14 @@
       }
       if (acquired.ok && supported(connection)) onProgress?.(`${label}: checking the registry.`);
       let count = 0;
-      while (state.phase === "search" && count++ < (registryState === "NY" ? 10 : 36)) {
+      const lookupDeadline = Date.now() + 300000;
+      // The master owns IL/GA query capacity. A second fixed UI cap previously
+      // truncated valid reviewed-name plans even after the backend cap was fixed.
+      while (state.phase === "search" && (registryState !== "NY" || count++ < 10)) {
+        if (registryState !== "NY" && Date.now() >= lookupDeadline) {
+          state = await api({ action: "fail", check_token: checkToken, reason: "NY_CONNECTOR_TIMEOUT" });
+          break;
+        }
         checkToken = state.check_token;
         connected = true;
         const completed = await bridge("search", state.query, lookupId, progress => onProgress?.(progress.reconnecting ? `${label}: reconnecting and resuming this check. Other states can continue.` : progress.recovering ? "New York: refreshing the connection, then retrying this check. Other states can continue." : `${label}: the registry requested a pause. Retrying automatically.`), null, signal);

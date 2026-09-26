@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CharityClarity \u2014 Registry Connector",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "minimum_chrome_version": "132",
   "description": "Connect CharityClarity to public New York, Illinois and Georgia charity records in your browser.",
   "host_permissions": [

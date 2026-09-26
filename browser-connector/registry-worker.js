@@ -38,7 +38,13 @@ async function registryNavigate(job, url) {
 async function performRegistryQuery(job, query) {
   if (!P.validQuery(query) || query.state !== job.registryState || new URL(job.sender.url).origin !== P.STAGING) throw new Error("NY_CONNECTOR_INVALID_SEQUENCE");
   if (query.state === "IL") {
-    await registryNavigate(job, registryStart("IL"));
+    // Keep one ordinary search form through the same organization's fallbacks.
+    // Reloading for every name repeatedly discards normal page readiness and
+    // verification. The content handler clears all public filters each time.
+    // A previously opened detail or failed command still requires a fresh form.
+    if (job.tab === null || !job.ilReusableForm) await registryNavigate(job, registryStart("IL"));
+    else await registryReady(job,null,"/search");
+    job.ilReusableForm = false;
     let result = await registryMessage(job,{action:"registry-il",query});
     // One fresh-form retry for a search that never completed or an unopened
     // detail. Loaded records with absent dates are complete evidence.
@@ -49,6 +55,7 @@ async function performRegistryQuery(job, query) {
       await registryNavigate(job, registryStart("IL"));
       result = await registryMessage(job,{action:"registry-il",query});
     }
+    job.ilReusableForm = result?.ok === true && !Object.hasOwn(query,"identifier");
     return result;
   }
   if (Object.hasOwn(query,"identifier")) {
