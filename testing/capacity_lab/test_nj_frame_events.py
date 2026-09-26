@@ -49,7 +49,10 @@ class NewJerseyFrameEventsTests(unittest.TestCase):
         section=after[start:end]
         self.assertEqual(section.count(new),1)
         restored=after[:start]+section.replace(new,old)+after[end:]
-        self.assertEqual(ast.dump(ast.parse(restored)),ast.dump(ast.parse(before)))
+        from testing.capacity_lab.parsing_scope import strip_nj_public_detail_optimization
+        tree = ast.parse(restored)
+        strip_nj_public_detail_optimization(tree)
+        self.assertEqual(ast.dump(tree),ast.dump(ast.parse(before)))
 
 
 if __name__=='__main__':unittest.main()

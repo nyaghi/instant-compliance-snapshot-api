@@ -771,3 +771,15 @@ After a successful Florida search response, use its existing visible ASP.NET for
 ### New Jersey detail-frame polling (perf.35)
 
 The selected detail iframe initially remains about:blank in Playwright until its protocol event loop dispatches navigation. The prior Python sleep in nj_loaded_detail_body prevented that dispatch and spent the entire eight-second wait without seeing the loaded frame. Pump the Playwright event loop for the same quarter-second polling interval, preserving the original deadline and exact identity/fiscal-period checks. A real delayed-frame control reproduces the old miss and confirms the new read in the same allowance. No source, status, name, date, queue or capacity rule changes.
+
+### Selected New Jersey public detail response (perf.36)
+
+After the existing scored row selection, an exact-EIN row with a CH credential
+can retrieve the same public registration and detail responses used by the modal.
+The response must bind to both the selected EIN and credential, include a complete
+HTML document and satisfy the unchanged filing-period parser. The two requests
+share six seconds; redirects, failed identity, missing fields or incomplete
+responses retain the browser path. There is no negative shortcut. The verified
+response is reused only inside this page and search; each new search clears it.
+Evidence capture retains the rendered modal. Matching, ranking, classification,
+dates, deadlines, source permits and four-node capacity are unchanged.

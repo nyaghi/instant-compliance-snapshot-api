@@ -12,7 +12,7 @@ class Tests(unittest.TestCase):
 
     def test_existing_frame_does_not_require_another_click(self):
         frame=SimpleNamespace(url='https://example.test/CHR-Public-Details-Page/',content=lambda:'Example Relief 123456789 Next Filing Due: 12/31/2026')
-        page=SimpleNamespace(frames=[frame])
+        page=SimpleNamespace(frames=[frame],url='https://charportal.dca.njoag.gov/Charity-Registration/CHR-Public-Search-Page/')
         with patch.object(c,'registry_page_body',return_value='Compliant'):
             self.assertIn('12/31/2026',c.nj_detail_body(page,self.org()))
 

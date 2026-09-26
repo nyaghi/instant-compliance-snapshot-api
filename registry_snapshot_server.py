@@ -18588,7 +18588,88 @@ def nj_reload_detail_body(page, org) -> str:
         return ""
 
 
+def nj_selected_public_detail(page, target, org) -> str:
+    """Read the public response for an already-scored exact-EIN row.
+
+    This is the same registration selection used by the public detail modal.
+    Ambiguous, incomplete or changed responses keep the existing browser path.
+    No results are shared between pages, organizations or lookup jobs.
+    """
+    if (getattr(org, "evidence_mode", False) or CAPTURE_EVIDENCE_SCREENSHOTS
+            or CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT):
+        return ""
+    try:
+        digits = canonical_ein_digits(org.ein)
+        if len(digits) != 9:
+            return ""
+        row = target.evaluate('''element => {
+            const row = element.closest('[role="row"]');
+            if (!row) return null;
+            const field = key => row.querySelector('[data-automation-key="' + key + '"]')?.innerText || '';
+            return {name: field('name'), ein: field('crsm_federalein'), credential: field('accountnumber')};
+        }''')
+        if not isinstance(row, dict) or canonical_ein_digits(row.get("ein", "")) != digits:
+            return ""
+        name, credential = row.get("name", "").strip(), row.get("credential", "").strip()
+        if not name or not re.fullmatch(r"CH\d+", credential):
+            return ""
+        deadline = time.monotonic() + 6.0
+
+        def get(path: str, content_type: str) -> str:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("NJ public detail allowance exhausted")
+            response = page.request.get("https://charportal.dca.njoag.gov" + path,
+                timeout=max(1, min(4000, int(remaining * 1000))), max_redirects=0)
+            try:
+                parsed = urlparse(response.url)
+                if (response.status != 200 or parsed.scheme != "https"
+                        or parsed.netloc != "charportal.dca.njoag.gov"
+                        or parsed.path != path.split("?", 1)[0]
+                        or content_type not in response.headers.get("content-type", "").lower()):
+                    raise ValueError("NJ public detail response changed or incomplete")
+                body = response.body()
+                if len(body) > 1_000_000:
+                    raise ValueError("NJ public detail exceeded the bounded response size")
+                return body.decode("utf-8")
+            finally:
+                response.dispose()
+
+        selection = json.loads(get("/retrieveRegistration/?" + urlencode({"name": name, "chNum": credential}), "json"))
+        if (selection.get("charityName", "").strip().casefold() != name.casefold()
+                or not str(selection.get("numberOfResults", "")).isdigit()
+                or int(selection["numberOfResults"]) < 1):
+            return ""
+        # A count alone cannot prove identity. Bind the returned registration
+        # to the already selected row with both its EIN and CH identifier.
+        identifiers = [selection.get(k, "") for k in ("accountId", "charityRegistrationId")]
+        if not all(isinstance(value, str) and re.fullmatch(
+                r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", value) for value in identifiers):
+            return ""
+        body = get("/CHR-Public-Details-Page/?" + urlencode(dict(zip(("id", "rid"), identifiers))), "html")
+        if not re.search(r"</html>\s*(?:<!--[\s\S]*?-->\s*)*$", body, re.I):
+            return ""
+        fields = {}
+        for tag in re.findall(r"<input\b[^>]*>", body, re.I):
+            attrs = {key.lower(): html.unescape(value) for key, _, value in
+                re.findall(r'''\b(id|value)\s*=\s*(["'])(.*?)\2''', tag, re.I)}
+            if attrs.get("id") in {"crsm_federalein", "accountnumber"}:
+                fields.setdefault(attrs["id"], []).append(attrs.get("value", ""))
+        if (fields.get("crsm_federalein") != [digits] or fields.get("accountnumber") != [credential]
+                or not nj_filing_context_from_body(body).get("computed_due_date")):
+            return ""
+        return body
+    except Exception:
+        return ""
+
+
 def nj_detail_body(page, org) -> str:
+    cache_key = (page.url, canonical_ein_digits(org.ein), org.organization_name)
+    cached = getattr(page, "_cc_nj_selected_detail", None)
+    if (isinstance(cached, tuple) and len(cached) == 2 and cached[0] == cache_key
+            and not getattr(org, "evidence_mode", False)
+            and not CAPTURE_EVIDENCE_SCREENSHOTS and not CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT):
+        return cached[1]
     pieces = [registry_page_body(page)]
     loaded_detail = nj_loaded_detail_body(page, org)
     if loaded_detail:
@@ -18660,6 +18741,11 @@ def nj_detail_body(page, org) -> str:
 
     if candidates:
         candidates.sort(key=lambda item: item[0], reverse=True)
+        public_detail = nj_selected_public_detail(page, candidates[0][1], org)
+        if public_detail:
+            body = "\n".join([*pieces, public_detail])
+            page._cc_nj_selected_detail = (cache_key, body)
+            return body
         try:
             candidates[0][1].click(timeout=5000)
             clicked = True
@@ -18854,6 +18940,7 @@ def nj_next_due_date_from_body(body: str) -> date | None:
 def search_nj_direct(page, org):
     url = "https://charportal.dca.njoag.gov/Charity-Registration/CHR-Public-Search-Page/"
     result = checker.StateResult(org.organization_name, org.ein, "NJ", checker.STATUS_UNKNOWN, url)
+    page._cc_nj_selected_detail = None  # A new search always obtains fresh evidence.
     try:
         ein_digits = re.sub(r"\D", "", org.ein or "")
         page.goto(url, wait_until="domcontentloaded", timeout=60000)
