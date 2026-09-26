@@ -101,6 +101,33 @@ test('Illinois unopened detail gets one fresh-form retry and preserves final rea
   const result=await h.query(p,20,{state:'IL',identifier:'01015532'});
   assert.equal(attempts,2);assert.equal(result.ok,false);assert.equal(result.reason,'NY_CONNECTOR_IL_DETAIL_NOT_OPENED');
 });
+
+test('Georgia EXEMPT marker selects the bound name and location after link refresh',async()=>{
+  const h=harness();registryFixture(h);const p=connect(h,'GA');
+  const original=h.chrome.tabs.sendMessage;let searches=0;
+  h.chrome.tabs.sendMessage=async(tab,m)=>{
+    if(m.action==='registry-ga-form')searches++;
+    if(m.action==='registry-ga-rows')return {ok:true,rows:[
+      {identifier:'EXEMPT',name:'Unrelated Foundation',location:'Atlanta GA',detail_key:'33333333-3333-3333-3333-333333333333'},
+      {identifier:'EXEMPT',name:'ACOEL Foundation',location:'Atlanta GA',detail_key:'44444444-4444-4444-4444-444444444444'},
+      {identifier:'EXEMPT',name:'ACOEL Foundation',location:'Washington DC 20036',detail_key:searches===1?'11111111-1111-1111-1111-111111111111':'22222222-2222-2222-2222-222222222222'}
+    ],page:1,next:false};
+    if(m.action==='registry-ga-detail'){
+      assert.match(h.tabs.get(tab).url,/result=22222222-2222-2222-2222-222222222222$/);
+      return {ok:true,evidence:{query:m.query,complete:true,body:'ACOEL Foundation EXEMPT'}};
+    }
+    return original(tab,m);
+  };
+  assert.equal((await h.query(p,20,{state:'GA',orgName:'Foundation'})).ok,true);
+  const q={state:'GA',identifier:'EXEMPT',record_name:'ACOEL Foundation',record_location:'Washington DC 20036',detail_key:'11111111-1111-1111-1111-111111111111'};
+  const r=await h.query(p,21,q);assert.equal(r.ok,true);assert.equal(searches,2);assert.deepEqual(r.evidence.query,q);
+});
+
+test('Georgia EXEMPT detail cannot be requested with only its shared marker',async()=>{
+  const h=harness();registryFixture(h);const p=connect(h,'GA');
+  const r=await h.query(p,20,{state:'GA',identifier:'EXEMPT',detail_key:'11111111-1111-1111-1111-111111111111'});
+  assert.equal(r,undefined);assert.equal(h.created.length,0);
+});
 test('a state-specific port rejects evidence requested for a different state',async()=>{
   const h=harness();registryFixture(h);const p=connect(h,'IL');
   const result=await h.query(p,20,{state:'GA',orgName:'Control'});

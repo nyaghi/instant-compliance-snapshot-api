@@ -69,6 +69,12 @@ class SourceControls(unittest.TestCase):
         self.assertIsNone(r['initial']);self.assertIsNone(r['renewal'])
     def test_ga_wrong_record_rejected(self):
         with self.assertRaises(ValueError):cc.ga_charity_detail_html(ga_html(),'CH002707')
+    def test_ga_literal_exempt_marker_requires_explicit_exemption(self):
+        body=ga_html(full_name='ACOEL Foundation',license_no='EXEMPT',license_type='Exempt Charity',status='Exempt',expiry='')
+        self.assertEqual(cc.ga_charity_detail_html(body,'EXEMPT')['status'],'Exempt')
+        for change in [{'license_type':'Charity'},{'status':'Active'}]:
+            with self.assertRaises(ValueError):
+                cc.ga_charity_detail_html(ga_html(**{'license_no':'EXEMPT','license_type':'Exempt Charity','status':'Exempt',**change}),'EXEMPT')
     def test_ga_solicitor_rejected(self):
         with self.assertRaises(ValueError):cc.ga_charity_detail_html(ga_html(license_type='Paid Solicitor'),'CH003977')
     def test_ga_lapsed_adverse_precedes_future_date(self):
@@ -174,6 +180,33 @@ class IntegrationControls(unittest.TestCase):
         self.assertNotEqual(result.status,'Not Registered')
     def test_ga_exempt_license_type(self):
         self.assertEqual(cc.ga_charity_detail_html(ga_html(license_type='Exempt Charity'),'CH003977')['status'],'Exempt')
+    def test_ga_exemption_marker_is_bound_to_name_location_and_detail(self):
+        org=cc.checker.Organization('ACOEL Foundation','82-3980782')
+        row={**search_row(org.organization_name,'EXEMPT','11111111-1111-1111-1111-111111111111'),'location':'Washington DC 20036'}
+        requested=[]
+        def evidence(q):
+            requested.append(q)
+            if 'identifier' not in q:return {'rows':[row]}
+            self.assertEqual(q['record_name'],row['name']);self.assertEqual(q['record_location'],row['location'])
+            return {'body':ga_html(full_name=row['name'],license_no='EXEMPT',license_type='Exempt Charity',status='Exempt',expiry='')}
+        result=cc.il_ga_browser_lookup(org,'GA',evidence)
+        self.assertEqual(result.status,'Exempt')
+    def test_ga_nonunique_exempt_marker_preserves_different_organizations(self):
+        q={'state':'GA','orgName':'Foundation'}
+        rows=[search_row('Alpha Foundation','EXEMPT','11111111-1111-1111-1111-111111111111'),search_row('Beta Foundation','EXEMPT','22222222-2222-2222-2222-222222222222')]
+        cleaned=cc.il_ga_clean_evidence({'query':q,'complete':True,'total':2,'rows':rows},q)
+        self.assertEqual(len(cleaned['rows']),2)
+        with self.assertRaises(ValueError):cc.il_ga_clean_evidence({'query':q,'complete':True,'total':2,'rows':[rows[0],rows[0]]},q)
+    def test_ga_current_numbered_registration_is_evaluated_alongside_old_exemption(self):
+        org=cc.checker.Organization('ACOEL Foundation','82-3980782')
+        rows=[search_row(org.organization_name,'EXEMPT','11111111-1111-1111-1111-111111111111'),search_row(org.organization_name,'CH015274','22222222-2222-2222-2222-222222222222')]
+        seen=[]
+        def evidence(q):
+            if 'identifier' not in q:return {'rows':rows}
+            seen.append(q['identifier']);exempt=q['identifier']=='EXEMPT'
+            return {'body':ga_html(full_name=org.organization_name,license_no=q['identifier'],license_type='Exempt Charity' if exempt else 'Charity',status='Exempt' if exempt else 'Active',expiry='' if exempt else '9/28/2099')}
+        result=cc.il_ga_browser_lookup(org,'GA',evidence)
+        self.assertEqual(seen,['EXEMPT','CH015274']);self.assertEqual(result.status,'Current');self.assertEqual(result.matched_registry_identifier,'CH015274')
     def test_detail_record_change_rejected(self):
         def evidence(q):return {'body':IL.replace('FEEDING AMERICA','DIFFERENT ORGANIZATION')} if 'identifier' in q else {'rows':[search_row()]}
         with self.assertRaises(ValueError):cc.il_ga_browser_lookup(self.org,'IL',evidence)

@@ -13,6 +13,9 @@
       if (keys === "ein,state") return value.state === "IL" && typeof value.ein === "string" && /^[0-9]{9}$/.test(value.ein) && value.ein !== "000000000";
       if (keys === "orgName,state") return typeof value.orgName === "string" && value.orgName.trim().length > 0 && value.orgName.length <= 500;
       if (keys === "identifier,state") return value.state === "IL" && /^\d{8}$/.test(value.identifier);
+      if (keys === "detail_key,identifier,record_location,record_name,state") return value.state === "GA" && value.identifier === "EXEMPT"
+        && /^[a-f0-9-]{36}$/.test(value.detail_key) && typeof value.record_name === "string" && value.record_name.trim().length > 0 && value.record_name.length <= 500
+        && typeof value.record_location === "string" && value.record_location.length <= 1000;
       return keys === "detail_key,identifier,state" && value.state === "GA" && /^CH\d+$/.test(value.identifier) && /^[a-f0-9-]{36}$/.test(value.detail_key);
     }
     if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length !== 1) return false;

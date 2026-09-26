@@ -8,12 +8,15 @@ Georgia exposes both a six-column public search layout and a seven/eight-column 
 The master now accepts connector version 0.5.3 in the same signed New York evidence flow as 0.5.2. No identity scoring or status classification rules change. Application version is .5-staging for traceability.
 
 ## Validation already completed
-- 367 backend tests in 21 suites; zero failures, including mature EIN-first state and shared identity/status guardrails.
+- 371 backend tests in 21 suites; zero failures, including mature EIN-first state and shared identity/status guardrails.
 - 30 matching fixtures in the regression run.
-- 64 browser connector tests; zero failures, including NY lifecycle/protocol regression and seven new Georgia public-table tests.
+- 66 browser connector tests; zero failures, including NY lifecycle/protocol regression and seven new Georgia public-table tests.
 
 ## Required live follow-ups
 - All 40 Georgia pairs after the update.
 - Bounded retry of incomplete Illinois pairs.
 - Two corrected Unicode organization inputs across all 34 states, including New York.
 - Confirm live staging version and API routing. No production deployment is authorized.
+
+## Literal exemption marker
+Independent ACOEL source review also found legitimate records whose license field is EXEMPT. The previous CH-only validator made such searches incomplete. Master evidence validation and the connector now bind these rows to public name, location and detail link; unrelated EXEMPT entries remain distinct. The existing duplicate-selection rules then evaluate the exemption and numbered registration together. Four additional backend tests and two connector tests cover this behavior.

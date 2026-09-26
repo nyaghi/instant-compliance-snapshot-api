@@ -5422,10 +5422,12 @@ def ga_charity_detail_html(body, expected_identifier):
         return values[0] if values else ""
     identifier = field("license_no", True)
     name, profession, kind, raw = (field(key, True) for key in ("full_name", "profession", "license_type", "status"))
-    if identifier != expected_identifier or not re.fullmatch(r"CH\d+", identifier):
+    if identifier != expected_identifier or not re.fullmatch(r"CH\d+|EXEMPT", identifier):
         raise ValueError("Georgia detail does not match the selected charity license")
     if profession != "Charities" or kind not in {"Charity", "Exempt Charity", "Private Foundations"}:
         raise ValueError("Georgia record is not a qualifying charity registration")
+    if identifier == "EXEMPT" and (kind != "Exempt Charity" or raw.casefold() != "exempt"):
+        raise ValueError("Georgia EXEMPT marker is not a confirmed charity exemption")
     dates = {}
     for key in ("expiry", "issue_date", "last_ren"):
         value = field(key)
@@ -5444,6 +5446,14 @@ def ga_charity_detail_html(body, expected_identifier):
 
 IL_GA_SOURCES = {"IL": "https://charitable.illinoisattorneygeneral.gov/search",
                  "GA": "https://verify.sos.ga.gov/verification/Search.aspx?facility=Y"}
+
+
+def ga_charity_record_key(row):
+    # EXEMPT is a public marker shared by unrelated organizations, not a license
+    # number. Keep its full public identity when deduplicating search responses.
+    if row["identifier"] == "EXEMPT":
+        return ("EXEMPT", normalized_match_name(row["name"]), row.get("location", "").strip().casefold())
+    return row["identifier"]
 
 
 def il_ga_clean_evidence(payload, query):
@@ -5469,14 +5479,16 @@ def il_ga_clean_evidence(payload, query):
         if (not isinstance(row, dict) or set(row) != fields
                 or any(not isinstance(v, str) or len(v) > 1000 for v in row.values())
                 or not row["name"].strip() or len(row["name"]) > 500
-                or not re.fullmatch(r"\d{8}" if state == "IL" else r"CH\d+", row["identifier"])
-                or row["identifier"] in seen):
+                or not re.fullmatch(r"\d{8}" if state == "IL" else r"CH\d+|EXEMPT", row["identifier"])):
+            raise ValueError("Invalid or duplicated charity search identity")
+        identity = ga_charity_record_key(row) if state == "GA" else row["identifier"]
+        if identity in seen:
             raise ValueError("Invalid or duplicated charity search identity")
         if state == "GA" and not re.fullmatch(r"[a-f0-9-]{36}", row["detail_key"]):
             raise ValueError("Invalid Georgia detail link")
         if state == "IL" and row["detail_key"]:
             raise ValueError("Unexpected Illinois detail link")
-        seen.add(row["identifier"]); cleaned.append(dict(row))
+        seen.add(identity); cleaned.append(dict(row))
     return {"rows": cleaned}
 
 
@@ -5495,17 +5507,20 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
         found = evidence(query)["rows"]
         completed.append(query)
         for row in found:
-            if row["identifier"] in seen:
+            identity = ga_charity_record_key(row) if state == "GA" else row["identifier"]
+            if identity in seen:
                 continue
             if "ein" not in query and score_candidate(org.organization_name, org.ein, {"name": row["name"]})["decision"] == "rejected":
                 continue
             detail_query = {"state": state, "identifier": row["identifier"]}
             if state == "GA": detail_query["detail_key"] = row["detail_key"]
+            if state == "GA" and row["identifier"] == "EXEMPT":
+                detail_query.update(record_name=row["name"], record_location=row["location"])
             detail = evidence(detail_query)["body"]
             parsed = (il_charity_detail_text if state == "IL" else ga_charity_detail_html)(detail, row["identifier"])
             if normalized_match_name(parsed["name"]) != normalized_match_name(row["name"]):
                 raise ValueError("Selected detail name changed from the search result")
-            seen.add(row["identifier"])
+            seen.add(identity)
             if state == "IL" and parsed["ein"] != canonical_ein_digits(org.ein):
                 continue
             record = {**row, **parsed, "url": IL_GA_SOURCES[state]}

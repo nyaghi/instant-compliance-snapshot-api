@@ -55,3 +55,5 @@ Compliance Express · www.compliance-express.com · info@compliance-express.com
 Georgia pagination activates the existing public pager link in page context. No new permissions or state API access are added.
 
 Version 0.5.3 validates both public Georgia result layouts (combined address or split city/state). Unknown layouts and malformed rows remain incomplete evidence rather than completed empty searches. No new permissions or matching/status rules.
+
+Georgia literal EXEMPT records are bound to the selected public name, location and refreshed detail link. The shared EXEMPT marker is never treated as a unique license number. Staging requires this capability before starting Georgia browser research.
