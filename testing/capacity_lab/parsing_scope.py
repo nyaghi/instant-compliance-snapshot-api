@@ -73,6 +73,7 @@ def strip_nj_query_optimization(tree):
 
 def strip_pa_form_optimization(tree):
     """Only PA's redundant ready-form navigation/idle wait is replaced."""
+    strip_pa_ein_wait_and_ny_browser_timeout(tree)
     strip_fl_date_post_allowance(tree)
     if not any(getattr(n, 'name', '') == 'pa_prepare_name_fallback_form' for n in tree.body):
         return
@@ -86,6 +87,51 @@ def strip_pa_form_optimization(tree):
                   and ast.unparse(n.body[0]) == 'pa_prepare_name_fallback_form(page, url)')
     target.body = original.body[:3] + target.body[1:]
     tree.body = [n for n in tree.body if getattr(n, 'name', '') != 'pa_prepare_name_fallback_form']
+
+
+def strip_pa_ein_wait_and_ny_browser_timeout(tree):
+    old = ast.parse(subprocess.check_output(['git', 'show', 'e9d6b9a:registry_snapshot_server.py'],
+        cwd=Path(__file__).resolve().parents[2]).decode('utf-8'))
+    function = lambda t, name: next(n for n in t.body if getattr(n, 'name', '') == name)
+    core = function(tree, 'search_pa_with_name_fallback_core')
+    if ast.unparse(core.body[0]) == 'initial_offset = request_offset()':
+        assert ast.unparse(core.body[1]) == "result = checker.search_pa(page, org, wait_for_ein=lambda ein: completion_wait('', initial_offset, time.monotonic() + 12.0, ein=ein))"
+        core.body[:2] = function(old, core.name).body[:1]
+        outer = function(tree, 'search_pa_with_name_fallback')
+        wait = next(n for n in outer.body if getattr(n, 'name', '') == 'wait_for_search')
+        before = next(n for n in function(old, outer.name).body if getattr(n, 'name', '') == 'wait_for_search')
+        assert wait.args.args[-1].arg == 'ein' and ast.literal_eval(wait.args.defaults[-1]) == ''
+        wait.args.args.pop();wait.args.defaults.pop()
+        comp = next(n for n in ast.walk(wait) if isinstance(n, ast.ListComp))
+        old_comp = next(n for n in ast.walk(before) if isinstance(n, ast.ListComp))
+        assert ast.unparse(comp.generators[0].ifs[0]) == "row['step'] == 'search' and (canonical_ein_digits(row.get('ein', '')) == canonical_ein_digits(ein) and (not row.get('name')) if ein else not row.get('ein') and key(row.get('name')) == key(query))"
+        comp.generators[0].ifs = old_comp.generators[0].ifs
+        assert ast.dump(wait) == ast.dump(before)
+    ny = function(tree, 'search_ny_direct')
+    for node in ast.walk(ny):
+        if isinstance(node, ast.Call) and ast.unparse(node.func) == 'isinstance' and len(node.args)==2:
+            types = node.args[1]
+            if isinstance(types, ast.Tuple) and any(ast.unparse(t)=='checker.PlaywrightTimeoutError' for t in types.elts):
+                assert ast.unparse(types) in {'(TimeoutError, checker.PlaywrightTimeoutError, OSError)', '(TimeoutError, checker.PlaywrightTimeoutError)'}
+                types.elts = [t for t in types.elts if ast.unparse(t)!='checker.PlaywrightTimeoutError']
+                if len(types.elts)==1:node.args[1]=types.elts[0]
+
+
+def strip_checker_pa_ein_wait(tree):
+    fn=next(n for n in tree.body if getattr(n,'name','')=='search_pa')
+    if fn.args.args[-1].arg != 'wait_for_ein':return
+    assert ast.literal_eval(fn.args.defaults[-1]) is None
+    fn.args.args.pop();fn.args.defaults.pop()
+    body=next(n for n in fn.body if isinstance(n,ast.Try)).body
+    block=next(n for n in body if isinstance(n,ast.If) and 'wait_for_ein is not None' in ast.unparse(n.test))
+    expected=ast.parse('''if wait_for_ein is not None and not wait_for_ein(ein):
+    result.raw_status_text = "Pennsylvania EIN search did not complete"
+    result.source_note = "Pennsylvania did not finish the submitted EIN search; registration status remains unconfirmed."
+    result.reason_code = "PA_INCOMPLETE_SEARCH"
+    return result
+''').body[0]
+    assert ast.dump(block)==ast.dump(expected)
+    body.remove(block)
 
 
 def strip_fl_date_post_allowance(tree):

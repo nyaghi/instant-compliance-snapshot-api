@@ -138,7 +138,7 @@ class EventControls(unittest.TestCase):
 
     def test_base_incomplete_search_short_circuits_name_fallback(self):
         page=Page()
-        def initial(p,org):p.emit(500);return result()
+        def initial(p,org,**kwargs):p.emit(500);return result()
         with patch.object(c.checker,'search_pa',side_effect=initial), \
              patch.object(c,'build_search_queries') as names:
             actual=c.search_pa_with_name_fallback(page,ORG)

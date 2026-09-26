@@ -879,3 +879,18 @@ Standard control found two missing issuance dates: both timed out on the form
 GET after three seconds and its verified-TLS fallback after four. These are
 preserved failures, not accepted spreadsheet differences. Extending POST alone
 would not address them; the revised candidate covers the slow form as well.
+
+Phase48 corrective qualification: phase46 first-pass Standard returned 638/640.
+Year Up PA exposed an implicit-wait dependency after removing the invalid dashed
+EIN retry. The master now waits up to 12 seconds for the submitted EIN response
+before the shared checker reads the table; empty completed responses return
+immediately. Request identity, schema, name fallback and classification remain
+unchanged. Pending/failed responses remain inconclusive.
+
+The NY smoke failure used Playwright's TimeoutError, which is not Python's
+builtin TimeoutError. Include that specific exception in the existing one-retry
+policy, retaining the same 35-second lookup allowance and Sales60s. Identity
+and schema failures are not retried. This does not change the customer connector.
+The Oklahoma 300-second task timeout recovered unchanged in 15.8 seconds; its
+exact blocked internal step was not retained, so do not claim a known root cause
+or erase that original failure. It is added to live smoke/controlled load.

@@ -51,6 +51,8 @@ class PennsylvaniaReadyFormTests(unittest.TestCase):
         root=Path(m.__file__).parent;name='Charity_Checker_Script for 13_states.py'
         old=ast.parse(subprocess.check_output(['git','show','88e5f17:'+name],cwd=root).decode())
         new=ast.parse((root/name).read_text(encoding='utf-8'))
+        from testing.capacity_lab.parsing_scope import strip_checker_pa_ein_wait
+        strip_checker_pa_ein_wait(new)
         fn=next(n for n in new.body if getattr(n,'name','')=='search_pa')
         branch=next(n for n in ast.walk(fn) if isinstance(n,ast.If) and ast.unparse(n.test)=='retry_input')
         self.assertEqual(ast.unparse(branch.body[0]),"maximum = retry_input.get_attribute('maxlength') or ''")

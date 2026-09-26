@@ -49,6 +49,14 @@ test('discovery and shared checker match baseline; NY transport has separate sco
   const old=cp.execFileSync('git',['show','fb193e6:'+file],{cwd:root,maxBuffer:20*1024*1024});
   let current=fs.readFileSync(path.join(root,file)).toString().replaceAll('\r\n','\n');
   if(file==='Charity_Checker_Script for 13_states.py'){
+   current=current.replace('def search_pa(page, org: Organization, wait_for_ein=None) -> StateResult:', 'def search_pa(page, org: Organization) -> StateResult:');
+   const wait=`        if wait_for_ein is not None and not wait_for_ein(ein):
+            result.raw_status_text = "Pennsylvania EIN search did not complete"
+            result.source_note = "Pennsylvania did not finish the submitted EIN search; registration status remains unconfirmed."
+            result.reason_code = "PA_INCOMPLETE_SEARCH"
+            return result
+`;
+   assert.equal(current.split(wait).length,2);current=current.replace(wait,'');
    // Separately covered by PA field-length, completion and whole-checker AST controls.
    const added=`                    maximum = retry_input.get_attribute("maxlength") or ""
                     # A browser truncates a formatted EIN in a digits-only field,

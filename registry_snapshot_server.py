@@ -19444,7 +19444,7 @@ def search_pa_with_name_fallback(page, org):
         if row is not None:
             row["failure"] = "Public registry request failed"
 
-    def wait_for_search(query, request_offset, deadline):
+    def wait_for_search(query, request_offset, deadline, ein=""):
         # Pump Playwright events while waiting for this submitted query, not an
         # earlier response or the temporarily empty Angular results table.
         key = lambda value: re.sub(r"\s+", " ", str(value or "")).strip().casefold()
@@ -19452,8 +19452,10 @@ def search_pa_with_name_fallback(page, org):
             if time.monotonic() > deadline:
                 return False
             matching = [row for row in observations[request_offset:]
-                        if row["step"] == "search" and not row.get("ein")
-                        and key(row.get("name")) == key(query)]
+                        if row["step"] == "search" and (
+                            canonical_ein_digits(row.get("ein", "")) == canonical_ein_digits(ein)
+                            and not row.get("name") if ein else
+                            not row.get("ein") and key(row.get("name")) == key(query))]
             if matching:
                 row = matching[-1]
                 if row.get("complete"):
@@ -19495,7 +19497,9 @@ def pa_prepare_name_fallback_form(page, url):
 
 
 def search_pa_with_name_fallback_core(page, org, completion_guard, completion_wait, request_offset):
-    result = checker.search_pa(page, org)
+    initial_offset = request_offset()
+    result = checker.search_pa(page, org, wait_for_ein=lambda ein:
+        completion_wait("", initial_offset, time.monotonic() + 12.0, ein=ein))
     result = completion_guard(result)
     if public_status(result) != "Not Registered":
         return result
@@ -20324,8 +20328,8 @@ def search_ny_direct(org, browser_page=None, registry_search_provider=None, regi
             except Exception as exc:
                 code = getattr(exc, "code", None)
                 http_status = getattr(response, "status_code", None)
-                result._ny_transport_failure = isinstance(exc, (TimeoutError, OSError)) or code in {6, 7, 28, 35, 52, 55, 56} or http_status in {403, 408, 429, 500, 502, 503, 504}
-                transient = isinstance(exc, TimeoutError) or code in {7, 28, 52, 55, 56} or http_status in {408, 429, 500, 502, 503, 504}
+                result._ny_transport_failure = isinstance(exc, (TimeoutError, checker.PlaywrightTimeoutError, OSError)) or code in {6, 7, 28, 35, 52, 55, 56} or http_status in {403, 408, 429, 500, 502, 503, 504}
+                transient = isinstance(exc, (TimeoutError, checker.PlaywrightTimeoutError)) or code in {7, 28, 52, 55, 56} or http_status in {408, 429, 500, 502, 503, 504}
                 label = f"HTTP {http_status}" if isinstance(http_status, int) else type(exc).__name__
                 result.source_attempts.append(f"{attempt}: {label} in {time.perf_counter() - started:.2f}s")
                 # One retry for the entire lookup, inside the original deadline.

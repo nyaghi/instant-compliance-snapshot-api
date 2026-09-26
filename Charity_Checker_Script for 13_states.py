@@ -1749,7 +1749,7 @@ def extract_pa_result_expiration(page, ein: str, organization_name: str = ""):
         candidates.sort(key=lambda item: (item[0], item[5], item[1], item[2]), reverse=True)
         return candidates[0][3], candidates[0][4]
     return "", ""
-def search_pa(page, org: Organization) -> StateResult:
+def search_pa(page, org: Organization, wait_for_ein=None) -> StateResult:
     url = "https://www.charities.pa.gov/#/page/searchCharities"
     result = StateResult(org.organization_name, org.ein, "PA", STATUS_UNKNOWN, url)
     try:
@@ -1791,6 +1791,11 @@ def search_pa(page, org: Organization) -> StateResult:
             result.error = "Could not click PA Search button"
             return result
 
+        if wait_for_ein is not None and not wait_for_ein(ein):
+            result.raw_status_text = "Pennsylvania EIN search did not complete"
+            result.source_note = "Pennsylvania did not finish the submitted EIN search; registration status remains unconfirmed."
+            result.reason_code = "PA_INCOMPLETE_SEARCH"
+            return result
         row_text, expiration_raw = extract_pa_result_expiration(page, ein, org.organization_name)
         if not row_text:
             formatted_ein = format_ein_with_dash(ein)
