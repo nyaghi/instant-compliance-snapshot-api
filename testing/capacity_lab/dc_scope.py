@@ -3,6 +3,8 @@ import ast
 
 
 def remove_dc_recovery(tree):
+    from testing.capacity_lab.transport_scope import remove_transport_recovery
+    remove_transport_recovery(tree)
     for name in ('dc_repeated_name_prefix', 'dc_repeated_name_identity'):
         tree.body.remove(next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == name))
     identity = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'licensed_charity_identity')

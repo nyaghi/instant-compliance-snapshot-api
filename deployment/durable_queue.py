@@ -21,6 +21,8 @@ from psycopg_pool import ConnectionPool
 LOCK = 4823915721
 HELD = ('running', 'stopping', 'quarantined')
 TERMINAL = ('completed', 'canceled', 'expired')
+DISCOVERY_QUEUE_SECONDS = 270
+DISCOVERY_EXECUTION_SECONDS = 90
 
 
 class Conflict(ValueError): pass
@@ -120,7 +122,7 @@ class Queue:
                 count = c.execute('SELECT count(*) AS n FROM cc_lab_workflows WHERE finished IS NULL').fetchone()['n']
                 if count >= config['backlog_limit']: raise QueueFull('Lab backlog is full; no work was accepted')
                 ident, created = str(uuid.uuid4()), True
-                seconds = 90 if payload['kind'] == 'discovery' else 60 if payload['mode'] == 'sales' else 900
+                seconds = DISCOVERY_QUEUE_SECONDS if payload['kind'] == 'discovery' else 60 if payload['mode'] == 'sales' else 900
                 c.execute('INSERT INTO cc_lab_workflows(id,scope,ein,fingerprint,payload,kind,mode,source_version,phase,submitted,deadline) '
                           "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'queued',%s,%s)",
                           (ident, scope, payload['ein'], fingerprint, Jsonb(payload), payload['kind'], payload['mode'], version, now, now+seconds))
@@ -243,7 +245,16 @@ class Queue:
                             for submitted,resources in earlier_multi): continue
                     if any(busy[r] >= cfg['registry_limits'].get(r, 4) for r in j['resources']): continue
                     token = str(uuid.uuid4())
-                    run_until = min(w['deadline'], now + (90 if j['state'] == '@discovery' else 300))
+                    if j['state'] == '@discovery' and w['started'] is None:
+                        # The bounded waiting allowance must not consume the
+                        # collector's unchanged execution allowance. Activate it
+                        # once, atomically with the first claim. Recovery never
+                        # resets this deadline or extends an already running job.
+                        w['deadline'] = now + DISCOVERY_EXECUTION_SECONDS
+                        c.execute('UPDATE cc_lab_workflows SET deadline=%s WHERE id=%s', (w['deadline'], w['id']))
+                        self.event(c, now, 'discovery_execution_started', w['id'], j['id'],
+                                   queue_seconds=now-w['submitted'], execution_seconds=DISCOVERY_EXECUTION_SECONDS)
+                    run_until = min(w['deadline'], now + (DISCOVERY_EXECUTION_SECONDS if j['state'] == '@discovery' else 300))
                     with c.pipeline():
                         c.execute("UPDATE cc_lab_jobs SET phase='running',owner=%s,token=%s,attempt=attempt+1,claimed=%s,lease_until=%s,run_until=%s WHERE id=%s",
                                   (worker, token, now, now+20, run_until, j['id']))

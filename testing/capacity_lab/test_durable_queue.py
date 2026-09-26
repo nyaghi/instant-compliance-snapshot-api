@@ -354,6 +354,45 @@ class DurableTests(unittest.TestCase):
         st=self.q.status('a',ident); self.assertEqual(st['phase'],'expired')
         self.assertIsNone(st['jobs'][0]['result']); self.assertEqual(st['jobs'][0]['error'],'WORKFLOW_DEADLINE')
 
+    def test_discovery_queue_wait_does_not_consume_execution_allowance(self):
+        ident=self.submit(normalize_submission({'ein':'123123123','organization_name':'Discovery','kind':'discovery'},STATES))
+        with self.q.transaction() as (c,now):
+            row=c.execute('SELECT * FROM cc_lab_workflows WHERE id=%s',(ident,)).fetchone()
+            self.assertEqual(row['deadline']-row['submitted'],270)
+            c.execute('UPDATE cc_lab_workflows SET submitted=%s,deadline=%s WHERE id=%s',(now-180,now+10,ident))
+        job=self.q.claim(self.worker())
+        self.assertEqual(job['run_seconds'],90)
+        state=self.q.status('a',ident)
+        self.assertEqual(state['deadline']-state['started'],90)
+        self.assertGreaterEqual(state['queue_seconds'],180)
+
+    def test_expired_discovery_queue_cannot_start_new_execution_budget(self):
+        ident=self.submit(normalize_submission({'ein':'123123123','organization_name':'Discovery','kind':'discovery'},STATES))
+        with self.q.transaction() as (c,now):c.execute('UPDATE cc_lab_workflows SET deadline=%s WHERE id=%s',(now-1,ident))
+        self.assertIsNone(self.q.claim(self.worker()))
+        state=self.q.status('a',ident)
+        self.assertEqual(state['phase'],'expired');self.assertEqual(state['jobs'][0]['attempt'],0)
+        self.assertIsNone(state['jobs'][0]['result'])
+
+    def test_discovery_recovery_does_not_reset_execution_deadline(self):
+        ident=self.submit(normalize_submission({'ein':'123123123','organization_name':'Discovery','kind':'discovery'},STATES))
+        worker=self.worker();job=self.q.claim(worker)
+        with self.q.transaction() as (c,now):
+            deadline=now+30
+            c.execute('UPDATE cc_lab_workflows SET deadline=%s WHERE id=%s',(deadline,ident))
+        self.q.confirm_worker_stopped(worker,'Fixture: isolated process tree termination proven')
+        replacement=self.q.claim(self.worker())
+        self.assertEqual(replacement['attempt'],2)
+        self.assertLessEqual(replacement['run_seconds'],30)
+        self.assertEqual(self.q.status('a',ident)['deadline'],deadline)
+
+    def test_registration_deadlines_remain_unchanged(self):
+        for ein,mode,seconds in [('123123123','standard',900),('234234234','sales',60)]:
+            ident=self.submit(payload(ein,mode=mode))
+            with self.q.transaction() as (c,now):
+                row=c.execute('SELECT * FROM cc_lab_workflows WHERE id=%s',(ident,)).fetchone()
+            self.assertEqual(row['deadline']-row['submitted'],seconds)
+
     def test_expired_running_work_cannot_publish_late_success(self):
         ident=self.submit(); w=self.worker(); j=self.q.claim(w)
         with self.q.transaction() as (c,now): c.execute('UPDATE cc_lab_workflows SET deadline=%s WHERE id=%s',(now-1,ident))

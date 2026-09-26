@@ -97,6 +97,8 @@ class ReadinessTests(unittest.TestCase):
         root=Path(__file__).resolve().parents[1]
         old=ast.parse(subprocess.check_output(['git','show','73a262f:registry_snapshot_server.py'],cwd=root).decode())
         new=ast.parse((root/'registry_snapshot_server.py').read_text(encoding='utf-8'))
+        from testing.capacity_lab.transport_scope import remove_transport_recovery
+        remove_transport_recovery(new)
         for name in ('ny_browser_registry_response','search_ny_direct','ny_select_confirmed_duplicate',
                      'ny_safe_identity_from_evidence','apply_ny_latest_fye_next_cycle_status'):
             a=next(n for n in old.body if isinstance(n,ast.FunctionDef) and n.name==name)

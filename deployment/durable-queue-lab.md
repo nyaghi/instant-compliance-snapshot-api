@@ -478,3 +478,32 @@ source pressure or call spreadsheet agreement proof of identity. Compare state
 status, matched identity, dates, names, conservative failures and execution/queue
 time against controlled baselines. Any subsequent optimization must have its
 own configuration record and repeat trial.
+# September 25: twenty-workflow first-response findings (perf.19 candidate)
+
+The first twenty-user trial on perf.18 produced eleven usable discoveries and
+nine deadline failures. Several failed discoveries waited 75–90 seconds and
+then received less than fifteen seconds of execution. The 341 completed state
+checks preserved their control identities, dates and statuses. This partial run
+does not qualify twenty-organization capacity.
+
+Discovery now has a bounded 270-second queue allowance. Its unchanged
+90-second task execution allowance activates atomically on the first claim.
+The master collector's own 60-second source deadline is unchanged. Recovery
+does not reset execution time; expired waiting requests cannot start. Standard
+registration (900 seconds including queue), Sales (60 seconds including queue),
+state execution limits, four nodes and source caps are unchanged. Actual elapsed
+time must be reported; a larger waiting allowance is not a speed improvement.
+
+Two solo controls exposed independent headless NY transport gaps. A second
+same-EIN detail now returns through browser history to the same results page.
+A subsequent name search uses the official Clear fields button and fills only
+the requested filter: entering an empty EIN string made the portal submit
+`ein=`, which its API rejects. The existing EIN-first interpreter, duplicate
+selection, address checks and status rules remain unchanged. Customer browser
+extensions, staging and production are not modified.
+
+DC query OR predicates that are already covered by another predicate are
+removed. Generated-candidate controls and an ABBA official API comparison
+confirm an identical complete result set, including the separate same-address
+Policy Center. This reduces query complexity; it is not evidence that all
+source-side timeouts have been eliminated.

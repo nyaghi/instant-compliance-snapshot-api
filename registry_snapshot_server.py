@@ -5734,13 +5734,21 @@ def licensed_charity_failure(org, state, source, exc):
     return result
 
 
+def dc_license_query_patterns(names):
+    """Reduce redundant OR predicates without changing the union of candidates."""
+    plans = list(dict.fromkeys(tuple(re.findall(r"[A-Z0-9]+", name.upper())) for name in names))
+    plans = [p for p in plans if p]
+    def covered_by(broad, narrow):
+        iterator = iter(narrow)
+        return all(any(token == item for item in iterator) for token in broad)
+    return ["%" + "%".join(plan) + "%" for plan in plans
+            if not any(other != plan and covered_by(other, plan) for other in plans)]
+
+
 def dc_charity_records(org, deadline):
     required, generated = licensed_charity_names(org)
     clauses = []
-    for name in required + generated:
-        tokens = re.findall(r"[A-Z0-9]+", name.upper())
-        if not tokens: continue
-        pattern = "%" + "%".join(tokens) + "%"
+    for pattern in dc_license_query_patterns(required + generated):
         for field in ("ENTITYNAME", "ENTITYTRADENAME"):
             clause = f"UPPER({field}) LIKE '{pattern}'"
             if clause not in clauses: clauses.append(clause)
@@ -19556,9 +19564,22 @@ def ny_browser_registry_response(page, operation: str, params: dict, timeout: fl
         if remaining <= 0:
             raise TimeoutError("New York browser request time limit reached")
         return remaining
+    search_url = getattr(page, "_cc_ny_search_url", None)
+    if isinstance(search_url, str) and page.url != search_url:
+        # A previous detail belongs to this same verified EIN search. Use
+        # browser history so the next confirmed candidate is opened from the
+        # retained results, without clearing verification or changing filters.
+        page.go_back(wait_until="commit", timeout=remaining_ms())
+        page.wait_for_url(search_url, wait_until="commit", timeout=remaining_ms())
     if operation == "RegistrySearch":
+        page._cc_ny_search_url = page.url
+        # The official clear action restores unused controls to null. Filling
+        # an unused EIN with "" sends ein= on a later name search, which the
+        # registry rejects as HTTP 400 rather than treating as an absent filter.
+        page.get_by_role("button", name="Clear fields", exact=True).click(timeout=remaining_ms())
         for field in ("ein", "orgName", "orgID"):
-            page.locator(f"#{field}").fill(str(params.get(field) or ""), timeout=remaining_ms())
+            if field in params:
+                page.locator(f"#{field}").fill(str(params.get(field) or ""), timeout=remaining_ms())
         search = page.get_by_role("button", name="Search", exact=True)
         if not search.is_enabled():
             try:
