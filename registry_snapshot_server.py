@@ -9059,7 +9059,7 @@ def search_la_downloaded_export(page, org):
     result = checker.StateResult(org.organization_name, org.ein, "LA", "Unable to Verify", "https://www.ag.state.la.us/Charity/Registration/Listing")
     export_path = weekly_asset("LA", "downloadable-data/LA.xlsx")
     source_type, error = "deployed weekly state Excel export", ""
-    if export_path is None:
+    if export_path is None and page is not None:
         export_path, source_type, error = la_download_registered_charities_export(page)
     if not export_path:
         result.raw_status_text = "Louisiana registered charities export could not be downloaded"
@@ -22153,19 +22153,29 @@ def nh_parse_pdf_table_records(pdf_bytes: bytes) -> tuple[list[dict], str]:
     return records, updated_label
 
 
+@lru_cache(maxsize=1)
+def nh_records_from_snapshot_bytes(snapshot_bytes: bytes, pdf_digest: str) -> tuple[list[dict], str]:
+    # Cache parsing only, keyed by exact source bytes and the verified PDF.
+    # Every caller still validates current manifest freshness and both files.
+    payload = json.loads(snapshot_bytes)
+    if payload.get("source_sha256") != pdf_digest:
+        raise ValueError("NH parsed records do not match the verified source PDF")
+    records = [nh_record_from_cells(row) for row in payload["records"]]
+    if payload.get("source_record_count") != len(records) or not payload.get("updated_label"):
+        raise ValueError("NH parsed record reconciliation is missing or incomplete")
+    return records, f"{payload['updated_label']} from bundled NH PDF"
+
+
 def nh_download_live_pdf_records() -> tuple[list[dict], str]:
     # Like KY, use the validated parsed asset during checks. The master parser
     # runs during refresh, avoiding a full-document parse on the first request.
     snapshot_path = weekly_asset("NH", "downloadable-data/NH-records.json")
     if snapshot_path is not None:
-        payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
         pdf_path = weekly_asset("NH", "registered-charities.pdf")
-        if pdf_path is None or payload.get("source_sha256") != hashlib.sha256(pdf_path.read_bytes()).hexdigest():
+        if pdf_path is None:
             raise ValueError("NH parsed records do not match the verified source PDF")
-        records = [nh_record_from_cells(row) for row in payload["records"]]
-        if payload.get("source_record_count") != len(records) or not payload.get("updated_label"):
-            raise ValueError("NH parsed record reconciliation is missing or incomplete")
-        return records, f"{payload['updated_label']} from bundled NH PDF"
+        return nh_records_from_snapshot_bytes(
+            snapshot_path.read_bytes(), hashlib.sha256(pdf_path.read_bytes()).hexdigest())
     pdf_source = NH_LIVE_PDF_URL
     try:
         local_path = weekly_asset("NH", "registered-charities.pdf")
@@ -22199,6 +22209,11 @@ def nh_download_live_pdf_records() -> tuple[list[dict], str]:
 
 def nh_live_pdf_records() -> tuple[list[dict], str]:
     global NH_LIVE_PDF_RECORDS, NH_LIVE_PDF_LOADED_AT, NH_LIVE_PDF_UPDATED_LABEL
+    if weekly_asset("NH", "downloadable-data/NH-records.json") is not None:
+        records, label = nh_download_live_pdf_records()
+        if len(records) < 1000:
+            raise RuntimeError("New Hampshire PDF was empty or incomplete; registration cannot be determined")
+        return records, label
     now = time.time()
     if NH_LIVE_PDF_RECORDS is not None and now - NH_LIVE_PDF_LOADED_AT < NH_LIVE_PDF_MAX_AGE_SECONDS and weekly_asset("NH", "registered-charities.pdf") is not None:
         return NH_LIVE_PDF_RECORDS, NH_LIVE_PDF_UPDATED_LABEL
@@ -26429,6 +26444,33 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             if browser_admitted:
                 BROWSER_LOOKUP_SEMAPHORE.release()
         return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
+
+    if state == "VA" and not capture_source_snapshot:
+        # The existing Virginia path uses HTTP exclusively. Do not initialize
+        # Chromium merely to leave its blank page unused.
+        try:
+            result = search_va_direct(org)
+            body = " ".join(filter(None, [result.raw_status_text, result.source_note,
+                                          result.matched_registry_name, result.matched_registry_identifier]))
+        except Exception as exc:
+            log_error(f"{state} lookup for {format_ein(ein)} failed before completion: {exc}")
+            result = checker.StateResult(organization_name or f"EIN {format_ein(ein)}", format_ein(ein), state, "Site Not Reachable", "")
+            result.raw_status_text = "Lookup could not be completed"
+            result.source_note = "Public registry lookup could not be completed."
+            result.error = str(exc)
+            result.success = False
+        result = ensure_state_result(result, org, state)
+        return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
+
+    if state == "LA" and not capture_source_snapshot and weekly_asset("LA", "downloadable-data/LA.xlsx") is not None:
+        # A verified local export needs neither a browser nor a network request.
+        # If the asset expires/disappears between checks, the normal browser path
+        # remains the owner of live download recovery.
+        result = search_la_downloaded_export(None, org)
+        if result.success:
+            body = " ".join(filter(None, [result.raw_status_text, result.source_note,
+                                          result.matched_registry_name, result.matched_registry_identifier]))
+            return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
 
     if state == "CT":
         lookup_started = time.perf_counter()

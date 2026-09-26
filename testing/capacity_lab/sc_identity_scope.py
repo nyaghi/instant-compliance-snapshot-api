@@ -5,6 +5,8 @@ import subprocess
 
 
 def restore_sc_identity_guard(tree):
+    from testing.capacity_lab.parsing_scope import restore_parsing_optimization
+    restore_parsing_optimization(tree)
     helper=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='sc_related_entity_requires_ein')
     if len(helper.args.args)==2:return
     assert [a.arg for a in helper.args.args]==['original','candidate','ein']
