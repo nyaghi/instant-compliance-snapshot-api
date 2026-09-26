@@ -664,8 +664,10 @@ Florida transport, matching, interpretation or budgets. Florida timeouts also
 occurred with no other states running, so cross-state CPU contention is not a
 sufficient root-cause explanation.
 
-Paired lab mode comparisons now supply the same freshly discovered reviewed
-names. This explicitly differs from the unchanged customer Sales UI, which skips
-discovery. Discovery time is reported separately. Lab evidence does not qualify
-the unchanged customer UI or browser connector. No staging/production changes,
-new compute or database purchase are authorized by this revision.
+The main Sales trial uses entered name/EIN, as its unchanged customer UI does.
+Standard uses reviewed discovery names. An optional paired-input diagnostic can
+supply those reviewed names to both modes, but must be labeled as a separate
+experiment and cannot qualify current Sales behavior. Discovery time is reported
+separately. Lab evidence does not qualify the unchanged customer UI or browser
+connector. No staging/production changes, new compute or database purchase are
+authorized by this revision.
