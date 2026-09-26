@@ -1,0 +1,1318 @@
+
+
+
+
+
+
+<!DOCTYPE html>
+<!--[if lt IE 7]>      <html lang="en" class="no-js lt-ie10 lt-ie9 lt-ie8 lt-ie7"> <![endif]-->
+<!--[if IE 7]>         <html lang="en" class="no-js lt-ie10 lt-ie9 lt-ie8"> <![endif]-->
+<!--[if IE 8]>         <html lang="en" class="no-js lt-ie10 lt-ie9"> <![endif]-->
+<!--[if IE 9]>         <html lang="en" class="no-js lt-ie10"> <![endif]-->
+<!--[if gt IE 9]><!--> <html lang="en" class="no-js"> <!--<![endif]-->
+  <head>
+    <title>Charitable Organization Details</title>
+
+    <!-- Meta Tags -->
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="">
+    <meta name="author" content="">
+
+    <!-- Favicon -->
+    <link rel="shortcut icon" href="/charity/static/img/favicon.ico" type="image/x-icon" />
+
+    <!-- CSS -->
+    <link href="/charity/static/css/bootstrap.min.css" rel="stylesheet" />
+    <link href="/charity/static/css/style-v2.css" rel="stylesheet" />
+    <link href="/charity/static/css/charities.css" rel="stylesheet" />
+    <script src="/charity/static/js/modernizr-respond.js"></script>
+
+    <!--[if lt IE 9]>
+    <link href="/charity/static/css/ie.css" rel="stylesheet">
+    <![endif]-->
+
+    <script src="/charity/static/js/jquery-3.6.0.min.js"></script>
+    <script type="text/javascript">
+        // Pre-paint guard: if the temporary banner was already dismissed this session, flag <html>
+        // now (before the body renders) so CSS hides the banner from the very first paint - no flash.
+        try {
+            if (window.sessionStorage && sessionStorage.getItem('charitiesTemporaryBannerClosed') === '1') {
+                jQuery('html').addClass('temporary-banner-dismissed');
+            }
+        } catch (e) { /* sessionStorage unavailable - just show the banner */ }
+    </script>
+    <script src="/charity/static/js/scripts.js"></script>
+    <script src="/charity/static/js/global.js"></script>
+    <!--[if lte IE 7]><script src="/charity/static/js/ie-fixes.js"></script><![endif]-->
+    <script src="/charity/static/js/jquery.button-toggler.js"></script>
+    <script src="/charity/static/js/jquery.form.min.js"></script>
+    <script src="/charity/static/js/copyright.js"></script>
+    <script type="text/javascript">
+        $(function(){
+            $('.tooltips').tooltip();
+        });
+    </script>
+
+    <!-- Global site tag (gtag.js) - Google Analytics -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-4LQ8SBX9EZ"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+
+      gtag('config', 'G-4LQ8SBX9EZ');
+    </script>
+    
+    
+    
+    <script type="text/javascript">
+        /* <![CDATA[ */
+        $(document).ready(
+            function () {
+                $(document).on('click', 'a.attachment', function () {
+                    if (this.rel != '') {
+                        window.open(this.rel, '_blank');
+                    }
+                    return false;
+                });
+            }
+        );
+
+        $(window).on('load', function() {
+            if($('#payment').length){
+                $('#payment').modal('show');
+            }
+        });
+        /* ]]> */
+    </script>
+
+</head>
+
+<body onload="" onunload="" style="padding-top: 0px;">
+
+<!--[if lt IE 7]>
+<p class="chromeframe">You are using an outdated browser. <a href="http://browsehappy.com/">Upgrade your browser today</a> or <a href="http://www.google.com/chromeframe/?redirect=true">install Google Chrome Frame</a> to better experience this site.</p>
+<![endif]-->
+
+<!-- Navigation top -->
+<nav class="navbar navbar-inverse navbar-fixed-top affix" data-spy="affix">
+    <a class="skip-to-content-link" href="#main">Skip to main content</a>
+    <div class="navbar-inner">
+        <div class="container">
+            <button class="button-toggler btn btn-navbar hidden-toggler hidden-phone hidden-tablet" value="Toggle Element" data-target="#off-canvas-header" data-transition="slide" type="button">
+                <i class="icon-plus-sign"></i>
+            </button>
+            <button data-target=".nav-collapse" data-toggle="collapse" class="btn btn-navbar" type="button">
+                <span class="icon-bar"></span>
+                <span class="icon-bar"></span>
+                <span class="icon-bar"></span>
+            </button>
+            <a class="brand" href="//portal.ehawaii.gov" title="Official website of the State of Hawaii" target="_blank" rel="noopener noreferrer"><span class="ehawaii_logo">e</span><span class="ehawaii_brand">hawaii.gov</span></a>
+            <div class="nav-collapse collapse">
+                <ul class="nav pull-right" id="navigation">
+                    
+                        <li><a href="http://ag.hawaii.gov/tax/" title="Hawaii Tax and Charities website" target="_blank" rel="noopener noreferrer"><i class="icon-home"></i> Tax &amp; Charities</a></li>
+                    
+                    
+                    
+                    <!--
+                                            <li><a href="http://stayconnected.hawaii.gov" title="Stay connected at Hawaii.gov"><i class="icon-globe"></i> Stay Connected</a></li>
+
+                                            <li><a target="_blank" rel="noopener noreferrer" title="" href="https://messenger.providesupport.com/messenger/15lnfhnn7ggpt1ehjjev1e3mrn.html" class="help-chat"><i class="icon-comment"></i> Help Chat</a></li>
+                    -->
+                    <li><a href="#" class="button-toggler hidden-phone hidden-tablet" id="desktop-settings" value="Toggle Element" data-target="#off-canvas-header" data-transition="slide"><i class="icon-plus-sign"></i><span class="visually-hidden"> More</span></a></li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hidden content -->
+    <div id="off-canvas-header" class="hide off-canvas-header hidden-phone">
+        <ul class="unstyled inline settings-list">
+            <li><a href="https://portal.ehawaii.gov/government/departments-and-agencies/" title="Government Directory at Hawaii.gov" target="_blank" rel="noopener noreferrer"><i class="icon-globe"></i> Government Directory</a></li>
+            <li class="header-textsizer visible-desktop pull-right">
+                <span aria-hidden="true" data-icon="!" class="smaller-icon"></span> Text size: <a href="#" title="Smaller text size" class="decreaseFont">Smaller</a> | <a href="#" title="Reset text size" class="resetFont">Reset</a> | <a href="#" title="Larger text size" class="increaseFont">Larger</a>
+            </li>
+
+        </ul>
+    </div>
+
+</nav>
+<!-- end navigation top -->
+
+<div class="container-fluid site-wrapper">
+
+    <header class="site-header clearfix" role="banner">
+        <div class="row-fluid">
+            
+            
+            <div class="span9">
+                <div class="pull-left visible-desktop">
+                    <img src="/charity/static/img/logo.png" alt="">
+                </div>
+
+                <div class="headergroup">
+                    <p class="h1">Hawaii Charities</p>
+                    <p class="h2">Tax &amp; Charities Division, Hawaii Attorney General</p>
+                </div>
+            </div>
+
+            
+            <div class="span3">
+                <div class="charities_registered">
+                    <p class="text-center count">
+                        10958
+                    </p>
+                    <p class="text-center type">Charitable Organizations</p>
+                    <p class="text-center description">registered with the State of Hawaii</p>
+                </div>
+            </div>
+            
+            
+        </div>
+
+    </header>
+
+    
+        
+            <div id="temporary-banner" class="temporary-banner" role="alert">
+                <button type="button" class="close" data-dismiss="alert" aria-label="Close">&times;</button>
+                <i class="icon-warning-sign temporary-banner-icon" aria-hidden="true"></i>
+                <h4>Charities Amnesty Program: Extended to October 31, 2026</h4><p>Eligible charitable organizations that are behind on required filings or fees may use this amnesty period to return to compliance. Organizations that complete all required filings and satisfy program requirements by October 31, 2026, may qualify for waiver of certain late fees and penalties.</p><p><a href="/charity/static/Hawaii%20-%20Amnesty%20Period%20for%20Charitable%20Organizations.pdf" target="_blank" rel="noopener noreferrer">Learn more about eligibility and how to participate</a></p>
+            </div>
+            <script type="text/javascript">
+                (function ($) {
+                    // Remember the dismissal for the rest of this browsing session. The pre-paint
+                    // guard in <head> reads this to hide the banner before first paint on later pages.
+                    // sessionStorage is per session/tab, so a brand new session shows it again.
+                    $('#temporary-banner').on('click', '.close', function () {
+                        try { window.sessionStorage.setItem('charitiesTemporaryBannerClosed', '1'); } catch (e) { /* ignore */ }
+                    });
+                })(jQuery);
+            </script>
+        
+    
+
+    <nav class="navbar navbar-app navbar-gets-fixed">
+        <div class="navbar-inner">
+            <div class="container">
+                <div class="nav-collapse collapse">
+                    <ul class="nav pull-left" id="navigation">
+
+                        
+                        
+                            <li><a href="/charity/welcome.html" title="Hawaii Charities home"> Home</a></li>
+                            <li><a href="/charity/new-search.html"> Search</a></li>
+                            <li><a href="/charity/fein.html"> Pay Fees</a></li>
+                            <li><a href="/charity/apply-info.html"> Submit</a></li>
+                            <li><a href="/charity/help.html"> Help</a></li>
+                        
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="main" id="main">
+        
+
+
+
+
+
+<section class="white-bg padded">
+    <ul class="breadcrumb">
+        <i class="icon-search"></i>
+        <li><a href="/charity/new-search.html">New Search</a><span class="divider">/</span></li>
+        
+        <li class="active">Charity Details</li>
+    </ul>
+    <h1 class="has_status">GOOD SPORTS, INC. 
+        
+        
+    
+        <span class="badge badge-success">Status: <span>Active</span></span> </h1>
+    
+    
+    <div class="row-fluid">
+        <div class="span8">
+            <form id="organization" action="/charity/753138664/details.html" method="post">
+                
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+                    
+                        
+
+
+
+
+<section id="general_information">
+    <h2 class="lead text-legend">General Information</h2>
+    <dl class="dl_emphasis">
+        <dt>Primary Name:</dt>
+        <dd>GOOD SPORTS, INC. </dd>
+
+        <dt>FEIN:</dt>
+        <dd>75-3138664</dd>
+
+        <dt>Type:</dt>
+        <dd>
+            
+                
+                    Corporation
+                    
+                
+                
+            
+        </dd>
+
+        
+        <dt>NTEE Code(s):</dt>
+        <dd>
+        
+            N - Recreation &amp; Sports<br/>
+        
+            O - Youth Development
+        
+        </dd>
+        
+
+        <dt>Subordinate Organizations:</dt>
+        <dd>
+            
+            
+                
+            
+            --
+        </dd>
+
+        <dt>Purpose:</dt>
+        <dd>
+            
+                
+                
+                    To increase youth participation in sports, fitness and recreational programs by targeting one of the major obstacles limiting participation, access to sports equipment. Good Sports gives kids the lifelong benefits of sport and physical activity by providing new equipment, apparel and footwear to those most in need nationwide.
+                
+            
+        </dd>
+    </dl>
+</section>
+
+<section id="address">
+    <h2 class="lead text-legend">Address</h2>
+    <dl class="dl_emphasis">
+        <dt>Location Address:</dt>
+        <dd>
+            
+            
+                
+                    
+                    
+                        1515 Washington Street<br/>
+                        Suite 300
+                            <br/>
+                        
+                            
+                                Braintree,&nbsp;MA&nbsp;02184
+                            
+                            
+                        
+                    
+                
+            
+                
+            
+        </dd>
+
+        <dt>Mailing Address:</dt>
+        <dd>
+            
+                Same as the street address.
+                
+            
+        </dd>
+    </dl>
+</section>
+
+<section id="statuses">
+    <h2 class="lead text-legend">Status</h2>
+    <dl class="dl_emphasis">
+        
+            
+            
+                <dt>Registration Status:</dt>
+                <dd id="status-holder">Active</dd>
+
+                
+
+                <dt>Registration Type:</dt>
+                <dd>Registered</dd>
+            
+        
+    </dl>
+</section>
+
+<section id="other_info">
+    <h2 class="lead text-legend">Other Info</h2>
+    <dl class="dl_emphasis">
+        <dt>Other Names:</dt>
+        <dd>
+            
+            
+            
+            
+            --
+        </dd>
+        <dt>Previous Names:</dt>
+        <dd>
+            
+            
+            
+            
+            --
+        </dd>
+
+        <dt>Phone:</dt>
+        <dd>
+            
+                
+                    (617) 471-1213
+                
+                
+            
+        </dd>
+        
+        <dt>Email:</dt>
+        <dd>nonprofit.orders@nationalcorp.com</dd>
+    </dl>
+</section>
+                    
+                
+            <div>
+<input type="hidden" name="_csrf" value="d24e1607-d257-4237-a8fd-d9c711fbe20b" />
+</div></form>
+
+            
+
+            <h2><i class="icon-file"></i> Documents</h2>
+
+            
+            <ul class="nav nav-tabs">
+                
+                    <li class='active'><a
+                        href="/charity/753138664/details.html#urs_section">Registration 2014</a>
+                    </li>
+                    
+                
+                
+                    <li><a href="/charity/753138664/details.html#irs_2025">2025</a>
+                    </li>
+                
+                    <li><a href="/charity/753138664/details.html#irs_2024">2024</a>
+                    </li>
+                
+                    <li><a href="/charity/753138664/details.html#irs_2023">2023</a>
+                    </li>
+                
+                    <li><a href="/charity/753138664/details.html#irs_2022">2022</a>
+                    </li>
+                
+                    <li><a href="/charity/753138664/details.html#irs_2021">2021</a>
+                    </li>
+                
+                    <li><a href="/charity/753138664/details.html#irs_2020">2020</a>
+                    </li>
+                
+                    <li><a href="/charity/753138664/details.html#irs_2019">2019</a>
+                    </li>
+                
+                    <li><a href="/charity/753138664/details.html#irs_2018">2018</a>
+                    </li>
+                
+                    <li><a href="/charity/753138664/details.html#irs_2017">2017</a>
+                    </li>
+                
+                    <li><a href="/charity/753138664/details.html#irs_2016">2016</a>
+                    </li>
+                
+                    <li><a href="/charity/753138664/details.html#irs_2015">2015</a>
+                    </li>
+                
+                
+            </ul>
+
+            
+            <div class="tab-content underline">
+                
+                    <div class="tab-pane active" id="urs_section">
+                        <div>
+                            
+                            
+                                
+                                    <table class="table no-bottom-margin">
+                                        <thead>
+                                        <tr>
+                                            <th>Documents</th>
+                                            
+                                        </tr>
+                                        </thead>
+                                        
+                                        <tbody id="urs_docs">
+                                            
+                                                
+                                                    <tr>
+                                                        <td><a
+                                                            rel="/charity/attachments/urs/753138664/0/753138664.061516/8600762016166j227745/attachment/7531386642014aHIURS.pdf"
+                                                            class="attachment">Unified Registration Statement for Charitable Organizations</a>
+                                                            </td>
+                                                        
+                                                    </tr>
+                                                
+                                            
+                                                
+                                                    <tr>
+                                                        <td><a
+                                                            rel="/charity/attachments/urs/753138664/1/753138664.061516/8600762016166j227745/attachment/753138664a_219652_Attachment_Officers_1.pdf"
+                                                            class="attachment">Attachment_Officers_1</a>
+                                                            </td>
+                                                        
+                                                    </tr>
+                                                
+                                            
+                                                
+                                                    <tr>
+                                                        <td><a
+                                                            rel="/charity/attachments/urs/753138664/2/753138664.061516/8600762016166j227745/attachment/753138664a_219652_Attachment_OtherStatesSolicited_1.pdf"
+                                                            class="attachment">Attachment_OtherStatesSolicited_1</a>
+                                                            </td>
+                                                        
+                                                    </tr>
+                                                
+                                            
+                                                
+                                                    <tr>
+                                                        <td><a
+                                                            rel="/charity/attachments/urs/753138664/3/753138664.061516/8600762016166j227745/attachment/753138664a_219652_Attachment_Support_1.pdf"
+                                                            class="attachment">Attachment_Support_1</a>
+                                                            </td>
+                                                        
+                                                    </tr>
+                                                
+                                            
+                                                
+                                            
+                                                
+                                            
+                                                
+                                            
+                                        </tbody>
+                                    </table>
+                                
+                                
+                            
+                        </div>
+                    </div>
+                
+
+                
+                    <div class="tab-pane" id="irs_2025">
+                        <div class="row-fluid">
+                            <div class="span12">
+                                
+                                    
+                                    <div class="well">
+                                        <table class="table no-bottom-margin">
+                                            <caption>2025</caption>
+                                            <thead>
+                                            <tr>
+                                                <th>Documents</th>
+                                                
+                                            </tr>
+                                            </thead>
+                                            
+                                            <tbody id="irs_docs2025">
+                                                
+                                                    
+                                                        <tr>
+                                                            <td><a
+                                                                rel="/charity/attachments/irs/753138664/2025/0/T/753138664.082726/8600762026239m782219/attachment/753138664a_755322_Attachment_IRSForm_1.pdf"
+                                                                class="attachment">Attachment_IRSForm_1</a>
+                                                                </td>
+                                                            
+                                                        </tr>
+                                                    
+                                                
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    
+                                    
+                                
+                            </div>
+                        </div>
+                    </div>
+                
+                    <div class="tab-pane" id="irs_2024">
+                        <div class="row-fluid">
+                            <div class="span12">
+                                
+                                    
+                                    <div class="well">
+                                        <table class="table no-bottom-margin">
+                                            <caption>2024</caption>
+                                            <thead>
+                                            <tr>
+                                                <th>Documents</th>
+                                                
+                                            </tr>
+                                            </thead>
+                                            
+                                            <tbody id="irs_docs2024">
+                                                
+                                                    
+                                                        <tr>
+                                                            <td><a
+                                                                rel="/charity/attachments/irs/753138664/2024/0/T/753138664.111425/8600762025318dh22581/attachment/753138664a_696790_Attachment_IRSForm_1.pdf"
+                                                                class="attachment">Attachment_IRSForm_1</a>
+                                                                </td>
+                                                            
+                                                        </tr>
+                                                    
+                                                
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    
+                                    
+                                
+                            </div>
+                        </div>
+                    </div>
+                
+                    <div class="tab-pane" id="irs_2023">
+                        <div class="row-fluid">
+                            <div class="span12">
+                                
+                                    
+                                    <div class="well">
+                                        <table class="table no-bottom-margin">
+                                            <caption>2023</caption>
+                                            <thead>
+                                            <tr>
+                                                <th>Documents</th>
+                                                
+                                            </tr>
+                                            </thead>
+                                            
+                                            <tbody id="irs_docs2023">
+                                                
+                                                    
+                                                        <tr>
+                                                            <td><a
+                                                                rel="/charity/attachments/irs/753138664/2023/0/T/753138664.082726/8600762026239q630667/attachment/753138664b_606568_Attachment_IRSForm_2.pdf"
+                                                                class="attachment">Attachment_IRSForm_2</a>
+                                                                </td>
+                                                            
+                                                        </tr>
+                                                    
+                                                
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    
+                                    
+                                
+                            </div>
+                        </div>
+                    </div>
+                
+                    <div class="tab-pane" id="irs_2022">
+                        <div class="row-fluid">
+                            <div class="span12">
+                                
+                                    
+                                    <div class="well">
+                                        <table class="table no-bottom-margin">
+                                            <caption>2022</caption>
+                                            <thead>
+                                            <tr>
+                                                <th>Documents</th>
+                                                
+                                            </tr>
+                                            </thead>
+                                            
+                                            <tbody id="irs_docs2022">
+                                                
+                                                    
+                                                        <tr>
+                                                            <td><a
+                                                                rel="/charity/attachments/irs/753138664/2022/0/T/753138664.091423/8600762023257k554324/attachment/753138664a_531645_Attachment_IRSForm_1.pdf"
+                                                                class="attachment">Attachment_IRSForm_1</a>
+                                                                </td>
+                                                            
+                                                        </tr>
+                                                    
+                                                
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    
+                                    
+                                
+                            </div>
+                        </div>
+                    </div>
+                
+                    <div class="tab-pane" id="irs_2021">
+                        <div class="row-fluid">
+                            <div class="span12">
+                                
+                                    
+                                    <div class="well">
+                                        <table class="table no-bottom-margin">
+                                            <caption>2021</caption>
+                                            <thead>
+                                            <tr>
+                                                <th>Documents</th>
+                                                
+                                            </tr>
+                                            </thead>
+                                            
+                                            <tbody id="irs_docs2021">
+                                                
+                                                    
+                                                        <tr>
+                                                            <td><a
+                                                                rel="/charity/attachments/irs/753138664/2021/0/T/753138664.091222/8600762022255u478656/attachment/753138664a_457255_Attachment_IRSForm_1.pdf"
+                                                                class="attachment">Attachment_IRSForm_1</a>
+                                                                </td>
+                                                            
+                                                        </tr>
+                                                    
+                                                
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    
+                                    
+                                
+                            </div>
+                        </div>
+                    </div>
+                
+                    <div class="tab-pane" id="irs_2020">
+                        <div class="row-fluid">
+                            <div class="span12">
+                                
+                                    
+                                    <div class="well">
+                                        <table class="table no-bottom-margin">
+                                            <caption>2020</caption>
+                                            <thead>
+                                            <tr>
+                                                <th>Documents</th>
+                                                
+                                            </tr>
+                                            </thead>
+                                            
+                                            <tbody id="irs_docs2020">
+                                                
+                                                    
+                                                        <tr>
+                                                            <td><a
+                                                                rel="/charity/attachments/irs/753138664/2020/0/T/753138664.062921/8600762021180r404657/attachment/753138664a_384717_Attachment_IRSForm_1.pdf"
+                                                                class="attachment">Attachment_IRSForm_1</a>
+                                                                </td>
+                                                            
+                                                        </tr>
+                                                    
+                                                
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    
+                                    
+                                
+                            </div>
+                        </div>
+                    </div>
+                
+                    <div class="tab-pane" id="irs_2019">
+                        <div class="row-fluid">
+                            <div class="span12">
+                                
+                                    
+                                    <div class="well">
+                                        <table class="table no-bottom-margin">
+                                            <caption>2019</caption>
+                                            <thead>
+                                            <tr>
+                                                <th>Documents</th>
+                                                
+                                            </tr>
+                                            </thead>
+                                            
+                                            <tbody id="irs_docs2019">
+                                                
+                                                    
+                                                        <tr>
+                                                            <td><a
+                                                                rel="/charity/attachments/irs/753138664/2019/0/T/753138664.112020/8600762020322bc74250/attachment/753138664a_355014_Attachment_IRSForm_2.pdf"
+                                                                class="attachment">Attachment_IRSForm_2</a>
+                                                                </td>
+                                                            
+                                                        </tr>
+                                                    
+                                                
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    
+                                    
+                                
+                            </div>
+                        </div>
+                    </div>
+                
+                    <div class="tab-pane" id="irs_2018">
+                        <div class="row-fluid">
+                            <div class="span12">
+                                
+                                    
+                                    <div class="well">
+                                        <table class="table no-bottom-margin">
+                                            <caption>2018</caption>
+                                            <thead>
+                                            <tr>
+                                                <th>Documents</th>
+                                                
+                                            </tr>
+                                            </thead>
+                                            
+                                            <tbody id="irs_docs2018">
+                                                
+                                                    
+                                                        <tr>
+                                                            <td><a
+                                                                rel="/charity/attachments/irs/753138664/2018/0/T/753138664.101019/8600762019283p332294/attachment/753138664a_316097_Attachment_IRSForm_1.pdf"
+                                                                class="attachment">Attachment_IRSForm_1</a>
+                                                                </td>
+                                                            
+                                                        </tr>
+                                                    
+                                                
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    
+                                    
+                                
+                            </div>
+                        </div>
+                    </div>
+                
+                    <div class="tab-pane" id="irs_2017">
+                        <div class="row-fluid">
+                            <div class="span12">
+                                
+                                    
+                                    <div class="well">
+                                        <table class="table no-bottom-margin">
+                                            <caption>2017</caption>
+                                            <thead>
+                                            <tr>
+                                                <th>Documents</th>
+                                                
+                                            </tr>
+                                            </thead>
+                                            
+                                            <tbody id="irs_docs2017">
+                                                
+                                                    
+                                                        <tr>
+                                                            <td><a
+                                                                rel="/charity/attachments/irs/753138664/2017/0/T/753138664.112918/8600762018333p304731/attachment/753138664a_290883_Attachment_IRSForm_1.pdf"
+                                                                class="attachment">Attachment_IRSForm_1</a>
+                                                                </td>
+                                                            
+                                                        </tr>
+                                                    
+                                                
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    
+                                    
+                                
+                            </div>
+                        </div>
+                    </div>
+                
+                    <div class="tab-pane" id="irs_2016">
+                        <div class="row-fluid">
+                            <div class="span12">
+                                
+                                    
+                                    <div class="well">
+                                        <table class="table no-bottom-margin">
+                                            <caption>2016</caption>
+                                            <thead>
+                                            <tr>
+                                                <th>Documents</th>
+                                                
+                                            </tr>
+                                            </thead>
+                                            
+                                            <tbody id="irs_docs2016">
+                                                
+                                                    
+                                                        <tr>
+                                                            <td><a
+                                                                rel="/charity/attachments/irs/753138664/2016/0/U/753138664./attachments/irs/753138664/2016/0/U/753138664.pdf"
+                                                                class="attachment">2016.pdf</a>
+                                                                </td>
+                                                            
+                                                        </tr>
+                                                    
+                                                
+                                                    
+                                                        <tr>
+                                                            <td><a
+                                                                rel="/charity/attachments/irs/753138664/2016/0/T/753138664.092617/8600762017269n265279/attachment/753138664a_254378_Attachment_IRSForm_1.pdf"
+                                                                class="attachment">Attachment_IRSForm_1</a>
+                                                                </td>
+                                                            
+                                                        </tr>
+                                                    
+                                                
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    
+                                    
+                                
+                            </div>
+                        </div>
+                    </div>
+                
+                    <div class="tab-pane" id="irs_2015">
+                        <div class="row-fluid">
+                            <div class="span12">
+                                
+                                    
+                                    <div class="well">
+                                        <table class="table no-bottom-margin">
+                                            <caption>2015</caption>
+                                            <thead>
+                                            <tr>
+                                                <th>Documents</th>
+                                                
+                                            </tr>
+                                            </thead>
+                                            
+                                            <tbody id="irs_docs2015">
+                                                
+                                                    
+                                                        <tr>
+                                                            <td><a
+                                                                rel="/charity/attachments/irs/753138664/2015/0/T/753138664.110216/8600762016307l238013/attachment/753138664a_229172_Attachment_IRSForm_1.pdf"
+                                                                class="attachment">Attachment_IRSForm_1</a>
+                                                                </td>
+                                                            
+                                                        </tr>
+                                                    
+                                                
+                                                    
+                                                        <tr>
+                                                            <td><a
+                                                                rel="/charity/attachments/irs/753138664/2015/1/U/753138664./attachments/irs/753138664/2015/1/U/753138664.pdf"
+                                                                class="attachment">2015 Form 990.pdf</a>
+                                                                </td>
+                                                            
+                                                        </tr>
+                                                    
+                                                
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    
+                                    
+                                
+                            </div>
+                        </div>
+                    </div>
+                
+                
+            </div>
+
+            <section class="row-fluid extra-top-margin">
+                <div class="span12">
+                    
+                </div>
+            </section>
+
+            
+
+            
+            
+
+            
+            
+
+            
+            
+
+            
+            
+        </div>
+
+        
+        <div class="span4">
+            <section class="well">
+                
+                    <p class="extra-bottom-margin">
+                        <a class="btn btn-sm btn-default" href="/charity/apply-promotion.html">Submit a consent form</a>
+                    </p>
+                
+                <h3 class="lead text-legend no-top-margin">Current <abbr title="Commercial Co-Venture">CCV</abbr> Partnerships</h3>
+                
+                    
+                    
+                        <p>No current <abbr title="Commercial Co-Venture">CCV</abbr> partnerships</p>
+                        <h4 class="lead text-legend">Past <abbr title="Commercial Co-Venture">CCV</abbr> Partnerships</h4>
+                        <p>No archived <abbr title="Commercial Co-Venture">CCV</abbr> partnerships</p>
+                    
+                
+            </section>
+        </div>
+
+        
+    </div>
+</section>
+
+<script type="text/javascript">
+    $(function () {
+        var currentRowToDelete = null;
+        var currentDocumentsTab = null;
+        $('#changer').change(function () {
+            var target_div = $('#' + $(this).val());
+            target_div.siblings('ul').hide().end().fadeIn();
+        });
+
+        $('.nav-tabs a').click(function (e) {
+            e.preventDefault();
+            $(this).tab('show');
+        });
+        $('#promo_history').hide();
+        $('#history_toggle_hide').hide();
+
+        
+
+        $(".deleteConfirm").on('click', function (e) {
+            e.preventDefault();
+            $.post("/charity/exemption-delete.json",
+                {"exemptionId": ""})
+                .done(function (data) {
+                    window.location = "/charity/search.html";
+                });
+        });
+
+        $(".addAttachment").on("click", function (e) {
+            var dataspace = $(this).data('dataspace');
+            $(".dataspace").val(dataspace);
+
+            var taxyear = $(this).data('taxyear');
+            $(".taxyear").val(taxyear);
+
+            var ursfillingyear = $(this).data('ursfillingyear');
+            $(".ursfillingyear").val(ursfillingyear);
+            currentDocumentsTab = $(this).parent().parent();
+        });
+
+        function onRemoveClickFunction() {
+            currentRowToDelete = $(this).parent().parent();
+            var dataspace      = $(this).data('dataspace');
+            $(".dataspace").val(dataspace);
+
+            var taxyear = $(this).data('taxyear');
+            $(".taxyear").val(taxyear);
+
+            var ursfillingyear = $(this).data('ursfillingyear');
+            $(".ursfillingyear").val(ursfillingyear);
+
+            var formType = $(this).data('formtype');
+            $(".formtype").val(formType);
+
+            var seqnumber = $(this).data('seqnumber');
+            $(".seqnumber").val(seqnumber);
+
+            var description = $(this).data('description');
+            $("#description").text(description);
+        }
+
+        $(".removeAttachment").on("click", onRemoveClickFunction);
+
+        function attachmentsReloadedCallback(){
+            $(".removeAttachment").on("click", onRemoveClickFunction);
+            $('#uploadDoc').modal('hide');
+            $(".uploadConfirm").prop('disabled', false);
+            $('#uploadedFile').val('');
+            $('#archiveDocument').prop('checked', false);
+        }
+
+        $(".uploadConfirm").on('click', function (e) {
+            e.preventDefault();
+            $(this).prop('disabled', true);
+            $('#uploadDocForm').ajaxSubmit({
+                success: function (data) {
+                    if (data.status === 'SUCCESS' || $('html').is('.lt-ie10')) {
+                        $("#uploadError").text("");
+                        var dataspace = $(".dataspace").val();
+
+                        $.get(window.location.href, function(data){
+                            if(dataspace=="URS") {
+                                $("#urs_docs").replaceWith($(data).find("#urs_docs"));
+                            } else {
+                                var taxYear = $(".taxyear").val();
+                                $("#irs_docs"+taxYear).replaceWith($(data).find("#irs_docs"+taxYear));
+                            }
+                            attachmentsReloadedCallback();
+                            $("#notes-envelope").replaceWith($(data).find("#notes-envelope"));
+                        });
+
+                    }
+                    if (data.status === 'FAILURE') {
+                        $("#uploadError").text(data.message);
+                        $(".uploadConfirm").prop('disabled', false);
+                    }
+                },
+                error:   function (data) {
+                    $("#uploadError").text(data);
+                }
+            });
+        });
+
+        $(".cancelConfirm").on('click', function (e) {
+            e.preventDefault();
+            $('#uploadedFile').val('');
+            $('#uploadError').empty();
+        });
+
+        $(".cancelExemptionAttachmentConfirm").on('click', function (e) {
+            e.preventDefault();
+            $('#uploadedExemptionFile').val('');
+            $('#uploadExemptionError').empty();
+        });
+        $(".removeConfirm").on('click', function (e) {
+            e.preventDefault();
+
+            $('#removeDocForm').ajaxSubmit({
+                success: function (data) {
+                    if (data.status === 'SUCCESS') {
+                        $('#removeCheck').modal('hide');
+                        $("#removeError").text("");
+                        currentRowToDelete.remove();
+                        $.get(window.location.href, function(data) {
+                            $("#notes-envelope").replaceWith($(data).find("#notes-envelope"));
+                        });
+                    }
+                    if (data.status === 'FAILURE') {
+                        $("#removeError").text(data.message);
+                    }
+                },
+                error:   function (data) {
+                    $("#removeError").text(data);
+                }
+            });
+        });
+
+        $("#add-note-trigger").on('click', function (e) {
+            e.preventDefault();
+            var source = $(this).data("target");
+            var note   = $(source).val();
+            if (note !== "") {
+                if (!$(this).is(":disabled")) {
+                    $(this).prop('disabled', true);
+                    $.post('/charity/add-internal-note.json',
+                        {"fein": "753138664", "note": note},
+                        function (data, status, jqXHR) {
+                            $(source).val('');
+                            var note = data.payload;
+                            $("#internal-notes tbody").prepend('<tr><td>' + note.dateCreated + '</td><td>' + xssEscape(note.content) + '</td><td>' + note.creatorName + '</td></tr>');
+                            $("#notes-envelope").show();
+                            $("#add-note-trigger").prop('disabled', false);
+                        });
+                }
+            }
+        });
+
+        $("input.accreditors:checked").replaceWith('<i class="icon-ok"></i>');
+        $("input.accreditors").each(function (i, e) {
+            $(e).parent("label").addClass("inactive-accreditor");
+            $(e).replaceWith('<i class="icon-ok spacer"></i>');
+        });
+
+        $("#history_toggle_show").on('click', function (e) {
+            e.preventDefault();
+            $('#promo_history').show('fast');
+            $('#history_toggle_show').hide();
+            $('#history_toggle_hide').show('fast');
+        });
+
+        $("#history_toggle_hide").on('click', function (e) {
+            e.preventDefault();
+            $('#promo_history').hide();
+            $('#history_toggle_hide').hide();
+            $('#history_toggle_show').show('fast');
+        })
+
+        $(document).on('click', '.removeExemptionAddendum',
+            function(e) {
+                e.preventDefault();
+                var container = $(this).closest("tr");
+                var target = $(this).data("target");
+                var addendum = $(this).data("addendum");
+                var attachmentId = $(this).data("id");
+                $.post('/charity/addendum.json', { 'addendumType': addendum, 'attachmentId' : attachmentId, 'exemptionId': '' },
+                    function() {
+                        $(container).hide();
+                        $(target).show();
+                        $.get(window.location.href, function(data){
+                            $("#notes-envelope").replaceWith($(data).find("#notes-envelope"));
+                        });
+                    });
+            });
+
+        $(".uploadExemptionDocumentConfirm").on('click', function (e) {
+            e.preventDefault();
+            $(this).prop('disabled', true);
+            $('#uploadExemptionDocumentForm').ajaxSubmit({
+                success: function (data) {
+                    if (data.status === 'SUCCESS' || $('html').is('.lt-ie10')) {
+                        $("#uploadExemptionError").text("");
+                        $.get(window.location.href, function(data){
+                            $("#addendumsDataRefresh").replaceWith($(data).find("#addendumsDataRefresh"));
+                            $('#uploadExemptionDocument').modal('hide');
+                            $(".uploadExemptionDocumentConfirm").prop('disabled', false);
+                            $('#uploadedExemptionFile').val('');
+                            $('#archiveExemptionDocument').prop('checked', false)
+                            $("#notes-envelope").replaceWith($(data).find("#notes-envelope"));
+                        });
+                    }
+                    if (data.status === 'FAILURE') {
+                        $("#uploadExemptionError").text(data.message);
+                        $(".uploadExemptionDocumentConfirm").prop('disabled', false);
+                    }
+                },
+                error:   function (data) {
+                    $("#uploadExemptionError").text(data);
+                }
+            });
+        });
+    });
+</script>
+
+    </main>
+
+    <footer role="contentinfo" class="white-bg padding">
+
+        <div class="row-fluid">
+
+            <section class="span8">
+                <p class="lead">Tax &amp; Charities Division, Department of the Attorney General</p>
+                <address>
+                    <small>425 Queen Street • Honolulu, HI 96813<br>
+                        Phone: (808) 586-1480 </small>
+                </address>
+                <ul class="clearfix horizontal unstyled space-right bottom-margin">
+                    <li><a href="https://portal.ehawaii.gov/page/about-us/" title="Link" target="_blank" rel="noopener noreferrer">Contact</a></li>
+                    <li><a href="https://portal.ehawaii.gov/page/feedback/?applicationId=101" title="Link" target="_blank" rel="noopener noreferrer">Feedback</a></li>
+                    <li><a href="https://portal.ehawaii.gov/page/help/subscriber-account/" title="Link" target="_blank" rel="noopener noreferrer">Subscriber Services</a></li>
+                    <li class="last"><a href="https://portal.ehawaii.gov/page/terms-of-use/" title="Link" target="_blank" rel="noopener noreferrer">Terms of Use</a></li>
+                    
+                    
+                        <a href="/charity/login.html">Admin Login</a>
+                    
+
+                </ul>
+            </section>
+
+            <section class="span4 text-right">
+                <p class="lead">Copyright &copy; <span id="copyright_year_start">2014</span><span class="copyright_year_current"></span>
+                <small>State of Hawaii. All rights reserved.<br>
+                    An Equal Opportunity Employer.</small>
+                <div>
+                    <span class="gray">Powered by </span> <a href=" https://www.tylertech.com" target="_blank" rel="noopener noreferrer">Tyler Technologies</a>
+                </div>
+            </section>
+
+        </div>
+
+
+    </footer>
+
+</div> <!-- /container -->
+
+<div class="modal hide fade signin-modal" id="signin-modal">
+    <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h3>Login</h3>
+    </div>
+    <div class="modal-body">
+        <div class="row-fluid">
+            <div class="span12">
+                <input type="text" name="username" id="username" class="span12 logins" placeholder="Username">
+            </div>
+        </div>
+        <div class="row-fluid">
+            <div class="span12">
+                <input type="password" name="password" id="password" class="span12 logins" placeholder="Password">
+            </div>
+        </div>
+        <div class="row-fluid">
+            <div class="span12">
+                <a href="#" class="small">Forgot Password?</a>
+            </div>
+        </div>
+
+        <div class="row-fluid">
+            <div class="span12">
+                <a class="pull-left btn btn-info btn-large" href="solicitor/"><i class="icon-lock icon-white"></i> Sign In</a>
+                <button class="pull-right btn btn-large"><i class="icon-edit"></i> Register</button>
+            </div>
+        </div>
+
+
+    </div>
+</div>
+
+
+<script type="text/javascript">
+    /* <![CDATA[ */
+    var gaJsHost = (("https:" == document.location.protocol) ? "https://ssl." : "http://www.");
+    document.write(unescape("%3Cscript src='" + gaJsHost + "google-analytics.com/ga.js' type='text/javascript'%3E%3C/script%3E"));
+    /* ]]> */
+</script>
+<script type="text/javascript">
+    /* <![CDATA[ */
+    try {
+        var pageTracker = _gat._getTracker("UA-939376-1");
+        pageTracker._trackPageview();
+    } catch(err) {}
+    /* ]]> */
+</script>
+<script type="text/javascript">
+    $(document).ready(function () {
+        copyrightYear();
+    });
+</script>
+</body>
+</html>

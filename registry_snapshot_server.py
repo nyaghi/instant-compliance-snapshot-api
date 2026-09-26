@@ -2395,7 +2395,7 @@ def identity_irs_historical_names(ein: str, latest_object_id: str, deadline: flo
             "historical_note": "Up to three oldest available electronic IRS filer headers checked for former names; this is not an exhaustive name history."}
 
 
-def identity_irs_names(ein: str, deadline: float, *, metadata_only: bool = False) -> dict:
+def identity_irs_names(ein: str, deadline: float, *, metadata_only: bool = False, latest_only: bool = False) -> dict:
     api_url = f"https://projects.propublica.org/nonprofits/api/v2/organizations/{ein}.json"
     payload = json.loads(identity_fetch(api_url, deadline))
     org = payload.get("organization") or {}
@@ -2431,6 +2431,9 @@ def identity_irs_names(ein: str, deadline: float, *, metadata_only: bool = False
             result["note"] = "The latest available Form 990 discloses no DBA in its DBA field; other sources may list alternate names."
     except Exception:
         result["limitation"] = "IRS organization name checked; the latest Form 990 header could not be confirmed."
+    if latest_only:
+        result["scope_note"] = "Current IRS metadata and latest available filer header; historical filings were not searched."
+        return result
     try:
         history = identity_irs_historical_names(ein, object_id, min(deadline - 0.2, time.monotonic() + 26.0))
         result["names"].extend(history.pop("names")); result.update(history)
@@ -2454,22 +2457,27 @@ def sales_identity_evidence(organization_name: str, ein: str) -> dict:
         raise ValueError("Sales identity requires a valid EIN")
     started = time.monotonic()
     deadline = started + 6.0
+    # Oregon reads the already validated local extract only; it makes no live
+    # source request and therefore needs no extra registry permit.
     collectors = {"CO": lambda: identity_co_names(requested, deadline),
-                  "IRS": lambda: identity_irs_names(requested, deadline, metadata_only=True)}
-    executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="sales-identity")
+                  "IRS": lambda: identity_irs_names(requested, deadline, latest_only=True),
+                  "OR": lambda: identity_or_names(requested, deadline)}
+    executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="sales-identity")
     futures = {source: executor.submit(fn) for source, fn in collectors.items()}
     sources, errors = {}, {}
     try:
         for source, future in futures.items():
             try:
                 sources[source] = future.result(timeout=max(.001, deadline-time.monotonic()))
+                if sources[source].get("complete") is False:
+                    errors[source] = "Incomplete identity evidence"
             except Exception as exc:
                 errors[source] = type(exc).__name__
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
     return {"state": "@sales_identity", "ein": requested, "app_version": APP_VERSION,
             "sources": sources, "errors": errors, "seconds": time.monotonic()-started,
-            "scope": "Current IRS metadata and Colorado EIN records; limited identity assistance, not full discovery."}
+            "scope": "Current IRS metadata/latest filer header, Colorado EIN records and the validated Oregon extract; limited identity assistance, not full discovery."}
 
 
 def sales_names_from_evidence(ein: str, evidence: dict) -> list[str]:
@@ -2479,7 +2487,7 @@ def sales_names_from_evidence(ein: str, evidence: dict) -> list[str]:
             or evidence.get("ein") != canonical_ein_digits(ein)):
         raise ValueError("Sales identity evidence does not belong to this lookup")
     names = []
-    for source in ("CO", "IRS"):
+    for source in ("CO", "IRS", "OR"):
         for item in (evidence.get("sources", {}).get(source) or {}).get("names", []):
             if item.get("verified") is True and not item.get("identity_conflict") and item.get("evidence"):
                 names.append(item["name"])
@@ -2492,7 +2500,7 @@ def sales_result_with_identity(result: dict, evidence: dict) -> dict:
     names = sales_names_from_evidence(result.get("ein", ""), evidence)
     result["sales_identity"] = {"names": names, "errors": evidence.get("errors", {}),
                                "scope": evidence.get("scope"), "seconds": evidence.get("seconds")}
-    note = "This Sales check included names confirmed against the same EIN in current IRS metadata or Colorado records."
+    note = "This Sales check included names confirmed against the same EIN in current IRS metadata, the latest filer header, Colorado records or the latest validated Oregon extract. Oregon names retain their source refresh date; time-sensitive changes should be confirmed with the registry."
     if names:
         result["comments"] = (str(result.get("comments") or "") + " " + note).strip()
     # Source failure is not a completed negative identity search. Name-only
@@ -14970,6 +14978,55 @@ def hi_submit_completed_search(page, name, fein, deadline):
             page.reload(wait_until="domcontentloaded", timeout=remaining_ms())
 
 
+
+def hi_direct_details_from_source(org, source: str, url: str):
+    """Accept a complete, same-EIN public detail document; otherwise use search."""
+    if not re.search(r"</html\s*>", source, re.I) or not re.search(r"<h2[^>]*>.*?Documents.*?</h2>", source, re.I | re.S):
+        return None
+    pairs = [(sc_html_to_text(key).strip().rstrip(":"), sc_html_to_text(value).strip())
+             for key, value in re.findall(r"<dt\b[^>]*>(.*?)</dt>\s*<dd\b[^>]*>(.*?)</dd>", source, re.S | re.I)]
+    fields = dict(pairs)
+    if any(sum(key == label for key, _ in pairs) != 1 for label in ("FEIN", "Primary Name", "Registration Status", "Registration Type")):
+        return None
+    if len(canonical_ein_digits(org.ein)) != 9 or canonical_ein_digits(fields.get("FEIN", "")) != canonical_ein_digits(org.ein):
+        return None
+    name = useful_registry_name(fields.get("Primary Name", ""))
+    status = fields.get("Registration Status", "")
+    kind = fields.get("Registration Type", "")
+    if not name or not status or not kind:
+        return None
+    # Preserve public document text, excluding code/styles. No script payload,
+    # missing page or HTTP failure can establish a registration status.
+    markup = re.sub(r"<(script|style|noscript)\b[^>]*>.*?</\1\s*>", "", source, flags=re.I | re.S)
+    markup = re.sub(r"</(?:div|p|dt|dd|li|h[1-6]|tr|section)>|<br\s*/?>", "\n", markup, flags=re.I)
+    body = "\n".join(filter(None, (sc_html_to_text(line).strip() for line in markup.splitlines())))
+    result = checker.StateResult(org.organization_name, org.ein, "HI", status, url)
+    result.raw_status_text = f"Registration Status: {status} | Registration Type: {kind}"
+    result.matched_registry_name = name
+    result.matched_registry_identifier = fields["FEIN"]
+    result.source_note = "Hawaii detail page confirmed the requested FEIN exactly; registration status and filings are from the Hawaii detail page."
+    result.success = True
+    if not hi_indicates_exempt_registration(body):
+        # The existing filing reader uses only content() and url. Keep its tax
+        # year, attachment, IRS fallback and incomplete-document rules intact.
+        document = SimpleNamespace(content=lambda: source, url=url)
+        annotate_irs_based_state_period(result, hi_public_filing_period(document, org.ein))
+    return result, body
+
+
+def search_hi_direct_details(org):
+    digits = canonical_ein_digits(org.ein)
+    if len(digits) != 9:
+        return None
+    url = f"https://charity.ehawaii.gov/charity/{digits}/details.html"
+    try:
+        source = identity_fetch(url, time.monotonic()+8, headers={"Accept": "text/html"}).decode("utf-8", "replace")
+        return hi_direct_details_from_source(org, source, url)
+    except Exception:
+        # A missing direct URL is not a completed no-match search. The existing
+        # EIN-first/name-fallback browser workflow remains the fallback.
+        return None
+
 def search_hi_precise(page, org):
     url = "https://charity.ehawaii.gov/charity/new-search.html"
     result = checker.StateResult(org.organization_name, org.ein, "HI", checker.STATUS_UNKNOWN, url)
@@ -26539,6 +26596,12 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             result.success = False
         result = ensure_state_result(result, org, state)
         return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
+
+    if state == "HI" and not capture_source_snapshot:
+        direct = search_hi_direct_details(org)
+        if direct is not None:
+            result, body = direct
+            return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
 
     sc_official_checked = state == "SC" and not capture_source_snapshot
     sc_official_result = None

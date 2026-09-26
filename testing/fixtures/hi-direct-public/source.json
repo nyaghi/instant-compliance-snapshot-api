@@ -1,0 +1,16 @@
+[
+  {
+    "file": "541517707.html",
+    "source_url": "https://charity.ehawaii.gov/charity/541517707/details.html",
+    "retrieved": "2026-09-26",
+    "sha256": "37b5b29fb3aad883ad3a1e9b6f193d61ebb84508ebde107e681907d61eb7d01d",
+    "purpose": "Public raw HTML used only in transport/parser regression. Runtime has no organization-specific records."
+  },
+  {
+    "file": "good-sports-detail.html",
+    "source_url": "https://charity.ehawaii.gov/charity/753138664/details.html",
+    "retrieved": "2026-09-26",
+    "sha256": "2cee0c423c7789094e9756f220b0b665dfd6d6cae8716b0f370d5f17cea5a421",
+    "purpose": "Public raw HTML used only in transport/parser regression. Runtime has no organization-specific records."
+  }
+]

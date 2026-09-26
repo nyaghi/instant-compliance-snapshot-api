@@ -739,3 +739,9 @@ staging frontend changes, or production changes are included. This candidate
 requires the queue integration, isolation, deadline, live issue-control and
 all-state comparison tests before promotion. The staging Sales disclaimer must
 be reviewed if this candidate is later explicitly promoted; staging is untouched.
+
+
+Hawaii public detail transport optimization (lab candidate, September 26):
+The master first reads the public EIN-addressed detail HTML. It requires a complete document, unique mandatory labels and an exact requested FEIN, then calls the existing filing-period parser and shared response formatter. A missing, mismatched or incomplete page falls back to the original browser workflow, never a negative conclusion. Source screenshots continue to use the browser. This changes transport only and must pass the retained all-state status, identity and date controls before promotion.
+
+Sales identity assistance also retains the latest IRS filer header and names from the already validated local Oregon extract. This addresses metadata truncation without weakening name matching. Oregon makes no live source requests in this preparation, so only the existing CO/IRS permits are reserved. All three collectors share the same six-second budget within Sales 60 seconds. Incomplete required identity evidence makes name-only negative conclusions inconclusive.

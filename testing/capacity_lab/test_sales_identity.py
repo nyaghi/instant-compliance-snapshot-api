@@ -20,6 +20,17 @@ def evidence(**extra):
             'errors':{},**extra}
 
 class SalesIdentityTests(unittest.TestCase):
+    def setUp(self):
+        self.oregon=patch.object(m,'identity_or_names',return_value={'complete':True,'names':[]})
+        self.oregon.start();self.addCleanup(self.oregon.stop)
+
+    def test_local_oregon_registered_name_survives_metadata_truncation(self):
+        with patch.object(m,'identity_or_names',return_value={'complete':True,'names':[candidate('Full Registered Legal Name')]}), \
+             patch.object(m,'identity_co_names',return_value={'complete':True,'names':[]}), \
+             patch.object(m,'identity_irs_names',return_value={'complete':True,'names':[candidate('Truncated Legal')]}):
+            r=m.sales_identity_evidence('Entered',EIN)
+        self.assertEqual(m.sales_names_from_evidence(EIN,r),['Truncated Legal','Full Registered Legal Name'])
+
     def test_irs_metadata_does_not_fetch_filings_and_rejects_wrong_ein(self):
         payload={'organization':{'ein':EIN,'name':'Legal Name','latest_object_id':'202543019349300749','city':'Chicago','state':'IL'}}
         with patch.object(m,'identity_fetch',return_value=json.dumps(payload).encode()), \
@@ -35,6 +46,27 @@ class SalesIdentityTests(unittest.TestCase):
             r=m.identity_irs_names(EIN,time.monotonic()+2,metadata_only=True)
         self.assertEqual([n['name'] for n in r['names']],['Local Chapter'])
 
+    def test_latest_header_preserves_full_name_without_history_fetch(self):
+        payload={'organization':{'ein':EIN,'name':'Truncated Legal Name','latest_object_id':'202543019349300749'}}
+        with patch.object(m,'identity_fetch',return_value=json.dumps(payload).encode()), \
+             patch.object(m,'irs_return_header',return_value={'names':[candidate('Complete Legal Name From Filer')],'dba_disclosed':False}) as header, \
+             patch.object(m,'identity_irs_historical_names',side_effect=AssertionError('No history for Sales')):
+            r=m.identity_irs_names(EIN,time.monotonic()+2,latest_only=True)
+        self.assertTrue(r['complete'])
+        self.assertEqual([n['name'] for n in r['names']],['Truncated Legal Name','Complete Legal Name From Filer'])
+        self.assertFalse(header.call_args.kwargs['require_period'])
+
+    def test_header_failure_keeps_metadata_but_marks_identity_incomplete(self):
+        payload={'organization':{'ein':EIN,'name':'Metadata Name','latest_object_id':'202543019349300749'}}
+        with patch.object(m,'identity_fetch',return_value=json.dumps(payload).encode()), \
+             patch.object(m,'irs_return_header',side_effect=TimeoutError('unfinished')), \
+             patch.object(m,'identity_co_names',return_value={'complete':True,'names':[]}):
+            r=m.sales_identity_evidence('Entered name',EIN)
+        self.assertEqual(r['errors'],{'IRS':'Incomplete identity evidence'})
+        self.assertEqual(m.sales_names_from_evidence(EIN,r),['Metadata Name'])
+        result=m.sales_result_with_identity({'ein':EIN,'state':'DC','status':'Not Registered'},r)
+        self.assertEqual(result['status'],'Unable to Confirm')
+
     def test_collectors_are_parallel_bounded_and_partial_evidence_survives(self):
         calls=[]
         def co(ein,deadline):
@@ -46,7 +78,7 @@ class SalesIdentityTests(unittest.TestCase):
         self.assertEqual(r['ein'],EIN);self.assertEqual(r['errors'],{'IRS':'TimeoutError'})
         self.assertEqual(m.sales_names_from_evidence(EIN,r),['Former Legal Name'])
         self.assertLess(r['seconds'],1);self.assertEqual(calls[0][2],calls[1][2])
-        self.assertLessEqual(calls[0][2]-start,6.1);self.assertTrue(calls[1][3]['metadata_only'])
+        self.assertLessEqual(calls[0][2]-start,6.1);self.assertTrue(calls[1][3]['latest_only'])
 
     def test_verified_ein_and_version_fences(self):
         for extra in ({'ein':'987654321'},{'app_version':'old'},{'state':'CO'}):

@@ -3,7 +3,7 @@ import ast
 from pathlib import Path
 import subprocess
 
-CHANGED = {'identity_irs_names', 'sales_identity_evidence', 'sales_names_from_evidence', 'sales_result_with_identity', 'search_sc_resilient', 'load_ks_weekly_checker', 'distinctive_match_tokens', '_cached_distinctive_match_tokens', 'nh_records_from_snapshot_bytes', 'nh_download_live_pdf_records',
+CHANGED = {'hi_direct_details_from_source', 'search_hi_direct_details', 'identity_irs_names', 'sales_identity_evidence', 'sales_names_from_evidence', 'sales_result_with_identity', 'search_sc_resilient', 'load_ks_weekly_checker', 'distinctive_match_tokens', '_cached_distinctive_match_tokens', 'nh_records_from_snapshot_bytes', 'nh_download_live_pdf_records',
            'nh_live_pdf_records', 'run_state_lookup', 'search_la_downloaded_export'}
 
 def restore_parsing_optimization(tree):
@@ -13,4 +13,4 @@ def restore_parsing_optimization(tree):
                    cwd=Path(__file__).resolve().parents[2]).decode('utf-8'))
     originals = {n.name: n for n in old.body if isinstance(n, ast.FunctionDef)}
     tree.body = [originals.get(n.name, n) if isinstance(n, ast.FunctionDef) and n.name in CHANGED else n
-                 for n in tree.body if not (isinstance(n, ast.FunctionDef) and n.name in {'nh_records_from_snapshot_bytes', '_cached_distinctive_match_tokens', 'sales_identity_evidence', 'sales_names_from_evidence', 'sales_result_with_identity'})]
+                 for n in tree.body if not (isinstance(n, ast.FunctionDef) and n.name in {'hi_direct_details_from_source', 'search_hi_direct_details', 'nh_records_from_snapshot_bytes', '_cached_distinctive_match_tokens', 'sales_identity_evidence', 'sales_names_from_evidence', 'sales_result_with_identity'})]
