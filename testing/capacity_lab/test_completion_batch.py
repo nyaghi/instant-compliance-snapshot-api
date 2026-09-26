@@ -67,6 +67,15 @@ class FloridaTraceTests(unittest.TestCase):
         self.assertNotIn('secret', str(trace.events))
         trace.request('request', object())  # Malformed observation cannot raise.
 
+    def test_assets_cannot_exhaust_document_trace_or_hide_attempt_end(self):
+        trace=FloridaTrace()
+        asset=SimpleNamespace(url='https://registry.example/font.woff',method='GET',resource_type='font')
+        for _ in range(600):trace.request('request',asset)
+        self.assertEqual(trace.events,[])
+        for _ in range(600):trace.record('request')
+        self.assertEqual(len(trace.events),512)
+        trace.record('attempt_return');self.assertEqual(trace.events[-1]['event'],'attempt_return')
+
     def test_restores_master_wrapper_on_success_and_failure(self):
         original = Mock(return_value='result')
         master = SimpleNamespace(APP_VERSION='test', SUPPORTED_STATES=['FL'], search_fl=original,

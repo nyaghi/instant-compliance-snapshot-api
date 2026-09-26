@@ -26453,12 +26453,6 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             ]).strip()
             return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
 
-    if state == "FL":
-        lookup_started = time.perf_counter()
-        reachable, preflight_note = quick_registry_preflight(FL_CHECK_A_CHARITY_URL, FL_PREFLIGHT_TIMEOUT_SECONDS)
-        if not reachable:
-            print(f"FL preflight did not respond; continuing to bounded browser lookup: {preflight_note}", flush=True)
-
     result = None
     lookup_started = time.perf_counter()
     browser_admitted = BROWSER_LOOKUP_SEMAPHORE.acquire(timeout=BROWSER_LOOKUP_ACQUIRE_SECONDS)

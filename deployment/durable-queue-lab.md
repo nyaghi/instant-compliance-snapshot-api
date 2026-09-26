@@ -671,3 +671,22 @@ experiment and cannot qualify current Sales behavior. Discovery time is reported
 separately. Lab evidence does not qualify the unchanged customer UI or browser
 connector. No staging/production changes, new compute or database purchase are
 authorized by this revision.
+
+## perf.26: remove the redundant Florida advisory request
+
+The perf.25 Florida-only 20-organization trial matched all 20 control statuses
+and identifiers. One record nevertheless needed two attempts: its first POST
+and subsequent GETs received no document response before timing out. The gap
+before recovery also contained a redundant availability probe with a 15-second
+timeout. That probe never gated execution: both success and failure proceeded
+to the same browser lookup. Removing it avoids this extra request/wait on every
+attempt. It does not establish that external response stalls have been fixed.
+
+The actual search, certificate verification/recovery, query order, alias and
+address checks, interpretation, confirmation and per-state budgets are unchanged.
+Only the probe is removed from the master; a full-master AST control verifies
+that scope, alongside current, negative and unavailable-path controls. Florida
+diagnostics now retain document requests only so fonts/images cannot exhaust
+the trace before a slow recovery. Sales still rejects all results after 60
+seconds. Existing queue/database controls remain applicable because those
+modules are unchanged from the 49-test perf.25 PostgreSQL run.

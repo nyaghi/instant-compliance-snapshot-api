@@ -18,12 +18,13 @@ class FloridaTrace:
         self.events = []
 
     def record(self, event, **details):
-        if len(self.events) < 512:
+        if len(self.events) < 512 or event.startswith('attempt'):
             self.events.append({'seconds': round(time.monotonic()-self.started, 3),
                                 'event': event, **details})
 
     def request(self, event, request, **details):
         try:
+            if request.resource_type != 'document': return
             url = urlsplit(request.url)
             self.record(event, request_id=id(request), host=url.hostname, path=url.path,
                         method=request.method, resource_type=request.resource_type, **details)

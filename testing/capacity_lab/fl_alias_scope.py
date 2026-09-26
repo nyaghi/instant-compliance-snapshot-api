@@ -5,6 +5,7 @@ import subprocess
 
 
 def remove_fl_alias_guard(tree):
+    restore_fl_redundant_preflight(tree)
     helper=next((n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='fl_reviewed_alias_address'),None)
     if helper is None:return
     tree.body.remove(helper)
@@ -22,3 +23,15 @@ def remove_fl_alias_guard(tree):
             assert any(label in ast.unparse(node.test) for label in ['cross_state_name_address','FL_ALIAS_IDENTITY_UNCONFIRMED'])
             fn.body.remove(node);removed.append(node)
     assert len(removed)==2
+
+
+def restore_fl_redundant_preflight(tree):
+    """Normalize only the deleted, non-decision-making FL probe for old guards."""
+    fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='run_state_lookup')
+    if any(isinstance(n,ast.If) and ast.unparse(n.test)=="state == 'FL'" for n in fn.body):return
+    old=ast.parse(subprocess.check_output(['git','show','8967853:registry_snapshot_server.py'],
+        cwd=Path(__file__).resolve().parents[2]).decode('utf-8'))
+    prior=next(n for n in old.body if isinstance(n,ast.FunctionDef) and n.name=='run_state_lookup')
+    probe=next(n for n in prior.body if isinstance(n,ast.If) and ast.unparse(n.test)=="state == 'FL'")
+    anchor=next(i for i,n in enumerate(fn.body) if isinstance(n,ast.Assign) and ast.unparse(n)=='result = None')
+    fn.body.insert(anchor,probe)
