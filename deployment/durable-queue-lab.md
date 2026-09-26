@@ -747,3 +747,17 @@ The master first reads the public EIN-addressed detail HTML. It requires a compl
 Sales identity assistance also retains the latest IRS filer header and names from the already validated local Oregon extract. This addresses metadata truncation without weakening name matching. Oregon makes no live source requests in this preparation, so only the existing CO/IRS permits are reserved. All three collectors share the same six-second budget within Sales 60 seconds. Incomplete required identity evidence makes name-only negative conclusions inconclusive.
 
 Ohio transport candidate (September 26): reuse the existing exact-EIN form response validation for the master status check and discovery. A complete selected-EIN table and matching detail header can use public HTML directly. The original status/filing interpretation statements are moved unchanged into one shared function used by both paths. Missing, ambiguous, incomplete and no-table responses retain browser fallback; source capture is unchanged.
+
+
+### Phase 36: West Virginia public response reuse (lab only)
+
+- Existing WV public name-search form and selected detail are fetched without
+  initializing Chromium or executing its unrelated portal scripts. All alias,
+  ranking, short-name identity, status and date interpretation stays in the
+  same master function. Static HTML rating defaults are explicitly checked
+  against the public page ready handler before posting unrestricted searches.
+- Complete single-page row counts and selected detail ID must agree. Negative,
+  paginated, incomplete and failed direct responses retain browser fallback.
+  Source capture always retains the original browser path.
+- Browser fallback reads the same visible result cells in one bounded snapshot.
+- No worker, source-permit, queue, pricing or 60-second Sales deadline changes.

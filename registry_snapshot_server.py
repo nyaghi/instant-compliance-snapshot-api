@@ -25454,7 +25454,137 @@ checker.registry_candidate_fields = registry_candidate_fields
 checker.md_prefer_active_entry_body = md_prefer_active_entry_body
 
 
-def search_wv_precise(page, org):
+def registry_table_text_snapshot(rows, limit: int, columns: tuple[int, ...]) -> list:
+    """Read bounded visible cell text in one browser round trip.
+
+    Selection and interpretation remain with the caller. Missing cells remain
+    explicit, and an unreadable response is never a completed negative lookup.
+    """
+    values = rows.evaluate_all("""(rows, options) => rows.slice(0, options.limit).map((row, index) => {
+        const cells = row.querySelectorAll('td');
+        return {index, count: cells.length, values: options.columns.map(column =>
+            column < cells.length ? cells[column].innerText : null)};
+    })""", {"limit": limit, "columns": list(columns)})
+    if (not isinstance(values, list) or len(values) > limit or any(
+            not isinstance(row, dict) or row.get("index") != index
+            or not isinstance(row.get("count"), int) or row["count"] < 0
+            or not isinstance(row.get("values"), list) or len(row["values"]) != len(columns)
+            or any(not isinstance(value, str) if column < row["count"] else value is not None
+                   for column, value in zip(columns, row["values"]))
+            for index, row in enumerate(values))):
+        raise ValueError("Registry table text was incomplete")
+    return values
+
+
+class WestVirginiaPublicLookup:
+    """Read the registry's existing public form and detail responses.
+
+    This transport does not select a candidate or interpret its status. The
+    master WV rules below still own aliases, ranking and detail confirmation.
+    """
+    def __init__(self, deadline):
+        self.deadline = deadline
+        self.body = ""
+        self.opener = urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+
+    @staticmethod
+    def text(source):
+        source = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", "", source, flags=re.I|re.S)
+        source = re.sub(r"</(?:div|label|tr|td|p|h[1-6])\s*>|<br\b[^>]*>", "\n", source, flags=re.I)
+        text = html.unescape(re.sub(r"<[^>]+>", "", source))
+        lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
+        # The registry's heading is uppercased by CSS in the browser. Preserve
+        # its label and the block boundaries required by the existing date reader.
+        return "\n".join("CHARITIES DETAILS" if line == "Charities Details" else line for line in lines if line)
+
+    def read(self, path, fields=None):
+        if path not in {"Search", "CharitiesInformation"}:
+            raise ValueError("Unexpected West Virginia public form")
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("West Virginia public response budget exhausted")
+        url = "https://erls.wvsos.gov/OnlineCharitiesSearch/" + path
+        request = urllib.request.Request(url,
+            data=urlencode(fields).encode("utf-8") if fields is not None else None,
+            headers={"User-Agent": BROWSER_USER_AGENT, "Accept-Encoding": "identity"})
+        with self.opener.open(request, timeout=min(8.0, remaining)) as response:
+            if response.status != 200 or response.url != url:
+                raise ValueError("West Virginia public response was not the requested page")
+            body = response.read(2_000_001)
+            if len(body) > 2_000_000 or time.monotonic() >= self.deadline:
+                raise TimeoutError("West Virginia public response was incomplete")
+            source = body.decode(response.headers.get_content_charset() or "utf-8", "replace")
+        if not re.search(r"</html\s*>", source, re.I):
+            raise ValueError("West Virginia public document was incomplete")
+        self.body = self.text(source)
+        return source
+
+    def search(self, query):
+        source = self.read("Search")
+        form = re.search(r'<form\b[^>]*id=["\']frm_Search["\'][^>]*>(.*?)(?:</form>|</section>)', source, re.I|re.S)
+        if not form or 'CharitiesSearch-CharitiesSearch_txtName' not in form[1]:
+            raise ValueError("West Virginia public search form was incomplete")
+        # These are the page's documented ready-handler defaults, including
+        # 'All' rating options inserted by its JavaScript. Never use the first
+        # static rating option (Gold), which would silently narrow the search.
+        for field in ("ddlCharityRatingNational", "ddlCharityRatingWV"):
+            if not re.search(r"\$\('#" + field + r"'\)\.prepend\(new Option\(\"All\", \"\"\)\)\.val\(\"\"\)", source):
+                raise ValueError("West Virginia public search defaults changed")
+        fields = html_hidden_inputs(form[1])
+        if not fields.get("__RequestVerificationToken"):
+            raise ValueError("West Virginia public form verification field was missing")
+        for tag in re.findall(r'<(?:input|select)\b[^>]*>', form[1], re.I):
+            name = re.search(r'\bname=["\']([^"\']+)["\']', tag, re.I)
+            if name and not re.search(r'\btype=["\'](?:button|submit|hidden)["\']', tag, re.I):
+                fields[name[1]] = ""
+        fields.update({"ddlType": "1", "CharitiesSearch-CharitiesSearch_txtName": query})
+        source = self.read("Search", fields)
+        message = html_hidden_inputs(source).get("hdnMessage", "")
+        if message == "No records found with your search criteria.":
+            return message, []
+        tables = re.findall(r'<table\b[^>]*\bid=["\']xhtml_grid["\'][^>]*>(.*?)</table>', source, re.I|re.S)
+        page = re.search(r"Page\s+1\s+of\s+1,\s+records\s+1\s+to\s+(\d+)\s+of\s+(\d+)", self.body)
+        if len(tables) != 1 or not page or page[1] != page[2] or int(page[1]) > 100:
+            raise ValueError("West Virginia public result table was incomplete or paginated")
+        if "$.submitForm('/OnlineCharitiesSearch/CharitiesInformation', { CharitiesId: id })" not in source:
+            raise ValueError("West Virginia detail navigation changed")
+        records = []
+        for row in re.findall(r'<tr\b[^>]*>(.*?)</tr>', tables[0], re.I|re.S):
+            cells = re.findall(r'<td\b[^>]*>(.*?)</td>', row, re.I|re.S)
+            if not cells:
+                continue
+            target = re.findall(r"\bonclick=[\"']NavigateLienInfo\((\d+)\)[\"']", row)
+            if len(cells) != 5 or len(target) != 1:
+                raise ValueError("West Virginia public result row was incomplete")
+            values = [html_to_text(cells[index]) for index in (0, 1, 4)]
+            if not all(values) or not re.fullmatch(r"[A-Z]?\d{1,20}", values[0]):
+                raise ValueError("West Virginia public result row had no identity")
+            records.append({"index": len(records), "count": 5, "values": values, "target": target[0]})
+        if len(records) != int(page[1]):
+            raise ValueError("West Virginia public result row count did not reconcile")
+        return self.body, records
+
+    def detail(self, target, identifier):
+        if not str(target).isdigit() or not re.fullmatch(r"[A-Z]?\d{1,20}", str(identifier)):
+            raise ValueError("West Virginia selected identifier was malformed")
+        self.read("CharitiesInformation", {"CharitiesId": target})
+        if not re.search(r"\bID:\s*" + re.escape(identifier) + r"\s+Initial Registration Date:", self.body):
+            raise ValueError("West Virginia detail identifier did not match the selected row")
+        return self.body
+
+
+def search_wv_public_details(org):
+    lookup = WestVirginiaPublicLookup(time.monotonic() + 16.0)
+    result = search_wv_precise(None, org, public_lookup=lookup)
+    # Keep the established browser completion path for negative searches,
+    # incomplete data and any unexpected public-page format.
+    if not result.success or public_status(result) == "Not Registered":
+        return None
+    return result, lookup.body
+
+
+def search_wv_precise(page, org, *, public_lookup=None):
     result = checker.StateResult(
         org.organization_name,
         org.ein,
@@ -25513,27 +25643,32 @@ def search_wv_precise(page, org):
                 continue
             if time.perf_counter() >= deadline:
                 break
-            page.goto(WV_SEARCH_URL, wait_until="domcontentloaded", timeout=action_timeout(WV_GOTO_TIMEOUT_MS))
-            safe_wait_for_network_idle(page, timeout=WV_NETWORK_IDLE_TIMEOUT_MS)
-            if time.perf_counter() >= deadline:
-                break
-            try:
-                page.locator("#ddlType").select_option(label="CHARITABLE ORGANIZATIONS", timeout=2500)
-            except Exception:
-                pass
+            if public_lookup is not None:
+                searched_queries.append(query_name)
+                body, snapshot = public_lookup.search(query_name)
+                rows = None
+            else:
+                page.goto(WV_SEARCH_URL, wait_until="domcontentloaded", timeout=action_timeout(WV_GOTO_TIMEOUT_MS))
+                safe_wait_for_network_idle(page, timeout=WV_NETWORK_IDLE_TIMEOUT_MS)
+                if time.perf_counter() >= deadline:
+                    break
+                try:
+                    page.locator("#ddlType").select_option(label="CHARITABLE ORGANIZATIONS", timeout=2500)
+                except Exception:
+                    pass
 
-            name_input = page.locator("#CharitiesSearch-CharitiesSearch_txtName").first
-            name_input.wait_for(state="visible", timeout=3000)
-            name_input.fill(query_name, timeout=action_timeout(3000))
-            searched_queries.append(query_name)
+                name_input = page.locator("#CharitiesSearch-CharitiesSearch_txtName").first
+                name_input.wait_for(state="visible", timeout=3000)
+                name_input.fill(query_name, timeout=action_timeout(3000))
+                searched_queries.append(query_name)
 
-            page.locator("#CharitiesSearch-CharitiesSearch_btnSearch").click(timeout=action_timeout(4000))
-            safe_wait_for_network_idle(page, timeout=WV_SEARCH_IDLE_TIMEOUT_MS)
-            page.wait_for_timeout(WV_RESULTS_SETTLE_MS)
-            if time.perf_counter() >= deadline:
-                break
+                page.locator("#CharitiesSearch-CharitiesSearch_btnSearch").click(timeout=action_timeout(4000))
+                safe_wait_for_network_idle(page, timeout=WV_SEARCH_IDLE_TIMEOUT_MS)
+                page.wait_for_timeout(WV_RESULTS_SETTLE_MS)
+                if time.perf_counter() >= deadline:
+                    break
 
-            body = registry_page_body(page)
+                body = registry_page_body(page)
             query_targets = list(dict.fromkeys([
                 *safe_targets,
                 *organization_match_target_variants(query_name, org.ein),
@@ -25542,25 +25677,25 @@ def search_wv_precise(page, org):
                 completed_queries.append(query_name)
                 continue
 
-            rows = page.locator("tr")
-            try:
-                row_count = min(rows.count(), 100)
-            except Exception as exc:
-                raise TimeoutError("West Virginia result table did not finish loading") from exc
-            if row_count:
+            if public_lookup is None:
+                rows = page.locator("tr")
+                try:
+                    snapshot = registry_table_text_snapshot(rows, 100, (0, 1, 4))
+                except Exception as exc:
+                    raise TimeoutError("West Virginia result table did not finish loading") from exc
+            if snapshot:
                 saw_result_rows = True
                 progress["saw_result_rows"] = True
             readable_record_rows = 0
-            for index in range(row_count):
+            for record in snapshot:
                 action_timeout(1000)
-                row = rows.nth(index)
+                row = record["target"] if public_lookup is not None else rows.nth(record["index"])
                 try:
-                    cells = row.locator("td")
-                    if cells.count() < 5:
+                    if record["count"] < 5:
                         continue
-                    registry_id = re.sub(r"\s+", " ", cells.nth(0).inner_text(timeout=1000)).strip()
-                    registry_name = structured_registry_name(cells.nth(1).inner_text(timeout=1000), org.organization_name, org.ein)
-                    status_text = re.sub(r"\s+", " ", cells.nth(4).inner_text(timeout=1000)).strip()
+                    registry_id = re.sub(r"\s+", " ", record["values"][0]).strip()
+                    registry_name = structured_registry_name(record["values"][1], org.organization_name, org.ein)
+                    status_text = re.sub(r"\s+", " ", record["values"][2]).strip()
                 except Exception as exc:
                     raise TimeoutError("West Virginia result rows did not finish loading") from exc
                 if not registry_id or not registry_name:
@@ -25621,12 +25756,14 @@ def search_wv_precise(page, org):
             return result
 
         row, registry_id, registry_name, row_status, selected_targets = best
-        link = row.locator("a").first
-        link.click(timeout=5000)
-        safe_wait_for_network_idle(page, timeout=WV_SEARCH_IDLE_TIMEOUT_MS)
-        page.wait_for_timeout(WV_RESULTS_SETTLE_MS)
-
-        detail_text = registry_page_body(page)
+        if public_lookup is not None:
+            detail_text = public_lookup.detail(row, registry_id)
+        else:
+            link = row.locator("a").first
+            link.click(timeout=5000)
+            safe_wait_for_network_idle(page, timeout=WV_SEARCH_IDLE_TIMEOUT_MS)
+            page.wait_for_timeout(WV_RESULTS_SETTLE_MS)
+            detail_text = registry_page_body(page)
         detail_name = structured_registry_name(text_between_labels(detail_text, "Organization Name", ["Expiration Date", "Contact Name", "Status", "Street Address"]), org.organization_name, org.ein)
         if not detail_name or not re.search(r"\b(?:Status|Expiration Date)\b", detail_text):
             raise TimeoutError("West Virginia selected organization detail did not finish loading")
@@ -26655,8 +26792,9 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
         result = ensure_state_result(result, org, state)
         return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
 
-    if state in {"HI", "OH"} and not capture_source_snapshot:
-        direct = search_hi_direct_details(org) if state == "HI" else search_oh_direct_details(org)
+    if state in {"HI", "OH", "WV"} and not capture_source_snapshot:
+        direct = (search_hi_direct_details(org) if state == "HI" else
+                  search_oh_direct_details(org) if state == "OH" else search_wv_public_details(org))
         if direct is not None:
             result, body = direct
             return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)

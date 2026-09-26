@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="X-UA-Compatible" content="chrome=1">
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge,chrome=1">
+    <meta id="viewport" name="viewport" content="user-scalable=0, width=device-width, height=device-height, initial-scale=0.5, maximum-scale=0.5" />
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="X-UA-Compatible" content="IE=8,9,10,11">
+    <link href="/Themes/Default/CSS/jquery-ui.css" rel="stylesheet"/>
+<link href="/Themes/Default/CSS/autocomplete.css" rel="stylesheet"/>
+<link href="/Themes/Default/CSS/font-awesome.css" rel="stylesheet"/>
+<link href="/Themes/Default/CSS/gridview.css" rel="stylesheet"/>
+<link href="/Themes/Default/CSS/jquery.timeentry.css" rel="stylesheet"/>
+<link href="/Themes/Default/CSS/styles.css" rel="stylesheet"/>
+<link href="/Themes/Default/CSS/sweetalert.css" rel="stylesheet"/>
+<link href="/Content/bootstrap.css" rel="stylesheet"/>
+<link href="/Content/sidemenu.css" rel="stylesheet"/>
+<link href="/Content/bootstrap-datepicker.min.css" rel="stylesheet"/>
+<link href="/Content/bootstrap_nv_theme.css" rel="stylesheet"/>
+<link href="/Content/custom-bootstrap-flex.css" rel="stylesheet"/>
+
+    <script src="/Scripts/jquery-1.11.3.min.js"></script>
+<script src="/Scripts/jquery-ui.js"></script>
+<script src="/Scripts/modernizr-2.6.2.js"></script>
+<script src="/Scripts/ezant-1.0.js"></script>
+<script src="/Scripts/xhtmlgrid.js"></script>
+<script src="/Scripts/cenuity-0.1.js"></script>
+<script src="/Scripts/CountryRules.js"></script>
+<script src="/Scripts/ezantExtension.js"></script>
+<script src="/Scripts/jquery.maskedinput.js"></script>
+<script src="/Scripts/jquery.timeentry.js"></script>
+<script src="/Scripts/common.js"></script>
+<script src="/Scripts/jquery.cookie.js"></script>
+<script src="/Scripts/sweetalert.min.js"></script>
+<script src="/Scripts/sidemenu.js"></script>
+<script src="/Scripts/ezval-1.0.js"></script>
+<script src="/Scripts/maskUpload.js"></script>
+<script src="/Scripts/bootstrap.js"></script>
+<script src="/Scripts/AutoComplete.js"></script>
+
+    <script src="/Scripts/tinymce/jquery.tinymce.min.js"></script>
+<script src="/Scripts/tinymce/tinymce.js"></script>
+<script src="/Scripts/tinymce/tinymce.min.js"></script>
+
+    <script src="/Scripts/gcr-acc-bsd-scripts/UCC/gcr.acc.bsd.AuthorizingParty.js"></script>
+<script src="/Scripts/gcr-acc-bsd-scripts/UCC/gcr.acc.bsd.Collateral.js"></script>
+<script src="/Scripts/gcr-acc-bsd-scripts/UCC/gcr.acc.bsd.DebtorInfromation.js"></script>
+<script src="/Scripts/gcr-acc-bsd-scripts/UCC/gcr.acc.bsd.Miscellaneous.js"></script>
+<script src="/Scripts/gcr-acc-bsd-scripts/UCC/gcr.acc.bsd.SendAdditionalAcknolowledgement.js"></script>
+<script src="/Scripts/gcr-acc-bsd-scripts/UCC/gcr.acc.bsd.ucc11advancedsearch.js"></script>
+<script src="/Scripts/gcr-acc-bsd-scripts/UCC/gcr.acc.bsd.ucc11search.js"></script>
+<script src="/Scripts/gcr-acc-bsd-scripts/UCC/gcr.pcc.crd.iq.shared.FeatureClaimInformation.js"></script>
+
+    <link href="/Content/onlineWorkflows.css" rel="stylesheet"/>
+
+    <script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.additionalbusinessinformation.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.addressfields.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.AdhocWorkflow.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.BusinessAddressMailingAddress.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.BusinessOfficeAddress.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.BusinessOfficeAddressMark.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.BusinessOfficeAddressNotary.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.businessSignature.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.CharitableSolicitationsScreenComponent.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.commercialregisteredagent.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.documentprocessingeditingmodel.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.exchangessignature.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.FirmBusinessAddressMailingAddress.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.jurisdiction.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.mergersignature.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.namefields.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.notaryaddressfields.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.NotaryAmendment.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.NotaryCancellationSignature.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.NotarySearch.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.NotaryViolationAndOnlineComplaint.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.registernamefield.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.registernamefieldRA.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.requiredFilings.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.Supportingdocumentation.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.WorkFlowNevigation.js"></script>
+
+    <script src="/Scripts/gcr-acc-bsd-scripts/gcr.acc.bsd.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.js"></script>
+
+    <link rel="shortcut icon" href="/favicon.ico" />
+    <link rel="icon" href="/favicon.ico" />
+    <title>West Virginia Secretary of State - Enterprise Registration &amp; Licensing System</title>
+    <style>
+
+        .navbar-toggle {
+            position: fixed;
+            float: right;
+            padding: 0px 10px;
+            margin-top: 0px;
+            margin-right: 0px !important;
+            margin-bottom: 8px;
+            background-color: transparent;
+            background-image: none;
+            border: 1px solid transparent;
+            border-radius: 0px;
+            z-index: 9999 !important;
+        }
+
+        .table thead {
+            background-color: #234C72;
+            color: #ffffff;
+            font-weight: bold;
+        }
+    </style>
+
+    <style type="text/css">
+        .ui-widget-header {
+            background: #043252 !important;
+            color: white !important;
+            font-weight: bold !important;
+        }
+
+        .ui-dialog-titlebar-close {
+            width: 23px !important;
+        }
+    </style>
+
+</head>
+
+
+<body class="bodybg2 sidebar-mini">
+    <div class="wrapper">
+        <!-- Main Header -->
+        <header class="main-header pagetitle ">
+
+            <!-- Header Navbar -->
+            <nav class=" navbar-static-top" role="navigation">
+
+                <!-- Sidebar toggle button-->
+                <div class="col-md-6 col-sm-6 col-xs-8 nopad-left">
+                    <a href="#" class="sidebar-toggle hidden-sm hidden-md hidden-lg navbar-toggle collapsed" ; type="button" data-toggle="collapse" data-target="#navbar" aria-expanded="false" aria-controls="navbar">
+                        <span class="sr-only">Toggle navigation</span>
+                    </a>
+                    <a class="logo1">
+                        <div class="page_title2" style="padding-left: 93px;">
+                            Charities Search
+                        </div>
+                    </a>
+                </div>
+                <!-- Navbar Right Menu -->
+                <div class="navbar-custom-menu col-md-6 col-sm-6 col-xs-4 nopad-left">
+                    <ul class="pull-right cart_list">
+
+
+
+
+
+                        <li>
+                        </li>
+                        <li>
+                        </li>
+                    </ul>
+                </div>
+            </nav>
+        </header>
+
+        <nav class="navbar navbar-default navbar-fixed-top nav_background">
+            <div class="container-fluid">
+                <div class="row">
+                    <div class="col-md-12">
+                        <div class="col-lg-2">
+                            <div class="navbar-header">
+                                <a class="navbar-brand" href="" style="padding: 0px;">
+                                    <img alt="Brand" style="height: 81px; max-height: 81px; min-height: 81px;position:relative;z-index:999;" src="/Themes/WV/Images/core_banner.png">
+                                </a>
+                            </div>
+                        </div>
+                        <div class="col-lg-10">
+                            <div style="">
+                                <div id="navbar" class="navbar-collapse collapse">
+                                    <ul id="movenav" class="nav navbar-nav"></ul>
+
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </nav>
+        <!-- Content Wrapper. Contains page content -->
+        <div class="" style="width:unset;">
+            <section class="content">
+                
+
+
+<script src="/Scripts/gcr-acc-bsd-scripts/CharitiesSearch/gcr.acc.bsd.CharitiesSearch.js"></script>
+<script>
+    var SearchVM = {};
+    var uccGrid = new XHtmlGrid();
+    $(function () {
+        var urls = {
+        }
+        var elements = {
+            SearchResults: "SearchResult"
+        }
+        SearchVM = new gcr.acc.bsd.charitiessearch.loadViewModel(urls, elements);
+    });
+</script>
+
+<form action="/OnlineCharitiesSearch/Search" id="frm_SearchList" method="post">
+
+<div class="panel panel-primary">
+    <div class="panel-heading mar-bottom-10">Charities Search Results</div>
+    <div class="panel panel-default">
+        <div id="tdList" class="form-group table-responsive">
+
+<table   class=' table table-striped table-condensed' id='xhtml_grid' ><thead ><tr  class='' id='Listrow_xhtml_grid' ><th  >ID</th><th style='cursor:pointer' >Name</th><th style='cursor:pointer' >Address</th><th style='cursor:pointer' >Type</th><th style='cursor:pointer' >Status</th></tr></thead><tbody ><tr  ><td ><a onclick='NavigateLienInfo(571)' style='cursor:pointer'>664</a><input type='hidden' class='hdnId' value=571></td><td >Comic Relief, Inc.</td><td >6404 Wilshire Boulevard, Suite 960, Los Angeles, CA, 90048, USA</td><td >Charitable Organizations</td><td >Closed</td></tr><tr  ><td ><a onclick='NavigateLienInfo(4703)' style='cursor:pointer'>5533</a><input type='hidden' class='hdnId' value=4703></td><td >Comic Relief, Inc.</td><td >120 Broadway, 22nd Floor, New York, NY, 10271, USA</td><td >Charitable Organizations</td><td >Active</td></tr></tbody></table><table border=0 style='width:100%' align='center'  class='borderFooter' cellspacing=0 cellpadding=0><tr><td class='bgfooter' align='right'><div id='pagination-digg-outer' border='2px' style='width:auto;' align='right'><ul style='width:auto' id='pagination-digg' ><li class='pageinfo'>Page 1 of 1, records 1 to 2 of 2</li></ul><input type=hidden name=hdnTotalPgCount id=hdnTotalPgCount value='1' /></div></td></tr></table>
+<script>
+    function NavigateLienInfo(id) {
+        $.submitForm('/OnlineCharitiesSearch/CharitiesInformation', { CharitiesId: id });
+    }
+</script>
+
+
+
+        </div>
+    </div>
+    <div class="form-group" align="center">
+
+        <input type="button" id="btnBack" name="btnBack" value="Back" class="button loading" onclick="location.href = '/OnlineCharitiesSearch/Search?isBack=true'" />
+    </div>
+</div>
+
+<script type="text/javascript">
+
+    $xhtml.init({
+        url: '/OnlineCharitiesSearch/SearchResultsForPagination',
+        sortBy: '',
+        sortType: "a",
+        nodeNum: -1,
+        pageIdx: 1,
+        local: false,
+        headerRowId: "ListRow_xhtml_grid",
+        updateTargetId: "tdList",
+        data: []
+    });
+</script>
+
+
+            </section>
+        </div>
+        <!-- Main Footer -->
+        <!--For Checking JavaScript Injection Check.-->
+        
+
+
+    </div>
+<script type="text/javascript">
+    $helper = function () {
+
+        var config = {
+            settings: {
+
+                //Account
+                Login: '/',
+                ValidateToken: '/Account/ValidateToken',
+
+                CountryCode: 'USA',
+                StateCode: 'WV',
+
+                // Address Fields Shared View
+                GetCountiesByZipCode: '/Registration/GetCountiesByZipCode',
+                GetCityCountyListByZipCode: '/Registration/GetCityCountyListByZipCode',
+                GetCityCountyListByState: '/Registration/GetCityCountyListByState',
+                GetCityCountyListByZipCodeForNotary: '/Registration/GetCityCountyListByZipCodeForNotary',
+                GetCityCountyListByZipCodeForNotaryMailingAddress: '/Registration/GetCityCountyListByZipCodeForNotaryMailingAddress',
+                //For Delete Upload File
+                DeleteUploadFile: '/OnlineDocumentProcessingHelper/FilingInformationDeleteFile',
+                FileUploadSize: '50',
+            }
+        };
+
+        var enums = {
+            Actions: {
+                Save: 'Save',
+                Update: 'Update',
+                Delete: 'Delete',
+                Success: 'Success',
+                Error: 'Error',
+                Exception: 'Exception',
+                Next: "Next",
+                Warning: "Warning",
+                Duplicate: "Duplicate",
+            },
+            Weekdays: {
+                Sunday: 1,
+                Monday: 2,
+                Tuesday: 3,
+                Wednesday: 4,
+                Thursday: 5,
+                Friday: 6,
+                Saturday: 7
+            },
+            Locales: {
+                Countries: {
+                    USA: 'USA',
+                }
+            },
+            TransactionTypes: {
+                CertificateOfAmendmentSoleProprietor: '15218',
+                CertificateOfAmendmentGeneralPartnership: '15219',
+                TradeMarkAmendment: '10499',
+                TradeMarkRenewal: '10498',
+                TradeMarkAssignment: '10500',
+
+            },
+            BusinessFilingTypes: {
+                AmendmenttoaForeignLimitedPartnership87A: '132',
+                ArticlesOfOrganization: '79',
+                AmendmenttoArticlesofOrganizationBeforeIssuanceofMemberInterest: '149',
+                AmendmenttoaForeignLimitedPartnership88: '133',
+                AmendmenttoCertificateofBusinessTrust: '134',
+                AmendmenttoForeignLimitedLiabilityPartnership: '135',
+                AmendmenttoaLimitedLiabilityLimitedPartnership87A: '158',
+                AmendmenttoaLimitedLiabilityLimitedPartnership88: '4384',
+                AmendmentforRegistrationofaForeignLimitedLiabilityCompany: '105',
+                CertificateOfCorrection: '138',
+                ArticlesOfAmendment_ForeignRegistration: '105',
+                OfficerStatement: '141',
+                OfficersStatement: '141',
+                StatementOfAbandoment: '91',
+                StatementOfBankruptcy: '92',
+                StatementOfChange: '93',
+                StatementOfChange_Member_Manager: '94',
+                StatementOfDivision: '95',
+                StatementOfIneffectiveness: '96',
+                SuretyBond: '98',
+                SuretyBondCancellation: '99',
+                ApplicationForAuthority: '100',
+                ApplicationForRegistration: '101',
+                ApplicationForRenewalOfNameRegistration: '102',
+                ApplicationForUseOfIndistinguishableName2: '103',
+                ApplicationForWithdrawal: '104',
+                ArticlesOfAmendment_ForeignRegistration: '105',
+                ArticlesOfAmendmentToApplicationForAuthority: '106',
+                CancelForeignRegistration: '107',
+                CancellationOfRegisteredForeignCorporationName: '108',
+                ForeignStateAmendment: '109',
+                RegistrationOfForeignCorporationName: '110',
+                Reservation2: '1',
+                Reservation3CopyOf2: '113',
+                reservation4CopyOf2: '114',
+                AllStepWorkflow: '115',
+                CommercialRegisteredAgentRegistration: '4358',
+                AmendmentAfterFirstMeetingofDirectors: '211',
+                CommercialRegisteredAgentStatementofChange: '4359',
+                ResignationofRegisteredAgent: '4357',
+                CancellationofAppointmentofRegisteredAgentbyNonFilingDomesticEntities: '4371',
+                CertificateofAcceptancebyRegisteredAgent: '3235',
+                CommercialRegisteredAgentTerminationStatement: '4360',
+                NoncommercialRegisteredAgentStatementofChange: '4361',
+                RepresentedEntityStatementofChange: '4362',
+                RegisteredAgentListingRegistration: '4363',
+                RegisteredAgentListingAmendment: '4364',
+                AppointmentofRegisteredAgent: '4365',
+                AppointmentofRegisteredAgentbyNonqualifiedForeignEntities: '4366',
+                CancellationofAppointmentofRegisteredAgentbyNonqualifiedForeignEntities: '4372',
+                AppointmentofRegisteredAgentbyNonresidentGuardianofAdult: '4373',
+                AbandonmentofConversion: '1',
+                AbandonmentofDomestication: '2',
+                AbandonmentofMerger: '3',
+                AbandonmentofShareExchange: '4',
+                AdministrativeDissolution: '5',
+                Amendment: '6',
+                ArticlesofMutualBankConversion: '18',
+                AssumedName: '19',
+                AssumedNameCancellation: '20',
+                BusinessEntityReport: '21',
+                BusinessSummary: '22',
+                CertificatePursuanttoNRS78209: '204',
+                Cancellation: '23',
+                CertificateofDissolution: '26',
+                CertificateofExistence: '27',
+                CertificateofFact: '28',
+                CertifiedCopiesRequest: '30',
+                CharterSurrender_Conversion: '33',
+                CharterSurrender_Domestication: '34',
+                Consolidation: '35',
+                Conversion: '3274',
+                ArticlesofDomestication: '3280',
+                Correction: '138',
+                Dissolution: '3234',
+                Domestication: '40',
+                DueandDiligentSearch: '41',
+                Formation: '42',
+                RAChange: '57',
+                CommercialRegisteredAgentRegistration: '4358',
+                CommercialRegisteredAgentStatementofChange: '4359',
+                ResignationofRegisteredAgent: '4357',
+                CancellationofAppointmentofRegisteredAgentbyNonFilingDomesticEntities: '4371',
+                CertificateofAcceptancebyRegisteredAgent: '3235',
+                CommercialRegisteredAgentTerminationStatement: '4360',
+                NoncommercialRegisteredAgentStatementofChange: '4361',
+                RepresentedEntityStatementofChange: '4362',
+                RegisteredAgentListingRegistration: '4363',
+                RegisteredAgentListingAmendment: '4364',
+                AppointmentofRegisteredAgentbyNonFilingDomesticEntities: '4365',
+                AppointmentofRegisteredAgentbyNonqualifiedForeignEntities: '4366',
+                CancellationofAppointmentofRegisteredAgentbyNonqualifiedForeignEntities: '4372',
+                AppointmentofRegisteredAgentbyNonresidentGuardianofAdult: '4373',
+                InitialList: '3277',
+                AmendedList: '3278',
+                AnnualList: '3279',
+                RegistrationLimitedLiabilityLimitedPartnership87A: '3291',
+                RegistrationLimitedLiabilityLimitedPartnership88: '3292',
+                ForeignLimitedLiabilitPartnership: '145',
+                ForeignQualification: '130',
+                ForeignNonprofitNRS80: '4376',
+                ForeignBusinessTrust: '131',
+                RegistrationForeignLimitedPartnership87A: '146',
+                RegistrationForeignLimitedPartnership88: '147',
+                ApplicationforForeignLimitedLiabilityCompanyRegistration: '140',
+                ForeignLimitedLiabilityLimitedPartnership87A: '143',
+                ForeignLimitedLiabilityLimitedPartnership88: '144',
+                RegistrationForeignLLC: '148',
+                GeneralPartnershipRenewal: '3261',
+                MergerBusinessfilingType: '3281',
+                ExchangeEntity: '3282',
+                StatementPartnershipAuthority: '125',
+                CancellationOfPartnershipAuthority: '4355',
+                RegistrationLimitedPartnership88: '128',
+                GeneralPartnershipRenewal: '3261',
+                GeneralPartnershipRegistration: '3258',
+                OtherNT7BusinessLicenseRegistration: '3267',
+                SoleProprietorRenewal: '3257',
+                SoleProprietorRegistration: '3251',
+                OtherNT7BusinessLicenseRenewal: '3269',
+                CertificateofAmendmentSoleProprietorandGeneralPartnership: '4390',
+                CertificateofAmendmentNT7BusinessLicenseOther: '3275',
+                CancellationStatementSoleProprietorGeneralPartnership: '4389',
+                CancellationStatementNT7BusinessLicenseOther: '4388',
+                MiscellaneousNameReservation: '4354',
+                AmendmentAfterFirstMeetingofDirectors: '211',
+                AmendmentLimitedPartnership88: '151',
+                AmendmentBeforeFirstMeetingofDirectors: '156',
+                TerminationofAmendmentBeforeIssuanceofStock: '160',
+                TerminationofAmendmentforaLimitedLiabilityCompany: '162',
+                AmendmentBeforeIssuanceofStock: '199',
+                ApplicationofRevival: '3268',
+                CertificateofReinstatement: '3276',
+                NT7BusinessLicenseOther: '3267',
+                AmendmentLimitedPartnership88: '151',
+                AmendmentLimitedPartnership87A: '150',
+                FormtoAccompanyMiscellaneousFilingsAmendment: '5139',
+                CharitableSolicitationRegistrationStatement: '4305',
+                ExemptionFromCharitableSolicitationStatement: '4353',
+                AmendmentLimitedLiabilityLimitedPartnership87A: '4404',
+                AmendedandRestatedArticles: '196',
+                StatementofAlternateDueDate: '3239',
+                AmendmentAfterIssuanceofStock: '203',
+                AmendedModifiedNameResolution: '3263',
+                AmendmenttoaLimitedLiabilityLimitedPartnership87A: '4394',
+                AmendmenttoaLimitedLiabilityLimitedPartnership88: '4384',
+                RegisteredAgentListingRegistration: '4363',
+                ArticlesOfIncorporation_Nonprofit: '77',
+                ArticlesOfIncorporation_ForProfit: '76',
+                CertificateofChangeofAddressoftheLimitedPartnershipsRecordsOffice: '169',
+                CertificateofChangeofPrincipalOffice: '137',
+                CharitableSolicitationRegistrationStatement: '4305',
+                ExemptionFromCharitableSolicitationStatement: '4353',
+                AmendmenttoArticlesofOrganization: '152',
+                RestatedArticles: '194',
+                StatementPartnershipAuthority: '125',
+                CertificateofResignation: '172',
+                CertificateofDesignation: '4392',
+                AmendedCertificationofStockDesignationAfterIssuanceofClassSeries: '209',
+                AmendedCertificationofStockDesignationBeforeIssuanceofClassSeries: '206',
+            },
+            RegisterAgentTypes: {
+                CommercialRegisteredAgent: '1',
+                NonCommercialRegisteredAgent: '2',
+                RepresentedEntity: '3'
+            },
+            BusinessTypeModel: {
+                Conversion: 'Conversion',
+                Listing: 'Listing',
+                RenewalNT7: 'Renewal NT7',
+                Amendment: 'Amendment',
+                Mergers: 'Mergers',
+                SoleorPartnershipRenewal: 'SoleorPartnershipRenewal',
+                OtherNT7Renewal: 'OtherNT7Renewal',
+                DomesticAmendment: 'Domestic Amendment',
+                ForeignAmendment: 'Foreign Amendment',
+                AnnualRenewal: 'AnnualRenewal',
+                AmendmentRenewal: 'AmendmentRenewal',
+                SolePropietor: 'SolePropietor',
+                Exchanges: 'Exchanges'
+            },
+            filingCategory: {
+                Business: '1',
+                UCC: '2',
+                Trademarks: '3',
+                Notary: '4',
+                Authentication: '5',
+                Charities: '8'
+            },
+            submissionmeets: {
+                Days: 90
+            },
+            BusinessType: {
+                ForeignLimitedLLP87A: '10157',
+                ForeignLimitedPartnership88: '10164',
+                ForeignNonprofitCorporations: '10161',
+                ForeignCorporation: '10160',
+                ForeignBusinessTrust: '10120',
+                ForeignLimitedPartnership87A: '10163',
+                ForeignLimitedLiabilityCompany: '19',
+                ForeignLimitedLiabilityLimitedPartnership87A: '10157',
+                ForeignLimitedLiabilityLimitedPartnership88: '10158',
+                ForeignLimitedLiabilityPartnership: '10159',
+                ForeignNonProfitCorporation: '10161',
+                ForeignBusinessTrust: '10120',
+                DomesticNonprofitCooperativeCorporationWithStock: '10168',
+                DomesticNonprofitCooperativeCorporationWithoutStock: '10167',
+                DomesticLLC: '7',
+                DomesticCorporationSole: '10109',
+                DomesticProfessionalLLC: '10115',
+                DomesticLimitedLiabilityLimitedPartnership87A: '10186',
+                DomesticLimitedLiabilityLimitedPartnership88: '10187',
+                DomesticProfessionalCorporation: '36',
+                DomesticLimitedPartnership87A: '10170',
+                DomesticLimitedPartnership88: '10171',
+
+                NT7BusinessLicenseGeneralPartnership: '10209',
+                NT7BusinessLicenseOther: '10210',
+                NT7BusinessLicenseSoleProprietor: '10208',
+
+                CourtappointedNonresidentGuardianofAdult: '10229',
+
+                DomesticProfessionalBenefitCorp: '36',
+                DomesticCorporation: '10104',
+                DomesticBusinessTrust: '10105',
+                DomesticCloseCorp: '10106',
+                DomesticProfessionalLLC: '10115',
+                DomesticCooperativeAssociation: '10166',
+                DomesticLimitedLiabilityPartnership: '10184',
+
+                ForeignProfessional: '23',
+                ForeignProfLimitedLiabilityCompany: '10218',
+                ForeignCorporationSole: '10219',
+                ForeignLimitedLiabilityPartnership87: '10231',
+                ForeignCloseCorporation: '10232',
+                ForeignCooperativeAssociation: '10233',
+                ForeignEntitiesNotRequiredtoRegisterinNevada: '10224',
+                AddNonQualified: '10244',
+                DomesticNonprofit: '10',
+                DomesticProfessionalAssociation: '10154',
+
+
+
+            },
+            Workflows: {
+                AmendmentSecuredPartyChange: '150',
+                AmendmentSecuredPartyAdd: '149',
+                AmendmentDebtorDelete: '148',
+                AmendmentDebtorChange: '147',
+                AmendmentDebtorAdd: '146',
+            },
+            principalTitle: {
+                Director: '4',
+                Trustee: '5',
+                Officers: '1001',
+
+
+            },
+            StockFee: {
+                InitialListFlatFee: parseFloat('150.00').toFixed(2),
+            }
+        };
+        return { config: config, enums: enums }
+    }();
+</script>
+
+
+<script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/v31edd6df95cf4e85bb4c19e7a9bdbcba1788362987495" integrity="sha512-iIg7k2xntmwu6/uSb5tpc/hySgZc4eoL31yB29W6tJFo2akwjPWcEqnCEdJvGexCL0KEQwVYv5BlowfhVz26hg==" data-cf-beacon='{"version":"2024.11.0","token":"89367734a440490aa8b2ff330f58cc38","spa":2}' crossorigin="anonymous"></script>
+</body>
+</html>
+
+<!--Script For Checking JavaScript Injection Check.-->
+<script>
+    $(document).ready(function ()
+    {
+        $("[type = text]").on("blur", function () {
+            var message = $(this).val();
+            var encodedMsg = $('<div />').text(message).html();
+
+            if (message.indexOf("<script>") != -1) {
+                $(this).val('');//Making Empty Entire Text if we writen <script> tag.
+            }
+
+        });
+
+        $("textarea").on("blur", function () {
+            var message = $(this).val();
+            var encodedMsg = $('<div />').text(message).html();
+
+            if (message.indexOf("<script>") != -1) {
+                $(this).val('');//Making Empty Entire Text if we writen <script> tag.
+            }
+
+        });
+    });
+</script>

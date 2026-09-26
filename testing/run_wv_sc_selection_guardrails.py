@@ -39,6 +39,9 @@ class SelectionTests(unittest.TestCase):
             rows.append(row)
         row_list = Mock()
         row_list.count.return_value = len(rows)
+        row_list.evaluate_all.return_value = [
+            {"index": index, "count": 5, "values": [identifier, registry_name, status]}
+            for index, (identifier, registry_name, status) in enumerate(records)]
         row_list.nth.side_effect = rows.__getitem__
         page.locator.side_effect = lambda selector: row_list if selector == "tr" else Mock()
         def body(_):
