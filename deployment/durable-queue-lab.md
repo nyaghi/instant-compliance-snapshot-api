@@ -894,3 +894,15 @@ and schema failures are not retried. This does not change the customer connector
 The Oklahoma 300-second task timeout recovered unchanged in 15.8 seconds; its
 exact blocked internal step was not retained, so do not claim a known root cause
 or erase that original failure. It is added to live smoke/controlled load.
+
+Phase50: phase48's PA negative-confirmation request retained the prior name
+filter after navigation to the same Angular route. Reset the public search form
+with its Clear button before filling the primary EIN, including confirmation
+passes. A failed reset remains incomplete. The query-bound response guard remains
+strict; matching, status and timeout policies do not change.
+
+Phase48 smoke retained 17/21 matches. Three NY readiness failures were separate
+from the successfully exercised Playwright detail retry: two navigation HTTP
+errors and one missing Verify control within 27 seconds. Expose the HTTP status
+code (no response body, URL parameters or secret details) so future HTTP errors
+can be diagnosed. Do not add speculative retry/bypass of those readiness errors.

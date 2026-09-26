@@ -20205,6 +20205,7 @@ def search_ny_verified(org):
                 stage = "page navigation"
                 response = page.goto("https://charities-search.ag.ny.gov/RegistrySearch", wait_until="commit", timeout=15000)
                 if response is not None and response.status >= 400:
+                    attempts.append(f"NY page navigation: HTTP {response.status}")
                     raise RuntimeError("New York navigation HTTP error")
                 attempts.append(f"NY {stage}: complete in {time.perf_counter()-started:.2f}s")
                 stage = "verification control readiness"

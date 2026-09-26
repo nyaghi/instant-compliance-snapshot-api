@@ -49,6 +49,11 @@ test('discovery and shared checker match baseline; NY transport has separate sco
   const old=cp.execFileSync('git',['show','fb193e6:'+file],{cwd:root,maxBuffer:20*1024*1024});
   let current=fs.readFileSync(path.join(root,file)).toString().replaceAll('\r\n','\n');
   if(file==='Charity_Checker_Script for 13_states.py'){
+   const reset=`        # Returning to the same Angular route can retain the preceding name
+        # fallback. Reset every search filter before the EIN-only confirmation.
+        page.get_by_role("button", name=re.compile(r"^Clear$", re.I)).first.click(timeout=1500)
+`;
+   assert.equal(current.split(reset).length,2);current=current.replace(reset,'');
    current=current.replace('def search_pa(page, org: Organization, wait_for_ein=None) -> StateResult:', 'def search_pa(page, org: Organization) -> StateResult:');
    const wait=`        if wait_for_ein is not None and not wait_for_ein(ein):
             result.raw_status_text = "Pennsylvania EIN search did not complete"

@@ -1784,6 +1784,9 @@ def search_pa(page, org: Organization, wait_for_ein=None) -> StateResult:
         if not ein_input:
             result.error = "Could not find PA EIN input"
             return result
+        # Returning to the same Angular route can retain the preceding name
+        # fallback. Reset every search filter before the EIN-only confirmation.
+        page.get_by_role("button", name=re.compile(r"^Clear$", re.I)).first.click(timeout=1500)
         ein_input.fill("")
         ein_input.fill(ein)
 

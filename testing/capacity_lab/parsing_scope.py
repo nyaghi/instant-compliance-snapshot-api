@@ -90,6 +90,7 @@ def strip_pa_form_optimization(tree):
 
 
 def strip_pa_ein_wait_and_ny_browser_timeout(tree):
+    strip_pa_reset_and_ny_http_diagnostic(tree)
     old = ast.parse(subprocess.check_output(['git', 'show', 'e9d6b9a:registry_snapshot_server.py'],
         cwd=Path(__file__).resolve().parents[2]).decode('utf-8'))
     function = lambda t, name: next(n for n in t.body if getattr(n, 'name', '') == name)
@@ -117,7 +118,25 @@ def strip_pa_ein_wait_and_ny_browser_timeout(tree):
                 if len(types.elts)==1:node.args[1]=types.elts[0]
 
 
+def strip_pa_reset_and_ny_http_diagnostic(tree):
+    expected = ast.parse('page.get_by_role("button", name=re.compile(r"^Clear$", re.I)).first.click(timeout=1500)').body[0]
+    for fn in tree.body:
+        if getattr(fn, 'name', '') == 'search_pa':
+            body = next(n for n in fn.body if isinstance(n, ast.Try)).body
+            nodes = [n for n in body if ast.dump(n) == ast.dump(expected)]
+            assert len(nodes) <= 1
+            for n in nodes: body.remove(n)
+        elif getattr(fn, 'name', '') == 'search_ny_verified':
+            for branch in ast.walk(fn):
+                if isinstance(branch, ast.If) and ast.unparse(branch.test) == 'response is not None and response.status >= 400':
+                    if isinstance(branch.body[0], ast.Expr):
+                        diagnostic = ast.parse('attempts.append(f"NY page navigation: HTTP {response.status}")').body[0]
+                        assert ast.dump(branch.body[0]) == ast.dump(diagnostic)
+                        branch.body.pop(0)
+
+
 def strip_checker_pa_ein_wait(tree):
+    strip_pa_reset_and_ny_http_diagnostic(tree)
     fn=next(n for n in tree.body if getattr(n,'name','')=='search_pa')
     if fn.args.args[-1].arg != 'wait_for_ein':return
     assert ast.literal_eval(fn.args.defaults[-1]) is None
