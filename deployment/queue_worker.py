@@ -16,6 +16,7 @@ import threading
 import time
 import uuid
 from collections import Counter, deque
+from psycopg import DataError
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -384,13 +385,13 @@ class Supervisor:
         if not ready:return
         completions=[(ident,r['job']['token'],r['result'],r['error']) for ident,r in ready]
         try:self.queue.complete_many(self.id,completions)
-        except ValueError:
+        except (ValueError, DataError):
             # One invalid output must not prevent independent valid completions.
             saved=[]
             for ident,r in ready:
                 try:
                     try:self.queue.complete(self.id,ident,r['job']['token'],r['result'],r['error'])
-                    except ValueError:self.queue.complete(self.id,ident,r['job']['token'],error='WORKER_RESULT_REJECTED')
+                    except (ValueError, DataError):self.queue.complete(self.id,ident,r['job']['token'],error='WORKER_RESULT_REJECTED')
                 except Exception:continue
                 saved.append((ident,r))
             ready=saved

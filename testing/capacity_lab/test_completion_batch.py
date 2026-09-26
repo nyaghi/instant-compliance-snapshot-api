@@ -2,6 +2,7 @@
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
+from psycopg import DataError
 
 from deployment.queue_engine import FloridaTrace, execute
 from deployment.queue_worker import Supervisor
@@ -32,11 +33,13 @@ class CompletionBatchTests(unittest.TestCase):
         s.persist_terminated(); self.assertEqual(set(s.active), {'2'})
 
     def test_bad_output_isolated_without_discarding_good_task(self):
-        s = self.supervisor(); s.queue.complete_many.side_effect = ValueError('identity')
-        s.queue.complete.side_effect = [ValueError('identity'), True, True]
-        s.persist_terminated()
-        self.assertEqual(set(s.active), {'2'})
-        self.assertEqual(s.queue.complete.call_args_list[1].kwargs, {'error': 'WORKER_RESULT_REJECTED'})
+        for error in (ValueError('identity'), DataError('invalid JSON data')):
+            with self.subTest(error=type(error).__name__):
+                s = self.supervisor(); s.queue.complete_many.side_effect = error
+                s.queue.complete.side_effect = [error, True, True]
+                s.persist_terminated()
+                self.assertEqual(set(s.active), {'2'})
+                self.assertEqual(s.queue.complete.call_args_list[1].kwargs, {'error': 'WORKER_RESULT_REJECTED'})
 
     def test_individual_persistence_failure_still_keeps_its_capacity(self):
         s = self.supervisor(); s.queue.complete_many.side_effect = ValueError('bad batch')
