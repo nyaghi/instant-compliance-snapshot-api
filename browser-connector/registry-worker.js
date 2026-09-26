@@ -49,9 +49,20 @@ async function performRegistryQuery(job, query) {
     return result;
   }
   if (query.identifier) {
-    await registryNavigate(job,registryOrigin("GA")+"/verification/Details.aspx?result="+query.detail_key);
+    // GA invalidates earlier-page detail links after another result page is
+    // visited. Reopen the same public search and locate the requested license
+    // before following its currently displayed link. The master still owns
+    // selection and confirms the requested license in the returned body.
+    const source=job.gaSearchByIdentifier?.[query.identifier];
+    if(!source)throw new Error("NY_CONNECTOR_INCOMPLETE");
+    const current=await registryGaSearch(job,source,query.identifier);
+    if(!current?.detail_key)throw new Error("NY_CONNECTOR_INCOMPLETE");
+    await registryNavigate(job,registryOrigin("GA")+"/verification/Details.aspx?result="+current.detail_key);
     return registryMessage(job,{action:"registry-ga-detail",query});
   }
+  return registryGaSearch(job,query);
+}
+async function registryGaSearch(job, query, requestedIdentifier=null) {
   let document=await registryNavigate(job,registryStart("GA"));
   let form=await registryMessage(job,{action:"registry-ga-form",query});
   if (form.phase === "profession") {
@@ -64,9 +75,20 @@ async function performRegistryQuery(job, query) {
   for(let page=1;page<=10;page++) {
     const result=await registryMessage(job,{action:"registry-ga-rows"});
     if(!result.ok || result.page!==page || !Array.isArray(result.rows)) throw new Error("NY_CONNECTOR_INCOMPLETE");
+    if(requestedIdentifier) {
+      const found=result.rows.filter(row=>row.identifier===requestedIdentifier);
+      if(found.length>1)throw new Error("NY_CONNECTOR_INCOMPLETE");
+      if(found.length===1)return found[0];
+    } else {
+      job.gaSearchByIdentifier ||= Object.create(null);
+      for(const row of result.rows)job.gaSearchByIdentifier[row.identifier]={...query};
+    }
     rows.push(...result.rows);
     if(rows.length>100) throw new Error("NY_CONNECTOR_INCOMPLETE");
-    if(!result.next) return {ok:true,evidence:{query,complete:true,total:rows.length,rows}};
+    if(!result.next) {
+      if(requestedIdentifier)throw new Error("NY_CONNECTOR_INCOMPLETE");
+      return {ok:true,evidence:{query,complete:true,total:rows.length,rows}};
+    }
     const next=await registryMessage(job,{action:"registry-ga-next",page:page+1});
     if(!next.ok) throw new Error("NY_CONNECTOR_INCOMPLETE");
     document=await registryReady(job,document.documentId,"/verification/SearchResults.aspx");

@@ -77,6 +77,23 @@ test('Georgia collects both result pages before declaring complete',async()=>{
   assert.deepEqual(r.evidence.rows.map(x=>x.identifier),['CH000001','CH000002']);
 });
 
+test('Georgia refreshes an expired detail link by the same search and license identifier',async()=>{
+  const h=harness();registryFixture(h);const p=connect(h,'GA');
+  const original=h.chrome.tabs.sendMessage;let searches=0;
+  h.chrome.tabs.sendMessage=async(tab,m)=>{
+    if(m.action==='registry-ga-form')searches++;
+    if(m.action==='registry-ga-rows')return {ok:true,rows:[{identifier:'CH002627',detail_key:searches===1?'11111111-1111-1111-1111-111111111111':'22222222-2222-2222-2222-222222222222'}],page:1,next:false};
+    if(m.action==='registry-ga-detail'){
+      assert.match(h.tabs.get(tab).url,/result=22222222-2222-2222-2222-222222222222$/);
+      return {ok:true,evidence:{query:m.query,complete:true,body:'CH002627'}};
+    }
+    return original(tab,m);
+  };
+  assert.equal((await h.query(p,20,{state:'GA',orgName:'Ronald McDonald House'})).ok,true);
+  const detail={state:'GA',identifier:'CH002627',detail_key:'11111111-1111-1111-1111-111111111111'};
+  const r=await h.query(p,21,detail);assert.equal(r.ok,true);assert.equal(searches,2);assert.deepEqual(r.evidence.query,detail);
+});
+
 test('Illinois unopened detail gets one fresh-form retry and preserves final reason',async()=>{
   const h=harness();registryFixture(h);const p=connect(h,'IL');
   const original=h.chrome.tabs.sendMessage;let attempts=0;
