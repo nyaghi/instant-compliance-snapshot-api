@@ -39,6 +39,42 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(self.gate.limit(12,1),1)
         self.assertEqual(self.gate.snapshot['reason'],'launch_pacing')
 
+    def test_low_cpu_allows_two_paced_launches_per_sample_only(self):
+        self.gate.limit(12,0);self.now=1;self.metrics(400000)
+        self.assertEqual(self.gate.limit(12,0),12)
+        self.gate.launched();self.now=1.11
+        self.assertEqual(self.gate.limit(12,1),12)
+        self.gate.launched();self.now=1.22
+        self.assertEqual(self.gate.limit(12,2),2)
+        self.assertEqual(self.gate.snapshot['reason'],'launch_pacing')
+        self.now=1.4;self.metrics(560000)
+        self.assertEqual(self.gate.limit(12,2),12)
+
+    def test_fast_pacing_never_skips_new_memory_or_cpu_pressure(self):
+        self.gate.limit(12,0);self.now=1;self.metrics(400000)
+        self.gate.limit(12,2);self.gate.launched()
+        self.now=1.11;self.metrics(500000,memory=3_400_000_000)
+        self.assertEqual(self.gate.limit(12,2),2)
+        self.assertEqual(self.gate.snapshot['reason'],'memory_headroom')
+        self.now=2.3;self.metrics(3100000)
+        self.assertEqual(self.gate.limit(12,2),2)
+        self.assertEqual(self.gate.snapshot['reason'],'cpu_pressure')
+
+    def test_busy_or_old_sample_keeps_original_pacing(self):
+        self.gate.limit(12,0);self.now=1;self.metrics(1200000)
+        self.gate.limit(12,1);self.gate.launched();self.now=1.11
+        self.assertEqual(self.gate.limit(12,1),1)
+        self.assertEqual(self.gate.snapshot['reason'],'launch_pacing')
+
+    def test_only_resource_admission_changed_in_worker(self):
+        import ast,subprocess
+        root=Path(__file__).resolve().parents[2]
+        before=ast.parse(subprocess.check_output(['git','show','b50e4ec:deployment/queue_worker.py'],cwd=root).decode())
+        after=ast.parse((root/'deployment/queue_worker.py').read_text())
+        cls=next(n for n in before.body if isinstance(n,ast.ClassDef) and n.name=='ResourceAdmission')
+        after.body=[cls if isinstance(n,ast.ClassDef) and n.name=='ResourceAdmission' else n for n in after.body]
+        self.assertEqual(ast.dump(before),ast.dump(after))
+
     def test_missing_cgroup_cannot_expand_beyond_original_capacity(self):
         (self.root/'cpu.stat').unlink()
         self.assertEqual(self.gate.limit(12,8),8)

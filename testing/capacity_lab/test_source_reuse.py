@@ -102,6 +102,53 @@ class SourceReuseTests(unittest.TestCase):
         self.assertFalse(result.success);self.assertEqual(result.status,'Site Not Reachable')
         self.assertEqual(result.error,'HTTP unavailable')
 
+    def test_cached_tokens_cannot_be_mutated_by_a_lookup(self):
+        c._cached_distinctive_match_tokens.cache_clear()
+        first=c.distinctive_match_tokens('Example Relief Foundation')
+        self.assertEqual(first,{'example','relief'})
+        first.clear()
+        self.assertEqual(c.distinctive_match_tokens('Example Relief Foundation'),{'example','relief'})
+        self.assertEqual(c._cached_distinctive_match_tokens.cache_info().hits,1)
+
+    def test_ks_normalization_preserves_legal_and_exact_distinction(self):
+        ks=c.load_ks_weekly_checker()
+        for value in ('The Example Foundation, Inc.','Example Foundation','Example Foundation Wisconsin'):
+            self.assertEqual(ks.normalize_name(value),ks.normalize_name.__wrapped__(value))
+            self.assertEqual(ks.normalize_legal_name(value),ks.normalize_legal_name.__wrapped__(value))
+        self.assertNotEqual(ks.normalize_name('The Example'),ks.normalize_name('Example'))
+        self.assertEqual(ks.normalize_legal_name('The Example, Inc.'),ks.normalize_legal_name('Example'))
+
+    def test_ca_retains_same_api_records_without_legacy_page_read(self):
+        result=c.checker.StateResult('Control','000000001','CA','Current','')
+        result.success=True;result._cc_registration_records=[{'initialDate':'2001-01-01'}]
+        with patch.object(c.checker,'search_ca',return_value=result) as search, \
+             patch.object(c,'ca_detail_body',side_effect=AssertionError('Unused legacy page')), \
+             patch.object(c,'response_data_for_lookup',side_effect=lambda r,*a:r), \
+             patch.object(c.checker,'sync_playwright',side_effect=AssertionError('Unused browser')):
+            actual=c.run_state_lookup('Control','000000001','CA')
+        self.assertIs(actual,result);self.assertIsNone(search.call_args.args[0])
+        self.assertEqual(actual._cc_registration_records,[{'initialDate':'2001-01-01'}])
+
+    def test_sc_retains_inconclusive_and_valid_direct_identity_checks(self):
+        for status in ('Current','Unable to Confirm'):
+            result=c.checker.StateResult('Control','000000001','SC',status,'')
+            result.success=status=='Current'
+            with patch.object(c,'sc_official_detail_lookup',return_value=result) as search, \
+                 patch.object(c,'response_data_for_lookup',side_effect=lambda r,*a:r), \
+                 patch.object(c.checker,'sync_playwright',side_effect=AssertionError('Unused browser')):
+                self.assertIs(c.run_state_lookup('Control','000000001','SC'),result)
+            search.assert_called_once()
+
+    def test_sc_fallback_does_not_repeat_already_completed_http_probe(self):
+        from unittest.mock import MagicMock
+        original=c.checker.StateResult('Control','000000001','SC','Not Registered','')
+        original.success=True
+        with patch.object(c,'sc_official_detail_lookup',side_effect=AssertionError('Duplicate probe')), \
+             patch.object(c,'preflight_name_search_registry',return_value=(True,None,None)), \
+             patch.object(c,'search_with_name_variants',return_value=original):
+            self.assertIs(c.search_sc_resilient(MagicMock(),c.checker.Organization('Control','000000001'),
+                official_checked=True,official_result=original),original)
+
     def test_matching_status_and_other_states_unchanged(self):
         from testing.capacity_lab.parsing_scope import restore_parsing_optimization
         root=Path(__file__).resolve().parents[2]

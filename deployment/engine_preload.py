@@ -26,10 +26,18 @@ import registry_snapshot_server as master
 for source in ("KS", "NH"):
     try:
         if source == "KS" and master.downloadable_data_info(source).get("usable"):
-            master.load_ks_weekly_checker().load_live_records()
+            ks = master.load_ks_weekly_checker()
+            records, _, _ = ks.load_live_records()
+            for row in records:
+                ks.normalize_name(row.name)
+                ks.normalize_legal_name(row.name)
+            del records, row
         elif (source == "NH" and master.weekly_asset(source, "downloadable-data/NH-records.json") is not None
                 and master.weekly_asset(source, "registered-charities.pdf") is not None):
-            master.nh_download_live_pdf_records()
+            records, _ = master.nh_download_live_pdf_records()
+            for row in records:
+                master.distinctive_match_tokens(master.normalized_match_name(row["registry_name"]))
+            del records, row
     except Exception as exc:
         # A broken source must remain an ordinary state failure, not prevent
         # unrelated states from starting. The lookup revalidates it in its child.

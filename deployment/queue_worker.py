@@ -172,11 +172,19 @@ class ResourceAdmission:
         self.cpu_fraction = None
         self.cpu_window_seconds = 0
         self.last_launch = float('-inf')
+        self.launches_since_sample = 0
         self.snapshot = {}
 
     def limit(self, configured, used):
         now = self.clock()
-        if now-self.last_launch < .25:
+        # The old unconditional quarter-second delay consumed substantial idle
+        # launch time even for warmed, lightweight HTTP/file tasks. Accelerate
+        # only on recent measured headroom, at most two launches per sample.
+        # CPU/memory thresholds, physical slots and registry caps do not change.
+        pacing = (.1 if self.cpu_fraction is not None and self.cpu_fraction < .5
+                  and self.previous is not None and now-self.previous[0] <= .5
+                  and self.launches_since_sample < 2 else .25)
+        if now-self.last_launch < pacing:
             self.snapshot['reason'] = 'launch_pacing'
             return used
         try:
@@ -197,10 +205,12 @@ class ResourceAdmission:
                 self.samples.clear()
                 self.samples.append((now,cpu))
                 self.previous = (now,cpu)
+                self.launches_since_sample = 0
                 self.cpu_fraction, self.cpu_window_seconds = None, 0
             elif now-previous[0] >= .25:
                 self.samples.append((now,cpu))
                 self.previous = (now,cpu)
+                self.launches_since_sample = 0
                 while len(self.samples)>1 and now-self.samples[0][0]>2:
                     self.samples.popleft()
                 first = self.samples[0]
@@ -229,7 +239,9 @@ class ResourceAdmission:
             self.snapshot={'reason':'metrics_unavailable','configured_slots':configured}
             return min(configured,8)
 
-    def launched(self): self.last_launch=self.clock()
+    def launched(self):
+        self.last_launch=self.clock()
+        self.launches_since_sample += 1
 
 
 class AdmissionWindow:

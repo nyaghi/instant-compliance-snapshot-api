@@ -682,6 +682,9 @@ def load_ks_weekly_checker():
         # source metadata. The validated weekly asset itself is not modified.
         KS_WEEKLY_CHECKER.records_from_workbook_bytes = lru_cache(maxsize=1)(
             KS_WEEKLY_CHECKER.records_from_workbook_bytes)
+        # Pure text transformations: no EIN, reviewed alias, date or result.
+        KS_WEEKLY_CHECKER.normalize_name = lru_cache(maxsize=16384)(KS_WEEKLY_CHECKER.normalize_name)
+        KS_WEEKLY_CHECKER.normalize_legal_name = lru_cache(maxsize=16384)(KS_WEEKLY_CHECKER.normalize_legal_name)
     return KS_WEEKLY_CHECKER
 
 
@@ -7257,8 +7260,9 @@ def result_has_safe_matched_registry_name(result, original_name: str, ein: str =
     return bool(matched and registry_name_is_safe_for_org(matched, original_name, ein))
 
 
-def search_sc_resilient(page, org):
-    official_result = sc_official_detail_lookup(org)
+def search_sc_resilient(page, org, *, official_checked=False, official_result=None):
+    if not official_checked:
+        official_result = sc_official_detail_lookup(org)
     if official_result and public_status(official_result) != "Not Registered":
         return official_result
     reachable, _, preflight_result = preflight_name_search_registry(org, "SC")
@@ -10394,6 +10398,12 @@ WEAK_NAME_MATCH_TOKENS = {
 
 
 def distinctive_match_tokens(value: str) -> set[str]:
+    # Give callers their own mutable set; cached public-name tokens are immutable.
+    return set(_cached_distinctive_match_tokens(value))
+
+
+@lru_cache(maxsize=32768)
+def _cached_distinctive_match_tokens(value: str) -> frozenset[str]:
     tokens = set()
     for token in re.findall(r"[a-z0-9]+", normalized_match_name(value or "")):
         if token in WEAK_NAME_MATCH_TOKENS:
@@ -10401,7 +10411,7 @@ def distinctive_match_tokens(value: str) -> set[str]:
         if len(token) < 2:
             continue
         tokens.add(token)
-    return tokens
+    return frozenset(tokens)
 
 
 def distinctive_overlap_is_sufficient(row_norm: str, target_norm: str) -> bool:
@@ -26445,12 +26455,13 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 BROWSER_LOOKUP_SEMAPHORE.release()
         return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
 
-    if state == "VA" and not capture_source_snapshot:
-        # The existing Virginia path uses HTTP exclusively. Do not initialize
-        # Chromium merely to leave its blank page unused.
+    if state in {"CA", "VA"} and not capture_source_snapshot:
+        # These existing paths use HTTP exclusively. CA retains its selected
+        # registration records on the result; legacy blank-page scrolling adds
+        # neither filing evidence nor dates.
         try:
-            result = search_va_direct(org)
-            body = " ".join(filter(None, [result.raw_status_text, result.source_note,
+            result = checker.search_ca(None, org) if state == "CA" else search_va_direct(org)
+            body = "" if state == "CA" else " ".join(filter(None, [result.raw_status_text, result.source_note,
                                           result.matched_registry_name, result.matched_registry_identifier]))
         except Exception as exc:
             log_error(f"{state} lookup for {format_ein(ein)} failed before completion: {exc}")
@@ -26461,6 +26472,20 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             result.success = False
         result = ensure_state_result(result, org, state)
         return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
+
+    sc_official_checked = state == "SC" and not capture_source_snapshot
+    sc_official_result = None
+    if sc_official_checked:
+        try:
+            sc_official_result = sc_official_detail_lookup(org)
+        except Exception as exc:
+            sc_official_result = checker.StateResult(organization_name, ein, state, "Site Not Reachable", "")
+            sc_official_result.raw_status_text = "Lookup could not be completed"
+            sc_official_result.source_note = "Public registry lookup could not be completed."
+            sc_official_result.error = str(exc)
+            sc_official_result.success = False
+    if sc_official_result and public_status(sc_official_result) != "Not Registered":
+        return response_data_for_lookup(sc_official_result, "", org, organization_name, ein, state, lookup_started)
 
     if state == "LA" and not capture_source_snapshot and weekly_asset("LA", "downloadable-data/LA.xlsx") is not None:
         # A verified local export needs neither a browser nor a network request.
@@ -26712,7 +26737,8 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     result.matched_registry_identifier or "",
                 ]).strip()
             elif state == "SC":
-                result = search_sc_resilient(page, org)
+                result = search_sc_resilient(page, org, official_checked=sc_official_checked,
+                                             official_result=sc_official_result)
             elif state == "HI":
                 result = search_hi_precise(page, org)
                 if public_status(result) != "Not Registered":
