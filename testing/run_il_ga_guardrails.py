@@ -138,6 +138,14 @@ class IntegrationControls(unittest.TestCase):
             result=cc.il_ga_connector_failure(record,'NY_CONNECTOR_IL_DETAIL_'+code)
             self.assertEqual(result['status'],'Unable to Confirm')
             self.assertIn(phrase,result['comments'])
+    def test_il_search_failures_are_distinct_from_blank_detail(self):
+        record=dict(state='IL',organization_name='Feeding America',ein='36-3673599')
+        for code,phrase in [('RESPONSE_TIMEOUT','search results'),('RESULTS_INCOMPLETE','selected registration number'),('TOTAL_CHANGED','result count'),('RESULT_LIMIT','more records'),('PAGINATION_INCOMPLETE','pagination')]:
+            result=cc.il_ga_connector_failure(record,'NY_CONNECTOR_IL_'+code)
+            self.assertEqual(result['status'],'Unable to Confirm')
+            self.assertIn(phrase,result['comments'])
+            self.assertNotIn('contained no readable record',result['comments'])
+
     def test_il_incomplete_fallback_never_negative(self):
         def evidence(q):
             if 'ein' in q:return {'rows':[]}
@@ -165,6 +173,19 @@ class IntegrationControls(unittest.TestCase):
         self.assertEqual(result.matched_registry_identifier,'CH003977')
         self.assertNotEqual(result.matched_registry_identifier,'CH002301')
         self.assertIn('Other returned records',result.source_note)
+    def test_ga_unrelated_legacy_rows_do_not_invalidate_completed_search(self):
+        org=cc.checker.Organization('Focus on the Family','95-3188150')
+        query={'state':'GA','orgName':org.organization_name}
+        rows=[search_row('Family of 3, a Robert Griffin III Foundation','','11111111-1111-1111-1111-111111111111'),search_row('Family Talk Action Corporation','','22222222-2222-2222-2222-222222222222')]
+        cleaned=cc.il_ga_clean_evidence({'query':query,'complete':True,'total':2,'rows':rows},query)
+        self.assertEqual(len(cleaned['rows']),2)
+        result=cc.il_ga_browser_lookup(org,'GA',lambda q:cleaned)
+        self.assertEqual(result.status,'Not Registered')
+    def test_ga_matching_unnumbered_row_is_incomplete_not_negative(self):
+        row=search_row('Feeding America','','11111111-1111-1111-1111-111111111111')
+        with self.assertRaisesRegex(ValueError,'no license identifier'):
+            cc.il_ga_browser_lookup(self.org,'GA',lambda q:{'rows':[row]})
+
     def test_ga_empty_is_not_registered_not_il_label(self):
         result=cc.il_ga_browser_lookup(self.org,'GA',lambda q:{'rows':[]})
         self.assertEqual(cc.public_status(result),'Not Registered')
@@ -178,6 +199,22 @@ class IntegrationControls(unittest.TestCase):
         self.assertEqual(result.status,'Needs Review')
         self.assertIn('Young Life (of Texas)',result.source_note)
         self.assertNotEqual(result.status,'Not Registered')
+    def test_ga_reviewed_aliases_do_not_hide_possible_primary_name(self):
+        org=cc.checker.Organization('Young Life','84-0385934')
+        row=search_row('Young Life (of Texas)','CH000861','85f78478-2813-4bd9-b1f0-8d49aa062631')
+        token=cc.REVIEWED_NAME_CONTEXT.set({'840385934':('YOUNG LIFE','YOUNG LIFE GREATER OLYMPIA','NE SEATTLE YOUNG LIFE')})
+        names_patch=patch.object(cc,'known_names_for_ein',side_effect=lambda ein:list(cc.REVIEWED_NAME_CONTEXT.get().get(cc.canonical_ein_digits(ein),())))
+        names_patch.start()
+        try:
+            self.assertEqual(cc.score_candidate(org.organization_name,org.ein,{'name':row['name']})['decision'],'rejected')
+            result=cc.il_ga_browser_lookup(org,'GA',lambda q:{'rows':[row]})
+            self.assertEqual(result.status,'Needs Review')
+            self.assertFalse(result.success)
+            self.assertIn('Young Life (of Texas)',result.source_note)
+            self.assertFalse(getattr(result,'matched_registry_identifier',''))
+        finally:
+            names_patch.stop();cc.REVIEWED_NAME_CONTEXT.reset(token)
+
     def test_ga_exempt_license_type(self):
         self.assertEqual(cc.ga_charity_detail_html(ga_html(license_type='Exempt Charity'),'CH003977')['status'],'Exempt')
     def test_ga_exemption_marker_is_bound_to_name_location_and_detail(self):

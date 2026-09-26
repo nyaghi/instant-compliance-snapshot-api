@@ -50,3 +50,8 @@ test('paid solicitors remain excluded from charity registrations',async()=>{
   const r=await collect(split,[['Example Solicitor','PS12345','Charities','Paid Solicitor','Active','Boston','MA','Submit Complaint']]);
   assert.equal(r.ok,true);assert.equal(r.rows.length,0);
 });
+
+test('observed legacy type and unnumbered exemptions stay visible for master matching',async()=>{
+  const r=await collect(combined,[['Elizabeth Anderson Hishon Foundation','EXEMPT','Charities','agency1prof0licType52004','Exempt','Atlanta GA'],['Elizabeth City State University (2017)','','Charities','Exempt Charity','Exempt','Chapel Hill NC']]);
+  assert.equal(r.ok,true);assert.equal(r.rows.length,2);assert.equal(r.rows[1].identifier,'');
+});

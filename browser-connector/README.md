@@ -1,4 +1,4 @@
-# CharityClarity registry connector — 0.5.3 candidate
+# CharityClarity registry connector — 0.5.4 candidate
 
 This candidate adds Illinois and Georgia on staging only. New York retains its existing workflow. This package has passed local protocol, queue and backend tests; live IL/GA connector validation remains required before release.
 
@@ -12,7 +12,7 @@ This candidate adds Illinois and Georgia on staging only. New York retains its e
 
 1. Open Chrome's Extensions page yourself (`chrome://extensions`).
 2. If updating an existing unpacked connector, use this candidate folder as its source, or disable the old connector and choose **Load unpacked** with this folder. Keep only one CharityClarity connector enabled.
-3. Verify version **0.5.3**. Refresh the staging tab.
+3. Verify version **0.5.4**. Refresh the staging tab.
 4. Keep Chrome open. Illinois and Georgia require the corresponding staging frontend/backend candidate before end-to-end checks can run.
 
 The additional host permissions are limited to the official Illinois and Georgia public registries. Production web/backend deployments are not part of this package.
@@ -57,3 +57,5 @@ Georgia pagination activates the existing public pager link in page context. No 
 Version 0.5.3 validates both public Georgia result layouts (combined address or split city/state). Unknown layouts and malformed rows remain incomplete evidence rather than completed empty searches. No new permissions or matching/status rules.
 
 Georgia literal EXEMPT records are bound to the selected public name, location and refreshed detail link. The shared EXEMPT marker is never treated as a unique license number. Staging requires this capability before starting Georgia browser research.
+
+Version 0.5.4 preserves the observed Georgia legacy exemption type for master evaluation, and reports Illinois search-update, result-count, and pagination failures separately. It adds no permissions.

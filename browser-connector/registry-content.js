@@ -45,7 +45,9 @@
       if (!url || url.origin !== location.origin || url.pathname !== "/verification/Details.aspx") throw new Error("REGISTRY_LINK_CHANGED");
       if (text(cells[2]) !== "Charities") throw new Error("REGISTRY_FILTER_CHANGED");
       if (text(cells[3]) === "Paid Solicitor") continue;
-      if (!["Charity", "Exempt Charity", "Private Foundations"].includes(text(cells[3]))) throw new Error("REGISTRY_FILTER_CHANGED");
+      // Legacy exemptions can expose an untranslated type code. Keep their
+      // public rows for master identity filtering; this does not classify them.
+      if (!["Charity", "Exempt Charity", "Private Foundations", "agency1prof0licType52004"].includes(text(cells[3]))) throw new Error("REGISTRY_FILTER_CHANGED");
       rows.push({name:text(cells[0]), identifier:text(cells[1]), location:combined ? text(cells[5]) : [text(cells[5]),text(cells[6])].filter(Boolean).join(", "), street:"", region:split ? text(cells[6]) : "", postal_code:"", detail_key:url.searchParams.get("result")});
     }
     const current = [...pager.querySelectorAll("span")].map(text).find(v => /^\d+$/.test(v));
@@ -167,7 +169,11 @@
   }
   chrome.runtime.onMessage.addListener((m,sender,reply)=>{
     if(sender.id!==chrome.runtime.id || !m?.action?.startsWith('registry-')) return false;
-    handle(m).then(reply,error=>reply({ok:false,reason:/^NY_CONNECTOR_IL_DETAIL_(NOT_OPENED|BLANK|IDENTITY_INCOMPLETE)$/.test(error?.message||'') ? error.message : 'NY_CONNECTOR_INCOMPLETE'}));
+    handle(m).then(reply,error=>{
+      const code=error?.message||'';
+      const ilReasons={REGISTRY_RESPONSE_INCOMPLETE:'NY_CONNECTOR_IL_RESPONSE_TIMEOUT',REGISTRY_RESULTS_INCOMPLETE:'NY_CONNECTOR_IL_RESULTS_INCOMPLETE',REGISTRY_TOTAL_CHANGED:'NY_CONNECTOR_IL_TOTAL_CHANGED',REGISTRY_RESULT_LIMIT:'NY_CONNECTOR_IL_RESULT_LIMIT',REGISTRY_PAGINATION_INCOMPLETE:'NY_CONNECTOR_IL_PAGINATION_INCOMPLETE'};
+      reply({ok:false,reason:/^NY_CONNECTOR_IL_DETAIL_(NOT_OPENED|BLANK|IDENTITY_INCOMPLETE)$/.test(code) ? code : IL && ilReasons[code] || 'NY_CONNECTOR_INCOMPLETE'});
+    });
     return true;
   });
 })();
