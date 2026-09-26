@@ -6,6 +6,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import registry_snapshot_server as cc
 
+class RedundantAcronymIdentityTests(unittest.TestCase):
+    def test_legal_suffix_before_verified_acronym_preserves_identity(self):
+        match = cc.score_candidate('Reading Is Fundamental, Inc.', '52-0976257', {'name': 'Reading Is Fundamental, Inc. (RIF)'})
+        self.assertEqual(match['decision'], 'accepted')
+        self.assertEqual(match['reason'], 'MATCH_REDUNDANT_BRACKET_ACRONYM')
+
+    def test_acronym_does_not_erase_chapter_or_wrong_ein(self):
+        for candidate in ['Reading Is Fundamental Georgia, Inc. (RIF)', 'Reading Is Fundamental, Inc. (RFI)', 'Reading Is Fundamental, Inc. (RIF) Georgia']:
+            with self.subTest(candidate=candidate):
+                self.assertNotEqual(cc.score_candidate('Reading Is Fundamental, Inc.', '52-0976257', {'name':candidate})['decision'], 'accepted')
+        self.assertEqual(cc.score_candidate('Reading Is Fundamental, Inc.', '52-0976257', {'name':'Reading Is Fundamental, Inc. (RIF)', 'ein':'36-2170141'})['reason'], 'REJECT_DIFFERENT_EIN')
+
 IL = """FEEDING AMERICA
 161 N. CLARK STREET, SUITE 700
 CHICAGO, IL 60601
@@ -204,7 +216,9 @@ class IntegrationControls(unittest.TestCase):
         changed={k for k in old if old[k]!=new.get(k)}
         self.assertEqual(changed,{'public_status','identity_rows_names','licensed_charity_identity','registration_date_metadata',
             'true_status_from_body','comments_for_result_base','run_state_lookup','ny_connector_failure',
-            'ny_connector_clean_response','ny_connector_advance','ny_connector_request','normalize_registry_match_fields'})
+            'ny_connector_clean_response','ny_connector_advance','ny_connector_request','normalize_registry_match_fields',
+            # Shared verified-acronym fix covered above and by release regression.
+            'redundant_bracket_acronym_key'})
 
 
 if __name__=='__main__':unittest.main()

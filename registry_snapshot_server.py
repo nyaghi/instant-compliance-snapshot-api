@@ -134,7 +134,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.25.2-staging").strip() or "2026.09.25.2-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.25.3-staging").strip() or "2026.09.25.3-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -10550,9 +10550,16 @@ def redundant_bracket_acronym_key(value: str) -> tuple[str, bool]:
         nonlocal changed
         acronym = match.group(1) or match.group(2)
         words = re.findall(r"[A-Za-z]+", value[:match.start()])
+        # An entity suffix may appear before the repeated acronym, e.g.
+        # "Reading Is Fundamental, Inc. (RIF)". Remove it only from the
+        # initials check; the complete-name comparison still checks the name.
+        acronym_words = list(words)
+        while acronym_words and acronym_words[-1].casefold() in {"inc", "incorporated", "corp", "corporation", "ltd", "limited", "llc"}:
+            acronym_words.pop()
         # The full preceding phrase must spell the acronym; arbitrary labels,
         # locations and substantive suffixes remain part of the identity.
-        if len(words) >= 3 and "".join(word[0] for word in words).upper() == acronym:
+        if len(words) >= 3 and ("".join(word[0] for word in words).upper() == acronym
+                               or len(acronym_words) >= 3 and "".join(word[0] for word in acronym_words).upper() == acronym):
             changed = True
             return " "
         return match.group(0)
