@@ -11758,6 +11758,25 @@ def fl_reviewed_alias_address(org, row_name, row_text, deadline):
     return {**evidence, "registry_location": place}
 
 
+def fl_completed_search_form_available(page):
+    """Reuse only the completed same-origin ASP.NET search form and its new viewstate."""
+    try:
+        if page.url.split("?", 1)[0] != FL_CHECK_A_CHARITY_URL:
+            return False
+        return page.evaluate("""() => {
+            const input = document.querySelector('input[name="ctl00$cpMainContent$BusinessNameTb"]');
+            const form = input && input.form;
+            const button = form && form.querySelector('input[name="ctl00$cpMainContent$SingleSearchBt"]');
+            const viewstate = form && form.querySelector('input[name="__VIEWSTATE"]');
+            return Boolean(input && !input.disabled && input.getClientRects().length &&
+                button && !button.disabled && button.getClientRects().length &&
+                viewstate && viewstate.value && form.method.toLowerCase() === 'post' &&
+                new URL(form.action, location.href).href.split('?')[0] === location.href.split('?')[0]);
+        }""") is True
+    except Exception:
+        return False
+
+
 def search_fl_with_transport(page, org, transport):
     url = FL_CHECK_A_CHARITY_URL
     original_name = org.organization_name
@@ -11961,6 +11980,7 @@ def search_fl_with_transport(page, org, transport):
     alias_review = None
     search_variants = reviewed_queries_first(original_name, org.ein, variants, limit=8)
     final_exact_retry_added = False
+    completed_search_form = False
     for variant in search_variants:
         if deadline_expired():
             break
@@ -11971,7 +11991,10 @@ def search_fl_with_transport(page, org, transport):
                 page.set_default_navigation_timeout(remaining_ms(12000))
             except Exception:
                 pass
-            load_fl_search_page()
+            if not (completed_search_form and fl_completed_search_form_available(page)):
+                load_fl_search_page()
+            # Any failed fill, submission, or parse requires a fresh document.
+            completed_search_form = False
             try:
                 page.locator('input[name*="BusinessName" i], input[id*="BusinessName" i], input[type="text"]').first.wait_for(state="visible", timeout=remaining_ms(6000))
             except Exception:
@@ -11997,6 +12020,7 @@ def search_fl_with_transport(page, org, transport):
             text = readable_page_text(page)
             if transport.error:
                 raise transport.error
+            completed_search_form = True
             if no_registry_results_seen(text):
                 result.status = checker.STATUS_NOT_REGISTERED
                 result.raw_status_text = "No matching organization record"
@@ -12105,6 +12129,7 @@ def search_fl_with_transport(page, org, transport):
             result.success = True
             return result
         except Exception as exc:
+            completed_search_form = False
             last_error = exc
             result.error = f"FL error: {exc}"
             if isinstance(exc, FloridaCertificateError):

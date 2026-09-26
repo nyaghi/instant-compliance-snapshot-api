@@ -761,3 +761,8 @@ Ohio transport candidate (September 26): reuse the existing exact-EIN form respo
   Source capture always retains the original browser path.
 - Browser fallback reads the same visible result cells in one bounded snapshot.
 - No worker, source-permit, queue, pricing or 60-second Sales deadline changes.
+
+
+### Florida completed-form reuse (perf.34)
+
+After a successful Florida search response, use its existing visible ASP.NET form and updated viewstate for the next planned name query. The form must remain on the exact registry path, use POST, contain the expected input/button and nonempty viewstate, and submit to the same path. Any missing form, failed navigation or parsing error forces the existing fresh-load path. All query ordering, candidate matching, address checks, classification, certificate verification and time budgets remain unchanged. This is a lab-only runtime optimization, with no additional workers or source capacity.
