@@ -1,6 +1,27 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const {harness,tick,id}=require('./run_ny_connector_lifecycle.cjs');
+const vm=require('node:vm');
+const fs=require('node:fs');
+const path=require('node:path');
+
+test('Georgia public pager advances only to the visible next page in page context',()=>{
+  let listener,clicks=0;const sent=[];
+  const link={innerText:'2',getClientRects:()=>[{}],getAttribute:()=>"javascript:__doPostBack('datagrid_results$_ctl44$_ctl1','')",click:()=>clicks++};
+  const pager={children:[{}],querySelectorAll:s=>s==='span'?[{innerText:'1'}]:[link]};
+  const win={addEventListener:(type,fn)=>listener=fn,postMessage:m=>sent.push(m)};win.top=win;
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../browser-connector/registry-ga-main.js'),'utf8'),{
+    window:win,location:{origin:'https://verify.sos.ga.gov',pathname:'/verification/SearchResults.aspx'},
+    document:{querySelector:()=>({querySelectorAll:()=>[pager]})},setTimeout:fn=>fn()
+  });
+  const message={channel:'cc-ga-public-pager-v1',direction:'request',id:'12345678-1234-1234-1234-123456789abc',page:2};
+  listener({source:win,origin:'https://verify.sos.ga.gov',data:message});
+  assert.equal(clicks,1);assert.equal(sent.at(-1).ok,true);
+  listener({source:win,origin:'https://evil.example',data:message});assert.equal(clicks,1);
+  listener({source:win,origin:'https://verify.sos.ga.gov',data:{...message,page:3}});assert.equal(clicks,1);assert.equal(sent.at(-1).ok,false);
+  link.getAttribute=()=>"javascript:unexpected()";
+  listener({source:win,origin:'https://verify.sos.ga.gov',data:message});assert.equal(clicks,1);assert.equal(sent.at(-1).ok,false);
+});
 function event(){const list=[];return {addListener:f=>list.push(f),emit:(...a)=>list.forEach(f=>f(...a))};}
 function connect(h,state,n=1,origin='https://staging.compliance-express.com/') {
   const p={name:`cc-${state.toLowerCase()}-lookup-v1:`+id(n),sender:{id:h.chrome.runtime.id,frameId:0,url:origin,tab:{id:1}},onMessage:event(),onDisconnect:event(),messages:[],disconnected:false,
@@ -41,6 +62,19 @@ test('Georgia normal form navigation produces a completed empty result',async()=
   const h=harness();registryFixture(h);const p=connect(h,'GA');
   const result=await h.query(p,20,{state:'GA',orgName:'Nonexistent Control'});
   assert.equal(result.ok,true);assert.equal(result.evidence.total,0);
+});
+
+test('Georgia collects both result pages before declaring complete',async()=>{
+  const h=harness();registryFixture(h);const p=connect(h,'GA');
+  const original=h.chrome.tabs.sendMessage;let page=1;
+  h.chrome.tabs.sendMessage=async(tab,m)=>{
+    if(m.action==='registry-ga-rows')return {ok:true,rows:[{identifier:'CH00000'+page}],page,next:page===1};
+    if(m.action==='registry-ga-next'){assert.equal(m.page,2);page=2;return {ok:true};}
+    const r=await original(tab,m);if(m.action==='registry-ready')r.documentId+='-page-'+page;return r;
+  };
+  const r=await h.query(p,20,{state:'GA',orgName:'Ronald McDonald House'});
+  assert.equal(r.ok,true);assert.equal(r.evidence.complete,true);assert.equal(r.evidence.total,2);
+  assert.deepEqual(r.evidence.rows.map(x=>x.identifier),['CH000001','CH000002']);
 });
 
 test('Illinois unopened detail gets one fresh-form retry and preserves final reason',async()=>{

@@ -129,7 +129,17 @@
       const table=document.querySelector("#datagrid_results"), pager=[...table.querySelectorAll(":scope > tbody > tr")].at(-1);
       const link=[...pager.querySelectorAll("a")].find(a=>text(a)===String(m.page));
       if (!link) throw new Error("REGISTRY_PAGINATION_INCOMPLETE");
-      setTimeout(()=>link.click(),0); return {ok:true};
+      const id=crypto.randomUUID();
+      return new Promise(resolve=>{
+        const receive=event=>{
+          const r=event.data;
+          if(event.source!==window || event.origin!==location.origin || r?.channel!=='cc-ga-public-pager-v1' || r.direction!=='response' || r.id!==id)return;
+          clearTimeout(timer);window.removeEventListener('message',receive);resolve({ok:r.ok===true});
+        };
+        const timer=setTimeout(()=>{window.removeEventListener('message',receive);resolve({ok:false});},3000);
+        window.addEventListener('message',receive);
+        window.postMessage({channel:'cc-ga-public-pager-v1',direction:'request',id,page:m.page},location.origin);
+      });
     }
     if (m.action === "registry-ga-detail") {
       // Serialize only public primary-license spans. Never forward forms,
