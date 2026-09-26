@@ -57,7 +57,10 @@
   }
   async function illinois(query) {
     const inputs = key => document.querySelector(`input[data-val-property-name="${key}"]`);
-    const button = await wait(() => [...document.querySelectorAll("button")].find(el => text(el) === "Search" && visible(el) && !el.disabled), 45000);
+    let button;
+    try {
+      button = await wait(() => [...document.querySelectorAll("button")].find(el => text(el) === "Search" && visible(el) && !el.disabled), 45000);
+    } catch { throw new Error("NY_CONNECTOR_IL_FORM_READY_TIMEOUT"); }
     for (const key of ["Name","Address","City","StateCode","Zip","County","FEIN","FileNumber"]) set(inputs(key), "");
     const field = query.ein ? "FEIN" : query.identifier ? "FileNumber" : "Name";
     const value = query.ein || query.identifier || query.orgName;
@@ -67,23 +70,38 @@
     const grid = document.querySelector('.k-grid[id^="CharitiesPublicSearch_"]');
     if (!grid) throw new Error("REGISTRY_GRID_CHANGED");
     async function changed(action) {
-      let mutated = false;
-      const observer = new MutationObserver(list => { if (list.some(m => m.type === "childList")) mutated = true; });
-      observer.observe(grid, { childList:true, subtree:true });
+      let rendered = false, loadingSeen = false, settledAt = 0;
+      const loading = () => [...grid.querySelectorAll(".k-loading-mask")].some(visible);
+      const observer = new MutationObserver(list => {
+        // Kendo can reuse the same empty grid and toggle only loading styles.
+        // Observe that cycle as well as result rendering, never accept the
+        // initial empty grid merely because its pager is already present.
+        loadingSeen ||= loading();
+        if (list.some(m => ["childList", "characterData"].includes(m.type)
+          && (m.target.nodeType === 1 ? m.target : m.target.parentElement)?.closest(".k-grid-content, .k-pager-info, .k-pager-numbers"))) rendered = true;
+        settledAt = 0;
+      });
+      observer.observe(grid, { childList:true, subtree:true, attributes:true, attributeFilter:["style","class","aria-busy"], characterData:true });
       try {
         action();
-        await wait(() => mutated && ![...grid.querySelectorAll(".k-loading-mask")].some(visible) && grid.querySelector(".k-pager-info"));
+        await wait(() => {
+          if (loading()) { loadingSeen = true; settledAt = 0; return false; }
+          if (!(rendered || loadingSeen) || !grid.querySelector(".k-pager-info")) return false;
+          settledAt ||= Date.now();
+          return Date.now()-settledAt >= 300;
+        },35000);
       } finally { observer.disconnect(); }
     }
     await changed(() => button.click());
     const collected = [];
     let total = null;
-    for (let page=0; page<10; page++) {
+    for (let page=0; page<100; page++) {
       const info = text(grid.querySelector(".k-pager-info"));
       const match = info.match(/(?:of\s+([\d,]+)\s+items)|(?:^No items to display$)/i);
       if (!match) throw new Error("REGISTRY_TOTAL_CHANGED");
       const count = match[1] ? Number(match[1].replaceAll(",","")) : 0;
-      if (count > 100 || total !== null && total !== count) throw new Error("REGISTRY_RESULT_LIMIT");
+      if (count > 1000) throw new Error("REGISTRY_RESULT_LIMIT");
+      if (total !== null && total !== count) throw new Error("REGISTRY_TOTAL_CHANGED");
       total = count;
       const headers = [...grid.querySelectorAll(".k-grid-header thead th")].map(h=>h.dataset.field);
       const pageRows = [...grid.querySelectorAll(".k-grid-content tbody > tr[data-uid]")];
@@ -162,7 +180,9 @@
       const spans=all.filter(el=>/^_ctl\d+__ctl\d+_(full_name|license_no|profession|license_type|status|issue_date|expiry|last_ren)$/.test(el.id) && (!boundary || !!(el.compareDocumentPosition(boundary)&Node.DOCUMENT_POSITION_FOLLOWING)));
       const escape=s=>s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
       const body=spans.map(el=>`<span id="${el.id}">${escape(text(el))}</span>`).join('');
-      if (!body || !body.includes(m.query.identifier)) throw new Error("REGISTRY_DETAIL_INCOMPLETE");
+      // A blank identifier is a real legacy exemption, but requires the
+      // selected public name. Master validates its explicit exemption fields.
+      if (!body || (m.query.identifier ? !body.includes(m.query.identifier) : !m.query.record_name || !spans.some(el=>el.id.endsWith('_full_name') && text(el)===m.query.record_name))) throw new Error("REGISTRY_DETAIL_INCOMPLETE");
       return {ok:true,evidence:{query:m.query,complete:true,body}};
     }
     throw new Error("REGISTRY_COMMAND_INVALID");
@@ -172,7 +192,7 @@
     handle(m).then(reply,error=>{
       const code=error?.message||'';
       const ilReasons={REGISTRY_RESPONSE_INCOMPLETE:'NY_CONNECTOR_IL_RESPONSE_TIMEOUT',REGISTRY_RESULTS_INCOMPLETE:'NY_CONNECTOR_IL_RESULTS_INCOMPLETE',REGISTRY_TOTAL_CHANGED:'NY_CONNECTOR_IL_TOTAL_CHANGED',REGISTRY_RESULT_LIMIT:'NY_CONNECTOR_IL_RESULT_LIMIT',REGISTRY_PAGINATION_INCOMPLETE:'NY_CONNECTOR_IL_PAGINATION_INCOMPLETE'};
-      reply({ok:false,reason:/^NY_CONNECTOR_IL_DETAIL_(NOT_OPENED|BLANK|IDENTITY_INCOMPLETE)$/.test(code) ? code : IL && ilReasons[code] || 'NY_CONNECTOR_INCOMPLETE'});
+      reply({ok:false,reason:/^NY_CONNECTOR_IL_(?:FORM_READY_TIMEOUT|DETAIL_(?:NOT_OPENED|BLANK|IDENTITY_INCOMPLETE))$/.test(code) ? code : IL && ilReasons[code] || 'NY_CONNECTOR_INCOMPLETE'});
     });
     return true;
   });

@@ -40,22 +40,26 @@ async function performRegistryQuery(job, query) {
   if (query.state === "IL") {
     await registryNavigate(job, registryStart("IL"));
     let result = await registryMessage(job,{action:"registry-il",query});
-    // Retry only an unopened/blank detail, once, using a fresh normal form.
-    // A loaded record with missing dates is complete evidence, not retryable.
-    if (query.identifier && ["NY_CONNECTOR_IL_DETAIL_NOT_OPENED", "NY_CONNECTOR_IL_DETAIL_BLANK"].includes(result?.reason)) {
+    // One fresh-form retry for a search that never completed or an unopened
+    // detail. Loaded records with absent dates are complete evidence.
+    const retryable = ["NY_CONNECTOR_IL_FORM_READY_TIMEOUT", "NY_CONNECTOR_IL_RESPONSE_TIMEOUT",
+      "NY_CONNECTOR_IL_DETAIL_NOT_OPENED", "NY_CONNECTOR_IL_DETAIL_BLANK"];
+    if (retryable.includes(result?.reason) && job.activeExpiresAt-Date.now()>50000) {
+      diagnostic("il-public-retry",job,result.reason);
       await registryNavigate(job, registryStart("IL"));
       result = await registryMessage(job,{action:"registry-il",query});
     }
     return result;
   }
-  if (query.identifier) {
+  if (Object.hasOwn(query,"identifier")) {
     // GA invalidates earlier-page detail links after another result page is
     // visited. Reopen the same public search and locate the requested license
     // before following its currently displayed link. The master still owns
     // selection and confirms the requested license in the returned body.
-    const source=job.gaSearchByIdentifier?.[query.identifier === "EXEMPT" ? query.detail_key : query.identifier];
+    const legacy = ["", "EXEMPT"].includes(query.identifier);
+    const source=job.gaSearchByIdentifier?.[legacy ? query.detail_key : query.identifier];
     if(!source)throw new Error("NY_CONNECTOR_INCOMPLETE");
-    const current=await registryGaSearch(job,source,query.identifier,query.identifier === "EXEMPT" ? query : null);
+    const current=await registryGaSearch(job,source,query.identifier,legacy ? query : null);
     if(!current?.detail_key)throw new Error("NY_CONNECTOR_INCOMPLETE");
     await registryNavigate(job,registryOrigin("GA")+"/verification/Details.aspx?result="+current.detail_key);
     return registryMessage(job,{action:"registry-ga-detail",query});
@@ -75,19 +79,19 @@ async function registryGaSearch(job, query, requestedIdentifier=null, selectedRe
   for(let page=1;page<=10;page++) {
     const result=await registryMessage(job,{action:"registry-ga-rows"});
     if(!result.ok || result.page!==page || !Array.isArray(result.rows)) throw new Error("NY_CONNECTOR_INCOMPLETE");
-    if(requestedIdentifier) {
+    if(requestedIdentifier !== null) {
       const found=result.rows.filter(row=>row.identifier===requestedIdentifier && (!selectedRecord
         || row.name===selectedRecord.record_name && row.location===selectedRecord.record_location));
       if(found.length>1)throw new Error("NY_CONNECTOR_INCOMPLETE");
       if(found.length===1)return found[0];
     } else {
       job.gaSearchByIdentifier ||= Object.create(null);
-      for(const row of result.rows)job.gaSearchByIdentifier[row.identifier === "EXEMPT" ? row.detail_key : row.identifier]={...query};
+      for(const row of result.rows)job.gaSearchByIdentifier[["", "EXEMPT"].includes(row.identifier) ? row.detail_key : row.identifier]={...query};
     }
     rows.push(...result.rows);
     if(rows.length>100) throw new Error("NY_CONNECTOR_INCOMPLETE");
     if(!result.next) {
-      if(requestedIdentifier)throw new Error("NY_CONNECTOR_INCOMPLETE");
+      if(requestedIdentifier !== null)throw new Error("NY_CONNECTOR_INCOMPLETE");
       return {ok:true,evidence:{query,complete:true,total:rows.length,rows}};
     }
     const next=await registryMessage(job,{action:"registry-ga-next",page:page+1});

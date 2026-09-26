@@ -134,7 +134,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.26.1-staging").strip() or "2026.09.26.1-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.26.2-staging").strip() or "2026.09.26.2-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -5399,34 +5399,41 @@ def il_charity_detail_text(body, expected_identifier=""):
     initial = registration_source_date(initial_text)
     if initial_text and initial is None:
         raise ValueError("Illinois registration date could not be parsed")
-    status = (status_from_calendar_date(due) if due else "Unable to Confirm") if raw.casefold() == "good standing" else licensed_charity_status(raw, due)
+    # User-confirmed IL policy (2026-09-26): a loaded, identified Good Standing
+    # record without its annual-report deadline is incomplete and delinquent.
+    # Transport/identity failures never reach this classification.
+    status = (status_from_calendar_date(due) if due else "Delinquent") if raw.casefold() == "good standing" else licensed_charity_status(raw, due)
     return {"name": lines[0], "identifier": identifier, "ein": ein, "raw_status": raw,
             "status": status, "expiration": due, "initial": initial,
             "date_type": "annual_report_due_date", "initial_label": "Registration Date", "aliases": []}
 
 
-def ga_charity_detail_html(body, expected_identifier):
+def ga_charity_detail_html(body, expected_identifier, expected_name=""):
     """Read only Georgia's primary license; associated solicitors are not aliases.
 
     Missing source fields stay missing. The page's JavaScript-generated
     'Data current as of' timestamp is not treated as a registry refresh date.
     """
     primary = body.split('id="more_details"', 1)[0]
-    def field(suffix, required=False):
+    def field(suffix, required=False, allow_blank=False):
         matches = re.findall(r'<span\b[^>]*\bid="([^\"]+)"[^>]*>(.*?)</span>', primary, re.I | re.S)
         values = [re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", value))).strip()
                   for identifier, value in matches
                   if re.fullmatch(r"_ctl\d+__ctl\d+_" + re.escape(suffix), identifier)]
-        if len(values) > 1 or required and (len(values) != 1 or not values[0]):
+        if len(values) > 1 or required and (len(values) != 1 or not values[0] and not allow_blank):
             raise ValueError(f"Georgia primary license is missing or duplicates {suffix}")
         return values[0] if values else ""
-    identifier = field("license_no", True)
+    identifier = field("license_no", True, allow_blank=not expected_identifier)
     name, profession, kind, raw = (field(key, True) for key in ("full_name", "profession", "license_type", "status"))
-    if identifier != expected_identifier or not re.fullmatch(r"CH\d+|EXEMPT", identifier):
+    if identifier != expected_identifier or not re.fullmatch(r"(?:CH\d+|EXEMPT)?", identifier):
         raise ValueError("Georgia detail does not match the selected charity license")
-    if profession != "Charities" or kind not in {"Charity", "Exempt Charity", "Private Foundations"}:
+    if profession != "Charities" or kind not in {"Charity", "Exempt Charity", "Private Foundations", "agency1prof0licType52004"}:
         raise ValueError("Georgia record is not a qualifying charity registration")
-    if identifier == "EXEMPT" and (kind != "Exempt Charity" or raw.casefold() != "exempt"):
+    if not identifier and (not expected_name or normalized_match_name(name) != normalized_match_name(expected_name)):
+        raise ValueError("Georgia unnumbered detail does not match its bound name")
+    if (not identifier or kind == "agency1prof0licType52004") and (kind not in {"Exempt Charity", "agency1prof0licType52004"} or raw.casefold() != "exempt"):
+        raise ValueError("Georgia legacy record is not an explicit charity exemption")
+    if identifier == "EXEMPT" and (kind not in {"Exempt Charity", "agency1prof0licType52004"} or raw.casefold() != "exempt"):
         raise ValueError("Georgia EXEMPT marker is not a confirmed charity exemption")
     dates = {}
     for key in ("expiry", "issue_date", "last_ren"):
@@ -5435,6 +5442,8 @@ def ga_charity_detail_html(body, expected_identifier):
         if value and dates[key] is None:
             raise ValueError(f"Georgia {key} date could not be parsed")
     status = licensed_charity_status("Expired" if raw.casefold() == "lapsed" else raw, dates["expiry"])
+    if not dates["expiry"] and raw.casefold() in {"active", "current", "issued", "approved"} and kind == "Charity":
+        status = "Delinquent"
     if kind == "Exempt Charity" and status in {"Current", "Upcoming Filing"}:
         status = "Exempt"
     return {"name": name, "identifier": identifier, "raw_status": raw, "status": status,
@@ -5469,11 +5478,14 @@ def il_ga_clean_evidence(payload, query):
         if not isinstance(body, str) or not 1 <= len(body) <= 60000:
             raise ValueError("Missing selected detail evidence")
         # Validate now and reparse on replay; only text/public field spans travel.
-        (il_charity_detail_text if state == "IL" else ga_charity_detail_html)(body, query["identifier"])
+        if state == "IL":
+            il_charity_detail_text(body, query["identifier"])
+        else:
+            ga_charity_detail_html(body, query["identifier"], query.get("record_name", ""))
         return {"body": body}
     rows = payload.get("rows")
     total = payload.get("total")
-    if not isinstance(rows, list) or type(total) is not int or total != len(rows) or total > 100:
+    if not isinstance(rows, list) or type(total) is not int or total != len(rows) or total > (1000 if state == "IL" else 100):
         raise ValueError("Incomplete search pagination")
     cleaned, seen = [], set()
     fields = {"name", "identifier", "location", "street", "region", "postal_code", "detail_key"}
@@ -5520,17 +5532,13 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
                 if state == "GA" and score_candidate(org.organization_name, "", {"name": row["name"]})["decision"] == "possible":
                     unresolved_primary_names[identity] = row
                 continue
-            if not row["identifier"]:
-                # Some GA legacy exemptions have no license number. Unrelated
-                # rows can be rejected by name, but a qualifying unnumbered row
-                # cannot be opened/confirmed by the current detail protocol.
-                raise ValueError("Georgia matching record has no license identifier")
             detail_query = {"state": state, "identifier": row["identifier"]}
             if state == "GA": detail_query["detail_key"] = row["detail_key"]
-            if state == "GA" and row["identifier"] == "EXEMPT":
+            if state == "GA" and row["identifier"] in {"", "EXEMPT"}:
                 detail_query.update(record_name=row["name"], record_location=row["location"])
             detail = evidence(detail_query)["body"]
-            parsed = (il_charity_detail_text if state == "IL" else ga_charity_detail_html)(detail, row["identifier"])
+            parsed = (il_charity_detail_text(detail, row["identifier"]) if state == "IL" else
+                      ga_charity_detail_html(detail, row["identifier"], row["name"]))
             if normalized_match_name(parsed["name"]) != normalized_match_name(row["name"]):
                 raise ValueError("Selected detail name changed from the search result")
             seen.add(identity)
@@ -5569,9 +5577,15 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
                                       f"The detail EIN {format_ein(selected['ein'])} matches the requested organization. ")
                 if selected["expiration"]:
                     result.source_note += f"The state's annual-report due date is {selected['expiration'].isoformat()}. "
-                elif selected["status"] == "Unable to Confirm":
-                    result.source_note += "The selected record loaded, but no annual-report due date is displayed. Missing filing information does not establish delinquency or confirm that filings are current. "
+                elif selected["raw_status"].casefold() == "good standing":
+                    result.source_note += "The selected record loaded, but no annual-report due date is displayed. CharityClarity treats this incomplete filing information as Delinquent under its Illinois review policy. This is CharityClarity's interpretation, rather than a delinquency label displayed by the state. "
                 result.source_note += f"CharityClarity reports {result.status}."
+    elif state == "GA":
+        selected = getattr(result, "_cc_license_record", {})
+        if selected and not selected.get("identifier"):
+            result.source_note = result.source_note.replace("()", "(unnumbered legacy exemption)")
+        if selected and not selected.get("expiration") and selected["status"] == "Delinquent" and selected["raw_status"].casefold() in {"active", "current", "issued", "approved"}:
+            result.source_note += " The confirmed record loaded without an expiration date. CharityClarity treats this incomplete filing information as Delinquent under its Georgia review policy; the state itself does not display that delinquency label."
     return result
 
 
@@ -5580,8 +5594,11 @@ def il_ga_connector_failure(record, reason=""):
     org = checker.Organization(record["organization_name"], record["ein"])
     result = licensed_charity_failure(org, state, IL_GA_SOURCES[state], ValueError("Browser search incomplete"))
     result.source_note = f"The {state} browser search did not return complete, confirmed public records. Keep Chrome open with the updated CharityClarity connector enabled and retry. This does not establish non-registration or delinquency."
+    if reason == "NY_CONNECTOR_QUERY_LIMIT":
+        result.source_note = f"The {state} search reached its candidate-review limit before every required record was evaluated. CharityClarity reports Unable to Confirm; an incomplete search does not establish non-registration or delinquency."
     if state == "IL":
         detail_reasons = {
+            "NY_CONNECTOR_IL_FORM_READY_TIMEOUT": "The Illinois search controls did not become ready within the lookup time limit.",
             "NY_CONNECTOR_IL_RESPONSE_TIMEOUT": "Illinois did not finish updating its search results within the lookup time limit.",
             "NY_CONNECTOR_IL_RESULTS_INCOMPLETE": "Illinois returned an incomplete search result or did not return the selected registration number during detail lookup.",
             "NY_CONNECTOR_IL_TOTAL_CHANGED": "Illinois did not provide a readable, stable search-result count.",
@@ -5607,11 +5624,17 @@ def il_ga_connector_advance(record):
     try:
         result = il_ga_browser_lookup(org, record["state"], evidence, record["purpose"])
     except NYConnectorQueryNeeded as pending:
-        if len(record["completed"]) >= 35:
-            return {"phase": "complete", "result": il_ga_connector_failure(record)}
+        # Capacity follows the reviewed-name plan plus a bounded allowance for
+        # candidate detail reads. The five-minute check expiry still applies.
+        # A fixed 35-command limit cut off valid large alias sets mid-search.
+        required, generated = licensed_charity_names(org)
+        command_limit = len(required) + len(generated) + 101
+        if len(record["completed"]) >= command_limit:
+            return {"phase": "complete", "result": il_ga_connector_failure(record, "NY_CONNECTOR_QUERY_LIMIT")}
         record["pending"] = {"query_id": secrets.token_urlsafe(18), "query": pending.params}
         return {"phase": "search", **record["pending"]}
-    except (ValueError, TimeoutError):
+    except (ValueError, TimeoutError) as exc:
+        log_event(f"{record['state']} connector evidence incomplete for {format_ein(org.ein)}: {type(exc).__name__}: {str(exc)[:160]}")
         return {"phase": "complete", "result": il_ga_connector_failure(record)}
     if record["purpose"] == "identity":
         return {"phase": "complete", "result": {"state": record["state"], "source": record["state"], "identity": result}}
@@ -5627,14 +5650,25 @@ def registry_json_request(url, deadline, *, payload=None, form=False, headers=No
     """Normal public-registry request, bounded by this lookup's own deadline."""
     data = None if payload is None else (urlencode(payload) if form else json.dumps(payload)).encode()
     request_headers = {"Content-Type": "application/x-www-form-urlencoded" if form else "application/json", **(headers or {})}
-    for attempt in range(2):
+    # DC's first failed batch exhausted two 15-second reads despite a 75-second
+    # lookup allowance. Spend a bounded portion of that existing allowance on
+    # transient recovery; RI and every other caller retain their prior policy.
+    timeouts = (15.0, 20.0, 25.0) if url == DC_LICENSE_API else (15.0, 15.0)
+    for attempt, request_timeout in enumerate(timeouts):
         try:
-            return json.loads(identity_fetch(url, deadline, headers=request_headers, data=data,
-                                            request_timeout=15.0, max_bytes=6_000_000))
+            result = json.loads(identity_fetch(url, deadline, headers=request_headers, data=data,
+                                              request_timeout=request_timeout, max_bytes=6_000_000))
+            if url == DC_LICENSE_API and attempt:
+                log_event(f"DC public data read recovered on attempt {attempt + 1}")
+            return result
         except (urllib.error.URLError, TimeoutError) as exc:
-            if (attempt or deadline - time.monotonic() < 3
+            if url == DC_LICENSE_API:
+                log_event(f"DC public data attempt {attempt + 1}/{len(timeouts)} failed: {type(exc).__name__}; read limit {request_timeout:g}s; remaining {max(0, deadline - time.monotonic()):.1f}s")
+            if (attempt == len(timeouts) - 1 or deadline - time.monotonic() < (10 if url == DC_LICENSE_API else 3)
                     or isinstance(exc, urllib.error.HTTPError) and exc.code not in {408, 429, 500, 502, 503, 504}):
                 raise
+            if url == DC_LICENSE_API:
+                time.sleep(0.5 * (attempt + 1))
     raise ValueError("Registry request did not complete")
 
 
@@ -20098,7 +20132,7 @@ def ny_connector_advance(record):
             return {"phase": "complete", "result": {"state": "NY", "source": "NY", "identity": identity,
                     "ein": format_ein(ein), "checked_at_epoch": time.time(), "app_version": APP_VERSION}}
         result = search_ny_direct(org, registry_search_provider=search_response,
-                                  registry_detail_provider=search_response if record.get("connector_version") in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4"} else None)
+                                  registry_detail_provider=search_response if record.get("connector_version") in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5"} else None)
     except NYConnectorQueryNeeded as pending:
         limit = 5
         is_detail = "orgID" in pending.params
@@ -20106,7 +20140,7 @@ def ny_connector_advance(record):
             return {"phase": "complete", "result": ny_connector_failure(record, "NY_CONNECTOR_INCOMPLETE")}
         record["pending"] = {"query_id": secrets.token_urlsafe(18), "query": pending.params}
         return {"phase": "search", **record["pending"]}
-    if record.get("connector_version") not in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4"} and "401" in (getattr(result, "source_note", "") or ""):
+    if record.get("connector_version") not in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5"} and "401" in (getattr(result, "source_note", "") or ""):
         return {"phase": "complete", "result": ny_connector_failure(record, "NY_CONNECTOR_UPDATE_REQUIRED")}
     data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, "NY", started)
     data["connector_version"] = record.get("connector_version", "0.2.1")
@@ -20139,7 +20173,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4"}:
+        if not isinstance(connector_version, str) or connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5"}:
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()

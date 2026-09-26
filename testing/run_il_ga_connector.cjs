@@ -102,6 +102,34 @@ test('Illinois unopened detail gets one fresh-form retry and preserves final rea
   assert.equal(attempts,2);assert.equal(result.ok,false);assert.equal(result.reason,'NY_CONNECTOR_IL_DETAIL_NOT_OPENED');
 });
 
+test('Illinois unanswered search retries once, without treating an old empty grid as evidence',async()=>{
+  const h=harness();registryFixture(h);const p=connect(h,'IL');
+  const original=h.chrome.tabs.sendMessage;let attempts=0;
+  h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='registry-il' && ++attempts===1 ? {ok:false,reason:'NY_CONNECTOR_IL_RESPONSE_TIMEOUT'} : original(tab,m);
+  const r=await h.query(p,20,{state:'IL',orgName:'Commanding Heights Foundation'});
+  assert.equal(r.ok,true);assert.equal(attempts,2);assert.equal(r.evidence.total,0);
+});
+
+test('Georgia unnumbered exemption refreshes by bound name and location, not first row',async()=>{
+  const h=harness();registryFixture(h);const p=connect(h,'GA');
+  const original=h.chrome.tabs.sendMessage;let searches=0;
+  h.chrome.tabs.sendMessage=async(tab,m)=>{
+    if(m.action==='registry-ga-form')searches++;
+    if(m.action==='registry-ga-rows')return {ok:true,rows:[
+      {identifier:'',name:'Unrelated',location:'Boston MA',detail_key:'33333333-3333-3333-3333-333333333333'},
+      {identifier:'',name:'USAFA Endowment, Inc.',location:'Colorado Springs CO',detail_key:searches===1?'11111111-1111-1111-1111-111111111111':'22222222-2222-2222-2222-222222222222'}
+    ],page:1,next:false};
+    if(m.action==='registry-ga-detail'){
+      assert.match(h.tabs.get(tab).url,/result=22222222-2222-2222-2222-222222222222$/);
+      return {ok:true,evidence:{query:m.query,complete:true,body:'USAFA Endowment, Inc. Exempt'}};
+    }
+    return original(tab,m);
+  };
+  assert.equal((await h.query(p,20,{state:'GA',orgName:'USAFA'})).ok,true);
+  const q={state:'GA',identifier:'',record_name:'USAFA Endowment, Inc.',record_location:'Colorado Springs CO',detail_key:'11111111-1111-1111-1111-111111111111'};
+  const r=await h.query(p,21,q);assert.equal(r.ok,true);assert.equal(searches,2);assert.deepEqual(r.evidence.query,q);
+});
+
 test('Georgia EXEMPT marker selects the bound name and location after link refresh',async()=>{
   const h=harness();registryFixture(h);const p=connect(h,'GA');
   const original=h.chrome.tabs.sendMessage;let searches=0;

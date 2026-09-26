@@ -49,7 +49,7 @@
     const box = document.getElementById("nyConnectorSetup");
     if (!box) return;
     const response = await bridge("ping");
-    const ready = !!compatible(response) && response.capabilities?.includes("il-ga-public-dom-v1") && response.capabilities?.includes("ga-exempt-record-v1") && response.capabilities?.includes("ga-legacy-rows-v1"), update = !!response.ok && !ready;
+    const ready = !!compatible(response) && response.capabilities?.includes("il-ga-public-dom-v1") && response.capabilities?.includes("ga-exempt-record-v1") && response.capabilities?.includes("ga-legacy-rows-v1") && response.capabilities?.includes("il-ga-complete-search-v2"), update = !!response.ok && !ready;
     box.hidden = false;
     const message = box.querySelector("[data-connector-message]");
     message.textContent = ready ? "Registry connector connected. Keep Chrome open while checks run." : update ? "Your registry connector needs an update. Follow the three update steps, then refresh CharityClarity." : "Connect this browser to New York, Illinois and Georgia using the three setup steps.";
@@ -105,7 +105,7 @@
     signal?.throwIfAborted();
     const label = {NY:"New York",IL:"Illinois",GA:"Georgia"}[registryState];
     if (!label) throw new Error("Unsupported browser registry");
-    const supported = c => compatible(c) && (registryState === "NY" || c.capabilities?.includes("il-ga-public-dom-v1")) && (registryState !== "GA" || c.capabilities?.includes("ga-exempt-record-v1") && c.capabilities?.includes("ga-legacy-rows-v1"));
+    const supported = c => compatible(c) && (registryState === "NY" || c.capabilities?.includes("il-ga-public-dom-v1") && c.capabilities?.includes("il-ga-complete-search-v2")) && (registryState !== "GA" || c.capabilities?.includes("ga-exempt-record-v1") && c.capabilities?.includes("ga-legacy-rows-v1"));
     if (refreshing) {
       onProgress?.("New York: waiting for the connection refresh. Other states can continue.");
       await refreshing;

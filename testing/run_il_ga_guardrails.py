@@ -52,10 +52,10 @@ class SourceControls(unittest.TestCase):
         with self.assertRaises(ValueError):cc.il_charity_detail_text(IL.replace('FEIN: 363673599','FEIN:'))
     def test_il_malformed_date_rejected(self):
         with self.assertRaises(ValueError):cc.il_charity_detail_text(IL.replace('12/31/2026','unknown'))
-    def test_il_missing_and_blank_due_dates_are_incomplete_not_current(self):
+    def test_il_loaded_missing_due_is_delinquent_per_user_policy(self):
         for body in [IL.replace('12/31/2026',''),IL.replace('Annual Report Due Date: 12/31/2026\n','')]:
             parsed=cc.il_charity_detail_text(body,'01015532')
-            self.assertEqual(parsed['status'],'Unable to Confirm')
+            self.assertEqual(parsed['status'],'Delinquent')
             self.assertEqual(parsed['ein'],'363673599')
             self.assertIsNone(parsed['expiration'])
     def test_il_duplicate_due_labels_rejected(self):
@@ -83,6 +83,18 @@ class SourceControls(unittest.TestCase):
         self.assertEqual(cc.ga_charity_detail_html(ga_html(status='Registration Terminated'),'CH003977')['status'],'Closed / Withdrawn / Canceled')
     def test_ga_malformed_date_rejected(self):
         with self.assertRaises(ValueError):cc.ga_charity_detail_html(ga_html(expiry='invalid'),'CH003977')
+    def test_ga_loaded_active_without_expiry_is_delinquent_but_exempt_stays_exempt(self):
+        self.assertEqual(cc.ga_charity_detail_html(ga_html(expiry=''),'CH003977')['status'],'Delinquent')
+        self.assertEqual(cc.ga_charity_detail_html(ga_html(expiry='',status='Exempt'),'CH003977')['status'],'Exempt')
+    def test_ga_unnumbered_exemption_requires_name_and_complete_explicit_fields(self):
+        body=ga_html(full_name='USAFA Endowment, Inc.',license_no='',license_type='Exempt Charity',status='Exempt',expiry='')
+        self.assertEqual(cc.ga_charity_detail_html(body,'','USAFA Endowment, Inc.')['status'],'Exempt')
+        for name in ['', 'Unrelated Foundation']:
+            with self.assertRaises(ValueError):cc.ga_charity_detail_html(body,'',name)
+        for suffix in ['license_no','status','profession','full_name']:
+            bad=re.sub(r'<span id="_ctl\d+__ctl\d+_'+suffix+r'">.*?</span>','',body)
+            with self.assertRaises(ValueError):cc.ga_charity_detail_html(bad,'','USAFA Endowment, Inc.')
+        with self.assertRaises(ValueError):cc.ga_charity_detail_html(body.replace('>Exempt<','>Active<'),'','USAFA Endowment, Inc.')
     def test_block_page_cannot_be_parsed_as_negative(self):
         with self.assertRaises(ValueError):cc.ga_charity_detail_html('Performing security verification','CH003977')
         with self.assertRaises(ValueError):cc.il_charity_detail_text('No Records Available')
@@ -128,9 +140,10 @@ class IntegrationControls(unittest.TestCase):
         for body in [IL.replace('12/31/2026',''),IL.replace('Annual Report Due Date: 12/31/2026\n','')]:
             def evidence(q):return {'body':body} if 'identifier' in q else {'rows':[search_row()]}
             result=cc.il_ga_browser_lookup(self.org,'IL',evidence)
-            self.assertEqual(result.status,'Unable to Confirm')
+            self.assertEqual(result.status,'Delinquent')
             self.assertEqual(result.matched_registry_identifier,'01015532')
             self.assertIn('record loaded',result.source_note)
+            self.assertIn('review policy',result.source_note)
             self.assertNotIn('retry',result.source_note.lower())
     def test_il_detail_failures_have_distinct_non_negative_explanations(self):
         record=dict(state='IL',organization_name='Feeding America',ein='36-3673599')
@@ -140,7 +153,7 @@ class IntegrationControls(unittest.TestCase):
             self.assertIn(phrase,result['comments'])
     def test_il_search_failures_are_distinct_from_blank_detail(self):
         record=dict(state='IL',organization_name='Feeding America',ein='36-3673599')
-        for code,phrase in [('RESPONSE_TIMEOUT','search results'),('RESULTS_INCOMPLETE','selected registration number'),('TOTAL_CHANGED','result count'),('RESULT_LIMIT','more records'),('PAGINATION_INCOMPLETE','pagination')]:
+        for code,phrase in [('FORM_READY_TIMEOUT','search controls'),('RESPONSE_TIMEOUT','search results'),('RESULTS_INCOMPLETE','selected registration number'),('TOTAL_CHANGED','result count'),('RESULT_LIMIT','more records'),('PAGINATION_INCOMPLETE','pagination')]:
             result=cc.il_ga_connector_failure(record,'NY_CONNECTOR_IL_'+code)
             self.assertEqual(result['status'],'Unable to Confirm')
             self.assertIn(phrase,result['comments'])
@@ -181,10 +194,36 @@ class IntegrationControls(unittest.TestCase):
         self.assertEqual(len(cleaned['rows']),2)
         result=cc.il_ga_browser_lookup(org,'GA',lambda q:cleaned)
         self.assertEqual(result.status,'Not Registered')
-    def test_ga_matching_unnumbered_row_is_incomplete_not_negative(self):
+    def test_ga_matching_unnumbered_row_is_opened_and_verified(self):
         row=search_row('Feeding America','','11111111-1111-1111-1111-111111111111')
-        with self.assertRaisesRegex(ValueError,'no license identifier'):
-            cc.il_ga_browser_lookup(self.org,'GA',lambda q:{'rows':[row]})
+        queries=[]
+        def evidence(q):
+            queries.append(q)
+            return {'body':ga_html(full_name='Feeding America',license_no='',license_type='Exempt Charity',status='Exempt',expiry='')} if 'identifier' in q else {'rows':[row]}
+        result=cc.il_ga_browser_lookup(self.org,'GA',evidence)
+        self.assertEqual(result.status,'Exempt')
+        self.assertEqual(queries[1]['record_name'],'Feeding America')
+        self.assertIn('record_location',queries[1])
+        self.assertIn('unnumbered legacy exemption',result.source_note)
+    def test_il_complete_large_search_is_accepted_without_truncation(self):
+        q={'state':'IL','orgName':'Veterans'}
+        rows=[search_row(f'Unrelated Veterans {i}',f'{10000000+i}') for i in range(240)]
+        self.assertEqual(len(cc.il_ga_clean_evidence({'query':q,'complete':True,'total':240,'rows':rows},q)['rows']),240)
+        for total,complete in [(241,True),(240,False)]:
+            with self.assertRaises(ValueError):cc.il_ga_clean_evidence({'query':q,'complete':complete,'total':total,'rows':rows},q)
+    def test_ga_full_reviewed_alias_plan_can_pass_35_successful_commands(self):
+        names=[self.org.organization_name]+[f'Former Program {i}' for i in range(40)]
+        record={'state':'GA','organization_name':self.org.organization_name,'ein':self.org.ein,'purpose':'registration','completed':[]}
+        candidate=search_row('Feeding America','CH003977','11111111-1111-1111-1111-111111111111')
+        with patch.object(cc,'licensed_charity_names',return_value=(names,[])),patch.object(cc,'response_data_for_lookup',side_effect=lambda result,*args: {'status':result.status}):
+            for _ in range(60):
+                response=cc.il_ga_connector_advance(record)
+                if response['phase']=='complete':break
+                q=response['query']
+                payload={'body':ga_html(full_name='Feeding America',expiry='12/31/2030')} if 'identifier' in q else {'rows':[candidate] if q['orgName']==names[-1] else []}
+                record['completed'].append({'query':q,'rows':payload})
+            self.assertEqual(response,{'phase':'complete','result':{'status':'Current'}})
+            self.assertGreater(len(record['completed']),35)
 
     def test_ga_empty_is_not_registered_not_il_label(self):
         result=cc.il_ga_browser_lookup(self.org,'GA',lambda q:{'rows':[]})
@@ -298,7 +337,9 @@ class IntegrationControls(unittest.TestCase):
             'true_status_from_body','comments_for_result_base','run_state_lookup','ny_connector_failure',
             'ny_connector_clean_response','ny_connector_advance','ny_connector_request','normalize_registry_match_fields',
             # Shared verified-acronym fix covered above and by release regression.
-            'redundant_bracket_acronym_key'})
+            'redundant_bracket_acronym_key',
+            # DC-specific transient recovery; RI policy independently tested.
+            'registry_json_request'})
 
 
 if __name__=='__main__':unittest.main()
