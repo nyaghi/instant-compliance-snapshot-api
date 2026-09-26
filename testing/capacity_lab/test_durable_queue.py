@@ -560,6 +560,48 @@ class DurableTests(unittest.TestCase):
             saved=c.execute('SELECT payload FROM cc_lab_workflows WHERE id=%s',(ident,)).fetchone()['payload']
         self.assertEqual(saved,payload())
 
+    def test_normal_progress_does_not_take_scheduler_lock(self):
+        ident=self.submit(); worker=self.worker(); job=self.q.claim(worker)
+        q2=self.second()
+        with concurrent.futures.ThreadPoolExecutor(1) as pool:
+            with self.q.transaction() as (c,now):
+                status=pool.submit(q2.status,'a',ident).result(timeout=5)
+                self.assertEqual(status['phase'],'active')
+                self.assertEqual(status['jobs'][0]['phase'],'running')
+                self.assertNotIn('lease_until',status['jobs'][0])
+        self.finish(job)
+
+    def test_normal_progress_is_read_only_and_enforces_scope(self):
+        ident=self.submit()
+        with patch.object(self.q,'transaction',side_effect=AssertionError('Read took scheduler lock')):
+            status=self.q.status('a',ident)
+            self.assertEqual(status['phase'],'queued');self.assertEqual(status['queue_position'],1)
+            with self.assertRaises(NotFound):self.q.status('other-scope',ident)
+        with self.q.transaction() as (c,now):
+            self.assertEqual(c.execute('SELECT count(*) AS n FROM cc_lab_events').fetchone()['n'],1)
+
+    def test_progress_snapshot_is_consistent_across_uncommitted_finish(self):
+        ident=self.submit();worker=self.worker();job=self.q.claim(worker);q2=self.second()
+        with self.q.transaction() as (c,now):
+            c.execute("UPDATE cc_lab_jobs SET phase='done',finished=%s,error='fixture' WHERE id=%s",(now,job['id']))
+            self.q._settle(c,now)
+            status=q2.status('a',ident)
+            self.assertEqual(status['phase'],'active');self.assertEqual(status['completed'],0)
+        status=q2.status('a',ident)
+        self.assertEqual(status['phase'],'completed');self.assertEqual(status['completed'],1)
+
+    def test_progress_still_settles_expired_queued_and_dead_worker(self):
+        ident=self.submit(payload(mode='sales'))
+        with self.q.transaction() as (c,now):
+            c.execute('UPDATE cc_lab_workflows SET deadline=%s WHERE id=%s',(now-1,ident))
+        status=self.q.status('a',ident)
+        self.assertEqual(status['phase'],'expired');self.assertEqual(status['jobs'][0]['error'],'WORKFLOW_DEADLINE')
+        ident=self.submit(payload('987654321'));worker=self.worker();job=self.q.claim(worker)
+        with self.q.transaction() as (c,now):
+            c.execute('UPDATE cc_lab_jobs SET lease_until=%s WHERE id=%s',(now-1,job['id']))
+        self.assertEqual(self.q.status('a',ident)['phase'],'attention')
+        self.assertIsNone(self.q.claim(self.worker()))
+
     def test_version_identity_and_queue_bounds(self):
         with self.assertRaises(Conflict): self.q.register_worker('wrong','wrong-performance-lab',8)
         ident=self.submit(); w=self.worker(); j=self.q.claim(w)

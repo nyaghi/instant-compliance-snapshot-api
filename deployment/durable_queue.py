@@ -374,16 +374,30 @@ dead. Persist that evidence reference, fence all tokens, then requeue boundedly.
             self._settle(c, now)
 
     def status(self, scope, ident):
-        with self.transaction() as (c, now):
-            self._settle(c, now)
+        snapshot, due = self._status_snapshot(scope, ident)
+        if due:
+            # Expiry/worker-loss transitions still use the scheduling authority.
+            # Ordinary UI polling must not serialize behind (or ahead of) claims.
+            with self.transaction() as (c, now):
+                self._settle(c, now)
+            snapshot, _ = self._status_snapshot(scope, ident)
+        return snapshot
+
+    def _status_snapshot(self, scope, ident):
+        with self.pool.connection() as c, c.transaction():
+            c.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY')
+            now = float(c.execute('SELECT extract(epoch FROM clock_timestamp()) AS t').fetchone()['t'])
             w = c.execute('SELECT * FROM cc_lab_workflows WHERE scope=%s AND id=%s', (scope, ident)).fetchone()
             if not w: raise NotFound('Workflow not found')
-            jobs = c.execute('SELECT state,phase,attempt,claimed,finished,result,error FROM cc_lab_jobs WHERE workflow_id=%s ORDER BY state', (ident,)).fetchall()
+            jobs = c.execute('SELECT state,phase,attempt,claimed,finished,result,error,lease_until FROM cc_lab_jobs WHERE workflow_id=%s ORDER BY state', (ident,)).fetchall()
+            due = (w['finished'] is None and (w['stop_reason'] is None and w['deadline'] <= now or any(
+                j['phase'] in ('running', 'stopping') and j['lease_until'] is not None and j['lease_until'] <= now for j in jobs)))
+            for j in jobs: j.pop('lease_until')
             position = c.execute("SELECT count(*) AS n FROM cc_lab_workflows WHERE phase='queued' AND submitted<=%s", (w['submitted'],)).fetchone()['n'] if w['phase'] == 'queued' else 0
-            return {k: w[k] for k in ('id','ein','kind','mode','phase','source_version','submitted','deadline','started','finished','stop_reason')} | {
+            return ({k: w[k] for k in ('id','ein','kind','mode','phase','source_version','submitted','deadline','started','finished','stop_reason')} | {
                 'jobs': jobs, 'completed': sum(j['phase'] == 'done' for j in jobs), 'total': len(jobs),
                 'queue_position': position, 'queue_seconds': (w['started'] or w['finished'] or now)-w['submitted'],
-                'execution_seconds': max(0, (w['finished'] or now)-w['started']) if w['started'] else 0}
+                'execution_seconds': max(0, (w['finished'] or now)-w['started']) if w['started'] else 0}, due)
 
     def metrics(self):
         with self.transaction() as (c, now):

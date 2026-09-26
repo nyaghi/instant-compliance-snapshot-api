@@ -600,3 +600,37 @@ the selected states remains queued, with identical identity/status rules, source
 caps and deadlines. No named-state or organization exceptions, cached compliance
 results or estimated statuses are introduced. This can improve conclusive
 coverage at the cutoff; it cannot promise all registries finish within a minute.
+
+## perf.24: progress reads and alternate-name identity control
+
+Twenty synchronized Sales workflows still completed only 95/640 checks after
+shortest-first ordering (71/640 before). Worker observations showed substantial
+claim/heartbeat transaction time. Every progress poll previously acquired the
+same global scheduler lock and ran all queue settlement writes. Ordinary polls
+now read a consistent, read-only repeatable-read snapshot. If their workflow
+deadline or running-worker lease has expired, they still invoke the original
+locked settlement and resnapshot. Claims, ownership, source/worker reservations,
+result acceptance, cancellation and worker-death recovery remain authoritative
+and serialized. Polling cannot release capacity or publish a late result.
+
+The all-state consistency gate also found a pre-existing Florida alias collision:
+an EIN-linked program name was accepted as another organization's legal name.
+The earlier baseline was wrong; a later primary-name result must not hide it.
+Florida now corroborates a reviewed-alias-only candidate's existing header
+location with the master EIN-linked office helper. A missing/conflicting identity
+remains unconfirmed while other queries continue. A valid primary result can
+still win. Exact primary-name matches require no new request, and discovery and
+all other state logic remain unchanged. The response retains the address basis
+or explains why identity could not be confirmed. No organization-specific rule
+or newly invented alias is introduced.
+
+Optional Florida issuance-date blanks were separately traced to transport
+timeouts, with the same status and credential. They remain blank when the bounded
+date read fails; no date is fabricated and the primary status is preserved.
+
+Sales' current UI supplies entered name/EIN only. Its all-state diagnostic also
+exposed name-only negative results where Standard's reviewed names found records.
+This is an open product/identity input limitation, not a successful accuracy
+comparison. Backend performance results do not qualify the customer UI or NY
+extension for equivalent concurrent use. No staging/production deployment or
+additional compute purchase is part of these experiments.

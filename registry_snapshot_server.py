@@ -11638,6 +11638,27 @@ def search_fl(page, org):
         transport.close()
 
 
+def fl_reviewed_alias_address(org, row_name, row_text, deadline):
+    """An EIN-linked alias can collide with another Florida legal entity.
+
+    Read the organization location already present in this candidate's header;
+    use the master office corroboration rule, not Florida-specific identity rules.
+    Exact primary names retain their existing path and make no extra request.
+    """
+    if (not is_reviewed_alias(org.ein, row_name)
+            or normalized_match_name(row_name) in {
+                normalized_match_name(name) for name in organization_match_target_variants(org.organization_name, "")}):
+        return {}
+    header = re.split(r"\bPrint\b|\bAlso\s+Soliciting\s+as\b|\b(?:License/)?Registration Number\b",
+                      row_text, maxsplit=1, flags=re.I)[0].strip()
+    location = re.search(r",\s*([^,]+),\s*([A-Z]{2})\s*$", header, re.I)
+    if not location or time.monotonic() >= deadline:
+        return {"decision": "unavailable", "registry_location": ""}
+    place = f"{location[1].strip()}, {location[2].upper()}"
+    evidence = reconciled_registry_address(org.ein, row_name, place, registry_state="FL", deadline=deadline)
+    return {**evidence, "registry_location": place}
+
+
 def search_fl_with_transport(page, org, transport):
     url = FL_CHECK_A_CHARITY_URL
     original_name = org.organization_name
@@ -11838,6 +11859,7 @@ def search_fl_with_transport(page, org, transport):
             variants.append(variant)
     best_result = None
     last_error = None
+    alias_review = None
     search_variants = reviewed_queries_first(original_name, org.ein, variants, limit=8)
     final_exact_retry_added = False
     for variant in search_variants:
@@ -11918,6 +11940,10 @@ def search_fl_with_transport(page, org, transport):
                     continue
                 if florida_nested_unrelated_entity_mismatch(row_name):
                     continue
+                address = fl_reviewed_alias_address(org, row_name, row_text, deadline)
+                if address and address.get("decision") != "corroborated":
+                    alias_review = {"name": row_name, "address": address}
+                    continue
                 score = name_score
                 if re.search(r"\bCH\d+\b", row_text, re.I):
                     score += 40
@@ -11928,7 +11954,7 @@ def search_fl_with_transport(page, org, transport):
                 if rank > best_rank:
                     best_rank = rank
                     best_score = score
-                    best_candidate = {"row_text": row_text, "row_name": row_name}
+                    best_candidate = {"row_text": row_text, "row_name": row_name, "address": address}
             if not best_candidate:
                 result.status = checker.STATUS_NOT_REGISTERED
                 result.raw_status_text = "No matching organization record"
@@ -11937,6 +11963,9 @@ def search_fl_with_transport(page, org, transport):
                 best_result = result
                 continue
             row_text = best_candidate["row_text"]
+            if best_candidate["address"]:
+                result.address_evidence = best_candidate["address"]
+                result.identity_anchor = "cross_state_name_address"
             exp_date = first_date_near_label(row_text, ["Expiration Date", "Expiration", "Expires"])
             suspended_match = re.search(r"\bSuspended\b", row_text, re.I)
             revoked_match = re.search(r"\bRevoked\b", row_text, re.I)
@@ -11999,6 +12028,19 @@ def search_fl_with_transport(page, org, transport):
             if deadline_expired():
                 break
             continue
+    if alias_review:
+        address = alias_review["address"]
+        place = address.get("registry_location") or "an unconfirmed location"
+        explanation = (f"Florida returned alternate-name candidate {alias_review['name']} in {place}, "
+                       "but the available EIN-linked address evidence did not confirm that it is the requested organization.")
+        if address.get("ein_linked_location"):
+            explanation += f" The EIN-linked organization record lists {address['ein_linked_location']}."
+        review = checker.StateResult(original_name, org.ein, "FL", "Unable to Confirm", url,
+            raw_status_text="Alternate-name identity was not corroborated", source_note=explanation,
+            success=False, error="")
+        review.reason_code = "FL_ALIAS_IDENTITY_UNCONFIRMED"
+        review.address_evidence = address
+        return review
     if best_result and not last_error:
         if deadline_expired():
             best_result.source_note = " ".join(
@@ -18042,6 +18084,12 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         address = getattr(result, "address_evidence", {}) or getattr(result, "identity_evidence", {}).get("address", {})
         if address.get("cross_state_records") and address.get("basis") not in data["comments"]:
             data["comments"] += " " + address["basis"] + " Compliance status comes from this state's own registry record."
+    if result.state == "FL" and result.success and getattr(result, "identity_anchor", "") == "cross_state_name_address":
+        address = getattr(result, "address_evidence", {})
+        if address.get("basis"):
+            data["comments"] += " " + address["basis"] + " Compliance status comes from Florida's own registry record."
+    if result.state == "FL" and getattr(result, "reason_code", "") == "FL_ALIAS_IDENTITY_UNCONFIRMED":
+        data["comments"] = result.source_note + " Registration status remains unconfirmed; this does not establish non-registration."
     enrich_registration_date_sources(result, data["status"], lookup_started)
     data["evidence_url"] = ""
     data["lookup_seconds"] = round(time.perf_counter() - lookup_started, 2)

@@ -2,6 +2,8 @@
 import ast
 
 def remove_dc_result_metadata(tree):
+    from testing.capacity_lab.fl_alias_scope import remove_fl_alias_guard
+    remove_fl_alias_guard(tree)
     helper=next((n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='dc_corroborated_result_match'),None)
     if helper is None:return
     tree.body.remove(helper)
