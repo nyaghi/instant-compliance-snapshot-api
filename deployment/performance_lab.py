@@ -198,6 +198,13 @@ def build_handler(master, key, capacity=None, durable=None):
             if durable is not None:
                 from deployment.durable_queue import normalize_submission, Conflict, QueueFull, NotFound
                 try:
+                    if self.path != '/api/lab/workflows':
+                        # Consume bounded ignored bodies before closing a rejected
+                        # or cancellation request. Unread bytes can reset the TCP
+                        # connection before the client receives our JSON response.
+                        length = int(self.headers.get('Content-Length', '0'))
+                        if not 0 <= length <= 32768: raise ValueError('Invalid request size')
+                        self.rfile.read(length)
                     if self.path == '/api/lab/workflows':
                         length = int(self.headers.get('Content-Length', '0'))
                         if not 0 < length <= 32768: raise ValueError('Workflow input must be 1–32768 bytes')

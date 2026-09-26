@@ -201,20 +201,23 @@ class Queue:
             # No priority decision is needed when there is no pending work.
             # Settlement and the worker heartbeat above still run while idle.
             if not pending or not workflows: return None
-            # A multi-source job must be able to collect one free permit from
-            # every source at once. Single-source work otherwise repeatedly
-            # fills the gaps and can starve discovery until its deadline.
-            # Protect one permit per needed source for the oldest eligible
-            # multi-source job. Existing work is never preempted, and unrelated
-            # work plus spare permits remain available. This is priority only:
-            # actual reservations still require the atomic capacity checks below.
+            # Earlier multi-source workflows finish before younger single-source
+            # jobs use overlapping sources. Merely reserving one spare permit
+            # prevented total starvation but let later work crowd discovery's
+            # remaining execution allowance. Older registration work and work on
+            # unrelated sources remain eligible, so new discovery arrivals cannot
+            # indefinitely preempt existing registrations. No running job is
+            # interrupted; actual reservations still use the capacity checks below.
             protected = None
+            earlier_multi = []
             for w in sorted(workflows,key=lambda w:(w['submitted'],w['id'])):
                 if w['source_version'] != wk['source_version'] or running[w['id']] >= 15: continue
                 if w['started'] is None and len(active) >= cfg['workflow_limit']: continue
                 candidates=[j for j in pending.get(w['id'],[]) if len(j['resources'])>1 and j['weight']<=wk['slots']]
-                if candidates:
-                    protected=min(candidates,key=lambda j:j['id']);break
+                ongoing=[j for j in held if j['workflow_id']==w['id'] and j['phase']=='running' and len(j['resources'])>1]
+                earlier_multi.extend((w['submitted'],set(j['resources'])) for j in candidates+ongoing)
+                if candidates and protected is None:
+                    protected=min(candidates,key=lambda j:j['id'])
             # Start slow state work earlier within each organization's fair turn.
             # Recent measured durations only: no organization or state overrides.
             estimates = {r['state']: r['seconds'] for r in c.execute(
@@ -235,9 +238,9 @@ class Queue:
                 if w['started'] is None and len(active) >= cfg['workflow_limit']: continue
                 for j in pending.get(w['id'], []):
                     if used+j['weight'] > ceiling: continue
-                    if protected and j['id']!=protected['id'] and any(
-                            r in protected['resources'] and busy[r]>=cfg['registry_limits'].get(r,4)-1
-                            for r in j['resources']): continue
+                    if len(j['resources'])==1 and any(
+                            submitted<w['submitted'] and j['resources'][0] in resources
+                            for submitted,resources in earlier_multi): continue
                     if any(busy[r] >= cfg['registry_limits'].get(r, 4) for r in j['resources']): continue
                     token = str(uuid.uuid4())
                     run_until = min(w['deadline'], now + (90 if j['state'] == '@discovery' else 300))

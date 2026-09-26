@@ -230,7 +230,7 @@ class DurableTests(unittest.TestCase):
         self.assertTrue(all(len(group) <= 12 for group in groups))
         self.assertEqual(sum(r['count'] for r in self.q.metrics()['workflows'] if r['phase'] == 'queued'), 5)
 
-    def test_waiting_multi_source_job_retains_one_permit_without_blocking_spares(self):
+    def test_earlier_discovery_finishes_before_younger_overlapping_work(self):
         with self.q.transaction() as (c,_):
             c.execute("UPDATE cc_lab_settings SET registry_limits=jsonb_set(registry_limits,'{CO}','2'::jsonb)")
         worker=self.worker(slots=12)
@@ -238,16 +238,40 @@ class DurableTests(unittest.TestCase):
         discovery=self.submit(normalize_submission({'ein':'222222222','organization_name':'Discovery','kind':'discovery'},STATES))
         self.submit(payload('333333333',states=['CO','LA']))
         self.submit(payload('444444444',states=['CO']))
-        spare=self.q.claim(worker);self.assertEqual(spare['state'],'CO')
         unrelated=self.q.claim(worker);self.assertEqual(unrelated['state'],'LA')
-        self.assertIsNone(self.q.claim(worker))  # Last CO permit stays available.
+        self.assertIsNone(self.q.claim(worker))  # Younger CO work waits; LA did not.
         self.finish(held)
         ready=self.q.claim(worker)
         self.assertEqual(ready['workflow_id'],discovery)
         self.assertEqual(ready['state'],'@discovery')
-        self.assertIsNone(self.q.claim(worker))  # Real CO cap includes discovery.
+        self.assertIsNone(self.q.claim(worker))  # Discovery keeps priority while running.
         self.finish(ready)
         self.assertEqual(self.q.claim(worker)['state'],'CO')
+        self.assertEqual(self.q.claim(worker)['state'],'CO')
+        self.assertIsNone(self.q.claim(worker))  # Actual CO cap is still enforced.
+
+    def test_new_discovery_cannot_preempt_older_registration_work(self):
+        worker=self.worker(slots=12)
+        self.submit(payload(states=['ME']));held=self.q.claim(worker)
+        older=self.submit(payload('333333333',states=['CO']))
+        self.submit(normalize_submission({'ein':'222222222','organization_name':'Discovery','kind':'discovery'},STATES))
+        job=self.q.claim(worker)
+        self.assertEqual(job['workflow_id'],older)
+        self.assertEqual(job['state'],'CO')
+
+    def test_all_earlier_discoveries_finish_before_younger_overlapping_work(self):
+        with self.q.transaction() as (c,_):
+            c.execute("UPDATE cc_lab_settings SET registry_limits=jsonb_set(registry_limits,'{ME}','2'::jsonb)")
+        worker=self.worker(slots=12)
+        for ein in ('222222222','333333333'):
+            self.submit(normalize_submission({'ein':ein,'organization_name':'Discovery','kind':'discovery'},STATES))
+        first=self.q.claim(worker);second=self.q.claim(worker)
+        younger=self.submit(payload('444444444',states=['CO']))
+        self.assertIsNone(self.q.claim(worker))
+        self.finish(first)
+        self.assertIsNone(self.q.claim(worker))
+        self.finish(second)
+        self.assertEqual(self.q.claim(worker)['workflow_id'],younger)
 
     def test_waiting_discovery_outside_workflow_ceiling_cannot_block_active_work(self):
         with self.q.transaction() as (c,_):

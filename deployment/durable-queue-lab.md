@@ -424,3 +424,28 @@ small-worker fit and cancellation. The master backend, source limits, deadlines,
 CPU/memory admission rules and four-node configuration are unchanged from
 perf.15. Only the lab release version environment value changes. This remains
 a lab candidate until a fresh ten-organization end-to-end repeat passes.
+
+## perf.17: order overlapping work by workflow age
+
+Perf.16 completed discovery for all ten organizations once, but the repeat lost
+one discovery after 42 seconds queued and approximately 48 seconds executing.
+Florida is not a discovery source and is separately deferred by the user because
+of a source outage. A single reserved permit did not sufficiently protect earlier
+discovery work from the overlapping workload submitted as other discoveries
+finished. Both original trials remain evidence; neither is an unconditional pass.
+
+The lab queue now defers younger single-source jobs that overlap an earlier
+eligible queued or running multi-source workflow. Older registration jobs and
+unrelated sources remain eligible. A stream of new discovery requests therefore
+cannot preempt already submitted registrations. Running jobs are never canceled
+or preempted, and all source caps, physical weights, deadlines and admission
+thresholds are unchanged. New tests cover completion of the whole earlier group,
+older registration fairness and continuation of unrelated work. The master and
+its identity, status, alias and date logic are byte-for-byte unchanged.
+
+Local HTTP regression also reproduced connection resets when rejecting legacy
+POST endpoints with unread request bodies. The private lab handler now consumes
+bounded ignored bodies before replying to rejected or cancellation requests.
+Invalid/oversized lengths do not execute or cancel work. Saved initial failures,
+body-consumption controls and repeated actual HTTP requests cover this fix;
+normal workflow submission and production/staging handlers are unchanged.

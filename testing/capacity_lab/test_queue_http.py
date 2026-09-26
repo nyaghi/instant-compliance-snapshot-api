@@ -1,5 +1,6 @@
 """HTTP contract and authorization tests. No registry network traffic."""
 import json
+import io
 import threading
 import types
 import unittest
@@ -51,6 +52,26 @@ class HTTPTests(unittest.TestCase):
             self.assertEqual(self.req(path,{})[0],409)
         self.assertEqual(self.req('/evidence/CO/test.pdf')[0],409)
         self.queue.submit.assert_not_called()
+
+    def test_rejection_and_cancellation_consume_bounded_ignored_body(self):
+        for path in ('/api/check','/api/discover-names','/api/ny-connector','/api/lab/workflows/id/cancel','/unknown'):
+            handler=self.server.RequestHandlerClass.__new__(self.server.RequestHandlerClass)
+            handler.path=path;handler.headers={'Content-Length':'2'}
+            handler.authorized=lambda:True;handler.rfile=io.BytesIO(b'{}')
+            observations=[]
+            handler._send_json=lambda status,*args:observations.append((status,handler.rfile.tell()))
+            handler.do_POST()
+            self.assertEqual(observations,[(202 if path.endswith('/cancel') else 404 if path=='/unknown' else 409,2)])
+
+    def test_ignored_body_size_limit_does_not_trigger_execution(self):
+        for length in ('-1','32769','invalid'):
+            handler=self.server.RequestHandlerClass.__new__(self.server.RequestHandlerClass)
+            handler.path='/api/lab/workflows/id/cancel';handler.headers={'Content-Length':length}
+            handler.authorized=lambda:True;handler.rfile=io.BytesIO(b'{}')
+            handler._send_json=Mock();handler.do_POST()
+            self.assertEqual(handler._send_json.call_args.args[0],400)
+            self.assertEqual(handler.rfile.tell(),0)
+        self.queue.cancel.assert_not_called()
 
     def test_private_access_and_client_scope_injection(self):
         for path,data in (('/api/lab/workflows',{}),('/api/lab/workflows/id',None),('/api/lab/workflows/id/cancel',{})):
