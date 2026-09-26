@@ -860,3 +860,22 @@ name order/32-second fallback allowance, Sales60s, source caps and four workers.
 No response evidence is reused between organizations or workflows. Controls
 cover stale negatives/positives, incomplete/filtered/foreign responses, original
 detail fallback and unchanged master logic outside the acquisition prefix.
+
+Phase46 candidates: PA skips a dashed EIN retry only when the live input's
+maxlength cannot hold that value. A usable/unconstrained field retains the retry.
+The submitted digits-only EIN, query-completion guard, candidate scoring, name
+sequence and delayed negative confirmation remain unchanged. A visible completed
+PA form on the exact search URL skips redundant navigation/network-idle waiting;
+the same Clear/reset, field clearing and response binding still run for each name.
+
+FL optional issuance lookup allows its form GET and same-credential POST up to six seconds
+instead of three, within the unchanged twelve-second total date deadline. It
+does not extend Sales60s or the state deadline. A slow response can finish without
+restarting the form; wrong identity, truncation, late data and TLS verification
+retain their existing conservative behavior. No primary status change and no
+date inferred from expiration. Treat the rare live timeout as unresolved until
+the final live date controls and all-state comparison pass. Phase45's full
+Standard control found two missing issuance dates: both timed out on the form
+GET after three seconds and its verified-TLS fallback after four. These are
+preserved failures, not accepted spreadsheet differences. Extending POST alone
+would not address them; the revised candidate covers the slow form as well.

@@ -1797,10 +1797,15 @@ def search_pa(page, org: Organization) -> StateResult:
             if formatted_ein and formatted_ein != ein:
                 retry_input = find_pa_ein_input(page)
                 if retry_input:
-                    retry_input.fill("")
-                    retry_input.fill(formatted_ein)
-                    if click_pa_search_button(page):
-                        row_text, expiration_raw = extract_pa_result_expiration(page, ein, org.organization_name)
+                    maximum = retry_input.get_attribute("maxlength") or ""
+                    # A browser truncates a formatted EIN in a digits-only field,
+                    # leaving its search button disabled. Keep the completed EIN
+                    # result rather than trying an input the field cannot hold.
+                    if not (maximum.isdigit() and len(formatted_ein) > int(maximum)):
+                        retry_input.fill("")
+                        retry_input.fill(formatted_ein)
+                        if click_pa_search_button(page):
+                            row_text, expiration_raw = extract_pa_result_expiration(page, ein, org.organization_name)
         if not row_text:
             result.raw_status_text = "No matching EIN result"
             result.status = STATUS_NOT_REGISTERED

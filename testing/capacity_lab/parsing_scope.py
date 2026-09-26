@@ -41,6 +41,7 @@ def strip_nj_public_detail_optimization(tree):
 
 def strip_nj_query_optimization(tree):
     """Restore only the new acquisition prefix; classification remains compared."""
+    strip_pa_form_optimization(tree)
     if not any(getattr(n, 'name', '') == 'nj_search_body' for n in tree.body):
         return
     old = ast.parse(subprocess.check_output(['git', 'show', 'a3376d2:registry_snapshot_server.py'],
@@ -68,6 +69,37 @@ def strip_nj_query_optimization(tree):
     assert ast.unparse(guards[0].test.values[1]) == "getattr(fallback, 'reason_code', '') == 'NJ_INCOMPLETE_QUERY_RESPONSE'"
     guards[0].test = guards[0].test.values[0]
     tree.body = [n for n in tree.body if getattr(n, 'name', '') not in {'nj_search_body', 'nj_completed_query_rows'}]
+
+
+def strip_pa_form_optimization(tree):
+    """Only PA's redundant ready-form navigation/idle wait is replaced."""
+    strip_fl_date_post_allowance(tree)
+    if not any(getattr(n, 'name', '') == 'pa_prepare_name_fallback_form' for n in tree.body):
+        return
+    old = ast.parse(subprocess.check_output(['git', 'show', '88e5f17:registry_snapshot_server.py'],
+        cwd=Path(__file__).resolve().parents[2]).decode('utf-8'))
+    before = next(n for n in old.body if getattr(n, 'name', '') == 'search_pa_with_name_fallback_core')
+    original = next(n for n in ast.walk(before) if isinstance(n, ast.Try)
+                    and ast.unparse(n.body[0]).startswith('page.goto(url,'))
+    after = next(n for n in tree.body if getattr(n, 'name', '') == 'search_pa_with_name_fallback_core')
+    target = next(n for n in ast.walk(after) if isinstance(n, ast.Try)
+                  and ast.unparse(n.body[0]) == 'pa_prepare_name_fallback_form(page, url)')
+    target.body = original.body[:3] + target.body[1:]
+    tree.body = [n for n in tree.body if getattr(n, 'name', '') != 'pa_prepare_name_fallback_form']
+
+
+def strip_fl_date_post_allowance(tree):
+    fn = next((n for n in tree.body if getattr(n, 'name', '') == 'enrich_registration_date_sources'), None)
+    if fn is None:
+        return
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Call) and ast.unparse(node.func) in {'session.get', 'session.post'}:
+            timeout = next(k.value for k in node.keywords if k.arg == 'timeout')
+            assert ast.unparse(timeout.func) == 'min' and len(timeout.args) == 2
+            assert ast.unparse(timeout.args[1]) == ('max(0.001, date_deadline - time.monotonic())'
+                if ast.unparse(node.func) == 'session.get' else 'date_deadline - time.monotonic()')
+            assert timeout.args[0].value in (3.0, 6.0)
+            timeout.args[0].value = 3.0
 
 
 def strip_or_snapshot_index_optimization(tree):

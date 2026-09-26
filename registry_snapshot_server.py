@@ -17896,7 +17896,7 @@ def enrich_registration_date_sources(result, final_status=None, lookup_started=N
     try:
         with curl_requests.Session(impersonate="chrome136") as session:
             step = "form"
-            response = session.get(url, timeout=min(3.0, max(.001, date_deadline-time.monotonic())))
+            response = session.get(url, timeout=min(6.0, max(.001, date_deadline-time.monotonic())))
             response.raise_for_status()
             fields = html_hidden_inputs(response.text)
             if "__VIEWSTATE" not in fields:
@@ -17906,7 +17906,9 @@ def enrich_registration_date_sources(result, final_status=None, lookup_started=N
             step = "credential"
             if time.monotonic() >= date_deadline:
                 raise TimeoutError("Florida optional registration-date deadline reached")
-            response = session.post(url, data=fields, timeout=min(3.0, date_deadline-time.monotonic()))
+            # Let slow form/credential responses finish instead of restarting
+            # after three seconds. The total date allowance is still 12s.
+            response = session.post(url, data=fields, timeout=min(6.0, date_deadline-time.monotonic()))
             response.raise_for_status()
             if time.monotonic() >= date_deadline:
                 raise TimeoutError("Florida optional registration-date deadline reached")
@@ -19480,6 +19482,18 @@ def search_pa_with_name_fallback(page, org):
             page.remove_listener(event, listener)
 
 
+def pa_prepare_name_fallback_form(page, url):
+    """A completed PA search leaves its form usable without another idle wait."""
+    ready = (page.url == url
+             and page.locator('input[name="EIN"]').is_visible()
+             and page.locator('input[name="entityName"]').is_visible()
+             and page.get_by_role("button", name=re.compile(r"^Clear$", re.I)).first.is_visible())
+    if not ready:
+        page.goto(url, wait_until="domcontentloaded", timeout=12000)
+        checker.safe_wait_for_network_idle(page, timeout=2500)
+        time.sleep(0.4)
+
+
 def search_pa_with_name_fallback_core(page, org, completion_guard, completion_wait, request_offset):
     result = checker.search_pa(page, org)
     result = completion_guard(result)
@@ -19525,9 +19539,7 @@ def search_pa_with_name_fallback_core(page, org, completion_guard, completion_wa
         attempted_variants.append(variant)
         fallback = checker.StateResult(org.organization_name, org.ein, "PA", checker.STATUS_UNKNOWN, url)
         try:
-            page.goto(url, wait_until="domcontentloaded", timeout=12000)
-            checker.safe_wait_for_network_idle(page, timeout=2500)
-            time.sleep(0.4)
+            pa_prepare_name_fallback_form(page, url)
             try:
                 clear_button = page.get_by_role("button", name=re.compile(r"^Clear$", re.I))
                 if clear_button.count() > 0 and clear_button.first.is_visible(timeout=500):

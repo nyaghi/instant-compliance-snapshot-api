@@ -46,6 +46,26 @@ test('Standard transport retains its five-minute timeout; optional Sales abort i
 });
 test('discovery and shared checker match baseline; NY transport has separate scoped controls',()=>{
  for(const file of ['Charity_Checker_Script for 13_states.py','web-staging/organization-identity.js']){
-  const old=cp.execFileSync('git',['show','fb193e6:'+file],{cwd:root,maxBuffer:20*1024*1024});assert.deepEqual(fs.readFileSync(path.join(root,file)).toString().replaceAll('\r\n','\n'),old.toString().replaceAll('\r\n','\n'),file);
+  const old=cp.execFileSync('git',['show','fb193e6:'+file],{cwd:root,maxBuffer:20*1024*1024});
+  let current=fs.readFileSync(path.join(root,file)).toString().replaceAll('\r\n','\n');
+  if(file==='Charity_Checker_Script for 13_states.py'){
+   // Separately covered by PA field-length, completion and whole-checker AST controls.
+   const added=`                    maximum = retry_input.get_attribute("maxlength") or ""
+                    # A browser truncates a formatted EIN in a digits-only field,
+                    # leaving its search button disabled. Keep the completed EIN
+                    # result rather than trying an input the field cannot hold.
+                    if not (maximum.isdigit() and len(formatted_ein) > int(maximum)):
+                        retry_input.fill("")
+                        retry_input.fill(formatted_ein)
+                        if click_pa_search_button(page):
+                            row_text, expiration_raw = extract_pa_result_expiration(page, ein, org.organization_name)`;
+   const original=`                    retry_input.fill("")
+                    retry_input.fill(formatted_ein)
+                    if click_pa_search_button(page):
+                        row_text, expiration_raw = extract_pa_result_expiration(page, ein, org.organization_name)`;
+   assert.equal(current.split(added).length,2);
+   current=current.replace(added,original);
+  }
+  assert.deepEqual(current,old.toString().replaceAll('\r\n','\n'),file);
  }
 });
