@@ -439,6 +439,78 @@ class DurableTests(unittest.TestCase):
                 row=c.execute('SELECT * FROM cc_lab_workflows WHERE id=%s',(ident,)).fetchone()
             self.assertEqual(row['deadline']-row['submitted'],seconds)
 
+    def discovery(self, ein='123123123'):
+        return self.submit(normalize_submission({'ein':ein,'organization_name':'Discovery','kind':'discovery'},STATES))
+
+    def test_returned_sources_free_permits_not_job_weight_or_unfinished_sources(self):
+        ident=self.discovery(); worker=self.worker(slots=4); job=self.q.claim(worker)
+        younger=self.submit(payload('987654321',states=['CO','ME']))
+        second=self.worker(slots=4)
+        self.assertIsNone(self.q.claim(second))
+        self.assertTrue(self.q.release_discovery_sources(worker,job['id'],job['token'],['CO']))
+        self.assertIsNone(self.q.claim(worker))  # Full physical weight still held.
+        next_job=self.q.claim(second);self.assertEqual(next_job['state'],'CO')
+        self.assertEqual(next_job['workflow_id'],younger)
+        self.assertIsNone(self.q.claim(second))  # ME is still executing/reserved.
+        self.assertTrue(self.q.release_discovery_sources(worker,job['id'],job['token'],['CO']))
+        with self.q.transaction() as (c,_):
+            row=c.execute('SELECT * FROM cc_lab_jobs WHERE id=%s',(job['id'],)).fetchone()
+            events=c.execute("SELECT count(*) AS n FROM cc_lab_events WHERE event='discovery_sources_finished'").fetchone()['n']
+        self.assertEqual(set(row['resources']),{'ME','IRS'});self.assertEqual(row['weight'],4)
+        self.assertEqual(row['phase'],'running');self.assertEqual(events,1)
+        self.finish(next_job);self.finish(job)
+        self.assertEqual(self.q.claim(second)['state'],'ME')
+
+    def test_discovery_release_rejects_wrong_identity_irs_unknown_and_cancellation(self):
+        ident=self.discovery();worker=self.worker();job=self.q.claim(worker)
+        for owner,token,sources in [('other',job['token'],['CO']),(worker,'stale',['CO']),
+                                     (worker,job['token'],['CO','XX']),(worker,job['token'],['IRS'])]:
+            self.assertFalse(self.q.release_discovery_sources(owner,job['id'],token,sources))
+        self.q.cancel('a',ident)
+        self.assertFalse(self.q.release_discovery_sources(worker,job['id'],job['token'],['CO']))
+        with self.q.transaction() as (c,_):
+            row=c.execute('SELECT * FROM cc_lab_jobs WHERE id=%s',(job['id'],)).fetchone()
+        self.assertEqual(row['released_resources'],[])
+
+    def test_discovery_release_recovery_restores_all_sources_and_fences_old_token(self):
+        ident=self.discovery();worker=self.worker();job=self.q.claim(worker)
+        self.assertTrue(self.q.release_discovery_sources(worker,job['id'],job['token'],['CO']))
+        self.q.confirm_worker_stopped(worker,'Fixture: entire isolated process tree proven dead')
+        newer=self.q.claim(self.worker())
+        self.assertEqual(set(newer['resources']),{'CO','ME','IRS'})
+        self.assertEqual(newer['released_resources'],[]);self.assertEqual(newer['attempt'],2)
+        self.assertFalse(self.q.release_discovery_sources(worker,job['id'],job['token'],['ME']))
+        self.finish(newer);self.assertEqual(self.q.status('a',ident)['phase'],'completed')
+
+    def test_expired_lease_cannot_release_discovery_source(self):
+        self.discovery();worker=self.worker();job=self.q.claim(worker)
+        with self.q.transaction() as (c,now):
+            c.execute('UPDATE cc_lab_jobs SET lease_until=%s WHERE id=%s',(now-1,job['id']))
+        self.assertFalse(self.q.release_discovery_sources(worker,job['id'],job['token'],['CO']))
+
+    def test_indexed_duration_estimates_equal_previous_window_query(self):
+        ident=self.submit();worker=self.worker();job=self.q.claim(worker);self.finish(job)
+        with self.q.transaction() as (c,now):
+            for i in range(100):
+                # Include recent, old, failed, retried and out-of-bound history.
+                state=['CO','ME','CA'][i%3];duration=(i%35)*11
+                finished=now-i*10-(90000 if i>90 else 0);error='FAILED' if i%11==0 else None
+                attempt=2 if i%13==0 else 1
+                history=uuid.uuid4().hex
+                c.execute("INSERT INTO cc_lab_workflows SELECT %s,scope,ein,fingerprint,payload,kind,mode,source_version,"
+                          "phase,stop_reason,submitted,deadline,started,finished,dispatched FROM cc_lab_workflows WHERE id=%s",
+                          (history,ident))
+                c.execute("INSERT INTO cc_lab_jobs(id,workflow_id,state,resources,weight,phase,attempt,claimed,finished,error) "
+                          "VALUES (%s,%s,%s,'[]',1,'done',%s,%s,%s,%s)",
+                          (uuid.uuid4().hex,history,state,attempt,finished-duration,finished,error))
+            states=[r['state'] for r in c.execute('SELECT DISTINCT state FROM cc_lab_jobs')]
+            previous={r['state']:r['seconds'] for r in c.execute(
+                "SELECT state,percentile_cont(0.5) WITHIN GROUP (ORDER BY seconds) AS seconds FROM "
+                "(SELECT state,finished-claimed AS seconds,row_number() OVER (PARTITION BY state ORDER BY finished DESC) AS n "
+                "FROM cc_lab_jobs WHERE phase='done' AND error IS NULL AND attempt=1 AND finished>=%s "
+                "AND claimed IS NOT NULL AND finished>claimed AND finished-claimed<=300) recent WHERE n<=20 GROUP BY state",(now-86400,))}
+            self.assertEqual(self.q.duration_estimates(c,now,states),previous)
+
     def test_expired_running_work_cannot_publish_late_success(self):
         ident=self.submit(); w=self.worker(); j=self.q.claim(w)
         with self.q.transaction() as (c,now): c.execute('UPDATE cc_lab_workflows SET deadline=%s WHERE id=%s',(now-1,ident))

@@ -3,17 +3,60 @@ import os
 from pathlib import Path
 import sys
 import json
+import threading
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 
-def execute(master, job):
+class DiscoveryProgress:
+    """Private child-to-supervisor evidence; never contains organization data.
+
+    Only source functions which have returned can release permits. IRS remains
+    held until tree cleanup because WA's alias review also uses IRS metadata.
+    Missing/unwritable progress is conservative: keep all unreported permits.
+    """
+    def __init__(self, output, job):
+        self.path = Path(output).with_suffix('.sources.json')
+        self.job = job
+        self.completed = set()
+        self.lock = threading.Lock()
+
+    def __call__(self, source):
+        if source == 'IRS' or source not in self.job['resources']: return
+        with self.lock:
+            self.completed.add(source)
+            payload = {'id': self.job['id'], 'token': self.job['token'],
+                       'completed': sorted(self.completed)}
+            try:
+                temp = self.path.with_suffix('.partial')
+                temp.write_text(json.dumps(payload), encoding='utf-8')
+                temp.replace(self.path)
+            except OSError:
+                pass
+
+
+def execute(master, job, source_finished=None):
     if job['version'] != master.APP_VERSION:
         raise ValueError('Master version mismatch')
     p = job['payload']
     if job['state'] == '@discovery':
-        return master.discover_organization_names(p['organization_name'], p['ein'])
+        if source_finished is None:
+            return master.discover_organization_names(p['organization_name'], p['ein'])
+        # This master instance belongs to one isolated task process. Observe its
+        # existing collectors; do not alter their input, deadlines or results.
+        original = master.identity_source_result
+        def observed(source, *args, **kwargs):
+            try:
+                return original(source, *args, **kwargs)
+            finally:
+                try: source_finished(source)
+                except Exception: pass  # Observation cannot change registry evidence.
+        master.identity_source_result = observed
+        try:
+            return master.discover_organization_names(p['organization_name'], p['ein'])
+        finally:
+            master.identity_source_result = original
     if job['state'] == 'NY' and os.environ.get('CE_LAB_NY_BROWSER') != '1':
         raise ValueError('Isolated NY collector not configured')
     if job['state'] not in master.SUPPORTED_STATES:
@@ -50,7 +93,8 @@ def run_job(job, output, supervisor_pid=None, warmed=None):
     import_seconds, import_cpu = time.monotonic()-import_started, time.process_time()-cpu_started
     # The child has a private result file. Logs never mix into the result payload.
     execution_started, cpu_started = time.monotonic(), time.process_time()
-    result = execute(master, job)
+    progress = DiscoveryProgress(output, job) if job['state'] == '@discovery' else None
+    result = execute(master, job, progress)
     result['lab_task_metrics'] = {'import_seconds': import_seconds, 'import_cpu_seconds': import_cpu,
         'execution_seconds': time.monotonic()-execution_started, 'execution_cpu_seconds': time.process_time()-cpu_started}
     result['lab_task_metrics']['engine_preloaded'] = warmed is not None

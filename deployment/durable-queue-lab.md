@@ -548,3 +548,41 @@ now drains at most 32 KiB with an absolute one-second read deadline before the
 401 reply; invalid lengths, timeout and oversized bodies still cannot execute or
 cancel work. Authorized requests are unchanged. The failed initial test output
 is retained, with body-bound/timeout controls and a full follow-up offline run.
+
+## perf.22: release completed discovery sources and index duration history
+
+The isolated discovery child reports when each existing master source function
+has actually returned, including its browser cleanup. The supervisor reads a
+private atomic progress file at most once per three seconds per discovery job.
+The queue checks the owner, token, live lease, job phase and deadline before
+releasing only those source reservations. IRS stays held until whole-process
+cleanup because other collectors use IRS metadata for alias verification.
+The job retains all four physical weighted slots until its entire process tree
+is stopped. Missing progress, an unknown source, cancellation, stale evidence or
+a failed database write cannot release unfinished work. Proven-dead recovery
+restores all original source reservations before a second attempt.
+
+Earlier discoveries retain priority on their unfinished sources. Their completed
+sources can serve later registrations. Master matching, name discovery sources,
+alias evidence, state interpretation and time allowances are unchanged. The
+source observer is confined to one lab task's isolated master process and never
+receives database credentials. It cannot change the collected result.
+
+Scheduling still uses the last twenty successful first-attempt durations per
+state within the past day, bounded to 300 seconds. An indexed lateral top-N
+query retrieves that same sample instead of sorting all completed daily jobs on
+every scheduling turn. This does not change workflow fairness or source caps.
+
+Validation measures both lab Standard and Sales across all 32 states, including
+Florida and the isolated New York browser collector. Sales retains its 60-second
+queue-inclusive cutoff; incomplete checks are failures of full coverage, not
+successful classifications. These are durable backend load trials, not a claim
+that the customer's browser extension or UI was load-tested. Standard receives
+fresh discovered aliases; Sales receives the entered name and EIN, matching its
+current UI. A preliminary three-case Sales diagnostic supplied aliases and is
+labeled separately from faithful Sales trials. The unchanged UI scheduling and
+conservative display grouping have separate JavaScript regression controls.
+
+No extra compute, staging deployment or production deployment is part of this
+trial. The baseline remains four Pro nodes, twelve weighted slots each, twenty
+active workflows and at most fifteen concurrent state jobs per organization.

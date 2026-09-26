@@ -272,6 +272,21 @@ class Supervisor:
 
     def stop(self): self.stop_event.set()
 
+    def collect_discovery_progress(self, r):
+        if r['job']['state'] != '@discovery' or r.get('stop_reason'): return
+        try:
+            evidence = json.loads(r['output'].with_suffix('.sources.json').read_text(encoding='utf-8'))
+            if (evidence.get('id') != r['job']['id'] or evidence.get('token') != r['job']['token']
+                    or not isinstance(evidence.get('completed'), list)): return
+            completed = evidence['completed']
+            if completed == r.get('released_sources'): return
+            if self.queue.release_discovery_sources(self.id, r['job']['id'], r['job']['token'], completed):
+                r['released_sources'] = completed
+        except Exception:
+            # Progress is optional. A missing file or failed queue update keeps
+            # reservations held; the normal heartbeat/termination rules apply.
+            return
+
     def run(self):
         last_heartbeat = time.monotonic()
         next_heartbeat = 0
@@ -298,6 +313,9 @@ class Supervisor:
                     output_ready = r['output'].is_file()
                     exited = r['tree'].poll() is not None
                     if time.monotonic() >= r['deadline']: r['stop_reason'] = 'TASK_TIME_LIMIT'
+                    if not output_ready and not exited and time.monotonic() >= r.get('next_source_progress', 0):
+                        self.collect_discovery_progress(r)
+                        r['next_source_progress'] = time.monotonic()+3
                     if output_ready or exited or r.get('stop_reason'):
                         result, error = None, r.get('stop_reason')
                         if output_ready and not error:

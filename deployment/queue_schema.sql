@@ -36,6 +36,11 @@ CREATE TABLE IF NOT EXISTS cc_lab_jobs (
 );
 CREATE INDEX IF NOT EXISTS cc_lab_jobs_workflow ON cc_lab_jobs(workflow_id,phase);
 CREATE INDEX IF NOT EXISTS cc_lab_jobs_owner ON cc_lab_jobs(owner,phase);
+-- Completed discovery sources can release their own permits without releasing
+-- the still-running job's physical weight. Recovery restores every reservation.
+ALTER TABLE cc_lab_jobs ADD COLUMN IF NOT EXISTS released_resources jsonb NOT NULL DEFAULT '[]';
+CREATE INDEX IF NOT EXISTS cc_lab_jobs_recent_duration ON cc_lab_jobs(state,finished DESC)
+ WHERE phase='done' AND error IS NULL AND attempt=1 AND claimed IS NOT NULL;
 CREATE TABLE IF NOT EXISTS cc_lab_events (
  sequence bigserial PRIMARY KEY, workflow_id text, job_id text,
  event text NOT NULL, at double precision NOT NULL, detail jsonb NOT NULL

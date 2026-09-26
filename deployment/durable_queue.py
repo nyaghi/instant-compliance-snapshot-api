@@ -216,19 +216,14 @@ class Queue:
                 if w['source_version'] != wk['source_version'] or running[w['id']] >= 15: continue
                 if w['started'] is None and len(active) >= cfg['workflow_limit']: continue
                 candidates=[j for j in pending.get(w['id'],[]) if len(j['resources'])>1 and j['weight']<=wk['slots']]
-                ongoing=[j for j in held if j['workflow_id']==w['id'] and j['phase']=='running' and len(j['resources'])>1]
+                ongoing=[j for j in held if j['workflow_id']==w['id'] and j['phase']=='running'
+                         and (len(j['resources'])>1 or j['state']=='@discovery')]
                 earlier_multi.extend((w['submitted'],set(j['resources'])) for j in candidates+ongoing)
                 if candidates and protected is None:
                     protected=min(candidates,key=lambda j:j['id'])
             # Start slow state work earlier within each organization's fair turn.
             # Recent measured durations only: no organization or state overrides.
-            estimates = {r['state']: r['seconds'] for r in c.execute(
-                "SELECT state, percentile_cont(0.5) WITHIN GROUP (ORDER BY seconds) AS seconds FROM "
-                "(SELECT state,finished-claimed AS seconds,row_number() OVER "
-                "(PARTITION BY state ORDER BY finished DESC) AS n FROM cc_lab_jobs "
-                "WHERE phase='done' AND error IS NULL AND attempt=1 AND finished>=%s "
-                "AND claimed IS NOT NULL AND finished>claimed AND finished-claimed<=300) recent "
-                "WHERE n<=20 GROUP BY state", (now-86400,))}
+            estimates = self.duration_estimates(c, now, {j['state'] for jobs in pending.values() for j in jobs})
             for jobs in pending.values():
                 jobs.sort(key=lambda j: (-estimates.get(j['state'], 10.0), j['state'], j['id']))
             workflows.sort(key=lambda w: (running[w['id']], w['dispatched'], w['submitted'], w['id']))
@@ -265,6 +260,44 @@ class Queue:
                             'payload': w['payload'], 'version': w['source_version'], 'run_seconds': max(0, run_until-now),
                             'submitted': w['submitted'], 'claimed': now}
             return None
+
+    @staticmethod
+    def duration_estimates(c, now, states):
+        # Same last-20 median and bounds; indexed top-N retrieval avoids sorting
+        # all of the day's completed jobs on every scheduler turn.
+        return {r['state']: r['seconds'] for r in c.execute(
+            "SELECT wanted.state, percentile_cont(0.5) WITHIN GROUP (ORDER BY recent.seconds) AS seconds "
+            "FROM unnest(%s::text[]) AS wanted(state) CROSS JOIN LATERAL "
+            "(SELECT finished-claimed AS seconds FROM cc_lab_jobs WHERE state=wanted.state "
+            "AND phase='done' AND error IS NULL AND attempt=1 AND finished>=%s "
+            "AND claimed IS NOT NULL AND finished>claimed AND finished-claimed<=300 "
+            "ORDER BY finished DESC LIMIT 20) recent GROUP BY wanted.state", (sorted(states), now-86400))}
+
+    def release_discovery_sources(self, worker, job, token, completed):
+        """Supervisor-only evidence from returned collectors, fenced like leases.
+
+        The task remains running with its full physical weight and deadline.
+        Never release IRS here: other discovery collectors may still use it.
+        """
+        if not isinstance(completed, list) or any(not isinstance(s, str) for s in completed):
+            return False
+        with self.transaction() as (c, now):
+            self._settle(c, now)
+            j = c.execute("SELECT * FROM cc_lab_jobs WHERE id=%s AND owner=%s AND token=%s "
+                          "AND phase='running' AND state='@discovery' AND lease_until>%s AND run_until>%s",
+                          (job, worker, token, now, now)).fetchone()
+            if not j: return False
+            requested = set(completed)
+            if 'IRS' in requested or not requested.issubset(set(j['resources']) | set(j['released_resources'])):
+                return False
+            newly = sorted(requested.intersection(j['resources']))
+            if newly:
+                remaining = [s for s in j['resources'] if s not in requested]
+                released = sorted(set(j['released_resources']) | set(newly))
+                c.execute('UPDATE cc_lab_jobs SET resources=%s,released_resources=%s WHERE id=%s',
+                          (Jsonb(remaining), Jsonb(released), job))
+                self.event(c, now, 'discovery_sources_finished', j['workflow_id'], job, sources=newly)
+            return True
 
     def heartbeat(self, worker, jobs, observation=None):
         allowed = []
@@ -330,8 +363,10 @@ dead. Persist that evidence reference, fence all tokens, then requeue boundedly.
             for j in c.execute("SELECT * FROM cc_lab_jobs WHERE owner=%s AND phase IN ('running','stopping','quarantined')", (worker,)).fetchall():
                 w = c.execute('SELECT * FROM cc_lab_workflows WHERE id=%s', (j['workflow_id'],)).fetchone()
                 retry = not w['stop_reason'] and j['attempt'] < 2
-                c.execute('UPDATE cc_lab_jobs SET phase=%s,token=NULL,owner=NULL,result=NULL,error=%s,finished=%s WHERE id=%s',
-                          ('queued' if retry else 'done', None if retry else 'WORKER_STOPPED', None if retry else now, j['id']))
+                c.execute('UPDATE cc_lab_jobs SET phase=%s,token=NULL,owner=NULL,result=NULL,error=%s,finished=%s,'
+                          'resources=%s,released_resources=%s WHERE id=%s',
+                          ('queued' if retry else 'done', None if retry else 'WORKER_STOPPED', None if retry else now,
+                           Jsonb(sorted(set(j['resources']) | set(j['released_resources']))), Jsonb([]), j['id']))
                 self.event(c, now, 'termination_confirmed', w['id'], j['id'], proof=proof, requeued=retry)
             self._settle(c, now)
 
