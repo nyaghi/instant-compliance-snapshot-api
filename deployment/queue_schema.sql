@@ -45,3 +45,8 @@ CREATE TABLE IF NOT EXISTS cc_lab_events (
  sequence bigserial PRIMARY KEY, workflow_id text, job_id text,
  event text NOT NULL, at double precision NOT NULL, detail jsonb NOT NULL
 );
+
+-- Preparation lookup must not scan historical registration results or repeatedly
+-- transfer every active workflow's identity evidence on each claim.
+CREATE INDEX IF NOT EXISTS cc_lab_sales_identity ON cc_lab_jobs(workflow_id)
+ WHERE state='@sales_identity';

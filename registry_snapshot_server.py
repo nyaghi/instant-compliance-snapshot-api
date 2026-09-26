@@ -2395,7 +2395,7 @@ def identity_irs_historical_names(ein: str, latest_object_id: str, deadline: flo
             "historical_note": "Up to three oldest available electronic IRS filer headers checked for former names; this is not an exhaustive name history."}
 
 
-def identity_irs_names(ein: str, deadline: float) -> dict:
+def identity_irs_names(ein: str, deadline: float, *, metadata_only: bool = False) -> dict:
     api_url = f"https://projects.propublica.org/nonprofits/api/v2/organizations/{ein}.json"
     payload = json.loads(identity_fetch(api_url, deadline))
     org = payload.get("organization") or {}
@@ -2417,6 +2417,9 @@ def identity_irs_names(ein: str, deadline: float) -> dict:
         result["group_name_note"] = "IRS group-ruling metadata identifies this subordinate in its secondary name field. The group primary name was not added as an organization alias."
     PUBLIC_PROFILE_CACHE[ein] = payload
     result["address"] = {key: org.get(key) for key in ("ein", "street", "city", "state", "zipcode")}
+    if metadata_only:
+        result["limitation"] = "Sales identity check uses current IRS organization metadata only; Form 990 history was not searched."
+        return result
     object_id = str(org.get("latest_object_id") or "")
     if not re.fullmatch(r"\d{18}", object_id):
         result["limitation"] = "IRS organization name checked; a machine-readable latest Form 990 was not available."
@@ -2435,6 +2438,70 @@ def identity_irs_names(ein: str, deadline: float) -> dict:
             result.update(complete=False, limitation="Current IRS names retained; some historical filer headers could not be checked.")
     except Exception:
         result.update(complete=False, historical_complete=False, limitation="Current IRS names retained; historical IRS names could not be checked within this discovery request.")
+    return result
+
+
+
+def sales_identity_evidence(organization_name: str, ein: str) -> dict:
+    """Small same-run EIN identity step; it never supplies a state's status.
+
+    Called by the isolated lab scheduler with CO and IRS permits reserved. Its
+    six-second allowance is inside the existing 60-second Sales workflow, not
+    a preparatory run. No prior organization's cache or reviewed names is used.
+    """
+    requested = canonical_ein_digits(ein)
+    if len(requested) != 9:
+        raise ValueError("Sales identity requires a valid EIN")
+    started = time.monotonic()
+    deadline = started + 6.0
+    collectors = {"CO": lambda: identity_co_names(requested, deadline),
+                  "IRS": lambda: identity_irs_names(requested, deadline, metadata_only=True)}
+    executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="sales-identity")
+    futures = {source: executor.submit(fn) for source, fn in collectors.items()}
+    sources, errors = {}, {}
+    try:
+        for source, future in futures.items():
+            try:
+                sources[source] = future.result(timeout=max(.001, deadline-time.monotonic()))
+            except Exception as exc:
+                errors[source] = type(exc).__name__
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+    return {"state": "@sales_identity", "ein": requested, "app_version": APP_VERSION,
+            "sources": sources, "errors": errors, "seconds": time.monotonic()-started,
+            "scope": "Current IRS metadata and Colorado EIN records; limited identity assistance, not full discovery."}
+
+
+def sales_names_from_evidence(ein: str, evidence: dict) -> list[str]:
+    """Accept only internal same-release, same-EIN evidence; no client field."""
+    if (not isinstance(evidence, dict) or evidence.get("state") != "@sales_identity"
+            or evidence.get("app_version") != APP_VERSION
+            or evidence.get("ein") != canonical_ein_digits(ein)):
+        raise ValueError("Sales identity evidence does not belong to this lookup")
+    names = []
+    for source in ("CO", "IRS"):
+        for item in (evidence.get("sources", {}).get(source) or {}).get("names", []):
+            if item.get("verified") is True and not item.get("identity_conflict") and item.get("evidence"):
+                names.append(item["name"])
+    # Keep every verified distinct spelling up to the normal reviewed-name cap.
+    return normalize_reviewed_names(list(dict.fromkeys(names))[:IDENTITY_MAX_NAMES])
+
+
+
+def sales_result_with_identity(result: dict, evidence: dict) -> dict:
+    names = sales_names_from_evidence(result.get("ein", ""), evidence)
+    result["sales_identity"] = {"names": names, "errors": evidence.get("errors", {}),
+                               "scope": evidence.get("scope"), "seconds": evidence.get("seconds")}
+    note = "This Sales check included names confirmed against the same EIN in current IRS metadata or Colorado records."
+    if names:
+        result["comments"] = (str(result.get("comments") or "") + " " + note).strip()
+    # Source failure is not a completed negative identity search. Name-only
+    # negatives remain uncertain if this bounded identity assistance failed.
+    name_search_states = {"AR", "CT", "DC", "FL", "KS", "KY", "LA", "ME", "MS", "ND", "NH", "OK", "RI", "SC", "WI", "WV"}
+    if (evidence.get("errors") and result.get("state") in name_search_states
+            and result.get("status") == "Not Registered"):
+        result.update(status="Unable to Confirm", success=False, reason_code="SALES_IDENTITY_INCOMPLETE",
+            comments="The entered-name search found no qualifying registration, but the bounded EIN identity check did not finish confirming alternate names. Registration remains unconfirmed; run Standard for a full check.")
     return result
 
 

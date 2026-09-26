@@ -89,6 +89,8 @@ def execute(master, job, source_finished=None):
     if job['version'] != master.APP_VERSION:
         raise ValueError('Master version mismatch')
     p = job['payload']
+    if job['state'] == '@sales_identity':
+        return master.sales_identity_evidence(p['organization_name'], p['ein'])
     if job['state'] == '@discovery':
         if source_finished is None:
             return master.discover_organization_names(p['organization_name'], p['ein'])
@@ -110,6 +112,12 @@ def execute(master, job, source_finished=None):
         raise ValueError('Isolated NY collector not configured')
     if job['state'] not in master.SUPPORTED_STATES:
         raise ValueError('Unsupported state')
+    identity = job.get('sales_identity')
+    if identity is not None:
+        if p.get('mode') != 'sales' or p.get('alternate_names'):
+            raise ValueError('Automatic Sales identity cannot override reviewed input')
+        aliases = master.sales_names_from_evidence(p['ein'], identity)
+        p = {**p, 'alternate_names': aliases}
     organizations = master.normalize_organization_requests(p, privileged=False)
     if len(organizations) != 1: raise ValueError('Exactly one organization required')
     trace = FloridaTrace() if job['state'] == 'FL' else None
@@ -121,6 +129,8 @@ def execute(master, job, source_finished=None):
         if trace: master.search_fl = original
     if len(results) != 1: raise ValueError('Unexpected result count')
     if trace: results[0]['lab_fl_trace'] = trace.events
+    if identity is not None:
+        results[0] = master.sales_result_with_identity(results[0], identity)
     return results[0]
 
 

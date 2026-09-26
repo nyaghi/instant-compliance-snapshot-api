@@ -714,3 +714,28 @@ name only, and the correct P40435/Upcoming Filing in 0.29 seconds with the verif
 alias. Separate Sales input gaps remain in DC, NH and RI when current Sales omits
 reviewed discovery names. An alias-fed experiment must not be labeled as current
 customer Sales validation. Neither it nor this guard extends the Sales deadline.
+
+
+## Bounded Sales identity assistance (lab candidate, September 26)
+
+Sales with no submitted alternate names receives one internal `@sales_identity`
+job before state dispatch. The master backend reads current IRS organization
+metadata and Colorado exact-EIN public records in parallel for at most six
+seconds. No financial pages, historical IRS returns, previous Standard results,
+or organization-specific overrides are used. The worker reserves CO and IRS
+permits together and has an eight-second process allowance **inside** the
+unchanged 60-second workflow deadline, including queue time. Failure or worker
+loss never resets that deadline.
+
+Only verified names bound to the workflow's EIN and source version enter that
+workflow's state queries. Existing master identity/address and classification
+rules remain authoritative. Standard and Sales with explicitly submitted names
+retain those inputs. Name-only negatives become inconclusive if this limited
+identity step fails. This assistance is not full alternate-name discovery.
+
+Preparation evidence is returned separately from the requested state rows, so
+32 states still means 32 checks. No additional paid resources, runtime sidecar,
+staging frontend changes, or production changes are included. This candidate
+requires the queue integration, isolation, deadline, live issue-control and
+all-state comparison tests before promotion. The staging Sales disclaimer must
+be reviewed if this candidate is later explicitly promoted; staging is untouched.

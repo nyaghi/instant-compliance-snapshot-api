@@ -65,6 +65,69 @@ class DurableTests(unittest.TestCase):
         return (q or self.q).complete(job['owner'], job['id'], job['token'],
             {'ein':job['payload']['ein'],'state':job['state'],'app_version':VERSION,'status':'Current'})
 
+    def sales_without_review(self, **changes):
+        return payload(mode='sales', alternate_names=[], states=['CO','LA'], **changes)
+
+    def test_sales_identity_is_inside_same_deadline_and_hidden_from_state_counts(self):
+        ident=self.submit(self.sales_without_review());worker=self.worker()
+        before=self.q.status('a',ident)
+        self.assertEqual(before['total'],2);self.assertEqual(len(before['preparation']),1)
+        self.assertEqual(before['deadline']-before['submitted'],60)
+        seed=self.q.claim(worker);self.assertEqual(seed['state'],'@sales_identity')
+        self.assertEqual(seed['resources'],['CO','IRS']);self.assertLessEqual(seed['run_seconds'],8)
+        self.assertIsNone(self.q.claim(worker))
+        proof={'state':'@sales_identity','ein':seed['payload']['ein'],'app_version':VERSION,'sources':{},'errors':{}}
+        self.q.complete(worker,seed['id'],seed['token'],proof)
+        state=self.q.claim(worker);self.assertNotEqual(state['state'],'@sales_identity')
+        self.assertEqual(state['sales_identity'],proof);self.assertEqual(state['payload']['alternate_names'],[])
+        after=self.q.status('a',ident);self.assertEqual(after['deadline'],before['deadline']);self.assertEqual(after['completed'],0)
+
+    def test_identity_failure_is_propagated_conservatively_without_blocking_states(self):
+        self.submit(self.sales_without_review());worker=self.worker();seed=self.q.claim(worker)
+        self.q.complete(worker,seed['id'],seed['token'],error='TASK_DEADLINE')
+        state=self.q.claim(worker)
+        self.assertEqual(state['sales_identity']['errors'],{'identity':'TASK_DEADLINE'})
+        self.assertEqual(state['sales_identity']['ein'],state['payload']['ein'])
+
+    def test_identity_cannot_change_reviewed_sales_or_standard_input(self):
+        for p in (payload(mode='sales'),payload(alternate_names=[])):
+            ident=self.submit(p);worker=self.worker();job=self.q.claim(worker)
+            self.assertNotEqual(job['state'],'@sales_identity');self.assertNotIn('sales_identity',job)
+            self.assertEqual(self.q.status('a',ident)['preparation'],[])
+            self.finish(job)
+
+    def test_identity_deadline_does_not_allow_queued_state_after_minute(self):
+        ident=self.submit(self.sales_without_review());worker=self.worker();seed=self.q.claim(worker)
+        with self.q.transaction() as (c,now):
+            c.execute('UPDATE cc_lab_workflows SET deadline=%s WHERE id=%s',(now-1,ident))
+        self.q.status('a',ident)
+        self.assertIsNone(self.q.claim(worker))
+        self.finish(seed)
+        final=self.q.status('a',ident)
+        self.assertEqual(final['phase'],'expired');self.assertEqual(final['completed'],2)
+        self.assertTrue(all(j['result'] is None for j in final['jobs']+final['preparation']))
+
+    def test_identity_evidence_cannot_cross_workflow_or_ein(self):
+        worker=self.worker();a=self.submit(self.sales_without_review(ein='123456789'));seed=self.q.claim(worker)
+        with self.assertRaises(ValueError):
+            self.q.complete(worker,seed['id'],seed['token'],{'ein':'987654321','state':'@sales_identity','app_version':VERSION})
+        self.finish(seed)
+        b=self.submit(self.sales_without_review(ein='987654321'))
+        claimed=[self.q.claim(worker) for _ in range(3)]
+        other=next(j for j in claimed if j and j['workflow_id']==b)
+        self.assertEqual(other['state'],'@sales_identity');self.assertNotIn('sales_identity',other)
+
+    def test_sales_identity_uses_same_global_source_permits(self):
+        worker=self.worker(slots=12)
+        with self.q.transaction() as (c,now):
+            c.execute("UPDATE cc_lab_settings SET registry_limits='{" + '\"CO\":1,\"IRS\":1}' + "'::jsonb WHERE id=1")
+        self.submit(self.sales_without_review(ein='123456789'));first=self.q.claim(worker)
+        self.submit(self.sales_without_review(ein='987654321'))
+        self.assertIsNone(self.q.claim(worker))
+        self.finish(first)
+        second=self.q.claim(worker);self.assertEqual(second['state'],'@sales_identity')
+        self.assertNotEqual(second['workflow_id'],first['workflow_id'])
+
     def test_idempotency_and_active_ein_dedupe_across_connections(self):
         q2 = self.second()
         with concurrent.futures.ThreadPoolExecutor(6) as pool:

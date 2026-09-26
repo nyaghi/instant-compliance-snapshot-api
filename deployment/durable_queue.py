@@ -126,8 +126,12 @@ class Queue:
                 c.execute('INSERT INTO cc_lab_workflows(id,scope,ein,fingerprint,payload,kind,mode,source_version,phase,submitted,deadline) '
                           "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'queued',%s,%s)",
                           (ident, scope, payload['ein'], fingerprint, Jsonb(payload), payload['kind'], payload['mode'], version, now, now+seconds))
-                for state in (['@discovery'] if payload['kind'] == 'discovery' else payload['states']):
-                    resources = sorted(set(discovery_sources)) if state == '@discovery' else [state]
+                states = ['@discovery'] if payload['kind'] == 'discovery' else payload['states']
+                if payload['kind'] == 'registration' and payload['mode'] == 'sales' and not payload['alternate_names']:
+                    states = ['@sales_identity', *states]
+                for state in states:
+                    resources = (sorted(set(discovery_sources)) if state == '@discovery' else
+                                 ['CO','IRS'] if state == '@sales_identity' else [state])
                     error = 'NY_COLLECTOR_NOT_CONFIGURED' if state == 'NY' and not self.ny_enabled else None
                     c.execute('INSERT INTO cc_lab_jobs(id,workflow_id,state,resources,weight,phase,finished,error) '
                               'VALUES (%s,%s,%s,%s,%s,%s,%s,%s)',
@@ -187,6 +191,9 @@ class Queue:
                 active_rows = c.execute('SELECT * FROM cc_lab_workflows WHERE started IS NOT NULL AND finished IS NULL')
                 workflow_rows = c.execute("SELECT * FROM cc_lab_workflows WHERE phase IN ('queued','active') AND stop_reason IS NULL")
                 pending_rows = c.execute("SELECT * FROM cc_lab_jobs WHERE phase='queued' ORDER BY state,id")
+                identity_rows = c.execute("SELECT j.workflow_id,j.phase,j.error FROM cc_lab_jobs j "
+                    "JOIN cc_lab_workflows w ON w.id=j.workflow_id WHERE j.state='@sales_identity' AND w.finished IS NULL")
+            identity = {row['workflow_id']: row for row in identity_rows.fetchall()}
             wk = worker_row.fetchone()
             if not wk or wk['retired']: raise Conflict('Worker is not registered or is retired')
             ceiling = wk['slots'] if slot_limit is None else min(wk['slots'],max(0,int(slot_limit)))
@@ -230,7 +237,7 @@ class Queue:
             for workflow in workflows:
                 direction = 1 if workflow['mode']=='sales' else -1
                 pending.get(workflow['id'], []).sort(
-                    key=lambda j: (direction*estimates.get(j['state'], 10.0), j['state'], j['id']))
+                    key=lambda j: (j['state'] != '@sales_identity', direction*estimates.get(j['state'], 10.0), j['state'], j['id']))
             workflows.sort(key=lambda w: (running[w['id']], w['dispatched'], w['submitted'], w['id']))
             if (protected and used+protected['weight']<=ceiling
                     and all(busy[r]<cfg['registry_limits'].get(r,4) for r in protected['resources'])):
@@ -239,6 +246,8 @@ class Queue:
                 if w['source_version'] != wk['source_version'] or running[w['id']] >= 15: continue
                 if w['started'] is None and len(active) >= cfg['workflow_limit']: continue
                 for j in pending.get(w['id'], []):
+                    seed = identity.get(w['id'])
+                    if seed and j['state'] != '@sales_identity' and seed['phase'] != 'done': continue
                     if used+j['weight'] > ceiling: continue
                     if len(j['resources'])==1 and any(
                             submitted<w['submitted'] and j['resources'][0] in resources
@@ -254,16 +263,24 @@ class Queue:
                         c.execute('UPDATE cc_lab_workflows SET deadline=%s WHERE id=%s', (w['deadline'], w['id']))
                         self.event(c, now, 'discovery_execution_started', w['id'], j['id'],
                                    queue_seconds=now-w['submitted'], execution_seconds=DISCOVERY_EXECUTION_SECONDS)
-                    run_until = min(w['deadline'], now + (DISCOVERY_EXECUTION_SECONDS if j['state'] == '@discovery' else 300))
+                    run_until = min(w['deadline'], now + (DISCOVERY_EXECUTION_SECONDS if j['state'] == '@discovery' else 8 if j['state'] == '@sales_identity' else 300))
+                    seed_cursor = None
                     with c.pipeline():
+                        if seed and seed['phase']=='done' and j['state']!='@sales_identity':
+                            seed_cursor = c.execute("SELECT result FROM cc_lab_jobs WHERE workflow_id=%s AND state='@sales_identity'", (w['id'],))
                         c.execute("UPDATE cc_lab_jobs SET phase='running',owner=%s,token=%s,attempt=attempt+1,claimed=%s,lease_until=%s,run_until=%s WHERE id=%s",
                                   (worker, token, now, now+20, run_until, j['id']))
                         c.execute("UPDATE cc_lab_workflows SET phase='active',started=COALESCE(started,%s),dispatched=%s WHERE id=%s", (now, now, w['id']))
                         self.event(c, now, 'claimed', w['id'], j['id'], worker=worker, token=token,
                                    slot_limit=ceiling, admission=admission_evidence)
+                    if seed_cursor: seed['result'] = seed_cursor.fetchone()['result']
                     return {**j, 'owner': worker, 'token': token, 'attempt': j['attempt']+1,
                             'payload': w['payload'], 'version': w['source_version'], 'run_seconds': max(0, run_until-now),
-                            'submitted': w['submitted'], 'claimed': now}
+                            'submitted': w['submitted'], 'claimed': now,
+                            **({'sales_identity': seed['result'] if seed['result'] is not None and not seed['error'] else
+                                {'state':'@sales_identity','ein':w['ein'],'app_version':w['source_version'],
+                                 'sources':{},'errors':{'identity':seed['error'] or 'INCOMPLETE'}}}
+                               if seed and seed['phase']=='done' and j['state']!='@sales_identity' else {})}
             return None
 
     @staticmethod
@@ -414,9 +431,11 @@ dead. Persist that evidence reference, fence all tokens, then requeue boundedly.
             due = (w['finished'] is None and (w['stop_reason'] is None and w['deadline'] <= now or any(
                 j['phase'] in ('running', 'stopping') and j['lease_until'] is not None and j['lease_until'] <= now for j in jobs)))
             for j in jobs: j.pop('lease_until')
+            preparation = [j for j in jobs if j['state']=='@sales_identity']
+            jobs = [j for j in jobs if j['state']!='@sales_identity']
             position = c.execute("SELECT count(*) AS n FROM cc_lab_workflows WHERE phase='queued' AND submitted<=%s", (w['submitted'],)).fetchone()['n'] if w['phase'] == 'queued' else 0
             return ({k: w[k] for k in ('id','ein','kind','mode','phase','source_version','submitted','deadline','started','finished','stop_reason')} | {
-                'jobs': jobs, 'completed': sum(j['phase'] == 'done' for j in jobs), 'total': len(jobs),
+                'preparation': preparation, 'jobs': jobs, 'completed': sum(j['phase'] == 'done' for j in jobs), 'total': len(jobs),
                 'queue_position': position, 'queue_seconds': (w['started'] or w['finished'] or now)-w['submitted'],
                 'execution_seconds': max(0, (w['finished'] or now)-w['started']) if w['started'] else 0}, due)
 

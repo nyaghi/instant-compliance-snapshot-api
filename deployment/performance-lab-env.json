@@ -55,7 +55,7 @@
   "CE_BATCH_ISOLATED_STATES": "ME,OR,FL,WI,VA,SC,ND",
   "CE_PUBLIC_RESERVED_BROWSER_LOOKUPS": "1",
   "PUBLIC_BASE_URL": "https://instant-compliance-snapshot-api-hn4v.onrender.com",
-  "CE_APP_VERSION": "2026.09.26.perf.29-performance-lab",
+  "CE_APP_VERSION": "2026.09.26.perf.30-performance-lab",
   "CE_LAB_WORKFLOW_LIMIT": "20",
   "CE_BATCH_FANOUT_SINGLE_STATE_LOOKUPS": "0",
   "CE_SINGLE_STATE_OVERFLOW_API_URL": "",
