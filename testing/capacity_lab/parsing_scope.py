@@ -79,6 +79,7 @@ def strip_browser_pool_metric(tree):
 
 def strip_browser_pool_worker(tree):
     """Remove only the separately tested browser ownership integration."""
+    strip_launch_pacing_threshold(tree)
     class Restore(ast.NodeTransformer):
         def visit_Assign(self, node):
             targets={ast.unparse(t) for t in node.targets}
@@ -95,3 +96,11 @@ def strip_browser_pool_worker(tree):
                 node.keywords=[k for k in node.keywords if k.arg!='owner']
             return self.generic_visit(node)
     return Restore().visit(tree)
+
+
+def strip_launch_pacing_threshold(tree):
+    for cls in tree.body:
+        if getattr(cls,'name','')!='ResourceAdmission':continue
+        for node in ast.walk(cls):
+            if isinstance(node,ast.Compare) and ast.unparse(node.left)=='self.cpu_fraction' and len(node.ops)==1 and isinstance(node.ops[0],ast.Lt) and len(node.comparators)==1 and isinstance(node.comparators[0],ast.Constant) and node.comparators[0].value==.7:
+                node.comparators[0].value=.5

@@ -181,7 +181,7 @@ class ResourceAdmission:
         # launch time even for warmed, lightweight HTTP/file tasks. Accelerate
         # only on recent measured headroom, at most two launches per sample.
         # CPU/memory thresholds, physical slots and registry caps do not change.
-        pacing = (.1 if self.cpu_fraction is not None and self.cpu_fraction < .5
+        pacing = (.1 if self.cpu_fraction is not None and self.cpu_fraction < .7
                   and self.previous is not None and now-self.previous[0] <= .5
                   and self.launches_since_sample < 2 else .25)
         if now-self.last_launch < pacing:

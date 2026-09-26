@@ -61,10 +61,43 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(self.gate.snapshot['reason'],'cpu_pressure')
 
     def test_busy_or_old_sample_keeps_original_pacing(self):
-        self.gate.limit(12,0);self.now=1;self.metrics(1200000)
+        self.gate.limit(12,0);self.now=1;self.metrics(1400000)
         self.gate.limit(12,1);self.gate.launched();self.now=1.11
         self.assertEqual(self.gate.limit(12,1),1)
         self.assertEqual(self.gate.snapshot['reason'],'launch_pacing')
+
+    def test_measured_midrange_headroom_allows_only_two_paced_launches(self):
+        self.gate.limit(12,0);self.now=1;self.metrics(1300000)
+        self.assertEqual(self.gate.limit(12,3),12)
+        self.gate.launched();self.now=1.11
+        self.assertEqual(self.gate.limit(12,4),12)
+        self.gate.launched();self.now=1.22
+        self.assertEqual(self.gate.limit(12,5),5)
+
+    def test_seventy_percent_is_not_fast_pacing_headroom(self):
+        self.gate.limit(12,0);self.now=1;self.metrics(1400000)
+        self.gate.limit(12,3);self.gate.launched();self.now=1.11
+        self.assertEqual(self.gate.limit(12,4),4)
+        self.assertEqual(self.gate.snapshot['reason'],'launch_pacing')
+
+    def test_midrange_fast_pacing_rechecks_new_cpu_and_memory_pressure(self):
+        self.gate.limit(12,0);self.now=1;self.metrics(1300000)
+        self.gate.limit(12,3);self.gate.launched();self.now=1.11
+        self.metrics(1320000,memory=3_400_000_000)
+        self.assertEqual(self.gate.limit(12,4),4)
+        self.assertEqual(self.gate.snapshot['reason'],'memory_headroom')
+        self.now=1.3;self.metrics(2400000)
+        self.assertEqual(self.gate.limit(12,4),4)
+        self.assertEqual(self.gate.snapshot['reason'],'cpu_pressure')
+
+    def test_only_fast_pacing_headroom_threshold_changed(self):
+        import ast,subprocess
+        from testing.capacity_lab.parsing_scope import strip_launch_pacing_threshold
+        root=Path(__file__).resolve().parents[2]
+        before=ast.parse(subprocess.check_output(['git','show','a6f879d:deployment/queue_worker.py'],cwd=root).decode('utf-8'))
+        after=ast.parse((root/'deployment/queue_worker.py').read_text(encoding='utf-8'))
+        strip_launch_pacing_threshold(after)
+        self.assertEqual(ast.dump(before),ast.dump(after))
 
     def test_only_resource_admission_changed_in_worker(self):
         import ast,subprocess

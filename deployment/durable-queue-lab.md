@@ -838,3 +838,12 @@ alone is no longer total state CPU for pooled tasks; use instance CPU metrics.
 Controls must cover abrupt child death, cookie isolation, exclusive lease/fallback,
 context cleanup ordering, expiry, actual Linux fork/process cleanup, and all32
 state regression before considering this trial qualified.
+
+Phase43 launch-pacing candidate: phase42 Sales20 observed84.39 aggregate worker
+seconds in launch spacing and84.78 in CPU-pressure pauses. This does not causally
+partition queued job time. Test the existing100ms fast spacing with recent CPU
+below70%, instead of below50%; still at most two launches per sample. At70%+
+keep250ms spacing; at85%+ stop new admission as before. Memory headroom, fresh
+counter validation, physical slots, workflow/state/source caps, deadlines and
+matching/classification code remain unchanged. No capacity purchase. Compare
+all32 Sales workloads and Standard controls before judging the hypothesis.
