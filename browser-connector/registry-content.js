@@ -25,18 +25,29 @@
   function gaRows() {
     const table = document.querySelector("#datagrid_results");
     if (!table) return null;
+    // Georgia exposes both its six-column verification view and a city/state
+    // view with an optional complaint link. A changed shape is incomplete
+    // evidence; silently skipping its data rows would create false negatives.
+    const tableRows = [...table.querySelectorAll(":scope > tbody > tr")];
+    const header = tableRows[0], pager = tableRows.at(-1);
+    const headings = [...(header?.children || [])].map(el=>text(el).toLowerCase());
+    const combined = JSON.stringify(headings) === JSON.stringify(["full name","license #","profession","license type","status","address"]);
+    const split = [7,8].includes(headings.length)
+      && JSON.stringify(headings.slice(0,7)) === JSON.stringify(["full name","license number","profession","license type","license status","city","state"])
+      && (headings.length === 7 || headings[7] === "");
+    if ((!combined && !split) || ![...header.children].every(el=>el.tagName === "TH") || tableRows.length < 2)
+      throw new Error("REGISTRY_COLUMNS_CHANGED");
     const rows = [];
-    for (const tr of table.querySelectorAll(":scope > tbody > tr")) {
+    for (const tr of tableRows.slice(1,-1)) {
       const cells = [...tr.children];
-      if (cells.length !== 6 || cells[0].tagName !== "TD") continue;
+      if (cells.length !== headings.length || !cells.every(el=>el.tagName === "TD")) throw new Error("REGISTRY_ROW_CHANGED");
       const link = cells[0].querySelector("a"), url = link && new URL(link.href);
       if (!url || url.origin !== location.origin || url.pathname !== "/verification/Details.aspx") throw new Error("REGISTRY_LINK_CHANGED");
       if (text(cells[2]) !== "Charities") throw new Error("REGISTRY_FILTER_CHANGED");
       if (text(cells[3]) === "Paid Solicitor") continue;
       if (!["Charity", "Exempt Charity", "Private Foundations"].includes(text(cells[3]))) throw new Error("REGISTRY_FILTER_CHANGED");
-      rows.push({name:text(cells[0]), identifier:text(cells[1]), location:text(cells[5]), street:"", region:"", postal_code:"", detail_key:url.searchParams.get("result")});
+      rows.push({name:text(cells[0]), identifier:text(cells[1]), location:combined ? text(cells[5]) : [text(cells[5]),text(cells[6])].filter(Boolean).join(", "), street:"", region:split ? text(cells[6]) : "", postal_code:"", detail_key:url.searchParams.get("result")});
     }
-    const pager = [...table.querySelectorAll(":scope > tbody > tr")].at(-1);
     const current = [...pager.querySelectorAll("span")].map(text).find(v => /^\d+$/.test(v));
     if (!current || pager.children.length !== 1) throw new Error("REGISTRY_PAGINATION_CHANGED");
     const next = [...pager.querySelectorAll("a")].find(a => text(a) === String(Number(current)+1) || text(a) === "...");

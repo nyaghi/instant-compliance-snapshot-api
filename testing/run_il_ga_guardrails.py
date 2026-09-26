@@ -162,6 +162,16 @@ class IntegrationControls(unittest.TestCase):
     def test_ga_empty_is_not_registered_not_il_label(self):
         result=cc.il_ga_browser_lookup(self.org,'GA',lambda q:{'rows':[]})
         self.assertEqual(cc.public_status(result),'Not Registered')
+    def test_ga_qualified_name_without_address_stays_visible_for_review(self):
+        org=cc.checker.Organization('Young Life','84-0385934')
+        row=search_row('Young Life (of Texas)','CH000861','85f78478-2813-4bd9-b1f0-8d49aa062631')
+        def evidence(query):
+            if 'identifier' not in query:return {'rows':[row]}
+            return {'body':ga_html(full_name=row['name'],license_no=row['identifier'],status='Exempt',expiry='4/14/2019')}
+        result=cc.il_ga_browser_lookup(org,'GA',evidence)
+        self.assertEqual(result.status,'Needs Review')
+        self.assertIn('Young Life (of Texas)',result.source_note)
+        self.assertNotEqual(result.status,'Not Registered')
     def test_ga_exempt_license_type(self):
         self.assertEqual(cc.ga_charity_detail_html(ga_html(license_type='Exempt Charity'),'CH003977')['status'],'Exempt')
     def test_detail_record_change_rejected(self):
