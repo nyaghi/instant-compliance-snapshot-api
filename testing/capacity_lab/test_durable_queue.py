@@ -192,6 +192,24 @@ class DurableTests(unittest.TestCase):
         self.finish(jobs[0])
         self.assertIsNotNone(self.q.claim(workers[0]))
 
+    def test_explicit_twenty_workflow_trial_preserves_global_ceiling(self):
+        with self.q.transaction() as (c, now):
+            c.execute('UPDATE cc_lab_settings SET workflow_limit=20 WHERE id=1')
+        self.q.initialize(VERSION, {'CO':30,'ME':1,'AR':1,'CA':4,'IRS':4}, workflow_limit=20)
+        with self.assertRaises(ValueError):
+            self.q.initialize(VERSION, {}, workflow_limit=21)
+        with self.assertRaises(Conflict):
+            self.q.initialize(VERSION, {'CO':30,'ME':1,'AR':1,'CA':4,'IRS':4})
+        for i in range(21): self.submit(payload(f'{i+1:09}'))
+        workers = [self.worker() for _ in range(4)]
+        with concurrent.futures.ThreadPoolExecutor(4) as pool:
+            groups = list(pool.map(lambda w: [j for _ in range(8) if (j := self.q.claim(w))], workers))
+        jobs = [j for group in groups for j in group]
+        self.assertEqual(len(jobs), 20)
+        self.assertEqual(len({j['workflow_id'] for j in jobs}), 20)
+        self.finish(jobs[0])
+        self.assertIsNotNone(self.q.claim(workers[0]))
+
     def test_registry_limit_discovery_reservation_and_fairness(self):
         q2=self.second(); w1=self.worker(); w2=self.worker(q2)
         a=self.submit(payload(states=['ME','CO','AR']))

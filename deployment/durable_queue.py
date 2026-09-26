@@ -84,7 +84,7 @@ class Queue:
             yield conn, now
 
     def initialize(self, version, registry_limits, workflow_limit=15, backlog_limit=1000):
-        if not 1 <= workflow_limit <= 15 or backlog_limit < 1:
+        if not 1 <= workflow_limit <= 20 or backlog_limit < 1:
             raise ValueError('Invalid queue limits')
         with self.transaction() as (c, now):
             c.execute(Path(__file__).with_name('queue_schema.sql').read_text())

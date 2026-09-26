@@ -449,3 +449,32 @@ bounded ignored bodies before replying to rejected or cancellation requests.
 Invalid/oversized lengths do not execute or cancel work. Saved initial failures,
 body-consumption controls and repeated actual HTTP requests cover this fix;
 normal workflow submission and production/staging handlers are unchanged.
+# September 25: DC identity recovery and twenty-workflow experiment
+
+The user authorized resolving the National Low Income Housing Coalition DC false
+negative and measuring/optimizing twenty concurrent organizations in the private
+performance lab. Staging, production, customer browsers, expected spreadsheet
+values and paid instance counts are unchanged. Florida is excluded at the user's
+request; PA and the isolated official NY collector remain in scope.
+
+DC's source joins duplicated fragments onto a complete EIN-linked legal name.
+The master now recovers this narrow condition only when the full name and exact
+street/state/ZIP are independently corroborated by a same-EIN organization
+record. The displayed source name is retained. A different entity at the same
+address remains rejected; unavailable corroboration yields review, not a false
+negative. Dedicated DC controls and a complete master AST comparison protect all
+other state behavior.
+
+`CE_LAB_WORKFLOW_LIMIT` defaults to 15 and is explicitly set to 20 for this
+experiment. The lab schema maximum is 20. Activation requires an idle, audited
+settings migration; startup rejects configuration disagreement. Per-organization
+state concurrency remains 15, each node retains 12 weighted slots, and source
+limits and deadline values remain unchanged for the first trial. The existing
+four Pro nodes are the entire paid compute scope. Twenty submissions and twenty
+active workflows must be reported separately using actual claim evidence.
+
+Every first-response run is saved under a new evidence label. Do not increase
+source pressure or call spreadsheet agreement proof of identity. Compare state
+status, matched identity, dates, names, conservative failures and execution/queue
+time against controlled baselines. Any subsequent optimization must have its
+own configuration record and repeat trial.

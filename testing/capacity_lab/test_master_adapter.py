@@ -28,6 +28,8 @@ class MasterIntegration(unittest.TestCase):
         baseline = subprocess.check_output(['git', 'show', '35e61ae:registry_snapshot_server.py'], cwd=root).decode('utf-8')
         current = (root / 'registry_snapshot_server.py').read_text(encoding='utf-8')
         before, after = ast.parse(baseline), ast.parse(current)
+        from testing.capacity_lab.dc_scope import remove_dc_recovery
+        remove_dc_recovery(after)
         # Phase17 skips clearing a hidden EIN input after switching WA to name.
         # Dedicated controls compare this hook and the rest of the master against
         # perf.14 as well, so this exemption cannot hide other state edits.

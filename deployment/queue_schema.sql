@@ -1,7 +1,7 @@
 -- Lab-only schema. One short transaction coordinates all API/worker replicas.
 CREATE TABLE IF NOT EXISTS cc_lab_settings (
  id integer PRIMARY KEY CHECK (id = 1),
- workflow_limit integer NOT NULL CHECK (workflow_limit BETWEEN 1 AND 15),
+ workflow_limit integer NOT NULL CHECK (workflow_limit BETWEEN 1 AND 20),
  backlog_limit integer NOT NULL CHECK (backlog_limit > 0),
  source_version text NOT NULL,
  registry_limits jsonb NOT NULL

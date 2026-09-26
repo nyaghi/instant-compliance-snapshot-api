@@ -50,6 +50,8 @@ class WashingtonHiddenFieldTests(unittest.TestCase):
         root=Path(__file__).resolve().parents[2]
         old=ast.parse(subprocess.check_output(['git','show','355b736:registry_snapshot_server.py'],cwd=root).decode())
         new=ast.parse((root/'registry_snapshot_server.py').read_text(encoding='utf-8'))
+        from testing.capacity_lab.dc_scope import remove_dc_recovery
+        remove_dc_recovery(new)
         new.body.remove(next(n for n in new.body if isinstance(n,ast.FunctionDef) and n.name=='wa_fill_ready_name_and_search'))
         loader=next(n for n in new.body if isinstance(n,ast.FunctionDef) and n.name=='load_wa_nm_module')
         removed=0

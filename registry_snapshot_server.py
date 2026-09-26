@@ -5565,6 +5565,8 @@ def licensed_charity_identity(org, row, state, deadline):
     decision, matched_name = max(decisions, key=lambda item: item[0]["score"])
     row["match"] = decision
     if decision["decision"] == "rejected":
+        if state == "DC" and decision["reason"] != "REJECT_DIFFERENT_EIN":
+            return dc_repeated_name_identity(org, row, deadline)
         return "rejected"
     if decision["decision"] == "possible":
         # A partial name can preserve word order and omit a suffix, but a
@@ -5586,6 +5588,58 @@ def licensed_charity_identity(org, row, state, deadline):
     if decision["decision"] == "possible" and address.get("decision") != "corroborated":
         return "possible"
     return "accepted"
+
+
+def dc_repeated_name_prefix(registry_name, verified_name):
+    """Recognize joined duplicate text, not an ordinary longer organization name.
+
+    The complete reference must precede a mid-word join. Everything after it
+    must be repeated multi-letter fragments of that same name. A new chapter,
+    affiliate or geographic term cannot be stripped by this rule.
+    """
+    words = re.findall(r"[A-Z0-9]+", str(verified_name).upper())
+    if len(words) < 4 or len(set(words)) < 4:
+        return False
+    base = " ".join(words)
+    raw_words = re.findall(r"[A-Z0-9]+", str(registry_name).upper())
+    # A trailing plural does not create a new identity term.
+    raw_words = [w[:-1] if w.endswith("S") and w[:-1] in words else w for w in raw_words]
+    raw = " ".join(raw_words)
+    if not raw.startswith(base) or raw.startswith(base + " ") or raw == base:
+        return False
+    tail = raw[len(base):].replace(" ", "")
+    reference = base.replace(" ", "")
+    if not 8 <= len(tail) <= 2 * len(reference):
+        return False
+    # Bound both the amount of source corruption and the segmentation work.
+    reachable = {0}
+    for _ in range(3):
+        reachable = {end for start in reachable for end in range(start + 8, len(tail) + 1)
+                     if tail[start:end] in reference}
+        if len(tail) in reachable:
+            return True
+    return False
+
+
+def dc_repeated_name_identity(org, row, deadline):
+    """DC-only recovery requires the full EIN-linked name AND exact office evidence."""
+    targets = [org.organization_name, *known_names_for_ein(org.ein)]
+    if not any(dc_repeated_name_prefix(row["name"], target) for target in targets):
+        return "rejected"
+    address = licensed_charity_street_evidence(org, row, deadline)
+    for record in address.get("cross_state_records", []):
+        for name in record.get("names", []):
+            if dc_repeated_name_prefix(row["name"], name):
+                row["match"] = {"score": 80, "decision": "accepted",
+                                "reason": "MATCH_EIN_LINKED_NAME_REPEATED_TEXT", "verified_name": name}
+                row["address_evidence"] = {**address, "basis":
+                    "DC's displayed name contains joined repeated text. Its complete legal-name prefix and exact street, "
+                    "state and ZIP agree with the organization record retrieved by EIN in " + record.get("source", "another state") +
+                    ". The original DC name is retained; the address alone was not used to establish identity."}
+                return "accepted"
+    # A plausible corrupt name must not become a definitive negative when its
+    # independent name/address corroboration is missing or unavailable.
+    return "possible"
 
 
 def select_licensed_charity(org, rows, state, deadline):

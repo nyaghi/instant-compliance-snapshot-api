@@ -273,7 +273,8 @@ def main():
         durable = Queue(os.environ['CE_LAB_DATABASE_URL'], ny_enabled=os.environ.get('CE_LAB_NY_BROWSER') == '1')
         limits = {s: 4 for s in master.SUPPORTED_STATES}
         limits.update(ME=1, AR=1, FL=3, IRS=4, NY=2)
-        durable.initialize(master.APP_VERSION, limits)
+        durable.initialize(master.APP_VERSION, limits,
+                           workflow_limit=int(os.environ.get('CE_LAB_WORKFLOW_LIMIT', '15')))
         if os.environ.get('CE_LAB_QUEUE_WORKER') == '1':
             from deployment.queue_worker import Supervisor
             supervisor = Supervisor(durable, master.APP_VERSION, int(os.environ.get('CE_LAB_WORKER_SLOTS', '8')))

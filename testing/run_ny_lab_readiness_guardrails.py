@@ -107,6 +107,8 @@ class ReadinessTests(unittest.TestCase):
         root=Path(__file__).resolve().parents[1]
         old=ast.parse(subprocess.check_output(['git','show','73a262f:registry_snapshot_server.py'],cwd=root).decode())
         new=ast.parse((root/'registry_snapshot_server.py').read_text(encoding='utf-8'))
+        from testing.capacity_lab.dc_scope import remove_dc_recovery
+        remove_dc_recovery(new)
         # Subsequent authorized WA input-readiness change has its own complete
         # perf.14 AST guard. Exempt only that exact hook/helper from this older
         # NY comparison; all remaining operations must still be identical.
