@@ -114,6 +114,7 @@ class FloridaFormReuseTests(unittest.TestCase):
         old = subprocess.check_output(['git', 'show', 'dbc5105:registry_snapshot_server.py'], cwd=root).decode('utf-8')
         current = (root / 'registry_snapshot_server.py').read_text(encoding='utf-8')
         def normalize(source):
+            source = source.replace('page.wait_for_timeout(min(250, remaining * 1000))', 'time.sleep(min(0.25, remaining))')
             tree = ast.parse(source)
             tree.body = [n for n in tree.body if getattr(n, 'name', '') != 'fl_completed_search_form_available']
             class Restore(ast.NodeTransformer):

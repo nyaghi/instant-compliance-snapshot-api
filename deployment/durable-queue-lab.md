@@ -766,3 +766,8 @@ Ohio transport candidate (September 26): reuse the existing exact-EIN form respo
 ### Florida completed-form reuse (perf.34)
 
 After a successful Florida search response, use its existing visible ASP.NET form and updated viewstate for the next planned name query. The form must remain on the exact registry path, use POST, contain the expected input/button and nonempty viewstate, and submit to the same path. Any missing form, failed navigation or parsing error forces the existing fresh-load path. All query ordering, candidate matching, address checks, classification, certificate verification and time budgets remain unchanged. This is a lab-only runtime optimization, with no additional workers or source capacity.
+
+
+### New Jersey detail-frame polling (perf.35)
+
+The selected detail iframe initially remains about:blank in Playwright until its protocol event loop dispatches navigation. The prior Python sleep in nj_loaded_detail_body prevented that dispatch and spent the entire eight-second wait without seeing the loaded frame. Pump the Playwright event loop for the same quarter-second polling interval, preserving the original deadline and exact identity/fiscal-period checks. A real delayed-frame control reproduces the old miss and confirms the new read in the same allowance. No source, status, name, date, queue or capacity rule changes.

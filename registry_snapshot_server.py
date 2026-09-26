@@ -18547,7 +18547,9 @@ def nj_loaded_detail_body(page, org, wait_seconds: float = 0.0) -> str:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return ""
-        time.sleep(min(0.25, remaining))
+        # Keep Playwright dispatching frame-navigation events while the detail
+        # document loads. A Python sleep leaves page.frames at about:blank.
+        page.wait_for_timeout(min(250, remaining * 1000))
 
 
 def nj_missing_period_result(result) -> bool:
