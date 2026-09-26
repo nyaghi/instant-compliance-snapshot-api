@@ -337,6 +337,10 @@ class IntegrationControls(unittest.TestCase):
         old,new=functions(previous),functions((root/'registry_snapshot_server.py').read_text(encoding='utf-8'))
         changed={k for k in old if old[k]!=new.get(k)}
         self.assertEqual(changed,{'public_status','identity_rows_names','licensed_charity_identity','registration_date_metadata',
+            # Next-50 audit: bounded literal fallback for short legal cores.
+            'licensed_charity_names',
+            # Next-50 audit: retain pending status in the Michigan name fallback.
+            'search_mi_name_fallback',
             'true_status_from_body','comments_for_result_base','run_state_lookup','ny_connector_failure',
             'ny_connector_clean_response','ny_connector_advance','ny_connector_request','ny_connector_unpack','normalize_registry_match_fields',
             # Shared verified-acronym fix covered above and by release regression.
@@ -349,6 +353,41 @@ class IntegrationControls(unittest.TestCase):
             'response_data_for_lookup','identity_source_cache_key','reason_code_for_result',
             'wi_confirm_cross_state_credential','wi_best_match_from_html','wi_best_match_from_markdown',
             'search_wi','search_wi_sidecar','identity_co_names'})
+
+
+class GeorgiaLocationEvidenceTests(unittest.TestCase):
+    def lookup(self, offices):
+        org = cc.checker.Organization('Endicott College', '04-2103567')
+        rows = [dict(name=name, identifier='', detail_key=str(i), location=location,
+                     street='', region='', postal_code='') for i, (name, location) in enumerate(offices)]
+        def evidence(query):
+            if 'orgName' in query:
+                return {'rows':copy.deepcopy(rows)}
+            return {'body':ga_html(full_name=query['record_name'], license_no='',
+                                  license_type='Exempt Charity', status='Exempt', expiry='')}
+        with patch.object(cc,'known_names_for_ein',return_value=[]), \
+             patch.object(cc,'public_profile_for_ein',return_value={'organization':{
+                 'ein':42103567,'city':'Beverly','state':'MA'}}), \
+             patch.object(cc,'registry_cross_state_identity',return_value={}), \
+             patch.object(cc,'licensed_charity_street_evidence',return_value={}):
+            return cc.il_ga_browser_lookup(org, 'GA', evidence)
+
+    def test_grid_location_corrobates_dated_name_and_rejects_other_office(self):
+        result=self.lookup([('Endicott College (2015)','Beverly MA 01915'),
+                            ('Endicott College (2016)','New York NY 10016')])
+        self.assertEqual(result.status,'Exempt')
+        self.assertEqual(result.matched_registry_name,'Endicott College (2015)')
+        self.assertEqual(result.address_evidence['decision'],'corroborated')
+
+    def test_exact_name_with_conflicting_ga_grid_office_requires_review(self):
+        result=self.lookup([('Endicott College','New York NY 10016')])
+        self.assertEqual(result.status,'Needs Review')
+        self.assertIn('address conflict',result.source_note)
+
+    def test_malformed_or_street_location_does_not_corroborate_partial_name(self):
+        for location in ['Beverly MA', '376 Hale Street Beverly MA 01915', 'Beverly MA Unknown']:
+            with self.subTest(location=location):
+                self.assertEqual(self.lookup([('Endicott College (2015)',location)]).status,'Needs Review')
 
 
 if __name__=='__main__':unittest.main()

@@ -134,7 +134,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.26.5-staging").strip() or "2026.09.26.5-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.26.6-staging").strip() or "2026.09.26.6-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -5554,6 +5554,12 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
             record = {**row, **parsed, "url": IL_GA_SOURCES[state]}
             if state == "GA":
                 record["location"] = row["location"]
+                # Georgia's grid prints city/state/ZIP without a comma. Keep
+                # its office evidence usable by the shared address verifier;
+                # require the complete city + state + ZIP shape, not a street.
+                location = re.fullmatch(r"\s*([A-Za-z][A-Za-z .'-]*?)\s+([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)\s*", row["location"])
+                if location:
+                    record["location"] = f"{location[1]}, {location[2].upper()} {location[3]}"
                 record["url"] = "https://verify.sos.ga.gov/verification/Details.aspx?result=" + row["detail_key"]
             records.append(record)
         # A confirmed primary record completes registration research without
@@ -5720,7 +5726,12 @@ def licensed_charity_names(org):
     # querying hundreds of low-information permutations such as "s Foundation".
     for name in required:
         added = 0
-        for value in possessive_search_phrases(name) + high_signal_search_phrases(name):
+        # Keep existing probes first. A short literal core can otherwise have
+        # no fallback when punctuation or an entity suffix differs in the
+        # registry. Reuse the mature retrieval helper without widening match
+        # acceptance or exceeding the existing three-probe bound.
+        for value in (possessive_search_phrases(name) + high_signal_search_phrases(name)
+                      + literal_name_retrieval_forms(name)):
             value = re.sub(r"\s+", " ", value).strip()
             if value.casefold() in seen or not distinctive_match_tokens(value): continue
             seen.add(value.casefold()); generated.append(value); added += 1
@@ -10110,26 +10121,32 @@ def search_mi_name_fallback(page, org):
                     pass
             if clicked_name_score >= 0:
                 selected_row_text = link.locator("xpath=ancestor::tr[1]").inner_text(timeout=mi_action_timeout(active_page, 2000))
+                # Read status only from the confirmed candidate's row. Michigan
+                # also mentions Pending in page-wide instructions and other rows.
+                row_pending = bool(re.search(r"\bRegistration\s+Pending\b", selected_row_text, re.I))
                 row_window_match = re.search(
                     rf"(?P<id>\b\d{{3,8}}\b)?\s*{re.escape(clicked_name)}[\s\S]{{0,220}}?(?P<date>\d{{1,2}}/\d{{1,2}}/\d{{2,4}})",
                     re.sub(r"\s+", " ", selected_row_text),
                     re.I,
                 )
-                if row_window_match:
-                    expiration_date = parse_due_date(row_window_match.group("date"))
-                    if expiration_date:
-                        result.status = classify_expiration_date(expiration_date)
-                        result.raw_status_text = (
-                            f"License / Registration Expiration: {format_date(expiration_date)} | "
-                            "Matched by organization name after EIN search returned no exact result"
-                        )
-                        result.source_note = "MI tried EIN search first, then used the public organization-name search result row when the EIN field returned no exact result."
-                        result.matched_registry_name = clean_registry_name(clicked_name)
-                        result.matched_registry_identifier = row_window_match.group("id") or ""
-                        result.reason_code = "MATCH_NAME_EXACT" if registry_exact_active_tiebreak(clicked_name, safe_targets, "Active") else "MATCH_NAME_SAFE"
-                        result.success = True
-                        result.error = ""
-                        return result
+                expiration_date = parse_due_date(row_window_match.group("date")) if row_window_match else None
+                if row_pending or expiration_date:
+                    result.status = classify_mi_solicitation_status("Registration Pending") if row_pending else classify_expiration_date(expiration_date)
+                    result.raw_status_text = " | ".join(part for part in [
+                        "Status: Registration Pending" if row_pending else "",
+                        f"License / Registration Expiration: {format_date(expiration_date)}" if expiration_date else "",
+                        "Matched by organization name after EIN search returned no exact result",
+                    ] if part)
+                    result.source_note = "MI tried EIN search first, then used the public organization-name search result row when the EIN field returned no exact result."
+                    if row_pending:
+                        result.source_note += " Michigan states organizations listed with Registration Pending are able to continue to solicit."
+                    result.matched_registry_name = clean_registry_name(clicked_name)
+                    row_identifier = re.match(r"\s*(\d{3,8})\b", selected_row_text)
+                    result.matched_registry_identifier = (row_identifier.group(1) if row_identifier else "")
+                    result.reason_code = "MATCH_NAME_EXACT" if registry_exact_active_tiebreak(clicked_name, safe_targets, "Active") else "MATCH_NAME_SAFE"
+                    result.success = True
+                    result.error = ""
+                    return result
             link.click(timeout=mi_action_timeout(active_page, 3000), no_wait_after=True)
             try:
                 active_page.wait_for_load_state("domcontentloaded", timeout=mi_action_timeout(active_page, 3500))

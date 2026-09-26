@@ -39,6 +39,18 @@ class LicenseControls(unittest.TestCase):
         self.assertLessEqual(len(generated),3*len(required))
         self.assertTrue(all(cc.distinctive_match_tokens(name) for name in generated))
         with self.assertRaises(TimeoutError):cc.select_licensed_charity(self.org,[row()],'RI',time.monotonic()-1)
+    def test_short_legal_core_is_retrieved_without_suffix_punctuation(self):
+        for legal,core in [('Ceres, Inc.','Ceres'),('Acorn, Inc.','Acorn')]:
+            org=cc.checker.Organization(legal,'123456789')
+            required,generated=cc.licensed_charity_names(org)
+            self.assertEqual(required,[legal])
+            self.assertIn(core,generated)
+            self.assertLessEqual(len(generated),3)
+    def test_short_retrieval_probe_does_not_accept_another_entity(self):
+        self.org=cc.checker.Organization('Ceres, Inc.','123456789')
+        selected,review=self.select([row('Ceres Farms LLC'),row('Ceres Inc',identifier='CO.RIGHT')])
+        self.assertEqual(selected['identifier'],'CO.RIGHT')
+        self.assertFalse(review)
     def test_chapter_rejected_even_if_listed_first(self):
         selected,review=self.select([row('Beacon Learning Foundation - Milwaukee'),row()])
         self.assertEqual(selected['name'],self.org.organization_name);self.assertFalse(review)
@@ -184,10 +196,12 @@ class MatureParity(unittest.TestCase):
     def test_existing_functions_unchanged_except_scoped_entry_points(self):
         old={n.name:ast.dump(n) for n in ast.parse(self.previous('registry_snapshot_server.py')).body if isinstance(n,ast.FunctionDef)}
         current={n.name:ast.dump(n) for n in ast.parse((ROOT/'registry_snapshot_server.py').read_text(encoding='utf-8')).body if isinstance(n,ast.FunctionDef)}
-        # Approved September 26 identity-review scope, compared with deployed .4.
+        # September 26 identity review and the next-50 short-name retrieval
+        # correction and Michigan pending-row fix, compared with deployed .4.
+        # Acceptance guards are unchanged.
         allowed={'ga_charity_detail_html','identity_co_names','identity_source_cache_key','il_ga_browser_lookup',
-                 'licensed_charity_identity','licensed_charity_result','ny_connector_advance','ny_connector_request',
-                 'reason_code_for_result','response_data_for_lookup','search_wi','search_wi_sidecar',
+                 'licensed_charity_identity','licensed_charity_names','licensed_charity_result','ny_connector_advance','ny_connector_request',
+                 'reason_code_for_result','response_data_for_lookup','search_wi','search_wi_sidecar','search_mi_name_fallback',
                  'select_licensed_charity','wi_best_match_from_html','wi_best_match_from_markdown','wi_confirm_cross_state_credential'}
         self.assertEqual({k for k,v in old.items() if current.get(k)!=v},allowed)
     def test_discovery_connector_and_state_modules_unchanged(self):

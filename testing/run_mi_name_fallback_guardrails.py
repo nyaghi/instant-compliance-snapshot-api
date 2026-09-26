@@ -11,7 +11,7 @@ def link(name, number, status='', expiration='12/31/2026'):
     item=Mock();item.get_attribute.return_value='javascript:btnOrgName'+number
     item.inner_text.return_value=name
     row=item.locator.return_value
-    row.inner_text.return_value=f'{number} {name} Chantilly VA {expiration}'
+    row.inner_text.return_value=f'{number} {name} Chantilly VA {expiration} {status}'
     row.evaluate.return_value={'status':status}
     return item
 
@@ -107,6 +107,28 @@ class MichiganNameTests(unittest.TestCase):
         self.correct.locator.return_value.inner_text.return_value="9927 America's Charities"
         r,_,_=self.flow([self.correct,self.wrong],text="2 record(s) found America's Charities America's Best Charities 12/31/2027")
         self.assertEqual(r.status,'Unable to Verify');self.assertFalse(r.success)
+
+    def test_confirmed_name_row_pending_overrides_expired_date(self):
+        candidate=link("America's Charities",'9927','Registration Pending','12/31/2020')
+        r,_,_=self.flow([candidate])
+        self.assertEqual(r.status,'Pending');self.assertTrue(r.success)
+        self.assertEqual(r.matched_registry_identifier,'9927')
+        self.assertIn('Status: Registration Pending',r.raw_status_text)
+        self.assertIn('12/31/2020',r.raw_status_text)
+        self.assertIn('able to continue to solicit',r.source_note)
+
+    def test_confirmed_name_row_pending_needs_no_expiration(self):
+        candidate=link("America's Charities",'9927','Registration Pending','')
+        r,_,_=self.flow([candidate])
+        self.assertEqual(r.status,'Pending');self.assertTrue(r.success)
+        self.assertEqual(r.matched_registry_identifier,'9927')
+
+    def test_pending_disclaimer_or_other_row_does_not_change_selected_status(self):
+        correct=link("America's Charities",'9927','', '12/31/2020')
+        wrong=link("America's Best Charities",'10158','Registration Pending')
+        r,_,_=self.flow([wrong,correct],text='2 record(s) found. Organizations listed with Registration Pending are able to continue to solicit.')
+        self.assertEqual(r.status,'Delinquent')
+        self.assertNotIn('Status: Registration Pending',r.raw_status_text)
 
     def test_browser_actions_use_remaining_budget(self):
         page=SimpleNamespace(_cc_mi_name_deadline=24)
