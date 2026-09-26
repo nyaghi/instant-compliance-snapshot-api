@@ -634,3 +634,38 @@ This is an open product/identity input limitation, not a successful accuracy
 comparison. Backend performance results do not qualify the customer UI or NY
 extension for equivalent concurrent use. No staging/production deployment or
 additional compute purchase is part of these experiments.
+
+## perf.25: completion persistence within the unchanged Sales cutoff
+
+Sales stops at 60 seconds including queue time. Maximize reliable answers before
+that hard cutoff; do not let unfinished checks continue for later answers. The
+Standard ceiling remains 900 seconds. Per-state execution budgets, cancellation,
+lease fencing, physical reservations, registry limits and ordering are unchanged.
+Report conclusive answers before the cutoff separately from expired/inconclusive
+jobs. Stopping and reaping processes may finish later, but late results are never
+accepted. The temporary local soft-cutoff interpretation was rejected by the
+user and reverted before deployment; its exploratory test logs are not release
+qualification evidence.
+
+Supervisors persist already-stopped and reaped tasks in one transaction when
+several are ready together. Every owner/token/identity/state/version fence is
+preserved. A failed commit keeps reservations for retry; invalid output is
+isolated so it cannot discard an independent valid result. No live task releases
+capacity through batching. This targets queue transaction overhead without
+increasing worker or registry concurrency.
+Queue settlement also skips rewriting a workflow whose derived phase has not
+changed. The same phase rules remain authoritative; unchanged active workflows
+no longer generate a new database row version on every scheduler transaction.
+
+Passive Florida request/response/failure timing is attached to lab results.
+The observer excludes query strings, headers and cookies, detaches after each
+attempt, and preserves original exceptions and return values. It does not alter
+Florida transport, matching, interpretation or budgets. Florida timeouts also
+occurred with no other states running, so cross-state CPU contention is not a
+sufficient root-cause explanation.
+
+Paired lab mode comparisons now supply the same freshly discovered reviewed
+names. This explicitly differs from the unchanged customer Sales UI, which skips
+discovery. Discovery time is reported separately. Lab evidence does not qualify
+the unchanged customer UI or browser connector. No staging/production changes,
+new compute or database purchase are authorized by this revision.

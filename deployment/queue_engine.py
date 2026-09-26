@@ -4,9 +4,57 @@ from pathlib import Path
 import sys
 import json
 import threading
+import time
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+
+
+class FloridaTrace:
+    """Lab-only passive timing. Never record headers, cookies or query strings."""
+    def __init__(self):
+        self.started = time.monotonic()
+        self.events = []
+
+    def record(self, event, **details):
+        if len(self.events) < 512:
+            self.events.append({'seconds': round(time.monotonic()-self.started, 3),
+                                'event': event, **details})
+
+    def request(self, event, request, **details):
+        try:
+            url = urlsplit(request.url)
+            self.record(event, request_id=id(request), host=url.hostname, path=url.path,
+                        method=request.method, resource_type=request.resource_type, **details)
+        except Exception:
+            pass  # Diagnostics must never change the registry lookup.
+
+    def wrap(self, original):
+        def observed(page, org):
+            hooks = {
+                'request': lambda r: self.request('request', r),
+                'response': lambda r: self.request('response', r.request, status=r.status),
+                'requestfinished': lambda r: self.request('requestfinished', r),
+                'requestfailed': lambda r: self.request('requestfailed', r, failure=r.failure),
+            }
+            attached = []
+            self.record('attempt_start')
+            for event, callback in hooks.items():
+                try: page.on(event, callback); attached.append((event, callback))
+                except Exception: pass
+            try:
+                result = original(page, org)
+                self.record('attempt_return')
+                return result
+            except Exception as exc:
+                self.record('attempt_exception', exception_type=type(exc).__name__)
+                raise
+            finally:
+                for event, callback in attached:
+                    try: page.remove_listener(event, callback)
+                    except Exception: pass
+        return observed
 
 
 class DiscoveryProgress:
@@ -63,8 +111,15 @@ def execute(master, job, source_finished=None):
         raise ValueError('Unsupported state')
     organizations = master.normalize_organization_requests(p, privileged=False)
     if len(organizations) != 1: raise ValueError('Exactly one organization required')
-    results = master.run_state_lookups_parallel(organizations, [job['state']])
+    trace = FloridaTrace() if job['state'] == 'FL' else None
+    original = master.search_fl if trace else None
+    if trace: master.search_fl = trace.wrap(original)
+    try:
+        results = master.run_state_lookups_parallel(organizations, [job['state']])
+    finally:
+        if trace: master.search_fl = original
     if len(results) != 1: raise ValueError('Unexpected result count')
+    if trace: results[0]['lab_fl_trace'] = trace.events
     return results[0]
 
 

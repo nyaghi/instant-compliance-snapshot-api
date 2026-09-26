@@ -122,7 +122,7 @@ class Queue:
                 count = c.execute('SELECT count(*) AS n FROM cc_lab_workflows WHERE finished IS NULL').fetchone()['n']
                 if count >= config['backlog_limit']: raise QueueFull('Lab backlog is full; no work was accepted')
                 ident, created = str(uuid.uuid4()), True
-                seconds = DISCOVERY_QUEUE_SECONDS if payload['kind'] == 'discovery' else 60 if payload['mode'] == 'sales' else 900
+                seconds = DISCOVERY_QUEUE_SECONDS if payload['kind'] == 'discovery' else (60 if payload['mode'] == 'sales' else 900)
                 c.execute('INSERT INTO cc_lab_workflows(id,scope,ein,fingerprint,payload,kind,mode,source_version,phase,submitted,deadline) '
                           "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'queued',%s,%s)",
                           (ident, scope, payload['ein'], fingerprint, Jsonb(payload), payload['kind'], payload['mode'], version, now, now+seconds))
@@ -167,10 +167,12 @@ class Queue:
                   "WHERE finished IS NULL AND NOT EXISTS (SELECT 1 FROM cc_lab_jobs j WHERE j.workflow_id=w.id AND j.phase<>'done') "
                   'RETURNING id,phase) INSERT INTO cc_lab_events(workflow_id,event,at,detail) '
                   "SELECT id,phase,%s,'{}'::jsonb FROM done", (now, now))
-        c.execute("UPDATE cc_lab_workflows w SET phase=CASE WHEN EXISTS "
+        c.execute("WITH desired AS (SELECT w.id,CASE WHEN EXISTS "
                   "(SELECT 1 FROM cc_lab_jobs j WHERE j.workflow_id=w.id AND j.phase='quarantined') THEN 'attention' "
                   "WHEN stop_reason IS NOT NULL THEN 'stopping' WHEN started IS NOT NULL THEN 'active' ELSE 'queued' END "
-                  'WHERE finished IS NULL')
+                  "AS phase FROM cc_lab_workflows w WHERE finished IS NULL) "
+                  "UPDATE cc_lab_workflows w SET phase=d.phase FROM desired d "
+                  "WHERE w.id=d.id AND w.phase IS DISTINCT FROM d.phase")
 
     def claim(self, worker, slot_limit=None, admission_evidence=None):
         with self.transaction() as (c, now):
@@ -324,25 +326,44 @@ class Queue:
 
     def complete(self, worker, job, token, result=None, error=None):
         """Call only after the supervisor has reaped the entire task process tree."""
+        return self.complete_many(worker, [(job, token, result, error)])[0]
+
+    def complete_many(self, worker, completions):
+        """Persist already-reaped tasks together, preserving every job's fence.
+
+        No capacity is released for a live process. Invalid results roll back
+        the whole transaction; the supervisor can isolate them individually.
+        """
+        if not 1 <= len(completions) <= 12 or len({item[0] for item in completions}) != len(completions):
+            raise ValueError('Completion batch must contain 1–12 distinct jobs')
         with self.transaction() as (c, now):
             self._settle(c, now)
-            j = c.execute('SELECT * FROM cc_lab_jobs WHERE id=%s AND owner=%s AND token=%s', (job, worker, token)).fetchone()
-            if not j or j['phase'] not in HELD: return False
-            w = c.execute('SELECT * FROM cc_lab_workflows WHERE id=%s', (j['workflow_id'],)).fetchone()
-            if j['phase'] != 'running' or now >= j['run_until'] or w['stop_reason']:
-                result, error = None, j['error'] or 'WORKFLOW_'+(w['stop_reason'] or 'deadline').upper()
-            if result is not None:
-                if not isinstance(result, dict) or re.sub(r'\D', '', str(result.get('ein', ''))) != w['ein']:
-                    raise ValueError('Worker result identity mismatch')
-                if j['state'] != '@discovery' and result.get('state') != j['state']:
-                    raise ValueError('Worker result state mismatch')
-                if result.get('app_version') != w['source_version']: raise ValueError('Worker result release mismatch')
-            if result is None and not error: raise ValueError('Missing result or error')
-            c.execute("UPDATE cc_lab_jobs SET phase='done',finished=%s,result=%s,error=%s WHERE id=%s",
-                      (now, Jsonb(result) if result is not None else None, error, job))
-            self.event(c, now, 'finished', w['id'], job, error=error)
+            jobs = {j['id']: j for j in c.execute(
+                'SELECT j.*,w.ein,w.source_version,w.stop_reason FROM cc_lab_jobs j '
+                'JOIN cc_lab_workflows w ON w.id=j.workflow_id WHERE j.id=ANY(%s) AND j.owner=%s',
+                ([item[0] for item in completions], worker))}
+            updates=[]; accepted=[]
+            for job,token,result,error in completions:
+                j=jobs.get(job)
+                if not j or j['token'] != token or j['phase'] not in HELD:
+                    accepted.append(False);continue
+                if j['phase'] != 'running' or now >= j['run_until'] or j['stop_reason']:
+                    result,error=None,j['error'] or 'WORKFLOW_'+(j['stop_reason'] or 'deadline').upper()
+                if result is not None:
+                    if not isinstance(result,dict) or re.sub(r'\D','',str(result.get('ein',''))) != j['ein']:
+                        raise ValueError('Worker result identity mismatch')
+                    if j['state'] != '@discovery' and result.get('state') != j['state']:
+                        raise ValueError('Worker result state mismatch')
+                    if result.get('app_version') != j['source_version']:raise ValueError('Worker result release mismatch')
+                if result is None and not error:raise ValueError('Missing result or error')
+                updates.append((j,result,error));accepted.append(True)
+            with c.pipeline():
+                for j,result,error in updates:
+                    c.execute("UPDATE cc_lab_jobs SET phase='done',finished=%s,result=%s,error=%s WHERE id=%s",
+                              (now,Jsonb(result) if result is not None else None,error,j['id']))
+                    self.event(c,now,'finished',j['workflow_id'],j['id'],error=error)
             self._settle(c, now)
-            return True
+            return accepted
 
     def cancel(self, scope, ident):
         with self.transaction() as (c, now):

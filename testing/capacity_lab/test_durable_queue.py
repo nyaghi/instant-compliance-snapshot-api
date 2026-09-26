@@ -75,6 +75,80 @@ class DurableTests(unittest.TestCase):
         with self.assertRaises(Conflict): self.submit(payload(alternate_names=[]), key='same')
         with self.assertRaises(Conflict): self.submit(payload(mode='sales'))
 
+    def completion(self, job):
+        return (job['id'],job['token'],{'ein':job['payload']['ein'],
+                'state':job['state'],'app_version':VERSION,'status':'Current'},None)
+
+    def test_sales_cutoff_rejects_late_results_and_never_starts_waiting_jobs(self):
+        ident=self.submit(payload(mode='sales',states=['CO','LA']));worker=self.worker()
+        job=self.q.claim(worker)
+        with self.q.transaction() as (c,now):
+            c.execute('UPDATE cc_lab_workflows SET deadline=%s WHERE id=%s',(now-1,ident))
+        snapshot=self.q.status('a',ident)
+        self.assertEqual(snapshot['stop_reason'],'deadline')
+        self.assertIsNone(self.q.claim(worker))
+        self.assertTrue(self.q.complete_many(worker,[self.completion(job)])[0])
+        final=self.q.status('a',ident)
+        self.assertEqual(final['phase'],'expired')
+        self.assertTrue(all(j['result'] is None and j['error'] for j in final['jobs']))
+
+    def test_batched_completion_preserves_independent_jobs_and_fences(self):
+        worker=self.worker();other=self.worker();jobs=[]
+        for i in range(5):
+            self.submit(payload(ein=f'{100000001+i:09d}'))
+            jobs.append(self.q.claim(other if i==4 else worker))
+        self.q.cancel('a',jobs[2]['workflow_id'])
+        entries=[self.completion(j) for j in jobs]
+        entries[1]=(entries[1][0],str(uuid.uuid4()),entries[1][2],None)
+        self.assertEqual(self.q.complete_many(worker,entries),[True,False,True,True,False])
+        with self.q.transaction() as (c,now):
+            rows={r['id']:r for r in c.execute('SELECT * FROM cc_lab_jobs')}
+        self.assertEqual(rows[jobs[0]['id']]['result']['status'],'Current')
+        self.assertEqual(rows[jobs[1]['id']]['phase'],'running')
+        self.assertIsNone(rows[jobs[2]['id']]['result'])
+        self.assertIn('CANCELED',rows[jobs[2]['id']]['error'])
+        self.assertEqual(rows[jobs[3]['id']]['result']['status'],'Current')
+        self.assertEqual(rows[jobs[4]['id']]['phase'],'running')
+
+    def test_batched_completion_invalid_evidence_rolls_back_every_job(self):
+        worker=self.worker();self.submit(payload(states=['CO','LA']))
+        jobs=[self.q.claim(worker),self.q.claim(worker)]
+        for key,value in [('ein','987654321'),('state','WRONG'),('app_version','wrong')]:
+            entries=[self.completion(j) for j in jobs];entries[1][2][key]=value
+            with self.assertRaises(ValueError):self.q.complete_many(worker,entries)
+            with self.q.transaction() as (c,now):
+                self.assertEqual(c.execute("SELECT count(*) AS n FROM cc_lab_jobs WHERE phase='running'").fetchone()['n'],2)
+                self.assertEqual(c.execute("SELECT count(*) AS n FROM cc_lab_events WHERE event='finished'").fetchone()['n'],0)
+        with self.assertRaises(ValueError):self.q.complete_many(worker,[])
+        with self.assertRaises(ValueError):self.q.complete_many(worker,[self.completion(jobs[0])]*2)
+        self.assertEqual(self.q.complete_many(worker,[self.completion(j) for j in jobs]),[True,True])
+
+    def test_batched_completion_write_failure_rolls_back_and_recovers(self):
+        worker=self.worker();self.submit(payload(states=['CO','LA']))
+        jobs=[self.q.claim(worker),self.q.claim(worker)];original=self.q.event
+        calls=[]
+        def broken(c,now,event,*args,**kwargs):
+            original(c,now,event,*args,**kwargs)
+            if event=='finished':
+                calls.append(event)
+                if len(calls)==2:c.execute('SELECT * FROM nonexistent_completion_failure_fixture')
+        entries=[self.completion(j) for j in jobs]
+        with patch.object(self.q,'event',broken):
+            with self.assertRaises(psycopg.errors.UndefinedTable):self.q.complete_many(worker,entries)
+        with self.q.transaction() as (c,now):
+            self.assertEqual(c.execute("SELECT count(*) AS n FROM cc_lab_jobs WHERE phase='running'").fetchone()['n'],2)
+            self.assertEqual(c.execute("SELECT count(*) AS n FROM cc_lab_events WHERE event='finished'").fetchone()['n'],0)
+        self.assertEqual(self.q.complete_many(worker,entries),[True,True])
+
+    def test_settlement_does_not_rewrite_unchanged_active_workflow(self):
+        ident=self.submit();worker=self.worker();self.q.claim(worker)
+        with self.q.transaction() as (c,now):
+            before=c.execute('SELECT xmin::text AS revision,phase FROM cc_lab_workflows WHERE id=%s',(ident,)).fetchone()
+        self.q.metrics()
+        with self.q.transaction() as (c,now):
+            after=c.execute('SELECT xmin::text AS revision,phase FROM cc_lab_workflows WHERE id=%s',(ident,)).fetchone()
+        self.assertEqual(before['phase'],'active');self.assertEqual(before,after)
+
     def test_admission_observation_does_not_change_job_or_capacity(self):
         ident=self.submit();worker=self.worker();job=self.q.claim(worker)
         observation={'window_seconds':3,'seconds_by_reason':{'cpu_pressure':2,'claim_transaction':1},

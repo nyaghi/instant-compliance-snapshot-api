@@ -323,23 +323,9 @@ class Supervisor:
                             except (ValueError, OSError): error = 'INVALID_WORKER_OUTPUT'
                         if result is None and not error: error = 'WORKER_TASK_FAILED'
                         r['tree'].stop()  # Must succeed before releasing capacity.
-                        try:
-                            self.queue.complete(self.id, ident, r['job']['token'], result, error)
-                        except ValueError:
-                            self.queue.complete(self.id, ident, r['job']['token'], error='WORKER_RESULT_REJECTED')
-                        except Exception:
-                            # Persisted claim stays reserved. Recovery is retried.
-                            r['terminated'] = True
-                            r['result'], r['error'] = result, error
-                            continue
-                        r['temp'].cleanup()
-                        del self.active[ident]
-                # If result persistence failed, retry without touching dead handles.
-                for ident, r in list(self.active.items()):
-                    if r.get('terminated'):
-                        try: self.queue.complete(self.id, ident, r['job']['token'], r['result'], r['error'])
-                        except Exception: continue
-                        r['temp'].cleanup(); del self.active[ident]
+                        r['terminated'] = True
+                        r['result'],r['error'] = result,error
+                self.persist_terminated()
                 used = sum(r['job']['weight'] for r in self.active.values())
                 ceiling = self.admission.limit(self.slots,used) if self.admission else self.slots
                 reason = ('physical_slots' if used >= self.slots else
@@ -390,6 +376,27 @@ class Supervisor:
             if all_stopped:
                 # Requeues only after actual local process-tree termination.
                 self.queue.confirm_worker_stopped(self.id, 'Supervisor shutdown: all owned process trees terminated and reaped')
+
+    def persist_terminated(self):
+        # A batch contains only process trees already stopped and reaped above.
+        # Failed commits keep their physical/source reservations for retry.
+        ready=[(ident,r) for ident,r in self.active.items() if r.get('terminated')]
+        if not ready:return
+        completions=[(ident,r['job']['token'],r['result'],r['error']) for ident,r in ready]
+        try:self.queue.complete_many(self.id,completions)
+        except ValueError:
+            # One invalid output must not prevent independent valid completions.
+            saved=[]
+            for ident,r in ready:
+                try:
+                    try:self.queue.complete(self.id,ident,r['job']['token'],r['result'],r['error'])
+                    except ValueError:self.queue.complete(self.id,ident,r['job']['token'],error='WORKER_RESULT_REJECTED')
+                except Exception:continue
+                saved.append((ident,r))
+            ready=saved
+        except Exception:return
+        for ident,r in ready:
+            r['temp'].cleanup();del self.active[ident]
 
 
 def main():
