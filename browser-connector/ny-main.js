@@ -106,7 +106,10 @@
       // Verify click when the page already permits this search.
       if (!force && attempt === 0 && button("Search") && !button("Search").disabled) return;
       const verify = await until(() => { const b = button("Verify"); return b && !b.disabled && b; }, 3000, "NY_CONNECTOR_VERIFY_BUTTON_TIMEOUT");
-      const verification = waitResponse("verify", 30000);
+      // The portal's visible reCAPTCHA frame advertises a 30-second execution
+      // allowance. Let that normal flow finish plus its public API response;
+      // a matching 30-second observer deadline could expire first.
+      const verification = waitResponse("verify", 45000);
       verify.click();
       const result = await verification;
       if (result.http_status === 401) {

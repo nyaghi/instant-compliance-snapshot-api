@@ -507,7 +507,7 @@
 
         <div>&copy; <span id="year"></span> Compliance Express</div>
 
-          <div class="font-semibold text-slate-600">CharityClarity v2026.09.26.4 &middot; Staging</div>
+          <div class="font-semibold text-slate-600">CharityClarity v2026.09.26.5 &middot; Staging</div>
         <div>No legal or tax advice.</div>
 
       </div>
@@ -520,6 +520,7 @@
 
   <script src="/ny-connector.js?v=2026.09.24.3"></script>
   <script src="/organization-identity.js?v=20260917.6-alias-review"></script>
+  <script src="/identity-review.js?v=20260926.5"></script>
   <script>
 
     const API_BASE = "https://instant-compliance-snapshot-api-staging-8dnk.onrender.com";
@@ -1039,6 +1040,26 @@
 
 
 
+    async function reviewIdentity(original, candidateId, action) {
+      const response = await fetch(`${API_BASE}/api/identity-review`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({token: original.identity_review.token, candidate_id: candidateId, action,
+          ein: original.ein, state: original.state, email: email.value.trim(),
+          admin_passcode: adminPasscode.value.trim(), device_id: getDeviceId()})
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Identity review could not be completed.');
+      if (latestResults.includes(original)) renderResults(latestResults.map(r => r === original ? {...result, _request_id: original._request_id} : r), true);
+    }
+
+    async function retryStateResult(original) {
+      const rejected = original.identity_review?.candidates?.find(c => c.decision === 'reject');
+      if (rejected) return reviewIdentity(original, rejected.id, 'reject');
+      const result = await requestSingleState(API_BASE, original.ein, email.value.trim(), original.state,
+        original.organization_name, true, original.reviewed_alternate_names || []);
+      if (latestResults.includes(original)) renderResults(latestResults.map(r => r === original ? {...result, _request_id: original._request_id} : r), true);
+    }
+
     function renderResults(results, onlyNewYorkRefreshed = false) {
       latestResults = results;
       generateReportButton.classList.toggle("hidden", !results.length);
@@ -1073,6 +1094,8 @@
         `;
 
         resultRows.appendChild(row);
+        window.CCIdentityReview?.render(row.lastElementChild, result,
+          (candidateId, action) => reviewIdentity(result, candidateId, action), () => retryStateResult(result));
 
       });
 

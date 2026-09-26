@@ -180,19 +180,15 @@ class LicenseControls(unittest.TestCase):
         self.assertEqual(data['status'],'Current');self.assertIn('Data freshness:',data['comments'])
 
 class MatureParity(unittest.TestCase):
-    def previous(self,path):return subprocess.check_output(['git','show','6c3504f:'+path],cwd=ROOT).decode('utf-8')
+    def previous(self,path):return subprocess.check_output(['git','show','b74897f:'+path],cwd=ROOT).decode('utf-8')
     def test_existing_functions_unchanged_except_scoped_entry_points(self):
         old={n.name:ast.dump(n) for n in ast.parse(self.previous('registry_snapshot_server.py')).body if isinstance(n,ast.FunctionDef)}
         current={n.name:ast.dump(n) for n in ast.parse((ROOT/'registry_snapshot_server.py').read_text(encoding='utf-8')).body if isinstance(n,ast.FunctionDef)}
-        allowed={'registration_date_metadata','true_status_from_body','comments_for_result_base','run_state_lookup',
-                 # September 23 mixed-mode controls explicitly cover these fixes.
-                 'canonical_name_punctuation','me_fast_direct_query_variants',
-                 'ma_read_legacy_form_pc','ma_read_latest_form_pc','irs_period_for_label',
-                 # September 24: verified-browser detail transport, NY rules unchanged.
-                 'search_ny_direct','ny_connector_advance','ny_connector_request',
-                 'ny_connector_clean_response','ny_connector_failure',
-                 # September 24: FL-only verified certificate-chain recovery and terminal TLS retry guard.
-                 'search_fl','run_single_state_lookup_reliably','enrich_registration_date_sources'}
+        # Approved September 26 identity-review scope, compared with deployed .4.
+        allowed={'ga_charity_detail_html','identity_co_names','identity_source_cache_key','il_ga_browser_lookup',
+                 'licensed_charity_identity','licensed_charity_result','ny_connector_advance','ny_connector_request',
+                 'reason_code_for_result','response_data_for_lookup','search_wi','search_wi_sidecar',
+                 'select_licensed_charity','wi_best_match_from_html','wi_best_match_from_markdown','wi_confirm_cross_state_credential'}
         self.assertEqual({k for k,v in old.items() if current.get(k)!=v},allowed)
     def test_discovery_connector_and_state_modules_unchanged(self):
         # NY now accepts optional Sales cancellation; signal-free lifecycle has dedicated controls.
@@ -204,17 +200,17 @@ class MatureParity(unittest.TestCase):
         start='    async function checkSingleState('
         def body(s):return s[s.index(start):].split('\n    async function runStateChecks')[0]
         self.assertEqual(body(self.previous('web-staging/index.html')),body((ROOT/'web-staging/index.html').read_text(encoding='utf-8')))
-    def test_old_lane_indices_preserved_and_ui_has_32(self):
+    def test_old_lane_indices_preserved_and_ui_has_34(self):
         tree=ast.parse(self.previous('registry_snapshot_server.py'))
         states=next(ast.literal_eval(n.value) for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='SUPPORTED_STATES' for t in n.targets))
-        self.assertEqual(cc.SUPPORTED_STATES[:30],states)
-        self.assertEqual(len(cc.SUPPORTED_STATES),32)
+        self.assertEqual(cc.SUPPORTED_STATES,states)
+        self.assertEqual(len(cc.SUPPORTED_STATES),34)
         import re
         ui=(ROOT/'web-staging/index.html').read_text(encoding='utf-8')
         self.assertEqual(set(re.findall(r'name="states" value="([A-Z]{2})"',ui)),set(cc.SUPPORTED_STATES))
-    def test_report_accepts_32_unique_results(self):
+    def test_report_accepts_34_unique_results(self):
         rows=[{'state':s,'organization_name':'Control','ein':'123456789','status':'Current'} for s in cc.SUPPORTED_STATES]
-        self.assertEqual(len(report.validate_results({'results':rows},set(cc.SUPPORTED_STATES))),32)
+        self.assertEqual(len(report.validate_results({'results':rows},set(cc.SUPPORTED_STATES))),34)
         with self.assertRaises(ValueError):report.validate_results({'results':rows+[rows[0]]},set(cc.SUPPORTED_STATES))
 
 if __name__=='__main__':unittest.main()

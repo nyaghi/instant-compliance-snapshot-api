@@ -10,8 +10,8 @@ const conflict={name:'Example Alternate Name',verified:false,evidence:[proof],id
 async function setup(names,ny=null){
  const ids={};const element=id=>ids[id]??=(new Element());
  element('organizationName').value='Example Center';element('ein').value='12-3456789';
- const window={nyCalls:0,dispatchEvent(){},CCIdentityConfig:()=>({email:'qa@example.test',admin_passcode:'test-only',apiBase:'https://staging.example'}),CCNYConnector:{lookup:async()=>{window.nyCalls++;throw Error('NY discovery must not run')}}};
- const context={window,document:{getElementById:element,createElement:t=>new Element(t),createTextNode:value=>({textContent:value})},Event:class{},performance,AbortController,setTimeout,clearTimeout,setInterval,clearInterval,fetch:async()=>({ok:true,json:async()=>({names:structuredClone(names),sources:[]})})};
+ const window={nyCalls:0,dispatchEvent(){},CCIdentityConfig:()=>({email:'qa@example.test',admin_passcode:'test-only',apiBase:'https://staging.example'}),CCNYConnector:{lookup:async({state})=>{if(state==='IL')return {identity:{names:[],complete:true}};window.nyCalls++;throw Error('NY discovery must not run')}}};
+ const context={window,location:{origin:'https://staging.compliance-express.com'},document:{getElementById:element,createElement:t=>new Element(t),createTextNode:value=>({textContent:value})},Event:class{},performance,AbortController,setTimeout,clearTimeout,setInterval,clearInterval,fetch:async()=>({ok:true,json:async()=>({names:structuredClone(names),sources:[]})})};
  vm.runInNewContext(source,context);await element('findAlternateNames').events.click();return {ids,window};
 }
 test('conflicting source name is visible and unchecked, with its evidence',async()=>{

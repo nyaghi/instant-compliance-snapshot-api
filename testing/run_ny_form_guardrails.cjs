@@ -3,7 +3,7 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');const vm=require('node:vm');const path=require('node:path');
 const root=path.join(__dirname,'..','browser-connector');
-async function run({alreadyVerified=false,rejectFirst=false,failSearch=false}={}) {
+async function run({alreadyVerified=false,rejectFirst=false,failSearch=false,verificationDelay=0}={}) {
   const origin='https://charities-search.ag.ny.gov',calls=[],listeners={};let searches=0,resolve;
   const completed=new Promise(r=>resolve=r);
   class Input {constructor(){this.v='';}get value(){return this.v;}set value(v){this.v=v;}dispatchEvent(){}}
@@ -15,7 +15,7 @@ async function run({alreadyVerified=false,rejectFirst=false,failSearch=false}={}
   const window={addEventListener:(name,fn)=>listeners[name]=fn,postMessage:resolve};window.top=window;
   window.fetch=async url=>{
     const verify=url.includes('/recaptcha/verify');let status=200,payload;
-    if(verify)payload={verified:true};
+    if(verify){if(verificationDelay)await new Promise(r=>setTimeout(r,verificationDelay/1000));payload={verified:true};}
     else {
       searches++;status=rejectFirst&&searches===1?401:200;
       if(status===401)buttons[1].disabled=false;
@@ -25,7 +25,7 @@ async function run({alreadyVerified=false,rejectFirst=false,failSearch=false}={}
   };
   const context=vm.createContext({URL,window,location:{origin},XMLHttpRequest:XHR,HTMLInputElement:Input,Event:class{},
     document:{querySelectorAll:()=>buttons,getElementById:id=>inputs[id]},Date,
-    setTimeout:(fn,ms)=>setTimeout(fn,ms===1000?1:ms),clearTimeout});
+    setTimeout:(fn,ms)=>setTimeout(fn,ms/1000),clearTimeout});
   for(const file of ['protocol.js','ny-main.js'])vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),context);
   listeners.message({source:window,origin,data:{channel:'cc-ny-page-v1',direction:'request',id:'12345678-1234-4234-9234-123456789012',query:{ein:'123456789'}}});
   const reply=await completed;return {reply,calls};
@@ -41,4 +41,10 @@ test('401 after reused verification forces one normal verification before retry'
 });
 test('unsuccessful response remains a retrieval failure, never an empty result',async()=>{
   const {reply}=await run({alreadyVerified:true,failSearch:true});assert.equal(reply.ok,false);assert.equal(reply.reason,'NY_CONNECTOR_SEARCH_UNSUCCESSFUL');
+});
+test('verification finishing after the portal execution window is still observed',async()=>{
+  const {reply,calls}=await run({verificationDelay:35000});assert.equal(reply.ok,true);assert.deepEqual(calls,['verify','search']);
+});
+test('verification remains bounded when the portal never finishes in time',async()=>{
+  const {reply,calls}=await run({verificationDelay:60000});assert.equal(reply.ok,false);assert.equal(reply.reason,'NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT');assert.deepEqual(calls,['verify']);
 });

@@ -246,7 +246,10 @@ class IntegrationControls(unittest.TestCase):
         names_patch.start()
         try:
             self.assertEqual(cc.score_candidate(org.organization_name,org.ein,{'name':row['name']})['decision'],'rejected')
-            result=cc.il_ga_browser_lookup(org,'GA',lambda q:{'rows':[row]})
+            def evidence(q):
+                if 'identifier' not in q: return {'rows':[row]}
+                return {'body':ga_html(full_name=row['name'], license_no=row['identifier'], status='Exempt', expiry='4/14/2019')}
+            result=cc.il_ga_browser_lookup(org,'GA',evidence)
             self.assertEqual(result.status,'Needs Review')
             self.assertFalse(result.success)
             self.assertIn('Young Life (of Texas)',result.source_note)
@@ -341,7 +344,11 @@ class IntegrationControls(unittest.TestCase):
             # DC-specific transient recovery; RI policy independently tested.
             'registry_json_request',
             # User-reviewed GA exemption priority and DC/GA source transparency.
-            'select_licensed_charity','licensed_charity_result','dc_charity_records'})
+            'select_licensed_charity','licensed_charity_result','dc_charity_records',
+            # User-requested identity decisions and same-EIN historical offices.
+            'response_data_for_lookup','identity_source_cache_key','reason_code_for_result',
+            'wi_confirm_cross_state_credential','wi_best_match_from_html','wi_best_match_from_markdown',
+            'search_wi','search_wi_sidecar','identity_co_names'})
 
 
 if __name__=='__main__':unittest.main()

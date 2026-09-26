@@ -1,7 +1,7 @@
 /* Real worker lifecycle with synthetic transport delays and queue contention. */
 const {test}=require('node:test');const assert=require('node:assert/strict');
 const fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
-const sandbox=vm.createContext({URL,require:n=>n==='node:test'?{test:()=>{}}:require(n),__dirname,setImmediate});
+const sandbox=vm.createContext({URL,module:{exports:{}},require:n=>n==='node:test'?{test:()=>{}}:require(n),__dirname,setImmediate});
 vm.runInContext(fs.readFileSync(path.join(__dirname,'run_ny_connector_lifecycle.cjs'),'utf8'),sandbox);
 const harness=()=>vm.runInContext('harness()',sandbox);
 const id=n=>String(n).padStart(20,'0');const tick=()=>new Promise(r=>setImmediate(r));

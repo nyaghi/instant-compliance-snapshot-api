@@ -134,7 +134,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.26.4-staging").strip() or "2026.09.26.4-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.26.5-staging").strip() or "2026.09.26.5-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -1850,6 +1850,7 @@ def known_names_for_ein(ein: str) -> list[str]:
 # Identity discovery is separate from registration classification. Only the names
 # explicitly submitted after review enter a lookup; cached suggestions never do.
 REVIEWED_NAME_CONTEXT = ContextVar("reviewed_organization_names", default={})
+USER_IDENTITY_CONTEXT = ContextVar("user_identity_review", default={})
 IDENTITY_SOURCE_CACHE: dict[tuple, tuple[float, dict]] = {}
 IDENTITY_CACHE_LOCK = threading.Lock()
 IRS_HISTORY_HEADER_CACHE: dict[tuple[str, str], tuple[float, list[dict]]] = {}
@@ -2080,19 +2081,24 @@ def identity_co_names(ein: str, deadline: float) -> dict:
     rows = json.loads(identity_fetch(url, deadline))
     if not isinstance(rows, list):
         raise ValueError("Colorado identity response is incomplete")
-    names, entities, seen, records = [], set(), set(), []
+    names, entities, seen, records, addresses = [], set(), set(), [], set()
     for row in rows:
         if canonical_ein_digits(str(row.get("fein") or "")) != ein:
             continue
         entity = row.get("entityid")
         historical = entity in entities
         entities.add(entity)
-        if not historical:
+        address_key = tuple(str(row.get(field) or "").strip().casefold() for field in
+                            ("name", "principaladdress", "principalcity", "principalstate", "principalzipcode"))
+        if address_key not in addresses and row.get("principalcity") and row.get("principalstate"):
+            addresses.add(address_key)
             records.append({"ein": ein, "source": "CO", "source_url": url,
                 "names": [str(row.get("name") or "")],
                 "city": row.get("principalcity", ""), "state": row.get("principalstate", ""),
                 "street": row.get("principaladdress", ""), "postal_code": row.get("principalzipcode", ""),
-                "address_role": "organization"})
+                "address_role": "organization", "historical": historical,
+                "filing_id": str(row.get("documentid") or ""),
+                "filing_date": str(row.get("registrationapproveddate") or "")})
         key = identity_name_key(str(row.get("name") or ""))
         if key in seen: continue
         seen.add(key)
@@ -2850,7 +2856,7 @@ def identity_wa_alias_review(result: dict, ein: str, deadline: float) -> dict:
 
 
 def identity_source_cache_key(source: str, ein: str) -> tuple:
-    fingerprint = json.dumps(downloadable_data_info("OR"), sort_keys=True) if source == "OR" else "live-v2"
+    fingerprint = json.dumps(downloadable_data_info("OR"), sort_keys=True) if source == "OR" else ("live-co-addresses-v3" if source == "CO" else "live-v2")
     return (ein, source, fingerprint)
 
 
@@ -5446,7 +5452,7 @@ def ga_charity_detail_html(body, expected_identifier, expected_name=""):
         status = "Delinquent"
     if kind == "Exempt Charity" and status in {"Current", "Upcoming Filing"}:
         status = "Exempt"
-    return {"name": name, "identifier": identifier, "raw_status": raw, "status": status,
+    return {"name": name, "identifier": identifier, "raw_status": raw, "status": status, "license_category": kind,
             "expiration": dates["expiry"], "initial": dates["issue_date"], "renewal": dates["last_ren"],
             "renewal_type": "last_renewal_date", "initial_label": "Initial Issue Date",
             "renewal_label": "Last Renewal Date", "aliases": [], "location": "",
@@ -5515,7 +5521,6 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
         names = il_browser_name_queries(required, generated) if state == "IL" else required + generated
         queries += [{"state": state, "orgName": name} for name in names]
     records, seen, completed = [], set(), []
-    unresolved_primary_names = {}
     for query_index, query in enumerate(queries):
         # Exact EIN is decisive for IL. Name fallbacks never admit a different EIN.
         if state == "IL" and records:
@@ -5531,8 +5536,9 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
                 # a possible primary-name candidate for review; never accept it
                 # or turn that ambiguity into a completed negative search.
                 if state == "GA" and score_candidate(org.organization_name, "", {"name": row["name"]})["decision"] == "possible":
-                    unresolved_primary_names[identity] = row
-                continue
+                    row = dict(row, _review_name_only=True)
+                else:
+                    continue
             detail_query = {"state": state, "identifier": row["identifier"]}
             if state == "GA": detail_query["detail_key"] = row["detail_key"]
             if state == "GA" and row["identifier"] in {"", "EXEMPT"}:
@@ -5559,12 +5565,6 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
     if purpose == "identity":
         return identity_rows_names("IL", records, canonical_ein_digits(org.ein), IL_GA_SOURCES[state])
     result = licensed_charity_result(org, state, records, deadline, IL_GA_SOURCES[state])
-    if state == "GA" and result.status == "Not Registered" and unresolved_primary_names:
-        candidate = next(iter(unresolved_primary_names.values()))
-        result.status = "Needs Review"; result.success = False
-        result.source_note = (f"GA returned a similar primary name, {candidate['name']} ({candidate['identifier']}), "
-                              "but the reviewed-name identity safeguards did not confirm this organization. "
-                              "This unresolved candidate does not establish non-registration.")
     if state == "IL":
         # User-approved IL-only interpretation, 2026-09-25. The combined label
         # deliberately does not choose between never registered and noncompliant.
@@ -5781,6 +5781,13 @@ def licensed_charity_identity(org, row, state, deadline):
                  for name in names if name]
     decision, matched_name = max(decisions, key=lambda item: item[0]["score"])
     row["match"] = decision
+    if row.get("_user_identity_decision") == "accept" and not (
+            row.get("ein") and canonical_ein_digits(row["ein"]) != canonical_ein_digits(org.ein)):
+        row["match"] = {"decision": "accepted", "score": 100, "reason": "USER_CONFIRMED_IDENTITY"}
+        row["address_evidence"] = {"decision": "user_confirmed", "basis": "Identity accepted by the user for this snapshot."}
+        return "accepted"
+    if decision["decision"] == "rejected" and row.get("_review_name_only") and not row.get("ein"):
+        return "possible"
     if decision["decision"] == "rejected":
         return "rejected"
     if state == "IL" and canonical_ein_digits(row.get("ein", "")) == canonical_ein_digits(org.ein):
@@ -5821,6 +5828,7 @@ def select_licensed_charity(org, rows, state, deadline):
         if time.monotonic() >= deadline:
             raise TimeoutError("Registry candidate evaluation did not finish within this lookup's budget")
         outcome = licensed_charity_identity(org, row, state, deadline)
+        row["_identity_outcome"] = outcome
         if outcome == "accepted": accepted.append(row)
         elif outcome == "conflict": conflicts.append(row)
         elif outcome == "possible": possible.append(row)
@@ -5870,6 +5878,8 @@ def licensed_charity_result(org, state, rows, deadline, source, *, freshness="")
     selected, review = select_licensed_charity(org, rows, state, deadline)
     if review:
         result.status = "Needs Review"; result.success = False; result.source_note = review
+        if any(r.get("_identity_outcome") in {"possible", "conflict"} for r in rows):
+            result._cc_identity_review = {"records": rows, "search_complete": True, "freshness": freshness}
     elif selected:
         result.status = selected["status"]; result.success = result.status != "Unable to Confirm"
         result.matched_registry_name = selected["name"]
@@ -16484,7 +16494,13 @@ def wi_confirm_cross_state_credential(candidate: dict, original_name: str, ein: 
     address = registry_cross_state_identity(ein, candidate.get("registry_name", ""),
         [candidate.get("location", ""), location[1] if location else ""], deadline)
     status = wi_extract_detail_status(text)
-    if not address or not wi_status_from_detail_status(status):
+    if not wi_status_from_detail_status(status):
+        return candidate
+    # A verified credential detail is status evidence even when its relation to
+    # the requested EIN still needs a user's identity decision.
+    candidate = dict(candidate, detail_status=status, detail_href=detail_url,
+                     location=location[1] if location else candidate.get("location", ""))
+    if not address:
         return candidate
     evidence = {"kind": "cross_state_name_address", "requested_ein": canonical_ein_digits(ein),
         "credential": candidate["license_number"], "registry_name": candidate["registry_name"],
@@ -16938,6 +16954,8 @@ def wi_best_match_from_html(result_html: str, target_names: list[str], best_matc
         if re.search(r"<th\b", row_html, re.I):
             continue
         cells = html_table_cells(row_html)
+        if cells and user_rejected_credential(ein, "WI", cells[0]):
+            continue
         alias_conflict = bool(cells and cells[0] in related_ids)
         if alias_conflict and (len(cells) < 3 or normalized_match_name(cells[2]) != normalized_match_name(original_name)):
             continue
@@ -16983,6 +17001,8 @@ def wi_best_match_from_markdown(result_text: str, target_names: list[str], best_
         best_match = None
     alias_checks = {}
     for license_id, line in rows:
+        if user_rejected_credential(ein, "WI", license_id):
+            continue
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
         registry_name, _ = wi_markdown_link_parts(cells[2])
         alias_conflict = license_id in related_ids
@@ -17272,6 +17292,11 @@ def search_wi(page, org, max_seconds: float | None = None, progress: dict | None
                     "CharityClarity reports Needs Review because identity remains unconfirmed, not because no record was found. "
                     "Confirm with Wisconsin whether this credential covers the requested EIN before relying on its status.")
                 result.success = False
+                result._cc_identity_review = {"search_complete": False, "freshness": "", "records": [{
+                    "name": best_match["registry_name"], "identifier": best_match["license_number"],
+                    "url": urljoin(WI_SEARCH_URL, best_match.get("detail_href", "")),
+                    "location": best_match.get("location", ""), "raw_status": best_match.get("detail_status", ""),
+                    "expiration": best_match.get("expiration_date"), "_identity_outcome": "possible"}]}
                 return result
             result.status = "Unable to Confirm"
             if best_match.get("identity_detail_unavailable"):
@@ -17285,6 +17310,12 @@ def search_wi(page, org, max_seconds: float | None = None, progress: dict | None
                 result.source_note = (f"Wisconsin credential {best_match['license_number']} lists {address['registry_location']}, "
                     f"but the EIN-linked organization record lists {address['ein_linked_location']}. "
                     "The address conflict could not be resolved, so this name-only record has not been accepted as the requested organization.")
+            if not best_match.get("identity_detail_unavailable") and best_match.get("detail_href"):
+                result._cc_identity_review = {"search_complete": False, "freshness": "", "records": [{
+                    "name": best_match["registry_name"], "identifier": best_match["license_number"],
+                    "url": urljoin(WI_SEARCH_URL, html.unescape(best_match["detail_href"])),
+                    "location": best_match.get("location", ""), "raw_status": best_match.get("detail_status", ""),
+                    "expiration": best_match.get("expiration_date"), "_identity_outcome": "conflict"}]}
             result.success = False
             return result
         detail_status = best_match.get("detail_status", "")
@@ -17380,6 +17411,14 @@ def search_wi(page, org, max_seconds: float | None = None, progress: dict | None
 
 
 def search_wi_sidecar(org):
+    # This existing remote adapter cannot honor request-scoped exclusions.
+    # Do not let it silently restore a credential the user just rejected.
+    review = USER_IDENTITY_CONTEXT.get()
+    if review.get("ein") == canonical_ein_digits(org.ein) and review.get("state") == "WI" and review.get("rejected"):
+        result = checker.StateResult(org.organization_name, org.ein, "WI", "Site Not Reachable", WI_SEARCH_URL)
+        result.success = False
+        result.source_note = "The remote Wisconsin retry cannot apply this identity review; the master lookup retains the reviewed exclusions."
+        return result
     acquired = WI_SIDECAR_SEMAPHORE.acquire(timeout=WI_SIDECAR_ACQUIRE_SECONDS)
     if not acquired:
         result = checker.StateResult(org.organization_name, org.ein, "WI", "Site Not Reachable", WI_SEARCH_URL)
@@ -18212,6 +18251,8 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
     data["debug_trace"] = json.dumps(debug_trace_for_result(result, org, state, data["status"]), sort_keys=True)
     data.update(registration_date_metadata(result, data["status"], body))
     data.update(renewal_filing_metadata(result, data, data["status"], body))
+    if getattr(result, "_cc_identity_review", None):
+        attach_identity_review(data, result._cc_identity_review)
     log_event(f"{state} lookup for {format_ein(ein)} finished in {data['lookup_seconds']}s with status {data.get('status')}")
     return data
 
@@ -18236,8 +18277,8 @@ def reason_code_for_result(result, status: str) -> str:
         return "PORTAL_ERROR"
     if re.search(r"\bclosed|withdrawn|cancel", status or "", re.I):
         return "STATUS_RAW_CLOSED"
-    if re.search(r"\b(?:terminated|withdrawn|cancel(?:ed|led)|closed)\b", text, re.I):
-        return "STATUS_RAW_CLOSED"
+    # Historical-record notes and page disclaimers do not describe the selected
+    # record. In particular, "exemptions may be withdrawn" is not a closure.
     if re.search(r"\brevoked\b", status or "", re.I):
         return "STATUS_RAW_REVOKED"
     if re.search(r"\bexempt\b", status or "", re.I):
@@ -20182,7 +20223,7 @@ def ny_connector_advance(record):
             return {"phase": "complete", "result": {"state": "NY", "source": "NY", "identity": identity,
                     "ein": format_ein(ein), "checked_at_epoch": time.time(), "app_version": APP_VERSION}}
         result = search_ny_direct(org, registry_search_provider=search_response,
-                                  registry_detail_provider=search_response if record.get("connector_version") in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7"} else None)
+                                  registry_detail_provider=search_response if record.get("connector_version") in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8"} else None)
     except NYConnectorQueryNeeded as pending:
         limit = 5
         is_detail = "orgID" in pending.params
@@ -20190,7 +20231,7 @@ def ny_connector_advance(record):
             return {"phase": "complete", "result": ny_connector_failure(record, "NY_CONNECTOR_INCOMPLETE")}
         record["pending"] = {"query_id": secrets.token_urlsafe(18), "query": pending.params}
         return {"phase": "search", **record["pending"]}
-    if record.get("connector_version") not in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7"} and "401" in (getattr(result, "source_note", "") or ""):
+    if record.get("connector_version") not in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8"} and "401" in (getattr(result, "source_note", "") or ""):
         return {"phase": "complete", "result": ny_connector_failure(record, "NY_CONNECTOR_UPDATE_REQUIRED")}
     data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, "NY", started)
     data["connector_version"] = record.get("connector_version", "0.2.1")
@@ -20223,7 +20264,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7"}:
+        if not isinstance(connector_version, str) or connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8"}:
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()
@@ -27808,6 +27849,197 @@ def proxy_single_state_request_to_overflow(payload: dict) -> tuple[int, dict, di
     return None
 
 
+def user_rejected_credential(ein, state, identifier):
+    review = USER_IDENTITY_CONTEXT.get()
+    return (review.get("ein") == canonical_ein_digits(ein) and review.get("state") == state
+            and identifier in review.get("rejected", []))
+
+
+def identity_review_pack(record):
+    if len(NY_CONNECTOR_SIGNING_KEY) < 32:
+        raise ValueError("Identity review is unavailable. Rerun this check later.")
+    body = base64.urlsafe_b64encode(json.dumps(record, separators=(",", ":"), sort_keys=True).encode()).rstrip(b"=")
+    if len(body) > 250000:
+        raise ValueError("Too many candidate details for one identity review.")
+    signature = hmac.new(NY_CONNECTOR_SIGNING_KEY.encode(), b"cc-identity-review-v1." + body, hashlib.sha256).hexdigest()
+    return body.decode() + "." + signature
+
+
+def identity_review_unpack(token, email, device):
+    if len(NY_CONNECTOR_SIGNING_KEY) < 32 or not isinstance(token, str) or not 65 <= len(token) <= 250065:
+        raise ValueError("Invalid identity review. Rerun the state check.")
+    body, signature = token.rsplit(".", 1)
+    expected = hmac.new(NY_CONNECTOR_SIGNING_KEY.encode(), b"cc-identity-review-v1." + body.encode("ascii"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        raise ValueError("The identity review was changed. Rerun the state check.")
+    record = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+    if (record["version"] != APP_VERSION or not record["issued"] <= time.time() < record["expires"] <= record["issued"] + 86400
+            or (record.get("owner") and record["owner"] != [email, device])):
+        raise ValueError("This identity review expired or belongs to another session. Rerun the state check.")
+    return record
+
+
+def identity_review_view(record):
+    return {"token": identity_review_pack(record), "expires_at": record["expires"],
+            "search_complete": record["search_complete"], "scope": "this_snapshot",
+            "candidates": [{"id": row["id"], "name": row["name"], "identifier": row["identifier"],
+                "location": row.get("location", ""), "source_url": row.get("url", ""),
+                "raw_status": row.get("raw_status", ""), "expiration": row.get("expiration", ""),
+                "decision": record["decisions"].get(row["id"], {}).get("decision", "")}
+                for row in record["records"] if row["reviewable"]]}
+
+
+def attach_identity_review(data, context):
+    """Sign master-retrieved candidates, never a browser-supplied status override."""
+    if not APP_VERSION.endswith("-staging") or len(NY_CONNECTOR_SIGNING_KEY) < 32:
+        return
+    rows = []
+    for row in context["records"]:
+        outcome = row.get("_identity_outcome")
+        if outcome not in {"accepted", "possible", "conflict"}:
+            continue
+        if row.get("ein") and canonical_ein_digits(row["ein"]) != canonical_ein_digits(data["ein"]):
+            continue
+        clean = {key: row.get(key, "") for key in
+                 ("name", "identifier", "ein", "location", "url", "raw_status", "expiration", "license_category", "initial")}
+        for key in ("expiration", "initial"):
+            if isinstance(clean[key], date): clean[key] = clean[key].isoformat()
+            elif clean[key] is None: clean[key] = ""
+        clean["id"] = hashlib.sha256(json.dumps([clean[k] for k in ("name", "identifier", "url")]).encode()).hexdigest()[:24]
+        clean["reviewable"] = outcome != "accepted"
+        rows.append(clean)
+    if not any(row["reviewable"] for row in rows) or len(rows) > 100:
+        return
+    prior = USER_IDENTITY_CONTEXT.get()
+    same_review = prior.get("ein") == canonical_ein_digits(data["ein"]) and prior.get("state") == data["state"]
+    now = int(time.time())
+    # Calendar decisions and extract age must be checked again on a new date.
+    midnight = int(datetime.combine(date.today() + timedelta(days=1), datetime.min.time()).timestamp())
+    record = {"issued": now, "expires": min(now + 86400, midnight), "version": APP_VERSION,
+              "base": {k: v for k, v in data.items() if k not in {"debug_trace", "identity_review"}},
+              "records": rows, "search_complete": context.get("search_complete") is True,
+              "freshness": context.get("freshness", ""), "decisions": {},
+              "history": list(prior.get("history", [])) if same_review else [],
+              "rejected": list(prior.get("rejected", [])) if same_review else []}
+    data["identity_review"] = identity_review_view(record)
+
+
+def identity_review_wi_status(row):
+    # Identity acceptance does not invent unavailable status information.
+    if not row.get("raw_status"):
+        candidate = {"registry_name": row["name"], "license_number": row["identifier"]}
+        deadline = time.perf_counter() + 18
+        text = wi_http_detail_text(row["url"], deadline=deadline)
+        if not wi_same_credential_text(text, candidate):
+            text = wi_reader_text(row["url"], no_cache=True, deadline=deadline)
+        if wi_same_credential_text(text, candidate):
+            row["raw_status"] = wi_extract_detail_status(text)
+    status = wi_status_from_detail_status(row.get("raw_status", ""))
+    expiry = parse_due_date(row.get("expiration", ""))
+    if status in {"Revoked", "Suspended", "Closed / Withdrawn / Canceled"}:
+        return status
+    effective = wi_effective_renewal_due_from_expiration(expiry)[0] if expiry else None
+    return status_from_calendar_date(effective or expiry) if expiry else status or "Unable to Confirm"
+
+
+def identity_review_state_status(state, row):
+    if state == "WI":
+        return identity_review_wi_status(row)
+    expiry = parse_due_date(row.get("expiration", ""))
+    raw, category = row.get("raw_status", ""), row.get("license_category", "")
+    status = licensed_charity_status(raw, expiry)
+    if state == "DC" and "exempt" in category.lower() and raw.lower() == "active":
+        return "Exempt"
+    if state == "GA":
+        if not expiry and raw.casefold() in {"active", "current", "issued", "approved"} and category == "Charity":
+            return "Delinquent"
+        if category == "Exempt Charity" and status in {"Current", "Upcoming Filing"}:
+            return "Exempt"
+    if state == "IL" and raw.casefold() == "good standing":
+        return status_from_calendar_date(expiry) if expiry else "Delinquent"
+    return status
+
+
+def resolve_identity_review(payload, email, device):
+    record = identity_review_unpack(payload.get("token"), email, device)
+    base = record["base"]
+    if (payload.get("ein") != base["ein"] or payload.get("state") != base["state"]
+            or payload.get("action") not in {"accept", "reject", "clear"}):
+        raise ValueError("Invalid identity decision or organization binding.")
+    selected = next((r for r in record["records"] if r["id"] == payload.get("candidate_id") and r["reviewable"]), None)
+    if not selected or len(record["history"]) >= 100:
+        raise ValueError("This candidate is unavailable for review. Rerun the state check.")
+    action = payload["action"]
+    decision = {"candidate_id": selected["id"], "identifier": selected["identifier"], "decision": action,
+                "reviewed_by": email, "reviewed_at": int(time.time())}
+    record["owner"] = [email, device]
+    record["history"].append(decision)
+    if action == "clear": record["decisions"].pop(selected["id"], None)
+    else: record["decisions"][selected["id"]] = decision
+    data = dict(base)
+    pending = [r for r in record["records"] if r["reviewable"] and r["id"] not in record["decisions"]]
+    accepted = [r for r in record["records"] if not r["reviewable"] or record["decisions"].get(r["id"], {}).get("decision") == "accept"]
+    rejected = [r for r in record["records"] if record["decisions"].get(r["id"], {}).get("decision") == "reject"]
+    note = ("User identity review for this snapshot: " + "; ".join(
+        f"{d['decision']} {next(r['name'] for r in record['records'] if r['id'] == key)} ({d['identifier']})"
+        for key, d in record["decisions"].items()) + f". Reviewed by {email}. ") if record["decisions"] else ""
+    if pending:
+        data.update(status="Needs Review", success=False,
+                    comments=note + base["comments"] + f" {len(pending)} candidate(s) still need an identity decision.")
+    elif not accepted and not record["search_complete"] and base["state"] == "WI":
+        # Rejection resumes the existing master lookup, scoped to this request.
+        # It is never substituted for completed search coverage.
+        excluded = sorted(set(record["rejected"] + [r["identifier"] for r in rejected]))
+        token = USER_IDENTITY_CONTEXT.set({"ein": canonical_ein_digits(base["ein"]), "state": "WI", "rejected": excluded, "history": record["history"]})
+        names_token = REVIEWED_NAME_CONTEXT.set({**REVIEWED_NAME_CONTEXT.get(), canonical_ein_digits(base["ein"]): base.get("reviewed_alternate_names", [])})
+        try:
+            data = run_state_lookup(base["organization_name"], base["ein"], "WI")
+        finally:
+            REVIEWED_NAME_CONTEXT.reset(names_token); USER_IDENTITY_CONTEXT.reset(token)
+        data["comments"] = note + data["comments"]
+    elif not accepted:
+        data.update(status="Not Registered" if record["search_complete"] else "Unable to Confirm",
+                    success=record["search_complete"], matched_registry_name="", matched_registry_identifier="",
+                    raw_status_text="User rejected the retrieved identity candidates", computed_due_date="",
+                    comments=note + ("The completed search has no remaining qualifying registration record." if record["search_complete"] else "The search is incomplete; rejecting this candidate does not establish non-registration."))
+    else:
+        org = checker.Organization(base["organization_name"], base["ein"])
+        candidates = []
+        for source_row in accepted:
+            r = dict(source_row)
+            r["expiration"] = parse_due_date(r.get("expiration", ""))
+            r["_user_identity_decision"] = "accept"
+            r["status"] = identity_review_state_status(base["state"], source_row)
+            r["raw_status"] = source_row["raw_status"]
+            candidates.append(r)
+        chosen, conflict = select_licensed_charity(org, candidates, base["state"], time.monotonic() + 5)
+        if conflict or not chosen:
+            data.update(status="Needs Review", success=False, comments=note + (conflict or "No complete registration record could be selected."))
+        else:
+            due = chosen["expiration"]
+            if base["state"] == "WI" and due:
+                due = wi_effective_renewal_due_from_expiration(due)[0] or due
+            data.update(status=chosen["status"], success=chosen["status"] not in {"Unable to Confirm", "Needs Review"},
+                        matched_registry_name=chosen["name"], matched_registry_identifier=chosen["identifier"],
+                        source_url=chosen["url"], raw_status_text=chosen["raw_status"],
+                        computed_due_date=due.isoformat() if due else "",
+                        comments=note + f"The registry reports {chosen['raw_status'] or 'no verified status'} for {chosen['name']} ({chosen['identifier']}). "
+                        + (f"Its recorded expiration is {chosen['expiration'].isoformat()}. " if chosen["expiration"] else "")
+                        + (f"Its next Wisconsin annual renewal is due {due.isoformat()}. " if due and due != chosen["expiration"] else "")
+                        + f"CharityClarity computes {chosen['status']} from that record. Identity was confirmed by the user; the registry status was not overridden.")
+    freshness = record.get("freshness", "")
+    if freshness and freshness not in data["comments"]: data["comments"] += " " + freshness
+    data.update(source_note=data["comments"], app_version=APP_VERSION,
+                identity_anchor="user_reviewed" if record["decisions"] else base.get("identity_anchor", ""),
+                reason_code="USER_IDENTITY_REVIEW", identity_review_history=record["history"],
+                status_reason="User identity decision; state status rules retained.")
+    data["identity_evidence"] = {"automated": base.get("identity_evidence", {}), "user_review": record["history"]}
+    # Preserve a newly found candidate's token after continued Wisconsin search.
+    if "identity_review" not in data: data["identity_review"] = identity_review_view(record)
+    log_event(f"Identity review {base['state']} {base['ein']} {selected['identifier']}: {action} by {email}; result {data['status']}")
+    return data
+
+
 def normalize_organization_requests(payload: dict, privileged: bool) -> list[dict]:
     organization_name = (payload.get("organization_name") or "").strip()
     raw_organizations = payload.get("organizations")
@@ -27863,6 +28095,32 @@ def payload_missing_required_organization_name(payload: dict) -> bool:
 
 
 class RegistrySnapshotHandler(BaseHTTPRequestHandler):
+    def _send_identity_review(self):
+        admitted = False
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not APP_VERSION.endswith("-staging") or not 0 < length <= 260000:
+                self._send_json(400, {"error": "Identity review is unavailable for this request."}); return
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            if not isinstance(payload, dict): raise ValueError("Invalid review request.")
+            email = normalize_email(str(payload.get("email") or ""))
+            passcode = str(payload.get("admin_passcode") or "").strip()
+            if staging_access_error(email, passcode) or not is_verified_internal_passcode(email, passcode):
+                self._send_json(403, {"error": "Unlock CharityClarity to review this match."}); return
+            device = normalize_device_id(payload.get("device_id") or "")
+            if not device: raise ValueError("A browser session is required to review this match.")
+            admitted = SINGLE_STATE_REQUEST_SEMAPHORE.acquire(blocking=False)
+            if not admitted:
+                self._send_json(429, {"error": "State lookup capacity is busy. Retry this decision shortly."}, {"Retry-After": "10"}); return
+            self._send_json(200, resolve_identity_review(payload, email, device), {"Cache-Control": "no-store"})
+        except (ValueError, TypeError, KeyError, UnicodeError) as exc:
+            self._send_json(400, {"error": str(exc)})
+        except Exception as exc:
+            log_error(f"Identity review failed: {type(exc).__name__}")
+            self._send_json(503, {"error": "The decision could not be completed. Your original result is retained; retry this state."})
+        finally:
+            if admitted: SINGLE_STATE_REQUEST_SEMAPHORE.release()
+
     def _send_identity_discovery(self):
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -28119,6 +28377,9 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
         self._send_json(404, {"error": "Open http://127.0.0.1:8765/ to use the registry snapshot page."})
 
     def do_POST(self) -> None:
+        if self.path == "/api/identity-review":
+            self._send_identity_review()
+            return
         if self.path == "/api/discover-names":
             self._send_identity_discovery()
             return

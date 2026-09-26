@@ -7,6 +7,7 @@
   if (location.origin !== NY || window !== window.top) return;
   let pending = null;
   let completed = null;
+  const documentId = `${Date.now()}:${Math.random()}`;
   const same = (a, b) => a.action === b.action && JSON.stringify(a.query || null) === JSON.stringify(b.query || null);
   function finish(task, response) {
     completed = { id: task.id, attempt: task.attempt, action: task.action, query: task.query, response };
@@ -23,7 +24,7 @@
     if (sender.id !== chrome.runtime.id) return false;
     if (message?.action === "ready") {
       const ready = !!document.querySelector("#ein") || /^\/RegistrySearch\/[0-9]{2}-[0-9]{2}-[0-9]{2}\/?$/.test(location.pathname);
-      respond({ ready, url: location.href, rateLimited: !ready && /(?:429\s+Too Many Requests|Too Many Requests\s*429)/i.test(document.body?.innerText || "") });
+      respond({ ready, documentId, url: location.href, rateLimited: !ready && /(?:429\s+Too Many Requests|Too Many Requests\s*429)/i.test(document.body?.innerText || "") });
       return false;
     }
     if (message?.action === "back-to-results") {

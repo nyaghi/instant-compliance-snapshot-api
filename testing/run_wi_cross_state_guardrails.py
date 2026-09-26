@@ -75,12 +75,14 @@ class CrossStateTests(unittest.TestCase):
     def test_bad_address_does_not_break_existing_name_discovery(self):
         with patch.object(c,'identity_fetch',return_value=json.dumps([{'fein':'12-3456789','legalName':self.name,'officialAddress':'unknown'}]).encode()):result=c.identity_ca_names(self.ein,time.monotonic()+3)
         self.assertEqual(result['names'][0]['name'],self.name);self.assertFalse(result['organization_records'][0]['city'])
-    def test_co_only_latest_principal_office_per_entity_is_used(self):
+    def test_co_preserves_same_ein_historical_principal_offices(self):
         rows=[{'fein':'12-3456789','name':self.name,'entityid':'1','principalcity':'Fort Myers','principalstate':'FL','mailingcity':'Rockville'},
               {'fein':'12-3456789','name':'Former Learning Name','entityid':'1','principalcity':'Boston','principalstate':'MA'}]
         with patch.object(c,'identity_fetch',return_value=json.dumps(rows).encode()):result=c.identity_co_names(self.ein,time.monotonic()+3)
-        self.assertEqual(len(result['names']),2);self.assertEqual(len(result['organization_records']),1)
+        self.assertEqual(len(result['names']),2);self.assertEqual(len(result['organization_records']),2)
         self.assertEqual(result['organization_records'][0]['city'],'Fort Myers')
+        self.assertEqual(result['organization_records'][1]['city'],'Boston')
+        self.assertTrue(result['organization_records'][1]['historical'])
     def test_foundation_flow_never_calls_financial_page(self):
         candidate=c.wi_foundation_identity_review(self.name,self.name+' Foundation','76543-800','CredSummaryDetails.aspx?chid=123','07/31/2027','FORT MYERS, FL')
         detail=f'Name: {self.name} Credential Type: Charitable Organization Credential Number: 76543-800 Location: Fort Myers, FL Status License is current (Active)'

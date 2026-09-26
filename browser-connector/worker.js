@@ -25,7 +25,7 @@ function keepAlive() {
 const rejected = reason => ["NY_CONNECTOR_VERIFICATION_REJECTED", "NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED"].includes(reason);
 const recoveryFailure = reason => rejected(reason) ? "NY_CONNECTOR_RECOVERY_REJECTED" :
   typeof reason === "string" && /^NY_CONNECTOR_[A-Z_]+$/.test(reason) ? reason : "NY_CONNECTOR_INCOMPLETE";
-const runtimeState = () => ({ schema: 2, nextStart, ownedTabs: [...owned], diagnostics: [...diagnostics], queue: [active, ...queue].filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, expiresAt: j.expiresAt, active: j === active, activeExpiresAt: j.activeExpiresAt, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.command, lastResponse: j.lastResponse, queryRepaired: j.queryRepaired })) });
+const runtimeState = () => ({ schema: 2, nextStart, ownedTabs: [...owned], diagnostics: [...diagnostics], queue: [active, ...queue].filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, expiresAt: j.expiresAt, active: j === active, activeExpiresAt: j.activeExpiresAt, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, detailRetryUsed: j.detailRetryUsed, retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.command, lastResponse: j.lastResponse, queryRepaired: j.queryRepaired })) });
 function saveRuntime() {
   keepAlive();
   if (!active && !queue.length && keepAliveTimer) { clearTimeout(keepAliveTimer); keepAliveTimer = null; }
@@ -204,13 +204,13 @@ async function ready(job) {
   }
   throw new Error("NY_CONNECTOR_TAB_READY_TIMEOUT");
 }
-async function waitForRegistryDocument(job, path) {
+async function waitForRegistryDocument(job, path, previousDocument = "") {
   const deadline = Math.min(Date.now() + 10000, job.activeExpiresAt);
   while (!job.closed && Date.now() < deadline) {
     const tab = await chrome.tabs.get(job.tab);
     if (tab.url === P.NY + path) {
       try { const state = await chrome.tabs.sendMessage(job.tab, { action: "ready" }, { frameId: 0 });
-        if (state?.ready && state.url === tab.url) return;
+        if (state?.ready && state.url === tab.url && (!previousDocument || state.documentId && state.documentId !== previousDocument)) return;
       } catch { /* The navigation's new content script is not ready yet. */ }
     }
     await nap(100);
@@ -270,7 +270,7 @@ async function performSearch(job, query, id) {
         if (job.closed || generation !== job.generation) return;
         job.verificationRetryUsed ||= response?.verificationRetryUsed === true;
         await saveRuntime();
-        if (["NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT", "NY_CONNECTOR_SEARCH_RESPONSE_TIMEOUT"].includes(response?.reason)) throw new Error(response.reason);
+        if (["NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT", "NY_CONNECTOR_SEARCH_RESPONSE_TIMEOUT", "NY_CONNECTOR_DETAIL_RESPONSE_TIMEOUT"].includes(response?.reason)) throw new Error(response.reason);
         if (response?.reason === "NY_CONNECTOR_RATE_LIMITED") throw new Error(response.reason);
         if (!response?.ok || !P.sameQuery(response.evidence?.query, query)) response = { ok: false, reason: response?.reason || "NY_CONNECTOR_INCOMPLETE" };
         if (rejected(response.reason) && !repaired) {
@@ -287,6 +287,19 @@ async function performSearch(job, query, id) {
         }
         break;
       } catch (error) {
+        if (error.message === "NY_CONNECTOR_DETAIL_RESPONSE_TIMEOUT" && Object.hasOwn(query, "orgID") && !job.detailRetryUsed && job.activeExpiresAt - Date.now() > 45000) {
+          // Retry only the exact detail page already opened from an observed
+          // result link. Require a new document so a cached timeout cannot win.
+          const path = "/RegistrySearch/" + query.orgID;
+          const tab = await chrome.tabs.get(job.tab);
+          const previous = await chrome.tabs.sendMessage(job.tab, { action: "ready" }, { frameId: 0 });
+          if (tab.url !== P.NY + path || !previous?.documentId) throw error;
+          job.detailRetryUsed = true; job.generation++;
+          await saveRuntime(); post(job, { id, progress: true, retrying: true });
+          await chrome.tabs.reload(job.tab);
+          await waitForRegistryDocument(job, path, previous.documentId);
+          continue;
+        }
         if (["NY_CONNECTOR_TAB_READY_TIMEOUT", "NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT", "NY_CONNECTOR_SEARCH_RESPONSE_TIMEOUT"].includes(error.message) && job.timeoutRetries < 1) {
           job.timeoutRetries++;
           job.retryNotBefore = Date.now() + 1000;
