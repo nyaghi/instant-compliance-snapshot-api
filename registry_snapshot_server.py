@@ -18737,6 +18737,8 @@ def nj_selected_public_detail(page, target, org) -> str:
 
 
 def nj_detail_body(page, org) -> str:
+    if getattr(page, "_cc_nj_query_incomplete", False) is True:
+        return ""  # Never recover status from a prior query's detail or grid.
     cache_key = (page.url, canonical_ein_digits(org.ein), org.organization_name)
     cached = getattr(page, "_cc_nj_selected_detail", None)
     if (isinstance(cached, tuple) and len(cached) == 2 and cached[0] == cache_key
@@ -19010,45 +19012,120 @@ def nj_next_due_date_from_body(body: str) -> date | None:
     return context.get("computed_due_date")
 
 
+def nj_completed_query_rows(request, query):
+    """Bind a fully received portal grid to the exact search that produced it."""
+    try:
+        parsed = urllib.parse.urlsplit(request.url)
+        if (parsed.scheme != "https" or parsed.hostname != "charportal.dca.njoag.gov"
+                or not parsed.path.startswith("/_services/entity-grid-data.json/")
+                or request.method != "POST"):
+            return None
+        sent = request.post_data_json
+        if (not isinstance(sent, dict) or sent.get("search") != query or sent.get("page") != 1
+                or any(sent.get(k) for k in ("filter", "metaFilter", "odataFilterQuery", "nlSearchFilter"))):
+            return None
+        response = request.response()
+        if (response.url != request.url or response.status != 200
+                or "json" not in response.headers.get("content-type", "").lower()):
+            return None
+        data = response.json()
+        records = data.get("Records") if isinstance(data, dict) else None
+        count = data.get("ItemCount") if isinstance(data, dict) else None
+        if (not isinstance(records, list) or type(count) is not int or count < len(records)
+                or data.get("PageNumber") != 1 or type(data.get("MoreRecords")) is not bool
+                or (data["MoreRecords"] is False and count != len(records))):
+            return None
+        if not records:
+            return [] if count == 0 and data["MoreRecords"] is False else None
+        rows = []
+        for record in records:
+            attributes = record.get("Attributes") if isinstance(record, dict) else None
+            if not isinstance(attributes, list):
+                return None
+            values = {a.get("Name"): a.get("DisplayValue") for a in attributes if isinstance(a, dict)}
+            row = tuple(re.sub(r"\s+", " ", str(values.get(k) or "")).strip() for k in ("name", "accountnumber"))
+            if not all(row):
+                return None
+            evidence = tuple(re.sub(r"\s+", " ", str(values.get(k) or "")).strip() for k in
+                             ("crsm_federalein", "crsm_filestanding", "crsm_addressline1",
+                              "crsm_mailingcity", "crsm_mailingstate", "crsm_mailingzip"))
+            rows.append(row + tuple(value for value in evidence if value))
+        return rows
+    except Exception:
+        return None
+
+
+def nj_search_body(page, query):
+    """Reuse only this page's ready form; never treat a prior grid as a new result."""
+    page._cc_nj_query_incomplete = True
+    url = "https://charportal.dca.njoag.gov/Charity-Registration/CHR-Public-Search-Page/"
+    selector = '#SearchBox28, input[placeholder="Search"], input[aria-label*="partial text" i], input[id^="SearchBox"], input[type="search"]'
+    box = page.locator(selector).first
+    ready = getattr(page, "_cc_nj_search_ready", False) is True and page.url == url
+    page._cc_nj_search_ready = False
+    if ready:
+        try:
+            if page.locator('#modalIframe').is_visible():
+                page.locator('[role="dialog"]:has(#modalIframe) button[title="Close"]').click(timeout=1000)
+                page.locator('#modalIframe').wait_for(state="hidden", timeout=1000)
+            ready = box.is_visible()
+        except Exception:
+            ready = False
+    if not ready:
+        page.goto(url, wait_until="domcontentloaded", timeout=60000)
+    box.wait_for(state="visible", timeout=10000)
+    started_requests = set()
+    completed = []
+
+    def on_request(request):
+        started_requests.add(request)
+
+    def on_finished(request):
+        if request not in started_requests:
+            return
+        rows = nj_completed_query_rows(request, query)
+        if rows is not None:
+            completed.append(rows)
+
+    page.on("request", on_request)
+    page.on("requestfinished", on_finished)
+    try:
+        box.fill(query)
+        page.keyboard.press("Enter")
+        deadline = time.monotonic() + 12
+        while time.monotonic() < deadline:
+            if completed:
+                rows = completed[-1]
+                grid = page.locator('.public-search-grid')
+                text = re.sub(r"\s+", " ", grid.inner_text(timeout=1000))
+                rendered_rows = [re.sub(r"\s+", " ", value) for value in grid.locator('[role="row"]').all_inner_texts()]
+                # Read the page only after it renders this query's completed response.
+                visible = (bool(re.search(r"no records(?: to show| found)?", text, re.I)) if not rows
+                           else all(any(all(value in rendered for value in row) for rendered in rendered_rows) for row in rows))
+                if visible and box.input_value() == query:
+                    page._cc_nj_search_ready = True
+                    page._cc_nj_query_incomplete = False
+                    return page.locator("body").inner_text(timeout=1000)
+            page.wait_for_timeout(100)
+        return None
+    finally:
+        page.remove_listener("request", on_request)
+        page.remove_listener("requestfinished", on_finished)
+
+
 def search_nj_direct(page, org):
     url = "https://charportal.dca.njoag.gov/Charity-Registration/CHR-Public-Search-Page/"
     result = checker.StateResult(org.organization_name, org.ein, "NJ", checker.STATUS_UNKNOWN, url)
     page._cc_nj_selected_detail = None  # A new search always obtains fresh evidence.
     try:
         ein_digits = re.sub(r"\D", "", org.ein or "")
-        page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        time.sleep(1)
-        input_box = None
-        for selector in [
-            "#SearchBox28",
-            'input[placeholder="Search"]',
-            'input[aria-label*="partial text" i]',
-            'input[id^="SearchBox"]',
-            'input[type="search"]',
-            'input[type="text"]',
-        ]:
-            try:
-                candidate = page.locator(selector).first
-                candidate.wait_for(state="visible", timeout=5000)
-                input_box = candidate
-                break
-            except Exception:
-                continue
-        if not input_box:
-            result.error = "Could not find NJ search box"
+        body = nj_search_body(page, ein_digits or org.organization_name)
+        if body is None:
+            result.status = "Unable to Verify"
+            result.source_note = "New Jersey did not finish the submitted search with a complete, matching response. Registration status could not be confirmed."
+            result.reason_code = "NJ_INCOMPLETE_QUERY_RESPONSE"
+            result.success = False
             return result
-
-        input_box.fill("")
-        input_box.fill(ein_digits or org.organization_name)
-        page.keyboard.press("Enter")
-        body = ""
-        deadline = time.time() + 12
-        while time.time() < deadline:
-            body = page.locator("body").inner_text(timeout=5000)
-            body_digits = re.sub(r"\D", "", body)
-            if (ein_digits and ein_digits in body_digits) or re.search(r"no records found|no records|no matching|0 results", body, re.I):
-                break
-            time.sleep(0.75)
         if re.search(r"no records found|no records|no matching|0 results", body, re.I):
             result.raw_status_text = "No record found"
             result.status = checker.STATUS_NOT_REGISTERED
@@ -19253,7 +19330,8 @@ def search_nj_with_name_fallback(page, org):
             return result
         fallback_org = SimpleNamespace(organization_name=variant, ein="")
         fallback = search_nj_direct(page, fallback_org)
-        if public_status(fallback) == "Site Not Reachable":
+        if (public_status(fallback) == "Site Not Reachable"
+                or getattr(fallback, "reason_code", "") == "NJ_INCOMPLETE_QUERY_RESPONSE"):
             return copy_name_fallback_result(org, fallback)
         if public_status(fallback) == "Not Registered":
             continue

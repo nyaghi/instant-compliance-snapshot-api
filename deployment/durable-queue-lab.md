@@ -847,3 +847,16 @@ keep250ms spacing; at85%+ stop new admission as before. Memory headroom, fresh
 counter validation, physical slots, workflow/state/source caps, deadlines and
 matching/classification code remain unchanged. No capacity purchase. Compare
 all32 Sales workloads and Standard controls before judging the hypothesis.
+
+Phase45 New Jersey query acquisition: the portal now renders TextField28 rather
+than the older SearchBox28. Find its semantic search field without serially
+waiting five seconds for an obsolete ID. Reuse only the completed, visible form
+in this job's page, closing its prior detail dialog with the portal's Close button.
+Require a fully received first-page grid response from the exact submitted query
+and matching rendered row evidence before continuing the existing scoring,
+identity, filing-period and status logic. An unfinished query cannot recover a
+status from a stale detail/grid. Preserve the 12-second response window, existing
+name order/32-second fallback allowance, Sales60s, source caps and four workers.
+No response evidence is reused between organizations or workflows. Controls
+cover stale negatives/positives, incomplete/filtered/foreign responses, original
+detail fallback and unchanged master logic outside the acquisition prefix.

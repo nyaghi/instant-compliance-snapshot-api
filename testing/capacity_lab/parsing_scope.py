@@ -21,6 +21,7 @@ def restore_parsing_optimization(tree):
 
 def strip_nj_public_detail_optimization(tree):
     """Remove only the tested response/cache statements, preserving scoring/rules."""
+    strip_nj_query_optimization(tree)
     if not any(getattr(n, 'name', '') == 'nj_selected_public_detail' for n in tree.body):
         return
     tree.body = [n for n in tree.body if getattr(n, 'name', '') != 'nj_selected_public_detail']
@@ -36,6 +37,37 @@ def strip_nj_public_detail_optimization(tree):
         elif getattr(fn, 'name', '') == 'search_nj_direct':
             assert ast.unparse(fn.body[2]) == 'page._cc_nj_selected_detail = None'
             del fn.body[2]
+
+
+def strip_nj_query_optimization(tree):
+    """Restore only the new acquisition prefix; classification remains compared."""
+    if not any(getattr(n, 'name', '') == 'nj_search_body' for n in tree.body):
+        return
+    old = ast.parse(subprocess.check_output(['git', 'show', 'a3376d2:registry_snapshot_server.py'],
+        cwd=Path(__file__).resolve().parents[2]).decode('utf-8'))
+    original = next(n for n in old.body if getattr(n, 'name', '') == 'search_nj_direct')
+    before = next(n for n in original.body if isinstance(n, ast.Try))
+    after = next(n for n in next(n for n in tree.body if getattr(n, 'name', '') == 'search_nj_direct').body if isinstance(n, ast.Try))
+    def boundary(body):
+        return next(i for i, n in enumerate(body) if isinstance(n, ast.If)
+                    and ast.unparse(n.test).startswith("re.search('no records found|no records|no matching|0 results'"))
+    split = boundary(after.body)
+    assert split == 3 and ast.dump(after.body[0]) == ast.dump(before.body[0])
+    assert ast.unparse(after.body[1]) == 'body = nj_search_body(page, ein_digits or org.organization_name)'
+    assert ast.unparse(after.body[2].test) == 'body is None'
+    after.body = before.body[:boundary(before.body)] + after.body[split:]
+    detail = next(n for n in tree.body if getattr(n, 'name', '') == 'nj_detail_body')
+    assert ast.unparse(detail.body[0].test) == "getattr(page, '_cc_nj_query_incomplete', False) is True"
+    assert len(detail.body[0].body) == 1 and ast.unparse(detail.body[0].body[0]) == "return ''"
+    del detail.body[0]
+    fallback = next(n for n in tree.body if getattr(n, 'name', '') == 'search_nj_with_name_fallback')
+    guards = [n for n in ast.walk(fallback) if isinstance(n, ast.If)
+              and 'NJ_INCOMPLETE_QUERY_RESPONSE' in ast.unparse(n.test)]
+    assert len(guards) == 1 and isinstance(guards[0].test, ast.BoolOp) and isinstance(guards[0].test.op, ast.Or)
+    assert len(guards[0].test.values) == 2
+    assert ast.unparse(guards[0].test.values[1]) == "getattr(fallback, 'reason_code', '') == 'NJ_INCOMPLETE_QUERY_RESPONSE'"
+    guards[0].test = guards[0].test.values[0]
+    tree.body = [n for n in tree.body if getattr(n, 'name', '') not in {'nj_search_body', 'nj_completed_query_rows'}]
 
 
 def strip_or_snapshot_index_optimization(tree):
@@ -64,6 +96,7 @@ def strip_sales_profile_reuse(tree):
 
 
 def strip_browser_startup_reuse(tree):
+    strip_nj_query_optimization(tree)
     tree.body = [n for n in tree.body if getattr(n, 'name', '') != 'launch_lookup_browser']
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id=='launch_lookup_browser':
