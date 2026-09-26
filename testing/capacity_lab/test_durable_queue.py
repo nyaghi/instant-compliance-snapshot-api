@@ -188,6 +188,41 @@ class DurableTests(unittest.TestCase):
             heartbeat = c.execute('SELECT heartbeat FROM cc_lab_workers WHERE id=%s', (worker,)).fetchone()['heartbeat']
             self.assertLess(now-heartbeat, 5)
 
+    def seed_duration_history(self):
+        old=self.submit(payload(states=['CO','LA']));worker=self.worker()
+        for _ in range(2):self.finish(self.q.claim(worker))
+        with self.q.transaction() as (c,now):
+            c.execute('UPDATE cc_lab_jobs SET claimed=%s,finished=%s WHERE workflow_id=%s AND state=%s',
+                      (now-70,now-10,old,'LA'))
+            c.execute('UPDATE cc_lab_jobs SET claimed=%s,finished=%s WHERE workflow_id=%s AND state=%s',
+                      (now-12,now-10,old,'CO'))
+        return worker
+
+    def test_sales_fast_first_preserves_all_states_deadline_and_org_fairness(self):
+        worker=self.seed_duration_history()
+        a=self.submit(payload(states=['CO','LA'],mode='sales'))
+        b=self.submit(payload('987654321',states=['CO','LA'],mode='sales'))
+        first,second=self.q.claim(worker),self.q.claim(worker)
+        self.assertEqual({first['workflow_id'],second['workflow_id']},{a,b})
+        self.assertEqual([first['state'],second['state']],['CO','CO'])
+        self.finish(first);self.finish(second)
+        third,fourth=self.q.claim(worker),self.q.claim(worker)
+        self.assertEqual([third['state'],fourth['state']],['LA','LA'])
+        self.assertEqual({third['workflow_id'],fourth['workflow_id']},{a,b})
+        for job in (third,fourth):self.finish(job)
+        for ident in (a,b):
+            result=self.q.status('a',ident)
+            self.assertEqual(result['total'],2);self.assertEqual(result['deadline']-result['submitted'],60)
+            self.assertTrue(all(j['result']['status']=='Current' for j in result['jobs']))
+
+    def test_mixed_modes_keep_standard_slow_first_and_sales_fast_first(self):
+        worker=self.seed_duration_history()
+        standard=self.submit(payload(states=['CO','LA']))
+        sales=self.submit(payload('987654321',states=['CO','LA'],mode='sales'))
+        jobs=[self.q.claim(worker),self.q.claim(worker)]
+        self.assertEqual({j['workflow_id']:j['state'] for j in jobs},{standard:'LA',sales:'CO'})
+        self.assertEqual(len({j['workflow_id'] for j in jobs}),2)
+
     def test_pipelined_claim_failure_rolls_back_job_and_dispatch(self):
         ident = self.submit()
         worker = self.worker()

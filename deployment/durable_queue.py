@@ -221,11 +221,14 @@ class Queue:
                 earlier_multi.extend((w['submitted'],set(j['resources'])) for j in candidates+ongoing)
                 if candidates and protected is None:
                     protected=min(candidates,key=lambda j:j['id'])
-            # Start slow state work earlier within each organization's fair turn.
-            # Recent measured durations only: no organization or state overrides.
+            # Standard starts slow work earlier to reduce the final tail. Sales
+            # prioritizes likely completions inside its one-minute deadline.
+            # Every requested state remains queued; fairness and caps are shared.
             estimates = self.duration_estimates(c, now, {j['state'] for jobs in pending.values() for j in jobs})
-            for jobs in pending.values():
-                jobs.sort(key=lambda j: (-estimates.get(j['state'], 10.0), j['state'], j['id']))
+            for workflow in workflows:
+                direction = 1 if workflow['mode']=='sales' else -1
+                pending.get(workflow['id'], []).sort(
+                    key=lambda j: (direction*estimates.get(j['state'], 10.0), j['state'], j['id']))
             workflows.sort(key=lambda w: (running[w['id']], w['dispatched'], w['submitted'], w['id']))
             if (protected and used+protected['weight']<=ceiling
                     and all(busy[r]<cfg['registry_limits'].get(r,4) for r in protected['resources'])):

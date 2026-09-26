@@ -586,3 +586,17 @@ conservative display grouping have separate JavaScript regression controls.
 No extra compute, staging deployment or production deployment is part of this
 trial. The baseline remains four Pro nodes, twelve weighted slots each, twenty
 active workflows and at most fifteen concurrent state jobs per organization.
+
+## perf.23: Sales priority within the unchanged one-minute window
+
+The unchanged-version synchronized twenty-organization Sales baseline completed
+only 71 of 640 requested checks before its deadline. Standard's longest-estimated
+duration-first rule was being used for Sales too. Under a hard one-minute cutoff,
+that spent early capacity on long tasks while many shorter checks never ran.
+
+Sales now starts the shortest recently measured states first within each
+organization's fair turn. Standard retains longest-first ordering. Every one of
+the selected states remains queued, with identical identity/status rules, source
+caps and deadlines. No named-state or organization exceptions, cached compliance
+results or estimated statuses are introduced. This can improve conclusive
+coverage at the cutoff; it cannot promise all registries finish within a minute.
