@@ -528,3 +528,23 @@ New real-database controls cover mixed eligible/ineligible leases and atomic
 rollback if a renewal fails. Actual whole-workflow timing must confirm any speed
 benefit; aggregated worker transaction time is not a causal partition of a
 user's elapsed time. All state interpreters are unchanged from perf.19.
+
+## perf.21: preserve DC corroboration in diagnostic metadata
+
+The selected DC result and its public comment were correct, but generic debug
+metadata re-scored the malformed source name alone and emitted a rejection reason
+and empty identity anchor. The selected record's verified name/address decision
+now survives serialization as `cross_state_name_address`, with its matching
+reason and an accepted debug candidate. The original registry name is retained.
+This changes diagnostic metadata only; selecting the record and interpreting its
+status are unchanged. A complete-master AST comparison and end-to-end response
+controls enforce that scope. The perf.20 queue implementation and its 33 passing
+PostgreSQL controls are unchanged. The final performance trial waits for this
+diagnostic correction so the result and its audit evidence agree.
+
+The offline HTTP suite also reproduced an intermittent Windows connection reset
+on an unauthorized POST with an unread JSON body. The private lab denial path
+now drains at most 32 KiB with an absolute one-second read deadline before the
+401 reply; invalid lengths, timeout and oversized bodies still cannot execute or
+cancel work. Authorized requests are unchanged. The failed initial test output
+is retained, with body-bound/timeout controls and a full follow-up offline run.

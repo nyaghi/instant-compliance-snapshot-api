@@ -80,6 +80,31 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(self.req('/api/lab/workflows',p)[0],400)
         self.queue.submit.assert_not_called()
 
+    def test_unauthorized_post_drains_only_bounded_body_before_denial(self):
+        for length,consumed in [('2',2),('32769',0),('-1',0),('invalid',0)]:
+            handler=self.server.RequestHandlerClass.__new__(self.server.RequestHandlerClass)
+            handler.command='POST';handler.headers={'Content-Length':length}
+            handler.connection=Mock();handler.connection.gettimeout.return_value=None
+            handler.rfile=io.BytesIO(b'{}');observed=[]
+            handler._send_json=lambda status,*args:observed.append((status,handler.rfile.tell()))
+            self.assertFalse(handler.authorized())
+            self.assertEqual(observed,[(401,consumed)])
+            self.assertTrue(handler.close_connection)
+            handler.connection.settimeout.assert_called_with(None)
+            if consumed:self.assertTrue(0<handler.connection.settimeout.call_args_list[0].args[0]<=1)
+        self.queue.submit.assert_not_called();self.queue.cancel.assert_not_called()
+
+    def test_unauthorized_body_timeout_still_denies_without_execution(self):
+        handler=self.server.RequestHandlerClass.__new__(self.server.RequestHandlerClass)
+        handler.command='POST';handler.headers={'Content-Length':'2'}
+        handler.connection=Mock();handler.connection.gettimeout.return_value=5
+        handler.rfile=Mock();handler.rfile.read1.side_effect=TimeoutError()
+        handler._send_json=Mock()
+        self.assertFalse(handler.authorized())
+        self.assertEqual(handler._send_json.call_args.args[0],401)
+        handler.connection.settimeout.assert_called_with(5)
+        self.queue.submit.assert_not_called();self.queue.cancel.assert_not_called()
+
     def test_errors_are_transport_outcomes_never_registry_negatives(self):
         p={'organization_name':'Fixture','ein':'123456789','states':['CO']}
         for error,code in ((Conflict('Different input'),409),(QueueFull('Busy'),429),(RuntimeError('secret'),503)):

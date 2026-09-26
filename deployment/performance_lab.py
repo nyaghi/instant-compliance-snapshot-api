@@ -135,6 +135,25 @@ def build_handler(master, key, capacity=None, durable=None):
         def authorized(self):
             if valid_authorization(self.headers.get('Authorization', ''), key):
                 return True
+            if getattr(self, 'command', '') == 'POST':
+                # Closing with unread request bytes can reset the connection
+                # before the caller receives the denial. Drain only a small,
+                # bounded body, with a separate one-second rejection deadline.
+                self.close_connection = True
+                previous_timeout = self.connection.gettimeout()
+                try:
+                    length = int(self.headers.get('Content-Length', '0'))
+                    if 0 < length <= 32768:
+                        deadline = time.monotonic()+1
+                        while length and (remaining := deadline-time.monotonic()) > 0:
+                            self.connection.settimeout(remaining)
+                            chunk = self.rfile.read1(length)
+                            if not chunk: break
+                            length -= len(chunk)
+                except (OSError, ValueError):
+                    pass
+                finally:
+                    self.connection.settimeout(previous_timeout)
             self._send_json(401, {'error': 'Private performance lab access required.'},
                             {'WWW-Authenticate': 'Basic realm="CharityClarity performance lab"', 'Cache-Control': 'no-store'})
             return False

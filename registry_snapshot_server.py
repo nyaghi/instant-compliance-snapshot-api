@@ -5690,6 +5690,24 @@ def select_licensed_charity(org, rows, state, deadline):
     return max(pool, key=lambda r: (r.get("expiration") or date.min, r["identifier"])), ""
 
 
+def dc_corroborated_result_match(result):
+    """Retain the selected DC recovery evidence in result diagnostics only."""
+    if getattr(result, "state", "") != "DC" or not getattr(result, "success", False):
+        return {}
+    row = getattr(result, "_cc_license_record", {})
+    match, address = row.get("match", {}), row.get("address_evidence", {})
+    if (match.get("decision") != "accepted" or match.get("reason") != "MATCH_EIN_LINKED_NAME_REPEATED_TEXT"
+            or address.get("decision") != "corroborated"
+            or row.get("name") != getattr(result, "matched_registry_name", "")
+            or row.get("identifier") != getattr(result, "matched_registry_identifier", "")):
+        return {}
+    if not any(canonical_ein_digits(record.get("ein", "")) == canonical_ein_digits(result.ein)
+               and any(dc_repeated_name_prefix(row["name"], name) for name in record.get("names", []))
+               for record in address.get("cross_state_records", [])):
+        return {}
+    return dict(match)
+
+
 def licensed_charity_result(org, state, rows, deadline, source, *, freshness=""):
     result = checker.StateResult(org.organization_name, format_ein(org.ein), state, "Not Registered", source)
     result.status_reason = "LICENSED_CHARITY_SOURCE"
@@ -5705,6 +5723,10 @@ def licensed_charity_result(org, state, rows, deadline, source, *, freshness="")
         result._cc_license_record = selected
         result.identity_evidence = {"name": selected.get("match", {}), "address": selected.get("address_evidence", {})}
         result.address_evidence = selected.get("address_evidence", {})
+        if state == "DC" and dc_corroborated_result_match(result):
+            result.reason_code = selected["match"]["reason"]
+            result.identity_anchor = "cross_state_name_address"
+            result.identity_review_evidence = {"kind": "cross_state_name_address", "name": selected["match"]}
         result.source_note = f"{state} lists {selected['name']} ({selected['identifier']}) as {selected['raw_status']}. "
         if selected.get("expiration"):
             result.computed_due_date = selected["expiration"].isoformat()
@@ -18134,6 +18156,8 @@ def debug_trace_for_result(result, org, state: str, interpreted_status: str) -> 
             decision = {"decision": "accepted", "reason": "MATCH_EIN_EXACT", "score": max(100, decision["score"])}
         if mn_confirmed_alias_evidence(result):
             decision = {"decision": "accepted", "reason": "MATCH_STATE_CONFIRMED_ALTERNATE_NAME", "score": 80}
+        if state == "DC":
+            decision = dc_corroborated_result_match(result) or decision
         status_reason_code = getattr(result, "reason_code", "") or reason_code_for_result(result, interpreted_status)
         if (
             decision.get("decision") == "rejected"

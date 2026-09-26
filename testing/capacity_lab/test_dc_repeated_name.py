@@ -91,6 +91,30 @@ class DcRecoveryTests(unittest.TestCase):
         data=cc.response_data_for_lookup(r,r.raw_status_text,self.org,self.org.organization_name,self.org.ein,'DC',time.perf_counter())
         self.assertEqual(data['status'],'Current')
         self.assertEqual(data['matched_registry_identifier'],'400215000366')
+        self.assertEqual(data['reason_code'],'MATCH_EIN_LINKED_NAME_REPEATED_TEXT')
+        self.assertEqual(data['identity_anchor'],'cross_state_name_address')
+        trace=json.loads(data['debug_trace'])
+        self.assertEqual(trace['accepted_candidate']['reason'],data['reason_code'])
+        self.assertEqual(trace['accepted_candidate']['name'],data['matched_registry_name'])
+
+    def test_diagnostic_recovery_requires_selected_record_and_ein_evidence(self):
+        r=self.result()
+        self.assertTrue(cc.dc_corroborated_result_match(r))
+        r.matched_registry_identifier='other-record'
+        self.assertFalse(cc.dc_corroborated_result_match(r))
+        r=self.result();r._cc_license_record['address_evidence']['cross_state_records']=[]
+        self.assertFalse(cc.dc_corroborated_result_match(r))
+        r=self.result();r.state='RI'
+        self.assertFalse(cc.dc_corroborated_result_match(r))
+        r=self.result();r.success=False
+        self.assertFalse(cc.dc_corroborated_result_match(r))
+
+    def test_diagnostics_only_do_not_change_other_master_behavior(self):
+        from testing.capacity_lab.dc_metadata_scope import remove_dc_result_metadata
+        old=ast.parse(subprocess.check_output(['git','show','c98c346:registry_snapshot_server.py'],cwd=ROOT).decode())
+        new=ast.parse((ROOT/'registry_snapshot_server.py').read_text(encoding='utf-8'))
+        remove_dc_result_metadata(new)
+        self.assertEqual(ast.dump(old),ast.dump(new))
 
     def test_entire_master_unchanged_except_dc_branch_and_two_helpers(self):
         old=ast.parse(subprocess.check_output(['git','show','de45053:registry_snapshot_server.py'],cwd=ROOT).decode())

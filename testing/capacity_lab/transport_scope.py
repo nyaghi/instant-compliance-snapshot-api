@@ -5,6 +5,8 @@ import subprocess
 
 
 def remove_transport_recovery(tree):
+    from testing.capacity_lab.dc_metadata_scope import remove_dc_result_metadata
+    remove_dc_result_metadata(tree)
     old = ast.parse(subprocess.check_output(['git','show','6eed5f9:registry_snapshot_server.py'],
                     cwd=Path(__file__).resolve().parents[2]).decode())
     def function(tree,name):
