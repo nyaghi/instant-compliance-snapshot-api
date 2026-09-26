@@ -39,6 +39,7 @@ def strip_nj_public_detail_optimization(tree):
 
 
 def strip_or_snapshot_index_optimization(tree):
+    strip_sales_profile_reuse(tree)
     if not any(getattr(n, 'name', '') == 'or_snapshot_index_from_bytes' for n in tree.body):
         return
     old = ast.parse(subprocess.check_output(['git', 'show', 'bd13982:registry_snapshot_server.py'],
@@ -47,3 +48,15 @@ def strip_or_snapshot_index_optimization(tree):
     originals = {n.name:n for n in old.body if isinstance(n, ast.FunctionDef) and n.name in allowed}
     tree.body = [originals.get(getattr(n, 'name', ''), n) for n in tree.body
                  if getattr(n, 'name', '') not in {'or_snapshot_index_from_bytes', 'validated_or_snapshot_index'}]
+
+
+def strip_sales_profile_reuse(tree):
+    if not any(getattr(n, 'name', '') == 'run_sales_lookups_with_source_evidence' for n in tree.body):
+        return
+    old = ast.parse(subprocess.check_output(['git', 'show', 'e3b09d5a3cc031374925a17fe0211ff4398273f2:registry_snapshot_server.py'],
+        cwd=Path(__file__).resolve().parents[2]).decode('utf-8'))
+    allowed = {'public_profile_for_ein', 'sales_identity_evidence'}
+    originals = {n.name:n for n in old.body if isinstance(n, ast.FunctionDef) and n.name in allowed}
+    tree.body = [originals.get(getattr(n, 'name', ''), n) for n in tree.body
+                 if getattr(n, 'name', '') != 'run_sales_lookups_with_source_evidence'
+                 and not (isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id=='SALES_PROFILE_CONTEXT' for t in n.targets))]

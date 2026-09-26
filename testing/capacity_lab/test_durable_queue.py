@@ -76,7 +76,7 @@ class DurableTests(unittest.TestCase):
         seed=self.q.claim(worker);self.assertEqual(seed['state'],'@sales_identity')
         self.assertEqual(seed['resources'],['CO','IRS']);self.assertLessEqual(seed['run_seconds'],8)
         self.assertIsNone(self.q.claim(worker))
-        proof={'state':'@sales_identity','ein':seed['payload']['ein'],'app_version':VERSION,'sources':{},'errors':{}}
+        proof={'state':'@sales_identity','ein':seed['payload']['ein'],'app_version':VERSION,'sources':{'IRS':{'public_profile':{'url':'https://projects.propublica.org/nonprofits/api/v2/organizations/'+seed['payload']['ein']+'.json','retrieved_after':time.time(),'payload':{'organization':{'ein':seed['payload']['ein'],'name':'Same workflow source'}}}}},'errors':{}}
         self.q.complete(worker,seed['id'],seed['token'],proof)
         state=self.q.claim(worker);self.assertNotEqual(state['state'],'@sales_identity')
         self.assertEqual(state['sales_identity'],proof);self.assertEqual(state['payload']['alternate_names'],[])

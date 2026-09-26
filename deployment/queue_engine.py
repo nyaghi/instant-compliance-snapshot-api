@@ -124,7 +124,8 @@ def execute(master, job, source_finished=None):
     original = master.search_fl if trace else None
     if trace: master.search_fl = trace.wrap(original)
     try:
-        results = master.run_state_lookups_parallel(organizations, [job['state']])
+        results = (master.run_sales_lookups_with_source_evidence(organizations, [job['state']], identity)
+                   if identity is not None else master.run_state_lookups_parallel(organizations, [job['state']]))
     finally:
         if trace: master.search_fl = original
     if len(results) != 1: raise ValueError('Unexpected result count')

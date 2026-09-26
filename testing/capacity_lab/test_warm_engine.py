@@ -40,6 +40,8 @@ def fixture(job,output,log,ready,supervisor,env):
     def blocked(*args,**kwargs):raise AssertionError('No network in warm isolation controls')
     socket.getaddrinfo=blocked
     def registry(name,ein,state):
+        prior_profile=bool(master.PUBLIC_PROFILE_CACHE) or bool(master.SALES_PROFILE_CONTEXT.get())
+        master.PUBLIC_PROFILE_CACHE[ein]={'organization':{'ein':ein}}
         prior=getattr(master,'_warm_test_previous_organization',None)
         master._warm_test_previous_organization=ein
         if job.get('hang'):
@@ -49,7 +51,7 @@ def fixture(job,output,log,ready,supervisor,env):
         return {'ein':ein,'state':state,'status':'Current','app_version':master.APP_VERSION,
             'matched_registry_name':name,'aliases':master.known_names_for_ein(ein),
             'registration_date':'2001-02-03','last_renewal_date':'2025-12-31',
-            'source_first_name':nh_first,'ks_reused':ks_reused,'or_reused':or_reused,'or_unchanged':or_unchanged,'previous_organization':prior,'pid':os.getpid(),'private_group':os.getpgrp()==os.getpid(),
+            'source_first_name':nh_first,'ks_reused':ks_reused,'or_reused':or_reused,'or_unchanged':or_unchanged,'previous_organization':prior,'previous_profile':prior_profile,'pid':os.getpid(),'private_group':os.getpgrp()==os.getpid(),
             'secret_keys_present':[k for k in ('CE_LAB_DATABASE_URL','CE_TEST_DATABASE_URL','RENDER_API_KEY') if k in os.environ],
             'context_before':dict(master.REVIEWED_NAME_CONTEXT.get())}
     with patch.object(master,'run_single_state_lookup_reliably',side_effect=registry):
@@ -105,7 +107,7 @@ class WarmEngineTests(unittest.TestCase):
             self.assertTrue(r['lab_task_metrics']['engine_preloaded']);self.assertTrue(r['private_group'])
             self.assertNotEqual(r['source_first_name'],'CHILD-ONLY-MUTATION');self.assertTrue(r['ks_reused'])
             self.assertTrue(r['or_reused']);self.assertTrue(r['or_unchanged'])
-            self.assertIsNone(r['previous_organization']);self.assertEqual(r['secret_keys_present'],[])
+            self.assertIsNone(r['previous_organization']);self.assertFalse(r['previous_profile']);self.assertEqual(r['secret_keys_present'],[])
             self.assertEqual(r['registration_date'],'2001-02-03');self.assertEqual(r['last_renewal_date'],'2025-12-31')
             self.assertEqual(list(r['context_before']),[r['ein'].replace('-','')])
         self.assertEqual(results[0]['aliases'],['Reviewed DBA']);self.assertEqual(results[1]['aliases'],[])

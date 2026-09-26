@@ -793,3 +793,15 @@ weekly source freshness; changed file bytes force a new parse even if size and
 timestamp remain unchanged. The organization-free forkserver preloads this public
 table alongside Kansas and New Hampshire. No status results, organization inputs,
 network sessions, matching rules or dates are cached or changed.
+
+
+### Same-workflow Sales profile reuse (perf.38 candidate)
+
+Carry the already fetched, EIN-verified public IRS/ProPublica source from the
+bounded identity child to its own state children. Reuse is lazy: it populates the
+normal profile cache only if the unchanged state lookup asks for that profile.
+Same release, EIN, source URL and <=60-second retrieval age are required. Failed,
+stale or missing source evidence keeps the normal live fetch. Each child has its
+own source copy; the warm template never stores organization data. The internal
+queue payload is not a customer input field. No deadline, worker count, registry
+permit, matching, classification or date rules change. Standard remains unchanged.

@@ -518,6 +518,7 @@ PIN_STORE: dict[str, dict] = {}
 VERIFICATION_TOKENS: dict[str, dict] = {}
 ORG_NAME_CACHE: dict[str, str] = {}
 PUBLIC_PROFILE_CACHE: dict[str, dict] = {}
+SALES_PROFILE_CONTEXT = ContextVar("sales_same_workflow_profile", default={})
 def load_checker():
     spec = importlib.util.spec_from_file_location("charity_state_checker_v9", CHECKER_PATH)
     if spec is None or spec.loader is None:
@@ -1837,6 +1838,13 @@ def public_profile_for_ein(ein: str) -> dict:
         return {}
     if target in PUBLIC_PROFILE_CACHE:
         return PUBLIC_PROFILE_CACHE[target]
+    # Lazy reuse: do not populate the normal cache until the unchanged lookup
+    # actually requests this source. Comment-only cache-presence checks retain
+    # their behavior. The queue supplies only this workflow's exact-EIN source.
+    seed = SALES_PROFILE_CONTEXT.get().get(target)
+    if seed is not None:
+        PUBLIC_PROFILE_CACHE[target] = json.loads(json.dumps(seed))
+        return PUBLIC_PROFILE_CACHE[target]
     try:
         url = f"https://projects.propublica.org/nonprofits/api/v2/organizations/{target}.json"
         request = urllib.request.Request(url, headers={"User-Agent": "ComplianceExpressRegistrySnapshot/1.0"})
@@ -2468,8 +2476,20 @@ def sales_identity_evidence(organization_name: str, ein: str) -> dict:
     deadline = started + 6.0
     # Oregon reads the already validated local extract only; it makes no live
     # source request and therefore needs no extra registry permit.
+    def collect_irs():
+        retrieved_after = time.time()
+        result = identity_irs_names(requested, deadline, latest_only=True)
+        # identity_irs_names has just fetched and verified the exact EIN. Keep
+        # that source response, not a classification, within this one workflow.
+        payload = PUBLIC_PROFILE_CACHE.get(requested)
+        if (isinstance(payload, dict) and isinstance(payload.get("organization"), dict)
+                and canonical_ein_digits(str(payload["organization"].get("ein") or "")) == requested):
+            result["public_profile"] = {
+                "url": f"https://projects.propublica.org/nonprofits/api/v2/organizations/{requested}.json",
+                "retrieved_after": retrieved_after, "payload": json.loads(json.dumps(payload))}
+        return result
     collectors = {"CO": lambda: identity_co_names(requested, deadline),
-                  "IRS": lambda: identity_irs_names(requested, deadline, latest_only=True),
+                  "IRS": collect_irs,
                   "OR": lambda: identity_or_names(requested, deadline)}
     executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="sales-identity")
     futures = {source: executor.submit(fn) for source, fn in collectors.items()}
@@ -2503,6 +2523,39 @@ def sales_names_from_evidence(ein: str, evidence: dict) -> list[str]:
     # Keep every verified distinct spelling up to the normal reviewed-name cap.
     return normalize_reviewed_names(list(dict.fromkeys(names))[:IDENTITY_MAX_NAMES])
 
+
+
+
+def run_sales_lookups_with_source_evidence(organizations: list[dict], states: list[str], evidence: dict) -> list[dict]:
+    """Reuse a current exact-EIN source only inside one isolated Sales state job.
+
+    Unusable/missing data leaves the existing live fetch intact. No source is
+    persisted in the warm template, and no stored status replaces a new check.
+    """
+    if len(organizations) != 1:
+        raise ValueError("Sales source evidence requires one organization")
+    target = canonical_ein_digits(organizations[0]["ein"])
+    sales_names_from_evidence(target, evidence)  # Same-release/EIN envelope fence.
+    source = (evidence.get("sources", {}).get("IRS") or {}).get("public_profile")
+    seeds = {}
+    try:
+        if isinstance(source, dict):
+            age = time.time() - float(source["retrieved_after"])
+            payload = source["payload"]
+            expected = f"https://projects.propublica.org/nonprofits/api/v2/organizations/{target}.json"
+            if (source.get("url") == expected and 0 <= age <= 60
+                    and isinstance(payload, dict) and isinstance(payload.get("organization"), dict)
+                    and canonical_ein_digits(str(payload["organization"].get("ein") or "")) == target):
+                encoded = json.dumps(payload)
+                if len(encoded.encode("utf-8")) <= 4_000_000:
+                    seeds[target] = json.loads(encoded)
+    except (KeyError, TypeError, ValueError, OverflowError):
+        pass
+    token = SALES_PROFILE_CONTEXT.set(seeds)
+    try:
+        return run_state_lookups_parallel(organizations, states)
+    finally:
+        SALES_PROFILE_CONTEXT.reset(token)
 
 
 def sales_result_with_identity(result: dict, evidence: dict) -> dict:
