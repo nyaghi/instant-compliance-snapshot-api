@@ -27,6 +27,8 @@ def remove_fl_alias_guard(tree):
 
 def restore_fl_redundant_preflight(tree):
     """Normalize only the deleted, non-decision-making FL probe for old guards."""
+    from testing.capacity_lab.sc_identity_scope import restore_sc_identity_guard
+    restore_sc_identity_guard(tree)
     fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='run_state_lookup')
     if any(isinstance(n,ast.If) and ast.unparse(n.test)=="state == 'FL'" for n in fn.body):return
     old=ast.parse(subprocess.check_output(['git','show','8967853:registry_snapshot_server.py'],

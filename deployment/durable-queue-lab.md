@@ -690,3 +690,27 @@ diagnostics now retain document requests only so fonts/images cannot exhaust
 the trace before a slow recovery. Sales still rejects all results after 60
 seconds. Existing queue/database controls remain applicable because those
 modules are unchanged from the 49-test perf.25 PostgreSQL run.
+
+## perf.27: South Carolina possible-name identity guard
+
+The hard-cutoff Sales20 trial completed 227/640 checks before 60 seconds versus
+120/640 in the prior run; this is an observed run comparison, not an isolated
+causal speedup claim. Its broader completed set exposed a pre-existing SC path
+that accepted a possible name as a definitive status. The national organization
+was assigned a different local coalition's expired registration. Speed does not
+qualify a wrong identity.
+
+SC now uses the master's identity score and exact safe target variants before
+accepting a candidate without filing evidence. Possible/related candidates must
+confirm the requested EIN using the existing bounded state-filed Form 990 reader.
+Missing or different EIN proof cannot fall through to a weaker browser lookup;
+it remains unconfirmed while other permitted queries are evaluated. Exact legal,
+explicit slash/DBA and reviewed names retain their existing fast path. The same
+status/date interpreter is preserved. Filing-confirmed matches retain the EIN
+basis in diagnostics. No organization-specific exception was introduced.
+
+Local live reproduction returned Unable to Confirm in 2.69 seconds with entered
+name only, and the correct P40435/Upcoming Filing in 0.29 seconds with the verified
+alias. Separate Sales input gaps remain in DC, NH and RI when current Sales omits
+reviewed discovery names. An alias-fed experiment must not be labeled as current
+customer Sales validation. Neither it nor this guard extends the Sales deadline.

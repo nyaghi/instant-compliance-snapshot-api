@@ -7020,10 +7020,13 @@ def sc_detail_filing_ein(detail_html: str, deadline: float) -> str:
     return ""
 
 
-def sc_related_entity_requires_ein(original: str, candidate: str) -> bool:
+def sc_related_entity_requires_ein(original: str, candidate: str, ein: str = "") -> bool:
     markers = {"alumni", "auxiliary", "chapter", "affiliate"}
     return bool((set(normalized_match_name(candidate).split()) & markers)
-                - set(normalized_match_name(original).split()))
+                - set(normalized_match_name(original).split())) or (
+                    score_candidate(original, ein, {"name": candidate})["decision"] != "accepted"
+                    and not any(complete_name_identity_key(candidate) == complete_name_identity_key(target)
+                                for target in organization_match_target_variants(original, ein)))
 
 
 def sc_official_detail_lookup(org) -> object | None:
@@ -7150,7 +7153,8 @@ def sc_official_detail_lookup(org) -> object | None:
             continue
         detail_text = sc_html_to_text(detail_html)
         registry_name = str(best["name"])
-        if sc_related_entity_requires_ein(original_name, registry_name):
+        filing_ein = ""
+        if sc_related_entity_requires_ein(original_name, registry_name, org.ein):
             filing_ein = sc_detail_filing_ein(detail_html, time.monotonic() + 10)
             if filing_ein != canonical_ein_digits(org.ein):
                 if not filing_ein: identity_unconfirmed = True
@@ -7223,11 +7227,16 @@ def sc_official_detail_lookup(org) -> object | None:
             )
         else:
             result.source_note = f"South Carolina returned safe registry match {registry_name} ({public_id}) from the official result list."
+        if filing_ein:
+            result.verified_registry_ein = filing_ein
+            result.identity_anchor = "EIN"
+            result.reason_code = "MATCH_SC_FILING_EIN"
+            result.source_note += " The state-filed Form 990 confirms the requested EIN."
         return result
-    if identity_unconfirmed:
+    if identity_unconfirmed or rejected_ids:
         return checker.StateResult(original_name, org.ein, "SC", "Unable to Confirm", url,
-            raw_status_text="Related organization found; its filing EIN could not be confirmed",
-            source_note="The related organization's name alone does not establish that it is the requested entity. Its state-filed return could not confirm the EIN.", success=False)
+            raw_status_text="Similar organization found; its filing EIN did not confirm the requested entity",
+            source_note="South Carolina returned a similar or related name, but its state-filed return did not confirm the requested EIN. No status was assigned to that name-only candidate.", success=False)
     if last_html and re.search(r"\bNo\s+results\s+found\b", sc_html_to_text(last_html), re.I):
         result = checker.StateResult(
             original_name,
@@ -18193,14 +18202,14 @@ def debug_trace_for_result(result, org, state: str, interpreted_status: str) -> 
         matched_identifier = getattr(result, "matched_registry_identifier", "") or ""
         candidate_ein = matched_identifier if normalized_ein_key(matched_identifier) == normalized_ein_key(getattr(org, "ein", "")) else ""
         verified_ein = getattr(result, "verified_registry_ein", "")
-        if state == "WA" and verified_ein and normalized_ein_key(verified_ein) == normalized_ein_key(getattr(org, "ein", "")):
+        if state in {"WA", "SC"} and verified_ein and normalized_ein_key(verified_ein) == normalized_ein_key(getattr(org, "ein", "")):
             candidate_ein = verified_ein
         decision = score_candidate(
             getattr(org, "organization_name", ""),
             getattr(org, "ein", ""),
             {"name": matched_name, "ein": candidate_ein},
         )
-        if state == "WA" and verified_ein and normalized_ein_key(verified_ein) == normalized_ein_key(getattr(org, "ein", "")):
+        if state in {"WA", "SC"} and verified_ein and normalized_ein_key(verified_ein) == normalized_ein_key(getattr(org, "ein", "")):
             decision = {"decision": "accepted", "reason": "MATCH_EIN_EXACT", "score": max(100, decision["score"])}
         if mn_confirmed_alias_evidence(result):
             decision = {"decision": "accepted", "reason": "MATCH_STATE_CONFIRMED_ALTERNATE_NAME", "score": 80}
