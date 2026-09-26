@@ -29,6 +29,14 @@ def fixture(job,output,log,ready,supervisor,env):
     hits=ks.records_from_workbook_bytes.cache_info().hits
     ks.load_live_records()
     ks_reused=ks.records_from_workbook_bytes.cache_info().hits>hits
+    or_hits=master.or_snapshot_index_from_bytes.cache_info().hits
+    _,or_names,or_periods=master.validated_or_snapshot_index()
+    or_reused=master.or_snapshot_index_from_bytes.cache_info().hits>or_hits
+    or_ein=next(k for k in or_periods if len(k)==9)
+    original_or_name=or_periods[or_ein][6]
+    returned=master.or_snapshot_row_for_ein(or_ein)
+    returned[6]='CHILD-ONLY-MUTATION'
+    or_unchanged=master.or_snapshot_row_for_ein(or_ein)[6]==original_or_name
     def blocked(*args,**kwargs):raise AssertionError('No network in warm isolation controls')
     socket.getaddrinfo=blocked
     def registry(name,ein,state):
@@ -41,7 +49,7 @@ def fixture(job,output,log,ready,supervisor,env):
         return {'ein':ein,'state':state,'status':'Current','app_version':master.APP_VERSION,
             'matched_registry_name':name,'aliases':master.known_names_for_ein(ein),
             'registration_date':'2001-02-03','last_renewal_date':'2025-12-31',
-            'source_first_name':nh_first,'ks_reused':ks_reused,'previous_organization':prior,'pid':os.getpid(),'private_group':os.getpgrp()==os.getpid(),
+            'source_first_name':nh_first,'ks_reused':ks_reused,'or_reused':or_reused,'or_unchanged':or_unchanged,'previous_organization':prior,'pid':os.getpid(),'private_group':os.getpgrp()==os.getpid(),
             'secret_keys_present':[k for k in ('CE_LAB_DATABASE_URL','CE_TEST_DATABASE_URL','RENDER_API_KEY') if k in os.environ],
             'context_before':dict(master.REVIEWED_NAME_CONTEXT.get())}
     with patch.object(master,'run_single_state_lookup_reliably',side_effect=registry):
@@ -96,6 +104,7 @@ class WarmEngineTests(unittest.TestCase):
         for r in results:
             self.assertTrue(r['lab_task_metrics']['engine_preloaded']);self.assertTrue(r['private_group'])
             self.assertNotEqual(r['source_first_name'],'CHILD-ONLY-MUTATION');self.assertTrue(r['ks_reused'])
+            self.assertTrue(r['or_reused']);self.assertTrue(r['or_unchanged'])
             self.assertIsNone(r['previous_organization']);self.assertEqual(r['secret_keys_present'],[])
             self.assertEqual(r['registration_date'],'2001-02-03');self.assertEqual(r['last_renewal_date'],'2025-12-31')
             self.assertEqual(list(r['context_before']),[r['ein'].replace('-','')])

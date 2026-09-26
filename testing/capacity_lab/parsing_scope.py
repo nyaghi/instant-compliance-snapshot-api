@@ -7,6 +7,7 @@ CHANGED = {'nj_loaded_detail_body', 'search_fl_with_transport', 'search_wv_publi
            'nh_live_pdf_records', 'run_state_lookup', 'search_la_downloaded_export'}
 
 def restore_parsing_optimization(tree):
+    strip_or_snapshot_index_optimization(tree)
     strip_nj_public_detail_optimization(tree)
     if not any(isinstance(n, ast.FunctionDef) and n.name == 'nh_records_from_snapshot_bytes' for n in tree.body):
         return
@@ -35,3 +36,14 @@ def strip_nj_public_detail_optimization(tree):
         elif getattr(fn, 'name', '') == 'search_nj_direct':
             assert ast.unparse(fn.body[2]) == 'page._cc_nj_selected_detail = None'
             del fn.body[2]
+
+
+def strip_or_snapshot_index_optimization(tree):
+    if not any(getattr(n, 'name', '') == 'or_snapshot_index_from_bytes' for n in tree.body):
+        return
+    old = ast.parse(subprocess.check_output(['git', 'show', 'bd13982:registry_snapshot_server.py'],
+        cwd=Path(__file__).resolve().parents[2]).decode('utf-8'))
+    allowed = {'fiscal_period_for_ein', 'organization_name_for_ein', 'or_snapshot_row_for_ein'}
+    originals = {n.name:n for n in old.body if isinstance(n, ast.FunctionDef) and n.name in allowed}
+    tree.body = [originals.get(getattr(n, 'name', ''), n) for n in tree.body
+                 if getattr(n, 'name', '') not in {'or_snapshot_index_from_bytes', 'validated_or_snapshot_index'}]

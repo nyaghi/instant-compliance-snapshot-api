@@ -116,7 +116,8 @@ class FloridaFormReuseTests(unittest.TestCase):
         def normalize(source):
             source = source.replace('page.wait_for_timeout(min(250, remaining * 1000))', 'time.sleep(min(0.25, remaining))')
             tree = ast.parse(source)
-            from testing.capacity_lab.parsing_scope import strip_nj_public_detail_optimization
+            from testing.capacity_lab.parsing_scope import strip_nj_public_detail_optimization, strip_or_snapshot_index_optimization
+            strip_or_snapshot_index_optimization(tree)
             strip_nj_public_detail_optimization(tree)
             tree.body = [n for n in tree.body if getattr(n, 'name', '') != 'fl_completed_search_form_available']
             class Restore(ast.NodeTransformer):

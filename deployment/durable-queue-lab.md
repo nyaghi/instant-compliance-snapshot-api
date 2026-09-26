@@ -783,3 +783,13 @@ responses retain the browser path. There is no negative shortcut. The verified
 response is reused only inside this page and search; each new search clears it.
 Evidence capture retains the rendered modal. Matching, ranking, classification,
 dates, deadlines, source permits and four-node capacity are unchanged.
+
+### Oregon extract parsing reuse (perf.37)
+
+Shared name and fiscal-period helpers reuse immutable indexes keyed by the exact
+validated extract bytes. Each helper preserves its first qualifying row and
+returns independent mutable row copies where required. Every access still checks
+weekly source freshness; changed file bytes force a new parse even if size and
+timestamp remain unchanged. The organization-free forkserver preloads this public
+table alongside Kansas and New Hampshire. No status results, organization inputs,
+network sessions, matching rules or dates are cached or changed.

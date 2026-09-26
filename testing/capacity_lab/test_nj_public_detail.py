@@ -129,10 +129,11 @@ class NewJerseyPublicDetailTests(unittest.TestCase):
         self.page.request.get.assert_called_once()
 
     def test_remaining_master_scoring_matching_and_classification_unchanged(self):
-        from testing.capacity_lab.parsing_scope import strip_nj_public_detail_optimization
+        from testing.capacity_lab.parsing_scope import strip_nj_public_detail_optimization, strip_or_snapshot_index_optimization
         root = Path(m.__file__).parent
         old = ast.parse(subprocess.check_output(['git', 'show', '914fa6f:registry_snapshot_server.py'], cwd=root).decode('utf-8'))
         new = ast.parse(Path(m.__file__).read_text(encoding='utf-8'))
+        strip_or_snapshot_index_optimization(new)
         strip_nj_public_detail_optimization(new)
         self.assertEqual(ast.dump(old), ast.dump(new))
 

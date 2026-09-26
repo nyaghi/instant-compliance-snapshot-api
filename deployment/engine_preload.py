@@ -23,7 +23,7 @@ started, cpu_started = time.monotonic(), time.process_time()
 import registry_snapshot_server as master
 # Pure source parsing only: no EIN, organization, live network or match results.
 # Child lookups repeat freshness/asset validation before reusing these tables.
-for source in ("KS", "NH"):
+for source in ("KS", "NH", "OR"):
     try:
         if source == "KS" and master.downloadable_data_info(source).get("usable"):
             ks = master.load_ks_weekly_checker()
@@ -32,6 +32,8 @@ for source in ("KS", "NH"):
                 ks.normalize_name(row.name)
                 ks.normalize_legal_name(row.name)
             del records, row
+        elif source == "OR":
+            master.validated_or_snapshot_index()
         elif (source == "NH" and master.weekly_asset(source, "downloadable-data/NH-records.json") is not None
                 and master.weekly_asset(source, "registered-charities.pdf") is not None):
             records, _ = master.nh_download_live_pdf_records()

@@ -49,8 +49,9 @@ class NewJerseyFrameEventsTests(unittest.TestCase):
         section=after[start:end]
         self.assertEqual(section.count(new),1)
         restored=after[:start]+section.replace(new,old)+after[end:]
-        from testing.capacity_lab.parsing_scope import strip_nj_public_detail_optimization
+        from testing.capacity_lab.parsing_scope import strip_nj_public_detail_optimization, strip_or_snapshot_index_optimization
         tree = ast.parse(restored)
+        strip_or_snapshot_index_optimization(tree)
         strip_nj_public_detail_optimization(tree)
         self.assertEqual(ast.dump(tree),ast.dump(ast.parse(before)))
 

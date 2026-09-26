@@ -1565,48 +1565,57 @@ def md_automatic_extension_due_date(fy_end: date) -> date:
     return fifteenth_day_after_fiscal_year_end(fy_end, 11)
 
 
+@lru_cache(maxsize=1)
+def or_snapshot_index_from_bytes(body: bytes):
+    """Pure immutable index of exact extract bytes; never stores a status."""
+    from types import MappingProxyType
+    reader = csv.reader(io.StringIO(body.decode("utf-8", errors="ignore"), newline=""), delimiter="\t")
+    headers, names, periods = (), {}, {}
+    for index, row in enumerate(reader):
+        if index == 0:
+            headers = tuple(row)
+        if len(row) >= 7:
+            key = re.sub(r"\D", "", row[4])
+            # Preserve each original reader's first qualifying row, including
+            # a short name-only row before a complete filing-period row.
+            names.setdefault(key, tuple(row))
+            if len(row) >= 16:
+                periods.setdefault(key, tuple(row))
+    return headers, MappingProxyType(names), MappingProxyType(periods)
+
+
+def validated_or_snapshot_index():
+    path = weekly_asset("OR", "Charity_OR.txt")
+    if path is None:
+        return (), {}, {}
+    # Validate freshness on every call. Changed bytes cannot hit the old index.
+    return or_snapshot_index_from_bytes(path.read_bytes())
+
+
 def fiscal_period_for_ein(ein: str) -> tuple[date | None, date | None]:
     target = re.sub(r"\D", "", ein or "")
-    if not target or not weekly_asset("OR", "Charity_OR.txt"):
+    if not target:
         return None, None
-
-    with weekly_asset("OR", "Charity_OR.txt").open("r", encoding="utf-8", errors="ignore", newline="") as f:
-        reader = csv.reader(f, delimiter="\t")
-        for row in reader:
-            if len(row) < 16:
-                continue
-            if re.sub(r"\D", "", row[4]) != target:
-                continue
-            period_start = parse_ce_date(row[14])
-            period_end = parse_ce_date(row[15])
-            return period_start, period_end
+    row = validated_or_snapshot_index()[2].get(target)
+    if row:
+        return parse_ce_date(row[14]), parse_ce_date(row[15])
     return None, None
 
 
 def organization_name_for_ein(ein: str) -> str:
     target = re.sub(r"\D", "", ein or "")
-    if not target or not weekly_asset("OR", "Charity_OR.txt"):
+    if not target:
         return ""
-    with weekly_asset("OR", "Charity_OR.txt").open("r", encoding="utf-8", errors="ignore", newline="") as f:
-        reader = csv.reader(f, delimiter="\t")
-        for row in reader:
-            if len(row) < 7:
-                continue
-            if re.sub(r"\D", "", row[4]) == target:
-                return (row[6] or "").strip().strip('"')
-    return ""
+    row = validated_or_snapshot_index()[1].get(target)
+    return (row[6] or "").strip().strip('"') if row else ""
 
 
 def or_snapshot_row_for_ein(ein: str) -> list[str] | None:
     target = re.sub(r"\D", "", ein or "")
-    if len(target) != 9 or not weekly_asset("OR", "Charity_OR.txt"):
+    if len(target) != 9:
         return None
-    with weekly_asset("OR", "Charity_OR.txt").open("r", encoding="utf-8", errors="ignore", newline="") as f:
-        reader = csv.reader(f, delimiter="\t")
-        for row in reader:
-            if len(row) >= 16 and re.sub(r"\D", "", row[4]) == target:
-                return row
-    return None
+    row = validated_or_snapshot_index()[2].get(target)
+    return list(row) if row is not None else None
 
 
 def or_snapshot_headers() -> list[str]:
