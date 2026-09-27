@@ -369,7 +369,9 @@ def strip_nj_public_query(tree):
 
 def strip_ny_verification_timeout(tree):
     """Remove only the typed rethrow; retry budget and denial rules stay compared."""
-    fn=next(n for n in tree.body if getattr(n,'name','')=='ny_browser_registry_response')
+    fn=next((n for n in tree.body if getattr(n,'name','')=='ny_browser_registry_response'),None)
+    if fn is None:
+        return
     expected=ast.parse('''try:
     pass
 except (TimeoutError, checker.PlaywrightTimeoutError):
