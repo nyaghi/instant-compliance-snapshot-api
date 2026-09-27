@@ -22378,6 +22378,8 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
         failure = "did not respond in time" if re.search(r"timeout|timed out", combined + " " + (getattr(result, "error", "") or ""), re.I) else "could not be accessed"
         return f"{source} {failure}, so CharityClarity could not complete the check and reports Site Not Reachable. This does not mean the organization is unregistered or delinquent."
     if status in {"Needs Review", "Unable to Verify", "Unable to Confirm", "Unknown", "No Confirmed Match"}:
+        if state == "MS" and getattr(result, "reason_code", "") == "MS_IDENTITY_UNCONFIRMED":
+            return note
         if state == "MS" and getattr(result, "reason_code", "") == "MS_REVIEWED_SEARCH_INCOMPLETE":
             return ("Mississippi did not complete searches for all reviewed organization names within the lookup window. "
                     "Registration status remains unconfirmed; an incomplete search does not establish non-registration or delinquency.")
@@ -24320,6 +24322,24 @@ def search_batch_browser_state(page, org, state: str):
             matched_name = getattr(external_result, "matched_registry_name", "") or getattr(external_result, "organization_name", "")
             if matched_name and not ms_registry_name_is_safe(matched_name, org.organization_name, org.ein):
                 continue
+            # A broad search phrase may locate a related entity. It is not proof
+            # that the candidate is the requested organization or reviewed alias.
+            decision = score_candidate(org.organization_name, org.ein, {
+                "name": matched_name,
+                "ein": getattr(external_result, "verified_registry_ein", ""),
+            })
+            if decision["decision"] != "accepted":
+                external_result.status = "Needs Review"
+                external_result.success = False
+                external_result.reason_code = "MS_IDENTITY_UNCONFIRMED"
+                external_result.source_note = (
+                    f"Mississippi returned {matched_name}, but its name could not be confirmed as "
+                    f"{org.organization_name} or a reviewed alternate name, and no matching registry EIN was verified. "
+                    "A similar name may identify a separate regional organization. CharityClarity reports Needs Review; "
+                    "the candidate's registration status has not been assigned to the requested organization."
+                )
+                best_external = external_result
+                continue
             if variant_name != org.organization_name:
                 external_result.source_note = " ".join(part for part in [
                     getattr(external_result, "source_note", "") or "",
@@ -24339,6 +24359,17 @@ def search_batch_browser_state(page, org, state: str):
             external_result.source_confidence = "incomplete_search"
             external_result.reason_code = "MS_REVIEWED_SEARCH_INCOMPLETE"
             external_result.source_note = "Mississippi did not complete searches for all reviewed identities within the lookup window; non-registration was not established."
+        if getattr(external_result, "reason_code", "") == "MS_IDENTITY_UNCONFIRMED":
+            result = checker.StateResult(org.organization_name, org.ein, state, "Needs Review",
+                                         getattr(external_result, "source_url", "") or "")
+            result.success = False
+            result.reason_code = external_result.reason_code
+            result.source_note = external_result.source_note
+            result.raw_status_text = "Mississippi candidate identity unconfirmed"
+            result.queries_attempted = attempted_identity_queries
+            result.rejected_candidates = [{"name": getattr(external_result, "matched_registry_name", ""),
+                                           "reason": "Identity unconfirmed; status not applied"}]
+            return result
     elif state == "OK":
         external_result = search_ok_with_variants(page, org, module)
     else:

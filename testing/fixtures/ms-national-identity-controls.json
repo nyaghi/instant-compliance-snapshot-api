@@ -1,0 +1,388 @@
+{
+  "source": "Preserved phase82 Standard/5 live controls, 20 organizations; expected results unchanged.",
+  "rows": [
+    {
+      "ein": "042433182",
+      "organization_name": "Resist, Inc.",
+      "alternate_names": [
+        "RESIST, INC."
+      ],
+      "result": {
+        "status": "Upcoming Filing",
+        "success": true,
+        "matched_registry_name": "Resist, Inc.",
+        "matched_registry_identifier": "",
+        "raw_status_text": "Current - Registered | Expiration Date: 11/15/2026",
+        "source_note": "Mississippi uses Filing Status and Expiration Date from the matched record; the master checker uses bounded waits around the public result/detail pages.",
+        "source_url": "https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx",
+        "verified_registry_ein": null
+      }
+    },
+    {
+      "ein": "043534407",
+      "organization_name": "Year Up, Inc.",
+      "alternate_names": [
+        "YEAR UP, INC"
+      ],
+      "result": {
+        "status": "Not Registered",
+        "success": true,
+        "matched_registry_name": "",
+        "matched_registry_identifier": "",
+        "raw_status_text": "No matching organization row",
+        "source_note": "Mississippi results table did not contain a matching organization row.",
+        "source_url": "https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx",
+        "verified_registry_ein": null
+      }
+    },
+    {
+      "ein": "131998814",
+      "organization_name": "NAACP Foundation",
+      "alternate_names": [
+        "NAACP FOUNDATION",
+        "NAACP SPECIAL CONTRIBUTION FUND",
+        "NAACP"
+      ],
+      "result": {
+        "status": "Upcoming Filing",
+        "success": true,
+        "matched_registry_name": "NAACP Foundation",
+        "matched_registry_identifier": "",
+        "raw_status_text": "Current - Registered | Expiration Date: 11/15/2026",
+        "source_note": "Mississippi uses Filing Status and Expiration Date from the matched record; the master checker uses bounded waits around the public result/detail pages.",
+        "source_url": "https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx",
+        "verified_registry_ein": null
+      }
+    },
+    {
+      "ein": "237169265",
+      "organization_name": "National Arbor Day Foundation",
+      "alternate_names": [
+        "NATIONAL ARBOR DAY FOUNDATION",
+        "ARBOR DAY FOUNDATION"
+      ],
+      "result": {
+        "status": "Upcoming Filing",
+        "success": true,
+        "matched_registry_name": "National Arbor Day Foundation",
+        "matched_registry_identifier": "",
+        "raw_status_text": "Current - Registered | Expiration Date: 11/15/2026",
+        "source_note": "Mississippi uses Filing Status and Expiration Date from the matched record; the master checker uses bounded waits around the public result/detail pages.",
+        "source_url": "https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx",
+        "verified_registry_ein": null
+      }
+    },
+    {
+      "ein": "260537053",
+      "organization_name": "Air Force Academy Foundation",
+      "alternate_names": [
+        "AIR FORCE ACADEMY FOUNDATION",
+        "F/K/A USAFA ENDOWMENT, INC.",
+        "USAFA ENDOWMENT, INC.",
+        "Air Force Academy Endowment",
+        "United States Air Force Academy Endowment",
+        "Air Force Academy Real Estate Trust",
+        "USAFA Endowmrnt",
+        "U.S. Air Force Academy Association",
+        "U.S. AIR FORCE ACADEMY ASSOCIATION & FOUNDATION"
+      ],
+      "result": {
+        "status": "Current",
+        "success": true,
+        "matched_registry_name": "Air Force Academy Foundation",
+        "matched_registry_identifier": "",
+        "raw_status_text": "Current - Registered | Expiration Date: 05/15/2027",
+        "source_note": "Mississippi uses Filing Status and Expiration Date from the matched record; the master checker uses bounded waits around the public result/detail pages.",
+        "source_url": "https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx",
+        "verified_registry_ein": null
+      }
+    },
+    {
+      "ein": "271493201",
+      "organization_name": "Shining Hope for Communities, Inc.",
+      "alternate_names": [
+        "SHINING HOPE FOR COMMUNITIES",
+        "SHOFCO"
+      ],
+      "result": {
+        "status": "Upcoming Filing",
+        "success": true,
+        "matched_registry_name": "Shining Hope for Communities, Inc.",
+        "matched_registry_identifier": "",
+        "raw_status_text": "Current - Registered | Expiration Date: 11/15/2026",
+        "source_note": "Mississippi uses Filing Status and Expiration Date from the matched record; the master checker uses bounded waits around the public result/detail pages.",
+        "source_url": "https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx",
+        "verified_registry_ein": null
+      }
+    },
+    {
+      "ein": "271635830",
+      "organization_name": "Achieving the Dream, Inc.",
+      "alternate_names": [
+        "Achieving The Dream Inc"
+      ],
+      "result": {
+        "status": "Not Registered",
+        "success": true,
+        "matched_registry_name": "",
+        "matched_registry_identifier": "",
+        "raw_status_text": "No matching organization row",
+        "source_note": "Mississippi results table did not contain a matching organization row.",
+        "source_url": "https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx",
+        "verified_registry_ein": null
+      }
+    },
+    {
+      "ein": "320033325",
+      "organization_name": "Operation Homefront, Inc.",
+      "alternate_names": [
+        "OPERATION HOMEFRONT, INC.",
+        "CINCHOUSE.COM INCORPORATED",
+        "OPERATION HOMEFRONT 2014 AMENDED",
+        "Star Spangled Babies",
+        "Homes on the Homefront",
+        "Hearts of Valor"
+      ],
+      "result": {
+        "status": "Closed / Withdrawn / Canceled",
+        "success": true,
+        "matched_registry_name": "Operation Homefront, Inc.",
+        "matched_registry_identifier": "",
+        "raw_status_text": "Closed/Withdrawn | Expiration Date: 05/15/2026",
+        "source_note": "Mississippi uses Filing Status and Expiration Date from the matched record; the master checker uses bounded waits around the public result/detail pages.",
+        "source_url": "https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx",
+        "verified_registry_ein": null
+      }
+    },
+    {
+      "ein": "371665745",
+      "organization_name": "Zearn",
+      "alternate_names": [
+        "ZEARN"
+      ],
+      "result": {
+        "status": "Not Registered",
+        "success": true,
+        "matched_registry_name": "",
+        "matched_registry_identifier": "",
+        "raw_status_text": "No matching organization row",
+        "source_note": "Mississippi results table did not contain a matching organization row.",
+        "source_url": "https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx",
+        "verified_registry_ein": null
+      }
+    },
+    {
+      "ein": "520853312",
+      "organization_name": "Conservation Nation",
+      "alternate_names": [
+        "CONSERVATION NATION",
+        "FRIENDS OF THE NATIONAL ZOO",
+        "FONZ",
+        "FRIENDS OF NATIONAL ZOO"
+      ],
+      "result": {
+        "status": "Current",
+        "success": true,
+        "matched_registry_name": "Conservation Nation",
+        "matched_registry_identifier": "",
+        "raw_status_text": "Current - Registered | Expiration Date: 05/15/2027",
+        "source_note": "Mississippi uses Filing Status and Expiration Date from the matched record; the master checker uses bounded waits around the public result/detail pages.",
+        "source_url": "https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx",
+        "verified_registry_ein": null
+      }
+    },
+    {
+      "ein": "521089824",
+      "organization_name": "National Low Income Housing Coalition",
+      "alternate_names": [
+        "NATIONAL LOW INCOME HOUSING COALITION",
+        "NATIONAL LOW INCOME HOUSING COALITION AND LOW INCOME HOUSING INFORMATION SERVICE",
+        "National Low Income Housing Coalition And Low Income Housing",
+        "National Low Income Housing Coalition & Low Income Housing",
+        "NATIONAL LOW INCOME HOUSING COALITION AND INCOME HOUSING"
+      ],
+      "result": {
+        "status": "Upcoming Filing",
+        "success": true,
+        "matched_registry_name": "National Low Income Housing Coalition & Low Income Housing",
+        "matched_registry_identifier": "",
+        "raw_status_text": "Current - Registered | Expiration Date: 11/15/2026",
+        "source_note": "Mississippi uses Filing Status and Expiration Date from the matched record; the master checker uses bounded waits around the public result/detail pages.",
+        "source_url": "https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx",
+        "verified_registry_ein": null
+      }
+    },
+    {
+      "ein": "521477599",
+      "organization_name": "National Housing Trust",
+      "alternate_names": [
+        "NATIONAL HOUSING TRUST",
+        "NHT Communities",
+        "Institute for Community Economics"
+      ],
+      "result": {
+        "status": "Closed / Withdrawn / Canceled",
+        "success": true,
+        "matched_registry_name": "National Housing Trust",
+        "matched_registry_identifier": "",
+        "raw_status_text": "Closed/Withdrawn | Expiration Date: 05/15/2026",
+        "source_note": "Mississippi uses Filing Status and Expiration Date from the matched record; the master checker uses bounded waits around the public result/detail pages.",
+        "source_url": "https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx",
+        "verified_registry_ein": null
+      }
+    },
+    {
+      "ein": "541517707",
+      "organization_name": "America's Charities",
+      "alternate_names": [
+        "AMERICA'S CHARITIES",
+        "NATIONAL UNITED SERVICE AGENCIES",
+        "NATIONAL SERVICE AGENCIES"
+      ],
+      "result": {
+        "status": "Upcoming Filing",
+        "success": true,
+        "matched_registry_name": "America's Charities",
+        "matched_registry_identifier": "",
+        "raw_status_text": "Current - Registered | Expiration Date: 11/15/2026",
+        "source_note": "Mississippi uses Filing Status and Expiration Date from the matched record; the master checker uses bounded waits around the public result/detail pages.",
+        "source_url": "https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx",
+        "verified_registry_ein": null
+      }
+    },
+    {
+      "ein": "582366765",
+      "organization_name": "Better World Fund, Inc.",
+      "alternate_names": [
+        "BETTER WORLD FUND, INC.",
+        "UNA-USA, LLC",
+        "BWF",
+        "Better World Campaign",
+        "United Nations Association of the United States of America"
+      ],
+      "result": {
+        "status": "Upcoming Filing",
+        "success": true,
+        "matched_registry_name": "Better World Fund, Inc.",
+        "matched_registry_identifier": "",
+        "raw_status_text": "Current - Registered | Expiration Date: 11/15/2026",
+        "source_note": "Mississippi uses Filing Status and Expiration Date from the matched record; the master checker uses bounded waits around the public result/detail pages.",
+        "source_url": "https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx",
+        "verified_registry_ein": null
+      }
+    },
+    {
+      "ein": "812453820",
+      "organization_name": "Passages America Israel, Inc.",
+      "alternate_names": [
+        "PASSAGES AMERICA ISRAEL, INC.",
+        "PASSAGES AMERICA ISRAEL,INC."
+      ],
+      "result": {
+        "status": "Not Registered",
+        "success": true,
+        "matched_registry_name": "",
+        "matched_registry_identifier": "",
+        "raw_status_text": "No matching organization row",
+        "source_note": "Mississippi results table did not contain a matching organization row.",
+        "source_url": "https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx",
+        "verified_registry_ein": null
+      }
+    },
+    {
+      "ein": "813214432",
+      "organization_name": "Opportunity@Work, Inc.",
+      "alternate_names": [
+        "OPPORTUNITY@WORK, INC.",
+        "OPPORTUNITY AT WORK INC"
+      ],
+      "result": {
+        "status": "Not Registered",
+        "success": true,
+        "matched_registry_name": "",
+        "matched_registry_identifier": "",
+        "raw_status_text": "No matching organization row",
+        "source_note": "Mississippi results table did not contain a matching organization row.",
+        "source_url": "https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx",
+        "verified_registry_ein": null
+      }
+    },
+    {
+      "ein": "841267604",
+      "organization_name": "Junior Achievement USA",
+      "alternate_names": [
+        "Junior Achievement Usa"
+      ],
+      "result": {
+        "status": "Not Registered",
+        "success": true,
+        "matched_registry_name": "",
+        "matched_registry_identifier": "",
+        "raw_status_text": "No matching organization row",
+        "source_note": "Mississippi results table did not contain a matching organization row.",
+        "source_url": "https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx",
+        "verified_registry_ein": null
+      }
+    },
+    {
+      "ein": "860481941",
+      "organization_name": "Make-A-Wish Foundation of America",
+      "alternate_names": [
+        "MAKE-A-WISH FOUNDATION OF AMERICA",
+        "Make-A-Wish",
+        "Make-A-Wish America",
+        "MAKE- A- WISH FOUNDATION OF AMERICA",
+        "MAWF",
+        "MAKE-A-WISH FOUNDATION"
+      ],
+      "result": {
+        "status": "Upcoming Filing",
+        "success": true,
+        "matched_registry_name": "Make-A-Wish Foundation of America",
+        "matched_registry_identifier": "",
+        "raw_status_text": "Current - Registered | Expiration Date: 01/15/2027",
+        "source_note": "Mississippi uses Filing Status and Expiration Date from the matched record; the master checker uses bounded waits around the public result/detail pages.",
+        "source_url": "https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx",
+        "verified_registry_ein": null
+      }
+    },
+    {
+      "ein": "930749558",
+      "organization_name": "American Tinnitus Association",
+      "alternate_names": [
+        "THE AMERICAN TINNITUS ASSOCIATION",
+        "AMERICAN TINNITUS ASSOCIATION",
+        "AMERICAN TINNITUS ASSN",
+        "American Tinnitus Association, The"
+      ],
+      "result": {
+        "status": "Upcoming Filing",
+        "success": true,
+        "matched_registry_name": "American Tinnitus Association",
+        "matched_registry_identifier": "",
+        "raw_status_text": "Current - Registered | Expiration Date: 11/15/2026",
+        "source_note": "Mississippi uses Filing Status and Expiration Date from the matched record; the master checker uses bounded waits around the public result/detail pages.",
+        "source_url": "https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx",
+        "verified_registry_ein": null
+      }
+    },
+    {
+      "ein": "952548452",
+      "organization_name": "Autism Research Institute",
+      "alternate_names": [
+        "AUTISM RESEARCH INSTITUTE",
+        "Institute for Child Behavior Research"
+      ],
+      "result": {
+        "status": "Not Registered",
+        "success": true,
+        "matched_registry_name": "",
+        "matched_registry_identifier": "",
+        "raw_status_text": "No matching organization row",
+        "source_note": "Mississippi results table did not contain a matching organization row.",
+        "source_url": "https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx",
+        "verified_registry_ein": null
+      }
+    }
+  ]
+}
