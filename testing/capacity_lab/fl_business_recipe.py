@@ -25,7 +25,7 @@ def expected_fl_business_function(old):
     new=new.replace('    generated_variants = [\n',helpers+'    generated_variants = [\n',1)
     prefix='''    if (fl_business_lookup_enabled() and search_variants and not getattr(org, "evidence_mode", False)
             and not CAPTURE_EVIDENCE_SCREENSHOTS and not CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT):
-        rows = fl_business_public_rows(search_variants[0], deadline)
+        rows = fl_business_public_rows(canonical_name_punctuation(original_name), deadline)
         exact = [row for row in rows if normalized_match_name(row["business_evidence"]["name"])
                  in {normalized_match_name(name) for name in safe_targets}]
         # Extra/inactive names cannot displace the requested legal entity.

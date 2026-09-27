@@ -35,6 +35,21 @@ class BusinessLookup(unittest.TestCase):
         self.assertEqual(r.source_url,URL);self.assertIn('FDACS Business Lookup',r.source_note)
         self.assertEqual(r._cc_registration_date_evidence['initial'],'01/01/20');self.page.goto.assert_not_called()
 
+    def test_first_public_query_preserves_entered_plural_when_no_distinct_alias(self):
+        # Discovery removes an alias identical to the entered name. A generated
+        # singular spelling must not displace that complete identity on the one
+        # alternate-source attempt; the legacy variant plan remains unchanged.
+        self.org.organization_name='Hope for Communities, Inc.'
+        rows=m.fl_business_candidate_rows(source(card(name=self.org.organization_name)))
+        with patch.object(m,'known_names_for_ein',return_value=[]), \
+                patch.object(m,'reviewed_queries_first',return_value=['Hope for Community']), \
+                patch.object(m,'fl_business_public_rows',return_value=rows) as read:
+            result=m.search_fl_with_transport(self.page,self.org,self.transport)
+        self.assertEqual(read.call_args.args[0],self.org.organization_name)
+        self.assertTrue(result.success)
+        self.assertEqual(result.matched_registry_identifier,'CH12345')
+        self.page.goto.assert_not_called()
+
     def test_adverse_status_overrides_future_expiration(self):
         for status in ['Suspended','Revoked']:
             with self.subTest(status=status):self.assertEqual(self.run_source(source(card(status=status))).status,status)
