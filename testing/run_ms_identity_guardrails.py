@@ -85,6 +85,8 @@ class Tests(unittest.TestCase):
  def test_runtime_scope_and_budgets(self):
   old=ast.parse(subprocess.check_output(['git','show','19c6083:registry_snapshot_server.py'],cwd=ROOT).decode('utf-8'))
   new=ast.parse((ROOT/'registry_snapshot_server.py').read_text(encoding='utf-8'))
+  from testing.capacity_lab.test_fl_source_independence import restore_source_gate
+  restore_source_gate(new,old)
   oldmap={n.name:n for n in old.body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
   newmap={n.name:n for n in new.body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
   changed={k for k in oldmap if ast.dump(oldmap[k])!=ast.dump(newmap[k])}

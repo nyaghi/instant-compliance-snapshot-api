@@ -157,7 +157,9 @@ class Transport(unittest.TestCase):
               ('x','https://instant-compliance-snapshot-api-hn4v.onrender.com','1',False),
               ('x-performance-lab','https://staging.compliance-express.com','1',False),
               ('x-performance-lab','https://instant-compliance-snapshot-api-hn4v.onrender.com','0',False)]:
-            with patch.object(m,'APP_VERSION',version),patch.dict(os.environ,{'PUBLIC_BASE_URL':origin,'CE_LAB_FL_TRANSPORT':'verified-first','CE_LAB_FL_BUSINESS_LOOKUP':on}):
-                self.assertIs(m.fl_business_lookup_enabled(),want)
+            for transport in ['', 'verified-first']:
+                with self.subTest(version=version,origin=origin,on=on,transport=transport),patch.object(m,'APP_VERSION',version),patch.dict(os.environ,{'PUBLIC_BASE_URL':origin,'CE_LAB_FL_TRANSPORT':transport,'CE_LAB_FL_BUSINESS_LOOKUP':on}):
+                    self.assertIs(m.fl_business_lookup_enabled(),want)
+                    if not transport:self.assertFalse(m.fl_verified_transport_first())
 
 if __name__=='__main__':unittest.main()

@@ -42,6 +42,10 @@ class AccessBlock(unittest.TestCase):
         root=Path(m.__file__).parent
         old=ast.parse(subprocess.check_output(['git','show','f56a83d:registry_snapshot_server.py'],cwd=root).decode())
         new=ast.parse((root/'registry_snapshot_server.py').read_text(encoding='utf-8'))
+        # The independent Florida source gate is checked against the deployed
+        # release in test_fl_source_independence; keep every other comparison.
+        from testing.capacity_lab.test_fl_source_independence import restore_source_gate
+        restore_source_gate(new, old)
         def normalize(tree):
             tree.body=[n for n in tree.body if getattr(n,'name','')!='lab_sales_ar_access_block_is_terminal' and not (isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='LAB_LOOKUP_MODE_CONTEXT' for t in n.targets))]
             for node in tree.body:

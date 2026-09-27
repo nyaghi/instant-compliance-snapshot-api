@@ -12115,7 +12115,10 @@ def fl_completed_search_form_available(page):
 
 def fl_business_lookup_enabled() -> bool:
     """Isolated lab opt-in to the state's alternate public charity-license page."""
-    return (fl_verified_transport_first()
+    # Source selection is independent of the browser's transport experiment.
+    # Restoring normal Chromium must not disable the complete license lookup.
+    return (APP_VERSION.endswith("-performance-lab")
+            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
             and os.environ.get("CE_LAB_FL_BUSINESS_LOOKUP") == "1")
 
 
