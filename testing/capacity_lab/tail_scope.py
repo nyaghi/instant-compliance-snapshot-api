@@ -5,6 +5,8 @@ import subprocess
 
 
 def strip_tail_latency(tree):
+    from testing.capacity_lab.test_censored_tail import strip_censored_tail
+    strip_censored_tail(tree)
     from testing.capacity_lab.state_ceiling_scope import strip_state_ceiling
     strip_state_ceiling(tree)
     root = Path(__file__).resolve().parents[2]

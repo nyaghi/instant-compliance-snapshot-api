@@ -46,6 +46,9 @@ CREATE INDEX IF NOT EXISTS cc_lab_held_jobs ON cc_lab_jobs(owner,lease_until)
 ALTER TABLE cc_lab_jobs ADD COLUMN IF NOT EXISTS released_resources jsonb NOT NULL DEFAULT '[]';
 CREATE INDEX IF NOT EXISTS cc_lab_jobs_recent_duration ON cc_lab_jobs(state,finished DESC)
  WHERE phase='done' AND error IS NULL AND attempt=1 AND claimed IS NOT NULL;
+CREATE INDEX IF NOT EXISTS cc_lab_jobs_recent_tail ON cc_lab_jobs(state,finished DESC)
+ WHERE phase='done' AND (error IS NULL OR error IN ('WORKFLOW_DEADLINE','TASK_TIME_LIMIT'))
+ AND attempt=1 AND claimed IS NOT NULL;
 CREATE TABLE IF NOT EXISTS cc_lab_events (
  sequence bigserial PRIMARY KEY, workflow_id text, job_id text,
  event text NOT NULL, at double precision NOT NULL, detail jsonb NOT NULL

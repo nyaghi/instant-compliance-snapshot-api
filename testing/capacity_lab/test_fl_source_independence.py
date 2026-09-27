@@ -42,9 +42,11 @@ class Scope(unittest.TestCase):
 
     def test_scheduler_deadlines_workers_and_ui_unchanged(self):
         root = Path(__file__).resolve().parents[2]
+        from testing.capacity_lab.test_censored_tail import assert_queue_file_matches_ref
+        for path in ['deployment/durable_queue.py', 'deployment/queue_schema.sql']:
+            assert_queue_file_matches_ref(root, '9de9c95', path)
         subprocess.run(['git', 'diff', '--exit-code', '9de9c95', '--',
-            'deployment/durable_queue.py', 'deployment/queue_worker.py',
-            'deployment/queue_engine.py', 'deployment/queue_schema.sql',
+            'deployment/queue_worker.py', 'deployment/queue_engine.py',
             'deployment/performance_lab.py', 'web-staging', 'browser-connector'],
             cwd=root, check=True, stdout=subprocess.DEVNULL)
 

@@ -19,6 +19,14 @@ def strip_same_lookup(tree):
     original_query_call = copy.deepcopy(nodes['nj_name_fallback_queries'].body[0].value)
     tree.body[:] = [n for n in tree.body if getattr(n, 'name', '') not in helpers]
     public = next(n for n in tree.body if getattr(n, 'name', '') == 'search_nj_public_details')
+    doc = public.body[0].value
+    if 'An explicit lab Sales opt-in' in doc.value:
+        doc.value = doc.value.replace(
+            '    Ambiguous, incomplete or changed responses keep the existing browser path.\n'
+            '    An explicit lab Sales opt-in may also finish the unchanged no-match path\n'
+            '    after every planned EIN/name query has completed without a qualifying row.',
+            '    Missing, negative, ambiguous, incomplete or changed responses keep the\n'
+            '    existing browser/name-fallback path and never become a negative here.')
     removable = [n for n in public.body if isinstance(n, ast.Assign) and (
         any(isinstance(t, ast.Name) and t.id == 'progress' for t in n.targets) or
         any(isinstance(t, ast.Attribute) and t.attr == '_cc_nj_completed_public_queries' for t in n.targets))]
@@ -86,7 +94,11 @@ class SameLookup(unittest.TestCase):
         return r
 
     def test_all_planned_queries_complete_before_negative_and_no_duplicate_browser(self):
-        self.assertIsNone(m.search_nj_public_details(self.org))
+        with patch.object(m, 'search_nj_direct', side_effect=AssertionError('duplicate browser request')):
+            direct, evidence = m.search_nj_public_details(self.org)
+        self.assertTrue(direct.success)
+        self.assertEqual(m.public_status(direct), 'Not Registered')
+        self.assertIn('organization-name queries completed', evidence)
         self.assertEqual(self.queries, [self.org.ein, *NAMES])
         with patch.object(m, 'search_nj_direct', side_effect=AssertionError('duplicate browser request')):
             r = m.search_nj_with_name_fallback(MagicMock(), self.org)

@@ -19622,8 +19622,9 @@ def search_nj_public_details(org):
 
     Uses the anonymous portal's observed query protocol with its fresh session
     and request-verification token. No organization results or tokens are shared.
-    Missing, negative, ambiguous, incomplete or changed responses keep the
-    existing browser/name-fallback path and never become a negative here.
+    Ambiguous, incomplete or changed responses keep the existing browser path.
+    An explicit lab Sales opt-in may also finish the unchanged no-match path
+    after every planned EIN/name query has completed without a qualifying row.
     """
     if (not nj_public_query_enabled() or curl_requests is None
             or getattr(org, "evidence_mode", False) or CAPTURE_EVIDENCE_SCREENSHOTS
@@ -19711,15 +19712,20 @@ def search_nj_public_details(org):
             data = json.loads(fetch(query_path, "json", payload, tokens[0]))
             if progress is not None and nj_complete_public_zero(data):
                 progress.queries.add(ein)
-                for query in nj_name_fallback_queries(org):
+                planned_queries = nj_name_fallback_queries(org)
+                for query in planned_queries:
                     if query in progress.queries:
                         continue
                     named = json.loads(fetch(query_path, "json", {**payload, "search": query}, tokens[0]))
                     if not (nj_complete_public_zero(named) or nj_complete_other_ein_rows(named, ein)):
                         break  # Positive/ambiguous/unusable queries keep browser matching.
                     progress.queries.add(query)
-                # Do not classify here. The original fallback exhausts its full
-                # plan, reusing only exact completed queries from this lookup.
+                # The unchanged fallback can finish without opening a browser
+                # only when this lookup has already completed its entire plan.
+                if {ein, *planned_queries}.issubset(nj_same_lookup_zero_queries(org)):
+                    result = search_nj_with_name_fallback(None, org)
+                    return result, " ".join([result.raw_status_text, result.source_note])
+                # Any unresolved query still requires the original browser path.
                 return None
             records = data.get("Records")
             if (type(data.get("ItemCount")) is not int or data["ItemCount"] != 1

@@ -139,6 +139,25 @@ def order_pending(workflow, jobs, estimates, tail_scores, now):
     jobs.sort(key=key)
 
 
+def apply_censored_tail_floor(c, now, states, estimates):
+    """A deadline-truncated search is a lower bound on source service time.
+
+    Preserve completed medians and all admission rules. Only concurrent Sales
+    urgency uses this floor; failed results themselves are never reused.
+    """
+    rows = c.execute(
+        "SELECT wanted.state, percentile_cont(0.95) WITHIN GROUP (ORDER BY recent.seconds) AS tail_seconds "
+        "FROM unnest(%s::text[]) AS wanted(state) CROSS JOIN LATERAL "
+        "(SELECT finished-claimed AS seconds FROM cc_lab_jobs WHERE state=wanted.state "
+        "AND phase='done' AND (error IS NULL OR error IN ('WORKFLOW_DEADLINE','TASK_TIME_LIMIT')) "
+        "AND attempt=1 AND finished>=%s AND claimed IS NOT NULL "
+        "AND finished>claimed AND finished-claimed<=300 "
+        "ORDER BY finished DESC LIMIT 20) recent GROUP BY wanted.state", (sorted(states), now-86400))
+    for row in rows:
+        state = row['state']
+        estimates.tails[state] = max(estimates.tails.get(state, estimates.get(state, 10.0)), row['tail_seconds'])
+
+
 class Queue:
     def __init__(self, dsn, max_connections=6, test_schema=None, ny_enabled=False, sales_policy=None):
         self.sales_policy = sales_policy or os.environ.get('CE_LAB_SALES_QUEUE_POLICY', 'shortest')
@@ -393,6 +412,9 @@ class Queue:
         if cache and cache[0] == version and 0 <= now-cache[1] < 5 and states <= cache[2]:
             return cache[3]
         values = self.duration_estimates(c, now, states)
+        if (getattr(self, 'sales_policy', '') == 'tail-aware'
+                and os.environ.get('CE_LAB_SALES_TAIL_CENSORING') == '1'):
+            apply_censored_tail_floor(c, now, states, values)
         self._duration_cache = (version, now, frozenset(states), values)
         return values
 

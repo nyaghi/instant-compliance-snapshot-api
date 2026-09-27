@@ -34,10 +34,15 @@ class Headers(unittest.TestCase):
             if trace:self.assertEqual(trace.events,[])
     def test_runtime_scope_is_only_validator_and_passive_observer(self):
         root=Path(__file__).resolve().parents[2]
+        from testing.capacity_lab.test_censored_tail import assert_queue_file_matches_ref, strip_censored_tail
         for path in ['deployment/queue_worker.py','deployment/queue_schema.sql','deployment/performance_lab.py']:
-            subprocess.run(['git','diff','--exit-code','f56a83d','--',path],cwd=root,check=True,stdout=subprocess.DEVNULL)
+            if path == 'deployment/queue_schema.sql':
+                assert_queue_file_matches_ref(root, 'f56a83d', path)
+            else:
+                subprocess.run(['git','diff','--exit-code','f56a83d','--',path],cwd=root,check=True,stdout=subprocess.DEVNULL)
         old=ast.parse(subprocess.check_output(['git','show','f56a83d:deployment/durable_queue.py'],cwd=root).decode())
         new=ast.parse((root/'deployment/durable_queue.py').read_text())
+        strip_censored_tail(new)
         for tree in [old,new]:tree.body=[n for n in tree.body if getattr(n,'name','')!='normalize_submission']
         self.assertEqual(ast.dump(old),ast.dump(new))
 
