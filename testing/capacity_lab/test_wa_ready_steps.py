@@ -61,8 +61,12 @@ class ReadySteps(unittest.TestCase):
                         submit.assert_not_called(); read.assert_not_called(); self.assertFalse(result.success)
                         continue
                     submit.assert_called_once_with(page, '123456789')
-                    completed.assert_called_once_with(page, 'Example Relief', timeout_seconds=22, require_search_response=True)
+                    options = {'timeout_seconds':22, 'require_search_response':True}
+                    if fast:
+                        options['require_complete_before_link'] = True
+                    completed.assert_called_once_with(page, 'Example Relief', **options)
                     if case in ['current', 'name_fallback']:
+                        link.click.assert_called_once_with(timeout=5000, **({} if fast else {'force':True}))
                         self.assertEqual(result.status, 'Current')
                         self.assertEqual(result.verified_registry_ein, '123456789')
                     elif case == 'no_record':
@@ -85,6 +89,8 @@ class ReadySteps(unittest.TestCase):
             if name.startswith('registry'):
                 strip_ready_steps(new)
             else:
+                from testing.capacity_lab.test_wa_actionable import strip_actionable
+                strip_actionable(new)
                 fn = next(n for n in new.body if getattr(n, 'name', '') == 'search_wa')
                 self.assertEqual([a.arg for a in fn.args.kwonlyargs], ['readiness_waits_only'])
                 fn.args.kwonlyargs = []; fn.args.kw_defaults = []

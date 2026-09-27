@@ -573,10 +573,37 @@ def find_result_link(page, org_name: str):
     return candidates[0][4]
 
 
-def wait_for_result_link_or_no_value(page, org_name: str, timeout_seconds: int = 45, require_search_response: bool = False):
+def wa_completed_search_rendered(page) -> bool:
+    """A completed request and its rendered rows replace general network idle."""
+    tracker = wa_search_tracker_state(page)
+    if not tracker.get("completed") or tracker.get("pending"):
+        return False
+    if tracker.get("failed") or not 200 <= int(tracker.get("lastStatus") or 0) < 300:
+        raise RuntimeError("Washington search response failed before its rows were ready.")
+    text = tracker.get("lastText") or ""
+    if wa_search_response_is_empty(text):
+        # The existing zero-results branch still requires an explicit page message.
+        return True
+    try:
+        rows = json.loads(text)
+        if not isinstance(rows, list) or not rows:
+            return False
+        names = [normalize_name(row.get("EntityName") or "") for row in rows if isinstance(row, dict)]
+        if len(names) != len(rows) or not all(names):
+            return False
+        rendered = normalize_name(" ".join(page.locator("table").all_inner_texts()))
+        return all(name in rendered for name in names)
+    except (ValueError, TypeError):
+        return False
+
+
+def wait_for_result_link_or_no_value(page, org_name: str, timeout_seconds: int = 45, require_search_response: bool = False, *, require_complete_before_link: bool = False):
     deadline = time.time() + timeout_seconds
     no_value_seen = False
     while time.time() < deadline:
+        if require_complete_before_link and not wa_completed_search_rendered(page):
+            time.sleep(0.2)
+            continue
         scroll_to_results(page)
         link = find_result_link(page, org_name)
         if link:
@@ -643,7 +670,11 @@ def search_wa(org: Organization, show_process: bool = False, *, readiness_waits_
                 safe_wait_for_network_idle(page, timeout=8000)
                 time.sleep(1)
 
-            found = wait_for_result_link_or_no_value(page, org.organization_name, timeout_seconds=22, require_search_response=True)
+            if readiness_waits_only:
+                found = wait_for_result_link_or_no_value(page, org.organization_name, timeout_seconds=22,
+                    require_search_response=True, require_complete_before_link=True)
+            else:
+                found = wait_for_result_link_or_no_value(page, org.organization_name, timeout_seconds=22, require_search_response=True)
             if found == "NO_VALUE":
                 found = wa_name_fallback_result_link(page, org)
                 if not found:
@@ -677,7 +708,12 @@ def search_wa(org: Organization, show_process: bool = False, *, readiness_waits_
                     time.sleep(1)
             except Exception:
                 pass
-            found.click(timeout=5000, force=True)
+            if readiness_waits_only:
+                # A forced click can hit the loading overlay even after rows
+                # render. Normal actionability waits for the row to receive it.
+                found.click(timeout=5000)
+            else:
+                found.click(timeout=5000, force=True)
 
             if not readiness_waits_only:
                 safe_wait_for_network_idle(page, timeout=10000)
