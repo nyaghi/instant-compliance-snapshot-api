@@ -12122,6 +12122,18 @@ def fl_business_lookup_enabled() -> bool:
             and os.environ.get("CE_LAB_FL_BUSINESS_LOOKUP") == "1")
 
 
+def lab_fl_form_context_options(state, org) -> dict:
+    """Use native HTML form submission for the lab Sales FL browser fallback."""
+    if (state == "FL" and APP_VERSION.endswith("-performance-lab")
+            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and os.environ.get("CE_LAB_FL_SCRIPTLESS") == "1"
+            and LAB_LOOKUP_MODE_CONTEXT.get() == "sales"
+            and not getattr(org, "evidence_mode", False)
+            and not CAPTURE_EVIDENCE_SCREENSHOTS and not CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT):
+        return {"java_script_enabled": False}
+    return {}
+
+
 def fl_business_candidate_rows(source: str) -> list:
     """Read complete, unfiltered business-license cards; never infer a negative."""
     if not re.search(r"</html>\s*$", source or "", re.I):
@@ -27821,6 +27833,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     })
                 if state == "LA":
                     context_kwargs["accept_downloads"] = True
+                context_kwargs.update(lab_fl_form_context_options(state, org))
                 context = browser.new_context(**context_kwargs)
                 if state == "AR":
                     context.add_init_script(

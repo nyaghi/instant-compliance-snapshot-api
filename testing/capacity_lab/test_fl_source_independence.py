@@ -6,6 +6,8 @@ import unittest
 
 
 def restore_source_gate(tree, reference):
+    from testing.capacity_lab.test_fl_native_forms import strip_native_forms
+    strip_native_forms(tree)
     old = next(n for n in reference.body if getattr(n, 'name', '') == 'fl_business_lookup_enabled')
     new = next(n for n in tree.body if getattr(n, 'name', '') == old.name)
     expected = ast.parse('''def fl_business_lookup_enabled() -> bool:
@@ -24,6 +26,8 @@ class Scope(unittest.TestCase):
         before = ast.parse(subprocess.check_output(
             ['git', 'show', '9de9c95:registry_snapshot_server.py'], cwd=root).decode('utf-8'))
         after = ast.parse((root/'registry_snapshot_server.py').read_text(encoding='utf-8'))
+        from testing.capacity_lab.test_fl_native_forms import strip_native_forms
+        strip_native_forms(after)
         old = next(n for n in before.body if getattr(n, 'name', '') == 'fl_business_lookup_enabled')
         new = next(n for n in after.body if getattr(n, 'name', '') == old.name)
         expected = ast.parse('''def fl_business_lookup_enabled() -> bool:
