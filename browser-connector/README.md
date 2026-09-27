@@ -1,6 +1,6 @@
-# CharityClarity registry connector — 0.5.9 candidate
+# CharityClarity registry connector — 0.5.10 candidate
 
-Version 0.5.9 observes Illinois form, results and detail changes directly, preserving in-time evidence when background timers wake late. Stale grids, late responses and incomplete identity still fail conservatively. It distinguishes disabled from missing Search controls and records bounded phase/queue diagnostics without secrets. Matching, status rules, queue order and existing NY/GA recovery limits are unchanged.
+Version 0.5.10 recognizes Illinois's hidden Search control while its verification widget is present. After a bounded initial wait, it retains the same document and activates only its owned Illinois tab for one normal verification attempt, then restores the previous tab unless the user switched elsewhere. It never reveals hidden controls, reads verification values, solves challenges, or treats unfinished verification as a completed negative search. Event-based readiness from 0.5.9 is preserved. Matching, status rules, queue order and NY/GA recovery are unchanged. Live Chrome acceptance is still required before promotion.
 
 Version 0.5.7 selects Illinois's public 100-row page option for larger
 result sets, with complete-count and first-page checks. It also reuses Illinois's ordinary public search form during one
@@ -21,7 +21,7 @@ This candidate adds Illinois and Georgia on staging only. New York retains its e
 
 1. Open Chrome's Extensions page yourself (`chrome://extensions`).
 2. If updating an existing unpacked connector, use this candidate folder as its source, or disable the old connector and choose **Load unpacked** with this folder. Keep only one CharityClarity connector enabled.
-3. Verify version **0.5.9**. Refresh the staging tab.
+3. Verify version **0.5.10**. Refresh the staging tab.
 4. Keep Chrome open. Illinois and Georgia require the corresponding staging frontend/backend candidate before end-to-end checks can run.
 
 The additional host permissions are limited to the official Illinois and Georgia public registries. Production web/backend deployments are not part of this package.

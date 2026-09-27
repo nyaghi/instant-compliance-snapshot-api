@@ -32,7 +32,12 @@ function registryFixture(h) {
   let serial=0;const docs=new Map();
   const create=h.chrome.tabs.create,update=h.chrome.tabs.update;
   h.chrome.tabs.create=async options=>{const t=await create(options);docs.set(t.id,++serial);return t;};
-  h.chrome.tabs.update=async (id,options)=>{docs.set(id,++serial);return update(id,options);};
+  h.chrome.tabs.query=async options=>[...h.tabs.values()].filter(t=>t.windowId===options.windowId && (!options.active||t.active));
+  h.chrome.tabs.update=async (id,options)=>{
+    if(options.url)docs.set(id,++serial);
+    if(options.active)for(const t of h.tabs.values())if(t.windowId===h.tabs.get(id).windowId)t.active=false;
+    return update(id,options);
+  };
   h.chrome.tabs.reload=async id=>{docs.set(id,++serial);};
   h.chrome.tabs.sendMessage=async(tab,m)=>{
     const t=h.tabs.get(tab);
@@ -49,6 +54,74 @@ test('IL exact EIN query returns complete evidence through the existing queue',a
   assert.equal(result.ok,true);assert.equal(result.evidence.complete,true);
   assert.match(h.tabs.get(h.created[0]).url,/illinoisattorneygeneral/);
   p.onMessage.emit({action:'finish',id:id(21)});await tick();assert.deepEqual(h.removed,h.created);assert.ok(h.tabs.has(2));
+});
+
+test('Illinois verification recovery activates the same owned document and restores focus',async()=>{
+  const h=harness();registryFixture(h);h.tabs.get(1).active=true;const p=connect(h,'IL');
+  const original=h.chrome.tabs.sendMessage;let attempts=0,reloads=0;
+  h.chrome.tabs.reload=async()=>{reloads++;};
+  h.chrome.tabs.sendMessage=async(tab,m)=>{
+    if(m.action==='registry-il'){
+      attempts++;
+      if(attempts===1){assert.equal(m.formWaitMs,12000);return {ok:false,reason:'NY_CONNECTOR_IL_VERIFICATION_PENDING'};}
+      assert.equal(m.formWaitMs,45000);assert.equal(h.tabs.get(tab).active,true);
+    }
+    return original(tab,m);
+  };
+  const r=await h.query(p,20,{state:'IL',ein:'123456789'});
+  assert.equal(r.ok,true);assert.equal(attempts,2);assert.equal(reloads,0);
+  assert.equal(h.created.length,1);assert.equal(h.tabs.get(1).active,true);assert.equal(h.tabs.get(2).active,undefined);
+});
+
+test('persistent verification stays inconclusive without a reload loop or fabricated evidence',async()=>{
+  const h=harness();registryFixture(h);const p=connect(h,'IL');let attempts=0,reloads=0;const original=h.chrome.tabs.sendMessage;
+  h.chrome.tabs.reload=async()=>{reloads++;};
+  h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='registry-il'?(attempts++,{ok:false,reason:'NY_CONNECTOR_IL_VERIFICATION_PENDING'}):original(tab,m);
+  const r=await h.query(p,20,{state:'IL',ein:'123456789'});
+  assert.equal(r.ok,false);assert.equal(r.reason,'NY_CONNECTOR_IL_VERIFICATION_PENDING');
+  assert.equal(r.evidence,undefined);assert.equal(attempts,2);assert.equal(reloads,0);
+});
+
+test('Illinois visibility recovery respects a subsequent user tab change',async()=>{
+  const h=harness();registryFixture(h);h.tabs.get(1).active=true;
+  h.tabs.set(3,{id:3,windowId:10,url:'https://example.org/',active:false});const p=connect(h,'IL');
+  const original=h.chrome.tabs.sendMessage;let attempts=0;
+  h.chrome.tabs.sendMessage=async(tab,m)=>{
+    if(m.action==='registry-il' && ++attempts===1)return {ok:false,reason:'NY_CONNECTOR_IL_VERIFICATION_PENDING'};
+    if(m.action==='registry-il')await h.chrome.tabs.update(3,{active:true});
+    return original(tab,m);
+  };
+  assert.equal((await h.query(p,20,{state:'IL',ein:'123456789'})).ok,true);
+  assert.equal(h.tabs.get(3).active,true);assert.equal(h.tabs.get(1).active,false);
+});
+
+test('Illinois verification recovery never extends the active lookup budget',async()=>{
+  const h=harness();registryFixture(h);const p=connect(h,'IL');let attempts=0,activations=0;const original=h.chrome.tabs.sendMessage;
+  const update=h.chrome.tabs.update;h.chrome.tabs.update=async(id,options)=>{if(options.active)activations++;return update(id,options);};
+  h.chrome.tabs.sendMessage=async(tab,m)=>{
+    if(m.action==='registry-il'){
+      attempts++;vm.runInContext('active.activeExpiresAt=Date.now()+40000',h.context);
+      return {ok:false,reason:'NY_CONNECTOR_IL_VERIFICATION_PENDING'};
+    }
+    return original(tab,m);
+  };
+  const r=await h.query(p,20,{state:'IL',ein:'123456789'});
+  assert.equal(r.reason,'NY_CONNECTOR_IL_VERIFICATION_PENDING');assert.equal(attempts,1);
+  assert.equal(activations,0);
+});
+
+test('Illinois verification recovery cannot activate a tab navigated off the registry',async()=>{
+  const h=harness();registryFixture(h);const p=connect(h,'IL');let attempts=0;const original=h.chrome.tabs.sendMessage;
+  h.chrome.tabs.sendMessage=async(tab,m)=>{
+    if(m.action==='registry-il'){
+      attempts++;h.tabs.get(tab).url='https://example.org/';
+      return {ok:false,reason:'NY_CONNECTOR_IL_VERIFICATION_PENDING'};
+    }
+    return original(tab,m);
+  };
+  const r=await h.query(p,20,{state:'IL',ein:'123456789'});
+  assert.equal(r.ok,false);assert.equal(r.reason,'NY_CONNECTOR_INCOMPLETE');assert.equal(attempts,1);
+  assert.equal(h.tabs.get(h.created[0]).active,false);
 });
 test('Illinois reuses the verified public form between name and EIN fallbacks',async()=>{
   const h=harness();registryFixture(h);const p=connect(h,'IL');

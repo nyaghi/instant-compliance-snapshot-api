@@ -2,8 +2,8 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const vm=require('node:vm'),fs=require('node:fs'),path=require('node:path');
 const source=fs.readFileSync(path.join(__dirname,'../browser-connector/registry-content.js'),'utf8');
-async function run({total=0,activity=true,truncated=false,ready=true,disabled=false,readyAt=null,largePages=false,resizeTotalChange=false,timerClamp=0,responseDelay=100,lateMutation=false,unrelatedMutation=false,detail=null,detailDelay=100}={}) {
- let clock=1000,listener,loading=false,page=0,size=10,menu=false,nextClicks=0,formReady=ready&&readyAt===null,serial=0,dialog=null,result,done=false;
+async function run({total=0,activity=true,truncated=false,ready=true,disabled=false,readyAt=null,largePages=false,resizeTotalChange=false,timerClamp=0,responseDelay=100,lateMutation=false,unrelatedMutation=false,detail=null,detailDelay=100,verification=false,formWaitMs=45000}={}) {
+ let clock=1000,listener,loading=false,page=0,size=10,menu=false,nextClicks=0,searchClicks=0,formReady=ready&&readyAt===null,serial=0,dialog=null,result,done=false;
  const tasks=new Map(),observers=new Set(),root={};
  const schedule=(fn,ms)=>{const id=++serial;tasks.set(id,{at:clock+ms,fn});return id;};
  const mutate=(type,target,addedNodes=[],removedNodes=[])=>{for(const o of [...observers])if(o.root===root||o.root===grid)o.fn([{type,target,addedNodes,removedNodes}]);};
@@ -15,7 +15,7 @@ async function run({total=0,activity=true,truncated=false,ready=true,disabled=fa
   if(lateMutation)schedule(()=>mutate('childList',renderTarget),36000);
   if(unrelatedMutation)for(let n=500;n<=40000;n+=500)schedule(()=>mutate('attributes',styleTarget),n);
  }};
- const button={innerText:'Search',getClientRects:()=>formReady?[{}]:[],disabled,click:begin};
+ const button={innerText:'Search',getClientRects:()=>formReady?[{}]:[],disabled,click:()=>{searchClicks++;begin();}};
  const fields=['Name','FileNumber','Street1','City','State','PostalCode'];
  const openDetail=()=>schedule(()=>{
   if(detail==='absent')return;
@@ -44,6 +44,7 @@ async function run({total=0,activity=true,truncated=false,ready=true,disabled=fa
    if(selector.startsWith('input['))return inputs[selector.match(/name="([^"]+)"/i)[1]];
    if(selector.startsWith('.k-grid'))return grid;
    if(selector==='#KendoWindowLevel1')return dialog;
+   if(selector==='div[id^="recaptcha_"]')return verification?{}:null;
    throw Error('Unexpected document selector '+selector);
   }
  };
@@ -55,7 +56,7 @@ async function run({total=0,activity=true,truncated=false,ready=true,disabled=fa
   chrome:{runtime:{id:'test-extension',onMessage:{addListener:fn=>listener=fn}}}
  });
  if(readyAt!==null)schedule(()=>{formReady=true;button.disabled=false;mutate('attributes',styleTarget);},readyAt);
- listener({action:'registry-il',query:detail?{state:'IL',identifier:'10000000'}:{state:'IL',orgName:'Veterans'}},{id:'test-extension'},value=>{result=value;done=true;});
+ listener({action:'registry-il',formWaitMs,query:detail?{state:'IL',identifier:'10000000'}:{state:'IL',orgName:'Veterans'}},{id:'test-extension'},value=>{result=value;done=true;});
  for(let n=0;!done&&n<3000;n++){
   for(let i=0;i<12;i++)await Promise.resolve();
   if(done)break;
@@ -63,8 +64,22 @@ async function run({total=0,activity=true,truncated=false,ready=true,disabled=fa
   assert.ok(next,'unresolved handler without an event');tasks.delete(next[0]);clock=next[1].at;next[1].fn();
  }
  assert.ok(done,'handler terminates');assert.equal(observers.size,0,'observers disconnect');
- return {...result,nextClicks,elapsed:clock-1000};
+ return {...result,nextClicks,searchClicks,elapsed:clock-1000};
 }
+
+test('hidden verification control is reported before any search or negative evidence',async()=>{
+ const r=await run({ready:false,verification:true,formWaitMs:12000});
+ assert.equal(r.reason,'NY_CONNECTOR_IL_VERIFICATION_PENDING');assert.equal(r.elapsed,12000);
+ assert.equal(r.searchClicks,0);assert.equal(r.evidence,undefined);
+});
+test('normal state verification may enable Search without a reload',async()=>{
+ const r=await run({verification:true,readyAt:8000,formWaitMs:12000});
+ assert.equal(r.ok,true);assert.equal(r.searchClicks,1);
+});
+test('visible or absent verification widget does not shorten unrelated form readiness',async()=>{
+ const r=await run({readyAt:25000,formWaitMs:12000});
+ assert.equal(r.ok,true);assert.equal(r.searchClicks,1);
+});
 test('reused empty grid completes after attribute-only loading',async()=>{const r=await run();assert.equal(r.ok,true);assert.equal(r.evidence.total,0);});
 test('initial empty grid without response never becomes a negative',async()=>{assert.equal((await run({activity:false})).reason,'NY_CONNECTOR_IL_RESPONSE_TIMEOUT');});
 test('all 151 rows beyond old ten-page limit are collected',async()=>{const r=await run({total:151});assert.equal(r.ok,true);assert.equal(r.evidence.rows.length,151);assert.equal(r.evidence.rows.at(-1).identifier,'10000150');});

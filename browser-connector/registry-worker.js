@@ -35,6 +35,32 @@ async function registryNavigate(job, url) {
   }
   return registryReady(job,previous,new URL(url).pathname);
 }
+async function registryIllinoisVerification(job, collect) {
+  // Preserve the verification document. Reloading here resets Illinois's
+  // normal challenge instead of recovering it. Only activate our owned tab;
+  // the state's own code must enable Search before collection can proceed.
+  if (job.closed || !owned.has(job.tab) || job.activeExpiresAt-Date.now() <= 45000)
+    return {ok:false,reason:"NY_CONNECTOR_IL_VERIFICATION_PENDING"};
+  const tab = await chrome.tabs.get(job.tab);
+  const origin = await chrome.tabs.get(job.sender.tab.id);
+  if (tab.url !== registryStart("IL") || tab.windowId !== origin.windowId)
+    throw new Error("NY_CONNECTOR_INCOMPLETE");
+  const previous = (await chrome.tabs.query({active:true,windowId:tab.windowId}))[0];
+  diagnostic("il-verification",job,"same-document visibility recovery");
+  try {
+    if (job.closed || !owned.has(tab.id)) throw new Error("NY_CONNECTOR_INTERRUPTED");
+    if (!tab.active) await chrome.tabs.update(tab.id,{active:true});
+    return await collect(45000);
+  } finally {
+    // Do not override a user who switched elsewhere while the check ran.
+    try {
+      const current = await chrome.tabs.get(tab.id);
+      const prior = previous && await chrome.tabs.get(previous.id);
+      if (current.active && current.url === registryStart("IL") && prior && prior.id !== tab.id && prior.windowId === current.windowId)
+        await chrome.tabs.update(prior.id,{active:true});
+    } catch { /* A user may close or move either tab during collection. */ }
+  }
+}
 async function performRegistryQuery(job, query) {
   if (!P.validQuery(query) || query.state !== job.registryState || new URL(job.sender.url).origin !== P.STAGING) throw new Error("NY_CONNECTOR_INVALID_SEQUENCE");
   if (query.state === "IL") {
@@ -45,9 +71,9 @@ async function performRegistryQuery(job, query) {
     if (job.tab === null || !job.ilReusableForm) await registryNavigate(job, registryStart("IL"));
     else await registryReady(job,null,"/search");
     job.ilReusableForm = false;
-    const collect = async () => {
+    const collect = async (formWaitMs = 45000) => {
       const started = Date.now();
-      const result = await registryMessage(job,{action:"registry-il",query});
+      const result = await registryMessage(job,{action:"registry-il",query,formWaitMs});
       for (const entry of Array.isArray(result?.diagnostics) ? result.diagnostics.slice(0,32) : []) {
         if (!["form","results","page-size","detail"].includes(entry.phase) || !["observed","ready","incomplete"].includes(entry.event)
           || !Number.isFinite(entry.elapsed_ms) || entry.elapsed_ms < 0 || entry.elapsed_ms > 300000
@@ -57,7 +83,12 @@ async function performRegistryQuery(job, query) {
       diagnostic("il-command",job,`${query.identifier ? "detail" : query.ein ? "ein" : "name"} ms=${Date.now()-started} ${result?.ok ? "complete" : /^NY_CONNECTOR_[A-Z_]+$/.test(result?.reason) ? result.reason : "incomplete"}`);
       return result;
     };
-    let result = await collect();
+    let result = await collect(12000);
+    if (result?.reason === "NY_CONNECTOR_IL_VERIFICATION_PENDING") {
+      result = await registryIllinoisVerification(job, collect);
+      job.ilReusableForm = result?.ok === true && !Object.hasOwn(query,"identifier");
+      return result;
+    }
     // One fresh-form retry for a search that never completed or an unopened
     // detail. Loaded records with absent dates are complete evidence.
     const retryable = ["NY_CONNECTOR_IL_FORM_READY_TIMEOUT", "NY_CONNECTOR_IL_FORM_DISABLED", "NY_CONNECTOR_IL_FORM_MISSING", "NY_CONNECTOR_IL_RESPONSE_TIMEOUT",
@@ -66,6 +97,8 @@ async function performRegistryQuery(job, query) {
       diagnostic("il-public-retry",job,result.reason);
       await registryNavigate(job, registryStart("IL"));
       result = await collect();
+      if (result?.reason === "NY_CONNECTOR_IL_VERIFICATION_PENDING")
+        result = await registryIllinoisVerification(job, collect);
     }
     job.ilReusableForm = result?.ok === true && !Object.hasOwn(query,"identifier");
     return result;

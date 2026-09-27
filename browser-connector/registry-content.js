@@ -98,15 +98,23 @@
     const next = [...pager.querySelectorAll("a")].find(a => text(a) === String(Number(current)+1) || text(a) === "...");
     return {rows, page:Number(current), next:!!next};
   }
-  async function illinois(query, trace = () => {}) {
+  async function illinois(query, trace = () => {}, formWaitMs = 45000) {
     const inputs = key => document.querySelector(`input[data-val-property-name="${key}"]`);
     const phase = name => (event, elapsed_ms) => trace({phase:name, event, elapsed_ms,
       visibility:document.visibilityState || "unknown"});
     const searchButton = () => [...document.querySelectorAll("button")].find(el => text(el) === "Search" && visible(el));
+    const verificationPending = () => [...document.querySelectorAll("button")].some(el => text(el) === "Search" && !visible(el))
+      && !!document.querySelector('div[id^="recaptcha_"]');
     let button;
     try {
-      button = await wait(() => { const b=searchButton(); return b && !b.disabled && b; }, 45000, {trace:phase("form")});
+      button = await wait(() => { const b=searchButton(); return b && !b.disabled && b; },
+        verificationPending() ? formWaitMs : 45000, {trace:phase("form")});
     } catch {
+      // Illinois deliberately hides all Kendo buttons until its own
+      // verification callback succeeds. Observe only public DOM presence;
+      // never read verification values or enable/click a hidden control.
+      if (verificationPending())
+        throw new Error("NY_CONNECTOR_IL_VERIFICATION_PENDING");
       const b = searchButton();
       throw new Error(!b ? "NY_CONNECTOR_IL_FORM_MISSING" : b.disabled ? "NY_CONNECTOR_IL_FORM_DISABLED" : "NY_CONNECTOR_IL_FORM_READY_TIMEOUT");
     }
@@ -206,7 +214,7 @@
     if (m.action === "registry-ready") return {ready:document.readyState !== "loading", url:location.href, documentId};
     if (m.action === "registry-il" && IL) {
       const diagnostics = [];
-      try { return {ok:true, evidence:await illinois(m.query, entry => { if (diagnostics.length < 32) diagnostics.push(entry); }), diagnostics}; }
+      try { return {ok:true, evidence:await illinois(m.query, entry => { if (diagnostics.length < 32) diagnostics.push(entry); }, m.formWaitMs === 12000 ? 12000 : 45000), diagnostics}; }
       catch (error) { error.diagnostics = diagnostics; throw error; }
     }
     if (!GA) throw new Error("REGISTRY_WRONG_ORIGIN");
@@ -267,7 +275,7 @@
     handle(m).then(reply,error=>{
       const code=error?.message||'';
       const ilReasons={REGISTRY_RESPONSE_INCOMPLETE:'NY_CONNECTOR_IL_RESPONSE_TIMEOUT',REGISTRY_RESULTS_INCOMPLETE:'NY_CONNECTOR_IL_RESULTS_INCOMPLETE',REGISTRY_TOTAL_CHANGED:'NY_CONNECTOR_IL_TOTAL_CHANGED',REGISTRY_RESULT_LIMIT:'NY_CONNECTOR_IL_RESULT_LIMIT',REGISTRY_PAGINATION_INCOMPLETE:'NY_CONNECTOR_IL_PAGINATION_INCOMPLETE'};
-      reply({ok:false,reason:/^NY_CONNECTOR_IL_(?:FORM_READY_TIMEOUT|FORM_DISABLED|FORM_MISSING|DETAIL_(?:NOT_OPENED|BLANK|IDENTITY_INCOMPLETE|RESPONSE_TIMEOUT))$/.test(code) ? code : IL && ilReasons[code] || 'NY_CONNECTOR_INCOMPLETE',
+      reply({ok:false,reason:/^NY_CONNECTOR_IL_(?:VERIFICATION_PENDING|FORM_READY_TIMEOUT|FORM_DISABLED|FORM_MISSING|DETAIL_(?:NOT_OPENED|BLANK|IDENTITY_INCOMPLETE|RESPONSE_TIMEOUT))$/.test(code) ? code : IL && ilReasons[code] || 'NY_CONNECTOR_INCOMPLETE',
         ...(IL && error.diagnostics ? {diagnostics:error.diagnostics} : {})});
     });
     return true;
