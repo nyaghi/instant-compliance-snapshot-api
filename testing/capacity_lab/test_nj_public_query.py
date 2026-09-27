@@ -1,5 +1,5 @@
 """Unique public EIN records only; all other evidence preserves browser fallback."""
-import ast,copy,json,os,subprocess,unittest
+import ast,copy,json,os,subprocess,threading,unittest
 from pathlib import Path
 from unittest.mock import MagicMock,patch
 import registry_snapshot_server as m
@@ -122,7 +122,9 @@ class PublicQuery(unittest.TestCase):
         self.assertFalse(self.calls)
 
     def test_normal_source_failure_retains_existing_browser_route(self):
-        with patch.object(m,'search_nj_public_details',return_value=None),patch.object(m.checker,'sync_playwright',side_effect=RuntimeError('existing browser route')):
+        # Startup-failure controls elsewhere deliberately stop before the
+        # browser's cleanup scope. Give this fallback control its own slot.
+        with patch.object(m,'BROWSER_LOOKUP_SEMAPHORE',threading.BoundedSemaphore(1)),patch.object(m,'search_nj_public_details',return_value=None),patch.object(m.checker,'sync_playwright',side_effect=RuntimeError('existing browser route')):
             with self.assertRaisesRegex(RuntimeError,'existing browser route'):
                 m.run_state_lookup(self.org.organization_name,self.org.ein,'NJ')
 
