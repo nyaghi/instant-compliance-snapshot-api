@@ -12017,9 +12017,10 @@ def fl_business_candidate_rows(source: str) -> list:
 
 
 def fl_business_public_rows(query: str, deadline: float) -> list:
-    """One fresh public name search, TLS verified, bounded by eight seconds."""
+    """One TLS-verified public search, bounded by the remaining lookup time."""
     url = "https://csapp.fdacs.gov/CSPublicApp/BusinessSearch/BusinessSearch.aspx"
-    deadline = min(deadline, time.monotonic() + 8.0)
+    http_seconds = 8.0 if fl_business_lookup_enabled() and os.environ.get("CE_LAB_FL_HTTP_PATIENT") == "1" else 4.0
+    deadline = min(deadline, time.monotonic() + 2 * http_seconds)
     try:
         opener = urllib.request.build_opener(
             urllib.request.HTTPSHandler(context=fl_verified_ssl_context()), FloridaNoRedirect(),
@@ -12030,7 +12031,7 @@ def fl_business_public_rows(query: str, deadline: float) -> list:
                 raise TimeoutError("Florida alternate public search deadline")
             request = urllib.request.Request(url, data=data, headers={
                 "User-Agent": BROWSER_USER_AGENT, "Accept-Encoding": "identity"})
-            with opener.open(request, timeout=min(4.0, remaining)) as response:
+            with opener.open(request, timeout=min(http_seconds, remaining)) as response:
                 if response.status != 200 or response.geturl() != url:
                     raise ValueError("Unexpected Florida alternate response")
                 chunks, size = [], 0
