@@ -134,7 +134,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.27.1-staging").strip() or "2026.09.27.1-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.27.2-staging").strip() or "2026.09.27.2-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -1953,6 +1953,10 @@ def identity_candidate(name, source, evidence_type, url, source_date="", histori
     name = re.sub(r"\s+", " ", str(name or "")).strip()
     if (not name or len(name) > 300 or not re.search(r"[A-Za-z]", name)
             or name.casefold() in {"n/a", "none", "not applicable", "unknown"}):
+        return None
+    # Ohio's optional DBA field can contain the answer "No" instead of a name.
+    # Apply this only to discovered alias fields, never legal names or user edits.
+    if evidence_type in {"DBA", "AKA / DBA", "Form 990 DBA"} and name.casefold() == "no":
         return None
     # Some state DBA fields contain only a former-name annotation, sometimes
     # prefixed by a detached entity suffix. Preserve actual names with labels.
@@ -6207,9 +6211,16 @@ def search_ri(org):
         if not isinstance(token, dict) or not token.get("access_token"): raise ValueError("Rhode Island public search session unavailable")
         headers = {"Authorization": "Bearer " + token["access_token"]}
         required, generated = licensed_charity_names(org)
+        # A literal suffix-free legal name must be tried before an alias can
+        # end fallback discovery. The registry's literal search can miss the
+        # legal record with Inc. present while returning a retired alias.
+        # Reorder only probes already in the bounded master query plan.
+        legal_forms = {value.casefold() for value in literal_name_retrieval_forms(org.organization_name)}
+        legal_probes = [value for value in generated if value.casefold() in legal_forms]
+        planned = required + legal_probes + [value for value in generated if value not in legal_probes]
         rows, seen = [], set()
-        for index, query in enumerate(required + generated):
-            if index >= len(required) and rows:
+        for index, query in enumerate(planned):
+            if index >= len(required) + len(legal_probes) and rows:
                 selected, _ = select_licensed_charity(org, rows, "RI", deadline)
                 if selected: break
             for candidate in ri_charity_search(query, deadline, headers):

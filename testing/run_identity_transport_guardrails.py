@@ -80,6 +80,16 @@ class OtherPublicTransports(unittest.TestCase):
     def test_oh_unloaded_page_is_not_completed_empty_search(self):
         with patch.object(c,'identity_fetch',return_value=b'<h1>Research Charities</h1>'):
             with self.assertRaises(ValueError):c.identity_oh_names('131624103',time.monotonic()+30)
+    def test_oh_negative_dba_answer_does_not_create_a_search_alias(self):
+        source=('<input name="EIN" value="12-3456789"><select name="EINFilterCriteria">'
+                '<option selected="selected" value="3">Equals</option></select>'
+                '<table><caption>Search results</caption><tr><th>Organization Name</th><th>DBA Name</th><th>EIN</th></tr>'
+                '<tr><td>Example National Charity</td><td>No</td><td>12-3456789</td></tr></table>Page 1 of 1')
+        with patch.object(c,'identity_fetch',return_value=source.encode()):
+            result=c.identity_oh_names('123456789',time.monotonic()+30)
+        self.assertTrue(result['complete'])
+        self.assertEqual([r['name'] for r in result['names']],['Example National Charity'])
+        self.assertEqual(result['rejected_name_fields'],['No'])
     def test_oh_incomplete_pagination_retains_names_but_is_partial(self):
         source=(F/'oh-ywca.html').read_text().replace('Page 1 of 1','Page 1 of 2')
         with patch.object(c,'identity_fetch',return_value=source.encode()):

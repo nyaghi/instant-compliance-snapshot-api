@@ -23,6 +23,12 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(c.identity_name_key('YWCA USA, Inc.'),c.identity_name_key('ywca usa Incorporated'))
         self.assertNotEqual(c.identity_name_key('YWCA USA'),c.identity_name_key('YWCA USA Foundation'))
         self.assertNotEqual(c.identity_name_key('YWCA Boston'),c.identity_name_key('YWCA USA'))
+    def test_alias_no_is_an_absence_answer_not_a_discovered_name(self):
+        for kind in ('DBA','AKA / DBA','Form 990 DBA'):
+            self.assertIsNone(c.identity_candidate(' No ', 'Ohio', kind, 'https://source'))
+            self.assertEqual(c.identity_candidate('No Means No Worldwide', 'Ohio', kind, 'https://source')['name'],'No Means No Worldwide')
+        self.assertEqual(c.identity_candidate('No','Example','Registered name','https://source')['name'],'No')
+        self.assertEqual(c.normalize_reviewed_names(['No']),['No'])
     def test_ca_checks_returned_ein(self):
         rows=[{'fein':'99-9999999','entityName':'Wrong Chapter','dba':'Wrong Alias'},
               {'fein':'13-1624103','legalName':'YWCA Legal','dba':'YWCA DBA','officer':'Not an Alias'}]

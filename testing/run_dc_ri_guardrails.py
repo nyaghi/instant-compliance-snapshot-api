@@ -147,6 +147,17 @@ class LicenseControls(unittest.TestCase):
         pending=row(status='Pending',days=-30);pending['raw_status']='ACTIVE PENDING RENEWAL'
         result=cc.licensed_charity_result(self.org,'RI',[pending],self.deadline,'https://example.org')
         self.assertIn('expiration alone does not establish delinquency',result.source_note)
+    def test_ri_retired_alias_cannot_stop_literal_legal_probe(self):
+        self.org=cc.checker.Organization('Beacon Learning Foundation, Inc.','123456789')
+        old=row('Former Education Society','CO.OLD',status='Closed / Withdrawn / Canceled',days=-365)
+        current=row('Beacon Learning Foundation','CO.NEW',status='Pending',days=-5)
+        required=['Beacon Learning Foundation, Inc.','Former Education Society']
+        generated=['Beacon Learning Foundation','beacon learning','Former Education']
+        candidates=[[],[{'id':'C1','title':old['name']}],[{'id':'C2','title':current['name']}]]
+        with patch.object(cc,'registry_json_request',return_value={'access_token':'public-test-token'}),patch.object(cc,'licensed_charity_names',return_value=(required,generated)),patch.object(cc,'ri_charity_search',side_effect=candidates) as search,patch.object(cc,'ri_charity_detail',side_effect=[old,current]),patch.object(cc,'licensed_charity_identity',return_value='accepted'),patch.object(cc,'score_candidate',return_value={'decision':'accepted'}):
+            result=cc.search_ri(self.org)
+        self.assertEqual(result.status,'Pending')
+        self.assertEqual([call.args[0] for call in search.call_args_list],required+[generated[0]])
     def test_dc_error_payload_is_not_completed_negative(self):
         with patch.object(cc,'registry_json_request',return_value={'error':{'message':'Invalid field'}}):
             with self.assertRaises(ValueError):cc.dc_charity_records(self.org,self.deadline)
@@ -228,6 +239,10 @@ class MatureParity(unittest.TestCase):
                         'pa_guard_search_completion','irs_period_for_label','licensed_charity_street_evidence'})
         # Illinois preserves both same-CO, exact-EIN grid and detail names.
         allowed.add('identity_rows_names')
+        # September 27: exclude a standalone "No" only from discovered DBA fields.
+        allowed.add('identity_candidate')
+        # RI must try the existing suffix-free legal probe before stopping on an alias.
+        allowed.add('search_ri')
         self.assertEqual({k for k,v in old.items() if current.get(k)!=v},allowed)
     def test_discovery_connector_and_state_modules_unchanged(self):
         # NY now accepts optional Sales cancellation; signal-free lifecycle has dedicated controls.
