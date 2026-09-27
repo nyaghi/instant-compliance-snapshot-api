@@ -43,5 +43,18 @@ class EngineTests(unittest.TestCase):
             self.assertEqual(execute(master,self.job(state='NY')),result)
             call.assert_called_once_with('Legal Name','12-3456789','NY')
 
+    def test_job_mode_reaches_master_and_restores_even_on_failure(self):
+        token=master.LAB_LOOKUP_MODE_CONTEXT.set('standard')
+        self.addCleanup(master.LAB_LOOKUP_MODE_CONTEXT.reset,token)
+        for mode in ('sales','standard'):
+            job=self.job();job['payload']['mode']=mode
+            def registry(*args):
+                self.assertEqual(master.LAB_LOOKUP_MODE_CONTEXT.get(),mode)
+                return {'ein':'123456789','state':'CO','status':'Current'}
+            with patch.object(master,'run_single_state_lookup_reliably',side_effect=registry):execute(master,job)
+            self.assertEqual(master.LAB_LOOKUP_MODE_CONTEXT.get(),'standard')
+            with patch.object(master,'run_single_state_lookup_reliably',side_effect=RuntimeError('source failure')),self.assertRaises(RuntimeError):execute(master,job)
+            self.assertEqual(master.LAB_LOOKUP_MODE_CONTEXT.get(),'standard')
+
 
 if __name__=='__main__':unittest.main(verbosity=2)

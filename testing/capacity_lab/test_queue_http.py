@@ -55,7 +55,7 @@ class HTTPTests(unittest.TestCase):
 
     def test_state_concurrency_reaches_authoritative_queue_and_rejects_invalid(self):
         p={'organization_name':'Fixture','ein':'123456789','states':['CO']}
-        for limit in (5,10,15):
+        for limit in (5,10,15,20):
             self.assertEqual(self.req('/api/lab/workflows',{**p,'state_concurrency':limit})[0],202)
             self.assertEqual(self.queue.submit.call_args.args[2].get('state_concurrency',15),limit)
         self.queue.submit.reset_mock()

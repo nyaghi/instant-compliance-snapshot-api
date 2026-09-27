@@ -1054,3 +1054,26 @@ identity preparation, matching, status and date logic are unchanged. No schema
 migration or customer UI changes. The authorized six-cell experiment holds
 24 workers, 20 organizations, 32 states and source caps fixed while changing
 only this ceiling and mode; restore four workers after the trial.
+
+### perf72: bounded 20-state comparison and Florida transport attribution
+
+The private lab accepts 20 concurrent states as an additional explicit option.
+Default 15, discovery input, deadlines, reservations, source limits and physical
+capacity checks are unchanged. Real PostgreSQL controls include 20 in both modes.
+A passive, lab-only Florida observer records existing HTTPS request start,
+header receipt or exception type. Requests, bodies, headers, cookies and exception
+messages are not logged; request/response objects and timeouts are unchanged.
+This separates the forwarder's failure from Chromium's generic ERR_FAILED.
+No registry matching/status/date interpretation changes. The master receives
+the isolated job's mode through a scoped context that is reset after execution.
+With the exact lab gate CE_LAB_AR_BLOCK_RETRY=terminal, explicit Arkansas access
+blocks return immediately in Sales at both retry layers. They remain Site Not
+Reachable; transport timeouts and Standard keep existing recovery. This removes
+the 12-second sleep and repeated blocked search while holding a source lane.
+
+The lab's forced CE_LAB_FL_TRANSPORT=verified-first experiment is disabled for
+the candidate. Ordinary Chromium TLS is tried first; the existing authenticated
+certificate-chain fallback still handles actual authority failures. Local fresh
+native and system-TLS probes both return the correct form. The public Business
+Lookup path, matching, date extraction and verification remain unchanged. This
+candidate requires fresh cloud validation; local TLS success is not cloud proof.

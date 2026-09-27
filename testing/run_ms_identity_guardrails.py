@@ -88,8 +88,9 @@ class Tests(unittest.TestCase):
   oldmap={n.name:n for n in old.body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
   newmap={n.name:n for n in new.body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
   changed={k for k in oldmap if ast.dump(oldmap[k])!=ast.dump(newmap[k])}
-  self.assertEqual(changed,{'search_batch_browser_state','comments_for_result_base'})
-  self.assertEqual(oldmap.keys(),newmap.keys())
+  self.assertEqual(changed,{'search_batch_browser_state','comments_for_result_base','search_ar_serialized','run_single_state_lookup_reliably'})
+  self.assertEqual(set(newmap)-set(oldmap),{'lab_sales_ar_access_block_is_terminal'})
+  self.assertEqual(set(oldmap)-set(newmap),set())
   def budgets(node):
    return [ast.dump(n) for n in ast.walk(node) if isinstance(n,ast.Assign) and any(isinstance(x,ast.Name) and x.id=='ms_deadline' for x in n.targets)]
   self.assertEqual(budgets(oldmap['search_batch_browser_state']),budgets(newmap['search_batch_browser_state']))

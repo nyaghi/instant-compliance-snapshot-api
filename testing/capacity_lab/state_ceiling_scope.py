@@ -12,8 +12,8 @@ def strip_state_ceiling(tree):
     old_return = """    return {'organization_name': name.strip(), 'ein': ein.replace('-', ''),
             'alternate_names': aliases, 'states': sorted(set(states)), 'mode': mode, 'kind': kind}"""
     new_return = """    concurrency = payload.get('state_concurrency', 15)
-    if type(concurrency) is not int or concurrency not in (5, 10, 15):
-        raise ValueError('Lab state concurrency must be 5, 10 or 15')
+    if type(concurrency) is not int or concurrency not in (5, 10, 15, 20):
+        raise ValueError('Lab state concurrency must be 5, 10, 15 or 20')
     if kind == 'discovery' and 'state_concurrency' in payload:
         raise ValueError('State concurrency applies only to registration')
     normalized = {'organization_name': name.strip(), 'ein': ein.replace('-', ''),

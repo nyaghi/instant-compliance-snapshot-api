@@ -94,6 +94,45 @@ class DiscoveryProgress:
                 pass
 
 
+@contextmanager
+def observe_fl_headers(master, trace):
+    """Observe the existing FL HTTPS request through header receipt, without I/O.
+
+    Chromium's ERR_FAILED hides whether the verified forwarder ever received
+    headers. This isolated-process observer preserves exact requests, timeout,
+    response object and exceptions. It never reads a body or logs form data.
+    """
+    if trace is None or not master.APP_VERSION.endswith('-performance-lab'):
+        yield
+        return
+    director = master.urllib.request.OpenerDirector
+    original = director.open
+    def observed(opener, request, *args, **kwargs):
+        url = request.full_url if hasattr(request, 'full_url') else request
+        parsed = urlsplit(url)
+        if (parsed.scheme != 'https' or parsed.netloc != 'csapp.fdacs.gov'
+                or parsed.path not in {'/CSPublicApp/CheckACharity/CheckACharity.aspx',
+                                       '/CSPublicApp/BusinessSearch/BusinessSearch.aspx'}):
+            return original(opener, request, *args, **kwargs)
+        number = len(trace.events)
+        details = {'host': parsed.hostname, 'path': parsed.path,
+                   'method': request.get_method() if hasattr(request, 'get_method') else 'GET',
+                   'request_id': number}
+        trace.record('verified_open', **details)
+        try:
+            response = original(opener, request, *args, **kwargs)
+        except Exception as exc:
+            trace.record('verified_open_error', exception_type=type(exc).__name__, **details)
+            raise
+        trace.record('verified_headers', status=response.status, **details)
+        return response
+    director.open = observed
+    try:
+        yield
+    finally:
+        director.open = original
+
+
 def transport_route(state, url):
     """A fixed label, never a URL, query, registry ID or session value."""
     try:
@@ -204,12 +243,15 @@ def execute(master, job, source_finished=None, trace_path=None):
     trace = FloridaTrace(trace_path) if job['state'] == 'FL' else None
     original = master.search_fl if trace else None
     if trace: master.search_fl = trace.wrap(original)
-    with observe_transport(master, job['state'], trace_path) as transport_trace:
+    mode_context = getattr(master, 'LAB_LOOKUP_MODE_CONTEXT', None)
+    mode_token = mode_context.set(p.get('mode', 'standard')) if mode_context is not None else None
+    with observe_fl_headers(master, trace), observe_transport(master, job['state'], trace_path) as transport_trace:
         try:
             results = (master.run_sales_lookups_with_source_evidence(organizations, [job['state']], identity)
                        if identity is not None else master.run_state_lookups_parallel(organizations, [job['state']]))
         finally:
             if trace: master.search_fl = original
+            if mode_context is not None: mode_context.reset(mode_token)
     if len(results) != 1: raise ValueError('Unexpected result count')
     if transport_trace: results[0]['lab_transport_trace'] = transport_trace.events
     if trace: results[0]['lab_fl_trace'] = trace.events

@@ -519,6 +519,7 @@ VERIFICATION_TOKENS: dict[str, dict] = {}
 ORG_NAME_CACHE: dict[str, str] = {}
 PUBLIC_PROFILE_CACHE: dict[str, dict] = {}
 SALES_PROFILE_CONTEXT = ContextVar("sales_same_workflow_profile", default={})
+LAB_LOOKUP_MODE_CONTEXT = ContextVar("lab_lookup_mode", default="standard")
 def load_checker():
     spec = importlib.util.spec_from_file_location("charity_state_checker_v9", CHECKER_PATH)
     if spec is None or spec.loader is None:
@@ -25964,6 +25965,23 @@ def search_ar_name_variants_once(page, org):
     return result
 
 
+def lab_sales_ar_access_block_is_terminal(result) -> bool:
+    """Do not occupy a Sales source lane retrying an explicit access denial.
+
+    This is an isolated-lab scheduling policy, never identity/status evidence.
+    Standard and transport timeouts retain their existing recovery behavior.
+    """
+    if not (APP_VERSION.endswith("-performance-lab")
+            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and os.environ.get("CE_LAB_AR_BLOCK_RETRY") == "terminal"
+            and LAB_LOOKUP_MODE_CONTEXT.get() == "sales"):
+        return False
+    read = result.get if isinstance(result, dict) else lambda key, default=None: getattr(result, key, default)
+    return (read("state") == "AR" and read("success") is False
+            and str(read("status", "")).strip().lower() == "site not reachable"
+            and bool(re.fullmatch(r"AR registry returned bot-verification or block page(?: after submit)?", str(read("error", "")))))
+
+
 def search_ar_serialized(page, org):
     global AR_LAST_LOOKUP_FINISHED
     with AR_LOOKUP_LOCK:
@@ -25982,7 +26000,7 @@ def search_ar_serialized(page, org):
                     time.sleep(AR_TRANSIENT_RETRY_DELAY_SECONDS)
             result = search_ar_name_variants_once(page, org)
             last_result = result
-            if not ar_transient_unreachable_result(result):
+            if lab_sales_ar_access_block_is_terminal(result) or not ar_transient_unreachable_result(result):
                 AR_LAST_LOOKUP_FINISHED = time.perf_counter()
                 return result
 
@@ -28801,6 +28819,8 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
                   if state == "ME" else run_state_lookup(organization_name, ein, state, wi_progress=wi_progress)
                   if state == "WI" else run_state_lookup(organization_name, ein, state))
         result["semantic_attempts"] = attempt
+        if state == "AR" and lab_sales_ar_access_block_is_terminal(result):
+            return result
         if state == "ME":
             me_attempt_history.append({key: result.get(key) for key in (
                 "semantic_attempts", "status", "reason_code", "error", "source_note", "lookup_seconds", "me_queue_seconds", "source_attempts")})

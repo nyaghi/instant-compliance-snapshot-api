@@ -88,7 +88,7 @@ class DurableTests(unittest.TestCase):
     def test_registration_state_ceiling_across_workers_for_both_modes(self):
         states = [f'T{i:02}' for i in range(32)]
         for mode in ('standard', 'sales'):
-            for limit in (5, 10, 15):
+            for limit in (5, 10, 15, 20):
                 with self.subTest(mode=mode, limit=limit):
                     p = normalize_submission({'ein':f'{100000000+limit:09}',
                         'organization_name':'Concurrency fixture', 'states':states,
@@ -948,7 +948,7 @@ class DurableTests(unittest.TestCase):
 class InputTests(unittest.TestCase):
     def test_lab_state_concurrency_is_bounded_and_default_is_identical(self):
         self.assertEqual(payload(), payload(state_concurrency=15))
-        for limit in (5, 10):
+        for limit in (5, 10, 20):
             self.assertEqual(payload(state_concurrency=limit)['state_concurrency'], limit)
         for value in (0, 1, 4, 6, 16, 32, True, None, '5', 5.0):
             with self.subTest(value=value), self.assertRaises(ValueError):
