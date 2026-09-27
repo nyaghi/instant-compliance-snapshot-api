@@ -129,7 +129,12 @@
       return payload;
     }
     try {
-      const connection = await bridge("ping", null, null, null, null, signal);
+      let connection = await bridge("ping", null, null, null, null, signal);
+      // A sleeping/busy extension can miss one readiness response. Retry only
+      // this read-only handshake once, before acquiring or starting any check.
+      if (!connection.ok && connection.reason === "NY_CONNECTOR_UNAVAILABLE") {
+        connection = await bridge("ping", null, null, null, null, signal);
+      }
       let acquired = connection;
       if (supported(connection)) {
         connected = true;

@@ -13,3 +13,11 @@ Validation commands: `python -m py_compile registry_snapshot_server.py`; `python
 Local results: 721 tests in 39 suites and 30 matching fixtures pass. Two source-scope parity allowlists explicitly cover the authorized functions. The older annual/short-period fixture was repaired to mock the current `irs_latest_period` entry point; its expected period assertions were preserved.
 
 Live control and post-validation evidence is saved outside the repository under `outputs/final50-all34-postvalidation-20260926`. Staging deployment and those checks must be verified before completion. Do not promote while material findings remain unresolved.
+
+## Findings during the 50-organization pass — .9 follow-up
+
+- Illinois can show a current name in its result grid and a former legal name in the selected detail. The master now accepts the detail only after the same CO number and requested EIN are confirmed, and preserves both displayed names for discovery. A different EIN is excluded; a different CO number fails closed. Georgia's name consistency requirement is unchanged because those records do not expose EINs. Synthetic tests cover acceptance, discovery, foreign EINs, mismatched identifiers and unchanged Georgia rejection.
+- The frontend previously treated one missed five-second readiness response as an unavailable connector. It now retries that read-only handshake once before any registry lookup starts. Missing/incompatible connectors remain inconclusive; cancellation, queue serialization and lookup budgets are unchanged. Tests cover delayed readiness, absent/incompatible connectors, cleanup, concurrent queue isolation and cancellation.
+- The running .8 pass must finish before deploying .9, so signed continuations are not invalidated. Preserve its immutable first-pass checkpoint; perform focused .9 verification and retain both attempts in the final report. No new extension installation is needed.
+
+Local .9 verification: 724 backend tests in 39 suites, 30 matching fixtures, and 49 Node frontend/lifecycle/cancellation tests pass. Commands: audit-output `run_regression.py final9-tests`; `node --test testing/run_connector_frontend.cjs testing/run_ny_sales_abort_guardrails.cjs testing/run_ny_connector_lifecycle.cjs`; `git diff --check`. Live .9 verification must follow deployment before any completion claim.

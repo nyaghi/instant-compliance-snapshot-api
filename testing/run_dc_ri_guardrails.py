@@ -206,6 +206,8 @@ class MatureParity(unittest.TestCase):
                  'select_licensed_charity','wi_best_match_from_html','wi_best_match_from_markdown','wi_confirm_cross_state_credential'}
         allowed.update({'search_pa_with_name_fallback','search_pa_with_name_fallback_core',
                         'pa_guard_search_completion','irs_period_for_label','licensed_charity_street_evidence'})
+        # Illinois preserves both same-CO, exact-EIN grid and detail names.
+        allowed.add('identity_rows_names')
         self.assertEqual({k for k,v in old.items() if current.get(k)!=v},allowed)
     def test_discovery_connector_and_state_modules_unchanged(self):
         # NY now accepts optional Sales cancellation; signal-free lifecycle has dedicated controls.

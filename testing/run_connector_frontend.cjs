@@ -7,16 +7,17 @@ const {webcrypto} = require('node:crypto');
 const source = fs.readFileSync(path.join(__dirname,'../web-staging/ny-connector.js'),'utf8');
 const capabilities = ['lookup-tab-v1','verification-retry-v1','search-verification-retry-v1','search-schema-errors-v1','nullable-ein-v1','queue-v1','connection-recovery-v1','recovery-causes-v1','cleanup-ack-v1','timeout-recovery-v1','resume-v1','verified-detail-v1','detail-navigation-v1','il-ga-public-dom-v1','il-ga-complete-search-v2','il-session-reuse-v1','il-large-pages-v1','ga-exempt-record-v1','ga-legacy-rows-v1'];
 
-async function exercise({state='GA',commands=42,elapsedPerCommand=100,stopStatus='Delinquent'}={}) {
-  const actions=[];let advance=0,clock=0,listener;
+async function exercise({state='GA',commands=42,elapsedPerCommand=100,stopStatus='Delinquent',missedPings=0,incompatible=false}={}) {
+  const actions=[];let advance=0,clock=0,listener,pings=0;
   const window={addEventListener:(kind,fn)=>{if(kind==='message')listener=fn;},postMessage(message){
     actions.push(message.action);
+    if(message.action==='ping' && ++pings<=missedPings)return;
     queueMicrotask(()=>listener({source:window,origin:'https://staging.compliance-express.com',data:{
-      ...message,direction:'response',ok:true,version:'0.5.7',capabilities,evidence:{complete:true,rows:[]}
+      ...message,direction:'response',ok:true,version:'0.5.8',capabilities:incompatible?[]:capabilities,evidence:{complete:true,rows:[]}
     }}));
   }};
   const context=vm.createContext({window,location:{origin:'https://staging.compliance-express.com'},
-    document:{querySelector:()=>null},crypto:webcrypto,setTimeout,clearTimeout,AbortSignal,
+    document:{querySelector:()=>null,getElementById:()=>null},crypto:webcrypto,setTimeout:(f,ms)=>setTimeout(f,ms===5000?1:ms),clearTimeout,AbortSignal,
     Date:{now:()=>clock},fetch:async(_url,options)=>{
       const request=JSON.parse(options.body);actions.push('api:'+request.action);
       let payload;
@@ -49,4 +50,19 @@ test('a nonterminating IL/GA continuation fails conservatively at five minutes',
 });
 test('New York retains its existing ten-command ceiling',async()=>{
   const run=await exercise({state:'NY',commands:20});assert.equal(run.advance,10);assert.match(run.error.message,/complete result/);assert.ok(run.actions.includes('finish'));
+});
+test('one missed readiness response recovers before a single lookup starts',async()=>{
+  const run=await exercise({commands:1,missedPings:1});assert.ifError(run.error);
+  assert.equal(run.result.status,'Delinquent');assert.equal(run.actions.filter(a=>a==='ping').length,2);
+  assert.equal(run.actions.filter(a=>a==='acquire').length,1);assert.equal(run.actions.filter(a=>a==='api:start').length,1);
+  assert.equal(run.actions.filter(a=>a==='search').length,1);
+});
+test('absent connector remains inconclusive after exactly two readiness attempts',async()=>{
+  const run=await exercise({commands:1,missedPings:2});assert.ifError(run.error);
+  assert.equal(run.result.status,'Unable to Confirm');assert.equal(run.result.reason,'NY_CONNECTOR_UNAVAILABLE');
+  assert.equal(run.actions.filter(a=>a==='ping').length,2);assert.ok(!run.actions.includes('search'));assert.ok(!run.actions.includes('acquire'));
+});
+test('incompatible connector is not retried or treated as ready',async()=>{
+  const run=await exercise({commands:1,incompatible:true});assert.ifError(run.error);
+  assert.equal(run.result.reason,'NY_CONNECTOR_UPDATE_REQUIRED');assert.equal(run.actions.filter(a=>a==='ping').length,1);assert.ok(!run.actions.includes('search'));
 });

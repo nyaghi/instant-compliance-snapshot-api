@@ -134,7 +134,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.26.8-staging").strip() or "2026.09.26.8-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.26.9-staging").strip() or "2026.09.26.9-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -2416,7 +2416,7 @@ def identity_rows_names(source: str, rows: list, ein: str, url: str) -> dict:
         "MA": ("Employer_Idendification_Number_EIN__c", (("Organization_Name__c", "Registered name"),), ()),
         "NJ": ("crsm_federalein", (("name", "Registered name"),), ()),
         "NY": ("ein", (("orgName", "Registered name"),), ()),
-        "IL": ("ein", (("name", "Registered name"),), ()),
+        "IL": ("ein", (("name", "Registered name"), ("search_name", "Search display name")), ()),
     }
     ein_field, name_fields, alias_fields = fields[source]
     names, rejected = [], []
@@ -5557,11 +5557,19 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
             detail = evidence(detail_query)["body"]
             parsed = (il_charity_detail_text(detail, row["identifier"]) if state == "IL" else
                       ga_charity_detail_html(detail, row["identifier"], row["name"]))
-            if normalized_match_name(parsed["name"]) != normalized_match_name(row["name"]):
+            if state == "IL":
+                # The selected CO number was checked by the detail parser.
+                # Illinois can retain a former legal name in that detail while
+                # showing a newer name in its grid. The detail EIN is decisive;
+                # a different EIN is excluded even when the grid name matches.
+                if parsed["ein"] != canonical_ein_digits(org.ein):
+                    seen.add(identity)
+                    continue
+                if normalized_match_name(parsed["name"]) != normalized_match_name(row["name"]):
+                    parsed["search_name"] = row["name"]
+            elif normalized_match_name(parsed["name"]) != normalized_match_name(row["name"]):
                 raise ValueError("Selected detail name changed from the search result")
             seen.add(identity)
-            if state == "IL" and parsed["ein"] != canonical_ein_digits(org.ein):
-                continue
             record = {**row, **parsed, "url": IL_GA_SOURCES[state]}
             if state == "GA":
                 record["location"] = row["location"]
@@ -5593,6 +5601,9 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
             if selected:
                 result.source_note = (f"Illinois lists {selected['name']} (CO {selected['identifier']}) as {selected['raw_status']}. "
                                       f"The detail EIN {format_ein(selected['ein'])} matches the requested organization. ")
+                if selected.get("search_name"):
+                    result.source_note += (f"The search list displays {selected['search_name']}; the detail uses a different name "
+                                           "for the same CO number and confirmed EIN. ")
                 if selected["expiration"]:
                     result.source_note += f"The state's annual-report due date is {selected['expiration'].isoformat()}. "
                 elif selected["raw_status"].casefold() == "good standing":

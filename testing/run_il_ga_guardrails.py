@@ -286,9 +286,27 @@ class IntegrationControls(unittest.TestCase):
             return {'body':ga_html(full_name=org.organization_name,license_no=q['identifier'],license_type='Exempt Charity' if exempt else 'Charity',status='Exempt' if exempt else 'Active',expiry='' if exempt else '9/28/2099')}
         result=cc.il_ga_browser_lookup(org,'GA',evidence)
         self.assertEqual(seen,['EXEMPT','CH015274']);self.assertEqual(result.status,'Exempt');self.assertEqual(result.matched_registry_identifier,'EXEMPT')
-    def test_detail_record_change_rejected(self):
+    def test_il_detail_name_change_with_same_ein_and_co_number_is_accepted(self):
         def evidence(q):return {'body':IL.replace('FEEDING AMERICA','DIFFERENT ORGANIZATION')} if 'identifier' in q else {'rows':[search_row()]}
+        result=cc.il_ga_browser_lookup(self.org,'IL',evidence)
+        self.assertEqual(result.matched_registry_identifier,'01015532')
+        self.assertEqual(result.matched_registry_name,'DIFFERENT ORGANIZATION')
+        self.assertIn('same CO number and confirmed EIN',result.source_note)
+        names=cc.il_ga_browser_lookup(self.org,'IL',evidence,'identity')['names']
+        self.assertEqual({n['name'] for n in names},{'DIFFERENT ORGANIZATION','FEEDING AMERICA'})
+    def test_il_changed_name_different_ein_is_excluded(self):
+        body=IL.replace('FEEDING AMERICA','DIFFERENT ORGANIZATION').replace('363673599','123456789')
+        def evidence(q):return {'body':body} if 'identifier' in q else {'rows':[search_row()]}
+        self.assertEqual(cc.il_ga_browser_lookup(self.org,'IL',evidence).status,'Not Registered / Non-Compliant')
+        self.assertEqual(cc.il_ga_browser_lookup(self.org,'IL',evidence,'identity')['names'],[])
+    def test_il_changed_name_wrong_co_number_is_rejected(self):
+        body=IL.replace('FEEDING AMERICA','DIFFERENT ORGANIZATION').replace('01015532','01015533')
+        def evidence(q):return {'body':body} if 'identifier' in q else {'rows':[search_row()]}
         with self.assertRaises(ValueError):cc.il_ga_browser_lookup(self.org,'IL',evidence)
+    def test_ga_changed_detail_name_remains_rejected_without_ein(self):
+        key='11111111-1111-1111-1111-111111111111'
+        def evidence(q):return {'body':ga_html(full_name='Different Organization',license_no='CH003977')} if 'identifier' in q else {'rows':[search_row('Feeding America','CH003977',key)]}
+        with self.assertRaises(ValueError):cc.il_ga_browser_lookup(self.org,'GA',evidence)
     def test_completeness_query_total_and_duplicates_required(self):
         q={'state':'IL','ein':'363673599'}
         good={'query':q,'complete':True,'total':1,'rows':[search_row()]}
