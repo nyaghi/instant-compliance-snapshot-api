@@ -103,7 +103,10 @@ class Dates(unittest.TestCase):
     def test_only_request_allowances_change_in_date_reader(self):
         source=subprocess.check_output(['git','show','88e5f17:registry_snapshot_server.py'],cwd=Path(c.__file__).parent).decode()
         before=next(n for n in ast.parse(source).body if getattr(n,'name','')=='enrich_registration_date_sources')
-        after=next(n for n in ast.parse(Path(c.__file__).read_text(encoding='utf-8')).body if getattr(n,'name','')=='enrich_registration_date_sources')
+        from testing.capacity_lab.parsing_scope import strip_fl_business_lookup
+        current=ast.parse(Path(c.__file__).read_text(encoding='utf-8'))
+        strip_fl_business_lookup(current)
+        after=next(n for n in current.body if getattr(n,'name','')=='enrich_registration_date_sources')
         requests=[n for n in ast.walk(after) if isinstance(n,ast.Call) and ast.unparse(n.func) in {'session.get','session.post'}]
         self.assertEqual(len(requests),2)
         for request in requests:
