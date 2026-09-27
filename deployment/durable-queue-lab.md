@@ -1077,3 +1077,7 @@ certificate-chain fallback still handles actual authority failures. Local fresh
 native and system-TLS probes both return the correct form. The public Business
 Lookup path, matching, date extraction and verification remain unchanged. This
 candidate requires fresh cloud validation; local TLS success is not cloud proof.
+
+### Sales 32-state ceiling experiment (perf.73)
+
+The private lab accepts an explicit state_concurrency of 32 for Sales registration only. Standard keeps its default of 15 and cannot request 32. Discovery, registry logic, identity checks, source reservations, worker capacity and 60/900-second deadlines are unchanged. The controlled comparison uses Sales 20 versus 32 with the same 20 organizations and 24 nodes; it does not change staging or production defaults.

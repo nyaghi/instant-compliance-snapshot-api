@@ -63,6 +63,16 @@ class HTTPTests(unittest.TestCase):
             self.assertEqual(self.req('/api/lab/workflows',{**p,'state_concurrency':invalid})[0],400)
         self.queue.submit.assert_not_called()
 
+    def test_thirty_two_is_sales_only_and_default_standard_stays_fifteen(self):
+        p={'organization_name':'Fixture','ein':'123456789','states':['CO']}
+        self.assertEqual(self.req('/api/lab/workflows',{**p,'mode':'sales','state_concurrency':32})[0],202)
+        self.assertEqual(self.queue.submit.call_args.args[2]['state_concurrency'],32)
+        self.queue.submit.reset_mock()
+        self.assertEqual(self.req('/api/lab/workflows',{**p,'mode':'standard','state_concurrency':32})[0],400)
+        self.queue.submit.assert_not_called()
+        self.assertEqual(self.req('/api/lab/workflows',p)[0],202)
+        self.assertNotIn('state_concurrency',self.queue.submit.call_args.args[2])
+
     def test_rejection_and_cancellation_consume_bounded_ignored_body(self):
         for path in ('/api/check','/api/discover-names','/api/ny-connector','/api/lab/workflows/id/cancel','/unknown'):
             handler=self.server.RequestHandlerClass.__new__(self.server.RequestHandlerClass)

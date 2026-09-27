@@ -145,6 +145,52 @@ class DurableTests(unittest.TestCase):
         self.assertEqual(job['attempt'],1)
         self.finish(job,other)
 
+    def test_sales_thirty_two_across_three_workers_and_standard_default(self):
+        # Hold fixture time fixed while testing capacity over the external DB
+        # connection. Dozens of remote claims must not consume the Sales window.
+        # Separate deadline tests below use the real database clock.
+        original_transaction = self.q.transaction
+        with original_transaction() as (_, fixture_now):
+            pass
+        @contextmanager
+        def fixture_transaction(*args, **kwargs):
+            with original_transaction(*args, **kwargs) as acquired:
+                yield None if acquired is None else (acquired[0], fixture_now)
+        clock_patch = patch.object(self.q, 'transaction', fixture_transaction)
+        clock_patch.start()
+        self.addCleanup(clock_patch.stop)
+        states = [f'T{i:02}' for i in range(33)]
+        for mode, limit in [('sales', 32), ('standard', 15)]:
+            with self.subTest(mode=mode):
+                request = {'ein':f'{100000000+limit:09}', 'organization_name':'Ceiling fixture',
+                           'states':states, 'mode':mode, 'alternate_names':['Reviewed fixture']}
+                if mode == 'sales':request['state_concurrency'] = 32
+                p = normalize_submission(request, states)
+                if mode == 'standard':self.assertNotIn('state_concurrency', p)
+                ident = self.submit(p)
+                workers = [self.worker(slots=12) for _ in range(3)]
+                held = []
+                for i in range(limit):
+                    job = self.q.claim(workers[i % 3])
+                    self.assertIsNotNone(job)
+                    self.assertEqual(job['workflow_id'], ident)
+                    held.append(job)
+                for worker in workers:self.assertIsNone(self.q.claim(worker))
+                with self.q.transaction() as (c, now):
+                    c.execute("UPDATE cc_lab_jobs SET phase='stopping' WHERE id=%s", (held[0]['id'],))
+                self.assertIsNone(self.q.claim(workers[0]))
+                released = held.pop(0)
+                self.assertTrue(self.finish(released))
+                replacement = self.q.claim(released['owner'])
+                self.assertIsNotNone(replacement)
+                held.append(replacement)
+                self.assertIsNone(self.q.claim(released['owner']))
+                status = self.q.status('a', ident)
+                self.assertEqual(status['deadline']-status['submitted'], 60 if mode=='sales' else 900)
+                self.q.cancel('a', ident)
+                for job in held:self.q.complete(job['owner'],job['id'],job['token'],error='TEST_CANCELED')
+                self.assertIsNotNone(self.q.status('a',ident)['finished'])
+
     def test_busy_claim_does_not_allow_canceled_work_to_resurrect(self):
         ident=self.submit();worker=self.worker();other=self.second()
         with concurrent.futures.ThreadPoolExecutor(1) as pool:
@@ -946,6 +992,15 @@ class DurableTests(unittest.TestCase):
 
 
 class InputTests(unittest.TestCase):
+    def test_sales_thirty_two_is_explicit_and_standard_and_discovery_are_unchanged(self):
+        self.assertEqual(payload(mode='sales',state_concurrency=32)['state_concurrency'],32)
+        self.assertEqual(payload(mode='sales'),payload(mode='sales',state_concurrency=15))
+        for value in (31,33,'32',32.0,True):
+            with self.subTest(value=value),self.assertRaises(ValueError):payload(mode='sales',state_concurrency=value)
+        with self.assertRaises(ValueError):payload(state_concurrency=32)
+        with self.assertRaises(ValueError):
+            normalize_submission({'ein':'123456789','organization_name':'Discovery','kind':'discovery','state_concurrency':32},STATES)
+
     def test_lab_state_concurrency_is_bounded_and_default_is_identical(self):
         self.assertEqual(payload(), payload(state_concurrency=15))
         for limit in (5, 10, 20):

@@ -59,8 +59,9 @@ def normalize_submission(payload, supported):
     if kind == 'discovery' and (mode != 'standard' or aliases):
         raise ValueError('Discovery takes only the entered name and EIN')
     concurrency = payload.get('state_concurrency', 15)
-    if type(concurrency) is not int or concurrency not in (5, 10, 15, 20):
-        raise ValueError('Lab state concurrency must be 5, 10, 15 or 20')
+    allowed_concurrency = (5, 10, 15, 20, 32) if mode == 'sales' else (5, 10, 15, 20)
+    if type(concurrency) is not int or concurrency not in allowed_concurrency:
+        raise ValueError('Lab state concurrency must be 5, 10, 15 or 20; Sales also allows 32')
     if kind == 'discovery' and 'state_concurrency' in payload:
         raise ValueError('State concurrency applies only to registration')
     normalized = {'organization_name': name.strip(), 'ein': ein.replace('-', ''),
