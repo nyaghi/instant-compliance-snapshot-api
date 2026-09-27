@@ -275,6 +275,7 @@ def warm_task_engine(version, settings):
 
 def log_failure_trace(r, error):
     """Keep bounded passive FL step evidence after task cleanup, never secrets."""
+    log_transport_failure(r, error)
     if not error or r['job']['state']!='FL':return
     try:
         path=r['output'].with_suffix('.trace.json')
@@ -301,6 +302,30 @@ def log_failure_trace(r, error):
             'state':'FL','error':error,'events':events}),flush=True)
     except Exception:
         pass  # Diagnostics cannot interfere with termination or result fencing.
+
+
+def log_transport_failure(r, error):
+    """Preserve fixed-label HTTP timing after the isolated MI/NJ task is reaped."""
+    if not error or r['job']['state'] not in {'MI', 'NJ'}: return
+    try:
+        path = r['output'].with_suffix('.transport.json')
+        if not path.is_file() or path.stat().st_size > 65536: return
+        raw = json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(raw, list): return
+        allowed = {'route': {'disclaimer', 'search', 'results', 'configuration', 'verification', 'query', 'registration', 'details'},
+                   'event': {'http_start', 'http_headers', 'http_complete', 'http_exception', 'http_body_exception'},
+                   'method': {'GET', 'POST'}}
+        events = []
+        for row in raw[-64:]:
+            if not isinstance(row, dict): continue
+            clean = {k: v for k, v in row.items() if k in {'seconds', 'status', 'request_id'} and isinstance(v, (float, int))}
+            for key, choices in allowed.items():
+                if isinstance(row.get(key), str) and row[key] in choices: clean[key] = row[key]
+            events.append(clean)
+        print('CC_LAB_TASK_FAILURE_DIAGNOSTICS ' + json.dumps({'job': r['job']['id'],
+              'state': r['job']['state'], 'error': error, 'events': events}), flush=True)
+    except Exception:
+        pass
 
 
 class AdmissionWindow:

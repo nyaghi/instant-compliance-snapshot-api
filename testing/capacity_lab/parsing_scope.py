@@ -241,6 +241,7 @@ def strip_launch_pacing_threshold(tree):
 
 def strip_warm_ready_and_failure_trace_worker(tree):
     """Undo only readiness and passive trace hooks, retaining every scheduler rule."""
+    strip_transport_trace_worker(tree)
     strip_empty_claim_backoff(tree)
     tree.body=[n for n in tree.body if getattr(n,'name','') not in
         {'task_environment','warm_task_engine','log_failure_trace'} and not
@@ -276,6 +277,7 @@ child_env['CE_LAB_DURABLE_QUEUE'] = '0'
 
 
 def strip_warm_ready_and_failure_trace_engine(tree):
+    strip_transport_trace_engine(tree)
     tree.body=[n for n in tree.body if getattr(n,'name','')!='warm_ready_main']
     for fn in tree.body:
         if getattr(fn,'name','')=='FloridaTrace':
@@ -302,6 +304,31 @@ def strip_warm_ready_and_failure_trace_engine(tree):
                 result.value.args.pop()
 
 
+def strip_transport_trace_engine(tree):
+    tree.body = [n for n in tree.body if getattr(n, 'name', '') not in {'transport_route', 'observe_transport'}
+                 and not (isinstance(n, ast.ImportFrom) and n.module == 'contextlib'
+                          and [a.name for a in n.names] == ['contextmanager'])]
+    fn = next(n for n in tree.body if getattr(n, 'name', '') == 'execute')
+    body = []
+    for node in fn.body:
+        if isinstance(node, ast.With) and len(node.items) == 1 and ast.unparse(node.items[0].context_expr) == "observe_transport(master, job['state'], trace_path)":
+            assert ast.unparse(node.items[0].optional_vars) == 'transport_trace'
+            assert len(node.body) == 1 and isinstance(node.body[0], ast.Try)
+            body.extend(node.body)
+        elif isinstance(node, ast.If) and ast.unparse(node.test) == 'transport_trace':
+            assert ast.unparse(node.body[0]) == "results[0]['lab_transport_trace'] = transport_trace.events"
+            assert len(node.body) == 1 and not node.orelse
+        else: body.append(node)
+    fn.body = body
+
+
+def strip_transport_trace_worker(tree):
+    tree.body = [n for n in tree.body if getattr(n, 'name', '') != 'log_transport_failure']
+    fn = next((n for n in tree.body if getattr(n, 'name', '') == 'log_failure_trace'), None)
+    if fn:
+        fn.body = [n for n in fn.body if not (isinstance(n, ast.Expr) and ast.unparse(n) == 'log_transport_failure(r, error)')]
+
+
 def strip_fl_verified_first_trial(tree):
     """The opt-in lab changes only which verified transport sends the same page."""
     strip_nj_public_query(tree)
@@ -323,6 +350,7 @@ def strip_fl_verified_first_trial(tree):
 
 def strip_empty_claim_backoff(tree):
     """Strip only the claim timer; process polling, leases and deadlines stay compared."""
+    strip_transport_trace_worker(tree)
     tree.body=[n for n in tree.body if getattr(n,'name','')!='EmptyClaimBackoff']
     class Restore(ast.NodeTransformer):
         def visit_Assign(self,node):

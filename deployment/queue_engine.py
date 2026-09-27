@@ -5,6 +5,7 @@ import sys
 import json
 import threading
 import time
+from contextlib import contextmanager
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -93,6 +94,78 @@ class DiscoveryProgress:
                 pass
 
 
+def transport_route(state, url):
+    """A fixed label, never a URL, query, registry ID or session value."""
+    try:
+        parsed = urlsplit(url)
+        if parsed.scheme != 'https': return None
+        if state == 'MI' and parsed.hostname == 'www.ag.state.mi.us':
+            return {'/CharitableTrust/frmDisclaimer.aspx': 'disclaimer',
+                    '/CharitableTrust/frmDefault.aspx': 'search',
+                    '/CharitableTrust/frmSearchResults.aspx': 'results'}.get(parsed.path)
+        if state == 'NJ' and parsed.hostname == 'charportal.dca.njoag.gov':
+            for prefix, label in [('/Charity-Registration/CHR-Public-Search-Page/', 'search'),
+                                  ('/_services/portal/GetListViewConfiguration/', 'configuration'),
+                                  ('/_layout/tokenhtml', 'verification'),
+                                  ('/_services/entity-grid-data', 'query'),
+                                  ('/retrieveRegistration/', 'registration'),
+                                  ('/CHR-Public-Details-Page/', 'details')]:
+                if parsed.path.startswith(prefix): return label
+    except Exception:
+        pass
+    return None
+
+
+@contextmanager
+def observe_transport(master, state, sink=None):
+    """Observe the existing request/stream calls in one isolated lab child.
+
+    This neither changes requests nor reads responses ahead of the master.
+    The trace survives a killed task, identifying which source step stalled.
+    """
+    client = getattr(master, 'curl_requests', None)
+    if (state not in {'MI', 'NJ'} or client is None
+            or not master.APP_VERSION.endswith('-performance-lab')):
+        yield None
+        return
+    trace = FloridaTrace(Path(sink).with_suffix('').with_suffix('.transport.json') if sink else None)
+    original = client.Session
+
+    class ObservedSession(original):
+        def request(self, method, url, *args, **kwargs):
+            route = transport_route(state, url)
+            if not route: return super().request(method, url, *args, **kwargs)
+            number = len(trace.events)
+            trace.record('http_start', route=route, method=method, request_id=number)
+            try:
+                response = super().request(method, url, *args, **kwargs)
+            except Exception as exc:
+                trace.record('http_exception', route=route, request_id=number,
+                             exception_type=type(exc).__name__)
+                raise
+            trace.record('http_headers' if kwargs.get('stream') else 'http_complete',
+                         route=route, request_id=number, status=response.status_code)
+            if kwargs.get('stream'):
+                original_iter = response.iter_content
+                def observed_iter(*args, **kwargs):
+                    try:
+                        yield from original_iter(*args, **kwargs)
+                    except Exception as exc:
+                        trace.record('http_body_exception', route=route, request_id=number,
+                                     exception_type=type(exc).__name__)
+                        raise
+                    else:
+                        trace.record('http_complete', route=route, request_id=number)
+                response.iter_content = observed_iter
+            return response
+
+    client.Session = ObservedSession
+    try:
+        yield trace
+    finally:
+        client.Session = original
+
+
 def execute(master, job, source_finished=None, trace_path=None):
     if job['version'] != master.APP_VERSION:
         raise ValueError('Master version mismatch')
@@ -131,12 +204,14 @@ def execute(master, job, source_finished=None, trace_path=None):
     trace = FloridaTrace(trace_path) if job['state'] == 'FL' else None
     original = master.search_fl if trace else None
     if trace: master.search_fl = trace.wrap(original)
-    try:
-        results = (master.run_sales_lookups_with_source_evidence(organizations, [job['state']], identity)
-                   if identity is not None else master.run_state_lookups_parallel(organizations, [job['state']]))
-    finally:
-        if trace: master.search_fl = original
+    with observe_transport(master, job['state'], trace_path) as transport_trace:
+        try:
+            results = (master.run_sales_lookups_with_source_evidence(organizations, [job['state']], identity)
+                       if identity is not None else master.run_state_lookups_parallel(organizations, [job['state']]))
+        finally:
+            if trace: master.search_fl = original
     if len(results) != 1: raise ValueError('Unexpected result count')
+    if transport_trace: results[0]['lab_transport_trace'] = transport_trace.events
     if trace: results[0]['lab_fl_trace'] = trace.events
     if identity is not None:
         results[0] = master.sales_result_with_identity(results[0], identity)
