@@ -99,6 +99,12 @@ def sales_tail_scores(workflows, pending, held, estimates, limits):
                      if not j['state'].startswith('@'))
     demand.update(j['state'] for j in held if j['workflow_id'] in sales
                   and not j['state'].startswith('@'))
+    if getattr(estimates, 'as_of', None) is not None:
+        # Spare lanes cannot make a single remaining query take less than one
+        # query's service time. Avoid demoting the last long searches.
+        return {state: max(1.0, count / max(1, limits.get(state, 4)))
+                * getattr(estimates, 'tails', estimates).get(state, 10.0)
+                for state, count in demand.items()}
     return {state: count * getattr(estimates, 'tails', estimates).get(state, 10.0) / max(1, limits.get(state, 4))
             for state, count in demand.items()}
 
@@ -158,28 +164,52 @@ def apply_censored_tail_floor(c, now, states, estimates):
         estimates.tails[state] = max(estimates.tails.get(state, estimates.get(state, 10.0)), row['tail_seconds'])
 
 
-def order_workflows(workflows, pending, running, sales_policy, version):
-    """Give concurrent Sales equal dispatch opportunity, not equal live count.
+def cohort_timing_estimates(queue, c, now, states, version, workflows):
+    """Freeze elapsed-time metadata before a concurrent Sales cohort begins.
 
-    Least-active ordering repeatedly gives easy organizations another turn as
-    their checks finish. A harder organization can then reach the cutoff with
-    much of its plan still unstarted. In an explicitly enabled, Sales-only lab
-    cohort, count checks already offered instead. Source limits, physical
-    admission, identity dependencies, per-organization ceilings and deadlines
-    are still enforced by the unchanged claim loop below.
+    In-burst quick completions must not evict the slow searches from the last20
+    sample while those searches are still waiting. Read the existing bounded
+    timing histories as of the oldest active Sales submission, with the same
+    completed median and censored tail rules. No identities/results are reused.
+    Standard, mixed-mode, discovery and individual Sales retain their path.
     """
-    balanced = (sales_policy == 'tail-aware'
-                and version.endswith('-performance-lab')
-                and os.environ.get('CE_LAB_SALES_DISPATCH_FAIRNESS') == '1'
-                and len(workflows) > 1
-                and all(w['mode'] == 'sales' and w['kind'] == 'registration'
-                        for w in workflows))
-    def key(w):
-        offered = (len(w['payload']['states'])
-                   - sum(not j['state'].startswith('@')
-                         for j in pending.get(w['id'], []))) if balanced else running[w['id']]
-        return (offered, w['dispatched'], w['submitted'], w['id'])
-    workflows.sort(key=key)
+    enabled = (getattr(queue, 'sales_policy', '') == 'tail-aware'
+               and version.endswith('-performance-lab')
+               and os.environ.get('CE_LAB_SALES_COHORT_TIMING') == '1'
+               and len(workflows) > 1
+               and all(w['mode'] == 'sales' and w['kind'] == 'registration'
+                       for w in workflows))
+    if not enabled:
+        return queue.cached_duration_estimates(c, now, states, version)
+    before = min(w['submitted'] for w in workflows)
+    if not 0 <= now-before <= 60:
+        return queue.cached_duration_estimates(c, now, states, version)
+    cache = getattr(queue, '_cohort_timing_cache', None)
+    if cache and cache[0] == version and cache[1] == before and states <= cache[2]:
+        return cache[3]
+    def rows(include_censored):
+        eligible = ("(error IS NULL OR error IN ('WORKFLOW_DEADLINE','TASK_TIME_LIMIT'))"
+                    if include_censored else 'error IS NULL')
+        projection = ("percentile_cont(0.95) WITHIN GROUP (ORDER BY recent.seconds) AS tail_seconds"
+                      if include_censored else
+                      "percentile_cont(0.5) WITHIN GROUP (ORDER BY recent.seconds) AS seconds, "
+                      "percentile_cont(0.95) WITHIN GROUP (ORDER BY recent.seconds) AS tail_seconds")
+        return c.execute(
+            f"SELECT wanted.state, {projection} FROM unnest(%s::text[]) AS wanted(state) "
+            "CROSS JOIN LATERAL (SELECT finished-claimed AS seconds FROM cc_lab_jobs "
+            f"WHERE state=wanted.state AND phase='done' AND {eligible} AND attempt=1 "
+            "AND finished>=%s AND finished<=%s AND claimed IS NOT NULL "
+            "AND finished>claimed AND finished-claimed<=300 "
+            "ORDER BY finished DESC LIMIT 20) recent GROUP BY wanted.state",
+            (sorted(states), before-86400, before))
+    values = DurationEstimates(rows(False))
+    if os.environ.get('CE_LAB_SALES_TAIL_CENSORING') == '1':
+        for row in rows(True):
+            state = row['state']
+            values.tails[state] = max(values.tails.get(state, values.get(state, 10.0)), row['tail_seconds'])
+    values.as_of = before
+    queue._cohort_timing_cache = (version, before, frozenset(states), values)
+    return values
 
 
 class Queue:
@@ -370,14 +400,14 @@ class Queue:
                     protected=min(candidates,key=lambda j:j['id'])
             # Optional lab-only concurrent Sales policy. Organization fairness,
             # actual source/CPU limits, identity dependency and cutoff are below.
-            estimates = self.cached_duration_estimates(c, now,
-                {j['state'] for jobs in pending.values() for j in jobs}, cfg['source_version'])
+            estimates = cohort_timing_estimates(self, c, now,
+                {j['state'] for jobs in pending.values() for j in jobs}, cfg['source_version'], workflows)
             tail_scores = (sales_tail_scores(workflows, pending, held, estimates, cfg['registry_limits'])
                            if capacity_rows is not None and sales_tail_capacity(workflows, pending, held,
                                estimates, capacity_rows.fetchall(), cfg['source_version'], now) else {})
             for workflow in workflows:
                 order_pending(workflow, pending.get(workflow['id'], []), estimates, tail_scores, now)
-            order_workflows(workflows, pending, running, self.sales_policy, cfg['source_version'])
+            workflows.sort(key=lambda w: (running[w['id']], w['dispatched'], w['submitted'], w['id']))
             if (protected and used+protected['weight']<=ceiling
                     and all(busy[r]<cfg['registry_limits'].get(r,4) for r in protected['resources'])):
                 workflows.sort(key=lambda w:w['id']!=protected['workflow_id'])
@@ -415,6 +445,7 @@ class Queue:
                                    state_concurrency=w['payload'].get('state_concurrency', 15),
                                    sales_policy=('tail-aware' if tail_scores else 'shortest') if w['mode']=='sales' else None,
                                    sales_policy_configured=self.sales_policy if w['mode']=='sales' else None,
+                                   source_timing_as_of=getattr(estimates, 'as_of', None),
                                    source_drain_estimate=tail_scores.get(j['state']))
                     if seed_cursor: seed['result'] = seed_cursor.fetchone()['result']
                     return {**j, 'owner': worker, 'token': token, 'attempt': j['attempt']+1,

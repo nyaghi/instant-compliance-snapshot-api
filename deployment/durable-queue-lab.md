@@ -1082,18 +1082,19 @@ candidate requires fresh cloud validation; local TLS success is not cloud proof.
 
 The private lab accepts an explicit state_concurrency of 32 for Sales registration only. Standard keeps its default of 15 and cannot request 32. Discovery, registry logic, identity checks, source reservations, worker capacity and 60/900-second deadlines are unchanged. The controlled comparison uses Sales 20 versus 32 with the same 20 organizations and 24 nodes; it does not change staging or production defaults.
 
-### Equal Sales dispatch opportunity candidate (perf.80)
+### Sales timing snapshot candidate (perf.81)
 
-The perf.79 repeats produced 623 and 627 conclusive checks out of 640, versus
-638 in the fresh individual baseline. Completed statuses and available EIN/IDs
-matched the Standard reference. At 30 seconds in the second burst, one hard
-organization had only 11 checks started while an easier organization had 31.
-The least-active workflow preference rewards quick completions with more turns.
+Perf.80 equal-dispatch ordering is rejected: its fixed24-node bursts yielded
+628 then606 conclusive checks, versus638 individually. The prior least-active
+organization order is restored. The first trial trace also showed SC urgency
+of1.23seconds despite31–33second individual searches: new quick completions
+evicted the slow cases from the last20 sample during the burst.
 
-With `CE_LAB_SALES_DISPATCH_FAIRNESS=1`, an exclusively Sales registration
-cohort in the performance lab is ordered by checks already offered, then the
-existing dispatch/submission age. Single workflows, Standard, mixed modes and
-discovery retain their ordering. Per-state ordering, physical/source limits,
-identity dependency, cancellation, deadlines and result handling are unchanged.
-This is a candidate requiring controlled live comparison, not a capacity claim.
-Use the same 24 nodes, Sales20, all32 states and two repetitions; restore4 nodes.
+`CE_LAB_SALES_COHORT_TIMING=1` reads the same bounded timing history as of the
+oldest active Sales submission, excluding later completions. Only elapsed-time
+metadata is retained for that cohort; no lookup results, identities or names.
+The source drain estimate is also at least one query's tail service time even
+when fewer requests remain than available source lanes. Completed medians and
+all lookup/admission/deadline rules remain unchanged. Standard, mixed modes,
+discovery and individual Sales keep their original path. Live qualification
+still requires the fixed24-node, all32-state comparison and restoration to4.

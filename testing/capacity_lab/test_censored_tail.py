@@ -8,8 +8,8 @@ from testing.capacity_lab import test_durable_queue as dbtests
 
 
 def strip_censored_tail(tree):
-    from testing.capacity_lab.dispatch_scope import strip_dispatch_fairness
-    strip_dispatch_fairness(tree)
+    from testing.capacity_lab.cohort_scope import strip_cohort_timing
+    strip_cohort_timing(tree)
     helper = next((n for n in tree.body if getattr(n, 'name', '') == 'apply_censored_tail_floor'), None)
     if helper is None: return
     tree.body.remove(helper)
