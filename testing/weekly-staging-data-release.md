@@ -4,7 +4,7 @@ Scope: KS, KY, LA, NH, OR. Run every Sunday at 6 a.m. America/New_York. The exis
 
 ## Prepare
 
-Use a fresh isolated worktree from the latest origin/staging. Do not use or commit the dirty saved checkout, overwrite unrelated work, push main, change production, or change environment variables. The saved project has other uncommitted work. Fetch origin staging and create a uniquely named maintenance branch/worktree. Use the project's pinned Python and requirements, and Playwright Chromium. Credentials already available must never be printed.
+Inspect the two staging Render services listed below before choosing a source branch. Require both to identify the same non-production branch and live commit; if they disagree, stop and report the discrepancy. Fetch that exact branch and start an isolated worktree from its latest remote head, preserving all previously released code. Never assume the branch is named staging: the active staging release may use a release branch. Confirm the live commit is an ancestor of the selected source. Do not use or commit the dirty saved checkout, overwrite unrelated work, push main, change production, or change environment variables. Use the project's pinned Python and requirements, and Playwright Chromium. Credentials already available must never be printed.
 
 Install the current checkout's pinned requirements even when reusing a Python environment. On Windows, the platform-specific `tzdata` dependency supplies the IANA database used by identity evidence timestamps. The weekly smoke runner and integrity suite verify UTC and America/New_York before relying on lookup outcomes. A missing local dependency is a validation-environment failure; repair it and rerun rather than treating the resulting missing IRS evidence as a registry change.
 
@@ -26,9 +26,9 @@ Run `python testing/run_weekly_data_smoke.py --output testing/weekly-data-eviden
 
 ## Deploy without another permission request
 
-The user authorizes automatic STAGING deployment of validated weekly data. Stage only KS_weekly_checker.py, registered-charities.pdf, downloadable-data/NH-records.json, Charity_OR.txt, downloadable-data/KY.pdf, downloadable-data/KY-records.json, downloadable-data/LA.xlsx, and downloadable-state-data.json. Do not sweep unrelated changes into a commit. Respect .gitattributes so asset checksums survive checkout. Commit and push HEAD:staging after confirming origin/staging has not advanced; reconcile safely if it has. Never force push. Code fixes outside routine data maintenance require their normal local regression checks.
+The user authorizes automatic STAGING deployment of validated weekly data. Stage only KS_weekly_checker.py, registered-charities.pdf, downloadable-data/NH-records.json, Charity_OR.txt, downloadable-data/KY.pdf, downloadable-data/KY-records.json, downloadable-data/LA.xlsx, and downloadable-state-data.json. Do not sweep unrelated changes into a commit. Respect .gitattributes so asset checksums survive checkout. Commit and push to the exact staging branch verified during preparation, after confirming its remote head has not advanced; reconcile safely if it has. Never force push. Code fixes outside routine data maintenance require their normal local regression checks.
 
-Wait for both staging Render services to deploy that exact commit:
+Recheck that the services still use the verified staging branch. Deploy the exact validated commit to both services, explicitly triggering a pinned deployment if auto-deploy is disabled. Do not change their branch, auto-deploy setting, environment variables, instance count, or other configuration. Wait for both staging Render services to report that exact commit live:
 - public: srv-d8a38lnavr4c73d4ib30
 - internal: srv-d82afqjrjlhs738j7or0
 
