@@ -304,6 +304,7 @@ def strip_warm_ready_and_failure_trace_engine(tree):
 
 def strip_fl_verified_first_trial(tree):
     """The opt-in lab changes only which verified transport sends the same page."""
+    strip_nj_public_query(tree)
     expected_error=ast.parse('if fl_verified_transport_first() and not isinstance(self.error, FloridaCertificateError):\n    self.error = None\n').body[0]
     expected_asset=ast.parse('if fl_verified_transport_first() and request.resource_type != "document":\n    return route.fallback()\n').body[0]
     for cls in tree.body:
@@ -341,3 +342,25 @@ def strip_empty_claim_backoff(tree):
             if ast.unparse(node)=='self.claim_backoff.observe(bool(job), time.monotonic())':return None
             return self.generic_visit(node)
     Restore().visit(tree)
+
+
+def strip_nj_public_query(tree):
+    """Restore the browser-only acquisition and inline verbatim classification."""
+    helper=next((n for n in tree.body if getattr(n,'name','')=='nj_result_from_body'),None)
+    if helper is None:return
+    fn=next(n for n in tree.body if getattr(n,'name','')=='search_nj_direct')
+    body=next(n for n in fn.body if isinstance(n,ast.Try)).body
+    assert ast.unparse(body[-1])=='return nj_result_from_body(page, org, result, body, ein_digits)'
+    body[-1:]=helper.body
+    runtime=next(n for n in tree.body if getattr(n,'name','')=='run_state_lookup')
+    expected=ast.parse('''if state == "NJ" and not capture_source_snapshot:
+    direct = search_nj_public_details(org)
+    if direct is not None:
+        result, body = direct
+        return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
+''').body[0]
+    matches=[n for n in runtime.body if ast.dump(n)==ast.dump(expected)]
+    assert len(matches)==1
+    runtime.body.remove(matches[0])
+    tree.body=[n for n in tree.body if getattr(n,'name','') not in
+        {'nj_public_query_enabled','search_nj_public_details','nj_result_from_body'}]

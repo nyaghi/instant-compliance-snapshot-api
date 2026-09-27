@@ -988,3 +988,26 @@ New transport failures still abort, TLS verification and hard deadlines remain,
 and certificate failures are never cleared. Default production/staging path is
 unchanged. No status, name, EIN, address, date, source cap or queue change.
 This does not repair Florida source outages or eliminate its response latency.
+
+
+### Overnight New Jersey public EIN acquisition (perf53)
+
+A fresh local trace spent about eight seconds before sending the EIN query.
+The observed anonymous public portal protocol returned the same EIN, CH number
+and fiscal-period input through a fresh session in about9.6seconds total versus
+13.4seconds for the full browser lookup. These are preliminary source probes,
+not a concurrent performance claim.
+
+The new master-backend fast path is explicitly enabled only on the exact lab
+origin. It fetches a fresh public search page, view configuration, anonymous
+request-verification token, unfiltered EIN query, registration selector and
+detail. Only a complete single-record query whose exact EIN and CH identifier
+match the full detail, with usable fiscal-period evidence, can use the path.
+Negative, duplicate, filtered, incomplete, redirected, blocked, or unknown
+responses fall back to the existing browser and name-variant workflow. No
+cross-organization result/session/token reuse. TLS verification, source limits,
+queue reservations and the hard60second workflow cutoff remain unchanged.
+
+The existing NJ status/fiscal-period classification statements move verbatim
+into a shared function used by both acquisition paths. AST controls prove all
+other master behavior unchanged. Evidence capture retains the browser.

@@ -74,6 +74,8 @@ class Recovery(unittest.TestCase):
         root=Path(m.__file__).parent
         old=ast.parse(subprocess.check_output(['git','show','113c86e:registry_snapshot_server.py'],cwd=root).decode('utf-8'))
         new=ast.parse(Path(m.__file__).read_text(encoding='utf-8'))
+        from testing.capacity_lab.parsing_scope import strip_nj_public_query
+        strip_nj_public_query(new)
         expected=ast.parse('if fl_verified_transport_first() and not isinstance(self.error, FloridaCertificateError):\n    self.error = None\n').body[0]
         cls=next(n for n in new.body if getattr(n,'name','')=='FloridaVerifiedTransport')
         route=next(n for n in cls.body if getattr(n,'name','')=='route')

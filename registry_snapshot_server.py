@@ -19132,6 +19132,292 @@ def nj_search_body(page, query):
         page.remove_listener("requestfinished", on_finished)
 
 
+def nj_public_query_enabled() -> bool:
+    return (APP_VERSION.endswith("-performance-lab")
+            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and os.environ.get("CE_LAB_NJ_PUBLIC_QUERY") == "1")
+
+
+def search_nj_public_details(org):
+    """Fresh public EIN query and detail; only one fully confirmed record qualifies.
+
+    Uses the anonymous portal's observed query protocol with its fresh session
+    and request-verification token. No organization results or tokens are shared.
+    Missing, negative, ambiguous, incomplete or changed responses keep the
+    existing browser/name-fallback path and never become a negative here.
+    """
+    if (not nj_public_query_enabled() or curl_requests is None
+            or getattr(org, "evidence_mode", False) or CAPTURE_EVIDENCE_SCREENSHOTS
+            or CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT):
+        return None
+    ein = canonical_ein_digits(org.ein)
+    if len(ein) != 9:
+        return None
+    base = "https://charportal.dca.njoag.gov"
+    path = "/Charity-Registration/CHR-Public-Search-Page/"
+    view = "Portal - Charity - Public Search Subgrid"
+    deadline = time.monotonic() + 12.0
+
+    def input_values(source, key, expected):
+        values = []
+        for tag in re.findall(r"<input\b[^>]*>", source, re.I):
+            attrs = {k.lower(): html.unescape(v) for k, _, v in
+                re.findall(r'''\b(id|name|value)\s*=\s*(["'])(.*?)\2''', tag, re.I)}
+            if attrs.get(key) == expected:
+                values.append(attrs.get("value", ""))
+        return values
+
+    try:
+        with curl_requests.Session() as session:
+            def fetch(request_path, content_type, payload=None, token=""):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("NJ public query allowance exhausted")
+                assert request_path.startswith("/") and not request_path.startswith("//")
+                headers = {"Accept": "application/json" if content_type == "json" else "text/html"}
+                if payload is not None:
+                    headers.update({"__RequestVerificationToken": token,
+                        "X-Requested-With": "XMLHttpRequest", "Origin": base, "Referer": base + path})
+                response = session.request("POST" if payload is not None else "GET", base + request_path,
+                    json=payload, headers=headers, timeout=min(4.0, remaining), allow_redirects=False,
+                    verify=True, stream=True)
+                try:
+                    if (response.status_code != 200 or response.url != base + request_path
+                            or content_type not in response.headers.get("Content-Type", "").lower()):
+                        raise ValueError("NJ public query response changed or incomplete")
+                    pieces, size = [], 0
+                    for chunk in response.iter_content():
+                        size += len(chunk)
+                        if size > 1_000_000 or time.monotonic() >= deadline:
+                            raise ValueError("NJ public query response exceeded its allowance")
+                        pieces.append(chunk)
+                    return b"".join(pieces).decode("utf-8")
+                finally:
+                    response.close()
+
+            source = fetch(path, "html")
+            if not re.search(r"</html>\s*(?:<!--[\s\S]*?-->\s*)*$", source, re.I):
+                return None
+            if re.search(r"verify you are human|human verification|access denied|too many requests", html_to_text(source), re.I):
+                return None
+            cfg = json.loads(fetch("/_services/portal/GetListViewConfiguration/" + quote(view, safe=""), "json"))
+            layouts = cfg.get("layouts")
+            if cfg.get("filterenabled") is not False or not isinstance(layouts, list) or len(layouts) != 1:
+                return None
+            layout = layouts[0]
+            config = layout.get("Configuration", {})
+            if (layout.get("ViewName") != view or config.get("ViewId") != cfg.get("defaultViewId")
+                    or config.get("EntityName") != "account" or config.get("Search", {}).get("Enabled") is not True
+                    or not {"name", "accountnumber", "crsm_federalein", "crsm_filestanding"}.issubset(
+                        {c.get("LogicalName") for c in layout.get("Columns", []) if isinstance(c, dict)})):
+                return None
+            query_path = cfg.get("getDataUrl", "")
+            secure_config = layout.get("Base64SecureConfiguration")
+            if (not isinstance(query_path, str) or not re.fullmatch(
+                    r"/_services/entity-grid-data\.json/[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", query_path)
+                    or not isinstance(secure_config, str) or not secure_config or len(secure_config) > 100_000):
+                return None
+            tokens = input_values(fetch("/_layout/tokenhtml", "html"), "name", "__RequestVerificationToken")
+            if len(tokens) != 1 or not tokens[0]:
+                return None
+            payload = {"base64SecureConfiguration": secure_config, "sortExpression": "", "search": ein,
+                "page": 1, "pageSize": 10, "filter": None, "metaFilter": "", "timezoneOffset": 0,
+                "customParameters": [], "odataFilterQuery": "", "nlSearchFilter": ""}
+            data = json.loads(fetch(query_path, "json", payload, tokens[0]))
+            records = data.get("Records")
+            if (type(data.get("ItemCount")) is not int or data["ItemCount"] != 1
+                    or data.get("MoreRecords") is not False or data.get("PageNumber") != 1
+                    or not isinstance(records, list) or len(records) != 1):
+                return None
+            attrs = records[0].get("Attributes")
+            if not isinstance(attrs, list):
+                return None
+            fields = {}
+            for attribute in attrs:
+                if not isinstance(attribute, dict):
+                    return None
+                key = attribute.get("Name")
+                if key in fields:
+                    return None
+                fields[key] = attribute.get("DisplayValue")
+            name, credential, state_status, found_ein = [fields.get(k) for k in
+                ("name", "accountnumber", "crsm_filestanding", "crsm_federalein")]
+            if (not all(isinstance(v, str) and v.strip() for v in (name, credential, state_status, found_ein))
+                    or canonical_ein_digits(found_ein) != ein or not re.fullmatch(r"CH\d+", credential)):
+                return None
+            selection = json.loads(fetch("/retrieveRegistration/?" + urlencode({"name": name, "chNum": credential}), "json"))
+            if (selection.get("charityName", "").strip().casefold() != name.strip().casefold()
+                    or not str(selection.get("numberOfResults", "")).isdigit()
+                    or int(selection["numberOfResults"]) < 1):
+                return None
+            identifiers = [selection.get(k, "") for k in ("accountId", "charityRegistrationId")]
+            if not all(isinstance(v, str) and re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", v)
+                       for v in identifiers):
+                return None
+            detail = fetch("/CHR-Public-Details-Page/?" + urlencode(dict(zip(("id", "rid"), identifiers))), "html")
+            if (not re.search(r"</html>\s*(?:<!--[\s\S]*?-->\s*)*$", detail, re.I)
+                    or input_values(detail, "id", "crsm_federalein") != [ein]
+                    or input_values(detail, "id", "accountnumber") != [credential]
+                    or not nj_filing_context_from_body(detail).get("computed_due_date")):
+                return None
+            body = f"Charity Name: {name}\nStatus {state_status} Federal EIN {ein}\nNJ Registration # {credential}\n" + detail
+            result = checker.StateResult(org.organization_name, org.ein, "NJ", checker.STATUS_UNKNOWN, base + path)
+            return nj_result_from_body(None, org, result, body, ein), body
+    except Exception:
+        return None
+
+
+def nj_result_from_body(page, org, result, body, ein_digits):
+    status = ""
+    status_patterns = [
+        ("Noncompliant", r"\bnon\W*compliant\b"),
+        ("Exempt", r"\bexempt\b"),
+        ("Delinquent", r"\bdelinquent\b"),
+        ("Retired", r"\bretired\b"),
+        ("Withdrawn", r"\bwithdrawn\b"),
+        ("Revoked", r"\brevoked\b"),
+        ("Suspended", r"\bsuspended\b"),
+        ("Expired", r"\bexpired\b"),
+        ("Pending", r"\bpending\b"),
+        ("Compliant", r"\bcompliant\b"),
+        ("Active", r"\bactive\b"),
+        ("Current", r"\bcurrent\b"),
+    ]
+    if ein_digits and ein_line_has_registry_pattern(body, org.ein, r"\bnon\W*compliant\b"):
+        status = "Noncompliant"
+    if not status and ein_digits and ein_digits in re.sub(r"\D", "", body):
+        compact_body = re.sub(r"\s+", " ", body)
+        for match in re.finditer(r"\bnon\W*compliant\b", compact_body, re.I):
+            start = max(0, match.start() - 260)
+            end = min(len(compact_body), match.end() + 260)
+            window = compact_body[start:end]
+            if ein_digits in re.sub(r"\D", "", window):
+                status = "Noncompliant"
+                break
+    if not status and ein_digits and ein_digits in re.sub(r"\D", "", body):
+        try:
+            rows = page.locator("tr")
+            best_status = ""
+            best_score = (-999, -999, -999)
+            for i in range(min(rows.count(), 80)):
+                row_text = re.sub(r"\s+", " ", rows.nth(i).inner_text(timeout=1500)).strip()
+                if ein_digits not in re.sub(r"\D", "", row_text):
+                    continue
+                row_status = ""
+                for label, pattern in status_patterns:
+                    if re.search(pattern, row_text, re.I):
+                        row_status = label
+                        break
+                if not row_status:
+                    continue
+                try:
+                    name_priority = checker.name_match_priority(row_text, org.organization_name)
+                except Exception:
+                    name_priority = -1
+                status_priority = checker.active_row_priority(row_text)
+                if (name_priority == 5 or ein_digits in re.sub(r"\D", "", row_text)) and status_priority in {70, 85}:
+                    status_priority += 100
+                row_score = (name_priority, status_priority, -i)
+                if row_score > best_score:
+                    best_score = row_score
+                    best_status = row_status
+            if best_status:
+                status = best_status
+        except Exception:
+            pass
+    if not status and ein_digits and ein_digits in re.sub(r"\D", "", body):
+        body_candidates = []
+        compact_body = re.sub(r"\s+", " ", body)
+        for label, pattern in status_patterns:
+            for match in re.finditer(pattern, compact_body, re.I):
+                start = max(0, match.start() - 220)
+                end = min(len(compact_body), match.end() + 220)
+                window = compact_body[start:end]
+                if ein_digits not in re.sub(r"\D", "", window):
+                    continue
+                try:
+                    name_priority = checker.name_match_priority(window, org.organization_name)
+                except Exception:
+                    name_priority = -1
+                status_priority = checker.active_row_priority(label)
+                if status_priority in {70, 85}:
+                    status_priority += 100
+                body_candidates.append((status_priority, name_priority, -match.start(), label))
+        if body_candidates:
+            body_candidates.sort(reverse=True)
+            status = body_candidates[0][3]
+    if not status:
+        status_match = re.search(r"Status\s+([A-Za-z][A-Za-z /-]+?)\s+Federal\s+EIN", re.sub(r"\s+", " ", body), re.I)
+        if status_match:
+            status = status_match.group(1).strip()
+    registry_name = useful_registry_name(checker.extract_labeled_value_from_text(body, ["Organization Name", "Charity Name", "Legal Name", "Name"]))
+    if not registry_name and ein_digits:
+        for line in re.split(r"[\r\n]+", body or ""):
+            line_text = re.sub(r"\s+", " ", line).strip()
+            if ein_digits not in re.sub(r"\D", "", line_text):
+                continue
+            registry_name = useful_registry_name(re.split(r"\b(?:Federal\s+EIN|EIN|Status|Registration)\b", line_text, maxsplit=1, flags=re.I)[0])
+            if registry_name:
+                break
+    result.matched_registry_name = registry_name
+    nj_context = nj_filing_context_from_body(body)
+    nj_due_date = nj_context.get("computed_due_date")
+    if (
+        not nj_due_date
+        and re.search(r"\b(compliant|current|active)\b", status or "", re.I)
+        and (not ein_digits or ein_digits in re.sub(r"\D", "", body or ""))
+    ):
+        try:
+            time.sleep(1.0)
+            retry_body = nj_detail_body(page, org)
+            retry_context = nj_filing_context_from_body(retry_body)
+            retry_due_date = retry_context.get("computed_due_date")
+            if retry_due_date:
+                body = retry_body
+                nj_context = retry_context
+                nj_due_date = retry_due_date
+        except Exception:
+            pass
+    result.raw_status_text = status or "Status not found"
+    if nj_due_date:
+        result.raw_status_text = f"{result.raw_status_text} | Next Filing Due: {format_date(nj_due_date)}"
+    if nj_context:
+        if nj_context.get("last_year_on_record"):
+            result.last_year_on_record = nj_context["last_year_on_record"]
+        fiscal_end = nj_context.get("fiscal_year_end")
+        if fiscal_end:
+            result.fiscal_year_end = f"{fiscal_end[0]}/{fiscal_end[1]}"
+        if nj_context.get("next_required_period"):
+            result.next_required_period = format_date(nj_context["next_required_period"])
+        if nj_due_date:
+            result.computed_due_date = format_date(nj_due_date)
+        result.status_reason = "NJ_STATUS_FROM_REGISTRY_FILING_PERIOD"
+        result.source_attempts = [nj_context.get("source_evidence", "NJ registry filing-period evidence parsed.")]
+    if re.search(r"\b(retired|withdrawn|terminated|cancelled|canceled|closed)\b", status, re.I):
+        result.status = "Closed / Withdrawn / Canceled"
+    elif re.search(r"\bnon\W*compliant\b", status, re.I):
+        result.status = "Delinquent"
+    elif nj_due_date and re.search(r"\b(compliant|current|active)\b", status, re.I):
+        result.status = status_from_calendar_date(nj_due_date)
+        result.source_note = "New Jersey raw Status was checked against fiscal-period due-date evidence from the public page."
+    elif re.search(r"\b(compliant|current|active)\b", status, re.I):
+        result.status = checker.STATUS_CURRENT
+        result.raw_status_text = f"{result.raw_status_text} | NJ filing-period evidence not visible"
+        result.source_note = (
+            "New Jersey returned an exact registry status, but CharityClarity did not retrieve a usable "
+            "last accepted fiscal period or due-date section from the public page. CharityClarity returned Current "
+            "based on New Jersey's raw Compliant/Active registry status."
+        )
+        result.source_confidence = "raw_status_without_filing_period_evidence"
+        result.status_reason = "NJ_RAW_COMPLIANT_STATUS_NO_FILING_PERIOD_EVIDENCE"
+    else:
+        result.status = status or checker.STATUS_UNKNOWN
+    if not result.source_note:
+        result.source_note = "New Jersey uses the public search result Status value."
+    result.success = True
+    return result
+
+
 def search_nj_direct(page, org):
     url = "https://charportal.dca.njoag.gov/Charity-Registration/CHR-Public-Search-Page/"
     result = checker.StateResult(org.organization_name, org.ein, "NJ", checker.STATUS_UNKNOWN, url)
@@ -19169,154 +19455,7 @@ def search_nj_direct(page, org):
         except Exception:
             pass
 
-        status = ""
-        status_patterns = [
-            ("Noncompliant", r"\bnon\W*compliant\b"),
-            ("Exempt", r"\bexempt\b"),
-            ("Delinquent", r"\bdelinquent\b"),
-            ("Retired", r"\bretired\b"),
-            ("Withdrawn", r"\bwithdrawn\b"),
-            ("Revoked", r"\brevoked\b"),
-            ("Suspended", r"\bsuspended\b"),
-            ("Expired", r"\bexpired\b"),
-            ("Pending", r"\bpending\b"),
-            ("Compliant", r"\bcompliant\b"),
-            ("Active", r"\bactive\b"),
-            ("Current", r"\bcurrent\b"),
-        ]
-        if ein_digits and ein_line_has_registry_pattern(body, org.ein, r"\bnon\W*compliant\b"):
-            status = "Noncompliant"
-        if not status and ein_digits and ein_digits in re.sub(r"\D", "", body):
-            compact_body = re.sub(r"\s+", " ", body)
-            for match in re.finditer(r"\bnon\W*compliant\b", compact_body, re.I):
-                start = max(0, match.start() - 260)
-                end = min(len(compact_body), match.end() + 260)
-                window = compact_body[start:end]
-                if ein_digits in re.sub(r"\D", "", window):
-                    status = "Noncompliant"
-                    break
-        if not status and ein_digits and ein_digits in re.sub(r"\D", "", body):
-            try:
-                rows = page.locator("tr")
-                best_status = ""
-                best_score = (-999, -999, -999)
-                for i in range(min(rows.count(), 80)):
-                    row_text = re.sub(r"\s+", " ", rows.nth(i).inner_text(timeout=1500)).strip()
-                    if ein_digits not in re.sub(r"\D", "", row_text):
-                        continue
-                    row_status = ""
-                    for label, pattern in status_patterns:
-                        if re.search(pattern, row_text, re.I):
-                            row_status = label
-                            break
-                    if not row_status:
-                        continue
-                    try:
-                        name_priority = checker.name_match_priority(row_text, org.organization_name)
-                    except Exception:
-                        name_priority = -1
-                    status_priority = checker.active_row_priority(row_text)
-                    if (name_priority == 5 or ein_digits in re.sub(r"\D", "", row_text)) and status_priority in {70, 85}:
-                        status_priority += 100
-                    row_score = (name_priority, status_priority, -i)
-                    if row_score > best_score:
-                        best_score = row_score
-                        best_status = row_status
-                if best_status:
-                    status = best_status
-            except Exception:
-                pass
-        if not status and ein_digits and ein_digits in re.sub(r"\D", "", body):
-            body_candidates = []
-            compact_body = re.sub(r"\s+", " ", body)
-            for label, pattern in status_patterns:
-                for match in re.finditer(pattern, compact_body, re.I):
-                    start = max(0, match.start() - 220)
-                    end = min(len(compact_body), match.end() + 220)
-                    window = compact_body[start:end]
-                    if ein_digits not in re.sub(r"\D", "", window):
-                        continue
-                    try:
-                        name_priority = checker.name_match_priority(window, org.organization_name)
-                    except Exception:
-                        name_priority = -1
-                    status_priority = checker.active_row_priority(label)
-                    if status_priority in {70, 85}:
-                        status_priority += 100
-                    body_candidates.append((status_priority, name_priority, -match.start(), label))
-            if body_candidates:
-                body_candidates.sort(reverse=True)
-                status = body_candidates[0][3]
-        if not status:
-            status_match = re.search(r"Status\s+([A-Za-z][A-Za-z /-]+?)\s+Federal\s+EIN", re.sub(r"\s+", " ", body), re.I)
-            if status_match:
-                status = status_match.group(1).strip()
-        registry_name = useful_registry_name(checker.extract_labeled_value_from_text(body, ["Organization Name", "Charity Name", "Legal Name", "Name"]))
-        if not registry_name and ein_digits:
-            for line in re.split(r"[\r\n]+", body or ""):
-                line_text = re.sub(r"\s+", " ", line).strip()
-                if ein_digits not in re.sub(r"\D", "", line_text):
-                    continue
-                registry_name = useful_registry_name(re.split(r"\b(?:Federal\s+EIN|EIN|Status|Registration)\b", line_text, maxsplit=1, flags=re.I)[0])
-                if registry_name:
-                    break
-        result.matched_registry_name = registry_name
-        nj_context = nj_filing_context_from_body(body)
-        nj_due_date = nj_context.get("computed_due_date")
-        if (
-            not nj_due_date
-            and re.search(r"\b(compliant|current|active)\b", status or "", re.I)
-            and (not ein_digits or ein_digits in re.sub(r"\D", "", body or ""))
-        ):
-            try:
-                time.sleep(1.0)
-                retry_body = nj_detail_body(page, org)
-                retry_context = nj_filing_context_from_body(retry_body)
-                retry_due_date = retry_context.get("computed_due_date")
-                if retry_due_date:
-                    body = retry_body
-                    nj_context = retry_context
-                    nj_due_date = retry_due_date
-            except Exception:
-                pass
-        result.raw_status_text = status or "Status not found"
-        if nj_due_date:
-            result.raw_status_text = f"{result.raw_status_text} | Next Filing Due: {format_date(nj_due_date)}"
-        if nj_context:
-            if nj_context.get("last_year_on_record"):
-                result.last_year_on_record = nj_context["last_year_on_record"]
-            fiscal_end = nj_context.get("fiscal_year_end")
-            if fiscal_end:
-                result.fiscal_year_end = f"{fiscal_end[0]}/{fiscal_end[1]}"
-            if nj_context.get("next_required_period"):
-                result.next_required_period = format_date(nj_context["next_required_period"])
-            if nj_due_date:
-                result.computed_due_date = format_date(nj_due_date)
-            result.status_reason = "NJ_STATUS_FROM_REGISTRY_FILING_PERIOD"
-            result.source_attempts = [nj_context.get("source_evidence", "NJ registry filing-period evidence parsed.")]
-        if re.search(r"\b(retired|withdrawn|terminated|cancelled|canceled|closed)\b", status, re.I):
-            result.status = "Closed / Withdrawn / Canceled"
-        elif re.search(r"\bnon\W*compliant\b", status, re.I):
-            result.status = "Delinquent"
-        elif nj_due_date and re.search(r"\b(compliant|current|active)\b", status, re.I):
-            result.status = status_from_calendar_date(nj_due_date)
-            result.source_note = "New Jersey raw Status was checked against fiscal-period due-date evidence from the public page."
-        elif re.search(r"\b(compliant|current|active)\b", status, re.I):
-            result.status = checker.STATUS_CURRENT
-            result.raw_status_text = f"{result.raw_status_text} | NJ filing-period evidence not visible"
-            result.source_note = (
-                "New Jersey returned an exact registry status, but CharityClarity did not retrieve a usable "
-                "last accepted fiscal period or due-date section from the public page. CharityClarity returned Current "
-                "based on New Jersey's raw Compliant/Active registry status."
-            )
-            result.source_confidence = "raw_status_without_filing_period_evidence"
-            result.status_reason = "NJ_RAW_COMPLIANT_STATUS_NO_FILING_PERIOD_EVIDENCE"
-        else:
-            result.status = status or checker.STATUS_UNKNOWN
-        if not result.source_note:
-            result.source_note = "New Jersey uses the public search result Status value."
-        result.success = True
-        return result
+        return nj_result_from_body(page, org, result, body, ein_digits)
     except Exception as exc:
         result.error = f"NJ error: {exc}"
         return result
@@ -27090,6 +27229,12 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             result.success = False
         result = ensure_state_result(result, org, state)
         return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
+
+    if state == "NJ" and not capture_source_snapshot:
+        direct = search_nj_public_details(org)
+        if direct is not None:
+            result, body = direct
+            return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
 
     if state in {"HI", "OH", "WV"} and not capture_source_snapshot:
         direct = (search_hi_direct_details(org) if state == "HI" else
