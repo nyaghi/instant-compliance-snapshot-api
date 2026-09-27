@@ -9507,6 +9507,18 @@ def search_or_completed(page, org, module):
                     const actual = document.querySelector('#results');
                     const parsed = document.createElement('div'); parsed.innerHTML = expected;
                     const text = el => (el?.textContent || '').replace(/\s+/g, ' ').trim();
+                    const sourceGrid = parsed.querySelector('#grid');
+                    const actualGrid = actual?.querySelector('#grid');
+                    if (sourceGrid && actualGrid && text(parsed.querySelector('#search-results')) ===
+                            text(actual.querySelector('#search-results')) && window.jQuery?.fn?.dataTable?.isDataTable(actualGrid)) {
+                        // All rows already arrived in this completed response.
+                        // Expose the state's client-side pages to the existing
+                        // parser; never interpret only the first 25 records.
+                        const count = grid => grid.querySelectorAll('tbody tr:not(:has(td.dataTables_empty))').length;
+                        if (count(actualGrid) < count(sourceGrid)) {
+                            window.jQuery(actualGrid).DataTable().page.len(-1).draw(false);
+                        }
+                    }
                     const snapshot = root => {
                         const grid = root.querySelector('#grid');
                         if (grid) {

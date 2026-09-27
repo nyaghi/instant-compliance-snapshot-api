@@ -82,5 +82,19 @@ document.querySelector('#grid').insertAdjacentHTML('beforebegin','<div>Show 25 e
         result=self.run_case(True,0,source,"document.querySelector('#search-results').textContent='Search Results for Other';")
         self.assertFalse(result.success);self.assertEqual(result.reason_code,'OR_INCOMPLETE_QUERY_RESPONSE')
 
+    def test_client_side_pagination_exposes_every_received_record_before_parsing(self):
+        others=''.join(f'<tr><td><a href="/Charities/Charity/Details/other{i}">A Relief {i}</a></td></tr>' for i in range(25))
+        source=RESULT.replace('<tbody>','<tbody>'+others)
+        transform='''const grid=document.querySelector('#grid');
+const all=Array.from(grid.querySelectorAll('tbody tr'));
+all.slice(25).forEach(row=>row.remove());
+window.jQuery=()=>({DataTable:()=>({page:{len:n=>({draw:()=>{
+ if(n===-1)all.forEach(row=>grid.querySelector('tbody').appendChild(row));
+}})}})});
+window.jQuery.fn={dataTable:{isDataTable:el=>el===grid}};'''
+        result=self.run_case(True,0,source,transform)
+        self.assertTrue(result.success,result.error)
+        self.assertNotEqual(result.status,m.state_extension_module('OR').STATUS_NOT_REGISTERED)
+
 
 if __name__=='__main__':unittest.main()
