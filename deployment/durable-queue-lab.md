@@ -941,3 +941,25 @@ This is a testable scheduling hypothesis, not a performance claim. The user
 authorized temporary overnight compute under $50 and restoration of four nodes.
 Paired one-org/concurrent all32 measurements must qualify any benefit; source
 limits are independently varied and audited rather than silently broadened.
+
+### Overnight perf.47: bounded scheduler cost and capacity fallback
+
+perf.46 measured 99/640 conclusive Sales20 results on four nodes, 462/640 on
+twelve, 520/640 on twenty-four with original source caps, and 614/640 on
+twenty-four with measured source caps. The slow-first policy is unsuitable for
+scarce capacity. perf.47 uses it only when queued estimated service plus held
+work fits the live physical slot-seconds before the nearest Sales deadline;
+otherwise shortest-first remains. Actual reservations, source limits and CPU
+admission still apply independently. Standard and single Sales are unchanged.
+
+The 0.5-CPU queue database reached its allowance at twenty-four workers.
+Scheduling-only recent-duration medians now reuse a five-second in-process
+snapshot, invalidated by expiry, version, new states or clock reversal. Three
+partial indexes avoid scanning historical jobs/workflows for pending/held work.
+No registry result is cached and current admission rows are always read fresh
+under the same atomic lock. All claims retain deadlines and ownership fences.
+
+The 614/640 trial also retained a Florida optional initial-date timeout, with
+the same accepted CH credential and compliance status. It is not a clean pass.
+The isolated Sales follow-up also timed out; a subsequent Standard diagnostic
+recovered. Neither retry overwrites the first result or proves reliability.

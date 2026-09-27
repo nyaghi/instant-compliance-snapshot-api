@@ -333,6 +333,7 @@ class DurableTests(unittest.TestCase):
                       (now-70,now-10,old,'LA'))
             c.execute('UPDATE cc_lab_jobs SET claimed=%s,finished=%s WHERE workflow_id=%s AND state=%s',
                       (now-12,now-10,old,'CO'))
+        self.q._duration_cache=None  # Fixture rewrites historical durations directly.
         return worker
 
     def test_sales_fast_first_preserves_all_states_deadline_and_org_fairness(self):
@@ -381,6 +382,22 @@ class DurableTests(unittest.TestCase):
             self.assertEqual(result['total'],2)
             self.assertEqual(result['deadline']-result['submitted'],60)
             self.assertTrue(all(j['result']['status']=='Current' for j in result['jobs']))
+
+    def test_tail_policy_falls_back_on_scarce_pool_without_relaxing_reservations(self):
+        worker=self.seed_duration_history();self.q.sales_policy='tail-aware'
+        with self.q.transaction() as (c,now):
+            c.execute("UPDATE cc_lab_jobs SET claimed=finished-40 WHERE state='LA'")
+            c.execute('UPDATE cc_lab_workers SET slots=1 WHERE id=%s',(worker,))
+        self.q._duration_cache=None
+        self.submit(payload(states=['CO','LA'],mode='sales'))
+        self.submit(payload('987654321',states=['CO','LA'],mode='sales'))
+        first=self.q.claim(worker)
+        self.assertEqual(first['state'],'CO')
+        self.assertIsNone(self.q.claim(worker))
+        with self.q.transaction() as (c,now):
+            event=c.execute("SELECT detail FROM cc_lab_events WHERE event='claimed' AND job_id=%s",(first['id'],)).fetchone()['detail']
+        self.assertEqual(event['sales_policy'],'shortest')
+        self.assertEqual(event['sales_policy_configured'],'tail-aware')
 
     def test_pipelined_claim_failure_rolls_back_job_and_dispatch(self):
         ident = self.submit()

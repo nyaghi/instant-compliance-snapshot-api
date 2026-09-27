@@ -81,6 +81,29 @@ def sales_tail_scores(workflows, pending, held, estimates, limits):
             for state, count in demand.items()}
 
 
+def sales_tail_capacity(workflows, pending, held, estimates, workers, version, now):
+    """Use slow-source ordering only when measured work fits physical capacity.
+
+    This is a priority heuristic, never permission to overbook. The ordinary
+    live source/CPU/memory/slot checks still decide whether a job can start.
+    Scarce pools retain shortest-first, as does any unknown/stale capacity.
+    """
+    sales = [w for w in workflows if w['mode'] == 'sales']
+    if len(sales) < 2:
+        return False
+    window = min(w['deadline'] for w in sales) - now
+    slots = sum(w['slots'] for w in workers if not w['retired']
+                and w['source_version'] == version and 0 <= now-w['heartbeat'] < 20)
+    if window <= 0 or slots <= 0:
+        return False
+    demand = sum(j['weight'] * estimates.get(j['state'], 10.0)
+                 for w in sales for j in pending.get(w['id'], []))
+    # Existing work of either mode continues to own its physical reservation.
+    demand += sum(j['weight'] * max(1.0, estimates.get(j['state'], 10.0)
+                  - max(0.0, now-(j.get('claimed') or now))) for j in held)
+    return demand <= slots * window
+
+
 def order_pending(workflow, jobs, estimates, tail_scores, now):
     def key(job):
         state = job['state']
@@ -99,6 +122,7 @@ class Queue:
         self.sales_policy = sales_policy or os.environ.get('CE_LAB_SALES_QUEUE_POLICY', 'shortest')
         if self.sales_policy not in ('shortest', 'tail-aware'):
             raise ValueError('Unsupported lab Sales queue policy')
+        self._duration_cache = None
         options = {'options': '-c statement_timeout=10000'}
         self.lock = LOCK
         self.ny_enabled = ny_enabled
@@ -229,6 +253,8 @@ class Queue:
                 pending_rows = c.execute("SELECT * FROM cc_lab_jobs WHERE phase='queued' ORDER BY state,id")
                 identity_rows = c.execute("SELECT j.workflow_id,j.phase,j.error FROM cc_lab_jobs j "
                     "JOIN cc_lab_workflows w ON w.id=j.workflow_id WHERE j.state='@sales_identity' AND w.finished IS NULL")
+                capacity_rows = (c.execute('SELECT source_version,slots,heartbeat,retired FROM cc_lab_workers '
+                    'WHERE retired=false AND heartbeat>%s', (now-20,)) if self.sales_policy == 'tail-aware' else None)
             identity = {row['workflow_id']: row for row in identity_rows.fetchall()}
             wk = worker_row.fetchone()
             if not wk or wk['retired']: raise Conflict('Worker is not registered or is retired')
@@ -268,9 +294,11 @@ class Queue:
                     protected=min(candidates,key=lambda j:j['id'])
             # Optional lab-only concurrent Sales policy. Organization fairness,
             # actual source/CPU limits, identity dependency and cutoff are below.
-            estimates = self.duration_estimates(c, now, {j['state'] for jobs in pending.values() for j in jobs})
+            estimates = self.cached_duration_estimates(c, now,
+                {j['state'] for jobs in pending.values() for j in jobs}, cfg['source_version'])
             tail_scores = (sales_tail_scores(workflows, pending, held, estimates, cfg['registry_limits'])
-                           if self.sales_policy == 'tail-aware' else {})
+                           if capacity_rows is not None and sales_tail_capacity(workflows, pending, held,
+                               estimates, capacity_rows.fetchall(), cfg['source_version'], now) else {})
             for workflow in workflows:
                 order_pending(workflow, pending.get(workflow['id'], []), estimates, tail_scores, now)
             workflows.sort(key=lambda w: (running[w['id']], w['dispatched'], w['submitted'], w['id']))
@@ -308,7 +336,8 @@ class Queue:
                         c.execute("UPDATE cc_lab_workflows SET phase='active',started=COALESCE(started,%s),dispatched=%s WHERE id=%s", (now, now, w['id']))
                         self.event(c, now, 'claimed', w['id'], j['id'], worker=worker, token=token,
                                    slot_limit=ceiling, admission=admission_evidence,
-                                   sales_policy=self.sales_policy if w['mode']=='sales' else None,
+                                   sales_policy=('tail-aware' if tail_scores else 'shortest') if w['mode']=='sales' else None,
+                                   sales_policy_configured=self.sales_policy if w['mode']=='sales' else None,
                                    source_drain_estimate=tail_scores.get(j['state']))
                     if seed_cursor: seed['result'] = seed_cursor.fetchone()['result']
                     return {**j, 'owner': worker, 'token': token, 'attempt': j['attempt']+1,
@@ -319,6 +348,19 @@ class Queue:
                                  'sources':{},'errors':{'identity':seed['error'] or 'INCOMPLETE'}}}
                                if seed and seed['phase']=='done' and j['state']!='@sales_identity' else {})}
             return None
+
+    def cached_duration_estimates(self, c, now, states, version):
+        # Only scheduling durations are reused, for five seconds. Registry
+        # results, identity evidence and current reservations are never cached.
+        # Querying the same recent medians on every claim overwhelmed the small
+        # lab queue database at 24 workers. Missing states/version/clock expiry
+        # refresh the complete requested set; an unknown duration remains 10s.
+        cache = self._duration_cache
+        if cache and cache[0] == version and 0 <= now-cache[1] < 5 and states <= cache[2]:
+            return cache[3]
+        values = self.duration_estimates(c, now, states)
+        self._duration_cache = (version, now, frozenset(states), values)
+        return values
 
     @staticmethod
     def duration_estimates(c, now, states):

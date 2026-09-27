@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS cc_lab_workflows (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS cc_lab_active_ein
  ON cc_lab_workflows(scope, ein) WHERE finished IS NULL;
+CREATE INDEX IF NOT EXISTS cc_lab_schedulable_workflows
+ ON cc_lab_workflows(submitted,id) WHERE phase IN ('queued','active') AND stop_reason IS NULL;
 CREATE TABLE IF NOT EXISTS cc_lab_submissions (
  scope text NOT NULL, key text NOT NULL, fingerprint text NOT NULL,
  workflow_id text NOT NULL REFERENCES cc_lab_workflows(id), PRIMARY KEY (scope,key)
@@ -36,6 +38,9 @@ CREATE TABLE IF NOT EXISTS cc_lab_jobs (
 );
 CREATE INDEX IF NOT EXISTS cc_lab_jobs_workflow ON cc_lab_jobs(workflow_id,phase);
 CREATE INDEX IF NOT EXISTS cc_lab_jobs_owner ON cc_lab_jobs(owner,phase);
+CREATE INDEX IF NOT EXISTS cc_lab_pending_jobs ON cc_lab_jobs(state,id) WHERE phase='queued';
+CREATE INDEX IF NOT EXISTS cc_lab_held_jobs ON cc_lab_jobs(owner,lease_until)
+ WHERE phase IN ('running','stopping','quarantined');
 -- Completed discovery sources can release their own permits without releasing
 -- the still-running job's physical weight. Recovery restores every reservation.
 ALTER TABLE cc_lab_jobs ADD COLUMN IF NOT EXISTS released_resources jsonb NOT NULL DEFAULT '[]';
