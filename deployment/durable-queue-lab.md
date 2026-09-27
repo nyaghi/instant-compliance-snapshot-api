@@ -1025,3 +1025,18 @@ Exact-lab opt-in CE_LAB_FL_BUSINESS_LOOKUP=1 reads a fresh, unfiltered FDACS Bus
 ### Bounded Florida public response trial (perf60)
 
 Only the isolated lab enables `CE_LAB_FL_HTTP_PATIENT=1`. The existing TLS-verified official public form gets up to8seconds per request and16seconds total, always capped by remaining lookup time and the unchanged60-second Sales workflow deadline. The previous4-second read can abandon a complete but slower public response and enter expensive browser recovery; a six-second response control fails before this change and passes afterward. All selectors, field validation, exact identity checks, adverse statuses, dates, fallback and partial-page rejection stay identical. Other environments keep4/8seconds. This is an experimental transport allowance, not a claim that the live capacity goal is met.
+
+The perf60 allowance did not improve repeatable Sales coverage. It was rolled
+back and is absent from the deployment profile for perf61.
+
+### perf61: bound New York response body completion
+
+The official browser flow remains Verify, Search, then confirmed record detail.
+The response-header event alone does not prove that its JSON body is complete.
+Register a completion listener before submitting and correlate the exact
+request. Wait for body completion within the original request budget before
+reading JSON. Explicit HTTP rejection needs no body; preserve the existing
+verification rejection and bounded retry rules. No name/EIN/address selection,
+status/date interpretation, source concurrency or Sales deadline changes.
+Local delayed-body and fast-response controls pass. Live validation uses the
+existing four-node lab; it does not establish 20-organization Sales capacity.
