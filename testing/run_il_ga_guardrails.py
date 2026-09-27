@@ -356,7 +356,7 @@ class IntegrationControls(unittest.TestCase):
 
 
 class GeorgiaLocationEvidenceTests(unittest.TestCase):
-    def lookup(self, offices):
+    def lookup(self, offices, reviewed=None, profile=True):
         org = cc.checker.Organization('Endicott College', '04-2103567')
         rows = [dict(name=name, identifier='', detail_key=str(i), location=location,
                      street='', region='', postal_code='') for i, (name, location) in enumerate(offices)]
@@ -365,9 +365,9 @@ class GeorgiaLocationEvidenceTests(unittest.TestCase):
                 return {'rows':copy.deepcopy(rows)}
             return {'body':ga_html(full_name=query['record_name'], license_no='',
                                   license_type='Exempt Charity', status='Exempt', expiry='')}
-        with patch.object(cc,'known_names_for_ein',return_value=[]), \
+        with patch.object(cc,'known_names_for_ein',side_effect=lambda ein: (reviewed or []) if cc.canonical_ein_digits(ein)=='042103567' else []), \
              patch.object(cc,'public_profile_for_ein',return_value={'organization':{
-                 'ein':42103567,'city':'Beverly','state':'MA'}}), \
+                 'ein':42103567,'city':'Beverly','state':'MA'}} if profile else {}), \
              patch.object(cc,'registry_cross_state_identity',return_value={}), \
              patch.object(cc,'licensed_charity_street_evidence',return_value={}):
             return cc.il_ga_browser_lookup(org, 'GA', evidence)
@@ -383,6 +383,24 @@ class GeorgiaLocationEvidenceTests(unittest.TestCase):
         result=self.lookup([('Endicott College','New York NY 10016')])
         self.assertEqual(result.status,'Needs Review')
         self.assertIn('address conflict',result.source_note)
+
+    def test_dated_full_name_requires_office_even_with_reviewed_alias_context(self):
+        result=self.lookup([('Endicott College (2015)','Beverly MA 01915'),
+                            ('Endicott College (2016)','New York NY 10016')],
+                           reviewed=['ENDICOTT COLLEGE'])
+        self.assertEqual(result.status,'Exempt')
+        self.assertEqual(result.matched_registry_name,'Endicott College (2015)')
+        self.assertEqual(result.address_evidence['decision'],'corroborated')
+
+    def test_dated_name_cannot_bypass_missing_office_evidence(self):
+        result=self.lookup([('Endicott College (2015)','Beverly MA 01915')],
+                           reviewed=['ENDICOTT COLLEGE'],profile=False)
+        self.assertEqual(result.status,'Needs Review')
+
+    def test_year_decoration_does_not_accept_affiliate_extension(self):
+        result=self.lookup([('Endicott College Foundation (2015)','Beverly MA 01915')],
+                           reviewed=['ENDICOTT COLLEGE'])
+        self.assertNotEqual(result.status,'Exempt')
 
     def test_malformed_or_street_location_does_not_corroborate_partial_name(self):
         for location in ['Beverly MA', '376 Hale Street Beverly MA 01915', 'Beverly MA Unknown']:

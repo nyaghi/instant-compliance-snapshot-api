@@ -134,7 +134,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.26.6-staging").strip() or "2026.09.26.6-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.26.7-staging").strip() or "2026.09.26.7-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -5798,7 +5798,17 @@ def licensed_charity_identity(org, row, state, deadline):
         row["address_evidence"] = {"decision": "user_confirmed", "basis": "Identity accepted by the user for this snapshot."}
         return "accepted"
     if decision["decision"] == "rejected" and row.get("_review_name_only") and not row.get("ein"):
-        return "possible"
+        # Georgia's legacy display names may append a parenthesized filing
+        # year. A reviewed-name context must not make that exact full name
+        # impossible to corroborate. This is only a possible match: retain
+        # the original label and require same-EIN office evidence below.
+        dated_name = re.fullmatch(r"(.+?)\s+\((?:19|20)\d{2}\)", matched_name.strip()) if state == "GA" else None
+        targets = [org.organization_name, *known_names_for_ein(org.ein)]
+        if not dated_name or not any(normalized_match_name(dated_name[1]) == normalized_match_name(target)
+                                     for target in targets):
+            return "possible"
+        decision = {"decision": "possible", "score": 55, "reason": "MATCH_FULL_NAME_WITH_REGISTRY_YEAR"}
+        row["match"] = decision
     if decision["decision"] == "rejected":
         return "rejected"
     if state == "IL" and canonical_ein_digits(row.get("ein", "")) == canonical_ein_digits(org.ein):
