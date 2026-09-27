@@ -67,9 +67,11 @@ class BodyDeadline(unittest.TestCase):
         self.assertEqual(self.run_response('/fast?second').status,200)
     def test_entire_master_change_is_only_completed_response_transport(self):
         from testing.capacity_lab.ny_body_scope import strip_ny_body_completion
+        from testing.capacity_lab.parsing_scope import strip_transport_budget_and_redundancy
         root=Path(m.__file__).parent
         old=ast.parse(subprocess.check_output(['git','show','981510b:registry_snapshot_server.py'],cwd=root).decode('utf-8'))
-        new=ast.parse(Path(m.__file__).read_text(encoding='utf-8'));strip_ny_body_completion(new)
+        new=ast.parse(Path(m.__file__).read_text(encoding='utf-8'))
+        strip_transport_budget_and_redundancy(new);strip_ny_body_completion(new)
         self.assertEqual(ast.dump(old),ast.dump(new))
 
 if __name__=='__main__':unittest.main(verbosity=2)

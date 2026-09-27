@@ -436,6 +436,7 @@ def strip_fl_business_lookup(tree):
 
 
 def strip_mi_name_transport(tree):
+    strip_transport_budget_and_redundancy(tree)
     """Prove query planning/classification unchanged, restoring only transport hooks."""
     import copy
     strip_fl_patient_public(tree)
@@ -490,6 +491,32 @@ if completed_names:
     changed={'search_mi_name_fallback','search_mi_http_completion_probe','run_state_lookup'}
     tree.body=[originals.get(n.name,n) if isinstance(n,ast.FunctionDef) and n.name in changed else n
                for n in tree.body if getattr(n,'name','') not in {'mi_name_fallback_queries','mi_http_names_enabled','mi_name_http_empty_queries'}]
+
+
+def strip_transport_budget_and_redundancy(tree):
+    """Allow only the measured lab transport adjustments, then compare all code."""
+    helper = next((n for n in tree.body if getattr(n, 'name', '') == 'mi_completed_query_covers'), None)
+    if helper is None: return
+    tree.body.remove(helper)
+    functions = {n.name:n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    http = functions['mi_name_http_empty_queries']
+    deadline = next(n for n in http.body if isinstance(n, ast.Assign) and ast.unparse(n.targets[0]) == 'deadline')
+    assert ast.unparse(deadline.value) == 'time.monotonic() + min(24.0, max(0.0, lookup_deadline - time.perf_counter()))'
+    deadline.value = ast.parse('time.monotonic() + min(12.0, max(0.0, lookup_deadline - time.perf_counter()))', mode='eval').body
+    loop = next(n for n in ast.walk(http) if isinstance(n, ast.For) and ast.unparse(n.target) == 'query')
+    assert ast.unparse(loop.iter) == 'mi_name_fallback_queries(org)'
+    loop.iter = ast.parse('mi_name_fallback_queries(org)[:1]', mode='eval').body
+    assert ast.unparse(loop.body[0].test) == 'any((mi_completed_query_covers(old, query) for old in completed))'
+    loop.body[0].test = ast.parse('any(set(old.casefold().split()).issubset(set(query.casefold().split())) for old in completed)',mode='eval').body
+    fallback = functions['search_mi_name_fallback']
+    assignment = next(n for n in ast.walk(fallback) if isinstance(n, ast.Assign) and ast.unparse(n.targets[0]) == 'covered')
+    test = assignment.value.args[0].generators[0].ifs[0]
+    assert ast.unparse(test) == 'set(query.casefold().split()).issubset(query_tokens) or (mi_http_names_enabled(org) and mi_completed_query_covers(query, variant))'
+    assignment.value.args[0].generators[0].ifs[0] = test.values[0]
+    nj = functions['search_nj_public_details']
+    deadline = next(n for n in nj.body if isinstance(n, ast.Assign) and ast.unparse(n.targets[0]) == 'deadline')
+    assert ast.unparse(deadline.value) == 'time.monotonic() + 18.0'
+    deadline.value = ast.parse('time.monotonic() + 12.0',mode='eval').body
 
 
 def strip_fl_patient_public(tree):

@@ -126,7 +126,21 @@ class PublicQuery(unittest.TestCase):
         self.advance=4
         with patch.object(m.time,'monotonic',side_effect=lambda:self.clock[0]):
             self.assertIsNone(m.search_nj_public_details(self.org))
-        self.assertLessEqual(len(self.calls),3);self.assertEqual(self.clock[0],12)
+        self.assertLessEqual(len(self.calls),5);self.assertEqual(self.clock[0],20)
+
+    def test_complete_final_document_after_twelve_seconds_keeps_verified_result(self):
+        self.advance=2.2
+        with patch.object(m.time,'monotonic',side_effect=lambda:self.clock[0]):
+            result,body=m.search_nj_public_details(self.org)
+        self.assertTrue(result.success);self.assertEqual(len(self.calls),6)
+        self.assertAlmostEqual(self.clock[0],13.2)
+
+    def test_document_arriving_after_new_total_budget_is_not_accepted(self):
+        self.advance=3.1
+        with patch.object(m.time,'monotonic',side_effect=lambda:self.clock[0]):
+            self.assertIsNone(m.search_nj_public_details(self.org))
+        self.assertEqual(len(self.calls),6);self.assertAlmostEqual(self.clock[0],18.6)
+        self.assertTrue(all(r.close.call_count==1 for r in self.responses))
 
     def test_capture_and_disabled_mode_perform_no_new_requests(self):
         with patch.object(m,'nj_public_query_enabled',return_value=False):self.assertIsNone(m.search_nj_public_details(self.org))

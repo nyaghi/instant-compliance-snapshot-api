@@ -10019,6 +10019,20 @@ def mi_http_names_enabled(org) -> bool:
             and not CAPTURE_EVIDENCE_SCREENSHOTS and not CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT)
 
 
+def mi_completed_query_covers(completed, query):
+    """A completed zero for broader All-words terms covers a joined spelling.
+
+    Michigan's plan uses Includes / All words. Joining the same required
+    words with a hyphen cannot broaden that search. Keep every different word
+    and alias; only reuse a fully completed zero for this same organization.
+    """
+    original = set(completed.casefold().split())
+    joined = set(re.sub(r"(?<=\w)-(?=\w)", " ", query).casefold().split())
+    # A zero for the narrower joined spelling cannot cover separated words.
+    return bool(original) and (original.issubset(set(query.casefold().split()))
+                               or original.issubset(joined))
+
+
 def mi_name_http_empty_queries(session, org, headers, lookup_deadline):
     """Complete the same name queries in this already accepted public session.
 
@@ -10029,7 +10043,7 @@ def mi_name_http_empty_queries(session, org, headers, lookup_deadline):
     """
     url = "https://www.ag.state.mi.us/CharitableTrust/frmDefault.aspx"
     results_url = "https://www.ag.state.mi.us/CharitableTrust/frmSearchResults.aspx"
-    deadline = time.monotonic() + min(12.0, max(0.0, lookup_deadline - time.perf_counter()))
+    deadline = time.monotonic() + min(24.0, max(0.0, lookup_deadline - time.perf_counter()))
     completed = []
     def read(method, data=None):
         remaining = deadline - time.monotonic()
@@ -10057,10 +10071,11 @@ def mi_name_http_empty_queries(session, org, headers, lookup_deadline):
         finally:
             response.close()
     try:
-        # Probe only the primary query here. Remaining variants keep the
-        # original browser path, avoiding a second speculative HTTP wait.
-        for query in mi_name_fallback_queries(org)[:1]:
-            if any(set(old.casefold().split()).issubset(set(query.casefold().split())) for old in completed):
+        # Complete the same bounded plan in the accepted session. Each query
+        # still requires its own complete, echoed zero response; all remaining
+        # positive, failed or ambiguous queries stay on the browser path.
+        for query in mi_name_fallback_queries(org):
+            if any(mi_completed_query_covers(old, query) for old in completed):
                 continue
             form=read("GET")
             if not all(identifier in form for identifier in
@@ -10129,7 +10144,8 @@ def search_mi_name_fallback(page, org):
     for variant in variants[:4]:
         query_tokens = set(variant.casefold().split())
         covered = next((query for query in completed_empty_queries
-                        if set(query.casefold().split()).issubset(query_tokens)), None)
+                        if set(query.casefold().split()).issubset(query_tokens)
+                        or (mi_http_names_enabled(org) and mi_completed_query_covers(query, variant))), None)
         if covered is not None:
             result.source_attempts.append(f"Skipped redundant Michigan query: {variant}; completed zero-result query: {covered}")
             continue
@@ -19388,7 +19404,11 @@ def search_nj_public_details(org):
     base = "https://charportal.dca.njoag.gov"
     path = "/Charity-Registration/CHR-Public-Search-Page/"
     view = "Portal - Charity - Public Search Subgrid"
-    deadline = time.monotonic() + 12.0
+    # Six fresh, identity-checked responses can take just over twelve seconds
+    # under load. Finish that existing request sequence instead of discarding
+    # its final document and restarting in the browser. The workflow's own
+    # queue-inclusive Sales cutoff still terminates this entire task at 60s.
+    deadline = time.monotonic() + 18.0
 
     def input_values(source, key, expected):
         values = []

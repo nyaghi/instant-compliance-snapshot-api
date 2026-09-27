@@ -91,9 +91,9 @@ class TransportTrace(unittest.TestCase):
         self.assertEqual(len(trace.events),2)
 
     def test_entire_master_and_queue_unchanged_and_adapter_only_adds_diagnostics(self):
-        from testing.capacity_lab.parsing_scope import strip_transport_trace_engine,strip_transport_trace_worker
+        from testing.capacity_lab.parsing_scope import strip_transport_trace_engine,strip_transport_trace_worker,strip_transport_budget_and_redundancy
         root=Path(__file__).resolve().parents[2]
-        for path,strip in [('deployment/queue_engine.py',strip_transport_trace_engine),('deployment/queue_worker.py',strip_transport_trace_worker),('registry_snapshot_server.py',None),('deployment/durable_queue.py',None)]:
+        for path,strip in [('deployment/queue_engine.py',strip_transport_trace_engine),('deployment/queue_worker.py',strip_transport_trace_worker),('registry_snapshot_server.py',strip_transport_budget_and_redundancy),('deployment/durable_queue.py',None)]:
             old=ast.parse(subprocess.check_output(['git','show','3f1779f:'+path],cwd=root).decode())
             new=ast.parse((root/path).read_text(encoding='utf-8'))
             if strip:strip(new)

@@ -48,11 +48,33 @@ class Names(unittest.TestCase):
   s=MagicMock()
   with patch.object(m,'mi_name_fallback_queries',return_value=['Example Relief']):self.assertEqual(m.mi_name_http_empty_queries(s,self.org,{},time.perf_counter()-1),[])
   s.request.assert_not_called()
- def test_only_primary_query_is_probed_and_other_variants_remain_for_browser(self):
+ def test_distinct_alias_is_probed_but_positive_stays_for_browser_confirmation(self):
   s=MagicMock();s.request.side_effect=[self.response(FORM,URL),self.response(body(),RESULT),self.response(FORM,URL),self.response(body('Community Help','1'),RESULT)]
   with patch.object(m,'mi_name_fallback_queries',return_value=['Example Relief','The Example Relief','Community Help']):
    self.assertEqual(m.mi_name_http_empty_queries(s,self.org,{},time.perf_counter()+30),['Example Relief'])
-  self.assertEqual(s.request.call_count,2)
+  self.assertEqual(s.request.call_count,4)
+ def test_all_words_zero_covers_only_narrower_joined_query(self):
+  for old,query in [('Example Relief','Example-Relief'),('Example Relief Fund','The Example-Relief Fund'),('EXAMPLE RELIEF','example-relief')]:
+   self.assertTrue(m.mi_completed_query_covers(old,query))
+  for old,query in [('Example-Relief','Example Relief'),('Example Relief','Different Relief'),('Example Relief Inc.','Example Relief'),('','Example Relief')]:
+   self.assertFalse(m.mi_completed_query_covers(old,query))
+ def test_completed_zero_does_not_issue_generated_hyphen_queries(self):
+  found,s=self.run_source(body(),queries=['Example Relief','Example-Relief','The Example-Relief'])
+  self.assertEqual(found,['Example Relief']);self.assertEqual(s.request.call_count,2)
+ def test_distinct_alias_zero_is_completed_without_restarting_browser(self):
+  s=MagicMock();s.request.side_effect=[self.response(FORM,URL),self.response(body(),RESULT),self.response(FORM,URL),self.response(body('Community Help'),RESULT)]
+  with patch.object(m,'mi_name_fallback_queries',return_value=['Example Relief','Community Help']):
+   self.assertEqual(m.mi_name_http_empty_queries(s,self.org,{},time.perf_counter()+30),['Example Relief','Community Help'])
+  self.assertEqual(s.request.call_count,4)
+ def test_joined_query_coverage_requires_lab_opt_in_and_same_identity(self):
+  for enabled,identity,skip in [(True,('Example Relief','123456789'),True),(False,('Example Relief','123456789'),False),(True,('Other','123456789'),False)]:
+   page=MagicMock();page._cc_mi_lookup_deadline=time.perf_counter()+30
+   page._cc_mi_search_progress={'identity':identity,'completed_empty_name_queries':['Example Relief']}
+   module=MagicMock();module.MI_SEARCH_URL=URL;module.open_search_form.return_value=False
+   with patch.object(m,'mi_http_names_enabled',return_value=enabled),patch.object(m,'state_extension_module',return_value=module),patch.object(m,'patch_mi_module_for_fast_lookups'),patch.object(m,'mi_action_timeout',side_effect=TimeoutError()),patch.object(m,'mi_name_fallback_queries',return_value=['Example-Relief']):
+    result=m.search_mi_name_fallback(page,self.org)
+   self.assertEqual(result.success,skip)
+   self.assertEqual(module.open_search_form.called,not skip)
  def test_completed_progress_uses_existing_negative_rule_without_browser(self):
   page=MagicMock();page._cc_mi_search_progress={'identity':('Example Relief','123456789'),'completed_empty_name_queries':['Example Relief']}
   page._cc_mi_lookup_deadline=time.perf_counter()+30
