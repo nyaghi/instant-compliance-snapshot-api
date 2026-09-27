@@ -500,6 +500,10 @@ def strip_transport_budget_and_redundancy(tree):
     tree.body.remove(helper)
     functions = {n.name:n for n in tree.body if isinstance(n, ast.FunctionDef)}
     http = functions['mi_name_http_empty_queries']
+    request = next(n for n in ast.walk(http) if isinstance(n, ast.Call) and ast.unparse(n.func) == 'session.request')
+    timeout = next(k.value for k in request.keywords if k.arg == 'timeout')
+    assert ast.unparse(timeout) == "min(4.0 if method == 'GET' else 18.0, remaining)"
+    timeout.args[0].orelse.value = 12.0
     deadline = next(n for n in http.body if isinstance(n, ast.Assign) and ast.unparse(n.targets[0]) == 'deadline')
     assert ast.unparse(deadline.value) == 'time.monotonic() + min(24.0, max(0.0, lookup_deadline - time.perf_counter()))'
     deadline.value = ast.parse('time.monotonic() + min(12.0, max(0.0, lookup_deadline - time.perf_counter()))', mode='eval').body

@@ -10051,7 +10051,7 @@ def mi_name_http_empty_queries(session, org, headers, lookup_deadline):
             raise TimeoutError("Michigan name transport allowance exhausted")
         response = session.request(method, url, data=data,
             headers={**headers, "Referer":url, "Origin":"https://www.ag.state.mi.us"},
-            timeout=min(4.0 if method == "GET" else 12.0, remaining), verify=True, stream=True)
+            timeout=min(4.0 if method == "GET" else 18.0, remaining), verify=True, stream=True)
         try:
             expected = url if method == "GET" else results_url
             if response.status_code != 200 or response.url != expected:

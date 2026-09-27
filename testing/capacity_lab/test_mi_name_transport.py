@@ -24,7 +24,26 @@ class Names(unittest.TestCase):
   fields=s.request.call_args_list[1].kwargs['data']
   self.assertEqual(fields['ctl00$MainContent$txtName'],'Example Relief');self.assertEqual(fields['ctl00$MainContent$txtEIN'],'')
   self.assertEqual(fields['ctl00$MainContent$ddlName2'],'All words')
-  for c in s.request.call_args_list:self.assertTrue(c.kwargs['verify']);self.assertLessEqual(c.kwargs['timeout'],4 if c.args[0]=='GET' else 12)
+  for c in s.request.call_args_list:self.assertTrue(c.kwargs['verify']);self.assertLessEqual(c.kwargs['timeout'],4 if c.args[0]=='GET' else 18)
+ def test_slow_complete_body_can_finish_without_resetting_total_deadline(self):
+  for elapsed,want in [(14,['Example Relief']),(24,[])]:
+   clock=[100.0];s=MagicMock()
+   def request(method,*args,**kwargs):
+    if method=='GET':return self.response(FORM,URL)
+    self.assertEqual(kwargs['timeout'],18.0)
+    clock[0]+=elapsed
+    return self.response(body(),RESULT)
+   s.request.side_effect=request
+   with patch.object(m.time,'monotonic',side_effect=lambda:clock[0]),patch.object(m.time,'perf_counter',return_value=100.0),patch.object(m,'mi_name_fallback_queries',return_value=['Example Relief']):
+    self.assertEqual(m.mi_name_http_empty_queries(s,self.org,{},130.0),want)
+ def test_request_allowance_cannot_extend_remaining_lookup_budget(self):
+  with patch.object(m.time,'monotonic',return_value=100.0),patch.object(m.time,'perf_counter',return_value=100.0):
+   found,s=self.run_source(body())
+  self.assertEqual(found,['Example Relief'])
+  session=MagicMock();session.request.return_value=self.response(FORM,URL)
+  with patch.object(m.time,'monotonic',return_value=100.0),patch.object(m.time,'perf_counter',return_value=100.0),patch.object(m,'mi_name_fallback_queries',return_value=['Example Relief']):
+   m.mi_name_http_empty_queries(session,self.org,{},103.0)
+  self.assertTrue(all(c.kwargs['timeout']<=3 for c in session.request.call_args_list))
  def test_partial_wrong_query_positive_ambiguous_blocked_do_not_complete(self):
   for source in [body()[:-7],body('Another Relief'),body(count='1'),body()+body(),body().replace('0 record(s)','0 record'),body().replace('All words','Any word'),body().replace('No records found for your search criteria',''),body().replace('</html>',' CAPTCHA</html>'),body().replace('</html>',' EIN: 98-7654321</html>')]:
    with self.subTest(source=source):self.assertEqual(self.run_source(source)[0],[])
