@@ -8,6 +8,8 @@ import registry_snapshot_server as m
 
 
 def strip_native_forms(tree):
+    from testing.capacity_lab.test_wa_ready_steps import strip_ready_steps
+    strip_ready_steps(tree)
     fn=next((n for n in tree.body if getattr(n,'name','')=='lab_fl_form_context_options'),None)
     if fn is None:return
     tree.body.remove(fn)

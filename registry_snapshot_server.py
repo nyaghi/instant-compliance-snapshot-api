@@ -26914,12 +26914,23 @@ def wa_apply_detail_master(result, body: str):
     return result
 
 
+def lab_wa_readiness_waits_only() -> bool:
+    """Use existing explicit readiness checks instead of redundant idle waits."""
+    return (APP_VERSION.endswith("-performance-lab")
+            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and os.environ.get("CE_LAB_WA_READY_STEPS") == "1"
+            and LAB_LOOKUP_MODE_CONTEXT.get() == "sales")
+
+
 def search_wa_nm_state(org, state: str):
     state = (state or "").upper()
     module = load_wa_nm_module()
     external_org = module.Organization(organization_name=org.organization_name, ein=org.ein)
     if state == "WA":
-        external_result = module.search_wa(external_org, show_process=False)
+        if lab_wa_readiness_waits_only():
+            external_result = module.search_wa(external_org, show_process=False, readiness_waits_only=True)
+        else:
+            external_result = module.search_wa(external_org, show_process=False)
         wa_raw = " ".join([
             getattr(external_result, "raw_status_text", "") or "",
             getattr(external_result, "source_note", "") or "",

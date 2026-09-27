@@ -603,7 +603,12 @@ def wait_for_result_link_or_no_value(page, org_name: str, timeout_seconds: int =
     return "NO_VALUE" if no_value_seen else None
 
 
-def search_wa(org: Organization, show_process: bool = False) -> SearchResult:
+def search_wa(org: Organization, show_process: bool = False, *, readiness_waits_only: bool = False) -> SearchResult:
+    # The master supplies explicit ready-field and completed-detail checks.
+    # Standalone callers without those hooks retain the original waits.
+    readiness_waits_only = bool(readiness_waits_only
+        and callable(globals().get("read_wa_detail"))
+        and callable(globals().get("apply_wa_detail_to_result")))
     result = SearchResult(
         organization_name=org.organization_name,
         ein=org.ein,
@@ -621,19 +626,22 @@ def search_wa(org: Organization, show_process: bool = False) -> SearchResult:
         page = context.new_page()
         try:
             page.goto(WA_SEARCH_URL, wait_until="domcontentloaded", timeout=45000)
-            safe_wait_for_network_idle(page, timeout=10000)
-            time.sleep(1)
+            if not readiness_waits_only:
+                safe_wait_for_network_idle(page, timeout=10000)
+                time.sleep(1)
             install_wa_search_tracker(page)
 
             switch_to_fein_mode(page)
-            time.sleep(1)
+            if not readiness_waits_only:
+                time.sleep(1)
 
             if not fill_fein_and_search(page, org.ein):
                 result.error = "Could not click the Washington Search button."
                 return result
 
-            safe_wait_for_network_idle(page, timeout=8000)
-            time.sleep(1)
+            if not readiness_waits_only:
+                safe_wait_for_network_idle(page, timeout=8000)
+                time.sleep(1)
 
             found = wait_for_result_link_or_no_value(page, org.organization_name, timeout_seconds=22, require_search_response=True)
             if found == "NO_VALUE":
@@ -665,13 +673,15 @@ def search_wa(org: Organization, show_process: bool = False) -> SearchResult:
                 result.matched_registry_name = ""
             try:
                 found.scroll_into_view_if_needed(timeout=5000)
-                time.sleep(1)
+                if not readiness_waits_only:
+                    time.sleep(1)
             except Exception:
                 pass
             found.click(timeout=5000, force=True)
 
-            safe_wait_for_network_idle(page, timeout=10000)
-            time.sleep(1)
+            if not readiness_waits_only:
+                safe_wait_for_network_idle(page, timeout=10000)
+                time.sleep(1)
 
             detail_text = (read_wa_detail(page, result) if callable(globals().get("read_wa_detail"))
                            else page.locator("body").inner_text(timeout=15000))
