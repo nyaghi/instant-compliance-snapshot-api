@@ -53,6 +53,16 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(self.req('/evidence/CO/test.pdf')[0],409)
         self.queue.submit.assert_not_called()
 
+    def test_state_concurrency_reaches_authoritative_queue_and_rejects_invalid(self):
+        p={'organization_name':'Fixture','ein':'123456789','states':['CO']}
+        for limit in (5,10,15):
+            self.assertEqual(self.req('/api/lab/workflows',{**p,'state_concurrency':limit})[0],202)
+            self.assertEqual(self.queue.submit.call_args.args[2].get('state_concurrency',15),limit)
+        self.queue.submit.reset_mock()
+        for invalid in (0,16,True,'10'):
+            self.assertEqual(self.req('/api/lab/workflows',{**p,'state_concurrency':invalid})[0],400)
+        self.queue.submit.assert_not_called()
+
     def test_rejection_and_cancellation_consume_bounded_ignored_body(self):
         for path in ('/api/check','/api/discover-names','/api/ny-connector','/api/lab/workflows/id/cancel','/unknown'):
             handler=self.server.RequestHandlerClass.__new__(self.server.RequestHandlerClass)

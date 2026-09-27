@@ -85,6 +85,48 @@ class DurableTests(unittest.TestCase):
     def sales_without_review(self, **changes):
         return payload(mode='sales', alternate_names=[], states=['CO','LA'], **changes)
 
+    def test_registration_state_ceiling_across_workers_for_both_modes(self):
+        states = [f'T{i:02}' for i in range(32)]
+        for mode in ('standard', 'sales'):
+            for limit in (5, 10, 15):
+                with self.subTest(mode=mode, limit=limit):
+                    p = normalize_submission({'ein':f'{100000000+limit:09}',
+                        'organization_name':'Concurrency fixture', 'states':states,
+                        'mode':mode, 'alternate_names':['Reviewed fixture'],
+                        'state_concurrency':limit}, states)
+                    ident = self.submit(p)
+                    workers = [self.worker(slots=12), self.worker(slots=12)]
+                    held = []
+                    def renew():
+                        for worker in workers:
+                            self.q.heartbeat(worker, [(j['id'],j['token']) for j in held if j['owner']==worker])
+                    for i in range(limit):
+                        renew()
+                        job = self.q.claim(workers[i % 2])
+                        self.assertIsNotNone(job)
+                        self.assertEqual(job['workflow_id'], ident)
+                        held.append(job)
+                    renew()
+                    for worker in workers:
+                        self.assertIsNone(self.q.claim(worker))
+                    # A process stopping still owns its concurrency reservation.
+                    with self.q.transaction() as (c, now):
+                        c.execute("UPDATE cc_lab_jobs SET phase='stopping' WHERE id=%s", (held[0]['id'],))
+                    self.assertIsNone(self.q.claim(workers[0]))
+                    released = held.pop(0)
+                    self.assertTrue(self.finish(released))
+                    renew()
+                    replacement = self.q.claim(released['owner'])
+                    self.assertIsNotNone(replacement)
+                    held.append(replacement)
+                    self.assertIsNone(self.q.claim(released['owner']))
+                    status = self.q.status('a', ident)
+                    self.assertEqual(status['deadline']-status['submitted'], 60 if mode=='sales' else 900)
+                    self.q.cancel('a', ident)
+                    for job in held:
+                        self.q.complete(job['owner'],job['id'],job['token'],error='TEST_CANCELED')
+                    self.assertIsNotNone(self.q.status('a',ident)['finished'])
+
     def test_busy_claim_returns_before_lock_release_without_reserving_work(self):
         ident=self.submit();worker=self.worker();other=self.second()
         pool=concurrent.futures.ThreadPoolExecutor(1)
@@ -904,6 +946,17 @@ class DurableTests(unittest.TestCase):
 
 
 class InputTests(unittest.TestCase):
+    def test_lab_state_concurrency_is_bounded_and_default_is_identical(self):
+        self.assertEqual(payload(), payload(state_concurrency=15))
+        for limit in (5, 10):
+            self.assertEqual(payload(state_concurrency=limit)['state_concurrency'], limit)
+        for value in (0, 1, 4, 6, 16, 32, True, None, '5', 5.0):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                payload(state_concurrency=value)
+        with self.assertRaises(ValueError):
+            normalize_submission({'ein':'123456789','organization_name':'Discovery',
+                                  'kind':'discovery','state_concurrency':5}, STATES)
+
     def test_rejects_credentials_scope_injection_and_invalid_inputs(self):
         for change in ({'scope':'another-company'}, {'admin_passcode':'secret'}, {'ein':'000000000'},
                        {'states':['XX']}, {'alternate_names':['x']*33}, {'kind':'shell'}):

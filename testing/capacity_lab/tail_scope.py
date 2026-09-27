@@ -5,6 +5,8 @@ import subprocess
 
 
 def strip_tail_latency(tree):
+    from testing.capacity_lab.state_ceiling_scope import strip_state_ceiling
+    strip_state_ceiling(tree)
     root = Path(__file__).resolve().parents[2]
     original = subprocess.check_output(['git', 'show', 'e05c18d:deployment/durable_queue.py'], cwd=root).decode()
     expected = original.replace(
@@ -26,4 +28,3 @@ def strip_tail_latency(tree):
     tree.body.remove(cls)
     assert ast.dump(tree) == ast.dump(ast.parse(expected)), 'Change beyond exact elapsed-time priority recipe'
     tree.body = ast.parse(original).body
-

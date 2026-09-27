@@ -1040,3 +1040,17 @@ verification rejection and bounded retry rules. No name/EIN/address selection,
 status/date interpretation, source concurrency or Sales deadline changes.
 Local delayed-body and fast-response controls pass. Live validation uses the
 existing four-node lab; it does not establish 20-organization Sales capacity.
+
+### perf69: controlled state-concurrency measurement
+
+The private lab registration API accepts an optional `state_concurrency` of
+5, 10, or 15. Omission and explicit 15 normalize identically, preserving the
+existing payload fingerprint and default scheduling behavior. Discovery rejects
+the option. Both scheduling eligibility passes enforce the immutable per-workflow
+limit across every worker, including stopping and quarantined reservations.
+Claim events record the selected ceiling. State permits, physical weighted slots,
+Sales' queue-inclusive 60-second cutoff, Standard's 900-second allowance,
+identity preparation, matching, status and date logic are unchanged. No schema
+migration or customer UI changes. The authorized six-cell experiment holds
+24 workers, 20 organizations, 32 states and source caps fixed while changing
+only this ceiling and mode; restore four workers after the trial.

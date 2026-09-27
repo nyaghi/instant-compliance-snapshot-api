@@ -37,7 +37,7 @@ def digest(value):
 
 def normalize_submission(payload, supported):
     """Validate immutable scheduling input. Master retains alias normalization."""
-    allowed = {'organization_name', 'ein', 'alternate_names', 'states', 'mode', 'kind'}
+    allowed = {'organization_name', 'ein', 'alternate_names', 'states', 'mode', 'kind', 'state_concurrency'}
     if not isinstance(payload, dict) or set(payload) - allowed:
         raise ValueError('Unexpected workflow fields')
     name, ein = payload.get('organization_name'), payload.get('ein')
@@ -58,8 +58,17 @@ def normalize_submission(payload, supported):
         raise ValueError('Select states for registration only')
     if kind == 'discovery' and (mode != 'standard' or aliases):
         raise ValueError('Discovery takes only the entered name and EIN')
-    return {'organization_name': name.strip(), 'ein': ein.replace('-', ''),
-            'alternate_names': aliases, 'states': sorted(set(states)), 'mode': mode, 'kind': kind}
+    concurrency = payload.get('state_concurrency', 15)
+    if type(concurrency) is not int or concurrency not in (5, 10, 15):
+        raise ValueError('Lab state concurrency must be 5, 10 or 15')
+    if kind == 'discovery' and 'state_concurrency' in payload:
+        raise ValueError('State concurrency applies only to registration')
+    normalized = {'organization_name': name.strip(), 'ein': ein.replace('-', ''),
+                  'alternate_names': aliases, 'states': sorted(set(states)), 'mode': mode, 'kind': kind}
+    # Keep default submissions and their idempotency fingerprints unchanged.
+    if concurrency != 15:
+        normalized['state_concurrency'] = concurrency
+    return normalized
 
 
 class DurationEstimates(dict):
@@ -307,7 +316,7 @@ class Queue:
             protected = None
             earlier_multi = []
             for w in sorted(workflows,key=lambda w:(w['submitted'],w['id'])):
-                if w['source_version'] != wk['source_version'] or running[w['id']] >= 15: continue
+                if w['source_version'] != wk['source_version'] or running[w['id']] >= w['payload'].get('state_concurrency', 15): continue
                 if w['started'] is None and len(active) >= cfg['workflow_limit']: continue
                 candidates=[j for j in pending.get(w['id'],[]) if len(j['resources'])>1 and j['weight']<=wk['slots']]
                 ongoing=[j for j in held if j['workflow_id']==w['id'] and j['phase']=='running'
@@ -329,7 +338,7 @@ class Queue:
                     and all(busy[r]<cfg['registry_limits'].get(r,4) for r in protected['resources'])):
                 workflows.sort(key=lambda w:w['id']!=protected['workflow_id'])
             for w in workflows:
-                if w['source_version'] != wk['source_version'] or running[w['id']] >= 15: continue
+                if w['source_version'] != wk['source_version'] or running[w['id']] >= w['payload'].get('state_concurrency', 15): continue
                 if w['started'] is None and len(active) >= cfg['workflow_limit']: continue
                 for j in pending.get(w['id'], []):
                     seed = identity.get(w['id'])
@@ -359,6 +368,7 @@ class Queue:
                         c.execute("UPDATE cc_lab_workflows SET phase='active',started=COALESCE(started,%s),dispatched=%s WHERE id=%s", (now, now, w['id']))
                         self.event(c, now, 'claimed', w['id'], j['id'], worker=worker, token=token,
                                    slot_limit=ceiling, admission=admission_evidence,
+                                   state_concurrency=w['payload'].get('state_concurrency', 15),
                                    sales_policy=('tail-aware' if tail_scores else 'shortest') if w['mode']=='sales' else None,
                                    sales_policy_configured=self.sales_policy if w['mode']=='sales' else None,
                                    source_drain_estimate=tail_scores.get(j['state']))
