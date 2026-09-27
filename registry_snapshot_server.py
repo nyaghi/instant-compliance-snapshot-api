@@ -19262,6 +19262,9 @@ def search_nj_public_details(org):
                 return None
             body = f"Charity Name: {name}\nStatus {state_status} Federal EIN {ein}\nNJ Registration # {credential}\n" + detail
             result = checker.StateResult(org.organization_name, org.ein, "NJ", checker.STATUS_UNKNOWN, base + path)
+            # Preserve the same EIN identity anchor as the browser result. Both
+            # the unique row and its selected detail have confirmed this EIN.
+            result.matched_registry_identifier = ein
             return nj_result_from_body(None, org, result, body, ein), body
     except Exception:
         return None

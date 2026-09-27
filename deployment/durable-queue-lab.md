@@ -1011,3 +1011,6 @@ queue reservations and the hard60second workflow cutoff remain unchanged.
 The existing NJ status/fiscal-period classification statements move verbatim
 into a shared function used by both acquisition paths. AST controls prove all
 other master behavior unchanged. Evidence capture retains the browser.
+
+### perf54: preserve New Jersey identity provenance
+The perf53 public acquisition verified the EIN twice but did not copy it into the result identifier, causing the shared renderer to report a name match. Preserve the verified EIN identity anchor as the browser path does. The state-returned legal name remains visible; no matching/status/date or deadline rule changes. Live smoke now checks EIN provenance as well as status.

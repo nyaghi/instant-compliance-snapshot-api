@@ -59,8 +59,20 @@ class PublicQuery(unittest.TestCase):
         self.assertTrue(result.success);self.assertEqual(result.status,'Current')
         self.assertEqual(result.last_year_on_record,2025);self.assertEqual(result.computed_due_date,'6/30/2027')
         self.assertEqual(result.matched_registry_name,'Example Relief');self.assertEqual(len(self.calls),6)
+        self.assertEqual(result.matched_registry_identifier,self.org.ein)
+        self.assertEqual(m.identity_anchor_for_result(result,self.org),'EIN')
         self.assertTrue(all(r.close.call_count==1 for r in self.responses))
         self.assertIn(DETAIL,body)
+
+    def test_response_preserves_verified_ein_when_source_name_differs(self):
+        self.org=m.checker.Organization('Entered Former Name','123456789')
+        result,body=m.search_nj_public_details(self.org)
+        with patch.object(m,'log_event'):
+            data=m.response_data_for_lookup(result,body,self.org,self.org.organization_name,self.org.ein,'NJ',m.time.perf_counter())
+        self.assertEqual(data['identity_anchor'],'EIN')
+        self.assertEqual(data['matched_registry_identifier'],'123456789')
+        self.assertEqual(data['matched_registry_name'],'Example Relief')
+        self.assertEqual(data['status'],'Current')
 
     def test_negative_duplicate_partial_and_wrong_ein_keep_browser(self):
         variants=[{**DATA,'Records':[],'ItemCount':0},{**DATA,'ItemCount':2,'Records':DATA['Records']*2},
