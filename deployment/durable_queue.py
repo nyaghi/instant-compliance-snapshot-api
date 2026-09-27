@@ -137,11 +137,15 @@ class Queue:
     def close(self): self.pool.close()
 
     @contextmanager
-    def transaction(self):
+    def transaction(self, *, blocking=True):
         with self.pool.connection() as conn, conn.transaction():
             with conn.pipeline():
-                conn.execute("SELECT pg_advisory_xact_lock(%s)", (self.lock,))
+                lock = conn.execute("SELECT pg_advisory_xact_lock(%s)" if blocking else
+                                    "SELECT pg_try_advisory_xact_lock(%s) AS acquired", (self.lock,))
                 clock = conn.execute('SELECT extract(epoch FROM clock_timestamp()) AS t')
+            if not blocking and not lock.fetchone()['acquired']:
+                yield None
+                return
             now = float(clock.fetchone()['t'])
             yield conn, now
 
@@ -239,7 +243,14 @@ class Queue:
                   "WHERE w.id=d.id AND w.phase IS DISTINCT FROM d.phase")
 
     def claim(self, worker, slot_limit=None, admission_evidence=None):
-        with self.transaction() as (c, now):
+        # Claiming new work must not queue behind other workers and prevent this
+        # supervisor from collecting completions or enforcing active deadlines.
+        # A busy lock is an empty attempt; the existing bounded backoff retries.
+        # Every actual read/admission still holds the same transaction lock.
+        with self.transaction(blocking=False) as acquired:
+            if acquired is None:
+                return None
+            c, now = acquired
             self._settle(c, now)
             # All reads remain under the same advisory transaction lock. Pipeline
             # independent reads rather than paying a network round trip for each.

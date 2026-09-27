@@ -65,8 +65,47 @@ class DurableTests(unittest.TestCase):
         return (q or self.q).complete(job['owner'], job['id'], job['token'],
             {'ein':job['payload']['ein'],'state':job['state'],'app_version':VERSION,'status':'Current'})
 
+    def claim_available(self, q, worker, maximum):
+        # Production supervisors retry empty/busy claims. Keep the original
+        # exact capacity assertions below while allowing that bounded retry.
+        jobs=[];deadline=time.monotonic()+12
+        while len(jobs)<maximum and time.monotonic()<deadline:
+            job=q.claim(worker)
+            if job:jobs.append(job)
+            else:time.sleep(.03+int(worker[-2:],16)/10000)
+        return jobs
+
     def sales_without_review(self, **changes):
         return payload(mode='sales', alternate_names=[], states=['CO','LA'], **changes)
+
+    def test_busy_claim_returns_before_lock_release_without_reserving_work(self):
+        ident=self.submit();worker=self.worker();other=self.second()
+        pool=concurrent.futures.ThreadPoolExecutor(1)
+        self.addCleanup(pool.shutdown)
+        with self.q.transaction() as (c,now):
+            future=pool.submit(other.claim,worker)
+            try:
+                claimed=future.result(timeout=2)
+            except concurrent.futures.TimeoutError:
+                self.fail('A busy claim blocked the worker instead of returning to completion/deadline supervision')
+            self.assertIsNone(claimed)
+            row=c.execute('SELECT phase,owner,attempt FROM cc_lab_jobs WHERE workflow_id=%s',(ident,)).fetchone()
+            self.assertEqual(row,{'phase':'queued','owner':None,'attempt':0})
+        job=other.claim(worker)
+        self.assertEqual(job['workflow_id'],ident)
+        self.assertEqual(job['attempt'],1)
+        self.finish(job,other)
+
+    def test_busy_claim_does_not_allow_canceled_work_to_resurrect(self):
+        ident=self.submit();worker=self.worker();other=self.second()
+        with concurrent.futures.ThreadPoolExecutor(1) as pool:
+            with self.q.transaction():
+                self.assertIsNone(pool.submit(other.claim,worker).result(timeout=2))
+        self.q.cancel('a',ident)
+        self.assertIsNone(other.claim(worker))
+        state=self.q.status('a',ident)
+        self.assertEqual(state['phase'],'canceled')
+        self.assertEqual(state['jobs'][0]['attempt'],0)
 
     def test_sales_identity_is_inside_same_deadline_and_hidden_from_state_counts(self):
         ident=self.submit(self.sales_without_review());worker=self.worker()
@@ -314,9 +353,9 @@ class DurableTests(unittest.TestCase):
                 return self.conn.execute(query, *args, **kwargs)
 
         @contextmanager
-        def observed():
-            with original() as (c, now):
-                yield ObservedConnection(c), now
+        def observed(**kwargs):
+            with original(**kwargs) as acquired:
+                yield (ObservedConnection(acquired[0]),acquired[1]) if acquired is not None else None
 
         with patch.object(self.q, 'transaction', observed):
             self.assertIsNone(self.q.claim(worker))
@@ -441,7 +480,7 @@ class DurableTests(unittest.TestCase):
         workers = [self.worker(q2 if i%2 else self.q) for i in range(4)]
         def claims(pair):
             i,w=pair; q=q2 if i%2 else self.q
-            return [j for _ in range(8) if (j:=q.claim(w))]
+            return self.claim_available(q,w,8)
         with concurrent.futures.ThreadPoolExecutor(4) as pool: groups=list(pool.map(claims, enumerate(workers)))
         jobs=[j for g in groups for j in g]
         self.assertEqual(len(jobs),15)
@@ -460,7 +499,7 @@ class DurableTests(unittest.TestCase):
         for i in range(21): self.submit(payload(f'{i+1:09}'))
         workers = [self.worker() for _ in range(4)]
         with concurrent.futures.ThreadPoolExecutor(4) as pool:
-            groups = list(pool.map(lambda w: [j for _ in range(8) if (j := self.q.claim(w))], workers))
+            groups = list(pool.map(lambda w:self.claim_available(self.q,w,8), workers))
         jobs = [j for group in groups for j in group]
         self.assertEqual(len(jobs), 20)
         self.assertEqual(len({j['workflow_id'] for j in jobs}), 20)
@@ -495,7 +534,7 @@ class DurableTests(unittest.TestCase):
         workers = [self.worker(q, slots=12) for q in queues]
         def claim(pair):
             q, w = pair
-            return [j for _ in range(12) if (j := q.claim(w))]
+            return self.claim_available(q,w,12)
         with concurrent.futures.ThreadPoolExecutor(3) as pool:
             groups = list(pool.map(claim, zip(queues, workers)))
         jobs = [j for group in groups for j in group]
