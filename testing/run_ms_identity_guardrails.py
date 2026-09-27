@@ -48,6 +48,11 @@ class Tests(unittest.TestCase):
  def test_exact_local_organization_request_still_accepted(self):
   r,_=self.run_results([record(REGIONAL,'Current')],name=REGIONAL,ein='123456789')
   self.assertEqual(c.public_status(r),'Current')
+ def test_sales_full_reviewed_alias_accepts_and_ampersand_equivalence(self):
+  ein='521089824';name='National Low Income Housing Coalition'
+  c.REVIEWED_NAME_CONTEXT.set({ein:('National Low Income Housing Coalition And Low Income Housing',)})
+  r,_=self.run_results([record('National Low Income Housing Coalition & Low Income Housing','Upcoming Filing')],name=name,ein=ein)
+  self.assertEqual(c.public_status(r),'Upcoming Filing')
  def test_terminal_status_for_confirmed_org_unchanged(self):
   for status in ['Closed / Withdrawn / Canceled','Exempt','Delinquent','Current']:
    with self.subTest(status=status):
@@ -68,7 +73,7 @@ class Tests(unittest.TestCase):
   self.assertFalse(data['renewal_filing_value'])
  def test_recorded_twenty_org_control_results_unchanged(self):
   rows=json.loads((ROOT/'testing/fixtures/ms-national-identity-controls.json').read_text())['rows']
-  self.assertEqual(len(rows),20)
+  self.assertEqual(len(rows),40)
   for row in rows:
    with self.subTest(ein=row['ein']):
     ein=c.canonical_ein_digits(row['ein']);c.REVIEWED_NAME_CONTEXT.set({ein:tuple(row['alternate_names'])})

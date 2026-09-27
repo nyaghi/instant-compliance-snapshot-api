@@ -24324,10 +24324,13 @@ def search_batch_browser_state(page, org, state: str):
                 continue
             # A broad search phrase may locate a related entity. It is not proof
             # that the candidate is the requested organization or reviewed alias.
-            decision = score_candidate(org.organization_name, org.ein, {
+            candidate = {
                 "name": matched_name,
                 "ein": getattr(external_result, "verified_registry_ein", ""),
-            })
+            }
+            decision = max((score_candidate(target, org.ein, candidate)
+                            for target in [org.organization_name, *known_names_for_ein(org.ein)]),
+                           key=lambda item: item["score"])
             if decision["decision"] != "accepted":
                 external_result.status = "Needs Review"
                 external_result.success = False

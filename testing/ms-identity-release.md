@@ -19,9 +19,13 @@ name discovery, concurrency, source caps and lookup budgets are unchanged.
 Controls cover the reported national/regional case, recovery to the national
 record, retained uncertainty after later empty searches, exact local and former
 names, verified/mismatched EINs, terminal statuses, completed empty searches,
-outages, full response/comments, and 20 recorded Mississippi controls. The
-recorded controls come from the prior phase82 Standard/5 run; expectations were
-not changed. Existing core/alias matching, Mississippi readiness/detail, and
+outages, full response/comments, and 40 recorded Mississippi controls: 20 Standard
+and 20 Sales inputs, including full reviewed aliases differing only by AND/ampersand
+spelling. The first lab candidate scored aliases only by raw alias equality; a live
+Sales control exposed that gap before the repeat matrix completed. The correction
+scores each full reviewed alias with the existing master scorer, preserving
+punctuation equivalence without accepting broader regional extensions.
+Expectations were not changed. Existing core/alias matching, Mississippi readiness/detail, and
 queue/deadline controls remain required before the lab-only deployment.
 
 The subsequent bounded matrix uses the same 20 organizations at 24 workers,
