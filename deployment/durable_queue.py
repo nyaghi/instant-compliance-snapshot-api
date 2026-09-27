@@ -158,6 +158,30 @@ def apply_censored_tail_floor(c, now, states, estimates):
         estimates.tails[state] = max(estimates.tails.get(state, estimates.get(state, 10.0)), row['tail_seconds'])
 
 
+def order_workflows(workflows, pending, running, sales_policy, version):
+    """Give concurrent Sales equal dispatch opportunity, not equal live count.
+
+    Least-active ordering repeatedly gives easy organizations another turn as
+    their checks finish. A harder organization can then reach the cutoff with
+    much of its plan still unstarted. In an explicitly enabled, Sales-only lab
+    cohort, count checks already offered instead. Source limits, physical
+    admission, identity dependencies, per-organization ceilings and deadlines
+    are still enforced by the unchanged claim loop below.
+    """
+    balanced = (sales_policy == 'tail-aware'
+                and version.endswith('-performance-lab')
+                and os.environ.get('CE_LAB_SALES_DISPATCH_FAIRNESS') == '1'
+                and len(workflows) > 1
+                and all(w['mode'] == 'sales' and w['kind'] == 'registration'
+                        for w in workflows))
+    def key(w):
+        offered = (len(w['payload']['states'])
+                   - sum(not j['state'].startswith('@')
+                         for j in pending.get(w['id'], []))) if balanced else running[w['id']]
+        return (offered, w['dispatched'], w['submitted'], w['id'])
+    workflows.sort(key=key)
+
+
 class Queue:
     def __init__(self, dsn, max_connections=6, test_schema=None, ny_enabled=False, sales_policy=None):
         self.sales_policy = sales_policy or os.environ.get('CE_LAB_SALES_QUEUE_POLICY', 'shortest')
@@ -353,7 +377,7 @@ class Queue:
                                estimates, capacity_rows.fetchall(), cfg['source_version'], now) else {})
             for workflow in workflows:
                 order_pending(workflow, pending.get(workflow['id'], []), estimates, tail_scores, now)
-            workflows.sort(key=lambda w: (running[w['id']], w['dispatched'], w['submitted'], w['id']))
+            order_workflows(workflows, pending, running, self.sales_policy, cfg['source_version'])
             if (protected and used+protected['weight']<=ceiling
                     and all(busy[r]<cfg['registry_limits'].get(r,4) for r in protected['resources'])):
                 workflows.sort(key=lambda w:w['id']!=protected['workflow_id'])

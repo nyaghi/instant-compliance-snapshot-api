@@ -1081,3 +1081,19 @@ candidate requires fresh cloud validation; local TLS success is not cloud proof.
 ### Sales 32-state ceiling experiment (perf.73)
 
 The private lab accepts an explicit state_concurrency of 32 for Sales registration only. Standard keeps its default of 15 and cannot request 32. Discovery, registry logic, identity checks, source reservations, worker capacity and 60/900-second deadlines are unchanged. The controlled comparison uses Sales 20 versus 32 with the same 20 organizations and 24 nodes; it does not change staging or production defaults.
+
+### Equal Sales dispatch opportunity candidate (perf.80)
+
+The perf.79 repeats produced 623 and 627 conclusive checks out of 640, versus
+638 in the fresh individual baseline. Completed statuses and available EIN/IDs
+matched the Standard reference. At 30 seconds in the second burst, one hard
+organization had only 11 checks started while an easier organization had 31.
+The least-active workflow preference rewards quick completions with more turns.
+
+With `CE_LAB_SALES_DISPATCH_FAIRNESS=1`, an exclusively Sales registration
+cohort in the performance lab is ordered by checks already offered, then the
+existing dispatch/submission age. Single workflows, Standard, mixed modes and
+discovery retain their ordering. Per-state ordering, physical/source limits,
+identity dependency, cancellation, deadlines and result handling are unchanged.
+This is a candidate requiring controlled live comparison, not a capacity claim.
+Use the same 24 nodes, Sales20, all32 states and two repetitions; restore4 nodes.
