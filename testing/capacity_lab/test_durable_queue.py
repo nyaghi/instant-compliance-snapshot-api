@@ -360,6 +360,28 @@ class DurableTests(unittest.TestCase):
         self.assertEqual({j['workflow_id']:j['state'] for j in jobs},{standard:'LA',sales:'CO'})
         self.assertEqual(len({j['workflow_id'] for j in jobs}),2)
 
+    def test_tail_policy_changes_only_order_and_preserves_caps_fairness_and_cutoff(self):
+        worker=self.seed_duration_history();self.q.sales_policy='tail-aware'
+        # Use a measured feasible slow source (the legacy fixture is 60s).
+        with self.q.transaction() as (c,now):
+            c.execute("UPDATE cc_lab_jobs SET claimed=finished-12 WHERE state='LA'")
+            c.execute("UPDATE cc_lab_settings SET registry_limits=jsonb_set(registry_limits,'{LA}','1'::jsonb)")
+        a=self.submit(payload(states=['CO','LA'],mode='sales'))
+        b=self.submit(payload('987654321',states=['CO','LA'],mode='sales'))
+        first,second=self.q.claim(worker),self.q.claim(worker)
+        self.assertEqual(first['state'],'LA')
+        self.assertEqual(second['state'],'CO')  # The only LA permit is held.
+        self.assertNotEqual(first['workflow_id'],second['workflow_id'])
+        self.finish(first);self.finish(second)
+        third,fourth=self.q.claim(worker),self.q.claim(worker)
+        self.assertEqual({j['state'] for j in (third,fourth)},{'CO','LA'})
+        self.finish(third);self.finish(fourth)
+        for ident in (a,b):
+            result=self.q.status('a',ident)
+            self.assertEqual(result['total'],2)
+            self.assertEqual(result['deadline']-result['submitted'],60)
+            self.assertTrue(all(j['result']['status']=='Current' for j in result['jobs']))
+
     def test_pipelined_claim_failure_rolls_back_job_and_dispatch(self):
         ident = self.submit()
         worker = self.worker()

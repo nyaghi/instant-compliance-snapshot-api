@@ -924,3 +924,20 @@ and two missing optional Florida dates. Sales completed 31/32, 135/160, 213/320
 and 327/640 at 1/5/10/20 organizations. A same-code two-lane AR/ME experiment
 passed 40 identity/status/date controls but improved Sales only to 138/160 and
 332/640; original limits were restored. Neither trial establishes release readiness.
+
+### Overnight perf.46 candidate: start shared source backlogs earlier
+
+The opt-in lab setting CE_LAB_SALES_QUEUE_POLICY=tail-aware orders concurrent
+Sales states by estimated shared drain time (pending/running count times recent
+median service time divided by source limit). Feasible work is preferred when
+little time remains. Individual Sales keeps shortest-first, Standard remains
+slow-first, identity preparation stays first and required, and all requested
+states remain queued. Organization fairness, atomic source/worker admission,
+late-result rejection, and termination-before-release are unchanged. Claim
+events expose the policy and score for evidence. No hardcoded organization or
+state preference, completed-status cache, or early release of live resources.
+
+This is a testable scheduling hypothesis, not a performance claim. The user
+authorized temporary overnight compute under $50 and restoration of four nodes.
+Paired one-org/concurrent all32 measurements must qualify any benefit; source
+limits are independently varied and audited rather than silently broadened.

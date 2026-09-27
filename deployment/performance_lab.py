@@ -163,6 +163,7 @@ def build_handler(master, key, capacity=None, durable=None):
                     'supported_states': master.SUPPORTED_STATES, 'private_access': True,
                     'ny_browser_validation_enabled': os.environ.get('CE_LAB_NY_BROWSER') == '1', 'shared_helpers_enabled': False,
                     'durable_workflows_enabled': durable is not None,
+                    'sales_queue_policy': getattr(durable, 'sales_policy', None),
                     'downloadable_data': {s: master.downloadable_data_info(s) for s in ('KS','KY','LA','NH','OR')}}
             body = json.dumps(data).encode()
             self.send_response(200)

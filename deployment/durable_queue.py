@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from collections import Counter
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import uuid
@@ -61,8 +62,43 @@ def normalize_submission(payload, supported):
             'alternate_names': aliases, 'states': sorted(set(states)), 'mode': mode, 'kind': kind}
 
 
+def sales_tail_scores(workflows, pending, held, estimates, limits):
+    """Estimated source drain time, never a result or an admission decision.
+
+    Shortest-first across every organization leaves the same slow registries
+    idle until late in Sales. Under concurrent Sales demand, start the sources
+    with the largest shared backlog earlier. Limits and process reservations
+    remain authoritative; no work is omitted or permit released early.
+    """
+    sales = {w['id'] for w in workflows if w['mode'] == 'sales'}
+    if len(sales) < 2:
+        return {}
+    demand = Counter(j['state'] for ident in sales for j in pending.get(ident, [])
+                     if not j['state'].startswith('@'))
+    demand.update(j['state'] for j in held if j['workflow_id'] in sales
+                  and not j['state'].startswith('@'))
+    return {state: count * estimates.get(state, 10.0) / max(1, limits.get(state, 4))
+            for state, count in demand.items()}
+
+
+def order_pending(workflow, jobs, estimates, tail_scores, now):
+    def key(job):
+        state = job['state']
+        seconds = estimates.get(state, 10.0)
+        if workflow['mode'] == 'sales' and tail_scores:
+            # Work unlikely to fit must not displace feasible completions.
+            return (state != '@sales_identity', seconds > workflow['deadline']-now,
+                    -tail_scores.get(state, 0), seconds, state, job['id'])
+        direction = 1 if workflow['mode'] == 'sales' else -1
+        return (state != '@sales_identity', direction*seconds, state, job['id'])
+    jobs.sort(key=key)
+
+
 class Queue:
-    def __init__(self, dsn, max_connections=6, test_schema=None, ny_enabled=False):
+    def __init__(self, dsn, max_connections=6, test_schema=None, ny_enabled=False, sales_policy=None):
+        self.sales_policy = sales_policy or os.environ.get('CE_LAB_SALES_QUEUE_POLICY', 'shortest')
+        if self.sales_policy not in ('shortest', 'tail-aware'):
+            raise ValueError('Unsupported lab Sales queue policy')
         options = {'options': '-c statement_timeout=10000'}
         self.lock = LOCK
         self.ny_enabled = ny_enabled
@@ -230,14 +266,13 @@ class Queue:
                 earlier_multi.extend((w['submitted'],set(j['resources'])) for j in candidates+ongoing)
                 if candidates and protected is None:
                     protected=min(candidates,key=lambda j:j['id'])
-            # Standard starts slow work earlier to reduce the final tail. Sales
-            # prioritizes likely completions inside its one-minute deadline.
-            # Every requested state remains queued; fairness and caps are shared.
+            # Optional lab-only concurrent Sales policy. Organization fairness,
+            # actual source/CPU limits, identity dependency and cutoff are below.
             estimates = self.duration_estimates(c, now, {j['state'] for jobs in pending.values() for j in jobs})
+            tail_scores = (sales_tail_scores(workflows, pending, held, estimates, cfg['registry_limits'])
+                           if self.sales_policy == 'tail-aware' else {})
             for workflow in workflows:
-                direction = 1 if workflow['mode']=='sales' else -1
-                pending.get(workflow['id'], []).sort(
-                    key=lambda j: (j['state'] != '@sales_identity', direction*estimates.get(j['state'], 10.0), j['state'], j['id']))
+                order_pending(workflow, pending.get(workflow['id'], []), estimates, tail_scores, now)
             workflows.sort(key=lambda w: (running[w['id']], w['dispatched'], w['submitted'], w['id']))
             if (protected and used+protected['weight']<=ceiling
                     and all(busy[r]<cfg['registry_limits'].get(r,4) for r in protected['resources'])):
@@ -272,7 +307,9 @@ class Queue:
                                   (worker, token, now, now+20, run_until, j['id']))
                         c.execute("UPDATE cc_lab_workflows SET phase='active',started=COALESCE(started,%s),dispatched=%s WHERE id=%s", (now, now, w['id']))
                         self.event(c, now, 'claimed', w['id'], j['id'], worker=worker, token=token,
-                                   slot_limit=ceiling, admission=admission_evidence)
+                                   slot_limit=ceiling, admission=admission_evidence,
+                                   sales_policy=self.sales_policy if w['mode']=='sales' else None,
+                                   source_drain_estimate=tail_scores.get(j['state']))
                     if seed_cursor: seed['result'] = seed_cursor.fetchone()['result']
                     return {**j, 'owner': worker, 'token': token, 'attempt': j['attempt']+1,
                             'payload': w['payload'], 'version': w['source_version'], 'run_seconds': max(0, run_until-now),
