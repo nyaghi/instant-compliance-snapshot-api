@@ -62,6 +62,18 @@ def normalize_submission(payload, supported):
             'alternate_names': aliases, 'states': sorted(set(states)), 'mode': mode, 'kind': kind}
 
 
+class DurationEstimates(dict):
+    """Median service times plus source-wide tail latency for Sales ordering.
+
+    Only elapsed times are retained. No organization identity, registry result,
+    or classification is reused, and unknown states keep the existing default.
+    """
+    def __init__(self, rows):
+        rows = list(rows)
+        super().__init__((r['state'], r['seconds']) for r in rows)
+        self.tails = {r['state']: r['tail_seconds'] for r in rows}
+
+
 def sales_tail_scores(workflows, pending, held, estimates, limits):
     """Estimated source drain time, never a result or an admission decision.
 
@@ -77,7 +89,7 @@ def sales_tail_scores(workflows, pending, held, estimates, limits):
                      if not j['state'].startswith('@'))
     demand.update(j['state'] for j in held if j['workflow_id'] in sales
                   and not j['state'].startswith('@'))
-    return {state: count * estimates.get(state, 10.0) / max(1, limits.get(state, 4))
+    return {state: count * getattr(estimates, 'tails', estimates).get(state, 10.0) / max(1, limits.get(state, 4))
             for state, count in demand.items()}
 
 
@@ -377,13 +389,14 @@ class Queue:
     def duration_estimates(c, now, states):
         # Same last-20 median and bounds; indexed top-N retrieval avoids sorting
         # all of the day's completed jobs on every scheduler turn.
-        return {r['state']: r['seconds'] for r in c.execute(
-            "SELECT wanted.state, percentile_cont(0.5) WITHIN GROUP (ORDER BY recent.seconds) AS seconds "
+        return DurationEstimates(c.execute(
+            "SELECT wanted.state, percentile_cont(0.5) WITHIN GROUP (ORDER BY recent.seconds) AS seconds, "
+            "percentile_cont(0.95) WITHIN GROUP (ORDER BY recent.seconds) AS tail_seconds "
             "FROM unnest(%s::text[]) AS wanted(state) CROSS JOIN LATERAL "
             "(SELECT finished-claimed AS seconds FROM cc_lab_jobs WHERE state=wanted.state "
             "AND phase='done' AND error IS NULL AND attempt=1 AND finished>=%s "
             "AND claimed IS NOT NULL AND finished>claimed AND finished-claimed<=300 "
-            "ORDER BY finished DESC LIMIT 20) recent GROUP BY wanted.state", (sorted(states), now-86400))}
+            "ORDER BY finished DESC LIMIT 20) recent GROUP BY wanted.state", (sorted(states), now-86400)))
 
     def release_discovery_sources(self, worker, job, token, completed):
         """Supervisor-only evidence from returned collectors, fenced like leases.

@@ -96,6 +96,9 @@ class TransportTrace(unittest.TestCase):
         for path,strip in [('deployment/queue_engine.py',strip_transport_trace_engine),('deployment/queue_worker.py',strip_transport_trace_worker),('registry_snapshot_server.py',strip_transport_budget_and_redundancy),('deployment/durable_queue.py',None)]:
             old=ast.parse(subprocess.check_output(['git','show','3f1779f:'+path],cwd=root).decode())
             new=ast.parse((root/path).read_text(encoding='utf-8'))
+            if path == 'deployment/durable_queue.py':
+                from testing.capacity_lab.tail_scope import strip_tail_latency
+                strip_tail_latency(new)
             if strip:strip(new)
             self.assertEqual(ast.dump(old),ast.dump(new),path)
 

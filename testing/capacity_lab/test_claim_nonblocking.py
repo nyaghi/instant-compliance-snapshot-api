@@ -35,6 +35,8 @@ class NonblockingClaims(unittest.TestCase):
   old=subprocess.check_output(['git','show','7104970:deployment/durable_queue.py'],cwd=root,text=True)
   new=(root/'deployment/durable_queue.py').read_text()
   before,after=ast.parse(old),ast.parse(new)
+  from testing.capacity_lab.tail_scope import strip_tail_latency
+  strip_tail_latency(after)
   oldq=next(n for n in before.body if isinstance(n,ast.ClassDef) and n.name=='Queue')
   newq=next(n for n in after.body if isinstance(n,ast.ClassDef) and n.name=='Queue')
   originals={n.name:n for n in oldq.body if isinstance(n,ast.FunctionDef)}

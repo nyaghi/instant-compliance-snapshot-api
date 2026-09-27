@@ -9458,6 +9458,79 @@ def patch_mi_module_for_fast_lookups(module) -> None:
     module._cc_fast_lookup_patch = True
 
 
+def search_or_completed(page, org, module):
+    """Lab guard: classify only the finished, submitted Oregon search response.
+
+    The bundled parser's fixed pause cannot prove an asynchronous search ended.
+    Keep its form, matching, detail parsing and filing rules; wait at the search
+    click for this exact request and its results to reach the document instead.
+    """
+    if not (APP_VERSION.endswith("-performance-lab") and os.environ.get("PUBLIC_BASE_URL") ==
+            "https://instant-compliance-snapshot-api-hn4v.onrender.com"):
+        return module.search_or(page, org)
+    query = re.sub(r"\s+", " ", org.organization_name).strip()
+    failure = []
+    completed = []
+
+    def is_query(request):
+        try:
+            url = urlparse(request.url)
+            fields = parse_qs(request.post_data or "", keep_blank_values=True)
+            return (url.scheme == "https" and url.hostname == "justice.oregon.gov"
+                and url.path.casefold().rstrip("/") == "/charities/charity/results"
+                and request.method == "POST" and len(fields.get("Name", [])) == 1
+                and re.sub(r"\s+", " ", fields["Name"][0]).strip() == query
+                and fields.get("EIN", [""]) == [""])
+        except Exception:
+            return False
+
+    class SearchButton:
+        def __init__(self, target): self.target = target
+        def __getattr__(self, name): return getattr(self.target, name)
+        def click(self, *args, **kwargs):
+            deadline = time.monotonic() + min(float(kwargs.get("timeout", 10000)), 10000.0) / 1000
+            try:
+                with page.expect_event("requestfinished", predicate=is_query,
+                        timeout=max(1, int((deadline-time.monotonic())*1000))) as event:
+                    self.target.click(*args, **kwargs)
+                response = event.value.response()
+                if response is None or response.status != 200:
+                    raise ValueError("Oregon submitted search returned an unsuccessful response")
+                body = response.text()  # requestfinished confirms the full response body arrived.
+                if (not body.strip() or len(body)>1_000_000 or re.search(
+                        r"verify you are human|captcha|access denied|service unavailable", body, re.I)):
+                    raise ValueError("Oregon search response was empty, blocked or invalid")
+                remaining = deadline-time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("Oregon search completion allowance exhausted")
+                page.wait_for_function(r"""expected => {
+                    const actual = document.querySelector('#results');
+                    const parsed = document.createElement('div'); parsed.innerHTML = expected;
+                    const text = el => (el.textContent || '').replace(/\s+/g, ' ').trim();
+                    return actual && text(parsed).length > 0 && text(actual) === text(parsed);
+                }""", arg=body, timeout=max(1, int(remaining*1000)))
+                completed.append(True)
+            except Exception:
+                failure.append(True)
+                raise
+
+    class SearchPage:
+        def __getattr__(self, name): return getattr(page, name)
+        def locator(self, selector, *args, **kwargs):
+            target = page.locator(selector, *args, **kwargs)
+            return SearchButton(target) if selector == "#search" else target
+
+    result = module.search_or(SearchPage(), org)
+    if failure or not completed:
+        result.status = "Unable to Verify"
+        result.raw_status_text = "Oregon submitted search did not finish with confirmed results"
+        result.source_note = ("Oregon did not finish displaying a complete response for the submitted search. "
+                              "Registration status could not be confirmed; this does not establish non-registration.")
+        result.reason_code = "OR_INCOMPLETE_QUERY_RESPONSE"
+        result.success = False
+    return result
+
+
 def search_bundled_extension_state(page, org, state: str):
     state = state.upper()
     module = state_extension_module(state)
@@ -9657,11 +9730,15 @@ def search_bundled_extension_state(page, org, state: str):
             if best_result is not None and (time.perf_counter() - started) >= min(NAME_SEARCH_VARIANT_MAX_SECONDS, 30.0):
                 return best_result
             active_org = org_with_name(org, variant)
-            external_result = module.search_or(
+            external_result = search_or_completed(
                 page,
                 module.Organization(organization_name=active_org.organization_name, ein=active_org.ein),
+                module,
             )
             result = copy_external_result(org, "OR", external_result)
+            if getattr(result, "reason_code", "") == "OR_INCOMPLETE_QUERY_RESPONSE":
+                result.success = False
+                return result
             if public_status(result) == "Site Not Reachable":
                 return result
             if not result_is_retryable_name_miss(result):
@@ -9695,11 +9772,15 @@ def search_bundled_extension_state(page, org, state: str):
                 return annotate_or_empty_reports(result)
             best_candidate_name = best_or_registry_name_from_page()
             if best_candidate_name:
-                external_result = module.search_or(
+                external_result = search_or_completed(
                     page,
                     module.Organization(organization_name=best_candidate_name, ein=org.ein),
+                    module,
                 )
                 result = copy_external_result(org, "OR", external_result)
+                if getattr(result, "reason_code", "") == "OR_INCOMPLETE_QUERY_RESPONSE":
+                    result.success = False
+                    return result
                 if not result.matched_registry_name:
                     result.matched_registry_name = or_registry_name_from_detail() or best_candidate_name
                 if or_detail_ein_mismatches(result.matched_registry_name or best_candidate_name):
@@ -9731,7 +9812,7 @@ def search_bundled_extension_state(page, org, state: str):
                 if not result_is_retryable_name_miss(result):
                     return annotate_or_empty_reports(result)
             best_result = result
-        return best_result or copy_external_result(org, "OR", module.search_or(page, bundle_org))
+        return best_result or copy_external_result(org, "OR", search_or_completed(page, bundle_org, module))
     else:
         raise ValueError(f"Unsupported bundled extension state: {state}")
     return copy_external_result(org, state, external_result)

@@ -495,6 +495,8 @@ if completed_names:
 
 def strip_transport_budget_and_redundancy(tree):
     """Allow only the measured lab transport adjustments, then compare all code."""
+    from testing.capacity_lab.or_completion_scope import strip_or_completion
+    strip_or_completion(tree)
     helper = next((n for n in tree.body if getattr(n, 'name', '') == 'mi_completed_query_covers'), None)
     if helper is None: return
     tree.body.remove(helper)

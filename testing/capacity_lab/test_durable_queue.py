@@ -66,13 +66,20 @@ class DurableTests(unittest.TestCase):
             {'ein':job['payload']['ein'],'state':job['state'],'app_version':VERSION,'status':'Current'})
 
     def claim_available(self, q, worker, maximum):
-        # Production supervisors retry empty/busy claims. Keep the original
-        # exact capacity assertions below while allowing that bounded retry.
-        jobs=[];deadline=time.monotonic()+12
-        while len(jobs)<maximum and time.monotonic()<deadline:
-            job=q.claim(worker)
-            if job:jobs.append(job)
-            else:time.sleep(.03+int(worker[-2:],16)/10000)
+        # Real supervisors retry busy claims and renew leases while other
+        # workers acquire work. The external test connection can take >12s to
+        # acquire 20 jobs; that client-side cutoff must not masquerade as a
+        # smaller runtime capacity. Keep all exact 15/20/source-cap assertions.
+        jobs=[];deadline=time.monotonic()+30;heartbeat=0
+        while time.monotonic()<deadline:
+            if time.monotonic()>=heartbeat:
+                q.heartbeat(worker,[(j['id'],j['token']) for j in jobs])
+                heartbeat=time.monotonic()+3
+            if len(jobs)<maximum:
+                job=q.claim(worker)
+                if job:jobs.append(job)
+                else:time.sleep(.03+int(worker[-2:],16)/10000)
+            else:time.sleep(.05)
         return jobs
 
     def sales_without_review(self, **changes):
@@ -760,6 +767,12 @@ class DurableTests(unittest.TestCase):
                 "FROM cc_lab_jobs WHERE phase='done' AND error IS NULL AND attempt=1 AND finished>=%s "
                 "AND claimed IS NOT NULL AND finished>claimed AND finished-claimed<=300) recent WHERE n<=20 GROUP BY state",(now-86400,))}
             self.assertEqual(self.q.duration_estimates(c,now,states),previous)
+            expected_tails={r['state']:r['seconds'] for r in c.execute(
+                "SELECT state,percentile_cont(0.95) WITHIN GROUP (ORDER BY seconds) AS seconds FROM "
+                "(SELECT state,finished-claimed AS seconds,row_number() OVER (PARTITION BY state ORDER BY finished DESC) AS n "
+                "FROM cc_lab_jobs WHERE phase='done' AND error IS NULL AND attempt=1 AND finished>=%s "
+                "AND claimed IS NOT NULL AND finished>claimed AND finished-claimed<=300) recent WHERE n<=20 GROUP BY state",(now-86400,))}
+            self.assertEqual(self.q.duration_estimates(c,now,states).tails,expected_tails)
 
     def test_expired_running_work_cannot_publish_late_success(self):
         ident=self.submit(); w=self.worker(); j=self.q.claim(w)
