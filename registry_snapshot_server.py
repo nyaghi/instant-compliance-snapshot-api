@@ -11761,6 +11761,10 @@ class FloridaVerifiedTransport:
             # Keep independent assets concurrent in Chromium. The experiment
             # targets document navigation; serial asset forwarding delays every POST.
             return route.fallback()
+        if fl_verified_transport_first() and not isinstance(self.error, FloridaCertificateError):
+            # A fresh document request owns its error. A prior timeout must not
+            # invalidate a later fully received response; trust failures stay fatal.
+            self.error = None
         try:
             remaining = self.deadline - time.monotonic()
             if remaining <= 0:

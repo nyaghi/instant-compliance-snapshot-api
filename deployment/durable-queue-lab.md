@@ -975,3 +975,16 @@ The perf49 verified-first trial serialized scripts/stylesheets through synchrono
 
 ### Overnight perf51 empty-claim pacing
 At24 workers,2251/2882 claims found no eligible work; at48,2648/3278 did. CPU pressure fell with48 while aggregate claim-transaction time rose from374 to1338worker-seconds. This is not a causal partition of each job latency, but establishes wasted coordination work. Back off only empty claim requests exponentially from100ms to a worker-specific500-750ms cap. Continue the same100ms active-task supervision and3s heartbeat loop. Successful claims and safely persisted/released capacity reset the delay immediately. No source caps, weighting, fairness, process cleanup, master matching/status/dates, or60s deadline changes. Compare on24 with unchanged source caps before any further capacity recommendation.
+
+
+### Overnight Florida recovered-document error isolation (perf52)
+
+The opt-in lab verified-first transport retained an old TimeoutError after a
+fresh document request completed successfully, rejecting recovered registry
+evidence and forcing a whole lookup retry. Reproduced in route and end-to-end
+matching controls before the change. Clear only a non-certificate prior error
+at the start of a fresh document request in the existing exact-lab experiment.
+New transport failures still abort, TLS verification and hard deadlines remain,
+and certificate failures are never cleared. Default production/staging path is
+unchanged. No status, name, EIN, address, date, source cap or queue change.
+This does not repair Florida source outages or eliminate its response latency.
