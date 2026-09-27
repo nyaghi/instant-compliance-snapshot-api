@@ -24,7 +24,7 @@ class Names(unittest.TestCase):
   fields=s.request.call_args_list[1].kwargs['data']
   self.assertEqual(fields['ctl00$MainContent$txtName'],'Example Relief');self.assertEqual(fields['ctl00$MainContent$txtEIN'],'')
   self.assertEqual(fields['ctl00$MainContent$ddlName2'],'All words')
-  for c in s.request.call_args_list:self.assertTrue(c.kwargs['verify']);self.assertLessEqual(c.kwargs['timeout'],4)
+  for c in s.request.call_args_list:self.assertTrue(c.kwargs['verify']);self.assertLessEqual(c.kwargs['timeout'],4 if c.args[0]=='GET' else 12)
  def test_partial_wrong_query_positive_ambiguous_blocked_do_not_complete(self):
   for source in [body()[:-7],body('Another Relief'),body(count='1'),body()+body(),body().replace('0 record(s)','0 record'),body().replace('All words','Any word'),body().replace('No records found for your search criteria',''),body().replace('</html>',' CAPTCHA</html>'),body().replace('</html>',' EIN: 98-7654321</html>')]:
    with self.subTest(source=source):self.assertEqual(self.run_source(source)[0],[])
@@ -48,11 +48,11 @@ class Names(unittest.TestCase):
   s=MagicMock()
   with patch.object(m,'mi_name_fallback_queries',return_value=['Example Relief']):self.assertEqual(m.mi_name_http_empty_queries(s,self.org,{},time.perf_counter()-1),[])
   s.request.assert_not_called()
- def test_completed_prefix_survives_later_positive_without_claiming_all_queries(self):
+ def test_only_primary_query_is_probed_and_other_variants_remain_for_browser(self):
   s=MagicMock();s.request.side_effect=[self.response(FORM,URL),self.response(body(),RESULT),self.response(FORM,URL),self.response(body('Community Help','1'),RESULT)]
   with patch.object(m,'mi_name_fallback_queries',return_value=['Example Relief','The Example Relief','Community Help']):
    self.assertEqual(m.mi_name_http_empty_queries(s,self.org,{},time.perf_counter()+30),['Example Relief'])
-  self.assertEqual(s.request.call_count,4)
+  self.assertEqual(s.request.call_count,2)
  def test_completed_progress_uses_existing_negative_rule_without_browser(self):
   page=MagicMock();page._cc_mi_search_progress={'identity':('Example Relief','123456789'),'completed_empty_name_queries':['Example Relief']}
   page._cc_mi_lookup_deadline=time.perf_counter()+30
