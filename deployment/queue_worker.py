@@ -329,6 +329,27 @@ class AdmissionWindow:
         self.seconds.clear(); self.counts.clear(); self.had_work = False
 
 
+class EmptyClaimBackoff:
+    """Pace empty queue claims without slowing supervision of active processes."""
+    def __init__(self, phase=0.5):
+        self.cap = 0.5 + 0.25 * min(1.0, max(0.0, phase))
+        self.delay = 0.0
+        self.next_attempt = 0.0
+
+    def ready(self, now):
+        return now >= self.next_attempt
+
+    def observe(self, found, now):
+        if found:
+            self.reset()
+        else:
+            self.delay = min(self.cap, max(0.1, self.delay * 2))
+            self.next_attempt = now + self.delay
+
+    def reset(self):
+        self.delay = self.next_attempt = 0.0
+
+
 class Supervisor:
     def __init__(self, queue, version, slots=8, command=None, env=None):
         self.queue, self.version, self.slots = queue, version, slots
@@ -347,6 +368,7 @@ class Supervisor:
         self.admission = ResourceAdmission() if settings.get('CE_LAB_RESOURCE_ADMISSION') == '1' else None
         self.stop_event = threading.Event()
         self.active = {}
+        self.claim_backoff = EmptyClaimBackoff(int(self.id[-8:], 16) / 0xffffffff)
         self.observations = AdmissionWindow(time.monotonic())
         self.warm_ready = None
         try:
@@ -423,8 +445,10 @@ class Supervisor:
                 ceiling = self.admission.limit(self.slots,used) if self.admission else self.slots
                 reason = ('physical_slots' if used >= self.slots else
                     (self.admission.snapshot.get('reason', 'available') if self.admission else 'available'))
+                if used < ceiling and not self.claim_backoff.ready(time.monotonic()):
+                    reason = 'claim_backoff'
                 self.observations.observe(reason, time.monotonic(), bool(self.active))
-                if used < ceiling and time.monotonic()-last_heartbeat < 8:
+                if used < ceiling and time.monotonic()-last_heartbeat < 8 and self.claim_backoff.ready(time.monotonic()):
                     claim_started = time.monotonic()
                     self.observations.observe('claim_transaction', claim_started, bool(self.active))
                     try: job = self.queue.claim(self.id,slot_limit=ceiling,
@@ -434,6 +458,7 @@ class Supervisor:
                         self.observations.observe('claim_error', time.monotonic(), bool(self.active))
                     else:
                         self.observations.observe('launch' if job else 'no_eligible_job', time.monotonic(), bool(self.active) or bool(job))
+                    self.claim_backoff.observe(bool(job), time.monotonic())
                     if job:
                         temp = tempfile.TemporaryDirectory(prefix='cc-lab-task-')
                         output = Path(temp.name)/'result.json'
@@ -495,6 +520,8 @@ class Supervisor:
         except Exception:return
         for ident,r in ready:
             r['temp'].cleanup();del self.active[ident]
+        if ready:
+            self.claim_backoff.reset()
 
 
 def main():

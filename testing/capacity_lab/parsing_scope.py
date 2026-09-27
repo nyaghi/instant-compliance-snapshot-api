@@ -241,6 +241,7 @@ def strip_launch_pacing_threshold(tree):
 
 def strip_warm_ready_and_failure_trace_worker(tree):
     """Undo only readiness and passive trace hooks, retaining every scheduler rule."""
+    strip_empty_claim_backoff(tree)
     tree.body=[n for n in tree.body if getattr(n,'name','') not in
         {'task_environment','warm_task_engine','log_failure_trace'} and not
         (isinstance(n,ast.Import) and [a.name for a in n.names]==['re'])]
@@ -316,3 +317,26 @@ def strip_fl_verified_first_trial(tree):
     for n in ast.walk(loader):
         if isinstance(n,ast.Try) and n.body and ast.dump(n.body[0])==ast.dump(expected):
             n.body.pop(0)
+
+
+def strip_empty_claim_backoff(tree):
+    """Strip only the claim timer; process polling, leases and deadlines stay compared."""
+    tree.body=[n for n in tree.body if getattr(n,'name','')!='EmptyClaimBackoff']
+    class Restore(ast.NodeTransformer):
+        def visit_Assign(self,node):
+            if ast.unparse(node.targets[0])=='self.claim_backoff':
+                assert ast.unparse(node.value)=='EmptyClaimBackoff(int(self.id[-8:], 16) / 4294967295)'
+                return None
+            return self.generic_visit(node)
+        def visit_If(self,node):
+            text=ast.unparse(node)
+            if text=="if used < ceiling and (not self.claim_backoff.ready(time.monotonic())):\n    reason = 'claim_backoff'":return None
+            if text=='if ready:\n    self.claim_backoff.reset()':return None
+            if isinstance(node.test,ast.BoolOp) and ast.unparse(node.test.values[-1])=='self.claim_backoff.ready(time.monotonic())':
+                assert ast.unparse(node.test)=='used < ceiling and time.monotonic() - last_heartbeat < 8 and self.claim_backoff.ready(time.monotonic())'
+                node.test.values.pop()
+            return self.generic_visit(node)
+        def visit_Expr(self,node):
+            if ast.unparse(node)=='self.claim_backoff.observe(bool(job), time.monotonic())':return None
+            return self.generic_visit(node)
+    Restore().visit(tree)

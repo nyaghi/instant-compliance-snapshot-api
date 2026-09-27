@@ -5,13 +5,14 @@ from unittest.mock import Mock
 from psycopg import DataError
 
 from deployment.queue_engine import FloridaTrace, execute
-from deployment.queue_worker import Supervisor
+from deployment.queue_worker import Supervisor, EmptyClaimBackoff
 
 
 class CompletionBatchTests(unittest.TestCase):
     def supervisor(self):
         s = object.__new__(Supervisor)
         s.id, s.queue = 'worker', Mock()
+        s.claim_backoff = EmptyClaimBackoff()
         s.active = {str(i): {'terminated': i != 2, 'job': {'token': str(i)},
             'result': {'status': 'Current'}, 'error': None, 'temp': Mock()} for i in range(3)}
         return s
