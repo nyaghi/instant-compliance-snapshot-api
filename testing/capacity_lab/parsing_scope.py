@@ -303,6 +303,11 @@ def strip_warm_ready_and_failure_trace_engine(tree):
 
 def strip_fl_verified_first_trial(tree):
     """The opt-in lab changes only which verified transport sends the same page."""
+    expected_asset=ast.parse('if fl_verified_transport_first() and request.resource_type != "document":\n    return route.fallback()\n').body[0]
+    for cls in tree.body:
+        if getattr(cls,'name','')=='FloridaVerifiedTransport':
+            route=next(n for n in cls.body if getattr(n,'name','')=='route')
+            route.body=[n for n in route.body if ast.dump(n)!=ast.dump(expected_asset)]
     tree.body=[n for n in tree.body if getattr(n,'name','')!='fl_verified_transport_first']
     fn=next((n for n in tree.body if getattr(n,'name','')=='search_fl_with_transport'),None)
     if fn is None:return

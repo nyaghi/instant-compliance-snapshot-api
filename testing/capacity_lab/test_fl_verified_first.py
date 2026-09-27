@@ -57,4 +57,17 @@ class VerifiedFirst(unittest.TestCase):
         new=ast.parse(Path(m.__file__).read_text(encoding='utf-8'));strip_fl_verified_first_trial(new)
         self.assertEqual(ast.dump(old),ast.dump(new))
 
+    def test_assets_use_browser_only_for_explicit_lab_experiment(self):
+        for enabled in [False,True]:
+            for resource in ['script','stylesheet','xhr','document','image']:
+                with self.subTest(enabled=enabled,resource=resource),patch.object(m,'fl_verified_transport_first',return_value=enabled),patch.object(m,'BLOCK_HEAVY_BROWSER_RESOURCES',True):
+                    route=MagicMock();route.request.url=m.FL_CHECK_A_CHARITY_URL
+                    route.request.resource_type=resource;route.request.method='GET'
+                    tr=m.FloridaVerifiedTransport(MagicMock());tr.deadline=0
+                    tr.route(route)
+                    if enabled and resource not in ['document','image']:
+                        route.fallback.assert_called_once();route.abort.assert_not_called()
+                    else:
+                        route.fallback.assert_not_called();route.abort.assert_called_once()
+
 if __name__=='__main__':unittest.main()
