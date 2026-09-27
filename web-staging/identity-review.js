@@ -12,15 +12,16 @@
     const message = add(box, 'p', '', 'text-sm text-slate-600'); message.setAttribute('role', 'status');
     const buttons = [];
     let busy = false;
-    function action(parent, label, run) {
-      const button = add(parent, 'button', label, 'rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-100 disabled:opacity-50');
-      button.type = 'button'; buttons.push(button);
+    function action(parent, label, run, selected = false) {
+      const button = add(parent, 'button', label, 'rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-100 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed disabled:opacity-50');
+      button.type = 'button'; button.disabled = selected; buttons.push({button, selected});
       button.addEventListener('click', async () => {
-        if (busy) return; busy = true; buttons.forEach(b => b.disabled = true); message.textContent = 'Updating this state result…';
+        if (busy || button.disabled) return; busy = true; buttons.forEach(({button}) => button.disabled = true); message.textContent = 'Updating this state result…';
         try { await run(); }
         catch (error) { message.textContent = error.message || 'The update could not finish. The original result is retained.'; }
-        finally { busy = false; buttons.forEach(b => b.disabled = false); }
+        finally { busy = false; buttons.forEach(({button, selected}) => button.disabled = selected); }
       });
+      return button;
     }
     if (review?.candidates?.length) {
       add(box, 'p', 'Confirm the organization', 'font-semibold text-slate-900');
@@ -39,12 +40,12 @@
         } catch { /* No public link was supplied. */ }
         if (candidate.decision) add(card, 'p', candidate.decision === 'accept' ? 'Identity accepted by user' : 'Identity rejected by user', 'mt-2 text-xs font-semibold');
         const controls = add(card, 'div', '', 'mt-2 flex flex-wrap gap-2');
-        action(controls, 'Accept match', () => decide(candidate.id, 'accept'));
-        action(controls, 'Reject match', () => decide(candidate.id, 'reject'));
-        if (candidate.decision) action(controls, 'Undo decision', () => decide(candidate.id, 'clear'));
+        action(controls, 'Accept match', () => decide(candidate.id, 'accept'), candidate.decision === 'accept').setAttribute('aria-pressed', String(candidate.decision === 'accept'));
+        action(controls, 'Reject match', () => decide(candidate.id, 'reject'), candidate.decision === 'reject').setAttribute('aria-pressed', String(candidate.decision === 'reject'));
+        if (candidate.decision) action(controls, 'Undo match', () => decide(candidate.id, 'clear'));
       }
     }
-    if (inconclusive) {
+    if (inconclusive && !review?.candidates?.some(candidate => candidate.decision)) {
       const controls = add(box, 'div', '', 'mt-3');
       action(controls, `Retry ${result.state}`, retry);
     }

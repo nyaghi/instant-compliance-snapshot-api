@@ -231,8 +231,16 @@ class MatureParity(unittest.TestCase):
         self.assertEqual({k for k,v in old.items() if current.get(k)!=v},allowed)
     def test_discovery_connector_and_state_modules_unchanged(self):
         # NY now accepts optional Sales cancellation; signal-free lifecycle has dedicated controls.
-        for path in ['Charity_Checker_Script for 13_states.py','web-staging/organization-identity.js']:
+        for path in ['Charity_Checker_Script for 13_states.py']:
             self.assertEqual((ROOT/path).read_text(encoding='utf-8').replace('\r\n','\n'),self.previous(path).replace('\r\n','\n'))
+        # September 27 feedback removes only the appended IL discovery step.
+        # Master state/IRS evidence and connector registration are unchanged.
+        discovery=(ROOT/'web-staging/organization-identity.js').read_text(encoding='utf-8')
+        previous=self.previous('web-staging/organization-identity.js')
+        start=previous.index('      if (window.CCNYConnector && location.origin')
+        end=previous.index('\n\n      if (requestRevision',start)
+        replacement='      // Discovery finishes with the master\'s EIN-linked state and IRS evidence.\n      // Connector registration checks run only when the user starts compliance.'
+        self.assertEqual(discovery.replace('\r\n','\n'),(previous[:start]+replacement+previous[end:]).replace('\r\n','\n'))
     def test_frontend_state_retry_transport_unchanged(self):
         # Standard concurrency is now explicitly authorized; its 15-slot behavior
         # and all non-scheduler frontend parity are tested in run_standard_concurrency_guardrails.cjs.
