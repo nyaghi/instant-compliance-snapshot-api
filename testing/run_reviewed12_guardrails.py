@@ -66,7 +66,8 @@ class ReviewedTwelveTests(unittest.TestCase):
         short={**annual,'period_begin':'2025-01-01','period_end':'2025-03-31'}
         c.TAX_PERIOD_EVIDENCE_CACHE.clear()
         index=b'/organizations/237235671/202522679349200017/full /organizations/237235671/202422679349200018/full'
-        with patch.object(c,'identity_source_result',return_value={'filing':short}),patch.object(c,'identity_fetch',return_value=index),patch.object(c,'irs_return_header',side_effect=[ValueError('Unreadable'),{'filing':annual}]):
+        # The period reader now uses irs_latest_period, not full name discovery.
+        with patch.object(c,'irs_latest_period',return_value=short),patch.object(c,'identity_fetch',return_value=index),patch.object(c,'irs_return_header',side_effect=[ValueError('Unreadable'),{'filing':annual}]):
             evidence=c.irs_period_for_label('237235671',2024,time.monotonic()+10)
         self.assertEqual(evidence['period_end'],'2024-12-31');self.assertEqual(evidence['next_known_period_end'],'2025-03-31')
         c.TAX_PERIOD_EVIDENCE_CACHE.clear()

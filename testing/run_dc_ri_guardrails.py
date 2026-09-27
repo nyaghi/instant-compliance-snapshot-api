@@ -198,11 +198,14 @@ class MatureParity(unittest.TestCase):
         current={n.name:ast.dump(n) for n in ast.parse((ROOT/'registry_snapshot_server.py').read_text(encoding='utf-8')).body if isinstance(n,ast.FunctionDef)}
         # September 26 identity review and the next-50 short-name retrieval
         # correction and Michigan pending-row fix, compared with deployed .4.
-        # Acceptance guards are unchanged.
+        # Final-50 release: completed PA responses, KY source absence, and a
+        # shared street normalizer reused for evidence-based DC exclusions.
         allowed={'ga_charity_detail_html','identity_co_names','identity_source_cache_key','il_ga_browser_lookup',
                  'licensed_charity_identity','licensed_charity_names','licensed_charity_result','ny_connector_advance','ny_connector_request',
                  'reason_code_for_result','response_data_for_lookup','search_wi','search_wi_sidecar','search_mi_name_fallback',
                  'select_licensed_charity','wi_best_match_from_html','wi_best_match_from_markdown','wi_confirm_cross_state_credential'}
+        allowed.update({'search_pa_with_name_fallback','search_pa_with_name_fallback_core',
+                        'pa_guard_search_completion','irs_period_for_label','licensed_charity_street_evidence'})
         self.assertEqual({k for k,v in old.items() if current.get(k)!=v},allowed)
     def test_discovery_connector_and_state_modules_unchanged(self):
         # NY now accepts optional Sales cancellation; signal-free lifecycle has dedicated controls.

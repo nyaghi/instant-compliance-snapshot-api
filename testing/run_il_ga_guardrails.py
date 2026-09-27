@@ -337,6 +337,9 @@ class IntegrationControls(unittest.TestCase):
         old,new=functions(previous),functions((root/'registry_snapshot_server.py').read_text(encoding='utf-8'))
         changed={k for k in old if old[k]!=new.get(k)}
         self.assertEqual(changed,{'public_status','identity_rows_names','licensed_charity_identity','registration_date_metadata',
+            # Final-50 scoped PA/KY fixes and shared office normalization.
+            'search_pa_with_name_fallback','search_pa_with_name_fallback_core',
+            'pa_guard_search_completion','irs_period_for_label','licensed_charity_street_evidence',
             # Next-50 audit: bounded literal fallback for short legal cores.
             'licensed_charity_names',
             # Next-50 audit: retain pending status in the Michigan name fallback.
