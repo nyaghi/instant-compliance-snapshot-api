@@ -963,3 +963,6 @@ The 614/640 trial also retained a Florida optional initial-date timeout, with
 the same accepted CH credential and compliance status. It is not a clean pass.
 The isolated Sales follow-up also timed out; a subsequent Standard diagnostic
 recovered. Neither retry overwrites the first result or proves reliability.
+
+### Overnight readiness follow-up (perf48)
+Workers now preload the isolated fork template before advertising capacity. Readiness carries only the release version; it performs no organization lookup or result caching. A failed warmup cannot register worker capacity. Passive Florida request timing is retained after a killed task with bounded, whitelisted public-path metadata only. Deadlines, source admission, matching, dates, status logic, cleanup and reservation release remain unchanged. This follows measured first-task startup costs of four to five seconds.

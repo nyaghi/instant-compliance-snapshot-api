@@ -119,6 +119,17 @@ class WarmEngineTests(unittest.TestCase):
             self.assertEqual(list(r['context_before']),[r['ein'].replace('-','')])
         self.assertEqual(results[0]['aliases'],['Reviewed DBA']);self.assertEqual(results[1]['aliases'],[])
 
+    def test_startup_readiness_reuses_the_same_pristine_template(self):
+        from deployment.queue_worker import warm_task_engine
+        proof=warm_task_engine(self.version,self.env)
+        self.assertTrue(proof['ready'])
+        with tempfile.TemporaryDirectory() as folder:
+            result=self.result(folder,self.job())
+        self.assertEqual(proof['template_pid'],result['lab_task_metrics']['template_pid'])
+        self.assertIsNone(result['previous_organization'])
+        self.assertFalse(result['previous_profile'])
+        self.assertEqual(result['secret_keys_present'],[])
+
     def test_cancellation_kills_browser_descendants_before_release(self):
         from deployment.queue_worker import process_running,group_running
         with tempfile.TemporaryDirectory() as folder:

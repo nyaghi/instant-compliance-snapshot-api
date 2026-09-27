@@ -8,6 +8,7 @@ No customer browser/profile is opened; master uses its own headless browsers.
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import subprocess
 import sys
@@ -244,6 +245,64 @@ class ResourceAdmission:
         self.launches_since_sample += 1
 
 
+def task_environment(settings):
+    child_env = dict(settings)
+    for key in ('CE_LAB_DATABASE_URL','CE_TEST_DATABASE_URL','RENDER_API_KEY'):
+        child_env.pop(key,None)
+    child_env['CE_LAB_DURABLE_QUEUE']='0'
+    return child_env
+
+
+def warm_task_engine(version, settings):
+    """Confirm a clean fork template before advertising worker capacity."""
+    from deployment.queue_engine import warm_ready_main
+    with tempfile.TemporaryDirectory(prefix='cc-lab-warm-ready-') as directory:
+        output=Path(directory)/'ready.json'
+        tree=ForkProcessTree({'version':version},output,directory,
+                             task_environment(settings),target=warm_ready_main)
+        try:
+            end=time.monotonic()+15
+            while not output.is_file() and tree.poll() is None:
+                if time.monotonic()>=end:raise RuntimeError('Engine readiness timed out')
+                time.sleep(.05)
+            proof=json.loads(output.read_text(encoding='utf-8'))
+            if proof.get('version')!=version or proof.get('ready') is not True:
+                raise RuntimeError('Engine readiness was not confirmed')
+            return proof
+        finally:
+            tree.stop()  # The readiness child owns no queued job or source permit.
+
+
+def log_failure_trace(r, error):
+    """Keep bounded passive FL step evidence after task cleanup, never secrets."""
+    if not error or r['job']['state']!='FL':return
+    try:
+        path=r['output'].with_suffix('.trace.json')
+        if not path.is_file() or path.stat().st_size>65536:return
+        raw=json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(raw,list):return
+        events=[]
+        for row in raw[-64:]:
+            if not isinstance(row,dict):continue
+            event={k:v for k,v in row.items() if k in {'seconds','status','request_id'}
+                   and isinstance(v,(int,float))}
+            for key in ('event','method','resource_type','exception_type','failure'):
+                value=row.get(key)
+                if isinstance(value,str) and re.fullmatch(r'[A-Za-z0-9_:.-]{1,100}',value):event[key]=value
+            # This trace observes only the public Florida registry document.
+            # Omit all arbitrary text, queries, headers, bodies and credentials.
+            if row.get('host')=='csapp.fdacs.gov':
+                event['host']=row['host']
+                if row.get('path') in {
+                    '/CSPublicApp/CheckACharity/CheckACharity.aspx',
+                    '/CSPublicApp/BusinessSearch/BusinessSearch.aspx'}:event['path']=row['path']
+            events.append(event)
+        print('CC_LAB_TASK_FAILURE_DIAGNOSTICS '+json.dumps({'job':r['job']['id'],
+            'state':'FL','error':error,'events':events}),flush=True)
+    except Exception:
+        pass  # Diagnostics cannot interfere with termination or result fencing.
+
+
 class AdmissionWindow:
     """Constant-size observations; never make scheduling decisions."""
     def __init__(self, now):
@@ -289,7 +348,16 @@ class Supervisor:
         self.stop_event = threading.Event()
         self.active = {}
         self.observations = AdmissionWindow(time.monotonic())
-        self.queue.register_worker(self.id, version, slots)
+        self.warm_ready = None
+        try:
+            if (settings.get('CE_LAB_WARM_ENGINE')=='1' and sys.platform.startswith('linux')
+                    and self.command==[sys.executable,str(ROOT/'deployment/queue_engine.py')]):
+                self.warm_ready=warm_task_engine(version,settings)
+            self.queue.register_worker(self.id, version, slots)
+        except BaseException:
+            if self.browser_pool:self.browser_pool.close()
+            if self.browser_pool_temp:self.browser_pool_temp.cleanup()
+            raise
 
     def stop(self): self.stop_event.set()
 
@@ -344,6 +412,7 @@ class Supervisor:
                             except (ValueError, OSError): error = 'INVALID_WORKER_OUTPUT'
                         if result is None and not error: error = 'WORKER_TASK_FAILED'
                         r['tree'].stop()  # Must succeed before releasing capacity.
+                        log_failure_trace(r,error)
                         if self.browser_pool:
                             self.observations.observe('browser_cleanup', time.monotonic(), True)
                             self.browser_pool.release(r['owner'])
@@ -373,11 +442,7 @@ class Supervisor:
                             deadline = claim_started+job['run_seconds']
                             child_job = {**job, 'run_seconds': max(0, deadline-time.monotonic()),
                                          '_deadline_monotonic': deadline}
-                            child_env = dict(os.environ if self.env is None else self.env)
-                            child_env.pop('CE_LAB_DATABASE_URL', None)
-                            child_env.pop('CE_TEST_DATABASE_URL', None)
-                            child_env.pop('RENDER_API_KEY', None)
-                            child_env['CE_LAB_DURABLE_QUEUE'] = '0'
+                            child_env = task_environment(os.environ if self.env is None else self.env)
                             if self.browser_pool:
                                 child_env.update(self.browser_pool.owner(owner, job['token'], job['id']))
                             if (child_env.get('CE_LAB_WARM_ENGINE')=='1' and sys.platform.startswith('linux')

@@ -202,6 +202,7 @@ def strip_browser_startup_reuse(tree):
 
 
 def strip_browser_pool_metric(tree):
+    strip_warm_ready_and_failure_trace_engine(tree)
     for fn in tree.body:
         if getattr(fn, 'name', '')=='run_job':
             fn.body=[n for n in fn.body if not (isinstance(n, ast.Assign) and any("['pooled_browser_used']" in ast.unparse(t) for t in n.targets))]
@@ -229,8 +230,71 @@ def strip_browser_pool_worker(tree):
 
 
 def strip_launch_pacing_threshold(tree):
+    strip_warm_ready_and_failure_trace_worker(tree)
     for cls in tree.body:
         if getattr(cls,'name','')!='ResourceAdmission':continue
         for node in ast.walk(cls):
             if isinstance(node,ast.Compare) and ast.unparse(node.left)=='self.cpu_fraction' and len(node.ops)==1 and isinstance(node.ops[0],ast.Lt) and len(node.comparators)==1 and isinstance(node.comparators[0],ast.Constant) and node.comparators[0].value==.7:
                 node.comparators[0].value=.5
+
+
+def strip_warm_ready_and_failure_trace_worker(tree):
+    """Undo only readiness and passive trace hooks, retaining every scheduler rule."""
+    tree.body=[n for n in tree.body if getattr(n,'name','') not in
+        {'task_environment','warm_task_engine','log_failure_trace'} and not
+        (isinstance(n,ast.Import) and [a.name for a in n.names]==['re'])]
+    class Restore(ast.NodeTransformer):
+        def visit_Assign(self,node):
+            target=ast.unparse(node.targets[0])
+            if target=='self.warm_ready':
+                assert ast.unparse(node.value)=='None'
+                return None
+            if target=='child_env' and ast.unparse(node.value).startswith('task_environment('):
+                assert ast.unparse(node.value)=='task_environment(os.environ if self.env is None else self.env)'
+                return ast.parse("""child_env = dict(os.environ if self.env is None else self.env)
+child_env.pop('CE_LAB_DATABASE_URL', None)
+child_env.pop('CE_TEST_DATABASE_URL', None)
+child_env.pop('RENDER_API_KEY', None)
+child_env['CE_LAB_DURABLE_QUEUE'] = '0'
+""").body
+            return self.generic_visit(node)
+        def visit_Try(self,node):
+            if len(node.body)==2 and isinstance(node.body[0],ast.If) and 'self.warm_ready = warm_task_engine' in ast.unparse(node.body[0]):
+                assert ast.unparse(node.body[0].test)=="settings.get('CE_LAB_WARM_ENGINE') == '1' and sys.platform.startswith('linux') and (self.command == [sys.executable, str(ROOT / 'deployment/queue_engine.py')])"
+                assert ast.unparse(node.body[0].body[0])=='self.warm_ready = warm_task_engine(version, settings)'
+                assert ast.unparse(node.body[1])=='self.queue.register_worker(self.id, version, slots)'
+                assert len(node.handlers)==1 and ast.unparse(node.handlers[0].type)=='BaseException'
+                assert not node.orelse and not node.finalbody
+                return node.body[1]
+            return self.generic_visit(node)
+        def visit_Expr(self,node):
+            if ast.unparse(node)=='log_failure_trace(r, error)':return None
+            return self.generic_visit(node)
+    return Restore().visit(tree)
+
+
+def strip_warm_ready_and_failure_trace_engine(tree):
+    tree.body=[n for n in tree.body if getattr(n,'name','')!='warm_ready_main']
+    for fn in tree.body:
+        if getattr(fn,'name','')=='FloridaTrace':
+            init=next(n for n in fn.body if getattr(n,'name','')=='__init__')
+            if init.args.args[-1].arg=='sink':
+                assert ast.literal_eval(init.args.defaults[-1]) is None
+                init.args.args.pop();init.args.defaults.pop()
+                assert ast.unparse(init.body[-1])=='self.sink = Path(sink) if sink else None'
+                init.body.pop()
+                record=next(n for n in fn.body if getattr(n,'name','')=='record')
+                outer=record.body[0]
+                assert ast.unparse(outer.body[-1].test)=='self.sink is not None'
+                outer.body.pop()
+        if getattr(fn,'name','')=='execute' and fn.args.args[-1].arg=='trace_path':
+            assert ast.literal_eval(fn.args.defaults[-1]) is None
+            fn.args.args.pop();fn.args.defaults.pop()
+            trace=next(n for n in fn.body if isinstance(n,ast.Assign) and ast.unparse(n.targets[0])=='trace')
+            assert ast.unparse(trace.value.body)=='FloridaTrace(trace_path)'
+            trace.value.body.args=[]
+        if getattr(fn,'name','')=='run_job':
+            result=next(n for n in fn.body if isinstance(n,ast.Assign) and ast.unparse(n.targets[0])=='result')
+            if len(result.value.args)==4:
+                assert ast.unparse(result.value.args[-1])=="Path(output).with_suffix('.trace.json')"
+                result.value.args.pop()

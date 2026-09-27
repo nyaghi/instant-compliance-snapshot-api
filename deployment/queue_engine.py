@@ -13,14 +13,22 @@ sys.path.insert(0, str(ROOT))
 
 class FloridaTrace:
     """Lab-only passive timing. Never record headers, cookies or query strings."""
-    def __init__(self):
+    def __init__(self, sink=None):
         self.started = time.monotonic()
         self.events = []
+        self.sink = Path(sink) if sink else None
 
     def record(self, event, **details):
         if len(self.events) < 512 or event.startswith('attempt'):
             self.events.append({'seconds': round(time.monotonic()-self.started, 3),
                                 'event': event, **details})
+            if self.sink is not None:
+                try:
+                    temp=self.sink.with_suffix('.partial')
+                    temp.write_text(json.dumps(self.events[-64:]),encoding='utf-8')
+                    temp.replace(self.sink)
+                except Exception:
+                    pass  # Passive trace persistence cannot affect the lookup.
 
     def request(self, event, request, **details):
         try:
@@ -85,7 +93,7 @@ class DiscoveryProgress:
                 pass
 
 
-def execute(master, job, source_finished=None):
+def execute(master, job, source_finished=None, trace_path=None):
     if job['version'] != master.APP_VERSION:
         raise ValueError('Master version mismatch')
     p = job['payload']
@@ -120,7 +128,7 @@ def execute(master, job, source_finished=None):
         p = {**p, 'alternate_names': aliases}
     organizations = master.normalize_organization_requests(p, privileged=False)
     if len(organizations) != 1: raise ValueError('Exactly one organization required')
-    trace = FloridaTrace() if job['state'] == 'FL' else None
+    trace = FloridaTrace(trace_path) if job['state'] == 'FL' else None
     original = master.search_fl if trace else None
     if trace: master.search_fl = trace.wrap(original)
     try:
@@ -161,7 +169,7 @@ def run_job(job, output, supervisor_pid=None, warmed=None):
     # The child has a private result file. Logs never mix into the result payload.
     execution_started, cpu_started = time.monotonic(), time.process_time()
     progress = DiscoveryProgress(output, job) if job['state'] == '@discovery' else None
-    result = execute(master, job, progress)
+    result = execute(master, job, progress, Path(output).with_suffix('.trace.json'))
     result['lab_task_metrics'] = {'import_seconds': import_seconds, 'import_cpu_seconds': import_cpu,
         'execution_seconds': time.monotonic()-execution_started, 'execution_cpu_seconds': time.process_time()-cpu_started}
     result['lab_task_metrics']['engine_preloaded'] = warmed is not None
@@ -201,6 +209,17 @@ def prepare_forked_child(log_path, ready, env):
 def forked_main(job, output, log_path, ready, supervisor_pid, env):
     warmed = prepare_forked_child(log_path, ready, env)
     run_job(job, output, supervisor_pid=supervisor_pid, warmed=warmed)
+
+
+def warm_ready_main(job, output, log_path, ready, supervisor_pid, env):
+    """Readiness only: imports/static public tables, no organization or lookup."""
+    warmed = prepare_forked_child(log_path, ready, env)
+    if set(job) != {'version'} or warmed.master.APP_VERSION != job['version']:
+        raise ValueError('Invalid warm readiness request')
+    path=Path(output);temp=path.with_suffix('.partial')
+    temp.write_text(json.dumps({'version':job['version'],
+        'template_pid':warmed.PRELOAD_PID,'ready':True}),encoding='utf-8')
+    temp.replace(path)
 
 
 def main():
