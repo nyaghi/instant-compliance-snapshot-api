@@ -2,6 +2,8 @@
 import ast
 
 def strip_cohort_timing(tree):
+    from testing.capacity_lab.global_priority_scope import strip_global_priority
+    strip_global_priority(tree)
     helper=next((n for n in tree.body if getattr(n,'name','')=='cohort_timing_estimates'),None)
     if helper is None:return
     tree.body.remove(helper)

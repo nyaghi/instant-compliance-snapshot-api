@@ -212,6 +212,31 @@ def cohort_timing_estimates(queue, c, now, states, version, workflows):
     return values
 
 
+def claim_candidates(workflows, pending, running, estimates, tail_scores, now, version, protected):
+    """Order candidates; the claim loop still owns every admission check.
+
+    A source's urgency must be compared across the whole concurrent Sales
+    cohort. Comparing organizations first can strand a slow search even when
+    its source lane is free. Organization fairness breaks ties between equal
+    source priorities. This never grants capacity or bypasses identity work.
+    """
+    candidates = [(w, j) for w in workflows for j in pending.get(w['id'], [])]
+    enabled = (version.endswith('-performance-lab')
+               and os.environ.get('CE_LAB_SALES_GLOBAL_PRIORITY') == '1'
+               and getattr(estimates, 'as_of', None) is not None
+               and bool(tail_scores) and protected is None and len(workflows) > 1
+               and all(w['mode'] == 'sales' and w['kind'] == 'registration' for w in workflows))
+    if enabled:
+        def key(pair):
+            w, j = pair
+            seconds = estimates.get(j['state'], 10.0)
+            return (j['state'] != '@sales_identity', seconds > w['deadline']-now,
+                    -tail_scores.get(j['state'], 0), running[w['id']],
+                    w['dispatched'], w['submitted'], w['id'], seconds, j['state'], j['id'])
+        candidates.sort(key=key)
+    return candidates
+
+
 class Queue:
     def __init__(self, dsn, max_connections=6, test_schema=None, ny_enabled=False, sales_policy=None):
         self.sales_policy = sales_policy or os.environ.get('CE_LAB_SALES_QUEUE_POLICY', 'shortest')
@@ -411,50 +436,50 @@ class Queue:
             if (protected and used+protected['weight']<=ceiling
                     and all(busy[r]<cfg['registry_limits'].get(r,4) for r in protected['resources'])):
                 workflows.sort(key=lambda w:w['id']!=protected['workflow_id'])
-            for w in workflows:
+            for w, j in claim_candidates(workflows, pending, running, estimates, tail_scores,
+                                         now, cfg['source_version'], protected):
                 if w['source_version'] != wk['source_version'] or running[w['id']] >= w['payload'].get('state_concurrency', 15): continue
                 if w['started'] is None and len(active) >= cfg['workflow_limit']: continue
-                for j in pending.get(w['id'], []):
-                    seed = identity.get(w['id'])
-                    if seed and j['state'] != '@sales_identity' and seed['phase'] != 'done': continue
-                    if used+j['weight'] > ceiling: continue
-                    if len(j['resources'])==1 and any(
-                            submitted<w['submitted'] and j['resources'][0] in resources
-                            for submitted,resources in earlier_multi): continue
-                    if any(busy[r] >= cfg['registry_limits'].get(r, 4) for r in j['resources']): continue
-                    token = str(uuid.uuid4())
-                    if j['state'] == '@discovery' and w['started'] is None:
-                        # The bounded waiting allowance must not consume the
-                        # collector's unchanged execution allowance. Activate it
-                        # once, atomically with the first claim. Recovery never
-                        # resets this deadline or extends an already running job.
-                        w['deadline'] = now + DISCOVERY_EXECUTION_SECONDS
-                        c.execute('UPDATE cc_lab_workflows SET deadline=%s WHERE id=%s', (w['deadline'], w['id']))
-                        self.event(c, now, 'discovery_execution_started', w['id'], j['id'],
-                                   queue_seconds=now-w['submitted'], execution_seconds=DISCOVERY_EXECUTION_SECONDS)
-                    run_until = min(w['deadline'], now + (DISCOVERY_EXECUTION_SECONDS if j['state'] == '@discovery' else 8 if j['state'] == '@sales_identity' else 300))
-                    seed_cursor = None
-                    with c.pipeline():
-                        if seed and seed['phase']=='done' and j['state']!='@sales_identity':
-                            seed_cursor = c.execute("SELECT result FROM cc_lab_jobs WHERE workflow_id=%s AND state='@sales_identity'", (w['id'],))
-                        c.execute("UPDATE cc_lab_jobs SET phase='running',owner=%s,token=%s,attempt=attempt+1,claimed=%s,lease_until=%s,run_until=%s WHERE id=%s",
-                                  (worker, token, now, now+20, run_until, j['id']))
-                        c.execute("UPDATE cc_lab_workflows SET phase='active',started=COALESCE(started,%s),dispatched=%s WHERE id=%s", (now, now, w['id']))
-                        self.event(c, now, 'claimed', w['id'], j['id'], worker=worker, token=token,
-                                   slot_limit=ceiling, admission=admission_evidence,
-                                   state_concurrency=w['payload'].get('state_concurrency', 15),
-                                   sales_policy=('tail-aware' if tail_scores else 'shortest') if w['mode']=='sales' else None,
-                                   sales_policy_configured=self.sales_policy if w['mode']=='sales' else None,
-                                   source_timing_as_of=getattr(estimates, 'as_of', None),
-                                   source_drain_estimate=tail_scores.get(j['state']))
-                    if seed_cursor: seed['result'] = seed_cursor.fetchone()['result']
-                    return {**j, 'owner': worker, 'token': token, 'attempt': j['attempt']+1,
-                            'payload': w['payload'], 'version': w['source_version'], 'run_seconds': max(0, run_until-now),
-                            'submitted': w['submitted'], 'claimed': now,
-                            **({'sales_identity': seed['result'] if seed['result'] is not None and not seed['error'] else
-                                {'state':'@sales_identity','ein':w['ein'],'app_version':w['source_version'],
-                                 'sources':{},'errors':{'identity':seed['error'] or 'INCOMPLETE'}}}
-                               if seed and seed['phase']=='done' and j['state']!='@sales_identity' else {})}
+                seed = identity.get(w['id'])
+                if seed and j['state'] != '@sales_identity' and seed['phase'] != 'done': continue
+                if used+j['weight'] > ceiling: continue
+                if len(j['resources'])==1 and any(
+                        submitted<w['submitted'] and j['resources'][0] in resources
+                        for submitted,resources in earlier_multi): continue
+                if any(busy[r] >= cfg['registry_limits'].get(r, 4) for r in j['resources']): continue
+                token = str(uuid.uuid4())
+                if j['state'] == '@discovery' and w['started'] is None:
+                    # The bounded waiting allowance must not consume the
+                    # collector's unchanged execution allowance. Activate it
+                    # once, atomically with the first claim. Recovery never
+                    # resets this deadline or extends an already running job.
+                    w['deadline'] = now + DISCOVERY_EXECUTION_SECONDS
+                    c.execute('UPDATE cc_lab_workflows SET deadline=%s WHERE id=%s', (w['deadline'], w['id']))
+                    self.event(c, now, 'discovery_execution_started', w['id'], j['id'],
+                               queue_seconds=now-w['submitted'], execution_seconds=DISCOVERY_EXECUTION_SECONDS)
+                run_until = min(w['deadline'], now + (DISCOVERY_EXECUTION_SECONDS if j['state'] == '@discovery' else 8 if j['state'] == '@sales_identity' else 300))
+                seed_cursor = None
+                with c.pipeline():
+                    if seed and seed['phase']=='done' and j['state']!='@sales_identity':
+                        seed_cursor = c.execute("SELECT result FROM cc_lab_jobs WHERE workflow_id=%s AND state='@sales_identity'", (w['id'],))
+                    c.execute("UPDATE cc_lab_jobs SET phase='running',owner=%s,token=%s,attempt=attempt+1,claimed=%s,lease_until=%s,run_until=%s WHERE id=%s",
+                              (worker, token, now, now+20, run_until, j['id']))
+                    c.execute("UPDATE cc_lab_workflows SET phase='active',started=COALESCE(started,%s),dispatched=%s WHERE id=%s", (now, now, w['id']))
+                    self.event(c, now, 'claimed', w['id'], j['id'], worker=worker, token=token,
+                               slot_limit=ceiling, admission=admission_evidence,
+                               state_concurrency=w['payload'].get('state_concurrency', 15),
+                               sales_policy=('tail-aware' if tail_scores else 'shortest') if w['mode']=='sales' else None,
+                               sales_policy_configured=self.sales_policy if w['mode']=='sales' else None,
+                               source_timing_as_of=getattr(estimates, 'as_of', None),
+                               source_drain_estimate=tail_scores.get(j['state']))
+                if seed_cursor: seed['result'] = seed_cursor.fetchone()['result']
+                return {**j, 'owner': worker, 'token': token, 'attempt': j['attempt']+1,
+                        'payload': w['payload'], 'version': w['source_version'], 'run_seconds': max(0, run_until-now),
+                        'submitted': w['submitted'], 'claimed': now,
+                        **({'sales_identity': seed['result'] if seed['result'] is not None and not seed['error'] else
+                            {'state':'@sales_identity','ein':w['ein'],'app_version':w['source_version'],
+                             'sources':{},'errors':{'identity':seed['error'] or 'INCOMPLETE'}}}
+                           if seed and seed['phase']=='done' and j['state']!='@sales_identity' else {})}
             return None
 
     def cached_duration_estimates(self, c, now, states, version):

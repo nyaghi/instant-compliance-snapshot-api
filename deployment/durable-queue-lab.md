@@ -1098,3 +1098,22 @@ when fewer requests remain than available source lanes. Completed medians and
 all lookup/admission/deadline rules remain unchanged. Standard, mixed modes,
 discovery and individual Sales keep their original path. Live qualification
 still requires the fixed24-node, all32-state comparison and restoration to4.
+
+### Cross-organization Sales priority candidate (perf.82)
+
+Perf.81's timing freeze worked in 1,319 of 1,320 recorded admissions (the first
+admission was still an individual request). Its two bursts remained below the
+638/640 individual baseline: 624 and 627 conclusive. Recorded admissions show
+eligible long searches waiting while other organizations received short work;
+for example, the Junior Achievement NJ search started at 39.57 seconds despite
+an eligible source/worker opportunity at 4.70 seconds and a 52.55-second
+individual service time. These observations establish ordering opportunities,
+not a promise that different ordering will reproduce individual service times.
+
+`CE_LAB_SALES_GLOBAL_PRIORITY=1` compares source urgency across the pure concurrent
+Sales cohort, then uses existing organization fairness for equal priorities.
+The existing claim loop still enforces all source, worker, identity, workflow,
+deadline and result fences. When disabled, capacity is scarce, identity has
+multi-source protection, or the requests are individual, Standard or mixed,
+the candidate iterator is exactly the original nested ordering. Registry code,
+worker count, source caps and the 60-second Sales deadline remain unchanged.
