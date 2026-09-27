@@ -7,10 +7,10 @@ from testing.run_ny_retrieval_guardrails import ROW,DETAIL,response,AsOfDate
 
 class VerificationTimeout(unittest.TestCase):
     def test_only_timeout_classification_changed_in_master(self):
-        from testing.capacity_lab.parsing_scope import strip_ny_verification_timeout
+        from testing.capacity_lab.parsing_scope import strip_ny_verification_timeout, strip_fl_business_lookup
         root=Path(m.__file__).parent
         before=ast.parse(subprocess.check_output(['git','show','63adda5:registry_snapshot_server.py'],cwd=root).decode('utf-8'))
-        after=ast.parse(Path(m.__file__).read_text(encoding='utf-8'));strip_ny_verification_timeout(after)
+        after=ast.parse(Path(m.__file__).read_text(encoding='utf-8'));strip_fl_business_lookup(after);strip_ny_verification_timeout(after)
         self.assertEqual(ast.dump(before),ast.dump(after))
 
     def page(self):

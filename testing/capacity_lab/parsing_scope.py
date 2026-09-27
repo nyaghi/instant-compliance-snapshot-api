@@ -345,6 +345,7 @@ def strip_empty_claim_backoff(tree):
 
 
 def strip_nj_public_query(tree):
+    strip_fl_business_lookup(tree)
     strip_ny_verification_timeout(tree)
     """Restore the browser-only acquisition and inline verbatim classification."""
     helper=next((n for n in tree.body if getattr(n,'name','')=='nj_result_from_body'),None)
@@ -381,3 +382,25 @@ except (TimeoutError, checker.PlaywrightTimeoutError):
            for h in n.handlers if ast.dump(h)==ast.dump(expected)]
     assert len(found)<=1
     if found:found[0][0].handlers.remove(found[0][1])
+
+
+def strip_fl_business_lookup(tree):
+    """Verify the exact relocation of FL rules before restoring the prior AST."""
+    if not any(getattr(n,'name','')=='fl_business_public_rows' for n in tree.body):
+        return
+    from testing.capacity_lab.fl_business_recipe import expected_fl_business_function
+    source=subprocess.check_output(['git','show','3ad7d63:registry_snapshot_server.py'],
+        cwd=Path(__file__).resolve().parents[2]).decode('utf-8')
+    start=source.index('def search_fl_with_transport(')
+    end=source.index('\ndef mn_latest_fiscal_year_end_from_text',start)
+    expected=ast.parse(expected_fl_business_function(source[start:end])).body[0]
+    fn=next(n for n in tree.body if getattr(n,'name','')=='search_fl_with_transport')
+    assert ast.dump(fn)==ast.dump(expected), 'FL shared matcher/classifier changed beyond the exact source recipe'
+    tree.body[tree.body.index(fn)]=ast.parse(source[start:end]).body[0]
+    enrich=next(n for n in tree.body if getattr(n,'name','')=='enrich_registration_date_sources')
+    guard=ast.parse('if fl_business_lookup_enabled() and getattr(result, "_cc_fl_business_source_verified", False):\n    return\n').body[0]
+    found=[n for n in enrich.body if ast.dump(n)==ast.dump(guard)]
+    assert len(found)==1
+    enrich.body.remove(found[0])
+    tree.body=[n for n in tree.body if getattr(n,'name','') not in {
+        'fl_business_lookup_enabled','fl_business_candidate_rows','fl_business_public_rows'}]

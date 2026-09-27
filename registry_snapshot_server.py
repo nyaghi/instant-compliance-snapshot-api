@@ -11865,6 +11865,109 @@ def fl_completed_search_form_available(page):
         return False
 
 
+def fl_business_lookup_enabled() -> bool:
+    """Isolated lab opt-in to the state's alternate public charity-license page."""
+    return (fl_verified_transport_first()
+            and os.environ.get("CE_LAB_FL_BUSINESS_LOOKUP") == "1")
+
+
+def fl_business_candidate_rows(source: str) -> list:
+    """Read complete, unfiltered business-license cards; never infer a negative."""
+    if not re.search(r"</html>\s*$", source or "", re.I):
+        return []
+    text = html_to_text(source)
+    counts = re.findall(r"Records Found\s*:\s*(\d+)", text)
+    names = re.findall(r'<table\b[^>]*id=["\']cpMainContent_MasterGv_dataTab_(\d+)["\'][^>]*>.*?<strong[^>]*>(.*?)</strong>', source, re.I | re.S)
+    cards = re.findall(r'<div\b[^>]*id=["\']cpMainContent_MasterGv_maindiv_(\d+)["\'][^>]*>(.*?)<div\b[^>]*id=["\']cpMainContent_MasterGv_dvContractMovers_\1["\']', source, re.I | re.S)
+    if (len(counts) != 1 or not 0 < int(counts[0]) <= 20
+            or len(cards) != int(counts[0]) or len(names) != len(cards)
+            or [int(n[0]) for n in cards] != list(range(len(cards)))):
+        return []
+    rows = []
+    for number, card in cards:
+        card_names = [html_to_text(name) for index, name in names if index == number]
+        if len(card_names) != 1:
+            return []
+        name = card_names[0]
+        # A card must contain exactly one full charity license row. Preserve
+        # suspended/revoked evidence and refuse unrecognized status labels.
+        licenses = re.findall(r'<tr\b[^>]*>\s*<td\b[^>]*>\s*Charitable Organization\s*</td>\s*<td\b[^>]*>(.*?)</td>\s*<td\b[^>]*>(.*?)</td>\s*<td\b[^>]*>(.*?)</td>\s*<td\b[^>]*>(.*?)</td>\s*</tr>', card, re.I | re.S)
+        if len(licenses) != 1:
+            return []
+        identifier, issued, expires, status = [html_to_text(v) for v in licenses[0]]
+        if not re.fullmatch(r"CH\d+", identifier) or not re.fullmatch(r"[A-Za-z -]{1,60}", status):
+            return []
+        try:
+            expiry = datetime.strptime(expires, "%m/%d/%y").date()
+            issue = datetime.strptime(issued, "%m/%d/%y").date()
+        except ValueError:
+            return []
+        if issue > date.today() or expiry.year < 1990:
+            return []
+        header = html_to_text(card).split("License Type", 1)[0]
+        place = re.search(r",\s*([^,]+),\s*([A-Z]{2})\s+\d{5}(?:-\d{4})?(?:\s|$)", header)
+        if not place:
+            return []
+        # Normalize source fields for the existing FL matcher/classifier. The
+        # city/state stays before the license label for shared alias checking.
+        evidence = (f"Business Name {name}, {place[1].strip()}, {place[2]} "
+                    f"License/Registration Number {identifier} "
+                    f"Expiration Date {expiry.month}/{expiry.day}/{expiry.year} Status {status}")
+        rows.append({"text": evidence, "business_evidence": {
+            "identifier": identifier, "name": name, "initial": issued, "status": status,
+            "initial_label": "Issued", "initial_type": "initial_credential_issue_date",
+            "url": "https://csapp.fdacs.gov/CSPublicApp/BusinessSearch/BusinessSearch.aspx"}})
+    return rows
+
+
+def fl_business_public_rows(query: str, deadline: float) -> list:
+    """One fresh public name search, TLS verified, bounded by eight seconds."""
+    url = "https://csapp.fdacs.gov/CSPublicApp/BusinessSearch/BusinessSearch.aspx"
+    deadline = min(deadline, time.monotonic() + 8.0)
+    try:
+        opener = urllib.request.build_opener(
+            urllib.request.HTTPSHandler(context=fl_verified_ssl_context()), FloridaNoRedirect(),
+            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        def read(data=None):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Florida alternate public search deadline")
+            request = urllib.request.Request(url, data=data, headers={
+                "User-Agent": BROWSER_USER_AGENT, "Accept-Encoding": "identity"})
+            with opener.open(request, timeout=min(4.0, remaining)) as response:
+                if response.status != 200 or response.geturl() != url:
+                    raise ValueError("Unexpected Florida alternate response")
+                chunks, size = [], 0
+                while True:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("Florida alternate public search deadline")
+                    chunk = response.read1(min(65536, 2_000_001-size))
+                    if not chunk:
+                        break
+                    chunks.append(chunk); size += len(chunk)
+                    if size > 2_000_000:
+                        raise ValueError("Oversize Florida alternate response")
+                declared = response.headers.get("Content-Length")
+                if time.monotonic() >= deadline or (declared and
+                        (not declared.isdigit() or int(declared) != size)):
+                    raise ValueError("Incomplete Florida alternate response")
+                return b"".join(chunks).decode("utf-8")
+        fields = html_hidden_inputs(read())
+        if not fields.get("__VIEWSTATE"):
+            return []
+        fields.update({"ctl00$cpMainContent$BusinessNameTb": query,
+            "ctl00$cpMainContent$LicenseTb": "", "ctl00$cpMainContent$txtPhone": "",
+            "ctl00$cpMainContent$txtCity": "", "ctl00$cpMainContent$CountyDl": " X",
+            "ctl00$cpMainContent$LicenseTypeDl": "CH",
+            "ctl00$cpMainContent$SingleSearchBt": "Search"})
+        # Explicitly exclude the active-only checkbox. An empty/incomplete
+        # alternate result falls back to the original primary lookup.
+        fields.pop("ctl00$cpMainContent$chkActive", None)
+        return fl_business_candidate_rows(read(urlencode(fields).encode("utf-8")))
+    except Exception:
+        return []
+
+
 def search_fl_with_transport(page, org, transport):
     url = FL_CHECK_A_CHARITY_URL
     original_name = org.organization_name
@@ -12032,6 +12135,96 @@ def search_fl_with_transport(page, org, transport):
                     time.sleep(min(1, remaining_seconds()))
         raise last_error
 
+    def select_fl_candidate(candidate_rows):
+        nonlocal alias_review
+        best_candidate = None
+        best_score = -10000
+        best_rank = (-10000, -1)
+        if not any(re.search(r"\bCH\d+\b", row.get("text", ""), re.I) for row in candidate_rows):
+            raise ValueError("Florida search response contained neither registration rows nor an explicit no-record message")
+        for candidate in candidate_rows:
+            row_text = re.sub(r"\s+", " ", candidate.get("text") or "").strip()
+            row_name = (
+                text_between_labels(row_text, "Business Name", ["License/Registration Number", "Registration Number", "Expiration Date", "Status"])
+                or clean_fl_registry_name(re.split(r"\bLicense/Registration Number\b|\bRegistration Number\b|\bExpiration Date\b", row_text, maxsplit=1, flags=re.I)[0])
+            )
+            row_name = clean_fl_registry_name(row_name)
+            name_score = target_name_score(row_name, safe_targets)
+            if name_score < 0:
+                continue
+            if not reviewed_name_candidate_is_safe(row_name, original_name, org.ein):
+                continue
+            if re.search(r"\bAdvanced\s+Search\b", row_name, re.I):
+                continue
+            if florida_local_chapter_mismatch(row_name):
+                continue
+            if florida_related_entity_mismatch(row_name):
+                continue
+            if florida_missing_requested_wrapper_with_new_scope(row_name):
+                continue
+            if florida_nested_unrelated_entity_mismatch(row_name):
+                continue
+            address = fl_reviewed_alias_address(org, row_name, row_text, deadline)
+            if address and address.get("decision") != "corroborated":
+                alias_review = {"name": row_name, "address": address}
+                continue
+            score = name_score
+            if re.search(r"\bCH\d+\b", row_text, re.I):
+                score += 40
+            row_status = text_between_labels(row_text, "Status", ["Expiration Date", "Solicitation", "Business Name", "License/Registration Number"])
+            if isinstance(candidate.get("index"), int):
+                row_status = registry_candidate_fields(page.locator("tr").nth(candidate["index"])).get("status", "") or row_status
+            rank = (score, registry_exact_active_tiebreak(row_name, safe_targets, row_status))
+            if rank > best_rank:
+                best_rank = rank
+                best_score = score
+                best_candidate = {"row_text": row_text, "row_name": row_name, "address": address}
+        return best_candidate
+
+    def finish_fl_candidate(result, best_candidate):
+        row_text = best_candidate["row_text"]
+        if best_candidate["address"]:
+            result.address_evidence = best_candidate["address"]
+            result.identity_anchor = "cross_state_name_address"
+        exp_date = first_date_near_label(row_text, ["Expiration Date", "Expiration", "Expires"])
+        suspended_match = re.search(r"\bSuspended\b", row_text, re.I)
+        revoked_match = re.search(r"\bRevoked\b", row_text, re.I)
+        if not exp_date:
+            if suspended_match:
+                result.status = "Suspended"
+                result.raw_status_text = "Status: Suspended"
+                result.source_note = "FL uses the registration status shown next to the Check-A-Charity registration number."
+                result.matched_registry_name = clean_fl_registry_name(best_candidate["row_name"])
+                id_match = re.search(r"\bCH\d+\b", row_text, re.I)
+                result.matched_registry_identifier = id_match.group(0).upper() if id_match else ""
+                result.success = True
+                return result
+            if revoked_match:
+                result.status = "Revoked"
+                result.raw_status_text = "Status: Revoked"
+                result.source_note = "FL uses the registration status shown next to the Check-A-Charity registration number."
+                result.matched_registry_name = clean_fl_registry_name(best_candidate["row_name"])
+                id_match = re.search(r"\bCH\d+\b", row_text, re.I)
+                result.matched_registry_identifier = id_match.group(0).upper() if id_match else ""
+                result.success = True
+                return result
+            return None
+        if suspended_match:
+            result.status = "Suspended"
+            result.raw_status_text = f"Status: Suspended | Expiration Date {format_date(exp_date)}"
+        elif revoked_match:
+            result.status = "Revoked"
+            result.raw_status_text = f"Status: Revoked | Expiration Date {format_date(exp_date)}"
+        else:
+            result.status = classify_expiration_date(exp_date)
+            result.raw_status_text = f"Expiration Date {format_date(exp_date)}"
+        result.source_note = "FL uses the expiration date shown by Check-A-Charity."
+        result.matched_registry_name = clean_fl_registry_name(best_candidate["row_name"])
+        id_match = re.search(r"\bCH\d+\b", row_text, re.I)
+        result.matched_registry_identifier = id_match.group(0).upper() if id_match else ""
+        result.success = True
+        return result
+
     generated_variants = [
         *possessive_search_phrases(original_name),
         *high_signal_search_phrases(original_name),
@@ -12071,6 +12264,25 @@ def search_fl_with_transport(page, org, transport):
     search_variants = reviewed_queries_first(original_name, org.ein, variants, limit=8)
     final_exact_retry_added = False
     completed_search_form = False
+    if (fl_business_lookup_enabled() and search_variants and not getattr(org, "evidence_mode", False)
+            and not CAPTURE_EVIDENCE_SCREENSHOTS and not CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT):
+        rows = fl_business_public_rows(search_variants[0], deadline)
+        exact = [row for row in rows if normalized_match_name(row["business_evidence"]["name"])
+                 in {normalized_match_name(name) for name in safe_targets}]
+        # Extra/inactive names cannot displace the requested legal entity.
+        # Multiple exact credentials remain on the existing browser path.
+        if len(exact) == 1 and exact[0]["business_evidence"]["status"] in {
+                "Registered", "Active Small Charity", "Suspended", "Revoked"}:
+            candidate = select_fl_candidate(exact)
+            if candidate is not None:
+                evidence = exact[0]["business_evidence"]
+                alternate = checker.StateResult(original_name, org.ein, "FL", checker.STATUS_UNKNOWN, evidence["url"])
+                confirmed = finish_fl_candidate(alternate, candidate)
+                if confirmed is not None:
+                    confirmed.source_note = "FL uses the charity license status and expiration date in the official FDACS Business Lookup."
+                    confirmed._cc_registration_date_evidence = evidence
+                    confirmed._cc_fl_business_source_verified = True
+                    return confirmed
     for variant in search_variants:
         if deadline_expired():
             break
@@ -12126,48 +12338,7 @@ def search_fl_with_transport(page, org, transport):
                 }).filter((row) => row.text && /License\\/Registration Number|Expiration Date|Solicitation|Business Name|CH\\d+/i.test(row.text));
                 """
             )
-            best_candidate = None
-            best_score = -10000
-            best_rank = (-10000, -1)
-            if not any(re.search(r"\bCH\d+\b", row.get("text", ""), re.I) for row in candidate_rows):
-                raise ValueError("Florida search response contained neither registration rows nor an explicit no-record message")
-            for candidate in candidate_rows:
-                row_text = re.sub(r"\s+", " ", candidate.get("text") or "").strip()
-                row_name = (
-                    text_between_labels(row_text, "Business Name", ["License/Registration Number", "Registration Number", "Expiration Date", "Status"])
-                    or clean_fl_registry_name(re.split(r"\bLicense/Registration Number\b|\bRegistration Number\b|\bExpiration Date\b", row_text, maxsplit=1, flags=re.I)[0])
-                )
-                row_name = clean_fl_registry_name(row_name)
-                name_score = target_name_score(row_name, safe_targets)
-                if name_score < 0:
-                    continue
-                if not reviewed_name_candidate_is_safe(row_name, original_name, org.ein):
-                    continue
-                if re.search(r"\bAdvanced\s+Search\b", row_name, re.I):
-                    continue
-                if florida_local_chapter_mismatch(row_name):
-                    continue
-                if florida_related_entity_mismatch(row_name):
-                    continue
-                if florida_missing_requested_wrapper_with_new_scope(row_name):
-                    continue
-                if florida_nested_unrelated_entity_mismatch(row_name):
-                    continue
-                address = fl_reviewed_alias_address(org, row_name, row_text, deadline)
-                if address and address.get("decision") != "corroborated":
-                    alias_review = {"name": row_name, "address": address}
-                    continue
-                score = name_score
-                if re.search(r"\bCH\d+\b", row_text, re.I):
-                    score += 40
-                row_status = text_between_labels(row_text, "Status", ["Expiration Date", "Solicitation", "Business Name", "License/Registration Number"])
-                if isinstance(candidate.get("index"), int):
-                    row_status = registry_candidate_fields(page.locator("tr").nth(candidate["index"])).get("status", "") or row_status
-                rank = (score, registry_exact_active_tiebreak(row_name, safe_targets, row_status))
-                if rank > best_rank:
-                    best_rank = rank
-                    best_score = score
-                    best_candidate = {"row_text": row_text, "row_name": row_name, "address": address}
+            best_candidate = select_fl_candidate(candidate_rows)
             if not best_candidate:
                 result.status = checker.STATUS_NOT_REGISTERED
                 result.raw_status_text = "No matching organization record"
@@ -12175,49 +12346,11 @@ def search_fl_with_transport(page, org, transport):
                 result.success = True
                 best_result = result
                 continue
-            row_text = best_candidate["row_text"]
-            if best_candidate["address"]:
-                result.address_evidence = best_candidate["address"]
-                result.identity_anchor = "cross_state_name_address"
-            exp_date = first_date_near_label(row_text, ["Expiration Date", "Expiration", "Expires"])
-            suspended_match = re.search(r"\bSuspended\b", row_text, re.I)
-            revoked_match = re.search(r"\bRevoked\b", row_text, re.I)
-            if not exp_date:
-                if suspended_match:
-                    result.status = "Suspended"
-                    result.raw_status_text = "Status: Suspended"
-                    result.source_note = "FL uses the registration status shown next to the Check-A-Charity registration number."
-                    result.matched_registry_name = clean_fl_registry_name(best_candidate["row_name"])
-                    id_match = re.search(r"\bCH\d+\b", row_text, re.I)
-                    result.matched_registry_identifier = id_match.group(0).upper() if id_match else ""
-                    result.success = True
-                    return result
-                if revoked_match:
-                    result.status = "Revoked"
-                    result.raw_status_text = "Status: Revoked"
-                    result.source_note = "FL uses the registration status shown next to the Check-A-Charity registration number."
-                    result.matched_registry_name = clean_fl_registry_name(best_candidate["row_name"])
-                    id_match = re.search(r"\bCH\d+\b", row_text, re.I)
-                    result.matched_registry_identifier = id_match.group(0).upper() if id_match else ""
-                    result.success = True
-                    return result
-                best_result = result
-                continue
-            if suspended_match:
-                result.status = "Suspended"
-                result.raw_status_text = f"Status: Suspended | Expiration Date {format_date(exp_date)}"
-            elif revoked_match:
-                result.status = "Revoked"
-                result.raw_status_text = f"Status: Revoked | Expiration Date {format_date(exp_date)}"
-            else:
-                result.status = classify_expiration_date(exp_date)
-                result.raw_status_text = f"Expiration Date {format_date(exp_date)}"
-            result.source_note = "FL uses the expiration date shown by Check-A-Charity."
-            result.matched_registry_name = clean_fl_registry_name(best_candidate["row_name"])
-            id_match = re.search(r"\bCH\d+\b", row_text, re.I)
-            result.matched_registry_identifier = id_match.group(0).upper() if id_match else ""
-            result.success = True
-            return result
+            classified = finish_fl_candidate(result, best_candidate)
+            if classified is not None:
+                return classified
+            best_result = result
+            continue
         except Exception as exc:
             completed_search_form = False
             last_error = exc
@@ -17895,6 +18028,8 @@ def enrich_registration_date_sources(result, final_status=None, lookup_started=N
     """
     if (getattr(result, "state", "") != "FL" or not registration_date_result_confirmed(result, final_status)
             or curl_requests is None or not registration_date_budget_available(lookup_started)):
+        return
+    if fl_business_lookup_enabled() and getattr(result, "_cc_fl_business_source_verified", False):
         return
     identifier = str(getattr(result, "matched_registry_identifier", "") or "")
     if not re.fullmatch(r"CH\d+", identifier):
