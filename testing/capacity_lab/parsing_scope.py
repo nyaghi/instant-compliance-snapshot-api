@@ -410,6 +410,7 @@ def strip_fl_business_lookup(tree):
 def strip_mi_name_transport(tree):
     """Prove query planning/classification unchanged, restoring only transport hooks."""
     import copy
+    strip_fl_patient_public(tree)
     if not any(getattr(n,'name','')=='mi_name_http_empty_queries' for n in tree.body):return
     old=ast.parse(subprocess.check_output(['git','show','e57e4c7:registry_snapshot_server.py'],cwd=Path(__file__).resolve().parents[2]).decode('utf-8'))
     originals={n.name:n for n in old.body if isinstance(n,ast.FunctionDef)}
@@ -461,3 +462,29 @@ if completed_names:
     changed={'search_mi_name_fallback','search_mi_http_completion_probe','run_state_lookup'}
     tree.body=[originals.get(n.name,n) if isinstance(n,ast.FunctionDef) and n.name in changed else n
                for n in tree.body if getattr(n,'name','') not in {'mi_name_fallback_queries','mi_http_names_enabled','mi_name_http_empty_queries'}]
+
+
+def strip_fl_patient_public(tree):
+    """Verify and remove only the opt-in public-form read allowance."""
+    import copy
+    fn=next((n for n in tree.body if getattr(n,'name','')=='fl_business_public_rows'),None)
+    if fn is None:return
+    assignments=[n for n in fn.body if isinstance(n,ast.Assign)
+                 and any(isinstance(t,ast.Name) and t.id=='http_seconds' for t in n.targets)]
+    if not assignments:return
+    assert len(assignments)==1
+    expected=ast.parse('http_seconds = 8.0 if fl_business_lookup_enabled() and os.environ.get("CE_LAB_FL_HTTP_PATIENT") == "1" else 4.0').body[0]
+    assert ast.dump(assignments[0])==ast.dump(expected)
+    old=ast.parse(subprocess.check_output(['git','show','8f41320:registry_snapshot_server.py'],cwd=Path(__file__).resolve().parents[2]).decode('utf-8'))
+    original=next(n for n in old.body if getattr(n,'name','')==fn.name)
+    fn.body.remove(assignments[0])
+    assert isinstance(fn.body[0],ast.Expr) and isinstance(fn.body[0].value,ast.Constant) and isinstance(fn.body[0].value.value,str)
+    fn.body[0]=copy.deepcopy(original.body[0])
+    restored=[]
+    for n in ast.walk(fn):
+        if isinstance(n,ast.BinOp) and isinstance(n.op,ast.Add) and ast.unparse(n.right)=='2 * http_seconds':
+            n.right=ast.Constant(8.0);restored.append('total')
+        if isinstance(n,ast.Call) and ast.unparse(n.func)=='min' and n.args and ast.unparse(n.args[0])=='http_seconds':
+            n.args[0]=ast.Constant(4.0);restored.append('read')
+    assert sorted(restored)==['read','total']
+    assert ast.dump(fn)==ast.dump(original), 'FL change extends beyond the exact bounded transport allowance'
