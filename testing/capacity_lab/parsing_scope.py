@@ -345,6 +345,7 @@ def strip_empty_claim_backoff(tree):
 
 
 def strip_nj_public_query(tree):
+    strip_ny_verification_timeout(tree)
     """Restore the browser-only acquisition and inline verbatim classification."""
     helper=next((n for n in tree.body if getattr(n,'name','')=='nj_result_from_body'),None)
     if helper is None:return
@@ -364,3 +365,17 @@ def strip_nj_public_query(tree):
     runtime.body.remove(matches[0])
     tree.body=[n for n in tree.body if getattr(n,'name','') not in
         {'nj_public_query_enabled','search_nj_public_details','nj_result_from_body'}]
+
+
+def strip_ny_verification_timeout(tree):
+    """Remove only the typed rethrow; retry budget and denial rules stay compared."""
+    fn=next(n for n in tree.body if getattr(n,'name','')=='ny_browser_registry_response')
+    expected=ast.parse('''try:
+    pass
+except (TimeoutError, checker.PlaywrightTimeoutError):
+    raise
+''').body[0].handlers[0]
+    found=[(n,h) for n in ast.walk(fn) if isinstance(n,ast.Try)
+           for h in n.handlers if ast.dump(h)==ast.dump(expected)]
+    assert len(found)<=1
+    if found:found[0][0].handlers.remove(found[0][1])

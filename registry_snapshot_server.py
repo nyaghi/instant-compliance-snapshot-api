@@ -20303,6 +20303,10 @@ def ny_browser_registry_response(page, operation: str, params: dict, timeout: fl
                 if verified.status != 200 or verified.json().get("verified") is not True:
                     raise NYVerificationRequired("New York did not accept the browser verification")
                 page.wait_for_function("Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === 'Search' && !b.disabled)", timeout=remaining_ms())
+            except (TimeoutError, checker.PlaywrightTimeoutError):
+                # An unanswered request is not an explicit verification denial.
+                # Preserve the existing one-retry policy and original deadline.
+                raise
             except Exception as exc:
                 if isinstance(exc, NYVerificationRequired):
                     raise

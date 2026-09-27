@@ -1014,3 +1014,6 @@ other master behavior unchanged. Evidence capture retains the browser.
 
 ### perf54: preserve New Jersey identity provenance
 The perf53 public acquisition verified the EIN twice but did not copy it into the result identifier, causing the shared renderer to report a name match. Preserve the verified EIN identity anchor as the browser path does. The state-returned legal name remains visible; no matching/status/date or deadline rule changes. Live smoke now checks EIN provenance as well as status.
+
+### perf55: distinguish NY verification timeout from rejection
+Preserve Python/Playwright timeout types when waiting for the ordinary Verify response or Search readiness. They may use the existing single retry within the unchanged35second lookup budget. Explicit verification denial, HTTP rejection, identity mismatch, and parsing failure remain non-retriable here. No alternate access route or verification bypass. The live perf54 case exhausted exactly12seconds at this stage; failed-before controls reproduce the wrapper suppressing the existing retry.
