@@ -109,6 +109,7 @@ function pump() {
     close(job, repair.reason || "NY_CONNECTOR_RECOVERY_REJECTED"); return;
   }
   active = job;
+  diagnostic("admitted",job,`${job.registryState} queue_ms=${Date.now()-job.enqueuedAt}`);
   job.activeExpiresAt ??= Date.now() + ACTIVE_TTL;
   arm(job);
   saveRuntime().then(() => {
@@ -376,7 +377,7 @@ chrome.tabs.onRemoved.addListener(id => {
 });
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (!allowedSender(sender) || !P.validId(message?.id) || message.action !== "ping") return false;
-  boot.then(() => respond({ ok: true, version: chrome.runtime.getManifest().version, capabilities: ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "origin-window-v1", "connection-recovery-v1", "recovery-causes-v1", "cleanup-ack-v1", "timeout-recovery-v1", "resume-v1", "verified-detail-v1", "detail-navigation-v1", "il-ga-public-dom-v1", "ga-exempt-record-v1", "ga-legacy-rows-v1", "il-ga-complete-search-v2", "il-session-reuse-v1", "il-large-pages-v1"], recovery: { phase: repair.phase || "idle", nextAllowedAt: repair.nextAllowedAt || 0, verifiedAt: repair.finishedAt || 0 } }), () => respond({ ok: false, reason: "NY_CONNECTOR_INTERRUPTED" }));
+  boot.then(() => respond({ ok: true, version: chrome.runtime.getManifest().version, capabilities: ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "origin-window-v1", "connection-recovery-v1", "recovery-causes-v1", "cleanup-ack-v1", "timeout-recovery-v1", "resume-v1", "verified-detail-v1", "detail-navigation-v1", "il-ga-public-dom-v1", "ga-exempt-record-v1", "ga-legacy-rows-v1", "il-ga-complete-search-v2", "il-session-reuse-v1", "il-large-pages-v1", "il-dom-events-v1"], recovery: { phase: repair.phase || "idle", nextAllowedAt: repair.nextAllowedAt || 0, verifiedAt: repair.finishedAt || 0 } }), () => respond({ ok: false, reason: "NY_CONNECTOR_INTERRUPTED" }));
   return true;
 });
 chrome.runtime.onConnect.addListener(port => {

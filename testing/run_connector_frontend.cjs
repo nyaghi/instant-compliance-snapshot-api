@@ -7,13 +7,13 @@ const {webcrypto} = require('node:crypto');
 const source = fs.readFileSync(path.join(__dirname,'../web-staging/ny-connector.js'),'utf8');
 const capabilities = ['lookup-tab-v1','verification-retry-v1','search-verification-retry-v1','search-schema-errors-v1','nullable-ein-v1','queue-v1','connection-recovery-v1','recovery-causes-v1','cleanup-ack-v1','timeout-recovery-v1','resume-v1','verified-detail-v1','detail-navigation-v1','il-ga-public-dom-v1','il-ga-complete-search-v2','il-session-reuse-v1','il-large-pages-v1','ga-exempt-record-v1','ga-legacy-rows-v1'];
 
-async function exercise({state='GA',commands=42,elapsedPerCommand=100,stopStatus='Delinquent',missedPings=0,incompatible=false}={}) {
+async function exercise({state='GA',commands=42,elapsedPerCommand=100,stopStatus='Delinquent',missedPings=0,incompatible=false,oldIllinois=false}={}) {
   const actions=[];let advance=0,clock=0,listener,pings=0;
   const window={addEventListener:(kind,fn)=>{if(kind==='message')listener=fn;},postMessage(message){
     actions.push(message.action);
     if(message.action==='ping' && ++pings<=missedPings)return;
     queueMicrotask(()=>listener({source:window,origin:'https://staging.compliance-express.com',data:{
-      ...message,direction:'response',ok:true,version:'0.5.8',capabilities:incompatible?[]:capabilities,evidence:{complete:true,rows:[]}
+      ...message,direction:'response',ok:true,version:oldIllinois?'0.5.8':'0.5.9',capabilities:incompatible?[]:[...capabilities,...(oldIllinois?[]:['il-dom-events-v1'])],evidence:{complete:true,rows:[]}
     }}));
   }};
   const context=vm.createContext({window,location:{origin:'https://staging.compliance-express.com'},
@@ -65,4 +65,10 @@ test('absent connector remains inconclusive after exactly two readiness attempts
 test('incompatible connector is not retried or treated as ready',async()=>{
   const run=await exercise({commands:1,incompatible:true});assert.ifError(run.error);
   assert.equal(run.result.reason,'NY_CONNECTOR_UPDATE_REQUIRED');assert.equal(run.actions.filter(a=>a==='ping').length,1);assert.ok(!run.actions.includes('search'));
+});
+
+test('Illinois requires the event-readiness fix while old NY and GA remain usable',async()=>{
+  const il=await exercise({state:'IL',oldIllinois:true,commands:1});assert.ifError(il.error);
+  assert.equal(il.result.reason,'NY_CONNECTOR_UPDATE_REQUIRED');assert.ok(!il.actions.includes('search'));
+  for(const state of ['NY','GA'])assert.equal((await exercise({state,oldIllinois:true,commands:1})).result.status,'Delinquent');
 });

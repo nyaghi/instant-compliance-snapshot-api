@@ -45,15 +45,27 @@ async function performRegistryQuery(job, query) {
     if (job.tab === null || !job.ilReusableForm) await registryNavigate(job, registryStart("IL"));
     else await registryReady(job,null,"/search");
     job.ilReusableForm = false;
-    let result = await registryMessage(job,{action:"registry-il",query});
+    const collect = async () => {
+      const started = Date.now();
+      const result = await registryMessage(job,{action:"registry-il",query});
+      for (const entry of Array.isArray(result?.diagnostics) ? result.diagnostics.slice(0,32) : []) {
+        if (!["form","results","page-size","detail"].includes(entry.phase) || !["observed","ready","incomplete"].includes(entry.event)
+          || !Number.isFinite(entry.elapsed_ms) || entry.elapsed_ms < 0 || entry.elapsed_ms > 300000
+          || !["visible","hidden","unknown"].includes(entry.visibility)) continue;
+        diagnostic("il-dom",job,`${entry.phase}:${entry.event} ms=${entry.elapsed_ms} visibility=${entry.visibility}`);
+      }
+      diagnostic("il-command",job,`${query.identifier ? "detail" : query.ein ? "ein" : "name"} ms=${Date.now()-started} ${result?.ok ? "complete" : /^NY_CONNECTOR_[A-Z_]+$/.test(result?.reason) ? result.reason : "incomplete"}`);
+      return result;
+    };
+    let result = await collect();
     // One fresh-form retry for a search that never completed or an unopened
     // detail. Loaded records with absent dates are complete evidence.
-    const retryable = ["NY_CONNECTOR_IL_FORM_READY_TIMEOUT", "NY_CONNECTOR_IL_RESPONSE_TIMEOUT",
-      "NY_CONNECTOR_IL_DETAIL_NOT_OPENED", "NY_CONNECTOR_IL_DETAIL_BLANK"];
+    const retryable = ["NY_CONNECTOR_IL_FORM_READY_TIMEOUT", "NY_CONNECTOR_IL_FORM_DISABLED", "NY_CONNECTOR_IL_FORM_MISSING", "NY_CONNECTOR_IL_RESPONSE_TIMEOUT",
+      "NY_CONNECTOR_IL_DETAIL_NOT_OPENED", "NY_CONNECTOR_IL_DETAIL_BLANK", "NY_CONNECTOR_IL_DETAIL_RESPONSE_TIMEOUT"];
     if (retryable.includes(result?.reason) && job.activeExpiresAt-Date.now()>50000) {
       diagnostic("il-public-retry",job,result.reason);
       await registryNavigate(job, registryStart("IL"));
-      result = await registryMessage(job,{action:"registry-il",query});
+      result = await collect();
     }
     job.ilReusableForm = result?.ok === true && !Object.hasOwn(query,"identifier");
     return result;

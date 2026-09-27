@@ -254,6 +254,8 @@ class MatureParity(unittest.TestCase):
         allowed.add('search_ri')
         # NM access failures must not be labeled as unknown matched records.
         allowed.update({'copy_external_result','comments_for_result_base'})
+        # Illinois readiness repair adds missing/disabled form explanations only.
+        allowed.add('il_ga_connector_failure')
         self.assertEqual({k for k,v in old.items() if current.get(k)!=v},allowed)
     def test_discovery_connector_and_state_modules_unchanged(self):
         # NY now accepts optional Sales cancellation; signal-free lifecycle has dedicated controls.

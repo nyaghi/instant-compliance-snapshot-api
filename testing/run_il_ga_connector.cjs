@@ -119,6 +119,21 @@ test('Illinois unanswered search retries once, without treating an old empty gri
   assert.equal(r.ok,true);assert.equal(attempts,2);assert.equal(r.evidence.total,0);
 });
 
+test('Illinois missing and disabled forms retain one bounded retry and safe diagnostics',async()=>{
+  for(const reason of ['NY_CONNECTOR_IL_FORM_DISABLED','NY_CONNECTOR_IL_FORM_MISSING']){
+    const h=harness();registryFixture(h);const p=connect(h,'IL');const original=h.chrome.tabs.sendMessage;let attempts=0;
+    h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='registry-il' ? (++attempts,{ok:false,reason,diagnostics:[
+      {phase:'form',event:'incomplete',elapsed_ms:45000,visibility:'hidden'},
+      {phase:'secret-data-must-not-be-logged',event:'incomplete',elapsed_ms:10,visibility:'hidden'}
+    ]}) : original(tab,m);
+    const r=await h.query(p,20,{state:'IL',orgName:'Fixture Foundation'});
+    assert.equal(attempts,2);assert.equal(r.reason,reason);assert.equal(r.ok,false);
+    const log=JSON.stringify(h.data.session.ccnyRuntime.diagnostics);
+    assert.match(log,/form:incomplete ms=45000 visibility=hidden/);assert.doesNotMatch(log,/secret-data/);
+    assert.match(log,/queue_ms=/);
+  }
+});
+
 test('Georgia unnumbered exemption refreshes by bound name and location, not first row',async()=>{
   const h=harness();registryFixture(h);const p=connect(h,'GA');
   const original=h.chrome.tabs.sendMessage;let searches=0;

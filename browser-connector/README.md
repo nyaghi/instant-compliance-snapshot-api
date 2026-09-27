@@ -1,6 +1,6 @@
-# CharityClarity registry connector — 0.5.8 candidate
+# CharityClarity registry connector — 0.5.9 candidate
 
-Version 0.5.8 gives normal New York verification up to 45 seconds and retries one timed-out, previously opened detail page on a fresh document. It retains all verification limits and never treats failure as an empty result.
+Version 0.5.9 observes Illinois form, results and detail changes directly, preserving in-time evidence when background timers wake late. Stale grids, late responses and incomplete identity still fail conservatively. It distinguishes disabled from missing Search controls and records bounded phase/queue diagnostics without secrets. Matching, status rules, queue order and existing NY/GA recovery limits are unchanged.
 
 Version 0.5.7 selects Illinois's public 100-row page option for larger
 result sets, with complete-count and first-page checks. It also reuses Illinois's ordinary public search form during one
@@ -21,7 +21,7 @@ This candidate adds Illinois and Georgia on staging only. New York retains its e
 
 1. Open Chrome's Extensions page yourself (`chrome://extensions`).
 2. If updating an existing unpacked connector, use this candidate folder as its source, or disable the old connector and choose **Load unpacked** with this folder. Keep only one CharityClarity connector enabled.
-3. Verify version **0.5.8**. Refresh the staging tab.
+3. Verify version **0.5.9**. Refresh the staging tab.
 4. Keep Chrome open. Illinois and Georgia require the corresponding staging frontend/backend candidate before end-to-end checks can run.
 
 The additional host permissions are limited to the official Illinois and Georgia public registries. Production web/backend deployments are not part of this package.

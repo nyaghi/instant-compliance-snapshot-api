@@ -8,11 +8,54 @@
   const documentId = crypto.randomUUID();
   const text = el => (el?.innerText || "").replace(/\s+/g, " ").trim();
   const visible = el => !!el && el.getClientRects().length > 0;
-  const pause = ms => new Promise(r => setTimeout(r, ms));
-  async function wait(fn, ms = 25000) {
-    const end = Date.now() + ms;
-    while (Date.now() < end) { const value = fn(); if (value) return value; await pause(150); }
-    throw new Error("REGISTRY_RESPONSE_INCOMPLETE");
+  function wait(fn, ms = 25000, {root = document.documentElement, action, relevant, settle = 0, trace = () => {}} = {}) {
+    // Observe before acting. Hidden-page timers may wake much later than the
+    // DOM update; they are watchdogs, not the sole observers of completion.
+    return new Promise((resolve, reject) => {
+      const start = Date.now(), end = start + ms;
+      let done = false, candidate = null, candidateAt = null, timer, settleTimer;
+      const finish = (value, error) => {
+        if (done) return;
+        done = true; observer.disconnect(); clearTimeout(timer); clearTimeout(settleTimer);
+        trace(error ? "incomplete" : "ready", Date.now()-start);
+        error ? reject(error) : resolve(value);
+      };
+      const incomplete = () => finish(null, new Error("REGISTRY_RESPONSE_INCOMPLETE"));
+      const settleCandidate = () => {
+        if (done) return;
+        // Only evidence observed within the original deadline can survive a
+        // delayed watchdog. A later mutation invalidates this candidate.
+        if (candidateAt === null || candidateAt + settle > end) return incomplete();
+        try {
+          if (!fn()) return incomplete();
+          if (Date.now()-candidateAt < settle) return;
+          finish(candidate);
+        } catch (error) { finish(null, error); }
+      };
+      const inspect = () => {
+        if (done) return;
+        if (Date.now() > end) return incomplete();
+        try {
+          const value = fn();
+          if (!value) { candidate = null; candidateAt = null; return; }
+          candidate = value; candidateAt = Date.now();
+          trace("observed", candidateAt-start);
+          if (!settle) return finish(value);
+          settleTimer = setTimeout(settleCandidate, settle);
+        } catch (error) { finish(null, error); }
+      };
+      const observer = new MutationObserver(list => {
+        if (done) return;
+        try { if (relevant && !relevant(list)) return; }
+        catch (error) { return finish(null, error); }
+        candidate = null; candidateAt = null; clearTimeout(settleTimer);
+        inspect();
+      });
+      observer.observe(root, {childList:true, subtree:true, attributes:true, characterData:true,
+        attributeFilter:["style", "class", "aria-busy", "disabled", "aria-disabled", "hidden"]});
+      timer = setTimeout(() => candidateAt === null ? incomplete() : settleCandidate(), ms);
+      try { action?.(); inspect(); } catch (error) { finish(null, error); }
+    });
   }
   function set(el, value) {
     if (!el) throw new Error("REGISTRY_FORM_CHANGED");
@@ -55,12 +98,18 @@
     const next = [...pager.querySelectorAll("a")].find(a => text(a) === String(Number(current)+1) || text(a) === "...");
     return {rows, page:Number(current), next:!!next};
   }
-  async function illinois(query) {
+  async function illinois(query, trace = () => {}) {
     const inputs = key => document.querySelector(`input[data-val-property-name="${key}"]`);
+    const phase = name => (event, elapsed_ms) => trace({phase:name, event, elapsed_ms,
+      visibility:document.visibilityState || "unknown"});
+    const searchButton = () => [...document.querySelectorAll("button")].find(el => text(el) === "Search" && visible(el));
     let button;
     try {
-      button = await wait(() => [...document.querySelectorAll("button")].find(el => text(el) === "Search" && visible(el) && !el.disabled), 45000);
-    } catch { throw new Error("NY_CONNECTOR_IL_FORM_READY_TIMEOUT"); }
+      button = await wait(() => { const b=searchButton(); return b && !b.disabled && b; }, 45000, {trace:phase("form")});
+    } catch {
+      const b = searchButton();
+      throw new Error(!b ? "NY_CONNECTOR_IL_FORM_MISSING" : b.disabled ? "NY_CONNECTOR_IL_FORM_DISABLED" : "NY_CONNECTOR_IL_FORM_READY_TIMEOUT");
+    }
     for (const key of ["Name","Address","City","StateCode","Zip","County","FEIN","FileNumber"]) set(inputs(key), "");
     const field = query.ein ? "FEIN" : query.identifier ? "FileNumber" : "Name";
     const value = query.ein || query.identifier || query.orgName;
@@ -70,27 +119,29 @@
     const grid = document.querySelector('.k-grid[id^="CharitiesPublicSearch_"]');
     if (!grid) throw new Error("REGISTRY_GRID_CHANGED");
     async function changed(action) {
-      let rendered = false, loadingSeen = false, settledAt = 0;
+      let rendered = false, loadingSeen = false;
       const loading = () => [...grid.querySelectorAll(".k-loading-mask")].some(visible);
-      const observer = new MutationObserver(list => {
+      await wait(() => {
+        if (loading()) { loadingSeen = true; return false; }
+        return (rendered || loadingSeen) && !!grid.querySelector(".k-pager-info");
+      }, 35000, {root:grid, action, settle:300, trace:phase("results"), relevant:list => {
         // Kendo can reuse the same empty grid and toggle only loading styles.
         // Observe that cycle as well as result rendering, never accept the
         // initial empty grid merely because its pager is already present.
-        loadingSeen ||= loading();
-        if (list.some(m => ["childList", "characterData"].includes(m.type)
-          && (m.target.nodeType === 1 ? m.target : m.target.parentElement)?.closest(".k-grid-content, .k-pager-info, .k-pager-numbers"))) rendered = true;
-        settledAt = 0;
-      });
-      observer.observe(grid, { childList:true, subtree:true, attributes:true, attributeFilter:["style","class","aria-busy"], characterData:true });
-      try {
-        action();
-        await wait(() => {
-          if (loading()) { loadingSeen = true; settledAt = 0; return false; }
-          if (!(rendered || loadingSeen) || !grid.querySelector(".k-pager-info")) return false;
-          settledAt ||= Date.now();
-          return Date.now()-settledAt >= 300;
-        },35000);
-      } finally { observer.disconnect(); }
+        const isLoading = loading();
+        loadingSeen ||= isLoading;
+        const contentChanged = list.some(m => ["childList", "characterData"].includes(m.type)
+          && (m.target.nodeType === 1 ? m.target : m.target.parentElement)?.closest(".k-grid-content, .k-pager-info, .k-pager-numbers"));
+        rendered ||= contentChanged;
+        // Attribute-only loading transitions matter; unrelated row styling
+        // must not continually restart the response-settling period.
+        const loadingChanged = list.some(m => {
+          const el = m.target.nodeType === 1 ? m.target : m.target.parentElement;
+          return el?.closest(".k-loading-mask") || m.type === "childList" &&
+            [...m.addedNodes, ...m.removedNodes].some(n => n.nodeType === 1 && (n.matches(".k-loading-mask") || n.querySelector(".k-loading-mask")));
+        });
+        return contentChanged || loadingChanged || isLoading;
+      }});
     }
     await changed(() => button.click());
     // Use the registry's visible page-size menu to reduce long fallback scans.
@@ -105,7 +156,7 @@
       const option = await wait(() => {
         const list = listId && document.getElementById(listId);
         return list && [...list.querySelectorAll('[role="option"]')].find(el => visible(el) && text(el).replace(/\u200b/g, '') === '100');
-      }, 5000);
+      }, 5000, {trace:phase("page-size")});
       await changed(() => option.click());
       if (!/^1\s*-\s*\d+\s+of\s+[\d,]+\s+items$/i.test(text(grid.querySelector('.k-pager-info'))))
         throw new Error('REGISTRY_PAGINATION_INCOMPLETE');
@@ -128,17 +179,18 @@
         const cells = [...tr.children], val = key => text(cells[headers.indexOf(key)]);
         const row = {name:val("Name"), identifier:val("FileNumber"), street:val("Street1"), region:val("State"), postal_code:val("PostalCode"), location:[val("City"),val("State")].filter(Boolean).join(", "), detail_key:""};
         if (query.identifier && row.identifier === query.identifier) {
-          tr.querySelector('button[title="View Details"]').click();
           // Identity/status establish a loaded detail. A missing filing date is
           // evidence for the master to interpret, not a transport timeout.
-          let dialog;
+          let body;
+          const readDetail = () => { const d=document.querySelector("#KendoWindowLevel1"); return visible(d) && d.innerText.includes("CO Number: " + query.identifier) && /FEIN:\s*\d/.test(d.innerText) && /Status:\s*\S/.test(d.innerText) && d.innerText; };
           try {
-            dialog = await wait(() => { const d=document.querySelector("#KendoWindowLevel1"); return visible(d) && d.innerText.includes("CO Number: " + query.identifier) && /FEIN:\s*\d/.test(d.innerText) && /Status:\s*\S/.test(d.innerText) && d; });
+            body = await wait(readDetail, 25000,
+              {action:() => tr.querySelector('button[title="View Details"]').click(), trace:phase("detail")});
           } catch {
             const d=document.querySelector("#KendoWindowLevel1");
-            throw new Error(!visible(d) ? "NY_CONNECTOR_IL_DETAIL_NOT_OPENED" : !text(d) ? "NY_CONNECTOR_IL_DETAIL_BLANK" : "NY_CONNECTOR_IL_DETAIL_IDENTITY_INCOMPLETE");
+            throw new Error(!visible(d) ? "NY_CONNECTOR_IL_DETAIL_NOT_OPENED" : !text(d) ? "NY_CONNECTOR_IL_DETAIL_BLANK" : readDetail() ? "NY_CONNECTOR_IL_DETAIL_RESPONSE_TIMEOUT" : "NY_CONNECTOR_IL_DETAIL_IDENTITY_INCOMPLETE");
           }
-          return {query, complete:true, body:dialog.innerText};
+          return {query, complete:true, body};
         }
         collected.push(row);
       }
@@ -152,7 +204,11 @@
   }
   async function handle(m) {
     if (m.action === "registry-ready") return {ready:document.readyState !== "loading", url:location.href, documentId};
-    if (m.action === "registry-il" && IL) return {ok:true, evidence:await illinois(m.query)};
+    if (m.action === "registry-il" && IL) {
+      const diagnostics = [];
+      try { return {ok:true, evidence:await illinois(m.query, entry => { if (diagnostics.length < 32) diagnostics.push(entry); }), diagnostics}; }
+      catch (error) { error.diagnostics = diagnostics; throw error; }
+    }
     if (!GA) throw new Error("REGISTRY_WRONG_ORIGIN");
     if (m.action === "registry-ga-form") {
       const profession = [...document.querySelectorAll("select")].find(el=>[...el.options].some(o=>text(o)==="Charities"));
@@ -211,7 +267,8 @@
     handle(m).then(reply,error=>{
       const code=error?.message||'';
       const ilReasons={REGISTRY_RESPONSE_INCOMPLETE:'NY_CONNECTOR_IL_RESPONSE_TIMEOUT',REGISTRY_RESULTS_INCOMPLETE:'NY_CONNECTOR_IL_RESULTS_INCOMPLETE',REGISTRY_TOTAL_CHANGED:'NY_CONNECTOR_IL_TOTAL_CHANGED',REGISTRY_RESULT_LIMIT:'NY_CONNECTOR_IL_RESULT_LIMIT',REGISTRY_PAGINATION_INCOMPLETE:'NY_CONNECTOR_IL_PAGINATION_INCOMPLETE'};
-      reply({ok:false,reason:/^NY_CONNECTOR_IL_(?:FORM_READY_TIMEOUT|DETAIL_(?:NOT_OPENED|BLANK|IDENTITY_INCOMPLETE))$/.test(code) ? code : IL && ilReasons[code] || 'NY_CONNECTOR_INCOMPLETE'});
+      reply({ok:false,reason:/^NY_CONNECTOR_IL_(?:FORM_READY_TIMEOUT|FORM_DISABLED|FORM_MISSING|DETAIL_(?:NOT_OPENED|BLANK|IDENTITY_INCOMPLETE|RESPONSE_TIMEOUT))$/.test(code) ? code : IL && ilReasons[code] || 'NY_CONNECTOR_INCOMPLETE',
+        ...(IL && error.diagnostics ? {diagnostics:error.diagnostics} : {})});
     });
     return true;
   });

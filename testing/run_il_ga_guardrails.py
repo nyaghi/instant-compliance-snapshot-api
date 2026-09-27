@@ -147,13 +147,13 @@ class IntegrationControls(unittest.TestCase):
             self.assertNotIn('retry',result.source_note.lower())
     def test_il_detail_failures_have_distinct_non_negative_explanations(self):
         record=dict(state='IL',organization_name='Feeding America',ein='36-3673599')
-        for code,phrase in [('NOT_OPENED','did not open'),('BLANK','no readable'),('IDENTITY_INCOMPLETE','could not be confirmed')]:
+        for code,phrase in [('NOT_OPENED','did not open'),('BLANK','no readable'),('IDENTITY_INCOMPLETE','could not be confirmed'),('RESPONSE_TIMEOUT','after its response deadline')]:
             result=cc.il_ga_connector_failure(record,'NY_CONNECTOR_IL_DETAIL_'+code)
             self.assertEqual(result['status'],'Unable to Confirm')
             self.assertIn(phrase,result['comments'])
     def test_il_search_failures_are_distinct_from_blank_detail(self):
         record=dict(state='IL',organization_name='Feeding America',ein='36-3673599')
-        for code,phrase in [('FORM_READY_TIMEOUT','search controls'),('RESPONSE_TIMEOUT','search results'),('RESULTS_INCOMPLETE','selected registration number'),('TOTAL_CHANGED','result count'),('RESULT_LIMIT','more records'),('PAGINATION_INCOMPLETE','pagination')]:
+        for code,phrase in [('FORM_READY_TIMEOUT','search controls'),('FORM_DISABLED','remained disabled'),('FORM_MISSING','missing or not visible'),('RESPONSE_TIMEOUT','search results'),('RESULTS_INCOMPLETE','selected registration number'),('TOTAL_CHANGED','result count'),('RESULT_LIMIT','more records'),('PAGINATION_INCOMPLETE','pagination')]:
             result=cc.il_ga_connector_failure(record,'NY_CONNECTOR_IL_'+code)
             self.assertEqual(result['status'],'Unable to Confirm')
             self.assertIn(phrase,result['comments'])
