@@ -173,7 +173,12 @@
           }
           recoveryUsed = true;
           onProgress?.("Illinois: verification stalled. Reopening the state page once and resuming this check.");
-          const finished = await bridge("finish", null, lookupId);
+          let finished = await bridge("finish", null, lookupId);
+          // A failed worker job closes itself. Its disconnect can race the
+          // first finish request; repeat this idempotent cleanup once and
+          // require its acknowledgement before acquiring a new transport.
+          if (!finished.ok && finished.reason === "NY_CONNECTOR_INTERRUPTED")
+            finished = await bridge("finish", null, lookupId);
           if (!finished.ok) {
             state = await api({action:"fail",check_token:checkToken,reason:finished.reason});
             break;

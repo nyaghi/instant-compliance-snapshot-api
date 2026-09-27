@@ -31,3 +31,12 @@ Release evidence and live results are recorded in
 `outputs/illinois-verification-recovery-20260927` in the primary project.
 Production is not authorized. Live repeated acceptance is required before any
 promotion recommendation.
+
+The first 09.27.6 live attempt exposed an additional cleanup race: the worker
+auto-closed its failed job while the frontend requested `finish`, returning
+`NY_CONNECTOR_INTERRUPTED`. The next `finish` acknowledged cleanup. Version
+09.27.7 repeats only this idempotent cleanup once for that exact reason, and
+still requires a successful acknowledgement before creating the new job.
+Persistent interruption and all other cleanup failures remain inconclusive.
+The first-pass failure is retained; it is not counted as a successful recovery.
+Final acceptance evidence is in `outputs/illinois-verification-recovery-final-20260927`.

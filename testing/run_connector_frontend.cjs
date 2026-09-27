@@ -73,8 +73,8 @@ test('Illinois requires the event-readiness fix while old NY and GA remain usabl
   for(const state of ['NY','GA'])assert.equal((await exercise({state,oldIllinois:true,commands:1})).result.status,'Delinquent');
 });
 
-async function recoveryExercise({persistent=false,finishFails=false,acquireFails=false,abortRecovery=false,overBudget=false,repeatDirective=false}={}) {
-  const actions=[],searches=[],controller=new AbortController();let listener,clock=0,failures=0,admissions=0;
+async function recoveryExercise({persistent=false,finishFails=false,finishInterrupted=false,persistentInterruption=false,acquireFails=false,abortRecovery=false,overBudget=false,repeatDirective=false}={}) {
+  const actions=[],searches=[],controller=new AbortController();let listener,clock=0,failures=0,admissions=0,finishes=0;
   const query={state:'IL',ein:'123456789'};
   const window={addEventListener:(type,fn)=>listener=fn,postMessage(m){
     actions.push({action:m.action,id:m.lookup_id,query:m.query});
@@ -86,6 +86,7 @@ async function recoveryExercise({persistent=false,finishFails=false,acquireFails
       if(overBudget)clock=300001;
     }
     if(m.action==='finish' && finishFails)r={ok:false,reason:'NY_CONNECTOR_TIMEOUT'};
+    if(m.action==='finish' && (++finishes===1 && finishInterrupted || persistentInterruption))r={ok:false,reason:'NY_CONNECTOR_INTERRUPTED'};
     if(m.action==='search'){
       searches.push(m);clock+=60000;
       r=searches.length===1||persistent||repeatDirective?{ok:false,reason:'NY_CONNECTOR_IL_VERIFICATION_PENDING'}:{ok:true,evidence:{query,complete:true,total:0,rows:[]}};
@@ -142,4 +143,19 @@ test('canceling during recovery cleans up without another search',async()=>{
 test('a repeated master recovery directive is rejected instead of looping',async()=>{
   const r=await recoveryExercise({repeatDirective:true});assert.ifError(r.error);
   assert.equal(r.result.reason,'NY_CONNECTOR_INCOMPLETE');assert.equal(r.searches.length,2);
+});
+
+test('failed-job disconnect racing finish is acknowledged before recovery acquires',async()=>{
+  const r=await recoveryExercise({finishInterrupted:true});assert.ifError(r.error);
+  assert.equal(r.result.status,'Not Registered / Non-Compliant');assert.equal(r.searches.length,2);
+  const beforeAcquire=r.actions.slice(0,r.actions.findLastIndex(a=>a.action==='acquire'));
+  const cleanup=beforeAcquire.filter(a=>a.action==='finish');assert.equal(cleanup.length,2);
+  assert.equal(cleanup[0].id,cleanup[1].id);assert.equal(cleanup[0].id,r.searches[0].lookup_id);
+});
+
+test('persistent cleanup interruption cannot acquire a fresh job or loop',async()=>{
+  const r=await recoveryExercise({persistentInterruption:true});assert.ifError(r.error);
+  assert.equal(r.result.status,'Unable to Confirm');assert.equal(r.result.reason,'NY_CONNECTOR_INTERRUPTED');
+  assert.equal(r.searches.length,1);assert.equal(r.actions.filter(a=>a.action==='acquire').length,1);
+  assert.equal(r.actions.filter(a=>a.action==='finish').length,3); // two bounded attempts and final cleanup
 });
