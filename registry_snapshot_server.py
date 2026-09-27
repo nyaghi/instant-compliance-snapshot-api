@@ -134,7 +134,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.27.2-staging").strip() or "2026.09.27.2-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.27.3-staging").strip() or "2026.09.27.3-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -6034,6 +6034,8 @@ def licensed_charity_result(org, state, rows, deadline, source, *, freshness="")
     else:
         result.success = True
         result.source_note = f"The {state} charity-license search completed for the organization and reviewed alternate names without a qualifying registration record."
+        if state == "DC":
+            result.source_note += " This result concerns charitable licensing. Corporate entity registration and biennial-report standing are separate and do not establish a charitable-solicitation license."
         excluded = [r for r in rows if r.get("match", {}).get("reason") == "DIFFERENT_EIN_CORROBORATED"]
         if excluded:
             result.identity_evidence = {"excluded_records": [{"name": r["name"], "identifier": r["identifier"],
@@ -9122,6 +9124,10 @@ def copy_external_result(org, state: str, external_result):
     normalized_error = getattr(external_result, "error", "") or ""
     external_organization_name = (getattr(external_result, "organization_name", "") or "").strip()
     state_upper = state.upper()
+    nm_access_blocked = state_upper == "NM" and status in {
+        checker.STATUS_UNKNOWN, "Unknown", "Unable to Verify", "Unable to Confirm", "Site Not Reachable"
+    } and bool(re.search(r"upstream block page|you have been blocked|unable to access nmdoj\.gov|Cloudflare|Ray ID|CAPTCHA|human verification",
+                         raw_status + " " + normalized_error, re.I))
     if state_upper == "KS" and re.search(r"\b(withdrawn|terminated|closed|cancel(?:ed|led)|inactive|retired)\b", raw_status, re.I):
         status = "Closed / Withdrawn / Canceled"
     if state_upper == "AR" and re.search(r"\bStatus\s*:\s*(?:Close|Closed)\b|\b(?:Close|Closed|Withdrawn|Terminated|Cancel(?:ed|led)|Inactive)\b", raw_status, re.I):
@@ -9206,6 +9212,20 @@ def copy_external_result(org, state: str, external_result):
     ]:
         if hasattr(external_result, attr):
             setattr(result, attr, getattr(external_result, attr))
+    if nm_access_blocked:
+        # A requested FEIN or echoed input name is not a registry match when
+        # the response is an access-block page rather than usable state data.
+        result.status = "Site Not Reachable"
+        result.success = False
+        result.error = "NM_REGISTRY_ACCESS_BLOCKED"
+        result.status_reason = "NM_REGISTRY_ACCESS_BLOCKED"
+        result.matched_registry_name = ""
+        result.matched_registry_identifier = ""
+        result.source_note = (
+            "New Mexico blocked the automated lookup before usable registration or filing evidence could be retrieved. "
+            "CharityClarity reports Site Not Reachable. This lookup did not confirm the organization's identity or status; "
+            "it does not establish non-registration or delinquency."
+        )
     return result
 
 
@@ -21305,6 +21325,8 @@ def comment_registry_status(raw: str, status: str) -> str:
 
 
 def comments_for_result_base(result, body: str, public_facing_status: str) -> str:
+    if result.state == "NM" and getattr(result, "status_reason", "") == "NM_REGISTRY_ACCESS_BLOCKED":
+        return result.source_note
     if result.state == "FL" and getattr(result, "reason_code", "") == "FL_CERTIFICATE_ERROR":
         return result.source_note
     if result.state in {"DC", "RI", "IL", "GA"} and getattr(result, "status_reason", "") == "LICENSED_CHARITY_SOURCE":

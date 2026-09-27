@@ -359,6 +359,8 @@ class IntegrationControls(unittest.TestCase):
             'identity_candidate',
             # Rhode Island retrieval order; no matching/status acceptance changes.
             'search_ri',
+            # NM access-block normalization; all other adapters retain parity.
+            'copy_external_result',
             # Final-50 scoped PA/KY fixes and shared office normalization.
             'search_pa_with_name_fallback','search_pa_with_name_fallback_core',
             'pa_guard_search_completion','irs_period_for_label','licensed_charity_street_evidence',

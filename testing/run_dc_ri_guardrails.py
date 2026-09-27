@@ -21,6 +21,13 @@ class LicenseControls(unittest.TestCase):
     def test_adverse_status_overrides_future_expiration(self):
         for raw,status in [('INACTIVE','Closed / Withdrawn / Canceled'),('Revoked','Revoked'),('Suspended','Suspended'),('Expired - Enforcement','Delinquent')]:
             self.assertEqual(cc.licensed_charity_status(raw,date.today()+timedelta(days=365)),status)
+    def test_dc_leading_and_parenthesized_the_preserve_full_name_identity(self):
+        for label in ['THE BEACON LEARNING FOUNDATION', 'BEACON LEARNING FOUNDATION (THE)',
+                      'BEACON LEARNING FOUNDATION, INC. (THE)']:
+            with self.subTest(label=label):
+                r=row(label)
+                self.assertEqual(cc.licensed_charity_identity(self.org,r,'DC',self.deadline),'accepted')
+                self.assertEqual(r['match']['decision'],'accepted')
     def test_calendar_windows_and_pending(self):
         for days,status in [(-1,'Delinquent'),(0,'Upcoming Filing'),(60,'Upcoming Filing'),(365,'Current')]:
             self.assertEqual(cc.licensed_charity_status('ACTIVE',date.today()+timedelta(days=days)),status)
@@ -81,8 +88,10 @@ class LicenseControls(unittest.TestCase):
             selected,review=self.select([row()])
         self.assertIsNotNone(selected);self.assertFalse(review)
     def test_complete_negative(self):
-        result=cc.licensed_charity_result(self.org,'RI',[],self.deadline,'https://example.org')
-        self.assertTrue(result.success);self.assertEqual(result.status,'Not Registered')
+        for state in ['RI','DC']:
+            result=cc.licensed_charity_result(self.org,state,[],self.deadline,'https://example.org')
+            self.assertTrue(result.success);self.assertEqual(result.status,'Not Registered')
+            if state=='DC':self.assertIn('Corporate entity registration',result.source_note)
     def test_dc_extended_long_name_is_reviewable_not_a_false_negative(self):
         self.org=cc.checker.Organization('National Beacon Literacy Learning Coalition','123456789')
         token=cc.REVIEWED_NAME_CONTEXT.set({'123456789':['National Beacon Literacy Learning Coalition and Learning Information Service']})
@@ -243,6 +252,8 @@ class MatureParity(unittest.TestCase):
         allowed.add('identity_candidate')
         # RI must try the existing suffix-free legal probe before stopping on an alias.
         allowed.add('search_ri')
+        # NM access failures must not be labeled as unknown matched records.
+        allowed.update({'copy_external_result','comments_for_result_base'})
         self.assertEqual({k for k,v in old.items() if current.get(k)!=v},allowed)
     def test_discovery_connector_and_state_modules_unchanged(self):
         # NY now accepts optional Sales cancellation; signal-free lifecycle has dedicated controls.

@@ -10,10 +10,10 @@ function fixture(){
 test('one overall deadline preserves early results and closes running AND queued states exactly once',async()=>{
  const c=fixture(),run=c.submit();c.finish('AK',{state:'AK',status:'Current',comments:'Confirmed EIN control'});await tick();
  await c.advance(59999);assert.equal(c.events.length,0);await c.advance(1);await run;
- const d=c.events[0].detail;assert.equal(d.seconds,60);assert.equal(d.results.length,32);assert.equal(new Set(d.results.map(r=>r.state)).size,32);
- assert.equal(d.results.find(r=>r.state==='AK').status,'Current');assert.equal(d.results.filter(r=>r.result.status_reason==='SALES_TIME_LIMIT').length,31);
+ const d=c.events[0].detail;assert.equal(d.seconds,60);assert.equal(d.results.length,34);assert.equal(new Set(d.results.map(r=>r.state)).size,34);
+ assert.equal(d.results.find(r=>r.state==='AK').status,'Current');assert.equal(d.results.filter(r=>r.result.status_reason==='SALES_TIME_LIMIT').length,33);
  assert(c.calls.every(args=>args[7].signal.aborted));assert.equal(c.elements.ccSalesRun.disabled,false);assert.equal(c.calls.length,16);
- await c.drain();assert.equal(c.events.length,1);assert.equal(d.results.length,32);assert.equal(c.calls.length,16);
+ await c.drain();assert.equal(c.events.length,1);assert.equal(d.results.length,34);assert.equal(c.calls.length,16);
 });
 test('late response cannot overwrite deadline results or a new organization run',async()=>{
  const c=fixture();let run=c.submit();await c.advance(60000);await run;
@@ -46,6 +46,7 @@ test('Standard transport retains its five-minute timeout; optional Sales abort i
 });
 test('discovery and shared checker match baseline; NY transport has separate scoped controls',()=>{
  for(const file of ['Charity_Checker_Script for 13_states.py','web-staging/organization-identity.js']){
-  const old=cp.execFileSync('git',['show','fb193e6:'+file],{cwd:root,maxBuffer:20*1024*1024});assert.deepEqual(fs.readFileSync(path.join(root,file)).toString().replaceAll('\r\n','\n'),old.toString().replaceAll('\r\n','\n'),file);
+  // Verified 09.27.2 includes the user-requested IL discovery removal.
+  const old=cp.execFileSync('git',['show','53bb868:'+file],{cwd:root,maxBuffer:20*1024*1024});assert.deepEqual(fs.readFileSync(path.join(root,file)).toString().replaceAll('\r\n','\n'),old.toString().replaceAll('\r\n','\n'),file);
  }
 });

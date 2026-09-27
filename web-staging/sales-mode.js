@@ -2,11 +2,11 @@
 (() => {
   'use strict';
   if (location.origin !== 'https://staging.compliance-express.com') return;
-  const VERSION = '2026.09.24-sales.1';
+  const VERSION = '2026.09.27-sales.1';
   const RUN_LIMIT_MS = 60000;
   const STATE_CONCURRENCY = 15;
-  const STATES = Object.freeze(["AK", "AR", "CA", "CO", "CT", "DC", "FL", "HI", "KS", "KY", "LA", "MA", "MD", "ME", "MI", "MN", "MS", "ND", "NH", "NJ", "NM", "NY", "OH", "OK", "OR", "PA", "RI", "SC", "VA", "WA", "WI", "WV", "IL", "GA"]);
   const NAMES = {"IL":"Illinois", "GA":"Georgia", "AK": "Alaska", "AR": "Arkansas", "CA": "California", "CO": "Colorado", "CT": "Connecticut", "DC": "District of Columbia", "RI": "Rhode Island", "FL": "Florida", "HI": "Hawaii", "KS": "Kansas", "KY": "Kentucky", "LA": "Louisiana", "MA": "Massachusetts", "MD": "Maryland", "ME": "Maine", "MI": "Michigan", "MN": "Minnesota", "MS": "Mississippi", "ND": "North Dakota", "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico", "NY": "New York", "OH": "Ohio", "OK": "Oklahoma", "OR": "Oregon", "PA": "Pennsylvania", "SC": "South Carolina", "VA": "Virginia", "WA": "Washington", "WI": "Wisconsin", "WV": "West Virginia"};
+  const STATES = Object.freeze(Object.keys(NAMES).sort((a,b)=>NAMES[a].localeCompare(NAMES[b],'en')));
   // Display grouping only: never infer a registry outcome from a failed request.
   function displayStatus(result) {
     if (result.state === 'IL' && result.status === 'Not Registered / Non-Compliant' && result.success !== false) return result.status;
@@ -107,6 +107,7 @@
     } finally {
       closed=true;clearTimeout(deadlineTimer);clearInterval(timer);busy=false;progress();
       for(const el of [$('ccSalesRun'),$('ccSalesMode'),$('ccStandardMode'),$('ccSalesName'),$('ccSalesEin'),$('ccSalesConsent'),$('ccSalesStates')]) el.disabled=false;
+      results.sort((a,b)=>NAMES[a.state].localeCompare(NAMES[b.state],'en'));
       window.dispatchEvent(new CustomEvent('cc-sales-complete',{detail:{run_id:id,organization:org,ein,seconds:(performance.now()-start)/1000,results,version:VERSION,time_limit_reached:cutoff}}));
     }
   });

@@ -108,6 +108,33 @@ class NewMexicoHistoryTests(unittest.TestCase):
         b = self.classify(list(reversed(ARBOR_HISTORY)), "06/30/2024")
         self.assertEqual((a.status, a.raw_status_text), (b.status, b.raw_status_text))
 
+    def test_block_page_is_access_failure_without_an_invented_match(self):
+        org = cc.checker.Organization('Transport fixture', '012345678')
+        r = self.module.SearchResult(org.organization_name, org.ein, 'NM', self.module.STATUS_UNKNOWN,
+            'NM detail page returned an upstream block page before Status History could be read', self.module.NM_SEARCH_URL, '')
+        r.success = True  # Reproduces the legacy adapter's misleading success flag.
+        r.matched_registry_name = org.organization_name
+        r.matched_registry_identifier = org.ein
+        copied = cc.copy_external_result(org, 'NM', r)
+        self.assertEqual(cc.public_status(copied), 'Site Not Reachable')
+        self.assertFalse(copied.success)
+        self.assertEqual(copied.matched_registry_name, '')
+        self.assertEqual(copied.matched_registry_identifier, '')
+        text = cc.comments_for_result(copied, '', copied.status)
+        self.assertIn('blocked the automated lookup', text)
+        self.assertNotIn('organization was found', text)
+        self.assertNotIn('Registry match:', text)
+
+    def test_real_unknown_and_completed_filing_evidence_are_not_access_failures(self):
+        org = cc.checker.Organization('History fixture', '012345678')
+        r = self.module.SearchResult(org.organization_name, org.ein, 'NM', self.module.STATUS_UNKNOWN,
+            'Registration details incomplete', self.module.NM_SEARCH_URL, '')
+        r.success = True
+        self.assertEqual(cc.public_status(cc.copy_external_result(org, 'NM', r)), 'Unknown')
+        r = self.classify(ARBOR_HISTORY, '06/30/2025')
+        r.source_note += ' An earlier request encountered Cloudflare before this completed read.'
+        self.assertEqual(cc.public_status(cc.copy_external_result(org, 'NM', r)), 'Upcoming Filing')
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
