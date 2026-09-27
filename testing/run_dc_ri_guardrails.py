@@ -83,6 +83,26 @@ class LicenseControls(unittest.TestCase):
     def test_complete_negative(self):
         result=cc.licensed_charity_result(self.org,'RI',[],self.deadline,'https://example.org')
         self.assertTrue(result.success);self.assertEqual(result.status,'Not Registered')
+    def test_dc_extended_long_name_is_reviewable_not_a_false_negative(self):
+        self.org=cc.checker.Organization('National Beacon Literacy Learning Coalition','123456789')
+        token=cc.REVIEWED_NAME_CONTEXT.set({'123456789':['National Beacon Literacy Learning Coalition and Learning Information Service']})
+        try:
+            candidate=row('National Beacon Literacy Learning Coalition and Learning Information Servicend Learning Information Services')
+            with patch.object(cc,'score_candidate',return_value={'decision':'rejected','score':0,'reason':'NAME_NOT_EXACT'}):
+                result=cc.licensed_charity_result(self.org,'DC',[candidate],self.deadline,'https://example.org')
+            self.assertEqual(result.status,'Needs Review')
+            self.assertEqual(candidate['match']['reason'],'MATCH_FULL_NAME_IN_EXTENDED_DC_LABEL')
+            self.assertTrue(result._cc_identity_review['search_complete'])
+        finally:cc.REVIEWED_NAME_CONTEXT.reset(token)
+    def test_extended_label_does_not_override_foreign_ein_or_other_states(self):
+        self.org=cc.checker.Organization('National Beacon Literacy Learning Coalition','123456789')
+        name=self.org.organization_name+' and Other Foundation'
+        with patch.object(cc,'score_candidate',return_value={'decision':'rejected','score':0,'reason':'NAME_NOT_EXACT'}):
+            for state,candidate in [('DC',row(name,ein='987654321')),('RI',row(name)),('GA',row(name))]:
+                self.assertEqual(cc.licensed_charity_identity(self.org,candidate,state,self.deadline),'rejected')
+    def test_short_dc_prefix_does_not_turn_unrelated_name_into_review_candidate(self):
+        with patch.object(cc,'score_candidate',return_value={'decision':'rejected','score':0,'reason':'NAME_NOT_EXACT'}):
+            self.assertEqual(cc.licensed_charity_identity(self.org,row('Beacon Learning Foundation Alumni'),'DC',self.deadline),'rejected')
     def test_reversed_name_is_not_an_address_conflict(self):
         self.org=cc.checker.Organization('Focus on the Family','953188150')
         selected,review=self.select([row('Family Focus')])

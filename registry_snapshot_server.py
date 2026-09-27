@@ -5854,6 +5854,20 @@ def licensed_charity_identity(org, row, state, deadline):
         row["match"] = {"decision": "accepted", "score": 100, "reason": "USER_CONFIRMED_IDENTITY"}
         row["address_evidence"] = {"decision": "user_confirmed", "basis": "Identity accepted by the user for this snapshot."}
         return "accepted"
+    if state == "DC" and decision["decision"] == "rejected" and not row.get("ein"):
+        # The public feed can append corrupted/repeated text to a full legal
+        # name. Preserve a long whole-name prefix as a review candidate rather
+        # than claiming no registration. This does not establish identity:
+        # related entities can share that prefix and the same office address.
+        candidate = normalized_match_name(matched_name)
+        for target in [org.organization_name, *known_names_for_ein(org.ein)]:
+            key = normalized_match_name(target)
+            if len(distinctive_match_tokens(key)) >= 4 and candidate.startswith(key + " "):
+                row["match"] = {"decision": "possible", "score": 55,
+                                "reason": "MATCH_FULL_NAME_IN_EXTENDED_DC_LABEL"}
+                row["address_evidence"] = {"decision": "unavailable", "basis":
+                    "The DC label begins with the complete organization name but includes additional text. Identity requires confirmation."}
+                return "possible"
     if decision["decision"] == "rejected" and row.get("_review_name_only") and not row.get("ein"):
         # Georgia's legacy display names may append a parenthesized filing
         # year. A reviewed-name context must not make that exact full name
