@@ -386,6 +386,7 @@ except (TimeoutError, checker.PlaywrightTimeoutError):
 
 def strip_fl_business_lookup(tree):
     """Verify the exact relocation of FL rules before restoring the prior AST."""
+    strip_mi_name_transport(tree)
     if not any(getattr(n,'name','')=='fl_business_public_rows' for n in tree.body):
         return
     from testing.capacity_lab.fl_business_recipe import expected_fl_business_function
@@ -404,3 +405,59 @@ def strip_fl_business_lookup(tree):
     enrich.body.remove(found[0])
     tree.body=[n for n in tree.body if getattr(n,'name','') not in {
         'fl_business_lookup_enabled','fl_business_candidate_rows','fl_business_public_rows'}]
+
+
+def strip_mi_name_transport(tree):
+    """Prove query planning/classification unchanged, restoring only transport hooks."""
+    import copy
+    if not any(getattr(n,'name','')=='mi_name_http_empty_queries' for n in tree.body):return
+    old=ast.parse(subprocess.check_output(['git','show','e57e4c7:registry_snapshot_server.py'],cwd=Path(__file__).resolve().parents[2]).decode('utf-8'))
+    originals={n.name:n for n in old.body if isinstance(n,ast.FunctionDef)}
+    functions={n.name:n for n in tree.body if isinstance(n,ast.FunctionDef)}
+    fallback=copy.deepcopy(originals['search_mi_name_fallback'])
+    start=next(i for i,n in enumerate(fallback.body) if getattr(n,'name','')=='portal_query')
+    end=next(i for i,n in enumerate(fallback.body) if isinstance(n,ast.Assign) and ast.unparse(n.targets[0])=='progress')
+    plan=copy.deepcopy(fallback.body[start:end])
+    empty=next(n for n in plan if isinstance(n,ast.If) and ast.unparse(n.test)=='not variants')
+    empty.body=ast.parse('return []').body
+    expected=ast.parse('def mi_name_fallback_queries(org):\n    pass\n').body[0]
+    expected.body=plan+ast.parse('return variants[:4]').body
+    assert ast.dump(functions[expected.name])==ast.dump(expected)
+    fallback.body[start:end]=ast.parse('''variants = mi_name_fallback_queries(org)
+if not variants:
+    return incomplete("No usable organization-name query was available after the EIN search.")
+''').body
+    at=next(i for i,n in enumerate(fallback.body) if isinstance(n,ast.Assign) and ast.unparse(n.targets[0])=='completed_empty_queries')+1
+    fallback.body[at:at]=ast.parse('''result.source_attempts.extend(f"Completed Michigan name query via the same-session public form: {query}"
+    for query in progress.get("http_completed_empty_name_queries", []))
+''').body
+    assert ast.dump(functions[fallback.name])==ast.dump(fallback)
+    probe=copy.deepcopy(functions['search_mi_http_completion_probe'])
+    matches=[(n,x) for n in ast.walk(probe) if isinstance(n,ast.Try) for x in n.body
+             if isinstance(x,ast.If) and 'mi_http_names_enabled(org)' in ast.unparse(x.test)]
+    assert len(matches)==1
+    parent,node=matches[0]
+    expected=ast.parse('''if (mi_http_names_enabled(org) and lookup_deadline is not None
+        and re.search(r"\b0\s+record\(s\)\s+found\b|\bno\s+records?\s+found\b|\bno\s+results?\s+found\b", submitted_text, re.I)):
+    result._cc_mi_completed_empty_names = mi_name_http_empty_queries(session, org, headers, lookup_deadline)
+'''.replace('\x08','\\b')).body[0]
+    assert ast.dump(node)==ast.dump(expected)
+    parent.body.remove(node)
+    assert ast.dump(probe)==ast.dump(originals[probe.name])
+    runtime=copy.deepcopy(functions['run_state_lookup'])
+    expected=ast.parse('''completed_names = getattr(mi_probe_result, "_cc_mi_completed_empty_names", [])
+if completed_names:
+    progress["identity"] = (org.organization_name, canonical_ein_digits(org.ein))
+    progress["http_completed_empty_name_queries"] = list(completed_names)
+    progress["completed_empty_name_queries"] = list(dict.fromkeys([
+        *progress.get("completed_empty_name_queries", []), *completed_names]))
+''').body
+    hits=0
+    for parent in ast.walk(runtime):
+        if isinstance(getattr(parent,'body',None),list):
+            for n in list(parent.body):
+                if any(ast.dump(n)==ast.dump(e) for e in expected):parent.body.remove(n);hits+=1
+    assert hits==2 and ast.dump(runtime)==ast.dump(originals[runtime.name])
+    changed={'search_mi_name_fallback','search_mi_http_completion_probe','run_state_lookup'}
+    tree.body=[originals.get(n.name,n) if isinstance(n,ast.FunctionDef) and n.name in changed else n
+               for n in tree.body if getattr(n,'name','') not in {'mi_name_fallback_queries','mi_http_names_enabled','mi_name_http_empty_queries'}]

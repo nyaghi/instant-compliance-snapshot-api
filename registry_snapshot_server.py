@@ -9965,26 +9965,7 @@ def mi_name_fallback_candidate_is_safe(candidate_name: str, original_name: str, 
     return True
 
 
-def search_mi_name_fallback(page, org):
-    module = state_extension_module("MI")
-    patch_mi_module_for_fast_lookups(module)
-    result = checker.StateResult(org.organization_name, org.ein, "MI", "Unable to Verify", module.MI_SEARCH_URL)
-    safe_targets = organization_match_target_variants(org.organization_name, org.ein)
-    started = time.perf_counter()
-    deadline = started + MI_LOOKUP_MAX_SECONDS
-    lookup_deadline = getattr(page, "_cc_mi_lookup_deadline", None)
-    if isinstance(lookup_deadline, (int, float)):
-        deadline = min(deadline, lookup_deadline)
-    result.success = False
-    result.reason_code = "MI_NAME_SEARCH_INCOMPLETE"
-    result.queries_attempted = []
-    result.source_attempts = []
-    def incomplete(message):
-        result.status = "Unable to Verify"
-        result.raw_status_text = "Michigan organization-name search did not complete"
-        result.source_note = message + " No negative registration conclusion was drawn."
-        result.success = False
-        return result
+def mi_name_fallback_queries(org):
     def portal_query(value):
         # Michigan's public form rejects typographic dashes before submitting.
         # Adapt query punctuation only; keep original names/aliases for identity.
@@ -10012,7 +9993,7 @@ def search_mi_name_fallback(page, org):
         if variant not in variants:
             variants.append(variant)
     if not variants:
-        return incomplete("No usable organization-name query was available after the EIN search.")
+        return []
     def mi_variant_priority(value: str) -> tuple[int, int, str]:
         cleaned = re.sub(r"\s+", " ", value or "").strip()
         has_legal_suffix = bool(re.search(r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\b", cleaned, re.I))
@@ -10027,11 +10008,121 @@ def search_mi_name_fallback(page, org):
     variants = sorted(variants, key=lambda value: (
         value.strip().casefold() != portal_query(org.organization_name).strip().casefold(), mi_variant_priority(value)))
 
+    return variants[:4]
+
+
+def mi_http_names_enabled(org) -> bool:
+    return (APP_VERSION.endswith("-performance-lab")
+            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and os.environ.get("CE_LAB_MI_NAME_HTTP") == "1"
+            and not getattr(org, "evidence_mode", False)
+            and not CAPTURE_EVIDENCE_SCREENSHOTS and not CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT)
+
+
+def mi_name_http_empty_queries(session, org, headers, lookup_deadline):
+    """Complete the same name queries in this already accepted public session.
+
+    Only a full, exact-query-echoed zero result is reused. Any positive,
+    ambiguous, incomplete, blocked or failed response remains for the existing
+    browser matching path. No status is classified here and no session escapes
+    this lookup. The outer EIN probe owns and closes the session.
+    """
+    url = "https://www.ag.state.mi.us/CharitableTrust/frmDefault.aspx"
+    results_url = "https://www.ag.state.mi.us/CharitableTrust/frmSearchResults.aspx"
+    deadline = time.monotonic() + min(16.0, max(0.0, lookup_deadline - time.perf_counter()))
+    completed = []
+    def read(method, data=None):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Michigan name transport allowance exhausted")
+        response = session.request(method, url, data=data,
+            headers={**headers, "Referer":url, "Origin":"https://www.ag.state.mi.us"},
+            timeout=min(4.0, remaining), verify=True, stream=True)
+        try:
+            expected = url if method == "GET" else results_url
+            if response.status_code != 200 or response.url != expected:
+                raise ValueError("Michigan name response changed or incomplete")
+            if any(not str(r.url).startswith("https://www.ag.state.mi.us/CharitableTrust/") for r in response.history):
+                raise ValueError("Michigan name response left the official portal")
+            chunks=[];size=0
+            for chunk in response.iter_content():
+                size+=len(chunk)
+                if size>1_000_000 or time.monotonic()>=deadline:
+                    raise TimeoutError("Michigan name response allowance exceeded")
+                chunks.append(chunk)
+            source=b"".join(chunks).decode("utf-8")
+            if not re.search(r"</html>\s*$", source, re.I):
+                raise ValueError("Michigan name response is partial")
+            return source
+        finally:
+            response.close()
+    try:
+        for query in mi_name_fallback_queries(org):
+            if any(set(old.casefold().split()).issubset(set(query.casefold().split())) for old in completed):
+                continue
+            form=read("GET")
+            if not all(identifier in form for identifier in
+                ("ctl00_MainContent_txtName", "ctl00_MainContent_txtEIN", "ctl00_MainContent_btnTextSearch")):
+                break
+            fields=sc_extract_hidden_fields(form)
+            if not fields.get("__VIEWSTATE"):
+                break
+            fields.update({"__LASTFOCUS":"", "__EVENTTARGET":"", "__EVENTARGUMENT":"",
+                "ctl00$MainContent$rbSearchType":"0", "ctl00$MainContent$ddlName1":"Includes",
+                "ctl00$MainContent$ddlName2":"All words", "ctl00$MainContent$txtName":query,
+                "ctl00$MainContent$txtPurpose":"", "ctl00$MainContent$ddlPurpose2":"All words",
+                "ctl00$MainContent$txtEIN":"", "ctl00$MainContent$txtCity":"",
+                "ctl00$MainContent$txtCounty":"", "ctl00$MainContent$txtState":"",
+                "ctl00$MainContent$btnTextSearch":"Search", "ctl00$MainContent$txtFileNo":""})
+            body=sc_html_to_text(read("POST", fields))
+            compact=re.sub(r"\s+", " ", body).strip()
+            echoes=re.findall(r"Name Includes:\s*(.*?)\s*\(All words\);", compact, re.I)
+            normalize=lambda value:re.sub(r"\s+", " ", value).strip().casefold()
+            counts=re.findall(r"\b(\d+)\s+record\(s\)\s+found\b",compact,re.I)
+            if (echoes != [query] and [normalize(v) for v in echoes] != [normalize(query)]):
+                break
+            if (counts != ["0"] or "No records found for your search criteria" not in compact
+                    or "Results for the following input:" not in compact
+                    or "Organization Type: Charity or Public Safety Organization" not in compact
+                    or re.search(r"(?:Federal\s+EIN|FEIN|EIN)\s*:|verify you are human|captcha|access denied|maintenance|too many requests",compact,re.I)):
+                break
+            completed.append(query)
+    except Exception:
+        pass  # Uncompleted queries remain on the original browser path.
+    return completed
+
+
+def search_mi_name_fallback(page, org):
+    module = state_extension_module("MI")
+    patch_mi_module_for_fast_lookups(module)
+    result = checker.StateResult(org.organization_name, org.ein, "MI", "Unable to Verify", module.MI_SEARCH_URL)
+    safe_targets = organization_match_target_variants(org.organization_name, org.ein)
+    started = time.perf_counter()
+    deadline = started + MI_LOOKUP_MAX_SECONDS
+    lookup_deadline = getattr(page, "_cc_mi_lookup_deadline", None)
+    if isinstance(lookup_deadline, (int, float)):
+        deadline = min(deadline, lookup_deadline)
+    result.success = False
+    result.reason_code = "MI_NAME_SEARCH_INCOMPLETE"
+    result.queries_attempted = []
+    result.source_attempts = []
+    def incomplete(message):
+        result.status = "Unable to Verify"
+        result.raw_status_text = "Michigan organization-name search did not complete"
+        result.source_note = message + " No negative registration conclusion was drawn."
+        result.success = False
+        return result
+    variants = mi_name_fallback_queries(org)
+    if not variants:
+        return incomplete("No usable organization-name query was available after the EIN search.")
+
     progress = getattr(page, "_cc_mi_search_progress", None)
     identity = (org.organization_name, canonical_ein_digits(org.ein))
     if not isinstance(progress, dict) or progress.get("identity") != identity:
         progress = {}
     completed_empty_queries = list(progress.get("completed_empty_name_queries", []))
+    result.source_attempts.extend(f"Completed Michigan name query via the same-session public form: {query}"
+                                 for query in progress.get("http_completed_empty_name_queries", []))
     opened_session = False
     for variant in variants[:4]:
         query_tokens = set(variant.casefold().split())
@@ -10272,6 +10363,9 @@ def search_mi_http_completion_probe(org, lookup_deadline=None):
             )
             submitted.raise_for_status()
             submitted_text = sc_html_to_text(submitted.text or "")
+            if (mi_http_names_enabled(org) and lookup_deadline is not None
+                    and re.search(r"\b0\s+record\(s\)\s+found\b|\bno\s+records?\s+found\b|\bno\s+results?\s+found\b", submitted_text, re.I)):
+                result._cc_mi_completed_empty_names = mi_name_http_empty_queries(session, org, headers, lookup_deadline)
             break
         except Exception as exc:
             last_exception = exc
@@ -27695,6 +27789,12 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     )
                 ):
                     page._cc_mi_lookup_deadline = mi_deadline
+                    completed_names = getattr(mi_probe_result, "_cc_mi_completed_empty_names", [])
+                    if completed_names:
+                        progress["identity"] = (org.organization_name, canonical_ein_digits(org.ein))
+                        progress["http_completed_empty_name_queries"] = list(completed_names)
+                        progress["completed_empty_name_queries"] = list(dict.fromkeys([
+                            *progress.get("completed_empty_name_queries", []), *completed_names]))
                     page._cc_mi_search_progress = progress
                     result = search_mi_name_fallback(page, org)
                 if (
