@@ -116,8 +116,8 @@
     if (refreshButton) refreshButton.disabled = true;
     const credentials = { email, admin_passcode, device_id };
     let checkToken = "";
-    const lookupId = crypto.randomUUID().replaceAll("-", "");
-    let connected = false;
+    let lookupId = crypto.randomUUID().replaceAll("-", "");
+    let connected = false, recoveryUsed = false;
     async function api(fields, cleanup = false) {
       const timeout = AbortSignal.timeout(45000);
       const response = await fetch(API + "/api/ny-connector", {
@@ -143,7 +143,7 @@
       }
       // Start the signed continuation only after queue admission. Waiting cannot
       // consume the master's five-minute evidence lifetime.
-      let state = await api({ action: "start", state: registryState, organization_name, ein, purpose, ...(Array.isArray(alternate_names) ? {alternate_names} : {}), connector_version: supported(connection) ? connection.version : "0.2.1" });
+      let state = await api({ action: "start", state: registryState, organization_name, ein, purpose, recovery_protocol: "il-fresh-page-v1", ...(Array.isArray(alternate_names) ? {alternate_names} : {}), connector_version: supported(connection) ? connection.version : "0.2.1" });
       checkToken = state.check_token || "";
       if (!supported(connection) && state.phase === "search") {
         state = await api({ action: "fail", check_token: checkToken, reason: connection.ok ? "NY_CONNECTOR_UPDATE_REQUIRED" : "NY_CONNECTOR_UNAVAILABLE" });
@@ -154,7 +154,7 @@
       }
       if (acquired.ok && supported(connection)) onProgress?.(`${label}: checking the registry.`);
       let count = 0;
-      const lookupDeadline = Date.now() + 300000;
+      let lookupDeadline = Date.now() + Math.min(300000, Number.isFinite(state.lookup_remaining_ms) ? Math.max(0,state.lookup_remaining_ms) : 300000);
       // The master owns IL/GA query capacity. A second fixed UI cap previously
       // truncated valid reviewed-name plans even after the backend cap was fixed.
       while (state.phase === "search" && (registryState !== "NY" || count++ < 10)) {
@@ -163,11 +163,52 @@
           break;
         }
         checkToken = state.check_token;
+        if (state.recovery) {
+          if (Number.isFinite(state.lookup_remaining_ms)) lookupDeadline = Math.min(lookupDeadline, Date.now()+Math.max(0,state.lookup_remaining_ms));
+          // The master alone authorizes one fresh Illinois transport. Keep the
+          // same signed check, completed evidence, and original wall-clock cap.
+          if (registryState !== "IL" || recoveryUsed || state.recovery.action !== "fresh_browser" || state.recovery.attempt !== 1) {
+            state = await api({action:"fail",check_token:checkToken,reason:"NY_CONNECTOR_INCOMPLETE"});
+            break;
+          }
+          recoveryUsed = true;
+          onProgress?.("Illinois: verification stalled. Reopening the state page once and resuming this check.");
+          const finished = await bridge("finish", null, lookupId);
+          if (!finished.ok) {
+            state = await api({action:"fail",check_token:checkToken,reason:finished.reason});
+            break;
+          }
+          connected = false;
+          signal?.throwIfAborted();
+          lookupId = crypto.randomUUID().replaceAll("-", "");
+          connected = true;
+          // Queue admission for recovery also consumes the original budget.
+          const recoverySignal = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(Math.max(1, lookupDeadline-Date.now()))]);
+          try {
+            acquired = await bridge("acquire", null, lookupId, () => onProgress?.("Illinois: waiting to resume after verification recovery."), "IL", recoverySignal);
+          } catch (error) {
+            signal?.throwIfAborted();
+            state = await api({action:"fail",check_token:checkToken,reason:"NY_CONNECTOR_TIMEOUT"});
+            break;
+          }
+          if (!acquired.ok || Date.now() >= lookupDeadline) {
+            state = await api({action:"fail",check_token:checkToken,reason:acquired.ok ? "NY_CONNECTOR_TIMEOUT" : acquired.reason});
+            break;
+          }
+        }
         connected = true;
-        const completed = await bridge("search", state.query, lookupId, progress => onProgress?.(progress.reconnecting ? `${label}: reconnecting and resuming this check. Other states can continue.` : progress.recovering ? "New York: refreshing the connection, then retrying this check. Other states can continue." : `${label}: the registry requested a pause. Retrying automatically.`), null, signal);
+        let completed;
+        try {
+          const searchSignal = recoveryUsed ? AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(Math.max(1, lookupDeadline-Date.now()))]) : signal;
+          completed = await bridge("search", state.query, lookupId, progress => onProgress?.(progress.reconnecting ? `${label}: reconnecting and resuming this check. Other states can continue.` : progress.recovering ? "New York: refreshing the connection, then retrying this check. Other states can continue." : `${label}: the registry requested a pause. Retrying automatically.`), null, searchSignal);
+        } catch (error) {
+          signal?.throwIfAborted();
+          if (!recoveryUsed) throw error;
+          completed = {ok:false,reason:"NY_CONNECTOR_TIMEOUT"};
+        }
         state = completed.ok
           ? await api({ action: "advance", check_token: checkToken, query_id: state.query_id, evidence: completed.evidence })
-          : await api({ action: "fail", check_token: checkToken, reason: completed.reason });
+          : await api({ action: "fail", check_token: checkToken, query_id: state.query_id, reason: completed.reason });
       }
       if (state.phase !== "complete" || !state.result || state.result.state !== registryState) throw new Error(`${label} did not return a complete result.`);
       return state.result;

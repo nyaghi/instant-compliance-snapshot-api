@@ -88,4 +88,69 @@ class DeadlineCleanup(unittest.TestCase):
             self.assertEqual(self.request(action='fail', check_token=check['check_token'])[0], 410)
 
 
+class VerificationRecovery(DeadlineCleanup):
+    def start_recovery(self, state='IL', **overrides):
+        args=dict(action='start',state=state,organization_name='Example Charity',ein='123456789',
+                  connector_version='0.5.10',recovery_protocol='il-fresh-page-v1')
+        with patch.object(cc.time,'time',return_value=1000):
+            code, check=self.request(**{**args,**overrides})
+        self.assertEqual(code,200)
+        return check
+
+    def fail(self, check, at=1060, **overrides):
+        args=dict(action='fail',check_token=check['check_token'],query_id=check['query_id'],
+                  reason='NY_CONNECTOR_IL_VERIFICATION_PENDING')
+        with patch.object(cc.time,'time',return_value=at):
+            code, result=self.request(**{**args,**overrides})
+        self.assertEqual(code,200)
+        return result
+
+    def test_one_recovery_preserves_query_and_signed_deadline(self):
+        check=self.start_recovery(); retry=self.fail(check)
+        self.assertEqual(retry['phase'],'search');self.assertEqual(retry['query'],check['query'])
+        self.assertNotEqual(retry['query_id'],check['query_id'])
+        with patch.object(cc.time,'time',return_value=1060):
+            record=cc.ny_connector_unpack(retry['check_token'],self.auth['email'],self.auth['device_id'])
+        self.assertEqual(record['issued'],1000);self.assertEqual(record['expires'],1360)
+        self.assertEqual(record['completed'],[])
+        terminal=self.fail(retry,at=1120)
+        self.assertEqual(terminal['phase'],'complete');self.assertEqual(terminal['result']['status'],'Unable to Confirm')
+        self.assertEqual(terminal['result']['connector_recovery']['attempt'],1)
+        self.assertIn('fresh-page recovery',terminal['result']['comments'])
+
+    def test_no_recovery_for_other_states_errors_old_clients_or_low_budget(self):
+        for changes in [dict(state='GA'),dict(connector_version='0.5.9'),dict(recovery_protocol=''),dict(purpose='identity')]:
+            self.assertEqual(self.fail(self.start_recovery(**changes))['phase'],'complete')
+        for reason in ['NY_CONNECTOR_IL_DETAIL_BLANK','NY_CONNECTOR_IL_RESPONSE_TIMEOUT','NY_CONNECTOR_INCOMPLETE']:
+            self.assertEqual(self.fail(self.start_recovery(),reason=reason)['phase'],'complete')
+        self.assertEqual(self.fail(self.start_recovery(),at=1180)['phase'],'complete')
+
+    def test_stale_failure_cannot_authorize_recovery(self):
+        self.assertEqual(self.fail(self.start_recovery(),query_id='old-query')['phase'],'complete')
+
+    def test_completed_evidence_retained_and_old_query_response_rejected(self):
+        check=self.start_recovery()
+        with patch.object(cc.time,'time',return_value=1010):
+            _, name=self.request(action='advance',check_token=check['check_token'],query_id=check['query_id'],
+                evidence={'query':check['query'],'complete':True,'total':0,'rows':[]})
+        retry=self.fail(name)
+        self.assertEqual(retry['query'],name['query'])
+        with patch.object(cc.time,'time',return_value=1070):
+            record=cc.ny_connector_unpack(retry['check_token'],self.auth['email'],self.auth['device_id'])
+            self.assertEqual(len(record['completed']),1)
+            evidence={'query':retry['query'],'complete':True,'total':0,'rows':[]}
+            self.assertEqual(self.request(action='advance',check_token=retry['check_token'],query_id=name['query_id'],evidence=evidence)[0],409)
+            code, result=self.request(action='advance',check_token=retry['check_token'],query_id=retry['query_id'],evidence=evidence)
+        self.assertEqual(code,200);self.assertEqual(result['result']['status'],'Not Registered / Non-Compliant')
+        self.assertEqual(result['result']['connector_recovery']['reason'],'NY_CONNECTOR_IL_VERIFICATION_PENDING')
+
+    def test_recovery_does_not_accept_late_evidence(self):
+        retry=self.fail(self.start_recovery())
+        with patch.object(cc.time,'time',return_value=1301):
+            _, result=self.request(action='advance',check_token=retry['check_token'],query_id=retry['query_id'],
+                evidence={'query':retry['query'],'complete':True,'total':0,'rows':[]})
+        self.assertEqual(result['result']['status'],'Unable to Confirm')
+        self.assertIn('five-minute',result['result']['comments'])
+
+
 if __name__ == '__main__': unittest.main()

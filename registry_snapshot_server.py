@@ -134,7 +134,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.27.5-staging").strip() or "2026.09.27.5-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.27.6-staging").strip() or "2026.09.27.6-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -5636,7 +5636,7 @@ def il_ga_connector_failure(record, reason=""):
             "NY_CONNECTOR_IL_FORM_READY_TIMEOUT": "The Illinois search controls did not become ready within the lookup time limit.",
             "NY_CONNECTOR_IL_FORM_DISABLED": "The Illinois search page loaded, but its Search button remained disabled within the lookup time limit. The search was not submitted.",
             "NY_CONNECTOR_IL_FORM_MISSING": "The Illinois Search button was missing or not visible within the lookup time limit. The search was not submitted.",
-            "NY_CONNECTOR_IL_VERIFICATION_PENDING": "Illinois kept its Search button hidden while its verification control was present. The same page was retained for verification rather than repeatedly reloaded, but the state did not enable search within the lookup time limit. The search was not submitted.",
+            "NY_CONNECTOR_IL_VERIFICATION_PENDING": "Illinois kept its Search button hidden while its verification control was present. The state did not enable search within the lookup time limit. The pending search was not submitted.",
             "NY_CONNECTOR_IL_RESPONSE_TIMEOUT": "Illinois did not finish updating its search results within the lookup time limit.",
             "NY_CONNECTOR_IL_RESULTS_INCOMPLETE": "Illinois returned an incomplete search result or did not return the selected registration number during detail lookup.",
             "NY_CONNECTOR_IL_TOTAL_CHANGED": "Illinois did not provide a readable, stable search-result count.",
@@ -5649,9 +5649,14 @@ def il_ga_connector_failure(record, reason=""):
         }
         if reason in detail_reasons:
             result.source_note = detail_reasons[reason] + " CharityClarity reports Unable to Confirm. This incomplete lookup does not establish non-registration or delinquency."
+        if record.get("il_verification_recovery"):
+            result.source_note += " One automatic fresh-page recovery was attempted after the initial verification stall."
     if record.get("purpose") == "identity":
         return {"state": state, "source": state, "identity": {"source": state, "names": [], "complete": False, "limitation": result.source_note}}
-    return response_data_for_lookup(result, "", org, org.organization_name, org.ein, state, time.perf_counter())
+    data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, state, time.perf_counter())
+    if record.get("il_verification_recovery"):
+        data["connector_recovery"] = record["il_verification_recovery"]
+    return data
 
 
 def il_ga_connector_advance(record):
@@ -5678,6 +5683,28 @@ def il_ga_connector_advance(record):
     if record["purpose"] == "identity":
         return {"phase": "complete", "result": {"state": record["state"], "source": record["state"], "identity": result}}
     return {"phase": "complete", "result": response_data_for_lookup(result, "", org, org.organization_name, org.ein, record["state"], time.perf_counter())}
+
+
+def il_verification_recovery(record, payload, now):
+    """One master-authorized fresh transport; retain all evidence and deadlines."""
+    if (record.get("state") != "IL" or record.get("purpose") != "registration"
+            or record.get("recovery_protocol") != "il-fresh-page-v1"
+            or record.get("connector_version") != "0.5.10"
+            or payload.get("reason") != "NY_CONNECTOR_IL_VERIFICATION_PENDING"
+            or record.get("il_verification_recovery")
+            or now + 120 >= record["issued"] + NY_CONNECTOR_TTL_SECONDS):
+        return None
+    pending = record.get("pending")
+    if not pending or payload.get("query_id") != pending["query_id"]:
+        return None
+    record["il_verification_recovery"] = {"attempt": 1, "reason": payload["reason"],
+                                          "elapsed_seconds": round(now - record["issued"], 3)}
+    # Rotate the query id so a late response from the failed transport cannot
+    # advance the new continuation. No query is counted as completed here.
+    pending["query_id"] = secrets.token_urlsafe(18)
+    return {"phase": "search", **pending,
+            "recovery": {"action": "fresh_browser", "attempt": 1,
+                         "reason": payload["reason"]}}
 
 
 DC_LICENSE_API = "https://maps2.dcgis.dc.gov/dcgis/rest/services/FEEDS/DCRA/FeatureServer/0/query"
@@ -20363,6 +20390,8 @@ def ny_connector_request(payload, origin):
                   "connector_version": connector_version,
                   "issued": now, "expires": now + NY_CONNECTOR_TTL_SECONDS + (IL_GA_CONNECTOR_CLEANUP_SECONDS if state in IL_GA_SOURCES else 0), "version": APP_VERSION,
                   "completed": [], "pending": None}
+        if payload.get("recovery_protocol") == "il-fresh-page-v1":
+            record["recovery_protocol"] = "il-fresh-page-v1"
         if "alternate_names" in payload:
             try:
                 record["alternate_names"] = normalize_reviewed_names(payload["alternate_names"])
@@ -20399,7 +20428,8 @@ def ny_connector_request(payload, origin):
              if "alternate_names" in record else {})
     context_token = REVIEWED_NAME_CONTEXT.set(names)
     try:
-        response = ({"phase": "complete", "result": ny_connector_failure(record, payload.get("reason"))}
+        response = ((il_verification_recovery(record, payload, now)
+                     or {"phase": "complete", "result": ny_connector_failure(record, payload.get("reason"))})
                     if action == "fail" else ny_connector_advance(record))
     finally:
         REVIEWED_NAME_CONTEXT.reset(context_token)
@@ -20410,8 +20440,12 @@ def ny_connector_request(payload, origin):
     if response["phase"] == "search":
         try:
             response.update(check_token=ny_connector_pack(record), expires_in=max(0, int(record["expires"] - time.time())))
+            if record.get("state") == "IL" and record.get("recovery_protocol") == "il-fresh-page-v1":
+                response["lookup_remaining_ms"] = max(0, int((record["issued"] + NY_CONNECTOR_TTL_SECONDS - time.time()) * 1000))
         except ValueError:
             return 200, {"phase": "complete", "result": ny_connector_failure(record, "NY_CONNECTOR_INCOMPLETE")}
+    elif response["phase"] == "complete" and record.get("il_verification_recovery"):
+        response["result"]["connector_recovery"] = record["il_verification_recovery"]
     return 200, response
 
 

@@ -72,3 +72,74 @@ test('Illinois requires the event-readiness fix while old NY and GA remain usabl
   assert.equal(il.result.reason,'NY_CONNECTOR_UPDATE_REQUIRED');assert.ok(!il.actions.includes('search'));
   for(const state of ['NY','GA'])assert.equal((await exercise({state,oldIllinois:true,commands:1})).result.status,'Delinquent');
 });
+
+async function recoveryExercise({persistent=false,finishFails=false,acquireFails=false,abortRecovery=false,overBudget=false,repeatDirective=false}={}) {
+  const actions=[],searches=[],controller=new AbortController();let listener,clock=0,failures=0,admissions=0;
+  const query={state:'IL',ein:'123456789'};
+  const window={addEventListener:(type,fn)=>listener=fn,postMessage(m){
+    actions.push({action:m.action,id:m.lookup_id,query:m.query});
+    let r={ok:true};
+    if(m.action==='ping')r={ok:true,version:'0.5.10',capabilities:[...capabilities,'il-dom-events-v1']};
+    if(m.action==='acquire' && ++admissions===2){
+      if(abortRecovery){controller.abort(new Error('Canceled by test'));return;}
+      if(acquireFails)r={ok:false,reason:'NY_CONNECTOR_QUEUE_TIMEOUT'};
+      if(overBudget)clock=300001;
+    }
+    if(m.action==='finish' && finishFails)r={ok:false,reason:'NY_CONNECTOR_TIMEOUT'};
+    if(m.action==='search'){
+      searches.push(m);clock+=60000;
+      r=searches.length===1||persistent||repeatDirective?{ok:false,reason:'NY_CONNECTOR_IL_VERIFICATION_PENDING'}:{ok:true,evidence:{query,complete:true,total:0,rows:[]}};
+    }
+    queueMicrotask(()=>listener({source:window,origin:'https://staging.compliance-express.com',data:{...m,...r,direction:'response'}}));
+  }};
+  const context=vm.createContext({window,location:{origin:'https://staging.compliance-express.com'},
+    document:{querySelector:()=>null,getElementById:()=>null},crypto:webcrypto,setTimeout,clearTimeout,AbortSignal,
+    Date:{now:()=>clock},fetch:async(url,options)=>{
+      const p=JSON.parse(options.body);actions.push({action:'api:'+p.action,payload:p});let response;
+      if(p.action==='start')response={phase:'search',check_token:'initial',query_id:'original-query',query};
+      else if(p.action==='cancel')response={};
+      else if(p.action==='advance')response={phase:'complete',result:{state:'IL',status:'Not Registered / Non-Compliant'}};
+      else if(p.action==='fail' && p.reason==='NY_CONNECTOR_IL_VERIFICATION_PENDING' && (++failures===1||repeatDirective))
+        response={phase:'search',check_token:'continued',query_id:'retry-query',query,recovery:{action:'fresh_browser',attempt:1}};
+      else response={phase:'complete',result:{state:'IL',status:'Unable to Confirm',reason:p.reason}};
+      return {ok:true,json:async()=>response};
+    }});
+  vm.runInContext(source,context);let result,error;
+  try{result=await window.CCNYConnector.lookup({state:'IL',organization_name:'Example',ein:'123456789',signal:controller.signal});}catch(e){error=e;}
+  return {actions,searches,result,error};
+}
+
+test('master fresh-page recovery changes only the transport and retries the exact pending query',async()=>{
+  const r=await recoveryExercise();assert.ifError(r.error);assert.equal(r.result.status,'Not Registered / Non-Compliant');
+  assert.equal(r.searches.length,2);assert.notEqual(r.searches[0].lookup_id,r.searches[1].lookup_id);
+  assert.deepEqual(r.searches[0].query,r.searches[1].query);
+  assert.equal(r.actions.filter(a=>a.action==='api:start').length,1);
+  assert.equal(r.actions.filter(a=>a.action==='api:advance').length,1);
+  assert.equal(r.actions.find(a=>a.action==='api:fail').payload.query_id,'original-query');
+  assert.equal(r.actions.find(a=>a.action==='api:advance').payload.query_id,'retry-query');
+  assert.equal(r.actions.filter(a=>a.action==='finish').length,2);
+});
+
+test('a repeated verification failure remains inconclusive after one recovery',async()=>{
+  const r=await recoveryExercise({persistent:true});assert.ifError(r.error);
+  assert.equal(r.result.status,'Unable to Confirm');assert.equal(r.searches.length,2);
+  assert.equal(r.actions.filter(a=>a.action==='api:advance').length,0);
+});
+
+test('cleanup and re-admission failures cannot submit another search',async()=>{
+  for(const option of ['finishFails','acquireFails','overBudget']){
+    const r=await recoveryExercise({[option]:true});assert.ifError(r.error);
+    assert.equal(r.result.status,'Unable to Confirm');assert.equal(r.searches.length,1);
+  }
+});
+
+test('canceling during recovery cleans up without another search',async()=>{
+  const r=await recoveryExercise({abortRecovery:true});assert.match(r.error.message,/Canceled by test/);
+  assert.equal(r.searches.length,1);assert.equal(r.actions.at(-1).action,'api:cancel');
+  assert.equal(r.actions.filter(a=>a.action==='finish').length,2);
+});
+
+test('a repeated master recovery directive is rejected instead of looping',async()=>{
+  const r=await recoveryExercise({repeatDirective:true});assert.ifError(r.error);
+  assert.equal(r.result.reason,'NY_CONNECTOR_INCOMPLETE');assert.equal(r.searches.length,2);
+});
