@@ -8,6 +8,9 @@ import subprocess
 def strip_or_completion(tree):
     helper=next((n for n in tree.body if getattr(n,'name','')=='search_or_completed'),None)
     if helper is None:return
+    imports=next(n for n in tree.body if isinstance(n,ast.ImportFrom) and n.module=='types')
+    assert [n.name for n in imports.names]==['FunctionType','ModuleType','SimpleNamespace']
+    imports.names=[n for n in imports.names if n.name!='FunctionType']
     old=ast.parse(subprocess.check_output(['git','show','e05c18d:registry_snapshot_server.py'],
         cwd=Path(__file__).resolve().parents[2]).decode())
     original=next(n for n in old.body if getattr(n,'name','')=='search_bundled_extension_state')
@@ -30,4 +33,3 @@ def strip_or_completion(tree):
     assert ast.dump(actual)==ast.dump(expected), 'Oregon matching/filing rules changed beyond completion guard'
     tree.body[tree.body.index(actual)]=original
     tree.body.remove(helper)
-

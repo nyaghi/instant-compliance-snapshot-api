@@ -4,6 +4,7 @@ from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
+import time
 from unittest.mock import MagicMock,patch
 import registry_snapshot_server as m
 
@@ -71,6 +72,36 @@ class OregonCompletion(unittest.TestCase):
         from testing.capacity_lab.or_completion_scope import strip_or_completion
         tree=ast.parse(Path(m.__file__).read_text(encoding='utf-8'))
         strip_or_completion(tree)
+
+    def test_only_first_four_second_pause_after_confirmed_query_is_removed(self):
+        result=self.result
+        def search(page,org):
+            time.sleep(2)
+            page.locator('#search').click(timeout=10000)
+            time.sleep(4)
+            time.sleep(4)  # A later wait must not be removed.
+            return result
+        original_globals=search.__globals__
+        self.module.search_or=search
+        with patch.object(time,'sleep') as sleep:
+            self.assertIs(m.search_or_completed(self.page,self.org,self.module),result)
+            self.assertEqual([c.args for c in sleep.call_args_list],[(2,),(4,)])
+        self.assertIs(search.__globals__,original_globals)
+        self.assertIs(search.__globals__['time'],time)
+
+    def test_failed_query_does_not_remove_the_pause(self):
+        result=self.result
+        def search(page,org):
+            try:page.locator('#search').click(timeout=10000)
+            except Exception:pass
+            time.sleep(4)
+            return result
+        self.page.wait_for_function.side_effect=TimeoutError('incomplete')
+        self.module.search_or=search
+        with patch.object(time,'sleep') as sleep:
+            value=m.search_or_completed(self.page,self.org,self.module)
+            sleep.assert_called_once_with(4)
+        self.assertFalse(value.success)
 
 
 if __name__=='__main__':unittest.main()

@@ -29,7 +29,7 @@ from datetime import date, datetime, timedelta
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import FunctionType, ModuleType, SimpleNamespace
 from urllib.parse import parse_qs, quote, unquote, urlencode, urljoin, urlparse
 import urllib.error
 import urllib.request
@@ -9553,7 +9553,25 @@ def search_or_completed(page, org, module):
             target = page.locator(selector, *args, **kwargs)
             return SearchButton(target) if selector == "#search" else target
 
-    result = module.search_or(SearchPage(), org)
+    # Clone only this function's globals; never mutate the shared module or
+    # time.sleep. Its four-second post-search pause is redundant after the
+    # completed response and every displayed record have been verified above.
+    # All other waits, including detail readiness, remain unchanged.
+    skipped = []
+    class QueryClock:
+        def __getattr__(self, name): return getattr(time, name)
+        def sleep(self, seconds):
+            if seconds == 4 and completed and not skipped:
+                skipped.append(True)
+                return
+            time.sleep(seconds)
+    search = module.search_or
+    if isinstance(search, FunctionType):
+        original = search
+        search = FunctionType(original.__code__, {**original.__globals__, "time": QueryClock()},
+                              original.__name__, original.__defaults__, original.__closure__)
+        search.__kwdefaults__ = original.__kwdefaults__
+    result = search(SearchPage(), org)
     if failure or not completed:
         result.status = "Unable to Verify"
         result.raw_status_text = "Oregon submitted search did not finish with confirmed results"
@@ -12003,7 +12021,10 @@ class FloridaVerifiedTransport:
             outgoing = urllib.request.Request(request.url, data=request.post_data_buffer,
                                               headers=headers, method=request.method)
             try:
-                response = self.opener.open(outgoing, timeout=min(8.0, remaining))
+                # Loaded public pages sometimes need more than eight seconds
+                # for a POST. Avoid restarting that same request in the lab;
+                # the lookup and workflow deadlines still bound the operation.
+                response = self.opener.open(outgoing, timeout=min(12.0 if fl_verified_transport_first() else 8.0, remaining))
             except urllib.error.HTTPError as exc:
                 response = exc  # Preserve HTTP errors and redirects for the existing lookup.
             with response:

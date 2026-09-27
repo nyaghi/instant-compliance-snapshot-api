@@ -493,8 +493,24 @@ if completed_names:
                for n in tree.body if getattr(n,'name','') not in {'mi_name_fallback_queries','mi_http_names_enabled','mi_name_http_empty_queries'}]
 
 
+def strip_fl_request_allowance(tree):
+    """Restore only the lab-gated HTTP allowance, not TLS/body/deadline rules."""
+    cls = next((n for n in tree.body if getattr(n, 'name', '') == 'FloridaVerifiedTransport'), None)
+    if cls is None:
+        return
+    route = next(n for n in cls.body if getattr(n, 'name', '') == 'route')
+    calls = [n for n in ast.walk(route) if isinstance(n, ast.Call) and ast.unparse(n.func) == 'self.opener.open']
+    assert len(calls) == 1
+    timeout = next(k for k in calls[0].keywords if k.arg == 'timeout')
+    if ast.unparse(timeout.value) == 'min(8.0, remaining)':
+        return
+    assert ast.unparse(timeout.value) == 'min(12.0 if fl_verified_transport_first() else 8.0, remaining)'
+    timeout.value = ast.parse('min(8.0, remaining)', mode='eval').body
+
+
 def strip_transport_budget_and_redundancy(tree):
     """Allow only the measured lab transport adjustments, then compare all code."""
+    strip_fl_request_allowance(tree)
     from testing.capacity_lab.or_completion_scope import strip_or_completion
     strip_or_completion(tree)
     helper = next((n for n in tree.body if getattr(n, 'name', '') == 'mi_completed_query_covers'), None)
