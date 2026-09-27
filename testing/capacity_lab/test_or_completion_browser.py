@@ -20,7 +20,7 @@ DETAIL='''<html><body><div id="report">Report</div><table id="info"><tr><td>Stat
 
 
 class OregonBrowser(unittest.TestCase):
-    def run_case(self, guarded, delay, result=RESULT):
+    def run_case(self, guarded, delay, result=RESULT, transform=''):
         module=m.state_extension_module('OR');org=module.Organization('Example Relief','123456789')
         with sync_playwright() as p:
             browser=p.chromium.launch(headless=True)
@@ -28,8 +28,10 @@ class OregonBrowser(unittest.TestCase):
                 page=browser.new_page()
                 def route(r):
                     url=r.request.url
-                    body=(result if url.endswith('/Charity/Results') else DETAIL if '/Details/' in url
-                          else FORM.replace('DELAY',str(delay)))
+                    form=FORM.replace('DELAY',str(delay)).replace(
+                        "()=>document.querySelector('#results').innerHTML=body",
+                        "()=>{document.querySelector('#results').innerHTML=body;"+transform+"}")
+                    body=(result if url.endswith('/Charity/Results') else DETAIL if '/Details/' in url else form)
                     r.fulfill(status=200,content_type='text/html',body=body)
                 page.route('**/*',route)
                 with patch.object(m,'APP_VERSION','fixture-performance-lab'),patch.dict(m.os.environ,
@@ -51,6 +53,33 @@ class OregonBrowser(unittest.TestCase):
 
     def test_dom_that_never_catches_up_is_incomplete_not_negative(self):
         result=self.run_case(True,15000)
+        self.assertFalse(result.success);self.assertEqual(result.reason_code,'OR_INCOMPLETE_QUERY_RESPONSE')
+
+    def test_state_datatable_empty_row_controls_and_removed_scripts_are_not_records(self):
+        source='''<div id="search-results">Search Results for "Example Relief"</div>
+<table id="grid"><thead><tr><th>Name</th></tr></thead><tbody></tbody></table>
+<script>/* State DataTables initialization */</script>'''
+        transform='''document.querySelector('#results script').remove();
+document.querySelector('#grid tbody').innerHTML='<tr><td class="dataTables_empty">No data available in table</td></tr>';
+document.querySelector('#grid').insertAdjacentHTML('beforebegin','<div>Show 25 entries Filter:</div>');'''
+        result=self.run_case(True,0,source,transform)
+        self.assertTrue(result.success,result.error)
+        self.assertEqual(result.status,m.state_extension_module('OR').STATUS_NOT_REGISTERED)
+
+    def test_state_sorting_preserves_all_record_text_and_links(self):
+        source=RESULT.replace('<tbody>','<tbody><tr><td><a href="/Charities/Charity/Details/other">Other Relief</a></td></tr>')
+        transform="const rows=document.querySelector('#grid tbody');rows.appendChild(rows.firstElementChild);"
+        result=self.run_case(True,0,source,transform)
+        self.assertTrue(result.success,result.error)
+        self.assertNotEqual(result.status,m.state_extension_module('OR').STATUS_NOT_REGISTERED)
+
+    def test_missing_record_or_changed_link_is_not_a_completed_grid(self):
+        result=self.run_case(True,0,RESULT,"document.querySelector('#grid a').setAttribute('href','/Charities/Charity/Details/wrong');")
+        self.assertFalse(result.success);self.assertEqual(result.reason_code,'OR_INCOMPLETE_QUERY_RESPONSE')
+
+    def test_stale_empty_grid_for_another_query_is_not_a_completed_search(self):
+        source='<div id="search-results">Search Results for "Example Relief"</div><table id="grid"><tbody></tbody></table>'
+        result=self.run_case(True,0,source,"document.querySelector('#search-results').textContent='Search Results for Other';")
         self.assertFalse(result.success);self.assertEqual(result.reason_code,'OR_INCOMPLETE_QUERY_RESPONSE')
 
 

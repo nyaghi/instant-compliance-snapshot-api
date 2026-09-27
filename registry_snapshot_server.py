@@ -9506,8 +9506,29 @@ def search_or_completed(page, org, module):
                 page.wait_for_function(r"""expected => {
                     const actual = document.querySelector('#results');
                     const parsed = document.createElement('div'); parsed.innerHTML = expected;
-                    const text = el => (el.textContent || '').replace(/\s+/g, ' ').trim();
-                    return actual && text(parsed).length > 0 && text(actual) === text(parsed);
+                    const text = el => (el?.textContent || '').replace(/\s+/g, ' ').trim();
+                    const snapshot = root => {
+                        const grid = root.querySelector('#grid');
+                        if (grid) {
+                            // The state's DataTables script adds controls, sorts
+                            // rows and inserts an empty-table placeholder. Those
+                            // decorations are not charity records. Compare every
+                            // source record and its links, plus the query heading.
+                            const rows = Array.from(grid.querySelectorAll('tbody tr'))
+                                .filter(row => !row.querySelector('td.dataTables_empty'))
+                                .map(row => JSON.stringify({
+                                    cells: Array.from(row.querySelectorAll('td')).map(text),
+                                    links: Array.from(row.querySelectorAll('a')).map(a => a.getAttribute('href'))
+                                })).sort();
+                            return JSON.stringify({heading: text(root.querySelector('#search-results')), rows});
+                        }
+                        const copy = root.cloneNode(true);
+                        copy.querySelectorAll('script,style').forEach(el => el.remove());
+                        const value = text(copy);
+                        return /\bno (?:matching )?records? (?:were )?found\b/i.test(value) ? value : null;
+                    };
+                    const source = snapshot(parsed);
+                    return actual && source !== null && snapshot(actual) === source;
                 }""", arg=body, timeout=max(1, int(remaining*1000)))
                 completed.append(True)
             except Exception:
