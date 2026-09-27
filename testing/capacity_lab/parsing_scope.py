@@ -119,6 +119,7 @@ def strip_pa_ein_wait_and_ny_browser_timeout(tree):
 
 
 def strip_pa_reset_and_ny_http_diagnostic(tree):
+    strip_fl_verified_first_trial(tree)
     expected = ast.parse('page.get_by_role("button", name=re.compile(r"^Clear$", re.I)).first.click(timeout=1500)').body[0]
     for fn in tree.body:
         if getattr(fn, 'name', '') == 'search_pa':
@@ -298,3 +299,15 @@ def strip_warm_ready_and_failure_trace_engine(tree):
             if len(result.value.args)==4:
                 assert ast.unparse(result.value.args[-1])=="Path(output).with_suffix('.trace.json')"
                 result.value.args.pop()
+
+
+def strip_fl_verified_first_trial(tree):
+    """The opt-in lab changes only which verified transport sends the same page."""
+    tree.body=[n for n in tree.body if getattr(n,'name','')!='fl_verified_transport_first']
+    fn=next((n for n in tree.body if getattr(n,'name','')=='search_fl_with_transport'),None)
+    if fn is None:return
+    loader=next(n for n in fn.body if getattr(n,'name','')=='load_fl_search_page')
+    expected=ast.parse("if fl_verified_transport_first():\n    transport.enable()\n").body[0]
+    for n in ast.walk(loader):
+        if isinstance(n,ast.Try) and n.body and ast.dump(n.body[0])==ast.dump(expected):
+            n.body.pop(0)

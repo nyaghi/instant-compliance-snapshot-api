@@ -966,3 +966,6 @@ recovered. Neither retry overwrites the first result or proves reliability.
 
 ### Overnight readiness follow-up (perf48)
 Workers now preload the isolated fork template before advertising capacity. Readiness carries only the release version; it performs no organization lookup or result caching. A failed warmup cannot register worker capacity. Passive Florida request timing is retained after a killed task with bounded, whitelisted public-path metadata only. Deadlines, source admission, matching, dates, status logic, cleanup and reservation release remain unchanged. This follows measured first-task startup costs of four to five seconds.
+
+### Florida verified-transport trial (perf49)
+Opt-in CE_LAB_FL_TRANSPORT=verified-first is honored only on the exact lab origin and a performance-lab version. It activates the existing host-bound, certificate-verified HTTPS transport before initial navigation. Same form, submitted names, cookies, EIN/address selection, status rules, dates, request deadline and process cleanup. Normal staging/production/default behavior remains unchanged. This A/B follows repeated12-second initial Chromium navigation timeouts in parallel trials; it does not presume their underlying network cause. Certificate expiry, hostname, chain trust, redirects, response completeness and failures remain checked.

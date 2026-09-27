@@ -73,7 +73,11 @@ class KentuckyPreload(unittest.TestCase):
     def test_all_master_matching_status_and_date_code_is_identical(self):
         for name in ('registry_snapshot_server.py', 'Charity_Checker_Script for 13_states.py'):
             before = subprocess.check_output(['git', 'show', '3821cba:' + name], cwd=ROOT)
-            self.assertEqual((ROOT / name).read_text(encoding='utf-8'), before.decode('utf-8').replace('\r\n', '\n'))
+            import ast
+            from testing.capacity_lab.parsing_scope import strip_fl_verified_first_trial
+            after=ast.parse((ROOT/name).read_text(encoding='utf-8'))
+            strip_fl_verified_first_trial(after)
+            self.assertEqual(ast.dump(after),ast.dump(ast.parse(before.decode('utf-8'))))
 
 
 if __name__ == '__main__':

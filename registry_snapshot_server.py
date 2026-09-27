@@ -11802,6 +11802,13 @@ class FloridaVerifiedTransport:
             route.abort("failed")
 
 
+def fl_verified_transport_first() -> bool:
+    """Explicit isolated-lab transport comparison; no registry rule changes."""
+    return (APP_VERSION.endswith("-performance-lab")
+            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and os.environ.get("CE_LAB_FL_TRANSPORT") == "verified-first")
+
+
 def search_fl(page, org):
     transport = FloridaVerifiedTransport(page)
     try:
@@ -11993,6 +12000,8 @@ def search_fl_with_transport(page, org, transport):
             if deadline_expired():
                 raise TimeoutError("FL lookup exceeded its bounded search window")
             try:
+                if fl_verified_transport_first():
+                    transport.enable()
                 page.goto(url, wait_until="commit", timeout=remaining_ms(12000))
                 if transport.error:
                     raise transport.error
