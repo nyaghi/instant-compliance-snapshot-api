@@ -906,3 +906,21 @@ from the successfully exercised Playwright detail retry: two navigation HTTP
 errors and one missing Verify control within 27 seconds. Expose the HTTP status
 code (no response body, URL parameters or secret details) so future HTTP errors
 can be diagnosed. Do not add speculative retry/bypass of those readiness errors.
+
+
+### perf.45: pure Kentucky public-name warmup
+
+The forkserver now warms the existing immutable name-normalization cache from a
+currently validated Kentucky extract. It never performs an organization lookup
+or live fallback in the template. Each child still revalidates the source, reads
+current rows and executes the unchanged master matching, fiscal-period and
+status rules. This is not a completed-result cache. The 60-second Sales cutoff,
+source limits and four paid nodes are unchanged. Local cold/warm profiling of
+8,318 public rows measured 0.64 vs 0.10 seconds; this is not an end-to-end cloud
+performance claim. Linux isolation controls verify actual inherited cache reuse.
+
+The preceding perf.44 Standard trial retained three Florida transport failures
+and two missing optional Florida dates. Sales completed 31/32, 135/160, 213/320
+and 327/640 at 1/5/10/20 organizations. A same-code two-lane AR/ME experiment
+passed 40 identity/status/date controls but improved Sales only to 138/160 and
+332/640; original limits were restored. Neither trial establishes release readiness.

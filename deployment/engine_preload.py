@@ -5,12 +5,27 @@ or task threads enter this process. Each job receives a separate copy-on-write
 child; that child and its browser descendants are killed before releasing slots.
 """
 import os
+import json
 from pathlib import Path
 import sys
 import threading
 import time
 
 from deployment.performance_lab import validate_environment, install_http_egress_guard
+
+
+def preload_ky_public_names(master):
+    """Warm only pure name normalization from a currently verified public file.
+
+    Never invoke the live fallback or an organization lookup. Each child still
+    loads and validates the current source and performs every identity/date rule.
+    The existing cache is keyed by the actual name, not a record ID or status.
+    """
+    path = master.weekly_asset("KY", "downloadable-data/KY-records.json")
+    if path is not None:
+        for _, registry_name, _, _ in json.loads(path.read_text(encoding="utf-8")):
+            for name in master.ky_registry_name_variants(registry_name):
+                master.normalized_match_name(name)
 
 validate_environment(os.environ)
 if not sys.platform.startswith('linux'):
@@ -23,7 +38,7 @@ started, cpu_started = time.monotonic(), time.process_time()
 import registry_snapshot_server as master
 # Pure source parsing only: no EIN, organization, live network or match results.
 # Child lookups repeat freshness/asset validation before reusing these tables.
-for source in ("KS", "NH", "OR"):
+for source in ("KS", "NH", "OR", "KY"):
     try:
         if source == "KS" and master.downloadable_data_info(source).get("usable"):
             ks = master.load_ks_weekly_checker()
@@ -34,6 +49,8 @@ for source in ("KS", "NH", "OR"):
             del records, row
         elif source == "OR":
             master.validated_or_snapshot_index()
+        elif source == "KY":
+            preload_ky_public_names(master)
         elif (source == "NH" and master.weekly_asset(source, "downloadable-data/NH-records.json") is not None
                 and master.weekly_asset(source, "registered-charities.pdf") is not None):
             records, _ = master.nh_download_live_pdf_records()
