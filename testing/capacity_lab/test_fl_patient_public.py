@@ -44,6 +44,8 @@ class PatientPublic(unittest.TestCase):
         root=Path(m.__file__).parent
         old=ast.parse(subprocess.check_output(['git','show','8f41320:registry_snapshot_server.py'],cwd=root).decode())
         new=ast.parse(Path(m.__file__).read_text(encoding='utf-8'))
+        from testing.capacity_lab.ny_body_scope import strip_ny_body_completion
+        strip_ny_body_completion(new)
         original=next(n for n in old.body if getattr(n,'name','')=='fl_business_public_rows')
         fn=next(n for n in new.body if getattr(n,'name','')=='fl_business_public_rows')
         assign=next(n for n in fn.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='http_seconds' for t in n.targets))

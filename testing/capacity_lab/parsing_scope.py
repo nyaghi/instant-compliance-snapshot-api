@@ -467,6 +467,8 @@ if completed_names:
 def strip_fl_patient_public(tree):
     """Verify and remove only the opt-in public-form read allowance."""
     import copy
+    from testing.capacity_lab.ny_body_scope import strip_ny_body_completion
+    strip_ny_body_completion(tree)
     fn=next((n for n in tree.body if getattr(n,'name','')=='fl_business_public_rows'),None)
     if fn is None:return
     assignments=[n for n in fn.body if isinstance(n,ast.Assign)

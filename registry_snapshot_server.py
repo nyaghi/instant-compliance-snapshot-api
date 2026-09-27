@@ -20491,7 +20491,7 @@ class NYBrowserResponse:
     """Expose only the completed official response; never retain verification tokens."""
     def __init__(self, response):
         self.status_code = response.status
-        self.payload = response.json()
+        self.payload = response.json() if self.status_code == 200 else {}
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -20499,6 +20499,36 @@ class NYBrowserResponse:
 
     def json(self):
         return self.payload
+
+
+def ny_complete_browser_response(page, predicate, submit, remaining_ms):
+    """Wait for this response's complete body within the original request budget."""
+    matched = {}
+
+    class HeadersRejected(Exception):
+        pass
+
+    def capture(response):
+        if not predicate(response):
+            return False
+        matched["request"] = response.request
+        return True
+
+    try:
+        # Register before submission: a short response can finish before the
+        # expect_response context returns. Correlate by request, not just URL.
+        with page.expect_request_finished(
+                lambda request: request == matched.get("request"), timeout=remaining_ms()):
+            with page.expect_response(capture, timeout=remaining_ms()) as pending:
+                submit()
+            response = pending.value
+            if response.status != 200:
+                # A rejection needs no body. Cancel the pending completion wait
+                # and let the existing status/verification rules handle it.
+                raise HeadersRejected()
+        return response
+    except HeadersRejected:
+        return response
 
 
 def ny_browser_registry_response(page, operation: str, params: dict, timeout: float):
@@ -20528,10 +20558,10 @@ def ny_browser_registry_response(page, operation: str, params: dict, timeout: fl
         search = page.get_by_role("button", name="Search", exact=True)
         if not search.is_enabled():
             try:
-                with page.expect_response(lambda response: urlparse(response.url).path == "/api/recaptcha/verify"
-                                          and response.request.method == "POST", timeout=remaining_ms()) as verification:
-                    page.get_by_role("button", name="Verify", exact=True).click(timeout=remaining_ms())
-                verified = verification.value
+                verified = ny_complete_browser_response(page,
+                    lambda response: urlparse(response.url).path == "/api/recaptcha/verify"
+                    and response.request.method == "POST",
+                    lambda: page.get_by_role("button", name="Verify", exact=True).click(timeout=remaining_ms()), remaining_ms)
                 if verified.status != 200 or verified.json().get("verified") is not True:
                     raise NYVerificationRequired("New York did not accept the browser verification")
                 page.wait_for_function("Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === 'Search' && !b.disabled)", timeout=remaining_ms())
@@ -20566,17 +20596,17 @@ def ny_browser_registry_response(page, operation: str, params: dict, timeout: fl
                 elif actual[0] != expected:
                     return False
             return True
-        with page.expect_response(submitted_response, timeout=remaining_ms()) as pending:
-            search.click(timeout=remaining_ms())
-        return NYBrowserResponse(pending.value)
+        response = ny_complete_browser_response(page, submitted_response,
+            lambda: search.click(timeout=remaining_ms()), remaining_ms)
+        return NYBrowserResponse(response)
     if operation == "RegistryDetail":
         identifier = str(params["orgID"])
-        with page.expect_response(lambda response: urlparse(response.url).hostname == "charities-search-api.ag.ny.gov"
-                                  and urlparse(response.url).path == "/api/FileNet/RegistryDetail"
-                                  and parse_qs(urlparse(response.url).query).get("orgID", [""])[0] == identifier,
-                                  timeout=remaining_ms()) as pending:
-            page.get_by_role("link", name=identifier, exact=True).click(timeout=remaining_ms())
-        return NYBrowserResponse(pending.value)
+        response = ny_complete_browser_response(page,
+            lambda response: urlparse(response.url).hostname == "charities-search-api.ag.ny.gov"
+            and urlparse(response.url).path == "/api/FileNet/RegistryDetail"
+            and parse_qs(urlparse(response.url).query).get("orgID", [""])[0] == identifier,
+            lambda: page.get_by_role("link", name=identifier, exact=True).click(timeout=remaining_ms()), remaining_ms)
+        return NYBrowserResponse(response)
     raise ValueError("Unexpected New York registry operation")
 
 
