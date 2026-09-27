@@ -19537,6 +19537,86 @@ def nj_public_query_enabled() -> bool:
             and os.environ.get("CE_LAB_NJ_PUBLIC_QUERY") == "1")
 
 
+class NJCompletedPublicQueries:
+    """Private progress from one lookup's completed, unfiltered public queries."""
+    def __init__(self, ein):
+        self.ein = ein
+        self.created = time.monotonic()
+        self.queries = set()
+
+
+def nj_zero_reuse_enabled() -> bool:
+    return (nj_public_query_enabled()
+            and os.environ.get("CE_LAB_NJ_ZERO_REUSE") == "1"
+            and not CAPTURE_EVIDENCE_SCREENSHOTS
+            and not CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT
+            and LAB_LOOKUP_MODE_CONTEXT.get() == "sales")
+
+
+def nj_name_fallback_queries(org):
+    return build_search_queries(
+        org.organization_name,
+        org.ein,
+        include_ein=False,
+        include_ein_aliases=True,
+        include_name_segments=True,
+        include_compact_legal_suffixes=True,
+        include_leading_article_variants=True,
+        max_queries=int(os.environ.get("CE_NJ_NAME_FALLBACK_MAX_VARIANTS", "10")),
+    )
+
+
+def nj_complete_public_zero(data) -> bool:
+    return (isinstance(data, dict) and type(data.get("ItemCount")) is int
+            and data["ItemCount"] == 0 and data.get("Records") == []
+            and data.get("MoreRecords") is False and type(data.get("PageNumber")) is int
+            and data["PageNumber"] == 1
+            and not any(data.get(k) for k in ("Error", "error", "ErrorMessage", "errorMessage"))
+            and data.get("Success") is not False)
+
+
+def nj_complete_other_ein_rows(data, ein) -> bool:
+    """A complete name response whose every row explicitly identifies another EIN."""
+    if (not isinstance(data, dict) or type(data.get("ItemCount")) is not int
+            or not 1 <= data["ItemCount"] <= 10
+            or not isinstance(data.get("Records"), list)
+            or len(data["Records"]) != data["ItemCount"]
+            or data.get("MoreRecords") is not False
+            or type(data.get("PageNumber")) is not int or data["PageNumber"] != 1
+            or any(data.get(k) for k in ("Error", "error", "ErrorMessage", "errorMessage"))
+            or data.get("Success") is False or not re.fullmatch(r"\d{9}", ein or "")):
+        return False
+    for row in data["Records"]:
+        attrs = row.get("Attributes") if isinstance(row, dict) else None
+        if not isinstance(attrs, list) or not all(isinstance(a, dict) for a in attrs):
+            return False
+        fields = {}
+        for key in ("name", "accountnumber", "crsm_federalein"):
+            values = [a for a in attrs if a.get("Name") == key]
+            if len(values) != 1 or not isinstance(values[0].get("DisplayValue"), str):
+                return False
+            fields[key] = values[0]["DisplayValue"].strip()
+            raw = values[0].get("Value")
+            if raw is not None and raw != fields[key]:
+                return False
+        other = fields["crsm_federalein"]
+        if (not fields["name"] or not fields["accountnumber"]
+                or not re.fullmatch(r"\d{2}-?\d{7}", other)
+                or canonical_ein_digits(other) in (ein, "000000000")):
+            return False
+    return True
+
+
+def nj_same_lookup_zero_queries(org):
+    progress = getattr(org, "_cc_nj_completed_public_queries", None)
+    if (nj_zero_reuse_enabled() and not getattr(org, "evidence_mode", False)
+            and isinstance(progress, NJCompletedPublicQueries)
+            and progress.ein == canonical_ein_digits(org.ein)
+            and 0 <= time.monotonic() - progress.created < 60):
+        return set(progress.queries)
+    return set()
+
+
 def search_nj_public_details(org):
     """Fresh public EIN query and detail; only one fully confirmed record qualifies.
 
@@ -19552,6 +19632,8 @@ def search_nj_public_details(org):
     ein = canonical_ein_digits(org.ein)
     if len(ein) != 9:
         return None
+    progress = NJCompletedPublicQueries(ein) if nj_zero_reuse_enabled() else None
+    org._cc_nj_completed_public_queries = progress
     base = "https://charportal.dca.njoag.gov"
     path = "/Charity-Registration/CHR-Public-Search-Page/"
     view = "Portal - Charity - Public Search Subgrid"
@@ -19627,6 +19709,18 @@ def search_nj_public_details(org):
                 "page": 1, "pageSize": 10, "filter": None, "metaFilter": "", "timezoneOffset": 0,
                 "customParameters": [], "odataFilterQuery": "", "nlSearchFilter": ""}
             data = json.loads(fetch(query_path, "json", payload, tokens[0]))
+            if progress is not None and nj_complete_public_zero(data):
+                progress.queries.add(ein)
+                for query in nj_name_fallback_queries(org):
+                    if query in progress.queries:
+                        continue
+                    named = json.loads(fetch(query_path, "json", {**payload, "search": query}, tokens[0]))
+                    if not (nj_complete_public_zero(named) or nj_complete_other_ein_rows(named, ein)):
+                        break  # Positive/ambiguous/unusable queries keep browser matching.
+                    progress.queries.add(query)
+                # Do not classify here. The original fallback exhausts its full
+                # plan, reusing only exact completed queries from this lookup.
+                return None
             records = data.get("Records")
             if (type(data.get("ItemCount")) is not int or data["ItemCount"] != 1
                     or data.get("MoreRecords") is not False or data.get("PageNumber") != 1
@@ -19868,7 +19962,15 @@ def search_nj_direct(page, org):
 
 
 def search_nj_with_name_fallback(page, org):
-    result = search_nj_direct(page, org)
+    completed = nj_same_lookup_zero_queries(org)
+    if canonical_ein_digits(org.ein) in completed:
+        result = checker.StateResult(org.organization_name, org.ein, "NJ", checker.STATUS_NOT_REGISTERED,
+            "https://charportal.dca.njoag.gov/Charity-Registration/CHR-Public-Search-Page/")
+        result.raw_status_text = "No record found"
+        result.source_note = "New Jersey's public EIN query completed with no matching record."
+        result.success = True
+    else:
+        result = search_nj_direct(page, org)
     if public_status(result) != "Not Registered":
         return result
     fallback_started = time.monotonic()
@@ -19876,16 +19978,9 @@ def search_nj_with_name_fallback(page, org):
         fallback_budget_seconds = float(os.environ.get("CE_NJ_NAME_FALLBACK_SECONDS", "32"))
     except Exception:
         fallback_budget_seconds = 32.0
-    for variant in build_search_queries(
-        org.organization_name,
-        org.ein,
-        include_ein=False,
-        include_ein_aliases=True,
-        include_name_segments=True,
-        include_compact_legal_suffixes=True,
-        include_leading_article_variants=True,
-        max_queries=int(os.environ.get("CE_NJ_NAME_FALLBACK_MAX_VARIANTS", "10")),
-    ):
+    for variant in nj_name_fallback_queries(org):
+        if variant in completed:
+            continue
         if time.monotonic() - fallback_started > fallback_budget_seconds:
             result.source_note = (
                 (result.source_note or "New Jersey search returned no matching record.")
@@ -19905,6 +20000,9 @@ def search_nj_with_name_fallback(page, org):
                 + " CharityClarity used a name fallback after the EIN search returned no matching record."
             )
             return copy_name_fallback_result(org, fallback)
+    if completed:
+        result.source_note = ("New Jersey's public EIN and planned organization-name queries completed "
+                              "without a qualifying matching record.")
     return result
 
 

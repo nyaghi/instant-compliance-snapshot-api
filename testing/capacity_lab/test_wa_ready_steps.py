@@ -9,6 +9,8 @@ import registry_snapshot_server as m
 
 
 def strip_ready_steps(tree):
+    from testing.capacity_lab.test_nj_same_lookup import strip_same_lookup
+    strip_same_lookup(tree)
     helper = next((n for n in tree.body if getattr(n, 'name', '') == 'lab_wa_readiness_waits_only'), None)
     if helper is None:
         return
