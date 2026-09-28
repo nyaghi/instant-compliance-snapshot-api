@@ -202,6 +202,10 @@ def transport_route(state, url):
     try:
         parsed = urlsplit(url)
         if parsed.scheme != 'https': return None
+        if state == 'ME' and parsed.hostname == 'www.pfr.maine.gov':
+            return {'/almsonline/almsquery/searchcompany.aspx': 'search',
+                    '/almsonline/almsquery/searchresults.aspx': 'results',
+                    '/almsonline/almsquery/showdetail.aspx': 'details'}.get(parsed.path.casefold())
         if state == 'MI' and parsed.hostname == 'www.ag.state.mi.us':
             return {'/CharitableTrust/frmDisclaimer.aspx': 'disclaimer',
                     '/CharitableTrust/frmDefault.aspx': 'search',
@@ -231,7 +235,7 @@ def observe_transport(master, state, sink=None):
             yield trace
         return
     client = getattr(master, 'curl_requests', None)
-    if (state not in {'MI', 'NJ'} or client is None
+    if (state not in {'MI', 'NJ', 'ME'} or client is None
             or not master.APP_VERSION.endswith('-performance-lab')):
         yield None
         return

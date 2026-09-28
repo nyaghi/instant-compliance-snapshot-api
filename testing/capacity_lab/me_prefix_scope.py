@@ -14,7 +14,8 @@ def strip_me_prefix_coverage(tree):
                 assert [ast.unparse(n) for n in node.body]==['self.completed_search_html = response.text']
                 assert not node.orelse;hits.append('body');return None
             if ast.unparse(node.test)=='session.covered_source_query':
-                assert [ast.unparse(n) for n in node.body]==["attempt_evidence['covered_by_completed_prefix'] = session.covered_source_query"]
+                assert [ast.unparse(n) for n in node.body]==["attempt_evidence['covered_by_completed_prefix'] = session.covered_source_query",
+                    'completed.update((candidate for candidate in queries if candidate.casefold().startswith(session.covered_source_query)))']
                 assert not node.orelse;hits.append('evidence');return None
             return self.generic_visit(node)
         def visit_Call(self,node):

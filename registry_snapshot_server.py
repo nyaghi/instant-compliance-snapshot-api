@@ -8653,15 +8653,30 @@ def me_covering_literal_prefix(query, queries):
     return max(choices)[2] if choices else query
 
 
-def me_complete_prefix_list(body, rows) -> bool:
+def me_complete_prefix_list(body, rows, submitted_query="") -> bool:
     # Default pagination is allowed only when every advertised row is present.
     # An Active Only filter or partial response cannot cover the original plan.
     if not re.search(r"</html\s*>\s*$", body, re.I):
         return False
+    text = html.unescape(re.sub(r"<[^>]+>", " ", body))
+    # Maine renders an empty search on the completed search form, without the
+    # result table's Active Only control. Verify the actual submitted criteria.
+    if not rows and submitted_query and re.search(
+            r"\bNo records found for the search criteria entered\.", text, re.I):
+        form = re.findall(r'<form\b[^>]*\bid=["\']SearchForm["\'][^>]*>', body, re.I)
+        name = re.findall(r'<input\b[^>]*\bname=["\'][^"\']*scCompanyName["\'][^>]*>', body, re.I)
+        regulator = re.findall(r'<select\b[^>]*\bname=["\'][^"\']*scRegulator["\'][^>]*>(.*?)</select>', body, re.I | re.S)
+        begins = re.findall(r'<input\b[^>]*\bname=["\'][^"\']*\$ctl24["\'][^>]*>', body, re.I)
+        value = re.search(r'\bvalue=(["\'])(.*?)\1', name[0], re.S) if len(name) == 1 else None
+        selected = re.findall(r'<option\b[^>]*\bselected\b[^>]*>', regulator[0], re.I) if len(regulator) == 1 else []
+        checked = [tag for tag in begins if re.search(r"\bchecked(?:\s|=|/?>)", tag, re.I)]
+        return (len(form) == 1 and value is not None
+                and html.unescape(value[2]) == me_query_for_form(submitted_query, body)
+                and len(selected) == 1 and bool(re.search(r'\bvalue=["\']4076["\']', selected[0]))
+                and len(checked) == 1 and bool(re.search(r'\bvalue=["\']BW["\']', checked[0])))
     active = re.findall(r'<input\b[^>]*\bid=["\']cbActiveOnly["\'][^>]*>', body, re.I)
     if len(active) != 1 or re.search(r"\bchecked(?:\s|=|/?>)", active[0], re.I):
         return False
-    text = html.unescape(re.sub(r"<[^>]+>", " ", body))
     counts = re.findall(r"(?<![\d,])(\d[\d,]*)\s+records?\s+found\b", text, re.I)
     return (len(counts) == 1 and bool(re.fullmatch(r"\d+|\d{1,3}(?:,\d{3})+", counts[0]))
             and int(counts[0].replace(",", "")) == len(rows))
@@ -8684,7 +8699,7 @@ def me_search_with_prefix_coverage(session, query, queries):
             return session.search(query)
         rows, _ = session.search(prefix)
         body = getattr(session, "completed_search_html", "")
-        coverage[prefix] = ([dict(row) for row in rows] if me_complete_prefix_list(body, rows) else None)
+        coverage[prefix] = ([dict(row) for row in rows] if me_complete_prefix_list(body, rows, prefix) else None)
     if coverage[prefix] is not None:
         session.covered_source_query = prefix
         return [dict(row) for row in coverage[prefix]], session
@@ -8726,6 +8741,8 @@ def me_fast_direct_confirmation_result(org, page=None, deadline=None):
                     rows, opener = me_search_with_prefix_coverage(session, query, queries)
                     if session.covered_source_query:
                         attempt_evidence["covered_by_completed_prefix"] = session.covered_source_query
+                        completed.update(candidate for candidate in queries
+                                         if candidate.casefold().startswith(session.covered_source_query))
                 else:
                     if page is None:
                         continue

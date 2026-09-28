@@ -312,7 +312,7 @@ def log_failure_trace(r, error):
 
 def log_transport_failure(r, error):
     """Preserve fixed-label HTTP timing after the isolated MI/NJ task is reaped."""
-    if not error or r['job']['state'] not in {'MI', 'NJ', 'WI'}: return
+    if not error or r['job']['state'] not in {'MI', 'NJ', 'WI', 'ME'}: return
     try:
         path = r['output'].with_suffix('.transport.json')
         if not path.is_file() or path.stat().st_size > 65536: return

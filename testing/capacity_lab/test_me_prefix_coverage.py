@@ -11,6 +11,11 @@ BODY='<html><body><input id="cbActiveOnly" type="checkbox">2 records found.</bod
 ROWS=[{'name':'Example Relief','number':'CO1','status':'ACTIVE'},
       {'name':'Example Relief Chapter','number':'CO2','status':'ACTIVE'}]
 QUERIES=['Example Relief','Example-Relief','ExampleRelief','The Example Relief']
+EMPTY_FORM='''<html><body><form id="SearchForm">
+<input name="ctl00$scCompanyName" value="example" maxlength="30">
+<select name="ctl00$scRegulator"><option selected="selected" value="4076">CHARITABLE SOLICITATION</option></select>
+<input name="ctl00$ctl24" type="radio" value="BW" checked="checked">
+No records found for the search criteria entered.</form></body></html>'''
 
 class PrefixCoverage(unittest.TestCase):
     def setUp(self):
@@ -50,6 +55,33 @@ class PrefixCoverage(unittest.TestCase):
         self.assertEqual(s.calls,['example'])
         m.me_search_with_prefix_coverage(s,'Different Former Name',QUERIES)
         self.assertEqual(s.calls[-1],'Different Former Name')
+    def test_real_empty_form_shape_confirms_exact_query_and_category(self):
+        self.assertTrue(m.me_complete_prefix_list(EMPTY_FORM,[],'example'))
+        for body,query in [(EMPTY_FORM,'stale query'),(EMPTY_FORM.replace('4076','9999'),'example'),
+            (EMPTY_FORM.replace('value="BW"','value="C"'),'example'),
+            (EMPTY_FORM.replace('checked="checked"',''),'example'),
+            (EMPTY_FORM.replace('</html>',''),'example'),
+            (EMPTY_FORM.replace('No records found for the search criteria entered.','Loading'),'example'),
+            (EMPTY_FORM.replace('id="SearchForm"','id="Other"'),'example')]:
+            self.assertFalse(m.me_complete_prefix_list(body,[],query))
+        self.assertFalse(m.me_complete_prefix_list(EMPTY_FORM,ROWS,'example'))
+    def test_empty_form_respects_live_truncation_and_literal_apostrophe(self):
+        query="example's longer name";body=EMPTY_FORM.replace('value="example"','value="'+query+'"')
+        self.assertTrue(m.me_complete_prefix_list(body,[],query))
+        body=EMPTY_FORM.replace('maxlength="30"','maxlength="7"')
+        self.assertTrue(m.me_complete_prefix_list(body,[],'example with longer words'))
+    def test_completed_prefix_resolves_prior_failed_query_without_browser_retry(self):
+        org=m.checker.Organization('Example Relief','123456789')
+        s=self.session(EMPTY_FORM,[]);base=s.search
+        def search(query):
+            if query==QUERIES[0]:raise TimeoutError('initial request did not complete')
+            return base(query)
+        s.search=search;s.close=Mock()
+        with patch.object(m,'MaineRegistrySession',return_value=s),patch.object(m,'me_fast_direct_query_variants',return_value=QUERIES),\
+             patch.object(m,'me_browser_search_rows') as browser:
+            result=m.me_fast_direct_confirmation_result(org,page=Mock())
+        self.assertEqual(m.public_status(result),'Not Registered')
+        self.assertEqual(s.calls,['example',QUERIES[-1]]);browser.assert_not_called()
     def test_timeout_is_not_coverage_or_a_negative_result(self):
         s=self.session();s.search=Mock(side_effect=TimeoutError('source response incomplete'))
         with self.assertRaises(TimeoutError):m.me_search_with_prefix_coverage(s,QUERIES[1],QUERIES)
@@ -106,6 +138,11 @@ class PrefixCoverage(unittest.TestCase):
         self.assertEqual(ast.dump(old),ast.dump(new))
         for p in ['deployment/durable_queue.py','deployment/queue_schema.sql','deployment/queue_worker.py',
                   'deployment/lab_capacity.py','CharityClarity_WA_NM_checker.py']:
-            subprocess.run(['git','diff','--exit-code','7e25b24','--',p],cwd=root,check=True)
+            if p=='deployment/queue_worker.py':
+                from testing.capacity_lab.me_trace_scope import strip_me_transport_trace
+                old_worker=ast.parse(subprocess.check_output(['git','show','7e25b24:'+p],cwd=root).decode())
+                new_worker=ast.parse((root/p).read_text());strip_me_transport_trace(new_worker)
+                self.assertEqual(ast.dump(old_worker),ast.dump(new_worker))
+            else:subprocess.run(['git','diff','--exit-code','7e25b24','--',p],cwd=root,check=True)
 
 if __name__=='__main__':unittest.main(verbosity=2)

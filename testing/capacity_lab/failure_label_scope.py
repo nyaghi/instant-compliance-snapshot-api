@@ -3,6 +3,8 @@ import ast
 
 
 def strip_failure_labels(tree):
+    from testing.capacity_lab.me_trace_scope import strip_me_transport_trace
+    strip_me_transport_trace(tree)
     failures={'net::ERR_FAILED', 'net::ERR_ABORTED', 'net::ERR_TIMED_OUT',
         'net::ERR_CONNECTION_RESET', 'net::ERR_CONNECTION_CLOSED',
         'net::ERR_NAME_NOT_RESOLVED', 'net::ERR_HTTP2_PROTOCOL_ERROR',
