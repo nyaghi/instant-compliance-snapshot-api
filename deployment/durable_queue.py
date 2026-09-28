@@ -159,6 +159,25 @@ def sales_tail_capacity(workflows, pending, held, estimates, workers, version, n
     return demand <= slots * window
 
 
+def apply_paced_tail_floor(scores, workflows, pending, estimates, version):
+    """Count enforced start spacing when estimating a source's remaining work.
+
+    A source can have spare simultaneous permits and still need time to start
+    its queued searches. Preserve the existing elapsed-time estimate as a floor.
+    This changes priority only; start guards, permits and deadlines stay intact.
+    """
+    if not scores or not getattr(estimates, 'workload_timing', False):
+        return
+    intervals = sales_source_start_intervals(workflows, version)
+    for state, interval in intervals.items():
+        count = sum(j['state'] == state for w in workflows
+                    for j in pending.get(w['id'], []))
+        if count and state in scores:
+            paced = (max(0, count-1) * interval
+                     + estimates.tails.get(state, estimates.get(state, 10.0)))
+            scores[state] = max(scores[state], paced)
+
+
 def order_pending(workflow, jobs, estimates, tail_scores, now):
     def key(job):
         state = job['state']
@@ -546,6 +565,7 @@ class Queue:
             tail_scores = (sales_tail_scores(workflows, pending, held, estimates, cfg['registry_limits'])
                            if capacity_rows is not None and sales_tail_capacity(workflows, pending, held,
                                estimates, capacity_rows.fetchall(), cfg['source_version'], now) else {})
+            apply_paced_tail_floor(tail_scores, workflows, pending, estimates, cfg['source_version'])
             for workflow in workflows:
                 order_pending(workflow, pending.get(workflow['id'], []), estimates, tail_scores, now)
             workflows.sort(key=lambda w: (running[w['id']], w['dispatched'], w['submitted'], w['id']))

@@ -13,6 +13,8 @@ def strip_loaded_schema(source):
     assert source.count(SCHEMA_ADDITION)==1
     return source.replace(SCHEMA_ADDITION,'')
 def strip_loaded_timing(tree):
+    from testing.capacity_lab.paced_timing_scope import strip_paced_timing
+    strip_paced_timing(tree)
     helper=next((n for n in tree.body if getattr(n,'name','')=='apply_loaded_timing_floor'),None)
     if helper is None:return
     tree.body.remove(helper)

@@ -17,7 +17,8 @@ def strip_wi_trace_engine(tree):
 def strip_wi_trace_worker(tree):
     from testing.capacity_lab.failure_label_scope import strip_failure_labels
     strip_failure_labels(tree)
-    fn = next(n for n in tree.body if getattr(n, 'name', '') == 'log_transport_failure')
+    fn = next((n for n in tree.body if getattr(n, 'name', '') == 'log_transport_failure'), None)
+    if fn is None: return  # A chained whole-file comparison may already have stripped it.
     for n in ast.walk(fn):
         if isinstance(n, ast.Set):
             if ast.unparse(n) == "{'MI', 'NJ', 'WI'}": n.elts.pop()
