@@ -2,6 +2,8 @@
 import ast
 
 def strip_me_transport_trace(tree):
+    from testing.capacity_lab.test_me_rejected_page import strip_rejected_page_observer
+    strip_rejected_page_observer(tree)
     for fn in tree.body:
         if getattr(fn,'name','')=='transport_route':
             for node in ast.walk(fn):

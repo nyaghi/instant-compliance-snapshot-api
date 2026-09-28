@@ -224,6 +224,37 @@ def transport_route(state, url):
 
 
 @contextmanager
+def observe_me_rejected_page(master, trace):
+    """Private lab evidence only after the original parser rejects a public page."""
+    original = getattr(master, 'me_parse_search_rows', None)
+    if not callable(original):
+        yield
+        return
+    def parsed(body):
+        try:
+            return original(body)
+        except ValueError:
+            try:
+                import html, re
+                # Never retain hidden form fields, scripts, URLs, or headers.
+                visible = re.sub(r'<(script|style|textarea)\b[^>]*>.*?</\1\s*>', ' ', body[:2000000], flags=re.I|re.S)
+                visible = re.sub(r'<!--.*?-->', ' ', visible, flags=re.S)
+                visible = html.unescape(re.sub(r'<[^>]+>', ' ', visible))
+                visible = re.sub(r'https?://\S+', '[URL]', visible)
+                visible = re.sub(r'(?i)\b(password|secret|token|api[_ -]?key|connectionstring)\s*[:=]\s*\S+', r'\1=[redacted]', visible)
+                visible = re.sub(r'\s+', ' ', visible).strip()
+                trace.record('me_parser_rejected', bytes=len(body), visible_text=visible[:1600])
+            except Exception:
+                pass
+            raise
+    master.me_parse_search_rows = parsed
+    try:
+        yield
+    finally:
+        master.me_parse_search_rows = original
+
+
+@contextmanager
 def observe_transport(master, state, sink=None):
     """Observe the existing request/stream calls in one isolated lab child.
 
@@ -272,7 +303,11 @@ def observe_transport(master, state, sink=None):
 
     client.Session = ObservedSession
     try:
-        yield trace
+        if state == 'ME':
+            with observe_me_rejected_page(master, trace):
+                yield trace
+        else:
+            yield trace
     finally:
         client.Session = original
 
