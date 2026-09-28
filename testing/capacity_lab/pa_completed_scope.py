@@ -2,6 +2,8 @@
 import ast
 
 def strip_pa_completed(tree):
+    from testing.capacity_lab.mi_query_scope import strip_mi_query_order
+    strip_mi_query_order(tree)
     helper=next((n for n in tree.body if getattr(n,'name','')=='lab_pa_completed_no_match'),None)
     if helper is None:return
     tree.body.remove(helper)

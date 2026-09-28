@@ -10151,7 +10151,26 @@ def mi_name_fallback_queries(org):
     variants = sorted(variants, key=lambda value: (
         value.strip().casefold() != portal_query(org.organization_name).strip().casefold(), mi_variant_priority(value)))
 
-    return variants[:4]
+    planned = variants[:4]
+    if lab_mi_query_dominance_enabled():
+        # Keep the exact bounded query set. A planned broader All-words query
+        # goes first so its completed zero can cover narrower versions.
+        remaining, planned = list(planned), []
+        while remaining:
+            first = next((query for query in remaining if not any(
+                other != query and mi_completed_query_covers(other, query)
+                and not mi_completed_query_covers(query, other)
+                for other in remaining)), remaining[0])
+            remaining.remove(first)
+            planned.append(first)
+    return planned
+
+
+def lab_mi_query_dominance_enabled() -> bool:
+    return (APP_VERSION.endswith("-performance-lab")
+            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and os.environ.get("CE_LAB_MI_QUERY_DOMINANCE") == "1"
+            and LAB_LOOKUP_MODE_CONTEXT.get() == "sales")
 
 
 def mi_http_names_enabled(org) -> bool:
@@ -10172,8 +10191,14 @@ def mi_completed_query_covers(completed, query):
     original = set(completed.casefold().split())
     joined = set(re.sub(r"(?<=\w)-(?=\w)", " ", query).casefold().split())
     # A zero for the narrower joined spelling cannot cover separated words.
-    return bool(original) and (original.issubset(set(query.casefold().split()))
-                               or original.issubset(joined))
+    covered = bool(original) and (original.issubset(set(query.casefold().split()))
+                                  or original.issubset(joined))
+    if not covered and original and lab_mi_query_dominance_enabled():
+        # Includes / All words with added terminal punctuation cannot broaden
+        # a completed zero for the same unpunctuated required words. Do not
+        # strip punctuation from the completed query or alter internal marks.
+        covered = original.issubset({word.rstrip(',.;:') for word in query.casefold().split()})
+    return covered
 
 
 def mi_name_http_empty_queries(session, org, headers, lookup_deadline):
