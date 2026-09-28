@@ -2,6 +2,8 @@
 import ast
 
 def strip_mi_query_order(tree):
+    from testing.capacity_lab.mi_patient_scope import strip_mi_patient_transport
+    strip_mi_patient_transport(tree)
     helper=next((n for n in tree.body if getattr(n,'name','')=='lab_mi_query_dominance_enabled'),None)
     if helper is None:return
     tree.body.remove(helper)

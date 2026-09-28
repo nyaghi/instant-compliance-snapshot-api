@@ -10201,6 +10201,13 @@ def mi_completed_query_covers(completed, query):
     return covered
 
 
+def lab_mi_patient_transport_enabled() -> bool:
+    return (APP_VERSION.endswith("-performance-lab")
+            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and os.environ.get("CE_LAB_MI_PATIENT_TRANSPORT") == "1"
+            and LAB_LOOKUP_MODE_CONTEXT.get() == "sales")
+
+
 def mi_name_http_empty_queries(session, org, headers, lookup_deadline):
     """Complete the same name queries in this already accepted public session.
 
@@ -10219,7 +10226,7 @@ def mi_name_http_empty_queries(session, org, headers, lookup_deadline):
             raise TimeoutError("Michigan name transport allowance exhausted")
         response = session.request(method, url, data=data,
             headers={**headers, "Referer":url, "Origin":"https://www.ag.state.mi.us"},
-            timeout=min(4.0 if method == "GET" else 18.0, remaining), verify=True, stream=True)
+            timeout=min(4.0 if method == "GET" else (24.0 if lab_mi_patient_transport_enabled() else 18.0), remaining), verify=True, stream=True)
         try:
             expected = url if method == "GET" else results_url
             if response.status_code != 200 or response.url != expected:
@@ -10539,7 +10546,11 @@ def search_mi_http_completion_probe(org, lookup_deadline=None):
             submitted = session.post(
                 source_url,
                 data=form_fields,
-                timeout=request_timeout(MI_SEARCH_RESPONSE_TIMEOUT_MS / 1000),
+                # Loaded-source traces showed the 35s sublimit discarding a
+                # pending response and repeating the same expensive query.
+                # Spend more of the existing 55s allowance on that response;
+                # the request clamp and workflow's 60s cutoff still apply.
+                timeout=request_timeout(45.0 if lab_mi_patient_transport_enabled() else MI_SEARCH_RESPONSE_TIMEOUT_MS / 1000),
                 headers={
                     **headers,
                     "Referer": source_url,
