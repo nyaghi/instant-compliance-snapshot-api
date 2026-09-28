@@ -197,16 +197,25 @@ def cohort_timing_estimates(queue, c, now, states, version, workflows):
         return queue.cached_duration_estimates(c, now, states, version)
     cache = getattr(queue, '_cohort_timing_cache', None)
     workload_timing = os.environ.get('CE_LAB_SALES_WORKLOAD_TIMING') == '1'
+    observed_tail = (workload_timing
+                     and os.environ.get('CE_LAB_SALES_OBSERVED_TAIL') == '1')
     if (cache and cache[0] == version and cache[1] == before and states <= cache[2]
-            and getattr(cache[3], 'workload_timing', False) == workload_timing):
+            and getattr(cache[3], 'workload_timing', False) == workload_timing
+            and getattr(cache[3], 'observed_tail', False) == observed_tail):
         return cache[3]
     def rows(include_censored):
         eligible = ("(error IS NULL OR error IN ('WORKFLOW_DEADLINE','TASK_TIME_LIMIT'))"
                     if include_censored else 'error IS NULL')
-        projection = ("percentile_cont(0.95) WITHIN GROUP (ORDER BY recent.seconds) AS tail_seconds"
+        # In a 20-observation sample, interpolated p95 almost discards one
+        # uncommon slow path among fast file hits. Reserve the observed tail
+        # once, not for every job; the remaining waves still use the mean.
+        # Only elapsed metadata changes. Keep the bounded, pre-cohort sample.
+        tail_stat = ("max(recent.seconds)" if observed_tail else
+                     "percentile_cont(0.95) WITHIN GROUP (ORDER BY recent.seconds)")
+        projection = (f"{tail_stat} AS tail_seconds"
                       if include_censored else
                       "percentile_cont(0.5) WITHIN GROUP (ORDER BY recent.seconds) AS seconds, "
-                      "percentile_cont(0.95) WITHIN GROUP (ORDER BY recent.seconds) AS tail_seconds")
+                      f"{tail_stat} AS tail_seconds")
         if workload_timing:
             projection += ", avg(recent.seconds) AS mean_seconds"
         return c.execute(
@@ -226,6 +235,7 @@ def cohort_timing_estimates(queue, c, now, states, version, workflows):
                 values.means[state] = row['mean_seconds']
     values.as_of = before
     values.workload_timing = workload_timing
+    values.observed_tail = observed_tail
     queue._cohort_timing_cache = (version, before, frozenset(states), values)
     return values
 

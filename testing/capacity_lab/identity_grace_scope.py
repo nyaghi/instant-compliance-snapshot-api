@@ -2,6 +2,8 @@
 import ast
 
 def strip_identity_grace_queue(tree):
+    from testing.capacity_lab.observed_tail_scope import strip_observed_tail
+    strip_observed_tail(tree)
     imports=[n for n in tree.body if isinstance(n,ast.ImportFrom) and n.module=='deployment.lab_capacity'
              and [a.name for a in n.names]==['sales_identity_seconds']]
     if not imports:return

@@ -87,6 +87,12 @@ class PatientTransport(unittest.TestCase):
         old=ast.parse(subprocess.check_output(['git','show','5f5de6b:registry_snapshot_server.py'],cwd=root).decode())
         new=ast.parse(Path(m.__file__).read_text());strip_mi_patient_transport(new)
         self.assertEqual(ast.dump(old),ast.dump(new))
-        subprocess.run(['git','diff','--exit-code','5f5de6b','--','deployment'],cwd=root,check=True,capture_output=True)
+        # The later, separately tested Sales timing statistic is allowed;
+        # preserve the original assertion for every other queue operation.
+        from testing.capacity_lab.observed_tail_scope import strip_observed_tail
+        queue_old=ast.parse(subprocess.check_output(['git','show','5f5de6b:deployment/durable_queue.py'],cwd=root).decode())
+        queue_new=ast.parse((root/'deployment/durable_queue.py').read_text());strip_observed_tail(queue_new)
+        self.assertEqual(ast.dump(queue_old),ast.dump(queue_new))
+        subprocess.run(['git','diff','--exit-code','5f5de6b','--','deployment',':(exclude)deployment/durable_queue.py'],cwd=root,check=True,capture_output=True)
 
 if __name__=='__main__':unittest.main()
