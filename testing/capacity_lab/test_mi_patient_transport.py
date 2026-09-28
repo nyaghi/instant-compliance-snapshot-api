@@ -93,6 +93,9 @@ class PatientTransport(unittest.TestCase):
         queue_old=ast.parse(subprocess.check_output(['git','show','5f5de6b:deployment/durable_queue.py'],cwd=root).decode())
         queue_new=ast.parse((root/'deployment/durable_queue.py').read_text());strip_observed_tail(queue_new)
         self.assertEqual(ast.dump(queue_old),ast.dump(queue_new))
-        subprocess.run(['git','diff','--exit-code','5f5de6b','--','deployment',':(exclude)deployment/durable_queue.py'],cwd=root,check=True,capture_output=True)
+        subprocess.run(['git','diff','--exit-code','5f5de6b','--','deployment',':(exclude)deployment/durable_queue.py',':(exclude)deployment/queue_engine.py',':(exclude)deployment/queue_worker.py'],cwd=root,check=True,capture_output=True)
+        from testing.capacity_lab.failure_label_scope import assert_diagnostics_only
+        for path in ['deployment/queue_engine.py','deployment/queue_worker.py']:
+            assert_diagnostics_only(root,'5f5de6b',path)
 
 if __name__=='__main__':unittest.main()

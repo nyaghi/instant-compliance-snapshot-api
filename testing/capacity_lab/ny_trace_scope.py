@@ -2,6 +2,8 @@
 import ast
 
 def strip_browser_trace_engine(tree):
+    from testing.capacity_lab.failure_label_scope import strip_failure_labels
+    strip_failure_labels(tree)
     from testing.capacity_lab.wi_trace_scope import strip_wi_trace_engine
     strip_wi_trace_engine(tree)
     added={'browser_trace_route','observe_browser_transport'}
@@ -21,6 +23,8 @@ def strip_browser_trace_engine(tree):
     fn.body.remove(items[0])
 
 def strip_browser_trace_worker(tree):
+    from testing.capacity_lab.failure_label_scope import strip_failure_labels
+    strip_failure_labels(tree)
     from testing.capacity_lab.wi_trace_scope import strip_wi_trace_worker
     strip_wi_trace_worker(tree)
     added=next((n for n in tree.body if getattr(n,'name','')=='log_browser_failure'),None)

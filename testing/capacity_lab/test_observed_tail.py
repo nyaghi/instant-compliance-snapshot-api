@@ -65,9 +65,12 @@ class ObservedTail(unittest.TestCase):
         strip_observed_tail(new)
         self.assertEqual(ast.dump(old),ast.dump(new))
         subprocess.run(['git','diff','--exit-code','3383085','--','registry_snapshot_server.py',
-            'CharityClarity_WA_NM_checker.py','deployment/queue_engine.py','deployment/queue_worker.py',
+            'CharityClarity_WA_NM_checker.py',
             'deployment/queue_schema.sql','deployment/lab_capacity.py','web-staging','browser-connector'],
             cwd=root,check=True,capture_output=True)
+        from testing.capacity_lab.failure_label_scope import assert_diagnostics_only
+        for path in ['deployment/queue_engine.py','deployment/queue_worker.py']:
+            assert_diagnostics_only(root,'3383085',path)
 
 @unittest.skipUnless(os.environ.get('CE_TEST_DATABASE_URL'),'Real isolated Postgres schema required')
 class ObservedTailDB(unittest.TestCase):

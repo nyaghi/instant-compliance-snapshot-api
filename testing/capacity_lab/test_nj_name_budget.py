@@ -51,6 +51,7 @@ class NameBudget(unittest.TestCase):
         new=ast.parse(Path(m.__file__).read_text(encoding='utf-8'));strip_nj_name_budget(new)
         self.assertEqual(ast.dump(old),ast.dump(new))
         for p in ['deployment/queue_worker.py']:
-            self.assertEqual(subprocess.check_output(['git','show','be53a50:'+p],cwd=root).decode().replace('\r\n','\n'),(root/p).read_text())
+            from testing.capacity_lab.failure_label_scope import assert_diagnostics_only
+            assert_diagnostics_only(root,'be53a50',p)
 
 if __name__=='__main__':unittest.main()

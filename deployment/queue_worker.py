@@ -291,6 +291,11 @@ def log_failure_trace(r, error):
             for key in ('event','method','resource_type','exception_type','failure'):
                 value=row.get(key)
                 if isinstance(value,str) and re.fullmatch(r'[A-Za-z0-9_:.-]{1,100}',value):event[key]=value
+            if row.get('result_status') in {'Current', 'Upcoming Filing', 'Delinquent',
+                    'Not Registered', 'Not Found', 'Site Not Reachable', 'Unable to Confirm',
+                    'Unable to Verify', 'Unknown', 'Suspended', 'Revoked',
+                    'Closed / Withdrawn / Canceled', 'other'}:
+                event['result_status'] = row['result_status']
             # This trace observes only the public Florida registry document.
             # Omit all arbitrary text, queries, headers, bodies and credentials.
             if row.get('host')=='csapp.fdacs.gov':
@@ -342,7 +347,11 @@ def log_browser_failure(r,error):
             if not isinstance(row,dict):continue
             clean={k:v for k,v in row.items() if k in {'seconds','status','request_id'} and isinstance(v,(int,float))}
             for key,allowed in {'event':{'browser_start','browser_headers','browser_complete','browser_failed'},
-                    'route':{'navigation','static_asset','verification','search','details'}}.items():
+                    'route':{'navigation','static_asset','verification','search','details'},
+                    'failure':{'net::ERR_FAILED', 'net::ERR_ABORTED', 'net::ERR_TIMED_OUT',
+                        'net::ERR_CONNECTION_RESET', 'net::ERR_CONNECTION_CLOSED',
+                        'net::ERR_NAME_NOT_RESOLVED', 'net::ERR_HTTP2_PROTOCOL_ERROR',
+                        'net::ERR_BLOCKED_BY_CLIENT', 'net::ERR_INTERNET_DISCONNECTED'}}.items():
                 if isinstance(row.get(key),str) and row[key] in allowed:clean[key]=row[key]
             events.append(clean)
         print('CC_LAB_TASK_FAILURE_DIAGNOSTICS '+json.dumps({'job':r['job']['id'],'state':'NY','error':error,'events':events}),flush=True)

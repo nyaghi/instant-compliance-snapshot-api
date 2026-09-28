@@ -2,6 +2,8 @@
 import ast
 
 def strip_wi_trace_engine(tree):
+    from testing.capacity_lab.failure_label_scope import strip_failure_labels
+    strip_failure_labels(tree)
     from testing.capacity_lab.identity_grace_scope import strip_identity_grace_engine
     strip_identity_grace_engine(tree)
     added = {'wi_transport_route', 'observe_wi_transport'}
@@ -13,6 +15,8 @@ def strip_wi_trace_engine(tree):
     fn.body.remove(guards[0])
 
 def strip_wi_trace_worker(tree):
+    from testing.capacity_lab.failure_label_scope import strip_failure_labels
+    strip_failure_labels(tree)
     fn = next(n for n in tree.body if getattr(n, 'name', '') == 'log_transport_failure')
     for n in ast.walk(fn):
         if isinstance(n, ast.Set):

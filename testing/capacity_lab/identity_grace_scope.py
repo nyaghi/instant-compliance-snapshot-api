@@ -15,6 +15,8 @@ def strip_identity_grace_queue(tree):
     assert count==1
 
 def strip_identity_grace_engine(tree):
+    from testing.capacity_lab.failure_label_scope import strip_failure_labels
+    strip_failure_labels(tree)
     fn=next(n for n in tree.body if getattr(n,'name','')=='execute')
     guard=next(n for n in fn.body if isinstance(n,ast.If) and ast.unparse(n.test)=="job['state'] == '@sales_identity'")
     if not isinstance(guard.body[0],ast.ImportFrom):return

@@ -55,7 +55,14 @@ class FloridaTrace:
                 except Exception: pass
             try:
                 result = original(page, org)
-                self.record('attempt_return')
+                # Fixed public classification labels only; preserve the exact
+                # result object and never inspect registry text or identity.
+                status = getattr(result, 'status', '')
+                safe_status = status if status in {'Current', 'Upcoming Filing', 'Delinquent',
+                    'Not Registered', 'Not Found', 'Site Not Reachable', 'Unable to Confirm',
+                    'Unable to Verify', 'Unknown', 'Suspended', 'Revoked',
+                    'Closed / Withdrawn / Canceled'} else 'other'
+                self.record('attempt_return', result_status=safe_status)
                 return result
             except Exception as exc:
                 self.record('attempt_exception', exception_type=type(exc).__name__)
@@ -163,6 +170,13 @@ def observe_browser_transport(master,state,sink=None):
             if route:
                 details={'route':route,'request_id':id(request)}
                 if isinstance(status,int):details['status']=status
+                if event == 'browser_failed':
+                    failure = request.failure
+                    if failure in {'net::ERR_FAILED', 'net::ERR_ABORTED', 'net::ERR_TIMED_OUT',
+                            'net::ERR_CONNECTION_RESET', 'net::ERR_CONNECTION_CLOSED',
+                            'net::ERR_NAME_NOT_RESOLVED', 'net::ERR_HTTP2_PROTOCOL_ERROR',
+                            'net::ERR_BLOCKED_BY_CLIENT', 'net::ERR_INTERNET_DISCONNECTED'}:
+                        details['failure'] = failure
                 trace.record(event,**details)
         except Exception:pass
     def new_page(context,*args,**kwargs):
