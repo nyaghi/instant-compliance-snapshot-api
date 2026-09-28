@@ -64,7 +64,10 @@ class FailureLabels(unittest.TestCase):
         assert_ok_detail_only(root,'2afbb10')
         for file in ['deployment/durable_queue.py','deployment/queue_schema.sql',
                      'deployment/lab_capacity.py','deployment/performance_lab.py']:
-            subprocess.run(['git','diff','--exit-code','2afbb10','--',file],cwd=root,check=True,stdout=subprocess.DEVNULL)
+            if file=='deployment/durable_queue.py':
+                from testing.capacity_lab.me_application_scope import assert_queue_recovery_only
+                assert_queue_recovery_only(root,'2afbb10')
+            else:subprocess.run(['git','diff','--exit-code','2afbb10','--',file],cwd=root,check=True,stdout=subprocess.DEVNULL)
 
 
 if __name__=='__main__': unittest.main(verbosity=2)

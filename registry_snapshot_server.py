@@ -8567,6 +8567,12 @@ class MaineRegistrySession:
 
 
 def me_parse_search_rows(result_html):
+    if lab_me_application_recovery_enabled():
+        title = re.search(r'<title\b[^>]*>(.*?)</title>', result_html, re.I | re.S)
+        text = re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]+>', ' ', result_html))).strip()
+        if (title and re.sub(r'\s+', ' ', title[1]).strip() == 'ALMS License Information : Error'
+                and 'An error has been encountered while processing your request. Please try again at a later time.' in text):
+            raise MainePublicApplicationError('Maine returned its public application-error page and requested a later retry')
     rows: list[dict[str, str]] = []
     for match in re.finditer(
         r'<tr[^>]*>\s*<td[^>]*>\s*<a\s+href="(?P<href>ShowDetail\.aspx[^"]+)"[^>]*>(?P<name>.*?)</a>\s*</td>\s*'
@@ -8629,6 +8635,17 @@ def me_browser_search_rows(page, query, deadline):
         page.locator(f'input[name="{prefix}btnSearch"]').click(
             timeout=1000 * me_request_timeout(deadline, 3), no_wait_after=True)
     return me_parse_search_rows(page.content()), MaineBrowserDetailReader(page, deadline)
+
+
+class MainePublicApplicationError(ValueError):
+    """Explicit public registry error, never an empty search result."""
+
+
+def lab_me_application_recovery_enabled() -> bool:
+    return (APP_VERSION.endswith('-performance-lab')
+            and os.environ.get('PUBLIC_BASE_URL') == 'https://instant-compliance-snapshot-api-hn4v.onrender.com'
+            and LAB_LOOKUP_MODE_CONTEXT.get() == 'sales'
+            and os.environ.get('CE_LAB_ME_APPLICATION_RECOVERY') == '1')
 
 
 def lab_me_prefix_coverage_enabled() -> bool:
@@ -8721,6 +8738,7 @@ def me_fast_direct_confirmation_result(org, page=None, deadline=None):
     pending = []
     sessions = []
     session = None
+    application_error = False
     if progress.get("best_row"):
         best_row = dict(progress["best_row"])
         best_opener = MaineRegistrySession(deadline)
@@ -8762,6 +8780,10 @@ def me_fast_direct_confirmation_result(org, page=None, deadline=None):
                     if score > best_score:
                         best_row, best_opener, best_score = row, opener, score
                 log_event(f"ME search phase={phase} query={query!r} seconds={time.perf_counter()-started:.2f} rows={len(rows)}")
+            except MainePublicApplicationError as exc:
+                application_error = True
+                last_error = str(exc)
+                attempt_evidence.update(error=last_error, stage='source application error')
             except Exception as exc:
                 last_error = f"{type(exc).__name__}: {str(exc)[:120]}"
                 attempt_evidence.update(error=last_error, stage=getattr(session, "stage", phase) if phase == "direct" else phase)
@@ -8781,15 +8803,23 @@ def me_fast_direct_confirmation_result(org, page=None, deadline=None):
                 source_attempts.append(attempt_evidence)
             if (best_row and best_score[1] == 3
                     and registry_active_tiebreak(best_row.get("status", "")) > 0
-                    and best_row.get("address_evidence", {}).get("decision") != "conflict") or time.perf_counter() >= search_deadline or (phase == "direct" and len(pending) >= 2):
+                    and best_row.get("address_evidence", {}).get("decision") != "conflict") or time.perf_counter() >= search_deadline or (phase == "direct" and len(pending) >= 2) or application_error:
                 break
-        if best_row or time.perf_counter() >= search_deadline:
+        if best_row or time.perf_counter() >= search_deadline or application_error:
             break
     checked_any = bool(completed)
     last_error = "" if len(completed) == len(queries) else (last_error or "Incomplete Maine search")
     # Keep the selected session through detail retrieval, then close every
     # transport regardless of positive, negative, or incomplete result.
     try:
+        if application_error:
+            result = checker.StateResult(org.organization_name, org.ein, 'ME', 'Site Not Reachable',
+                NAME_SEARCH_PREFLIGHT_URLS['ME'], success=False,
+                raw_status_text='Maine public registry application error',
+                source_note='Maine returned its own application-error page and requested a later retry. No registration conclusion could be drawn.',
+                error=last_error)
+            result.reason_code = 'ME_SOURCE_APPLICATION_ERROR'
+            return result
         if best_opener is not None:
             best_opener.deadline = deadline
         if best_row:
@@ -29438,6 +29468,8 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
             me_attempt_history.append({key: result.get(key) for key in (
                 "semantic_attempts", "status", "reason_code", "error", "source_note", "lookup_seconds", "me_queue_seconds", "source_attempts")})
             result["me_attempt_history"] = list(me_attempt_history)
+            if result.get('reason_code') == 'ME_SOURCE_APPLICATION_ERROR':
+                return result  # The lab queue owns the one delayed, fenced recovery.
             if attempt > 1 and result.get("success"):
                 result["runner_recovery"] = "Maine completed after one delayed recovery attempt."
         if state == "MI":

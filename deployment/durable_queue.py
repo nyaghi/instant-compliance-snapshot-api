@@ -33,6 +33,22 @@ class QueueFull(ValueError): pass
 class NotFound(ValueError): pass
 
 
+def source_application_retry(job, result, error, now, worker):
+    """One later fresh task for an explicit source error, inside Sales' cutoff."""
+    if (os.environ.get('CE_LAB_ME_APPLICATION_RECOVERY') != '1'
+            or os.environ.get('PUBLIC_BASE_URL') != 'https://instant-compliance-snapshot-api-hn4v.onrender.com'
+            or not job['source_version'].endswith('-performance-lab')
+            or job['mode'] != 'sales' or job['state'] != 'ME' or job['attempt'] != 1
+            or error or job['stop_reason'] or job['deadline'] - now < 24
+            or not isinstance(result, dict) or result.get('success') is not False
+            or result.get('status') != 'Site Not Reachable'
+            or result.get('reason_code') != 'ME_SOURCE_APPLICATION_ERROR'):
+        return None
+    return {'failed_worker': worker, 'not_before': now + 8,
+            'first_attempt': {key: result.get(key) for key in
+                ('state', 'status', 'reason_code', 'source_note', 'source_attempts')}}
+
+
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
 
@@ -509,6 +525,8 @@ class Queue:
                 workflows.sort(key=lambda w:w['id']!=protected['workflow_id'])
             for w, j in claim_candidates(workflows, pending, running, estimates, tail_scores,
                                          now, cfg['source_version'], protected):
+                recovery = (j.get('result') or {}).get('lab_source_retry')
+                if recovery and (worker == recovery['failed_worker'] or now < recovery['not_before']): continue
                 if w['source_version'] != wk['source_version'] or running[w['id']] >= w['payload'].get('state_concurrency', 15): continue
                 if w['started'] is None and len(active) >= cfg['workflow_limit']: continue
                 seed = identity.get(w['id'])
@@ -644,7 +662,7 @@ class Queue:
         with self.transaction() as (c, now):
             self._settle(c, now)
             jobs = {j['id']: j for j in c.execute(
-                'SELECT j.*,w.ein,w.source_version,w.stop_reason FROM cc_lab_jobs j '
+                'SELECT j.*,w.ein,w.source_version,w.stop_reason,w.mode,w.deadline FROM cc_lab_jobs j '
                 'JOIN cc_lab_workflows w ON w.id=j.workflow_id WHERE j.id=ANY(%s) AND j.owner=%s',
                 ([item[0] for item in completions], worker))}
             updates=[]; accepted=[]
@@ -661,9 +679,25 @@ class Queue:
                         raise ValueError('Worker result state mismatch')
                     if result.get('app_version') != j['source_version']:raise ValueError('Worker result release mismatch')
                 if result is None and not error:raise ValueError('Missing result or error')
-                updates.append((j,result,error));accepted.append(True)
+                recovery = source_application_retry(j, result, error, now, worker)
+                if recovery and not c.execute('SELECT 1 FROM cc_lab_workers WHERE id<>%s AND source_version=%s AND retired=false AND heartbeat>%s LIMIT 1',
+                                              (worker,j['source_version'],now-20)).fetchone():
+                    recovery = None
+                updates.append((j,result,error,recovery));accepted.append(True)
             with c.pipeline():
-                for j,result,error in updates:
+                for j,result,error,recovery in updates:
+                    if recovery:
+                        # Only already-reaped, identity/release-validated tasks reach here.
+                        # Keep the original workflow deadline and every admission limit.
+                        c.execute("UPDATE cc_lab_jobs SET phase='queued',owner=NULL,token=NULL,claimed=NULL,lease_until=NULL,run_until=NULL,finished=NULL,result=%s,error=NULL WHERE id=%s",
+                                  (Jsonb({**result, 'lab_source_retry': recovery}), j['id']))
+                        self.event(c,now,'source_application_retry',j['workflow_id'],j['id'],
+                                   failed_worker=worker,not_before=recovery['not_before'],first_attempt=recovery['first_attempt'])
+                        continue
+                    prior_recovery = (j.get('result') or {}).get('lab_source_retry')
+                    if prior_recovery and result is not None:
+                        result = {**result, 'lab_source_recovery': {'first_attempt': prior_recovery['first_attempt'],
+                                  'attempts': j['attempt'], 'recovered': bool(result.get('success'))}}
                     c.execute("UPDATE cc_lab_jobs SET phase='done',finished=%s,result=%s,error=%s WHERE id=%s",
                               (now,Jsonb(result) if result is not None else None,error,j['id']))
                     self.event(c,now,'finished',j['workflow_id'],j['id'],error=error)

@@ -3,6 +3,8 @@ import ast, subprocess
 from pathlib import Path
 
 def strip_observed_tail(tree):
+    from testing.capacity_lab.me_application_scope import strip_queue_recovery
+    strip_queue_recovery(tree)
     fn=next((n for n in tree.body if getattr(n,'name','')=='cohort_timing_estimates'),None)
     if fn is None:return
     added=next((n for n in fn.body if isinstance(n,ast.Assign)

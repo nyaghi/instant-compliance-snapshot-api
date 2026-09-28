@@ -78,6 +78,9 @@ class PatientDetail(unittest.TestCase):
         new=ast.parse((root/'registry_snapshot_server.py').read_text());strip_nj_patient_detail(new)
         self.assertEqual(ast.dump(old),ast.dump(new))
         for path in ['deployment/durable_queue.py','deployment/lab_capacity.py','deployment/queue_schema.sql']:
-            subprocess.run(['git','diff','--exit-code','d7d0afa','--',path],cwd=root,check=True)
+            if path=='deployment/durable_queue.py':
+                from testing.capacity_lab.me_application_scope import assert_queue_recovery_only
+                assert_queue_recovery_only(root,'d7d0afa')
+            else:subprocess.run(['git','diff','--exit-code','d7d0afa','--',path],cwd=root,check=True)
 
 if __name__=='__main__':unittest.main(verbosity=2)

@@ -143,6 +143,9 @@ class PrefixCoverage(unittest.TestCase):
                 old_worker=ast.parse(subprocess.check_output(['git','show','7e25b24:'+p],cwd=root).decode())
                 new_worker=ast.parse((root/p).read_text());strip_me_transport_trace(new_worker)
                 self.assertEqual(ast.dump(old_worker),ast.dump(new_worker))
+            elif p=='deployment/durable_queue.py':
+                from testing.capacity_lab.me_application_scope import assert_queue_recovery_only
+                assert_queue_recovery_only(root,'7e25b24')
             else:subprocess.run(['git','diff','--exit-code','7e25b24','--',p],cwd=root,check=True)
 
 if __name__=='__main__':unittest.main(verbosity=2)

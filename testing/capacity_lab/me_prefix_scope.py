@@ -2,6 +2,8 @@
 import ast
 
 def strip_me_prefix_coverage(tree):
+    from testing.capacity_lab.me_application_scope import strip_me_application_recovery
+    strip_me_application_recovery(tree)
     names={'lab_me_prefix_coverage_enabled','me_covering_literal_prefix',
            'me_complete_prefix_list','me_search_with_prefix_coverage'}
     if not any(getattr(n,'name','') in names for n in tree.body):return
