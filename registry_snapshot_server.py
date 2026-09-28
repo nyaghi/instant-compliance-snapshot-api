@@ -8556,6 +8556,8 @@ class MaineRegistrySession:
             timeout=me_request_timeout(self.deadline, ME_FAST_DIRECT_POST_TIMEOUT_SECONDS))
         response.raise_for_status()
         self.stage = "completed search parsing"
+        if lab_me_prefix_coverage_enabled():
+            self.completed_search_html = response.text
         rows = me_parse_search_rows(response.text)
         # A results document can carry its own WebForms state without the search
         # form. Never submit that document's hidden fields as the next search.
@@ -8629,6 +8631,67 @@ def me_browser_search_rows(page, query, deadline):
     return me_parse_search_rows(page.content()), MaineBrowserDetailReader(page, deadline)
 
 
+def lab_me_prefix_coverage_enabled() -> bool:
+    return (APP_VERSION.endswith("-performance-lab")
+            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and LAB_LOOKUP_MODE_CONTEXT.get() == "sales"
+            and os.environ.get("CE_LAB_ME_PREFIX_COVERAGE") == "1")
+
+
+def me_covering_literal_prefix(query, queries):
+    """Coalesce only literal-prefix queries, never aliases with different starts."""
+    choices = []
+    for other in queries:
+        if other == query:
+            continue
+        prefix = os.path.commonprefix([query.casefold(), other.casefold()]).strip()
+        if len(prefix) < 4 or not re.fullmatch(r"[a-z0-9 &'\-]+", prefix):
+            continue
+        covered = sum(candidate.casefold().startswith(prefix) for candidate in queries)
+        if covered >= 2:
+            choices.append((covered, len(prefix), prefix))
+    return max(choices)[2] if choices else query
+
+
+def me_complete_prefix_list(body, rows) -> bool:
+    # Default pagination is allowed only when every advertised row is present.
+    # An Active Only filter or partial response cannot cover the original plan.
+    if not re.search(r"</html\s*>\s*$", body, re.I):
+        return False
+    active = re.findall(r'<input\b[^>]*\bid=["\']cbActiveOnly["\'][^>]*>', body, re.I)
+    if len(active) != 1 or re.search(r"\bchecked(?:\s|=|/?>)", active[0], re.I):
+        return False
+    text = html.unescape(re.sub(r"<[^>]+>", " ", body))
+    counts = re.findall(r"(?<![\d,])(\d[\d,]*)\s+records?\s+found\b", text, re.I)
+    return (len(counts) == 1 and bool(re.fullmatch(r"\d+|\d{1,3}(?:,\d{3})+", counts[0]))
+            and int(counts[0].replace(",", "")) == len(rows))
+
+
+def me_search_with_prefix_coverage(session, query, queries):
+    """Fresh completed rows reused within this private lookup session only."""
+    session.covered_source_query = ""
+    if not lab_me_prefix_coverage_enabled() or not queries or query == queries[0]:
+        return session.search(query)
+    prefix = me_covering_literal_prefix(query, queries)
+    if prefix == query:
+        return session.search(query)
+    coverage = getattr(session, "_cc_complete_prefix_lists", None)
+    if coverage is None:
+        coverage = session._cc_complete_prefix_lists = {}
+    if prefix not in coverage:
+        remaining = queries[queries.index(query):] if query in queries else []
+        if sum(candidate.casefold().startswith(prefix) for candidate in remaining) < 2:
+            return session.search(query)
+        rows, _ = session.search(prefix)
+        body = getattr(session, "completed_search_html", "")
+        coverage[prefix] = ([dict(row) for row in rows] if me_complete_prefix_list(body, rows) else None)
+    if coverage[prefix] is not None:
+        session.covered_source_query = prefix
+        return [dict(row) for row in coverage[prefix]], session
+    # An oversized, filtered or incomplete prefix list saves no searches.
+    return session.search(query)
+
+
 def me_fast_direct_confirmation_result(org, page=None, deadline=None):
     deadline = deadline or (time.perf_counter() + 105)
     search_deadline = deadline - 24  # Two bounded detail reads cannot be consumed by name queries.
@@ -8660,7 +8723,9 @@ def me_fast_direct_confirmation_result(org, page=None, deadline=None):
                     if session is None:
                         session = MaineRegistrySession(search_deadline)
                         sessions.append(session)
-                    rows, opener = session.search(query)
+                    rows, opener = me_search_with_prefix_coverage(session, query, queries)
+                    if session.covered_source_query:
+                        attempt_evidence["covered_by_completed_prefix"] = session.covered_source_query
                 else:
                     if page is None:
                         continue

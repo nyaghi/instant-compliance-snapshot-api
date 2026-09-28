@@ -2,6 +2,8 @@
 import ast
 
 def strip_nj_patient_detail(tree):
+    from testing.capacity_lab.me_prefix_scope import strip_me_prefix_coverage
+    strip_me_prefix_coverage(tree)
     helper=next((n for n in tree.body if getattr(n,'name','')=='nj_public_request_timeout'),None)
     if helper is None:return
     tree.body.remove(helper)
