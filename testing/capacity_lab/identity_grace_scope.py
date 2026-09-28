@@ -21,8 +21,10 @@ def strip_identity_grace_engine(tree):
     guard.body=ast.parse("return master.sales_identity_evidence(p['organization_name'], p['ein'])").body
 
 def strip_identity_grace(tree):
-    co=next(n for n in tree.body if getattr(n,'name','')=='identity_co_names')
-    if not co.args.kwonlyargs:return
+    from testing.capacity_lab.pa_rows_scope import strip_pa_rows
+    strip_pa_rows(tree)
+    co=next((n for n in tree.body if getattr(n,'name','')=='identity_co_names'),None)
+    if co is None or not co.args.kwonlyargs:return
     assert [a.arg for a in co.args.kwonlyargs]==['request_timeout']
     co.args.kwonlyargs=[];co.args.kw_defaults=[]
     call=next(n for n in ast.walk(co) if isinstance(n,ast.Call) and ast.unparse(n.func)=='identity_fetch')

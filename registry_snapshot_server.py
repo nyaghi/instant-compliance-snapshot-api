@@ -20229,6 +20229,48 @@ def search_pa_with_name_fallback(page, org):
             page.remove_listener(event, listener)
 
 
+def pa_name_rows(page, selector):
+    """Read the same visible rows in one browser round trip in opt-in lab Sales."""
+    rows = page.locator(selector)
+    if not (APP_VERSION.endswith('-performance-lab')
+            and os.environ.get('PUBLIC_BASE_URL') == 'https://instant-compliance-snapshot-api-hn4v.onrender.com'
+            and os.environ.get('CE_LAB_PA_ROW_SNAPSHOT') == '1'
+            and LAB_LOOKUP_MODE_CONTEXT.get() == 'sales'):
+        return rows
+    try:
+        data = rows.evaluate_all('''nodes => nodes.slice(0, 100).map(row => {
+            const style = getComputedStyle(row);
+            if (style.display === 'contents' || style.contentVisibility !== 'visible')
+                throw new Error('Use ordinary visibility');
+            const rect = row.getBoundingClientRect();
+            const visible = style.visibility === 'visible' && rect.width > 0 && rect.height > 0;
+            if (!visible) return {visible:false,text:'',count:0,first:'',fifth:''};
+            const cells = row.querySelectorAll('td');
+            return {visible:true,text:row.innerText,count:cells.length,
+                    first:cells.length >= 5 ? cells[0].innerText : '',
+                    fifth:cells.length >= 5 ? cells[4].innerText : ''};
+        })''')
+        if (not isinstance(data, list) or len(data) > 100 or any(
+                not isinstance(item, dict) or type(item.get('visible')) is not bool
+                or type(item.get('count')) is not int or item['count'] < 0
+                or any(not isinstance(item.get(key), str) for key in ('text', 'first', 'fifth'))
+                for item in data)):
+            return rows
+        def row_view(item):
+            def cell(index):
+                if index not in (0, 4): raise IndexError(index)
+                return SimpleNamespace(inner_text=lambda **kwargs: item['first' if index == 0 else 'fifth'])
+            def cells(selector):
+                if selector != 'td': raise ValueError('Unsupported snapshot selector')
+                return SimpleNamespace(count=lambda: item['count'], nth=cell)
+            return SimpleNamespace(is_visible=lambda **kwargs: item['visible'],
+                inner_text=lambda **kwargs: item['text'], locator=cells)
+        views = [row_view(item) for item in data]
+        return SimpleNamespace(count=lambda: len(views), nth=lambda index: views[index])
+    except Exception:
+        return rows
+
+
 def pa_prepare_name_fallback_form(page, url):
     """A completed PA search leaves its form usable without another idle wait."""
     ready = (page.url == url
@@ -20371,7 +20413,7 @@ def search_pa_with_name_fallback_core(page, org, completion_guard, completion_wa
             candidates = []
             for selector in ["tbody tr", "tr", "[role='row']"]:
                 try:
-                    rows = page.locator(selector)
+                    rows = pa_name_rows(page, selector)
                     for index in range(min(rows.count(), 100)):
                         row = rows.nth(index)
                         try:

@@ -513,6 +513,8 @@ def strip_fl_request_allowance(tree):
 
 
 def strip_transport_budget_and_redundancy(tree):
+    from testing.capacity_lab.nj_budget_scope import strip_nj_name_budget
+    strip_nj_name_budget(tree)
     """Allow only the measured lab transport adjustments, then compare all code."""
     strip_fl_request_allowance(tree)
     from testing.capacity_lab.or_completion_scope import strip_or_completion
