@@ -10,6 +10,8 @@ NAMES = ['Example Relief', 'Former Example Relief', 'Example Relief Inc']
 
 
 def strip_same_lookup(tree):
+    from testing.capacity_lab.ny_failed_scope import strip_ny_failed_wakeup
+    strip_ny_failed_wakeup(tree)
     helpers = {'NJCompletedPublicQueries', 'nj_zero_reuse_enabled', 'nj_name_fallback_queries',
                'nj_complete_public_zero', 'nj_complete_other_ein_rows', 'nj_same_lookup_zero_queries'}
     nodes = {n.name: n for n in tree.body if getattr(n, 'name', '') in helpers}

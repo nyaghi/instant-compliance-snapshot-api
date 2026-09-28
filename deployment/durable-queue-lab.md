@@ -1156,3 +1156,18 @@ headers, bodies, query values, tokens and organization data. The observer makes
 no requests and reads no response bodies. A bounded trace survives deadline
 termination so a failed page load can be distinguished from an API response
 timeout. Queue admission, worker allocation and registry semantics are unchanged.
+
+### Explicit NY request failure wakeup (perf.85)
+
+Perf.84 passed18smokechecks. Its20organizationNYdiagnostic completed18by60;
+one navigation receivedHTTP429 and another job expired. Timing also showed
+several search/detail requests firing `requestfailed` inabout0.1seconds while
+the response-only waiter consumed12seconds before its existing retry. These
+are distinct from successful headers whose body has not finished downloading.
+
+`CE_LAB_NY_FAILED_REQUEST_WAKEUP=1` enables a lab-Sales-only waiter that listens
+for matching requests created by the current submission. Explicit failure wakes
+the existing single retry; it does not add attempts or extend any deadline.
+Response bodies still require completion, unrelated/stale requests are ignored,
+and HTTP/verification denial handling and all identity/status logic are retained.
+Standard and customer-browser connector behavior remain unchanged.

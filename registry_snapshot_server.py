@@ -20762,6 +20762,55 @@ class NYConnectorQueryNeeded(Exception):
         self.params = dict(params)
 
 
+class NYBrowserConnectionError(OSError):
+    """The matching browser request explicitly failed before completing."""
+
+
+def lab_ny_failed_request_wakeup() -> bool:
+    return (APP_VERSION.endswith("-performance-lab")
+            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and os.environ.get("CE_LAB_NY_FAILED_REQUEST_WAKEUP") == "1"
+            and LAB_LOOKUP_MODE_CONTEXT.get() == "sales")
+
+
+def ny_wait_for_completed_or_failed_response(page, predicate, submit, remaining_ms):
+    """Observe this submission's complete response or explicit transport failure.
+
+    A failed request cannot produce response/requestfinished events. Detect it
+    promptly instead of consuming the full wait before the existing one retry.
+    Only requests started during this submission participate; old/other queries
+    cannot complete or fail it. HTTP rejection still returns without body reads.
+    """
+    started=set();matched={};finished=set();failed=set()
+    def response_seen(response):
+        if response.request in started and predicate(response) and "response" not in matched:
+            matched["response"]=response
+    def request_failed(request):
+        if request in started and predicate(SimpleNamespace(url=request.url,request=request)):
+            failed.add(request)
+    hooks=[("request",lambda request:started.add(request)),("response",response_seen),
+           ("requestfinished",lambda request:finished.add(request)),("requestfailed",request_failed)]
+    attached=[]
+    try:
+        for event,callback in hooks:
+            page.on(event,callback);attached.append((event,callback))
+        submit()
+        while True:
+            remaining=remaining_ms()
+            response=matched.get("response")
+            if response is not None:
+                if response.status != 200 or response.request in finished:
+                    return response
+                if response.request in failed:
+                    raise NYBrowserConnectionError("New York's matching browser request failed before its response completed")
+            elif failed:
+                raise NYBrowserConnectionError("New York's matching browser request failed before response headers arrived")
+            page.wait_for_timeout(min(100,remaining))
+    finally:
+        for event,callback in attached:
+            page.remove_listener(event,callback)
+
+
 class NYBrowserResponse:
     """Expose only the completed official response; never retain verification tokens."""
     def __init__(self, response):
@@ -20778,6 +20827,8 @@ class NYBrowserResponse:
 
 def ny_complete_browser_response(page, predicate, submit, remaining_ms):
     """Wait for this response's complete body within the original request budget."""
+    if lab_ny_failed_request_wakeup():
+        return ny_wait_for_completed_or_failed_response(page,predicate,submit,remaining_ms)
     matched = {}
 
     class HeadersRejected(Exception):
@@ -20840,7 +20891,7 @@ def ny_browser_registry_response(page, operation: str, params: dict, timeout: fl
                 if verified.status != 200 or verified.json().get("verified") is not True:
                     raise NYVerificationRequired("New York did not accept the browser verification")
                 page.wait_for_function("Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === 'Search' && !b.disabled)", timeout=remaining_ms())
-            except (TimeoutError, checker.PlaywrightTimeoutError):
+            except (TimeoutError, checker.PlaywrightTimeoutError, NYBrowserConnectionError):
                 # An unanswered request is not an explicit verification denial.
                 # Preserve the existing one-retry policy and original deadline.
                 raise
@@ -21030,7 +21081,7 @@ def search_ny_direct(org, browser_page=None, registry_search_provider=None, regi
                 code = getattr(exc, "code", None)
                 http_status = getattr(response, "status_code", None)
                 result._ny_transport_failure = isinstance(exc, (TimeoutError, checker.PlaywrightTimeoutError, OSError)) or code in {6, 7, 28, 35, 52, 55, 56} or http_status in {403, 408, 429, 500, 502, 503, 504}
-                transient = isinstance(exc, (TimeoutError, checker.PlaywrightTimeoutError)) or code in {7, 28, 52, 55, 56} or http_status in {408, 429, 500, 502, 503, 504}
+                transient = isinstance(exc, (TimeoutError, checker.PlaywrightTimeoutError, NYBrowserConnectionError)) or code in {7, 28, 52, 55, 56} or http_status in {408, 429, 500, 502, 503, 504}
                 label = f"HTTP {http_status}" if isinstance(http_status, int) else type(exc).__name__
                 result.source_attempts.append(f"{attempt}: {label} in {time.perf_counter() - started:.2f}s")
                 # One retry for the entire lookup, inside the original deadline.

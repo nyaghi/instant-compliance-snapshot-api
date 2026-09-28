@@ -4,6 +4,8 @@ from pathlib import Path
 
 
 def strip_ny_body_completion(tree):
+    from testing.capacity_lab.ny_failed_scope import strip_ny_failed_wakeup
+    strip_ny_failed_wakeup(tree)
     helper=next((n for n in tree.body if getattr(n,'name','')=='ny_complete_browser_response'),None)
     if helper is None:return
     assert hashlib.sha256(ast.dump(helper).encode()).hexdigest()=='22c76d1d0e2b177afb409250a9fd5516d578d4b4acc7e04d50ba71e6cd32aaaa'

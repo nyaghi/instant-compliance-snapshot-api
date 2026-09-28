@@ -96,6 +96,9 @@ class TransportTrace(unittest.TestCase):
         for path,strip in [('deployment/queue_engine.py',strip_browser_trace_engine),('deployment/queue_worker.py',strip_browser_trace_worker),('registry_snapshot_server.py',None),('deployment/durable_queue.py',None)]:
             old=ast.parse(subprocess.check_output(['git','show','371e88e:'+path],cwd=root).decode())
             new=ast.parse((root/path).read_text(encoding='utf-8'))
+            if path=='registry_snapshot_server.py':
+                from testing.capacity_lab.ny_failed_scope import strip_ny_failed_wakeup
+                strip_ny_failed_wakeup(new)
             if strip:strip(new)
             self.assertEqual(ast.dump(old),ast.dump(new),path)
 
