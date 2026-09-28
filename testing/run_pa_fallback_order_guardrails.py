@@ -28,6 +28,11 @@ class FallbackControls(unittest.TestCase):
     def test_full_organization_name_is_first_not_pruned_by_common_word(self):
         self.assertEqual(c.pa_name_search_plan(self.org)[0], self.org.organization_name)
 
+    def test_new_exact_probe_preserves_previously_bounded_derived_fallbacks(self):
+        org=c.checker.Organization('Junior Achievement USA','84-1267604')
+        plan=c.pa_name_search_plan(org)
+        self.assertEqual(plan, ['Junior Achievement USA','Junior','Achievement'])
+
     def test_plan_is_bounded_and_keeps_distinct_aliases(self):
         with patch.object(c, 'known_names_for_ein', return_value=['An Independent Alias']), \
              patch.object(c, 'build_search_queries', return_value=['Focus on the Family', 'Family', 'An Independent Alias']):

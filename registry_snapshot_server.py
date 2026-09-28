@@ -134,7 +134,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.28.3-staging").strip() or "2026.09.28.3-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.28.4-staging").strip() or "2026.09.28.4-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -19308,9 +19308,14 @@ def pa_name_search_plan(org):
         include_leading_article_variants=True, max_queries=8)
     core = distinctive_core_words(org.organization_name)
     priorities = [" ".join(core[:n]) for n in (2, 3) if len(core) >= n]
+    # Preserve the previously bounded derived-query plan. Full legal/reviewed
+    # names are added separately so a short token cannot remove them up front.
+    derived = list(dict.fromkeys(re.sub(r"\s+", " ", value).strip()
+        for value in [*priorities, *high_signal_search_phrases(org.organization_name), *variants] if value))[:10]
+    derived = [name for name in derived if not any(other.casefold() != name.casefold()
+        and other.casefold() in name.casefold() for other in derived)]
     names, seen = [], set()
-    for value in [org.organization_name, *known_names_for_ein(org.ein), *variants, *priorities,
-                  *high_signal_search_phrases(org.organization_name)]:
+    for value in [org.organization_name, *known_names_for_ein(org.ein), *derived]:
         name = re.sub(r"\s+", " ", value).strip()
         if name and name.casefold() not in seen:
             names.append(name)
