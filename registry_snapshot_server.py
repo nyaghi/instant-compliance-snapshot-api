@@ -27233,15 +27233,93 @@ def lab_wa_readiness_waits_only() -> bool:
             and LAB_LOOKUP_MODE_CONTEXT.get() == "sales")
 
 
+def lab_wa_public_detail(org, module):
+    """One fresh unique-EIN public detail; all other cases keep the UI lookup.
+
+    These are the search form's own public requests. Search-row status alone
+    is never used, and an empty search is not accepted as a negative result.
+    """
+    if not (lab_wa_readiness_waits_only()
+            and os.environ.get("CE_LAB_WA_PUBLIC_DETAIL") == "1"):
+        return None
+    ein = canonical_ein_digits(org.ein)
+    if len(ein) != 9:
+        return None
+    deadline = time.monotonic() + 14.0
+    try:
+        fields = {"Type": "FEINNo", "PageID": 1, "PageCount": 10, "IsSearch": "true",
+            "FEINNo": ein, "PrincipalAddress[ID]": 0, "PrincipalAddress[Country]": "USA",
+            "SortBy": "FEINNo", "SortType": "ASC"}
+        rows = json.loads(identity_fetch(
+            "https://ccfs-api.prod.sos.wa.gov/api/CFTPublicSearch/GetCFPublicSearchList", deadline,
+            headers={"Content-Type": "application/x-www-form-urlencoded", "Referer": "https://ccfs.sos.wa.gov/"},
+            data=urlencode(fields).encode(), request_timeout=9.0))
+        if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+            return None
+        row = rows[0]
+        if (canonical_ein_digits(str(row.get("FEINNumber") or "")) != ein
+                or row.get("BusinessType") != "Charity"
+                or not isinstance(row.get("EntityName"), str) or not row["EntityName"].strip()):
+            return None
+        identifier = row.get("CFTId")
+        if type(identifier) is not int or identifier <= 0 or not str(row.get("RegistrationNumber") or "").isdigit():
+            return None
+        # A claimed larger result set must be handled by the established UI
+        # selection path rather than treating a truncated page as unique.
+        counts = [row.get("TotalPageCount", 0), (row.get("Criteria") or {}).get("TotalRowCount", 0)]
+        if any(value is not None and (type(value) is not int or value > 1 or value < 0) for value in counts):
+            return None
+        detail = json.loads(identity_fetch(
+            "https://ccfs-api.prod.sos.wa.gov/api/CFTCommon/GetOnlieCharitiSummaryById?" +
+            urlencode({"CharityID": identifier, "Type": "Charity"}), deadline,
+            headers={"Referer": "https://ccfs.sos.wa.gov/"}, request_timeout=6.0))
+        if (not isinstance(detail, dict) or detail.get("CharityID") != identifier
+                or detail.get("CFTId") != identifier
+                or str(detail.get("RegistrationNumber") or "") != str(row["RegistrationNumber"])
+                or canonical_ein_digits(str(detail.get("FEINNumber") or "")) != ein
+                or detail.get("BusinessType") != "CHARITABLE ORGANIZATION"):
+            return None
+        status, optional = detail.get("Status"), detail.get("IsOptionalRegistration")
+        if not isinstance(status, str) or not status.strip() or type(optional) is not bool:
+            return None
+        # Only the visible detail's own fields feed the existing interpreter.
+        # Placeholder/minimum dates cannot become usable renewal dates.
+        date_text = detail.get("RenewalDate") or ""
+        due = module.parse_date(str(date_text).split("T", 1)[0])
+        renewal = due.strftime("%m/%d/%Y") if due and due.year >= 1900 else ""
+        if not renewal and not optional and not re.search(r"closed|withdraw|cancel|revok|inactive", status, re.I):
+            return None
+        if any("\n" in value or "\r" in value for value in [status, row["EntityName"]]):
+            return None
+        body = f"FEIN Number:\n{ein}\nStatus:\n{status}\nRenewal Date:\n{renewal}\nIs Optional Charities?\n{'Yes' if optional else 'No'}"
+        aka = row.get("AKANames") or ""
+        if not isinstance(aka, str):
+            return None
+        registry_name = module.normalize_spaces(row["EntityName"] + (f"({aka})" if aka else ""))
+        result = module.SearchResult(organization_name=org.organization_name, ein=org.ein, state="WA",
+            status=module.STATUS_UNKNOWN, raw_status_text="", source_url=module.WA_SEARCH_URL, source_note="",
+            matched_registry_name=registry_name)
+        result = wa_apply_detail_master(result, body)
+        if not result.success or result.status in {"Unable to Confirm", module.STATUS_UNKNOWN}:
+            return None
+        result.source_note += " The public search and selected detail data were read directly from the same official requests used by the Washington page."
+        return result
+    except Exception as exc:
+        log_event("WA public detail fallback " + json.dumps(identity_failure_evidence(exc), sort_keys=True))
+        return None
+
+
 def search_wa_nm_state(org, state: str):
     state = (state or "").upper()
     module = load_wa_nm_module()
     external_org = module.Organization(organization_name=org.organization_name, ein=org.ein)
     if state == "WA":
-        if lab_wa_readiness_waits_only():
-            external_result = module.search_wa(external_org, show_process=False, readiness_waits_only=True)
-        else:
-            external_result = module.search_wa(external_org, show_process=False)
+        external_result = lab_wa_public_detail(org, module)
+        if external_result is None:
+            if lab_wa_readiness_waits_only():
+                external_result = module.search_wa(external_org, show_process=False, readiness_waits_only=True)
+            else:
+                external_result = module.search_wa(external_org, show_process=False)
         wa_raw = " ".join([
             getattr(external_result, "raw_status_text", "") or "",
             getattr(external_result, "source_note", "") or "",
