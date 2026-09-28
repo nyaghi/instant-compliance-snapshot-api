@@ -62,7 +62,7 @@ class ReadySteps(unittest.TestCase):
                     if case == 'mode_failed':
                         submit.assert_not_called(); read.assert_not_called(); self.assertFalse(result.success)
                         continue
-                    submit.assert_called_once_with(page, '123456789')
+                    submit.assert_called_once_with(page, '123456789', readiness_waits_only=fast)
                     options = {'timeout_seconds':22, 'require_search_response':True}
                     if fast:
                         options['require_complete_before_link'] = True

@@ -1136,3 +1136,23 @@ the queue-inclusive60-second cutoff remain in force. Individual, Standard,
 mixed-mode and discovery workflows preserve existing behavior. This is not an
 HTTP429 retry or verification bypass. The NY-only control is diagnostic, not
 evidence that the full32-state parity target has been achieved.
+
+### Source readiness follow-up (perf.84)
+
+The perf.83 NY diagnostics returned18/20 first responses by60seconds in each
+repeat. The larger paid trial was held and four standing nodes were retained.
+Disable start spacing (`CE_LAB_SALES_START_INTERVALS={}`); it did not improve
+the observed control. The opt-in scheduler implementation remains disabled.
+
+The existing lab-Sales Washington readiness path now skips two fixed input
+sleeps and the scroll pause after a completed, rendered search response.
+It retains the same typed EIN and input-value check, query plan, completed
+response guard, actionable detail click and exact-EIN status interpretation.
+Standard and nonlab calls retain the original waits.
+
+The isolated job runner passively records New York navigation, static asset,
+verification, search and detail request timing. Fixed event/route labels omit
+headers, bodies, query values, tokens and organization data. The observer makes
+no requests and reads no response bodies. A bounded trace survives deadline
+termination so a failed page load can be distinguished from an API response
+timeout. Queue admission, worker allocation and registry semantics are unchanged.

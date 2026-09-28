@@ -133,6 +133,56 @@ def observe_fl_headers(master, trace):
         director.open = original
 
 
+def browser_trace_route(url):
+    """Public NY route classes only; never identifiers, query strings or tokens."""
+    try:
+        parsed=urlsplit(url)
+        if parsed.scheme!='https':return None
+        if parsed.hostname=='charities-search.ag.ny.gov':
+            if parsed.path=='/RegistrySearch':return 'navigation'
+            if parsed.path.endswith(('.js','.css')):return 'static_asset'
+        if parsed.hostname=='charities-search-api.ag.ny.gov':
+            return {'/api/recaptcha/verify':'verification','/api/FileNet/RegistrySearch':'search',
+                    '/api/FileNet/RegistryDetail':'details'}.get(parsed.path)
+    except Exception:pass
+    return None
+
+
+@contextmanager
+def observe_browser_transport(master,state,sink=None):
+    """Passive listeners in this isolated child; no body reads or extra requests."""
+    if state!='NY' or not master.APP_VERSION.endswith('-performance-lab'):
+        yield None;return
+    from playwright.sync_api import BrowserContext
+    trace=FloridaTrace(Path(sink).with_suffix('').with_suffix('.browser.json') if sink else None)
+    original=BrowserContext.new_page
+    attached=[]
+    def record(event,request,status=None):
+        try:
+            route=browser_trace_route(request.url)
+            if route:
+                details={'route':route,'request_id':id(request)}
+                if isinstance(status,int):details['status']=status
+                trace.record(event,**details)
+        except Exception:pass
+    def new_page(context,*args,**kwargs):
+        page=original(context,*args,**kwargs)
+        for event,callback in [('request',lambda r:record('browser_start',r)),
+                ('response',lambda r:record('browser_headers',r.request,r.status)),
+                ('requestfinished',lambda r:record('browser_complete',r)),
+                ('requestfailed',lambda r:record('browser_failed',r))]:
+            try:page.on(event,callback);attached.append((page,event,callback))
+            except Exception:pass
+        return page
+    BrowserContext.new_page=new_page
+    try:yield trace
+    finally:
+        BrowserContext.new_page=original
+        for page,event,callback in attached:
+            try:page.remove_listener(event,callback)
+            except Exception:pass
+
+
 def transport_route(state, url):
     """A fixed label, never a URL, query, registry ID or session value."""
     try:
@@ -245,7 +295,7 @@ def execute(master, job, source_finished=None, trace_path=None):
     if trace: master.search_fl = trace.wrap(original)
     mode_context = getattr(master, 'LAB_LOOKUP_MODE_CONTEXT', None)
     mode_token = mode_context.set(p.get('mode', 'standard')) if mode_context is not None else None
-    with observe_fl_headers(master, trace), observe_transport(master, job['state'], trace_path) as transport_trace:
+    with observe_fl_headers(master, trace), observe_transport(master, job['state'], trace_path) as transport_trace, observe_browser_transport(master, job['state'], trace_path) as browser_trace:
         try:
             results = (master.run_sales_lookups_with_source_evidence(organizations, [job['state']], identity)
                        if identity is not None else master.run_state_lookups_parallel(organizations, [job['state']]))
@@ -254,6 +304,7 @@ def execute(master, job, source_finished=None, trace_path=None):
             if mode_context is not None: mode_context.reset(mode_token)
     if len(results) != 1: raise ValueError('Unexpected result count')
     if transport_trace: results[0]['lab_transport_trace'] = transport_trace.events
+    if browser_trace: results[0]['lab_browser_trace'] = browser_trace.events
     if trace: results[0]['lab_fl_trace'] = trace.events
     if identity is not None:
         results[0] = master.sales_result_with_identity(results[0], identity)

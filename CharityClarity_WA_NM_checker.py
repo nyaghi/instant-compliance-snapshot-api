@@ -236,7 +236,7 @@ def switch_to_fein_mode(page) -> None:
     time.sleep(1)
 
 
-def fill_fein_and_search(page, ein: str) -> bool:
+def fill_fein_and_search(page, ein: str, *, readiness_waits_only: bool = False) -> bool:
     try:
         name_box = page.locator("#txtKeywordSearch").first
         if name_box.is_visible():
@@ -248,7 +248,8 @@ def fill_fein_and_search(page, ein: str) -> bool:
     fein_box = page.locator("#FEINNoSearchField").first
     fein_box.wait_for(state="visible", timeout=10000)
     fein_box.click(timeout=5000, force=True)
-    time.sleep(1)
+    if not readiness_waits_only:
+        time.sleep(1)
     fein_box.fill("")
     fein_box.type(digits_only(ein), delay=50)
     if digits_only(fein_box.input_value()) != digits_only(ein):
@@ -264,7 +265,8 @@ def fill_fein_and_search(page, ein: str) -> bool:
         }
         """
     )
-    time.sleep(1)
+    if not readiness_waits_only:
+        time.sleep(1)
 
     for candidate in [
         page.get_by_role("button", name=re.compile(r"^Search$", re.I)),
@@ -604,7 +606,8 @@ def wait_for_result_link_or_no_value(page, org_name: str, timeout_seconds: int =
         if require_complete_before_link and not wa_completed_search_rendered(page):
             time.sleep(0.2)
             continue
-        scroll_to_results(page)
+        if not require_complete_before_link:
+            scroll_to_results(page)
         link = find_result_link(page, org_name)
         if link:
             return link
@@ -662,7 +665,7 @@ def search_wa(org: Organization, show_process: bool = False, *, readiness_waits_
             if not readiness_waits_only:
                 time.sleep(1)
 
-            if not fill_fein_and_search(page, org.ein):
+            if not fill_fein_and_search(page, org.ein, readiness_waits_only=readiness_waits_only):
                 result.error = "Could not click the Washington Search button."
                 return result
 

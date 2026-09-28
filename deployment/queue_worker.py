@@ -276,6 +276,7 @@ def warm_task_engine(version, settings):
 def log_failure_trace(r, error):
     """Keep bounded passive FL step evidence after task cleanup, never secrets."""
     log_transport_failure(r, error)
+    log_browser_failure(r,error)
     if not error or r['job']['state']!='FL':return
     try:
         path=r['output'].with_suffix('.trace.json')
@@ -326,6 +327,26 @@ def log_transport_failure(r, error):
               'state': r['job']['state'], 'error': error, 'events': events}), flush=True)
     except Exception:
         pass
+
+
+def log_browser_failure(r,error):
+    """Keep bounded fixed NY event labels when the task deadline kills its child."""
+    if not error or r['job']['state']!='NY':return
+    try:
+        path=r['output'].with_suffix('.browser.json')
+        if not path.is_file() or path.stat().st_size>65536:return
+        raw=json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(raw,list):return
+        events=[]
+        for row in raw[-64:]:
+            if not isinstance(row,dict):continue
+            clean={k:v for k,v in row.items() if k in {'seconds','status','request_id'} and isinstance(v,(int,float))}
+            for key,allowed in {'event':{'browser_start','browser_headers','browser_complete','browser_failed'},
+                    'route':{'navigation','static_asset','verification','search','details'}}.items():
+                if isinstance(row.get(key),str) and row[key] in allowed:clean[key]=row[key]
+            events.append(clean)
+        print('CC_LAB_TASK_FAILURE_DIAGNOSTICS '+json.dumps({'job':r['job']['id'],'state':'NY','error':error,'events':events}),flush=True)
+    except Exception:pass
 
 
 class AdmissionWindow:

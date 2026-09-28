@@ -45,8 +45,12 @@ class Scope(unittest.TestCase):
         from testing.capacity_lab.test_censored_tail import assert_queue_file_matches_ref
         for path in ['deployment/durable_queue.py', 'deployment/queue_schema.sql']:
             assert_queue_file_matches_ref(root, '9de9c95', path)
+        from testing.capacity_lab.ny_trace_scope import strip_browser_trace_engine,strip_browser_trace_worker
+        for path,strip in [('deployment/queue_worker.py',strip_browser_trace_worker),('deployment/queue_engine.py',strip_browser_trace_engine)]:
+            before=ast.parse(subprocess.check_output(['git','show','9de9c95:'+path],cwd=root).decode())
+            after=ast.parse((root/path).read_text());strip(after)
+            self.assertEqual(ast.dump(before),ast.dump(after))
         subprocess.run(['git', 'diff', '--exit-code', '9de9c95', '--',
-            'deployment/queue_worker.py', 'deployment/queue_engine.py',
             'deployment/performance_lab.py', 'web-staging', 'browser-connector'],
             cwd=root, check=True, stdout=subprocess.DEVNULL)
 

@@ -38,6 +38,11 @@ class Headers(unittest.TestCase):
         for path in ['deployment/queue_worker.py','deployment/queue_schema.sql','deployment/performance_lab.py']:
             if path == 'deployment/queue_schema.sql':
                 assert_queue_file_matches_ref(root, 'f56a83d', path)
+            elif path == 'deployment/queue_worker.py':
+                from testing.capacity_lab.ny_trace_scope import strip_browser_trace_worker
+                before=ast.parse(subprocess.check_output(['git','show','f56a83d:'+path],cwd=root).decode())
+                after=ast.parse((root/path).read_text());strip_browser_trace_worker(after)
+                self.assertEqual(ast.dump(before),ast.dump(after))
             else:
                 subprocess.run(['git','diff','--exit-code','f56a83d','--',path],cwd=root,check=True,stdout=subprocess.DEVNULL)
         old=ast.parse(subprocess.check_output(['git','show','f56a83d:deployment/durable_queue.py'],cwd=root).decode())

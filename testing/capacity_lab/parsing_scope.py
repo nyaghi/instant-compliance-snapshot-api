@@ -305,6 +305,8 @@ def strip_warm_ready_and_failure_trace_engine(tree):
 
 
 def strip_transport_trace_engine(tree):
+    from testing.capacity_lab.ny_trace_scope import strip_browser_trace_engine
+    strip_browser_trace_engine(tree)
     tree.body = [n for n in tree.body if getattr(n, 'name', '') not in {'transport_route', 'observe_transport'}
                  and not (isinstance(n, ast.ImportFrom) and n.module == 'contextlib'
                           and [a.name for a in n.names] == ['contextmanager'])]
@@ -323,6 +325,8 @@ def strip_transport_trace_engine(tree):
 
 
 def strip_transport_trace_worker(tree):
+    from testing.capacity_lab.ny_trace_scope import strip_browser_trace_worker
+    strip_browser_trace_worker(tree)
     tree.body = [n for n in tree.body if getattr(n, 'name', '') != 'log_transport_failure']
     fn = next((n for n in tree.body if getattr(n, 'name', '') == 'log_failure_trace'), None)
     if fn:
