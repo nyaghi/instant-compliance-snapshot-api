@@ -239,8 +239,7 @@ class DurableTests(unittest.TestCase):
     def test_late_identity_grace_remains_bounded_by_workflow(self):
         with patch.dict(os.environ,{'CE_LAB_SALES_IDENTITY_GRACE':'1'}):
             ident=self.submit(self.sales_without_review());worker=self.worker()
-            with self.q.transaction() as c:
-                now=self.q.now(c)
+            with self.q.transaction() as (c,now):
                 c.execute('UPDATE cc_lab_workflows SET deadline=%s WHERE id=%s',(now+3,ident))
             seed=self.q.claim(worker)
             self.assertEqual(seed['state'],'@sales_identity');self.assertLess(seed['run_seconds'],3)
