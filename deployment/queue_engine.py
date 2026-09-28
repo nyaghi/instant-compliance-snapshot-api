@@ -230,28 +230,44 @@ def observe_me_rejected_page(master, trace):
     if not callable(original):
         yield
         return
+    def record_rejected(body, event):
+        try:
+            import html, re
+            # Never retain hidden form fields, scripts, URLs, or headers.
+            visible = re.sub(r'<(script|style|textarea)\b[^>]*>.*?</\1\s*>', ' ', body[:2000000], flags=re.I|re.S)
+            visible = re.sub(r'<!--.*?-->', ' ', visible, flags=re.S)
+            visible = html.unescape(re.sub(r'<[^>]+>', ' ', visible))
+            visible = re.sub(r'https?://\S+', '[URL]', visible)
+            visible = re.sub(r'(?i)\b(password|secret|token|api[_ -]?key|connectionstring)\s*[:=]\s*\S+', r'\1=[redacted]', visible)
+            visible = re.sub(r'\s+', ' ', visible).strip()
+            trace.record(event, bytes=len(body), visible_text=visible[:1600])
+        except Exception:
+            pass
     def parsed(body):
         try:
             return original(body)
         except ValueError:
+            record_rejected(body, 'me_parser_rejected')
+            raise
+    session = getattr(master, 'MaineRegistrySession', None)
+    search = getattr(session, 'search', None)
+    def searched(self, *args, **kwargs):
+        try:
+            return search(self, *args, **kwargs)
+        except ValueError:
             try:
-                import html, re
-                # Never retain hidden form fields, scripts, URLs, or headers.
-                visible = re.sub(r'<(script|style|textarea)\b[^>]*>.*?</\1\s*>', ' ', body[:2000000], flags=re.I|re.S)
-                visible = re.sub(r'<!--.*?-->', ' ', visible, flags=re.S)
-                visible = html.unescape(re.sub(r'<[^>]+>', ' ', visible))
-                visible = re.sub(r'https?://\S+', '[URL]', visible)
-                visible = re.sub(r'(?i)\b(password|secret|token|api[_ -]?key|connectionstring)\s*[:=]\s*\S+', r'\1=[redacted]', visible)
-                visible = re.sub(r'\s+', ' ', visible).strip()
-                trace.record('me_parser_rejected', bytes=len(body), visible_text=visible[:1600])
+                if self.stage in ('search form GET', 'search form'):
+                    record_rejected(self.form_html, 'me_form_rejected')
             except Exception:
                 pass
             raise
     master.me_parse_search_rows = parsed
+    if callable(search):session.search = searched
     try:
         yield
     finally:
         master.me_parse_search_rows = original
+        if callable(search):session.search = search
 
 
 @contextmanager

@@ -8535,6 +8535,7 @@ class MaineRegistrySession:
             response.raise_for_status()
             self.form_html = response.text
             self.url = response.url
+        me_raise_public_application_error(self.form_html)
         fields = {}
         for hidden in re.finditer(r'<input[^>]+type="hidden"[^>]*>', self.form_html, re.I):
             tag = hidden.group(0)
@@ -8566,13 +8567,18 @@ class MaineRegistrySession:
         return rows, self
 
 
-def me_parse_search_rows(result_html):
+def me_raise_public_application_error(result_html):
+    """Recognize the same explicit public error on entry and result pages."""
     if lab_me_application_recovery_enabled():
         title = re.search(r'<title\b[^>]*>(.*?)</title>', result_html, re.I | re.S)
         text = re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]+>', ' ', result_html))).strip()
         if (title and re.sub(r'\s+', ' ', title[1]).strip() == 'ALMS License Information : Error'
                 and 'An error has been encountered while processing your request. Please try again at a later time.' in text):
             raise MainePublicApplicationError('Maine returned its public application-error page and requested a later retry')
+
+
+def me_parse_search_rows(result_html):
+    me_raise_public_application_error(result_html)
     rows: list[dict[str, str]] = []
     for match in re.finditer(
         r'<tr[^>]*>\s*<td[^>]*>\s*<a\s+href="(?P<href>ShowDetail\.aspx[^"]+)"[^>]*>(?P<name>.*?)</a>\s*</td>\s*'

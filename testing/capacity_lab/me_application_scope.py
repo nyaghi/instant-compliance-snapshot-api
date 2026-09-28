@@ -2,13 +2,17 @@
 import ast
 
 def strip_me_application_recovery(tree):
-    names={'MainePublicApplicationError','lab_me_application_recovery_enabled'}
+    names={'MainePublicApplicationError','lab_me_application_recovery_enabled','me_raise_public_application_error'}
     if not any(getattr(n,'name','') in names for n in tree.body):return
-    assert sum(getattr(n,'name','') in names for n in tree.body)==2
+    assert sum(getattr(n,'name','') in names for n in tree.body)==3
     tree.body=[n for n in tree.body if getattr(n,'name','') not in names]
     parser=next(n for n in tree.body if getattr(n,'name','')=='me_parse_search_rows')
-    assert ast.unparse(parser.body[0].test)=='lab_me_application_recovery_enabled()'
+    assert ast.unparse(parser.body[0])=='me_raise_public_application_error(result_html)'
     parser.body.pop(0)
+    session=next(n for n in tree.body if getattr(n,'name','')=='MaineRegistrySession')
+    search=next(n for n in session.body if getattr(n,'name','')=='search')
+    calls=[n for n in search.body if ast.unparse(n)=='me_raise_public_application_error(self.form_html)']
+    assert len(calls)==1;search.body.remove(calls[0])
     fn=next(n for n in tree.body if getattr(n,'name','')=='me_fast_direct_confirmation_result')
     hits=[]
     class Strip(ast.NodeTransformer):

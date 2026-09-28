@@ -52,11 +52,27 @@ class SourceError(unittest.TestCase):
   self.assertIsNone(source_application_retry(j,r,'WORKFLOW_DEADLINE',100,'worker'))
  def test_master_changes_are_confined_to_error_detection_and_recovery_exit(self):
   root=Path(m.__file__).parent;old=ast.parse(subprocess.check_output(['git','show','4b6afa0:registry_snapshot_server.py'],cwd=root).decode());new=ast.parse((root/'registry_snapshot_server.py').read_text())
-  changed={'me_parse_search_rows','me_fast_direct_confirmation_result','run_single_state_lookup_reliably'}
-  added={'MainePublicApplicationError','lab_me_application_recovery_enabled'}
-  a=[x for x in old.body if getattr(x,'name','') not in changed]
-  z=[x for x in new.body if getattr(x,'name','') not in changed|added]
-  self.assertEqual(ast.dump(ast.Module(body=a,type_ignores=[])),ast.dump(ast.Module(body=z,type_ignores=[])))
+  from testing.capacity_lab.me_application_scope import strip_me_application_recovery
+  strip_me_application_recovery(new);self.assertEqual(ast.dump(old),ast.dump(new))
+ def test_explicit_entry_form_error_stops_before_any_post(self):
+  client=Mock();client.get.return_value=Mock(text=ERROR,url='https://www.pfr.maine.gov/ALMSOnline/ALMSQuery/SearchCompany.aspx')
+  with patch.object(m.curl_requests,'Session',return_value=client):
+   s=m.MaineRegistrySession(time.perf_counter()+60)
+   with self.assertRaises(m.MainePublicApplicationError):s.search('Example Relief')
+   client.get.assert_called_once();client.post.assert_not_called();s.close()
+ def test_other_entry_form_failures_keep_original_exception(self):
+  for body in ['<html>Loading</html>','<html>Verify you are human</html>','<html>Access denied</html>']:
+   client=Mock();client.get.return_value=Mock(text=body,url='https://www.pfr.maine.gov/ALMSOnline/ALMSQuery/SearchCompany.aspx')
+   with patch.object(m.curl_requests,'Session',return_value=client):
+    s=m.MaineRegistrySession(time.perf_counter()+60)
+    with self.assertRaises(ValueError) as caught:s.search('Example Relief')
+    self.assertNotIsInstance(caught.exception,m.MainePublicApplicationError);client.post.assert_not_called();s.close()
+ def test_completed_entry_and_zero_result_keep_original_queries(self):
+  body='<html><input type="hidden" name="__VIEWSTATE" value="state"><input name="ctl00$scCompanyName"></html>'
+  client=Mock();client.get.return_value=Mock(text=body,url='https://www.pfr.maine.gov/ALMSOnline/ALMSQuery/SearchCompany.aspx');client.post.return_value=Mock(text='<html>0 records found</html>')
+  with patch.object(m.curl_requests,'Session',return_value=client):
+   s=m.MaineRegistrySession(time.perf_counter()+60);rows,opener=s.search('Example Relief');self.assertEqual(rows,[]);self.assertIs(opener,s)
+   self.assertEqual(client.post.call_args.kwargs['data']['ctl00$ctl00$mainContent$mainContent$scCompanyName'],'Example Relief');s.close()
 
 @unittest.skipUnless(os.environ.get('CE_TEST_DATABASE_URL'),'Real lab Postgres required')
 class RecoveryDB(unittest.TestCase):
@@ -115,4 +131,3 @@ class RecoveryDB(unittest.TestCase):
   x=self.q.claim(a);self.assertEqual(x['state'],'CA');self.assertEqual(x['workflow_id'],other);self.finish(x)
 
 if __name__=='__main__':unittest.main(verbosity=2)
-

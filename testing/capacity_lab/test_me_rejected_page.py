@@ -25,6 +25,16 @@ class RejectedPage(unittest.TestCase):
   root=Path(__file__).resolve().parents[2];old=ast.parse(subprocess.check_output(['git','show','13f47e4:deployment/queue_engine.py'],cwd=root).decode())
   new=ast.parse((root/'deployment/queue_engine.py').read_text());strip_rejected_page_observer(new)
   self.assertEqual(ast.dump(old),ast.dump(new))
+ def test_rejected_entry_form_preserves_same_error_and_redacts_hidden_fields(self):
+  failure=ValueError('Original form rejected')
+  class Session:
+   stage='search form GET';form_html='<html><input type="hidden" value="private-hidden"><h1>Public application error</h1></html>'
+   def search(self,query):raise failure
+  original=Session.search;m=types.SimpleNamespace(me_parse_search_rows=Mock(),MaineRegistrySession=Session);trace=FloridaTrace()
+  with observe_me_rejected_page(m,trace):
+   with self.assertRaises(ValueError) as caught:Session().search('Original query')
+  self.assertIs(caught.exception,failure);self.assertIs(Session.search,original)
+  self.assertEqual(trace.events[0]['event'],'me_form_rejected');self.assertNotIn('private',trace.events[0]['visible_text'])
 
 def strip_rejected_page_observer(tree):
  added=[n for n in tree.body if getattr(n,'name','')=='observe_me_rejected_page']
@@ -42,4 +52,3 @@ def strip_rejected_page_observer(tree):
  assert found==1
 
 if __name__=='__main__':unittest.main(verbosity=2)
-
