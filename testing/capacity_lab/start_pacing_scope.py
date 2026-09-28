@@ -6,6 +6,8 @@ START_INDEX=("-- A completed fast response still participates in a configured so
              " WHERE claimed IS NOT NULL;\n")
 
 def strip_start_index(source):
+    from testing.capacity_lab.loaded_timing_scope import strip_loaded_schema
+    source=strip_loaded_schema(source)
     assert source.count(START_INDEX)==1
     return source.replace(START_INDEX,'')
 

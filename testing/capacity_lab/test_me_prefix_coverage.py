@@ -146,6 +146,9 @@ class PrefixCoverage(unittest.TestCase):
             elif p=='deployment/durable_queue.py':
                 from testing.capacity_lab.me_application_scope import assert_queue_recovery_only
                 assert_queue_recovery_only(root,'7e25b24')
+            elif p=='deployment/queue_schema.sql':
+                from testing.capacity_lab.loaded_timing_scope import assert_loaded_scope
+                assert_loaded_scope(root,'7e25b24',p)
             else:subprocess.run(['git','diff','--exit-code','7e25b24','--',p],cwd=root,check=True)
 
 if __name__=='__main__':unittest.main(verbosity=2)

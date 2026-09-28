@@ -81,6 +81,9 @@ class PatientDetail(unittest.TestCase):
             if path=='deployment/durable_queue.py':
                 from testing.capacity_lab.me_application_scope import assert_queue_recovery_only
                 assert_queue_recovery_only(root,'d7d0afa')
+            elif path=='deployment/queue_schema.sql':
+                from testing.capacity_lab.loaded_timing_scope import assert_loaded_scope
+                assert_loaded_scope(root,'d7d0afa',path)
             else:subprocess.run(['git','diff','--exit-code','d7d0afa','--',path],cwd=root,check=True)
 
 if __name__=='__main__':unittest.main(verbosity=2)

@@ -64,9 +64,11 @@ class ObservedTail(unittest.TestCase):
         from testing.capacity_lab.observed_tail_scope import strip_observed_tail
         strip_observed_tail(new)
         self.assertEqual(ast.dump(old),ast.dump(new))
+        from testing.capacity_lab.loaded_timing_scope import assert_loaded_scope
+        assert_loaded_scope(root,'3383085','deployment/queue_schema.sql')
         subprocess.run(['git','diff','--exit-code','3383085','--',
             'CharityClarity_WA_NM_checker.py',
-            'deployment/queue_schema.sql','deployment/lab_capacity.py','web-staging','browser-connector'],
+            'deployment/lab_capacity.py','web-staging','browser-connector'],
             cwd=root,check=True,capture_output=True)
         from testing.capacity_lab.failure_label_scope import assert_diagnostics_only
         for path in ['deployment/queue_engine.py','deployment/queue_worker.py']:

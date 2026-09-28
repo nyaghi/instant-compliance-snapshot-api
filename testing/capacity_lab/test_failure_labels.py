@@ -67,6 +67,9 @@ class FailureLabels(unittest.TestCase):
             if file=='deployment/durable_queue.py':
                 from testing.capacity_lab.me_application_scope import assert_queue_recovery_only
                 assert_queue_recovery_only(root,'2afbb10')
+            elif file=='deployment/queue_schema.sql':
+                from testing.capacity_lab.loaded_timing_scope import assert_loaded_scope
+                assert_loaded_scope(root,'2afbb10',file)
             else:subprocess.run(['git','diff','--exit-code','2afbb10','--',file],cwd=root,check=True,stdout=subprocess.DEVNULL)
 
 

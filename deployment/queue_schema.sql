@@ -61,3 +61,10 @@ CREATE INDEX IF NOT EXISTS cc_lab_sales_identity ON cc_lab_jobs(workflow_id)
 -- A completed fast response still participates in a configured source start rate.
 CREATE INDEX IF NOT EXISTS cc_lab_source_last_start ON cc_lab_jobs(state,claimed DESC)
  WHERE claimed IS NOT NULL;
+
+-- Timing metadata only: actual held source reservations when a job is claimed.
+-- Zero means unavailable, including historical jobs predating this observer.
+ALTER TABLE cc_lab_jobs ADD COLUMN IF NOT EXISTS source_pressure integer NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS cc_lab_jobs_loaded_duration ON cc_lab_jobs(state,finished DESC)
+ WHERE phase='done' AND source_pressure>=2 AND attempt=1 AND claimed IS NOT NULL
+ AND (error IS NULL OR error IN ('WORKFLOW_DEADLINE','TASK_TIME_LIMIT'));

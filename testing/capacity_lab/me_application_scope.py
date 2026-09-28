@@ -46,6 +46,8 @@ def strip_me_application_recovery(tree):
     Semantic().visit(fn);assert len(hits)==1
 
 def strip_queue_recovery(new):
+    from testing.capacity_lab.loaded_timing_scope import strip_loaded_timing
+    strip_loaded_timing(new)
     helper=next((n for n in new.body if getattr(n,'name','')=='source_application_retry'),None)
     if helper is None:return
     new.body.remove(helper)

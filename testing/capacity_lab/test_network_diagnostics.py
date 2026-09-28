@@ -63,7 +63,10 @@ class NetworkDiagnostics(unittest.TestCase):
         old=ast.parse(subprocess.check_output(['git','show','5d85732:deployment/queue_engine.py'],cwd=root).decode())
         new=ast.parse((root/'deployment/queue_engine.py').read_text());strip_network_diagnostics(new)
         self.assertEqual(ast.dump(old),ast.dump(new))
-        subprocess.run(['git','diff','--exit-code','5d85732','--','registry_snapshot_server.py','deployment/durable_queue.py','deployment/queue_worker.py','deployment/lab_capacity.py','deployment/queue_schema.sql','deployment/performance_lab.py'],cwd=root,check=True,stdout=subprocess.DEVNULL)
+        from testing.capacity_lab.loaded_timing_scope import assert_loaded_scope
+        for path in ['deployment/durable_queue.py','deployment/queue_schema.sql']:
+            assert_loaded_scope(root,'5d85732',path)
+        subprocess.run(['git','diff','--exit-code','5d85732','--','registry_snapshot_server.py','deployment/queue_worker.py','deployment/lab_capacity.py','deployment/performance_lab.py'],cwd=root,check=True,stdout=subprocess.DEVNULL)
     def test_real_cors_rejection_exposes_http_429_without_body_reads(self):
         from playwright.sync_api import sync_playwright
         class Handler(BaseHTTPRequestHandler):

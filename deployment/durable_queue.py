@@ -191,6 +191,29 @@ def apply_censored_tail_floor(c, now, states, estimates):
         estimates.tails[state] = max(estimates.tails.get(state, estimates.get(state, 10.0)), row['tail_seconds'])
 
 
+def apply_loaded_timing_floor(c, before, states, values):
+    """Retain measured source service times under overlapping demand.
+
+    A series of individual checks must not erase the slower source timings
+    already measured under load. Read only bounded, pre-cohort elapsed-time
+    metadata. This changes urgency, never result reuse, admission or deadlines.
+    """
+    rows = c.execute(
+        "SELECT wanted.state, max(recent.seconds) AS tail_seconds, "
+        "avg(recent.seconds) AS mean_seconds FROM unnest(%s::text[]) AS wanted(state) "
+        "CROSS JOIN LATERAL (SELECT finished-claimed AS seconds FROM cc_lab_jobs "
+        "WHERE state=wanted.state AND phase='done' AND source_pressure>=2 "
+        "AND (error IS NULL OR error IN ('WORKFLOW_DEADLINE','TASK_TIME_LIMIT')) "
+        "AND attempt=1 AND finished>=%s AND finished<=%s AND claimed IS NOT NULL "
+        "AND finished>claimed AND finished-claimed<=300 "
+        "ORDER BY finished DESC LIMIT 20) recent GROUP BY wanted.state",
+        (sorted(states), before-86400, before))
+    for row in rows:
+        state = row['state']
+        values.tails[state] = max(values.tails.get(state, values.get(state, 10.0)), row['tail_seconds'])
+        values.means[state] = max(values.means.get(state, values.get(state, 10.0)), row['mean_seconds'])
+
+
 def cohort_timing_estimates(queue, c, now, states, version, workflows):
     """Freeze elapsed-time metadata before a concurrent Sales cohort begins.
 
@@ -215,9 +238,12 @@ def cohort_timing_estimates(queue, c, now, states, version, workflows):
     workload_timing = os.environ.get('CE_LAB_SALES_WORKLOAD_TIMING') == '1'
     observed_tail = (workload_timing
                      and os.environ.get('CE_LAB_SALES_OBSERVED_TAIL') == '1')
+    loaded_timing = (workload_timing
+                     and os.environ.get('CE_LAB_SALES_LOADED_TIMING') == '1')
     if (cache and cache[0] == version and cache[1] == before and states <= cache[2]
             and getattr(cache[3], 'workload_timing', False) == workload_timing
-            and getattr(cache[3], 'observed_tail', False) == observed_tail):
+            and getattr(cache[3], 'observed_tail', False) == observed_tail
+            and getattr(cache[3], 'loaded_timing', False) == loaded_timing):
         return cache[3]
     def rows(include_censored):
         eligible = ("(error IS NULL OR error IN ('WORKFLOW_DEADLINE','TASK_TIME_LIMIT'))"
@@ -249,9 +275,12 @@ def cohort_timing_estimates(queue, c, now, states, version, workflows):
             values.tails[state] = max(values.tails.get(state, values.get(state, 10.0)), row['tail_seconds'])
             if workload_timing and row.get('mean_seconds') is not None:
                 values.means[state] = row['mean_seconds']
+    if loaded_timing:
+        apply_loaded_timing_floor(c, before, states, values)
     values.as_of = before
     values.workload_timing = workload_timing
     values.observed_tail = observed_tail
+    values.loaded_timing = loaded_timing
     queue._cohort_timing_cache = (version, before, frozenset(states), values)
     return values
 
@@ -552,8 +581,9 @@ class Queue:
                 with c.pipeline():
                     if seed and seed['phase']=='done' and j['state']!='@sales_identity':
                         seed_cursor = c.execute("SELECT result FROM cc_lab_jobs WHERE workflow_id=%s AND state='@sales_identity'", (w['id'],))
-                    c.execute("UPDATE cc_lab_jobs SET phase='running',owner=%s,token=%s,attempt=attempt+1,claimed=%s,lease_until=%s,run_until=%s WHERE id=%s",
-                              (worker, token, now, now+20, run_until, j['id']))
+                    c.execute("UPDATE cc_lab_jobs SET phase='running',owner=%s,token=%s,attempt=attempt+1,claimed=%s,lease_until=%s,run_until=%s,source_pressure=%s WHERE id=%s",
+                              (worker, token, now, now+20, run_until,
+                               busy[j['state']]+1 if j['state'] in j['resources'] else 0, j['id']))
                     c.execute("UPDATE cc_lab_workflows SET phase='active',started=COALESCE(started,%s),dispatched=%s WHERE id=%s", (now, now, w['id']))
                     self.event(c, now, 'claimed', w['id'], j['id'], worker=worker, token=token,
                                slot_limit=ceiling, admission=admission_evidence,
