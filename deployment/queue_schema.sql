@@ -58,3 +58,6 @@ CREATE TABLE IF NOT EXISTS cc_lab_events (
 -- transfer every active workflow's identity evidence on each claim.
 CREATE INDEX IF NOT EXISTS cc_lab_sales_identity ON cc_lab_jobs(workflow_id)
  WHERE state='@sales_identity';
+-- A completed fast response still participates in a configured source start rate.
+CREATE INDEX IF NOT EXISTS cc_lab_source_last_start ON cc_lab_jobs(state,claimed DESC)
+ WHERE claimed IS NOT NULL;

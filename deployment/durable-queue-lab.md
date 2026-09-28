@@ -1117,3 +1117,22 @@ deadline and result fences. When disabled, capacity is scarce, identity has
 multi-source protection, or the requests are individual, Standard or mixed,
 the candidate iterator is exactly the original nested ordering. Registry code,
 worker count, source caps and the 60-second Sales deadline remain unchanged.
+
+### Sales source start spacing candidate (perf.83)
+
+Perf.82 remained below individual completeness: 624 and 621 responses received
+by60 seconds, versus637 individually (the prior baseline was638). Completed
+statuses and available EIN/record identifiers matched the full reference. NY
+had explicit HTTP429 responses in the first burst and completed20/20 in the
+second; simultaneous source capacity alone does not regulate arrival bursts.
+
+`CE_LAB_SALES_START_INTERVALS={"NY":1}` is a lab-only start-rate experiment for
+concurrent Sales. A source start must be at least its configured interval after
+the previous start, even if that preceding request already finished. Timestamp
+reads and admission happen under the existing global Postgres claim lock. An
+index bounds the query to one start timestamp per configured source. No result
+data is read. All existing source caps, physical admission, identity checks and
+the queue-inclusive60-second cutoff remain in force. Individual, Standard,
+mixed-mode and discovery workflows preserve existing behavior. This is not an
+HTTP429 retry or verification bypass. The NY-only control is diagnostic, not
+evidence that the full32-state parity target has been achieved.

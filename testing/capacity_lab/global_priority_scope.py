@@ -2,6 +2,8 @@
 import ast
 
 def strip_global_priority(tree):
+    from testing.capacity_lab.start_pacing_scope import strip_start_pacing
+    strip_start_pacing(tree)
     helper=next((n for n in tree.body if getattr(n,'name','')=='claim_candidates'),None)
     if helper is None:return
     tree.body.remove(helper)

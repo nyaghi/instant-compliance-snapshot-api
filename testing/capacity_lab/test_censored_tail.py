@@ -28,6 +28,8 @@ def assert_queue_file_matches_ref(root, ref, path):
         tree = ast.parse(current); strip_censored_tail(tree)
         assert ast.dump(tree) == ast.dump(ast.parse(original))
     elif path == 'deployment/queue_schema.sql':
+        from testing.capacity_lab.start_pacing_scope import strip_start_index
+        current = strip_start_index(current)
         index = ("CREATE INDEX IF NOT EXISTS cc_lab_jobs_recent_tail ON cc_lab_jobs(state,finished DESC)\n"
                  " WHERE phase='done' AND (error IS NULL OR error IN ('WORKFLOW_DEADLINE','TASK_TIME_LIMIT'))\n"
                  " AND attempt=1 AND claimed IS NOT NULL;\n")

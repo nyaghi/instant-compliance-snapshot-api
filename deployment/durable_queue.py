@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from collections import Counter
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -237,6 +238,41 @@ def claim_candidates(workflows, pending, running, estimates, tail_scores, now, v
     return candidates
 
 
+def sales_source_start_intervals(workflows, version):
+    """Optional lab start-rate limits, separate from simultaneous source slots."""
+    if (not version.endswith('-performance-lab') or len(workflows) < 2
+            or not all(w['mode'] == 'sales' and w['kind'] == 'registration' for w in workflows)):
+        return {}
+    try:
+        values = json.loads(os.environ.get('CE_LAB_SALES_START_INTERVALS', '{}'))
+        if (not isinstance(values, dict) or len(values) > 32
+                or any(not re.fullmatch(r'[A-Z]{2}', key) or type(value) not in (int, float)
+                       or not math.isfinite(value) or not 0 < value <= 5
+                       for key, value in values.items())):
+            return {}
+        return values
+    except (ValueError, TypeError):
+        return {}
+
+
+def sales_source_start_after(c, workflows, version, now):
+    """Read latest starts under the claim lock, including already finished jobs.
+
+    A fast failure must not erase its start-rate reservation. This changes only
+    admission timing; no registry response, identity or result is read or reused.
+    The indexed lookup is bounded to one timestamp per configured source.
+    """
+    intervals = sales_source_start_intervals(workflows, version)
+    if not intervals:
+        return {}
+    rows = c.execute(
+        'SELECT wanted.state, recent.claimed FROM unnest(%s::text[]) AS wanted(state) '
+        'CROSS JOIN LATERAL (SELECT claimed FROM cc_lab_jobs WHERE state=wanted.state '
+        'AND claimed IS NOT NULL ORDER BY claimed DESC LIMIT 1) recent', (sorted(intervals),))
+    return {row['state']: row['claimed'] + intervals[row['state']] for row in rows
+            if row['claimed'] + intervals[row['state']] > now}
+
+
 class Queue:
     def __init__(self, dsn, max_connections=6, test_schema=None, ny_enabled=False, sales_policy=None):
         self.sales_policy = sales_policy or os.environ.get('CE_LAB_SALES_QUEUE_POLICY', 'shortest')
@@ -405,6 +441,7 @@ class Queue:
             # No priority decision is needed when there is no pending work.
             # Settlement and the worker heartbeat above still run while idle.
             if not pending or not workflows: return None
+            start_after = sales_source_start_after(c, workflows, cfg['source_version'], now)
             # Earlier multi-source workflows finish before younger single-source
             # jobs use overlapping sources. Merely reserving one spare permit
             # prevented total starvation but let later work crowd discovery's
@@ -447,6 +484,7 @@ class Queue:
                         submitted<w['submitted'] and j['resources'][0] in resources
                         for submitted,resources in earlier_multi): continue
                 if any(busy[r] >= cfg['registry_limits'].get(r, 4) for r in j['resources']): continue
+                if start_after.get(j['state'], now) > now: continue
                 token = str(uuid.uuid4())
                 if j['state'] == '@discovery' and w['started'] is None:
                     # The bounded waiting allowance must not consume the
