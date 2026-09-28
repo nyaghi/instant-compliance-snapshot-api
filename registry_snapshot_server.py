@@ -19720,6 +19720,15 @@ def nj_complete_grid_excludes_org(data, org) -> bool:
     return True
 
 
+def nj_public_request_timeout(request_path, remaining):
+    """Finish the selected detail within the existing overall request allowance."""
+    patient_detail = (nj_public_query_enabled()
+                      and LAB_LOOKUP_MODE_CONTEXT.get() == "sales"
+                      and os.environ.get("CE_LAB_NJ_PATIENT_DETAIL") == "1"
+                      and request_path.startswith("/CHR-Public-Details-Page/?"))
+    return min(10.0 if patient_detail else 4.0, remaining)
+
+
 def search_nj_public_details(org):
     """Fresh public EIN query and detail; only one fully confirmed record qualifies.
 
@@ -19769,7 +19778,7 @@ def search_nj_public_details(org):
                     headers.update({"__RequestVerificationToken": token,
                         "X-Requested-With": "XMLHttpRequest", "Origin": base, "Referer": base + path})
                 response = session.request("POST" if payload is not None else "GET", base + request_path,
-                    json=payload, headers=headers, timeout=min(4.0, remaining), allow_redirects=False,
+                    json=payload, headers=headers, timeout=nj_public_request_timeout(request_path, remaining), allow_redirects=False,
                     verify=True, stream=True)
                 try:
                     if (response.status_code != 200 or response.url != base + request_path

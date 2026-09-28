@@ -3,6 +3,8 @@ import ast
 
 
 def strip_ok_completed_detail(tree):
+    from testing.capacity_lab.nj_patient_scope import strip_nj_patient_detail
+    strip_nj_patient_detail(tree)
     names={'lab_ok_completed_detail_enabled','ok_open_selected_detail'}
     if not any(getattr(n,'name','') in names for n in tree.body): return
     assert sum(getattr(n,'name','') in names for n in tree.body)==2

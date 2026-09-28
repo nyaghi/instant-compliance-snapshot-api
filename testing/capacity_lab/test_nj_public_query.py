@@ -20,6 +20,39 @@ DETAIL='''<html><body><input id="crsm_federalein" value="123456789">
 <input id="accountnumber" value="CH12345"><input id="crsm_fiscalyearenddate" value="2025-12-31T00:00:00">
 </body></html>'''
 
+def normalize_independent_historic_changes(tree):
+    # This older proof can be called directly, outside the newer scope chain.
+    # AR terminal-block handling and MS identity rejection were independently
+    # accepted after this historical NJ baseline. Require their exact deployed
+    # AST before normalizing them; never mask future edits to those functions.
+    root = Path(__file__).resolve().parents[2]
+    deployed = ast.parse(subprocess.check_output(
+        ['git', 'show', 'd7d0afa:registry_snapshot_server.py'], cwd=root).decode('utf-8'))
+    baseline = ast.parse(subprocess.check_output(
+        ['git', 'show', 'b328ca9:registry_snapshot_server.py'], cwd=root).decode('utf-8'))
+    names = {'search_ar_serialized', 'run_single_state_lookup_reliably',
+             'search_batch_browser_state', 'comments_for_result_base',
+             'lab_sales_ar_access_block_is_terminal'}
+    for node in list(tree.body):
+        mode = (isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == 'LAB_LOOKUP_MODE_CONTEXT' for t in node.targets))
+        if getattr(node, 'name', '') not in names and not mode:
+            continue
+        key = lambda n: (ast.unparse(n.targets[0]) if isinstance(n, ast.Assign) else getattr(n, 'name', ''))
+        reference_node = next(n for n in deployed.body if key(n) == key(node))
+        assert ast.dump(node) == ast.dump(reference_node)
+        original = next((n for n in baseline.body if key(n) == key(node)), None)
+        if original is None:
+            tree.body.remove(node)
+        else:
+            tree.body[tree.body.index(node)] = original
+    from testing.capacity_lab.test_fl_source_independence import restore_source_gate
+    reference = ast.parse(subprocess.check_output(
+        ['git', 'show', '9de9c95:registry_snapshot_server.py'],
+        cwd=Path(__file__).resolve().parents[2]).decode('utf-8'))
+    restore_source_gate(tree, reference)
+
+
 class PublicQuery(unittest.TestCase):
     def setUp(self):
         self.org=m.checker.Organization('Example Relief','123456789');self.calls=[]
@@ -158,7 +191,9 @@ class PublicQuery(unittest.TestCase):
         from testing.capacity_lab.parsing_scope import strip_nj_public_query
         root=Path(m.__file__).parent
         old=ast.parse(subprocess.check_output(['git','show','b328ca9:registry_snapshot_server.py'],cwd=root).decode('utf-8'))
-        new=ast.parse(Path(m.__file__).read_text(encoding='utf-8'));strip_nj_public_query(new)
+        new=ast.parse(Path(m.__file__).read_text(encoding='utf-8'))
+        normalize_independent_historic_changes(new)
+        strip_nj_public_query(new)
         self.assertEqual(ast.dump(old),ast.dump(new))
 
 class LabOptIn(unittest.TestCase):
