@@ -1171,3 +1171,20 @@ the existing single retry; it does not add attempts or extend any deadline.
 Response bodies still require completion, unrelated/stale requests are ignored,
 and HTTP/verification denial handling and all identity/status logic are retained.
 Standard and customer-browser connector behavior remain unchanged.
+
+### NY same-document detail route (perf.86)
+
+Perf.85 passed 18 live smoke checks; its 20 concurrent NY checks completed 17
+within 60 seconds with no changed completed status/identity. Explicit failed
+requests woke promptly, but detail navigation and retry still received HTTP 429
+responses for the document and static application scripts. A normal local lookup
+confirmed the site re-downloads about 2 MB of no-store scripts/styles for detail.
+
+`CE_LAB_NY_ROUTED_DETAIL=1` selects the site's existing client-side detail route
+from the unique, confirmed result link in lab Sales only. The target must be the
+exact expected official-origin record URL. Its existing detail component runs
+unchanged, including its own fresh reCAPTCHA token request and normal registry
+request. No API call, token extraction, result reuse or verification substitution
+is added. The original complete-response correlation, shared single retry, EIN,
+record-ID, duplicate resolution and status logic remain authoritative. Standard
+and customer browsers retain their original click; no staging changes apply.

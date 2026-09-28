@@ -20857,6 +20857,41 @@ def ny_complete_browser_response(page, predicate, submit, remaining_ms):
         return response
 
 
+def lab_ny_routed_detail() -> bool:
+    return (APP_VERSION.endswith("-performance-lab")
+            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and os.environ.get("CE_LAB_NY_ROUTED_DETAIL") == "1"
+            and LAB_LOOKUP_MODE_CONTEXT.get() == "sales")
+
+
+def ny_open_registry_detail(page, identifier: str, remaining_ms):
+    """Open the confirmed result through the site's existing detail route.
+
+    The official component still obtains its own fresh verification token and
+    requests the same detail. Only the redundant full-document reload changes;
+    no API is called here, no token is read and no prior result is supplied.
+    """
+    link = page.get_by_role("link", name=identifier, exact=True)
+    if not lab_ny_routed_detail():
+        return link.click(timeout=remaining_ms())
+    source = "https://charities-search.ag.ny.gov/RegistrySearch"
+    if page.url != source or getattr(page, "_cc_ny_search_url", None) != source:
+        raise ValueError("New York detail navigation requires its confirmed search page")
+    link.wait_for(state="visible", timeout=remaining_ms())
+    if link.count() != 1:
+        raise ValueError("New York detail link is not unique")
+    href = link.get_attribute("href", timeout=remaining_ms())
+    target = source + "/" + quote(identifier, safe="")
+    if not href or urljoin(source, href) != target:
+        raise ValueError("New York detail link does not match the confirmed record")
+    remaining_ms()
+    page.evaluate("""target => {
+        const state = {...history.state, idx:(history.state?.idx ?? 0)+1};
+        history.pushState(state, '', target);
+        dispatchEvent(new PopStateEvent('popstate', {state}));
+    }""", target)
+
+
 def ny_browser_registry_response(page, operation: str, params: dict, timeout: float):
     """Submit the normal Verify/Search flow and wait for this query's response."""
     deadline = time.perf_counter() + timeout
@@ -20931,7 +20966,7 @@ def ny_browser_registry_response(page, operation: str, params: dict, timeout: fl
             lambda response: urlparse(response.url).hostname == "charities-search-api.ag.ny.gov"
             and urlparse(response.url).path == "/api/FileNet/RegistryDetail"
             and parse_qs(urlparse(response.url).query).get("orgID", [""])[0] == identifier,
-            lambda: page.get_by_role("link", name=identifier, exact=True).click(timeout=remaining_ms()), remaining_ms)
+            lambda: ny_open_registry_detail(page, identifier, remaining_ms), remaining_ms)
         return NYBrowserResponse(response)
     raise ValueError("Unexpected New York registry operation")
 
