@@ -102,6 +102,40 @@ class DiscoveryProgress:
 
 
 @contextmanager
+def observe_fl_connection(trace):
+    """Observe the existing verified request's TCP/TLS phases; no extra I/O."""
+    import socket
+    import ssl
+    connect, wrap = socket.create_connection, ssl.SSLContext.wrap_socket
+    def record(event, **details):
+        try: trace.record(event, **details)
+        except Exception: pass
+    def connected(address, *args, **kwargs):
+        if not isinstance(address, tuple) or address[0] != 'csapp.fdacs.gov':
+            return connect(address, *args, **kwargs)
+        record('fl_tcp_start')
+        try: result = connect(address, *args, **kwargs)
+        except Exception as exc:
+            record('fl_tcp_error', exception_type=type(exc).__name__)
+            raise
+        record('fl_tcp_complete')
+        return result
+    def wrapped(context, sock, *args, **kwargs):
+        if kwargs.get('server_hostname') != 'csapp.fdacs.gov':
+            return wrap(context, sock, *args, **kwargs)
+        record('fl_tls_start')
+        try: result = wrap(context, sock, *args, **kwargs)
+        except Exception as exc:
+            record('fl_tls_error', exception_type=type(exc).__name__)
+            raise
+        record('fl_tls_complete')
+        return result
+    socket.create_connection, ssl.SSLContext.wrap_socket = connected, wrapped
+    try: yield
+    finally: socket.create_connection, ssl.SSLContext.wrap_socket = connect, wrap
+
+
+@contextmanager
 def observe_fl_headers(master, trace):
     """Observe the existing FL HTTPS request through header receipt, without I/O.
 
@@ -127,7 +161,8 @@ def observe_fl_headers(master, trace):
                    'request_id': number}
         trace.record('verified_open', **details)
         try:
-            response = original(opener, request, *args, **kwargs)
+            with observe_fl_connection(trace):
+                response = original(opener, request, *args, **kwargs)
         except Exception as exc:
             trace.record('verified_open_error', exception_type=type(exc).__name__, **details)
             raise
@@ -155,6 +190,48 @@ def browser_trace_route(url):
     return None
 
 
+def attach_ny_network_diagnostics(context, page, trace):
+    """Observe hidden HTTP status/CORS failure codes, never headers or bodies."""
+    session = None
+    try:
+        session = context.new_cdp_session(page)
+        routes = {}
+        def started(event):
+            route = browser_trace_route(event.get('request', {}).get('url', ''))
+            if route in {'verification', 'search', 'details'}:
+                routes[event['requestId']] = route
+        def headers(event):
+            route = routes.get(event.get('requestId'))
+            status = event.get('statusCode')
+            if route and type(status) is int:
+                trace.record('network_headers', route=route, status=status)
+        def failed(event):
+            route = routes.get(event.get('requestId'))
+            if route:
+                details = {'route': route}
+                code = event.get('corsErrorStatus', {}).get('corsError')
+                if code in {'MissingAllowOriginHeader','InvalidAllowOriginValue',
+                        'PreflightMissingAllowOriginHeader','PreflightInvalidStatus',
+                        'PreflightDisallowedRedirect','AllowOriginMismatch','DisallowedByMode'}:
+                    details['cors_error'] = code
+                trace.record('network_failed', **details)
+        def safe(callback):
+            def observed(event):
+                try: callback(event)
+                except Exception: pass
+            return observed
+        session.on('Network.requestWillBeSent', safe(started))
+        session.on('Network.responseReceivedExtraInfo', safe(headers))
+        session.on('Network.loadingFailed', safe(failed))
+        session.send('Network.enable')
+        return session
+    except Exception:
+        if session is not None:
+            try: session.detach()
+            except Exception: pass
+        return None
+
+
 @contextmanager
 def observe_browser_transport(master,state,sink=None):
     """Passive listeners in this isolated child; no body reads or extra requests."""
@@ -164,6 +241,7 @@ def observe_browser_transport(master,state,sink=None):
     trace=FloridaTrace(Path(sink).with_suffix('').with_suffix('.browser.json') if sink else None)
     original=BrowserContext.new_page
     attached=[]
+    diagnostics=[]
     def record(event,request,status=None):
         try:
             route=browser_trace_route(request.url)
@@ -181,6 +259,7 @@ def observe_browser_transport(master,state,sink=None):
         except Exception:pass
     def new_page(context,*args,**kwargs):
         page=original(context,*args,**kwargs)
+        diagnostics.append(attach_ny_network_diagnostics(context, page, trace))
         for event,callback in [('request',lambda r:record('browser_start',r)),
                 ('response',lambda r:record('browser_headers',r.request,r.status)),
                 ('requestfinished',lambda r:record('browser_complete',r)),
@@ -192,6 +271,10 @@ def observe_browser_transport(master,state,sink=None):
     try:yield trace
     finally:
         BrowserContext.new_page=original
+        for session in diagnostics:
+            if session is not None:
+                try: session.detach()
+                except Exception: pass
         for page,event,callback in attached:
             try:page.remove_listener(event,callback)
             except Exception:pass

@@ -37,6 +37,8 @@ class RejectedPage(unittest.TestCase):
   self.assertEqual(trace.events[0]['event'],'me_form_rejected');self.assertNotIn('private',trace.events[0]['visible_text'])
 
 def strip_rejected_page_observer(tree):
+ from testing.capacity_lab.network_diagnostic_scope import strip_network_diagnostics
+ strip_network_diagnostics(tree)
  added=[n for n in tree.body if getattr(n,'name','')=='observe_me_rejected_page']
  if not added:return
  assert len(added)==1;tree.body.remove(added[0])
