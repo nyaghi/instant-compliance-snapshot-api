@@ -20093,6 +20093,7 @@ def search_nj_with_name_fallback(page, org):
 
 def pa_guard_search_completion(result, org, observations):
     """An empty Angular table is not evidence that PA's search request finished."""
+    result._cc_pa_completed_negative = None
     status = public_status(result)
     if status not in {"Not Registered", "Unknown", "Unable to Confirm", "Site Not Reachable"}:
         return result
@@ -20112,6 +20113,7 @@ def pa_guard_search_completion(result, org, observations):
     negative_complete = (exact and all(row.get("complete") for row in searches)
                          and names_completed and not missed_ein_row and not failures)
     if status == "Not Registered" and negative_complete:
+        result._cc_pa_completed_negative = (org.organization_name, ein)
         return result
     if status != "Not Registered" and not failures:
         return result
@@ -20132,6 +20134,23 @@ def pa_guard_search_completion(result, org, observations):
                               ("step", "ein", "name", "http_status", "complete", "failure")}
                              for row in observations]
     return result
+
+
+def lab_pa_completed_no_match(result, org) -> bool:
+    """Reuse this lookup's request-bound negative instead of repeating the UI.
+
+    The original delayed confirmation predates the completed-request guard.
+    Only that guard can set this private proof; stale/failed/partial searches
+    and all Standard lookups retain their existing confirmation behavior.
+    """
+    return (APP_VERSION.endswith("-performance-lab")
+            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and os.environ.get("CE_LAB_PA_COMPLETED_ZERO_REUSE") == "1"
+            and LAB_LOOKUP_MODE_CONTEXT.get() == "sales"
+            and bool(getattr(result, "success", False))
+            and public_status(result) == "Not Registered"
+            and getattr(result, "_cc_pa_completed_negative", None)
+                == (org.organization_name, canonical_ein_digits(org.ein)))
 
 
 def search_pa_with_name_fallback(page, org):
@@ -27245,7 +27264,9 @@ def lab_wa_public_detail(org, module):
     ein = canonical_ein_digits(org.ein)
     if len(ein) != 9:
         return None
-    deadline = time.monotonic() + 14.0
+    started = time.monotonic()
+    deadline = started + 24.0
+    trace = {"stage": "search_request"}
     try:
         fields = {"Type": "FEINNo", "PageID": 1, "PageCount": 10, "IsSearch": "true",
             "FEINNo": ein, "PrincipalAddress[ID]": 0, "PrincipalAddress[Country]": "USA",
@@ -27253,7 +27274,8 @@ def lab_wa_public_detail(org, module):
         rows = json.loads(identity_fetch(
             "https://ccfs-api.prod.sos.wa.gov/api/CFTPublicSearch/GetCFPublicSearchList", deadline,
             headers={"Content-Type": "application/x-www-form-urlencoded", "Referer": "https://ccfs.sos.wa.gov/"},
-            data=urlencode(fields).encode(), request_timeout=9.0))
+            data=urlencode(fields).encode(), request_timeout=18.0))
+        trace.update(stage="search_validation", search_seconds=round(time.monotonic() - started, 3))
         if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
             return None
         row = rows[0]
@@ -27269,10 +27291,13 @@ def lab_wa_public_detail(org, module):
         counts = [row.get("TotalPageCount", 0), (row.get("Criteria") or {}).get("TotalRowCount", 0)]
         if any(value is not None and (type(value) is not int or value > 1 or value < 0) for value in counts):
             return None
+        trace["stage"] = "detail_request"
+        detail_started = time.monotonic()
         detail = json.loads(identity_fetch(
             "https://ccfs-api.prod.sos.wa.gov/api/CFTCommon/GetOnlieCharitiSummaryById?" +
             urlencode({"CharityID": identifier, "Type": "Charity"}), deadline,
             headers={"Referer": "https://ccfs.sos.wa.gov/"}, request_timeout=6.0))
+        trace.update(stage="detail_validation", detail_seconds=round(time.monotonic() - detail_started, 3))
         if (not isinstance(detail, dict) or detail.get("CharityID") != identifier
                 or detail.get("CFTId") != identifier
                 or str(detail.get("RegistrationNumber") or "") != str(row["RegistrationNumber"])
@@ -27303,10 +27328,19 @@ def lab_wa_public_detail(org, module):
         if not result.success or result.status in {"Unable to Confirm", module.STATUS_UNKNOWN}:
             return None
         result.source_note += " The public search and selected detail data were read directly from the same official requests used by the Washington page."
+        trace["stage"] = "accepted_detail"
         return result
     except Exception as exc:
+        trace.update(identity_failure_evidence(exc))
         log_event("WA public detail fallback " + json.dumps(identity_failure_evidence(exc), sort_keys=True))
         return None
+    finally:
+        # Fixed labels and elapsed times only: no names, EINs, bodies or secrets.
+        trace["seconds"] = round(time.monotonic() - started, 3)
+        try:
+            print("CC_LAB_WA_PUBLIC_DETAIL " + json.dumps(trace, sort_keys=True), flush=True)
+        except Exception:
+            pass
 
 
 def search_wa_nm_state(org, state: str):
@@ -28381,6 +28415,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     and public_status(result) == "Not Registered"
                     and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0
                     and elapsed_before_confirmation < 35.0
+                    and not lab_pa_completed_no_match(result, org)
                 ):
                     time.sleep(min(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS, 5.0))
                     confirmed_result = search_pa_with_name_fallback(page, org)

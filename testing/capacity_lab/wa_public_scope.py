@@ -2,6 +2,8 @@
 import ast
 
 def strip_wa_public(tree):
+    from testing.capacity_lab.pa_completed_scope import strip_pa_completed
+    strip_pa_completed(tree)
     helper=next((n for n in tree.body if getattr(n,'name','')=='lab_wa_public_detail'),None)
     if helper is None:return
     tree.body.remove(helper)

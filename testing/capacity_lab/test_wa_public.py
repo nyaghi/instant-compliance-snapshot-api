@@ -23,7 +23,7 @@ class PublicDetail(unittest.TestCase):
         self.assertEqual(fetch.call_count,2)
         a,b=fetch.call_args_list
         self.assertIn('FEINNo=123456789',a.kwargs['data'].decode());self.assertIn('CharityID=17&Type=Charity',b.args[0])
-        self.assertEqual(a.args[1],b.args[1]);self.assertEqual(a.kwargs['request_timeout'],9);self.assertEqual(b.kwargs['request_timeout'],6)
+        self.assertEqual(a.args[1],b.args[1]);self.assertEqual(a.kwargs['request_timeout'],18);self.assertEqual(b.kwargs['request_timeout'],6)
         result2,fetch2=self.read();self.assertEqual(fetch2.call_count,2);self.assertEqual(result2.status,result.status)
 
     def test_empty_multiple_truncated_wrong_ein_or_wrong_type_keeps_browser(self):
