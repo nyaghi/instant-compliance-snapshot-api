@@ -10,6 +10,8 @@ def strip_start_index(source):
     return source.replace(START_INDEX,'')
 
 def strip_start_pacing(tree):
+    from testing.capacity_lab.workload_timing_scope import strip_workload_timing
+    strip_workload_timing(tree)
     helpers={'sales_source_start_intervals','sales_source_start_after'}
     present=[n for n in tree.body if getattr(n,'name','') in helpers]
     if not present:return

@@ -99,6 +99,9 @@ class TransportTrace(unittest.TestCase):
             if path=='registry_snapshot_server.py':
                 from testing.capacity_lab.ny_failed_scope import strip_ny_failed_wakeup
                 strip_ny_failed_wakeup(new)
+            if path=='deployment/durable_queue.py':
+                from testing.capacity_lab.workload_timing_scope import strip_workload_timing
+                strip_workload_timing(new)
             if strip:strip(new)
             self.assertEqual(ast.dump(old),ast.dump(new),path)
 

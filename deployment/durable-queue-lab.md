@@ -1188,3 +1188,31 @@ request. No API call, token extraction, result reuse or verification substitutio
 is added. The original complete-response correlation, shared single retry, EIN,
 record-ID, duplicate resolution and status logic remain authoritative. Standard
 and customer browsers retain their original click; no staging changes apply.
+
+### Source backlog work estimate (perf.87)
+
+Perf.86's 24-worker repeats delivered 622 and 627 of 640 results by 60 seconds,
+against 639 individually. All 1,254 conclusive statuses and available identity
+fields matched the complete Standard reference. The parity target remains unmet.
+
+The observed scheduler multiplies the source's P95 duration by every remaining
+wave. For heterogeneous lookups, a single long query can inflate a mostly quick
+source's priority over a consistently slower source. Offline replays of both
+bursts support separating average backlog work from a single tail allowance;
+they are hypothesis screening, not measured performance or acceptance evidence.
+
+`CE_LAB_SALES_WORKLOAD_TIMING=1` uses P95 plus the remaining waves times their
+source-wide mean. It reads only the existing bounded, pre-arrival elapsed-time
+sample, including censored durations when that existing option is enabled. No
+organization's prior result or individual timing influences its priority. A last
+wave retains its full tail allowance. Cache identity includes the policy flag.
+The feature applies only to the existing concurrent, lab-Sales cohort path.
+Individual Sales, Standard, mixed-mode, discovery, identity dependencies, source
+limits, worker admission and the queue-inclusive 60-second deadline are retained.
+
+Within equal source urgency, earliest workflow deadline breaks ties. The prior
+active-job-count tie breaker repeatedly sent organizations with long-running
+checks to the back of other state queues: the same NY negative case was 20th
+and 19th to start in the two observed bursts. Offline sensitivity replay favored
+deadline order over that complexity-dependent preference. Per-organization
+concurrency caps still apply; no extra job can start merely due to priority.

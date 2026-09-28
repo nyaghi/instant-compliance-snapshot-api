@@ -83,6 +83,7 @@ class DurationEstimates(dict):
         rows = list(rows)
         super().__init__((r['state'], r['seconds']) for r in rows)
         self.tails = {r['state']: r['tail_seconds'] for r in rows}
+        self.means = {r['state']: r.get('mean_seconds', r['seconds']) for r in rows}
 
 
 def sales_tail_scores(workflows, pending, held, estimates, limits):
@@ -101,6 +102,14 @@ def sales_tail_scores(workflows, pending, held, estimates, limits):
     demand.update(j['state'] for j in held if j['workflow_id'] in sales
                   and not j['state'].startswith('@'))
     if getattr(estimates, 'as_of', None) is not None:
+        if getattr(estimates, 'workload_timing', False):
+            # One slow query does not make every queued query equally slow.
+            # Retain a full tail allowance, then estimate the remaining waves
+            # from the source-wide mean. This changes ordering, not admission.
+            return {state: getattr(estimates, 'tails', estimates).get(state, 10.0)
+                    + max(0.0, count-max(1, limits.get(state, 4)))
+                    * estimates.means.get(state, 10.0) / max(1, limits.get(state, 4))
+                    for state, count in demand.items()}
         # Spare lanes cannot make a single remaining query take less than one
         # query's service time. Avoid demoting the last long searches.
         return {state: max(1.0, count / max(1, limits.get(state, 4)))
@@ -186,7 +195,9 @@ def cohort_timing_estimates(queue, c, now, states, version, workflows):
     if not 0 <= now-before <= 60:
         return queue.cached_duration_estimates(c, now, states, version)
     cache = getattr(queue, '_cohort_timing_cache', None)
-    if cache and cache[0] == version and cache[1] == before and states <= cache[2]:
+    workload_timing = os.environ.get('CE_LAB_SALES_WORKLOAD_TIMING') == '1'
+    if (cache and cache[0] == version and cache[1] == before and states <= cache[2]
+            and getattr(cache[3], 'workload_timing', False) == workload_timing):
         return cache[3]
     def rows(include_censored):
         eligible = ("(error IS NULL OR error IN ('WORKFLOW_DEADLINE','TASK_TIME_LIMIT'))"
@@ -195,6 +206,8 @@ def cohort_timing_estimates(queue, c, now, states, version, workflows):
                       if include_censored else
                       "percentile_cont(0.5) WITHIN GROUP (ORDER BY recent.seconds) AS seconds, "
                       "percentile_cont(0.95) WITHIN GROUP (ORDER BY recent.seconds) AS tail_seconds")
+        if workload_timing:
+            projection += ", avg(recent.seconds) AS mean_seconds"
         return c.execute(
             f"SELECT wanted.state, {projection} FROM unnest(%s::text[]) AS wanted(state) "
             "CROSS JOIN LATERAL (SELECT finished-claimed AS seconds FROM cc_lab_jobs "
@@ -208,7 +221,10 @@ def cohort_timing_estimates(queue, c, now, states, version, workflows):
         for row in rows(True):
             state = row['state']
             values.tails[state] = max(values.tails.get(state, values.get(state, 10.0)), row['tail_seconds'])
+            if workload_timing and row.get('mean_seconds') is not None:
+                values.means[state] = row['mean_seconds']
     values.as_of = before
+    values.workload_timing = workload_timing
     queue._cohort_timing_cache = (version, before, frozenset(states), values)
     return values
 
@@ -231,6 +247,13 @@ def claim_candidates(workflows, pending, running, estimates, tail_scores, now, v
         def key(pair):
             w, j = pair
             seconds = estimates.get(j['state'], 10.0)
+            if getattr(estimates, 'workload_timing', False):
+                # Equal source urgency follows the earliest hard deadline.
+                # A workflow with several long-running states must not keep
+                # losing its remaining source turns merely because it is busy.
+                return (j['state'] != '@sales_identity', seconds > w['deadline']-now,
+                        -tail_scores.get(j['state'], 0), w['deadline'],
+                        w['submitted'], w['id'], seconds, j['state'], j['id'])
             return (j['state'] != '@sales_identity', seconds > w['deadline']-now,
                     -tail_scores.get(j['state'], 0), running[w['id']],
                     w['dispatched'], w['submitted'], w['id'], seconds, j['state'], j['id'])
