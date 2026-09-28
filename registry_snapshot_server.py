@@ -25429,6 +25429,43 @@ def ok_click_name_search_ok_button(page, org=None) -> bool:
         return False
 
 
+def lab_ok_completed_detail_enabled() -> bool:
+    return (APP_VERSION.endswith("-performance-lab")
+            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and os.environ.get("CE_LAB_OK_COMPLETED_DETAIL") == "1"
+            and LAB_LOOKUP_MODE_CONTEXT.get() == "sales")
+
+
+def ok_open_selected_detail(page, link, org, module, filing_number):
+    """Wait for the selected full document instead of unrelated network idle."""
+    if not lab_ok_completed_detail_enabled():
+        link.click(timeout=ok_action_timeout(org, 5000))
+        module.safe_wait_for_network_idle(page, timeout=20000)
+        page.wait_for_timeout(2500)
+        return
+    identifier = str(filing_number)
+    if not re.fullmatch(r"[0-9]+", identifier):
+        raise ValueError("Oklahoma selected filing number is invalid")
+    target = "https://www.sos.ok.gov/corp/charityDetail.aspx?id=" + identifier
+    href = link.get_attribute("href", timeout=ok_action_timeout(org, 1000))
+    if not href or urljoin(page.url, href) != target:
+        raise ValueError("Oklahoma detail link does not match the selected record")
+    # Register both listeners before the click: an HTTP response can finish
+    # before its DOM is ready, and DOM readiness must not accept a stale page.
+    # Preserve the original maximum click + idle + pause allowance (27.5s).
+    # Readiness may return early; a slow source does not lose its old window.
+    with page.expect_request_finished(lambda request: request.is_navigation_request()
+            and request.frame == page.main_frame and request.url == target,
+            timeout=ok_action_timeout(org, 27500)):
+        with page.expect_navigation(wait_until="domcontentloaded", timeout=ok_action_timeout(org, 27500)) as pending:
+            link.click(timeout=ok_action_timeout(org, 5000), no_wait_after=True)
+        response = pending.value
+        if response is None or response.status != 200 or response.url != target:
+            raise ValueError("Oklahoma selected detail response was incomplete or unexpected")
+    if page.url != target:
+        raise ValueError("Oklahoma detail navigation left the selected record")
+
+
 def search_ok_precise(page, org, module):
     result = module.SearchResult(
         organization_name=org.organization_name,
@@ -25518,9 +25555,7 @@ def search_ok_precise(page, org, module):
             return result
 
         _, selected_filing_link, matched_name, filing_number = selected
-        selected_filing_link.click(timeout=ok_action_timeout(org, 5000))
-        module.safe_wait_for_network_idle(page, timeout=20000)
-        page.wait_for_timeout(2500)
+        ok_open_selected_detail(page, selected_filing_link, org, module, filing_number)
 
         detail_text = module.body_text(page, timeout=15000)
         status_text = module.extract_labeled_value_from_text(detail_text, ["Status"])

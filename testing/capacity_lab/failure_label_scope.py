@@ -20,7 +20,7 @@ def strip_failure_labels(tree):
                 assert ast.unparse(labels[0].value.body)=='status'
                 assert ast.unparse(labels[0].value.orelse)=="'other'"
                 assert set(ast.literal_eval(labels[0].value.test.comparators[0]))=={
-                    'Current','Upcoming Filing','Delinquent','Not Registered','Not Found',
+                    'Current','Upcoming Filing','Delinquent','Not Registered','Not registered','Delinquent/Non-compliant','Not Found',
                     'Site Not Reachable','Unable to Confirm','Unable to Verify','Unknown',
                     'Suspended','Revoked','Closed / Withdrawn / Canceled'}
                 node.body[i-1:i+2]=ast.parse("self.record('attempt_return')").body
@@ -31,7 +31,7 @@ def strip_failure_labels(tree):
                 assert ast.unparse(n.body[0])=="event['result_status'] = row['result_status']"
                 assert len(n.body)==1 and not n.orelse
                 assert set(ast.literal_eval(n.test.comparators[0]))=={
-                    'Current','Upcoming Filing','Delinquent','Not Registered','Not Found',
+                    'Current','Upcoming Filing','Delinquent','Not Registered','Not registered','Delinquent/Non-compliant','Not Found',
                     'Site Not Reachable','Unable to Confirm','Unable to Verify','Unknown',
                     'Suspended','Revoked','Closed / Withdrawn / Canceled','other'}
                 node.body.remove(n)

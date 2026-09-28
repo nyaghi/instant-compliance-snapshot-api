@@ -2,6 +2,8 @@
 import ast
 
 def strip_mi_patient_transport(tree):
+    from testing.capacity_lab.ok_detail_scope import strip_ok_completed_detail
+    strip_ok_completed_detail(tree)
     helper=next((n for n in tree.body if getattr(n,'name','')=='lab_mi_patient_transport_enabled'),None)
     if helper is None:return
     tree.body.remove(helper)

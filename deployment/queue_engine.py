@@ -59,7 +59,7 @@ class FloridaTrace:
                 # result object and never inspect registry text or identity.
                 status = getattr(result, 'status', '')
                 safe_status = status if status in {'Current', 'Upcoming Filing', 'Delinquent',
-                    'Not Registered', 'Not Found', 'Site Not Reachable', 'Unable to Confirm',
+                    'Not Registered', 'Not registered', 'Delinquent/Non-compliant', 'Not Found', 'Site Not Reachable', 'Unable to Confirm',
                     'Unable to Verify', 'Unknown', 'Suspended', 'Revoked',
                     'Closed / Withdrawn / Canceled'} else 'other'
                 self.record('attempt_return', result_status=safe_status)

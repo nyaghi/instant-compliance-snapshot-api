@@ -292,7 +292,7 @@ def log_failure_trace(r, error):
                 value=row.get(key)
                 if isinstance(value,str) and re.fullmatch(r'[A-Za-z0-9_:.-]{1,100}',value):event[key]=value
             if row.get('result_status') in {'Current', 'Upcoming Filing', 'Delinquent',
-                    'Not Registered', 'Not Found', 'Site Not Reachable', 'Unable to Confirm',
+                    'Not Registered', 'Not registered', 'Delinquent/Non-compliant', 'Not Found', 'Site Not Reachable', 'Unable to Confirm',
                     'Unable to Verify', 'Unknown', 'Suspended', 'Revoked',
                     'Closed / Withdrawn / Canceled', 'other'}:
                 event['result_status'] = row['result_status']
