@@ -2167,10 +2167,10 @@ def identity_ca_names(ein: str, deadline: float) -> dict:
     return {"names": names, "complete": len(rows) < 20, "source_url": url, "organization_records": records}
 
 
-def identity_co_names(ein: str, deadline: float) -> dict:
+def identity_co_names(ein: str, deadline: float, *, request_timeout=6.0) -> dict:
     url = "https://data.colorado.gov/resource/37wu-kn3g.json?" + urlencode({
         "$limit": "100", "$where": f"fein='{format_ein(ein)}'", "$order": "registrationapproveddate DESC"})
-    rows = json.loads(identity_fetch(url, deadline))
+    rows = json.loads(identity_fetch(url, deadline, request_timeout=request_timeout))
     if not isinstance(rows, list):
         raise ValueError("Colorado identity response is incomplete")
     names, entities, seen, records = [], set(), set(), []
@@ -2474,23 +2474,26 @@ def identity_irs_names(ein: str, deadline: float, *, metadata_only: bool = False
 
 
 
-def sales_identity_evidence(organization_name: str, ein: str) -> dict:
+def sales_identity_evidence(organization_name: str, ein: str, *, budget_seconds=6.0) -> dict:
     """Small same-run EIN identity step; it never supplies a state's status.
 
     Called by the isolated lab scheduler with CO and IRS permits reserved. Its
-    six-second allowance is inside the existing 60-second Sales workflow, not
+    bounded allowance is inside the existing 60-second Sales workflow, not
     a preparatory run. No prior organization's cache or reviewed names is used.
     """
     requested = canonical_ein_digits(ein)
     if len(requested) != 9:
         raise ValueError("Sales identity requires a valid EIN")
+    if budget_seconds not in (6.0, 10.0):
+        raise ValueError("Unsupported Sales identity allowance")
     started = time.monotonic()
-    deadline = started + 6.0
+    deadline = started + budget_seconds
+    ordinary_deadline = started + 6.0
     # Oregon reads the already validated local extract only; it makes no live
     # source request and therefore needs no extra registry permit.
     def collect_irs():
         retrieved_after = time.time()
-        result = identity_irs_names(requested, deadline, latest_only=True)
+        result = identity_irs_names(requested, ordinary_deadline, latest_only=True)
         # identity_irs_names has just fetched and verified the exact EIN. Keep
         # that source response, not a classification, within this one workflow.
         payload = PUBLIC_PROFILE_CACHE.get(requested)
@@ -2500,11 +2503,18 @@ def sales_identity_evidence(organization_name: str, ein: str) -> dict:
                 "url": f"https://projects.propublica.org/nonprofits/api/v2/organizations/{requested}.json",
                 "retrieved_after": retrieved_after, "payload": json.loads(json.dumps(payload))}
         return result
-    collectors = {"CO": lambda: identity_co_names(requested, deadline),
+    collectors = {"CO": lambda: identity_co_names(requested, deadline, request_timeout=budget_seconds) if budget_seconds != 6.0 else identity_co_names(requested, deadline),
                   "IRS": collect_irs,
-                  "OR": lambda: identity_or_names(requested, deadline)}
+                  "OR": lambda: identity_or_names(requested, ordinary_deadline)}
+    timings = {}
+    def timed(source, fn):
+        source_started = time.monotonic()
+        try:
+            return fn()
+        finally:
+            timings[source] = round(time.monotonic() - source_started, 3)
     executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="sales-identity")
-    futures = {source: executor.submit(fn) for source, fn in collectors.items()}
+    futures = {source: executor.submit(timed, source, fn) for source, fn in collectors.items()}
     sources, errors = {}, {}
     try:
         for source, future in futures.items():
@@ -2517,7 +2527,7 @@ def sales_identity_evidence(organization_name: str, ein: str) -> dict:
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
     return {"state": "@sales_identity", "ein": requested, "app_version": APP_VERSION,
-            "sources": sources, "errors": errors, "seconds": time.monotonic()-started,
+            "sources": sources, "errors": errors, "seconds": time.monotonic()-started, "source_seconds": dict(timings),
             "scope": "Current IRS metadata/latest filer header, Colorado EIN records and the validated Oregon extract; limited identity assistance, not full discovery."}
 
 
@@ -19699,7 +19709,8 @@ def search_nj_public_details(org):
     # under load. Finish that existing request sequence instead of discarding
     # its final document and restarting in the browser. The workflow's own
     # queue-inclusive Sales cutoff still terminates this entire task at 60s.
-    deadline = time.monotonic() + 18.0
+    started = time.monotonic()
+    deadline = started + 18.0
 
     def input_values(source, key, expected):
         values = []
@@ -19770,6 +19781,11 @@ def search_nj_public_details(org):
                 "customParameters": [], "odataFilterQuery": "", "nlSearchFilter": ""}
             data = json.loads(fetch(query_path, "json", payload, tokens[0]))
             if progress is not None and nj_complete_public_zero(data):
+                if nj_complete_grid_enabled():
+                    # Finish the bounded fresh name plan before paying for a
+                    # browser restart. This is measured from the original start;
+                    # the queue still enforces its unchanged total Sales cutoff.
+                    deadline = started + 30.0
                 progress.queries.add(ein)
                 planned_queries = nj_name_fallback_queries(org)
                 for query in planned_queries:

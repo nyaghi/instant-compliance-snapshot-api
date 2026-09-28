@@ -319,7 +319,9 @@ def execute(master, job, source_finished=None, trace_path=None):
         raise ValueError('Master version mismatch')
     p = job['payload']
     if job['state'] == '@sales_identity':
-        return master.sales_identity_evidence(p['organization_name'], p['ein'])
+        from deployment.lab_capacity import sales_identity_seconds
+        return master.sales_identity_evidence(p['organization_name'], p['ein'],
+                                              budget_seconds=sales_identity_seconds(job['version']))
     if job['state'] == '@discovery':
         if source_finished is None:
             return master.discover_organization_names(p['organization_name'], p['ein'])

@@ -1245,3 +1245,21 @@ times for the existing urllib operations. They never initiate extra requests,
 read a response ahead, capture names/tokens/body content, or change classification.
 This separates public-registry delay from the existing reader fallback on the
 next controlled run. Worker/source capacity and scheduling remain unchanged.
+
+### September 27: bounded Sales identity allowance and NJ transport completion
+
+The perf88 paired20-organization trials left ten state results unconfirmed
+because five CO identity requests reached the preparation cutoff. The opt-in
+`CE_LAB_SALES_IDENTITY_GRACE=1` gives this existing CO request up to10seconds,
+instead of6, with a12-second preparation-task ceiling. Both remain inside the
+original60-second queue-inclusive workflow deadline. IRS retains6seconds,
+discovery and Standard remain unchanged, and incomplete evidence still blocks
+definitive name-only negatives. Source timings disclose latency without URLs,
+names or credentials. The worker and scheduler share the same allowance helper.
+
+The existing NJ complete-grid flag now lets the completed-EIN-zero name plan
+use up to30seconds measured from its original transport start. Its measured
+18-second restart repeated browser setup while the public name endpoint was
+still returning valid responses. Positive EIN lookups retain18seconds. All
+query, matching, completeness and status rules remain unchanged. This is a
+lab experiment, not a staging/production promotion or a new60-second promise.

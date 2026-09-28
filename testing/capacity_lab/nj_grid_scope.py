@@ -2,6 +2,8 @@
 import ast
 
 def strip_nj_complete_grid(tree):
+    from testing.capacity_lab.nj_budget_scope import strip_nj_name_budget
+    strip_nj_name_budget(tree)
     added = {'nj_complete_grid_enabled', 'nj_complete_grid_excludes_org'}
     if not any(getattr(n, 'name', '') in added for n in tree.body):
         return

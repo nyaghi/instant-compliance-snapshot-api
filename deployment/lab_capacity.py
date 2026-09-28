@@ -7,11 +7,18 @@ authorization model. This is deliberately NOT a durable/distributed job queue.
 from collections import Counter, deque
 from contextvars import ContextVar
 from dataclasses import dataclass
+import os
 import threading
 import time
 
 REQUEST_GROUP = ContextVar('lab_request_group', default='unattributed')
 REQUEST_TIMING = ContextVar('lab_request_timing', default=None)
+
+
+def sales_identity_seconds(version):
+    """Opt-in lab identity allowance; included in the unchanged Sales deadline."""
+    return 10.0 if (str(version).endswith('-performance-lab')
+                    and os.environ.get('CE_LAB_SALES_IDENTITY_GRACE') == '1') else 6.0
 
 
 @dataclass(eq=False)

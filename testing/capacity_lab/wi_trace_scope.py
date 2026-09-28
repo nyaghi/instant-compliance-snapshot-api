@@ -2,6 +2,8 @@
 import ast
 
 def strip_wi_trace_engine(tree):
+    from testing.capacity_lab.identity_grace_scope import strip_identity_grace_engine
+    strip_identity_grace_engine(tree)
     added = {'wi_transport_route', 'observe_wi_transport'}
     if not any(getattr(n, 'name', '') in added for n in tree.body): return
     tree.body[:] = [n for n in tree.body if getattr(n, 'name', '') not in added]

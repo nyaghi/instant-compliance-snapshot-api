@@ -19,6 +19,7 @@ import uuid
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
+from deployment.lab_capacity import sales_identity_seconds
 
 LOCK = 4823915721
 HELD = ('running', 'stopping', 'quarantined')
@@ -518,7 +519,7 @@ class Queue:
                     c.execute('UPDATE cc_lab_workflows SET deadline=%s WHERE id=%s', (w['deadline'], w['id']))
                     self.event(c, now, 'discovery_execution_started', w['id'], j['id'],
                                queue_seconds=now-w['submitted'], execution_seconds=DISCOVERY_EXECUTION_SECONDS)
-                run_until = min(w['deadline'], now + (DISCOVERY_EXECUTION_SECONDS if j['state'] == '@discovery' else 8 if j['state'] == '@sales_identity' else 300))
+                run_until = min(w['deadline'], now + (DISCOVERY_EXECUTION_SECONDS if j['state'] == '@discovery' else sales_identity_seconds(w['source_version']) + 2 if j['state'] == '@sales_identity' else 300))
                 seed_cursor = None
                 with c.pipeline():
                     if seed and seed['phase']=='done' and j['state']!='@sales_identity':
