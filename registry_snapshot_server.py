@@ -134,7 +134,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.27.7-staging").strip() or "2026.09.27.7-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.28.1-staging").strip() or "2026.09.28.1-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -5654,6 +5654,27 @@ def il_ga_connector_failure(record, reason=""):
     if record.get("purpose") == "identity":
         return {"state": state, "source": state, "identity": {"source": state, "names": [], "complete": False, "limitation": result.source_note}}
     data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, state, time.perf_counter())
+    if state == "IL":
+        # Comment-only: retain the existing status, identity and diagnostic fields.
+        # Only the selected CO row from completed, bound IL search evidence qualifies.
+        query = (record.get("pending") or {}).get("query") or {}
+        selected = next((row for item in record.get("completed", [])
+                         if item.get("query", {}).get("state") == "IL"
+                         and "identifier" not in item.get("query", {})
+                         for row in item.get("rows", {}).get("rows", [])
+                         if query.get("state") == "IL" and query.get("identifier")
+                         and row.get("identifier") == query["identifier"]), None)
+        if selected:
+            data["comments"] = data["source_note"] = (
+                f"Illinois returned a search listing for {selected['name']} (CO {selected['identifier']}), "
+                "but its detail information could not be fully retrieved and confirmed. "
+                "A listing was found; compliance status remains Unable to Confirm. "
+                "This incomplete lookup does not establish non-registration or delinquency. "
+                + (detail_reasons[reason] if reason in detail_reasons else
+                   "The lookup time limit was reached." if reason == "NY_CONNECTOR_TIMEOUT" else
+                   "The required detail review could not be completed.")
+                + (" One automatic fresh-page recovery was attempted after the initial verification stall."
+                   if record.get("il_verification_recovery") else ""))
     if record.get("il_verification_recovery"):
         data["connector_recovery"] = record["il_verification_recovery"]
     return data

@@ -159,6 +159,35 @@ class IntegrationControls(unittest.TestCase):
             self.assertIn(phrase,result['comments'])
             self.assertNotIn('contained no readable record',result['comments'])
 
+    def test_il_found_listing_detail_failure_comment_preserves_inconclusive_result(self):
+        record=dict(state='IL', organization_name=self.org.organization_name, ein=self.org.ein,
+                    pending={'query':{'state':'IL','identifier':'01015532'}},
+                    completed=[{'query':{'state':'IL','ein':'363673599'},'rows':{'rows':[search_row()]}}])
+        for reason in ['', 'NY_CONNECTOR_IL_DETAIL_NOT_OPENED', 'NY_CONNECTOR_IL_DETAIL_BLANK',
+                       'NY_CONNECTOR_IL_DETAIL_IDENTITY_INCOMPLETE', 'NY_CONNECTOR_TIMEOUT']:
+            with self.subTest(reason=reason):
+                result=cc.il_ga_connector_failure(record,reason)
+                self.assertIn('search listing for FEEDING AMERICA (CO 01015532)',result['comments'])
+                self.assertIn('A listing was found',result['comments'])
+                self.assertEqual(result['status'],'Unable to Confirm')
+                self.assertFalse(result['success'])
+                self.assertEqual(result['matched_registry_identifier'],'')
+                self.assertEqual(result['matched_registry_name'],'')
+
+    def test_listing_comment_requires_selected_row_from_completed_il_search(self):
+        base=dict(state='IL',organization_name=self.org.organization_name,ein=self.org.ein,
+                  pending={'query':{'state':'IL','identifier':'01015532'}},
+                  completed=[{'query':{'state':'IL','ein':'363673599'},'rows':{'rows':[search_row()]}}])
+        cases=[dict(base,state='GA'),dict(base,completed=[]),
+               dict(base,pending={'query':{'state':'IL','orgName':'Feeding America'}}),
+               dict(base,pending={'query':{'state':'IL','identifier':'01015533'}}),
+               dict(base,completed=[{'query':{'state':'GA','orgName':'Feeding America'},'rows':{'rows':[search_row()]}}])]
+        for record in cases:
+            with self.subTest(record=record):
+                result=cc.il_ga_connector_failure(record)
+                self.assertNotIn('A listing was found',result['comments'])
+                self.assertEqual(result['status'],'Unable to Confirm')
+
     def test_il_incomplete_fallback_never_negative(self):
         def evidence(q):
             if 'ein' in q:return {'rows':[]}
