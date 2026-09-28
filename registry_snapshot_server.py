@@ -134,7 +134,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.28.2-staging").strip() or "2026.09.28.2-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.28.3-staging").strip() or "2026.09.28.3-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -19213,21 +19213,29 @@ def pa_guard_search_completion(result, org, observations):
         return result
     if status != "Not Registered" and not failures:
         return result
-    result.status = "Site Not Reachable" if failures else "Unable to Verify"
+    transport_failures = [row for row in failures if row.get("failure_kind") not in {"response", "budget"}]
+    response_failures = [row for row in failures if row.get("failure_kind") == "response"]
+    result.status = "Site Not Reachable" if transport_failures else "Unable to Confirm" if failures else "Unable to Verify"
     result.success = False
-    result.reason_code = "PA_INCOMPLETE_SEARCH"
+    result.reason_code = ("PA_INCOMPLETE_SEARCH" if transport_failures or not failures else
+                          "PA_NAME_RESPONSE_INCOMPLETE" if response_failures else "PA_NAME_BUDGET_EXHAUSTED")
     result.raw_status_text = "Pennsylvania search did not complete"
-    if failures:
-        codes = sorted({row.get("http_status") for row in failures if (row.get("http_status") or 0) >= 400})
+    if transport_failures:
+        codes = sorted({row.get("http_status") for row in transport_failures if (row.get("http_status") or 0) >= 400})
         detail = "HTTP " + ", ".join(map(str, codes)) if codes else "a network failure"
         result.error = "Pennsylvania public registry returned " + detail
         result.source_note = result.error + ". Registration status could not be confirmed."
+    elif failures:
+        result.error = ""
+        result.source_note = ("Pennsylvania responded to the name fallback, but returned incomplete, truncated, or unusable data. "
+                              if response_failures else "Pennsylvania name fallback reached its time limit before all required searches completed. ")
+        result.source_note += "Registration status could not be confirmed; this is not a completed no-record search."
     else:
         result.error = ""
         result.source_note = ("Pennsylvania did not provide a completed, usable response for the requested EIN "
                               "and attempted name searches. Registration status could not be confirmed.")
     result.source_attempts = [{key: row.get(key) for key in
-                              ("step", "ein", "name", "http_status", "complete", "failure", "seconds", "row_count")}
+                              ("step", "ein", "name", "http_status", "complete", "failure", "failure_kind", "seconds", "row_count", "result_count")}
                              for row in observations]
     return result
 
@@ -19294,16 +19302,20 @@ def search_pa_with_name_fallback(page, org):
 
 
 def pa_name_search_plan(org):
-    """Complete contains responses cover longer literal substrings, not fuzzy names."""
+    """Search full names first; broad contains queries are later bounded fallbacks."""
     variants = build_search_queries(org.organization_name, org.ein, include_ein=False,
         include_ein_aliases=True, include_name_segments=True, include_compact_legal_suffixes=True,
         include_leading_article_variants=True, max_queries=8)
     core = distinctive_core_words(org.organization_name)
     priorities = [" ".join(core[:n]) for n in (2, 3) if len(core) >= n]
-    names = list(dict.fromkeys(re.sub(r"\s+", " ", value).strip()
-        for value in [*priorities, *high_signal_search_phrases(org.organization_name), *variants] if value))[:10]
-    return [name for name in names if not any(other.casefold() != name.casefold()
-        and other.casefold() in name.casefold() for other in names)]
+    names, seen = [], set()
+    for value in [org.organization_name, *known_names_for_ein(org.ein), *variants, *priorities,
+                  *high_signal_search_phrases(org.organization_name)]:
+        name = re.sub(r"\s+", " ", value).strip()
+        if name and name.casefold() not in seen:
+            names.append(name)
+            seen.add(name.casefold())
+    return names[:10]
 
 
 def pa_completed_name_rows(org, rows, url):
@@ -19369,11 +19381,18 @@ def search_pa_with_name_fallback_core(page, org, completion_guard):
     deadline = time.monotonic() + budget
     attempts, attempted, collected = [], [], []
     for variant in pa_name_search_plan(org):
+        # Only a completed contains response can cover a later literal extension.
+        # A truncated broad response must never prune a more specific query.
+        if any(entry.get("complete") and entry["name"].casefold() in variant.casefold() for entry in attempts):
+            continue
         attempted.append(variant)
         entry = {"step": "search", "ein": "", "name": variant, "complete": False}
         attempts.append(entry)
         started = time.monotonic()
         try:
+            if started >= deadline:
+                entry.update(failure="Name fallback time limit reached", failure_kind="budget")
+                break
             payload = {"SearchMode": "CHARITIES_SEARCH_EXTERNAL", "EntityName": variant, "EIN": None,
                 "CertificateNumber": None, "IsRegistered": False, "SearchCategory": "Charities_IPP",
                 "SearchCriteria": "Contains", "AddressLine1": None, "AddressLine2": None, "City": None,
@@ -19381,13 +19400,15 @@ def search_pa_with_name_fallback_core(page, org, completion_guard):
                 "CountryId": 1756, "CountryCode": "UNITED_STATES", "Zip": None}
             # Same public endpoint and field contract already used for PA EIN name discovery.
             # Bind parsing to this request instead of a temporarily empty Angular table.
-            data = json.loads(identity_fetch("https://www.charities.pa.gov/api/Charities/Search", deadline,
+            body = identity_fetch("https://www.charities.pa.gov/api/Charities/Search", deadline,
                 headers={"Content-Type": "application/json", "Accept": "application/json"},
-                data=json.dumps(payload).encode(), request_timeout=min(12.0, max(0.1, deadline-time.monotonic()))))
+                data=json.dumps(payload).encode(), request_timeout=min(12.0, max(0.1, deadline-time.monotonic())))
             entry["http_status"] = 200
+            data = json.loads(body)
             rows = data.get("Table") if isinstance(data, dict) else None
             counts = data.get("Table1") or [] if isinstance(data, dict) else []
-            count = counts[0].get("RESULTCOUNT") if counts and isinstance(counts[0], dict) else None
+            count = counts[0].get("RESULTCOUNT") if isinstance(counts, list) and counts and isinstance(counts[0], dict) else None
+            entry.update(row_count=len(rows) if isinstance(rows, list) else None, result_count=count)
             if (not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows)
                     or count is None or int(count) != len(rows) or len(rows) > 500):
                 raise ValueError("Pennsylvania returned an incomplete or truncated name response")
@@ -19395,9 +19416,12 @@ def search_pa_with_name_fallback_core(page, org, completion_guard):
             collected.extend(rows)
         except Exception as exc:
             entry["failure"] = ("HTTP " + str(exc.code) if isinstance(exc, urllib.error.HTTPError) else type(exc).__name__)
+            entry["failure_kind"] = "transport" if isinstance(exc, (urllib.error.URLError, OSError)) else "response"
             if isinstance(exc, urllib.error.HTTPError): entry["http_status"] = exc.code
-            # The master permits one semantic retry. Do not multiply that into a retry per alias.
-            break
+            # A result limit can be avoided by another name; repeating the entire
+            # lookup cannot repair it. Transport failures retain the master retry.
+            if entry["failure_kind"] == "transport": break
+            continue
         finally:
             entry["seconds"] = round(time.monotonic() - started, 3)
         match = pa_completed_name_rows(org, collected, url)

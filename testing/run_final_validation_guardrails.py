@@ -31,13 +31,13 @@ class Pennsylvania(unittest.TestCase):
     def test_duplicate_current_record_beats_blank_old_record(self):
         rows=self.rows();rows.append(dict(rows[0],PersonId=102,StatusName='APPROVED',ExpDate=(date.today()+timedelta(days=400)).isoformat()))
         self.assertEqual(c.pa_completed_name_rows(self.org,rows,'').status,'Current')
-    def test_contains_query_plan_removes_only_literal_coverage(self):
+    def test_contains_query_plan_keeps_full_name_before_shorter_fallbacks(self):
         self.org.organization_name='Beacon Harbor Research Society'
         with patch.object(c,'build_search_queries',return_value=['Beacon Harbor Research Society','Different Alias']),patch.object(c,'high_signal_search_phrases',return_value=[]):
             plan=c.pa_name_search_plan(self.org)
         self.assertIn('beacon harbor',plan)
         self.assertIn('Different Alias',plan)
-        self.assertNotIn('Beacon Harbor Research Society',plan)
+        self.assertEqual(plan[0],'Beacon Harbor Research Society')
     def test_completed_response_path_and_failure_preserve_attempt(self):
         initial=c.checker.StateResult(self.org.organization_name,self.org.ein,'PA','Not Registered','')
         for payload in [{'Table':self.rows(),'Table1':[{'RESULTCOUNT':1}]},{'Table':self.rows(),'Table1':[{'RESULTCOUNT':2}]}]:
