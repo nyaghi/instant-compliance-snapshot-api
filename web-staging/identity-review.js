@@ -25,7 +25,7 @@
     }
     if (review?.candidates?.length) {
       add(box, 'p', 'Confirm the organization', 'font-semibold text-slate-900');
-      add(box, 'p', 'Accept or reject the identity. CharityClarity calculates the status from the state record. This decision applies to this snapshot.', 'mt-1 text-xs text-slate-600');
+      add(box, 'p', 'Accept or reject the identity. CharityClarity Aurora calculates the status from the state record. This decision applies to this snapshot.', 'mt-1 text-xs text-slate-600');
       for (const candidate of review.candidates) {
         const card = add(box, 'div', '', 'mt-3 rounded-md border border-slate-200 p-3');
         add(card, 'p', candidate.name, 'font-semibold');

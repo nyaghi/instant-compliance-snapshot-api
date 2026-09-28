@@ -17,7 +17,7 @@
   const compatible = response => response?.ok && ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "connection-recovery-v1", "recovery-causes-v1", "cleanup-ack-v1", "timeout-recovery-v1", "resume-v1", "verified-detail-v1", "detail-navigation-v1"].every(capability => response.capabilities?.includes(capability));
   let refreshing = null, activeLookups = 0;
   const recoveryMessage = (reason, retryAt) => ({
-    NY_CONNECTOR_RECOVERY_PAGE_OPEN: "Close your other New York registry page before refreshing this connection. Your CharityClarity results are saved on this page.",
+    NY_CONNECTOR_RECOVERY_PAGE_OPEN: "Close your other New York registry page before refreshing this connection. Your CharityClarity Aurora results are saved on this page.",
     NY_CONNECTOR_RECOVERY_COOLDOWN: "A connection refresh was already attempted recently. New York checks can be tried again after the recovery pause.",
     NY_CONNECTOR_RECOVERY_REJECTED: "New York still rejected verification after the connection refresh. Your other state results are unchanged.",
     NY_CONNECTOR_RECOVERY_FAILED: "The New York connection refresh could not finish. Your other state results are unchanged.",
@@ -52,7 +52,7 @@
     const ready = !!compatible(response) && response.capabilities?.includes("il-ga-public-dom-v1") && response.capabilities?.includes("ga-exempt-record-v1") && response.capabilities?.includes("ga-legacy-rows-v1") && response.capabilities?.includes("il-ga-complete-search-v2") && response.capabilities?.includes("il-session-reuse-v1") && response.capabilities?.includes("il-large-pages-v1") && response.capabilities?.includes("il-dom-events-v1"), update = !!response.ok && !ready;
     box.hidden = false;
     const message = box.querySelector("[data-connector-message]");
-    message.textContent = ready ? "Registry connector connected. Keep Chrome open while checks run." : update ? "Your registry connector needs an update. Follow the three update steps, then refresh CharityClarity." : "Connect this browser to New York, Illinois and Georgia using the three setup steps.";
+    message.textContent = ready ? "Registry connector connected. Keep Chrome open while checks run." : update ? "Your registry connector needs an update. Follow the three update steps, then refresh CharityClarity Aurora." : "Connect this browser to New York, Illinois and Georgia using the three setup steps.";
     const refreshButton = box.querySelector("[data-connector-refresh]");
     if (refreshButton) {
       refreshButton.hidden = !ready; refreshButton.disabled = !!refreshing || activeLookups > 0;

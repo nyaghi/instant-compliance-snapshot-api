@@ -13,7 +13,7 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.utils import ImageReader
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, CondPageBreak, KeepTogether
 
-REPORT_VERSION = "1.3.2"
+REPORT_VERSION = "1.3.3"
 NAVY = colors.HexColor("#0B2A5B")
 INK = colors.HexColor("#172B45")
 MUTED = colors.HexColor("#536274")
@@ -33,7 +33,7 @@ OVERDUE = HIGH - RESTRICTED
 CALENDAR = {"Current", "Upcoming Filing"} | OVERDUE
 DATE_TOKEN = r"(\d{1,2}/\d{1,2}/\d{4}|\d{4}-\d{2}-\d{2})"
 BUCKETS = ("Overdue", "0-30 days", "31-60 days", "61-90 days", "91-180 days", "Beyond 180 days", "Date unconfirmed")
-DISCLAIMER = ("CharityClarity provides preliminary results for diagnostic purposes only, not legal or tax advice. "
+DISCLAIMER = ("CharityClarity Aurora provides preliminary results for diagnostic purposes only, not legal or tax advice. "
                "Its compliance statuses generally apply a more conservative interpretation than the state's displayed "
                "status, which may not reflect the latest filing position. Confirm relevant records and requirements "
                "before making legal, tax or fundraising decisions.")
@@ -567,7 +567,7 @@ def generate_report(payload, supported_states):
                       p("Keep existing registrations and required filings current while exemption eligibility or a request is being reviewed.", "small")])
 
     story.extend([section_break(), p("State findings and evidence", "title"),
-                  p("Each finding separates the returned evidence, CharityClarity's interpretation and the verification needed. Evidence may include filing information assembled by CharityClarity; it is not necessarily a status displayed on the public page. Comments and source notes are retained without excerpt truncation.", "small")])
+                  p("Each finding separates the returned evidence, CharityClarity Aurora's interpretation and the verification needed. Evidence may include filing information assembled by CharityClarity Aurora; it is not necessarily a status displayed on the public page. Comments and source notes are retained without excerpt truncation.", "small")])
     for f in findings:
         row = f["row"]
         start = len(story)
@@ -592,7 +592,7 @@ def generate_report(payload, supported_states):
         story.append(labeled("Evidence returned with the check:", row["raw_status_text"] or "No separate registry excerpt supplied."))
         if row["source_note"]:
             story.append(labeled("Evidence context:", row["source_note"]))
-        story.append(labeled("CharityClarity interpretation:", row["comments"] or "No explanatory comment supplied with the returned status."))
+        story.append(labeled("CharityClarity Aurora interpretation:", row["comments"] or "No explanatory comment supplied with the returned status."))
         story.append(labeled("Verification needed:", verification_needed(row)))
         for state, when, source_date in freshness([row]):
             try:
@@ -614,24 +614,24 @@ def generate_report(payload, supported_states):
     story.append(p("Report template " + REPORT_VERSION + " | Snapshot version(s): " + versions, "small"))
 
     logo = ImageReader(str(ASSETS / "compliance-express.png"))
-    brand = ImageReader(str(ASSETS / "charityclarity.png"))
+    brand = ImageReader(str(ASSETS / "charityclarity-aurora.png"))
     page_count = 0
     def page_frame(canvas, document):
         canvas.saveState()
         canvas.drawImage(logo, 42, 747, width=150, height=36.15, mask="auto")
-        canvas.drawImage(brand, 443, 747, width=127, height=42.33, mask="auto")
+        canvas.drawImage(brand, 400, 724, width=170, height=170 * 793 / 1983, mask="auto")
         canvas.setStrokeColor(colors.HexColor("#DCE3EB"))
         canvas.line(42, 719, 570, 719)
         canvas.setFont("Helvetica", 7.5)
         canvas.setFillColor(MUTED)
         canvas.drawString(42, 33, "www.compliance-express.com  |  info@compliance-express.com")
-        canvas.drawRightString(570, 33, f"CharityClarity  |  {document.page} / {page_count}")
+        canvas.drawRightString(570, 33, f"CharityClarity Aurora  |  {document.page} / {page_count}")
         canvas.restoreState()
     # Two fresh layout passes preserve variable-length evidence and correct page totals.
     for _ in range(2):
         output = BytesIO()
         doc = SimpleDocTemplate(output, pagesize=(612, 792), leftMargin=42, rightMargin=42,
-                                topMargin=94, bottomMargin=53, title=f"CharityClarity - {org}", author="Compliance Express")
+                                topMargin=94, bottomMargin=53, title=f"CharityClarity Aurora - {org}", author="Compliance Express")
         doc.build(deepcopy(story), onFirstPage=page_frame, onLaterPages=page_frame)
         if page_count:
             assert page_count == doc.page, "Report pagination changed between layout passes"
