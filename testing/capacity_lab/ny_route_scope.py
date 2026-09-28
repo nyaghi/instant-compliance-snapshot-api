@@ -2,6 +2,8 @@
 import ast
 
 def strip_ny_routed_detail(tree):
+    from testing.capacity_lab.nj_grid_scope import strip_nj_complete_grid
+    strip_nj_complete_grid(tree)
     helpers={'lab_ny_routed_detail','ny_open_registry_detail'}
     present={getattr(n,'name','') for n in tree.body}&helpers
     if not present:return

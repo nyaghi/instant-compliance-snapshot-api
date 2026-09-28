@@ -307,13 +307,13 @@ def log_failure_trace(r, error):
 
 def log_transport_failure(r, error):
     """Preserve fixed-label HTTP timing after the isolated MI/NJ task is reaped."""
-    if not error or r['job']['state'] not in {'MI', 'NJ'}: return
+    if not error or r['job']['state'] not in {'MI', 'NJ', 'WI'}: return
     try:
         path = r['output'].with_suffix('.transport.json')
         if not path.is_file() or path.stat().st_size > 65536: return
         raw = json.loads(path.read_text(encoding='utf-8'))
         if not isinstance(raw, list): return
-        allowed = {'route': {'disclaimer', 'search', 'results', 'configuration', 'verification', 'query', 'registration', 'details'},
+        allowed = {'route': {'disclaimer', 'search', 'results', 'configuration', 'verification', 'query', 'registration', 'details', 'reader'},
                    'event': {'http_start', 'http_headers', 'http_complete', 'http_exception', 'http_body_exception'},
                    'method': {'GET', 'POST'}}
         events = []

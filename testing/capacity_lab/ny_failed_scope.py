@@ -1,6 +1,8 @@
 """Restore only the opt-in failed-request wakeup for full master comparisons."""
 import ast
 def strip_ny_failed_wakeup(tree):
+    from testing.capacity_lab.nj_grid_scope import strip_nj_complete_grid
+    strip_nj_complete_grid(tree)
     from testing.capacity_lab.ny_route_scope import strip_ny_routed_detail
     strip_ny_routed_detail(tree)
     added={'NYBrowserConnectionError','lab_ny_failed_request_wakeup','ny_wait_for_completed_or_failed_response'}

@@ -1216,3 +1216,32 @@ checks to the back of other state queues: the same NY negative case was 20th
 and 19th to start in the two observed bursts. Offline sensitivity replay favored
 deadline order over that complexity-dependent preference. Per-organization
 concurrency caps still apply; no extra job can start merely due to priority.
+
+### Complete New Jersey name grids and Wisconsin diagnostics (perf.88)
+
+Perf.87 returned 623 and 625 first-visible conclusive results by 60 seconds,
+versus the retained individual control's 639. All 1,251 completed statuses and
+available EIN/record IDs matched the complete Standard reference. Parity is not
+achieved; these counts do not justify staging or production promotion.
+
+The NJ public name query previously loaded only ten rows, then restarted the
+browser when the result list was larger. `CE_LAB_NJ_COMPLETE_GRID=1` requests up
+to fifty rows for the same planned names. Only a complete first page with an
+explicit no-more-records marker and consistent counts can exclude a match. Every
+row must have a different valid EIN, or, when EIN is missing, both existing master
+name checks must reject it against the full legal/alias targets. Matching, close,
+unreadable or malformed identities retain the browser path. Duplicate credentials
+are rejected. EIN queries, positive details and final status rules are unchanged.
+
+The public portal repeats substantial metadata per row: the measured 38-row
+response exceeded the old 1 MB buffer. The opt-in fifty-row name response alone
+has a bounded 2 MB allowance; all other responses retain 1 MB, and the original
+18-second acquisition and overall 60-second Sales deadlines remain unchanged.
+Every lookup uses a fresh session and fresh responses; nothing is shared between
+organizations or runs. Standard and non-lab paths retain their original behavior.
+
+Passive WI diagnostics record only fixed route labels, HTTP status and elapsed
+times for the existing urllib operations. They never initiate extra requests,
+read a response ahead, capture names/tokens/body content, or change classification.
+This separates public-registry delay from the existing reader fallback on the
+next controlled run. Worker/source capacity and scheduling remain unchanged.

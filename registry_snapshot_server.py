@@ -19617,6 +19617,63 @@ def nj_same_lookup_zero_queries(org):
     return set()
 
 
+def nj_complete_grid_enabled() -> bool:
+    return nj_zero_reuse_enabled() and os.environ.get("CE_LAB_NJ_COMPLETE_GRID") == "1"
+
+
+def nj_complete_grid_excludes_org(data, org) -> bool:
+    """Exclude only a complete fresh grid, using the master identity rules.
+
+    A missing EIN is not a mismatch. Such a row can be excluded only when
+    both master name checks reject it against the legal name and known aliases.
+    Any matching/unknown/malformed identity leaves the original browser path.
+    """
+    ein = canonical_ein_digits(org.ein)
+    if (not re.fullmatch(r"\d{9}", ein) or not isinstance(data, dict)
+            or type(data.get("ItemCount")) is not int or not 1 <= data["ItemCount"] <= 50
+            or not isinstance(data.get("Records"), list)
+            or len(data["Records"]) != data["ItemCount"]
+            or data.get("MoreRecords") is not False
+            or type(data.get("PageNumber")) is not int or data["PageNumber"] != 1
+            or any(data.get(k) for k in ("Error", "error", "ErrorMessage", "errorMessage"))
+            or data.get("Success") is False):
+        return False
+    targets = organization_match_target_variants(org.organization_name, org.ein)
+    if not targets:
+        return False
+    credentials = set()
+    for row in data["Records"]:
+        attrs = row.get("Attributes") if isinstance(row, dict) else None
+        if not isinstance(attrs, list) or not all(isinstance(a, dict) for a in attrs):
+            return False
+        fields = {}
+        for key in ("name", "accountnumber", "crsm_federalein"):
+            values = [a for a in attrs if a.get("Name") == key]
+            if not values and key == "crsm_federalein":
+                fields[key] = ""
+                continue
+            if len(values) != 1 or not isinstance(values[0].get("DisplayValue"), str):
+                return False
+            value = values[0]["DisplayValue"].strip()
+            raw = values[0].get("Value")
+            if raw is not None and raw != value:
+                return False
+            fields[key] = value
+        name, credential, other = [fields[k] for k in ("name", "accountnumber", "crsm_federalein")]
+        if (not useful_registry_name(name) or not re.fullmatch(r"CH\d+", credential)
+                or credential in credentials):
+            return False
+        credentials.add(credential)
+        if other:
+            if (not re.fullmatch(r"\d{2}-?\d{7}", other)
+                    or canonical_ein_digits(other) in (ein, "000000000")):
+                return False
+        elif (target_name_score(name, targets) >= 0
+                or registry_name_is_safe_against_targets(name, targets, org.organization_name, org.ein)):
+            return False
+    return True
+
+
 def search_nj_public_details(org):
     """Fresh public EIN query and detail; only one fully confirmed record qualifies.
 
@@ -19672,9 +19729,11 @@ def search_nj_public_details(org):
                             or content_type not in response.headers.get("Content-Type", "").lower()):
                         raise ValueError("NJ public query response changed or incomplete")
                     pieces, size = [], 0
+                    maximum_bytes = (2_000_000 if nj_complete_grid_enabled() and payload is not None
+                                     and payload.get("pageSize") == 50 else 1_000_000)
                     for chunk in response.iter_content():
                         size += len(chunk)
-                        if size > 1_000_000 or time.monotonic() >= deadline:
+                        if size > maximum_bytes or time.monotonic() >= deadline:
                             raise ValueError("NJ public query response exceeded its allowance")
                         pieces.append(chunk)
                     return b"".join(pieces).decode("utf-8")
@@ -19716,8 +19775,12 @@ def search_nj_public_details(org):
                 for query in planned_queries:
                     if query in progress.queries:
                         continue
-                    named = json.loads(fetch(query_path, "json", {**payload, "search": query}, tokens[0]))
-                    if not (nj_complete_public_zero(named) or nj_complete_other_ein_rows(named, ein)):
+                    name_payload = {**payload, "search": query}
+                    if nj_complete_grid_enabled():
+                        name_payload["pageSize"] = 50
+                    named = json.loads(fetch(query_path, "json", name_payload, tokens[0]))
+                    if not (nj_complete_public_zero(named) or nj_complete_other_ein_rows(named, ein)
+                            or (nj_complete_grid_enabled() and nj_complete_grid_excludes_org(named, org))):
                         break  # Positive/ambiguous/unusable queries keep browser matching.
                     progress.queries.add(query)
                 # The unchanged fallback can finish without opening a browser

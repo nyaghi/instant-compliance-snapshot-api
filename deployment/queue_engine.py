@@ -212,6 +212,10 @@ def observe_transport(master, state, sink=None):
     This neither changes requests nor reads responses ahead of the master.
     The trace survives a killed task, identifying which source step stalled.
     """
+    if state == 'WI':
+        with observe_wi_transport(master, sink) as trace:
+            yield trace
+        return
     client = getattr(master, 'curl_requests', None)
     if (state not in {'MI', 'NJ'} or client is None
             or not master.APP_VERSION.endswith('-performance-lab')):
@@ -253,6 +257,61 @@ def observe_transport(master, state, sink=None):
         yield trace
     finally:
         client.Session = original
+
+
+def wi_transport_route(url):
+    """Fixed public route labels only, including the existing reader fallback."""
+    try:
+        parsed = urlsplit(url)
+        if parsed.scheme != 'https': return None
+        if parsed.hostname == 'r.jina.ai':
+            nested = urlsplit(parsed.path.lstrip('/'))
+            if nested.hostname == 'apps.dfi.wi.gov': return 'reader'
+        if parsed.hostname == 'apps.dfi.wi.gov':
+            if parsed.path.endswith('/OrganizationCredentialSearch.aspx'): return 'search'
+            if parsed.path.endswith('/OrgCredentialSearchResults.aspx'): return 'results'
+            if parsed.path.startswith('/ice/berg/Registration/'): return 'details'
+    except Exception: pass
+    return None
+
+
+@contextmanager
+def observe_wi_transport(master, sink=None):
+    """Observe the original urllib request/read without extra reads or requests."""
+    if not master.APP_VERSION.endswith('-performance-lab'):
+        yield None
+        return
+    trace = FloridaTrace(Path(sink).with_suffix('').with_suffix('.transport.json') if sink else None)
+    director = master.urllib.request.OpenerDirector
+    original = director.open
+    def observed(opener, request, *args, **kwargs):
+        route = wi_transport_route(request.full_url if hasattr(request, 'full_url') else request)
+        if not route: return original(opener, request, *args, **kwargs)
+        number = len(trace.events)
+        trace.record('http_start', route=route, request_id=number,
+                     method=request.get_method() if hasattr(request, 'get_method') else 'GET')
+        try:
+            response = original(opener, request, *args, **kwargs)
+        except Exception as exc:
+            trace.record('http_exception', route=route, request_id=number, exception_type=type(exc).__name__)
+            raise
+        trace.record('http_headers', route=route, request_id=number, status=getattr(response, 'status', None))
+        try:
+            read = response.read
+            def observed_read(*args, **kwargs):
+                try: content = read(*args, **kwargs)
+                except Exception as exc:
+                    trace.record('http_body_exception', route=route, request_id=number, exception_type=type(exc).__name__)
+                    raise
+                trace.record('http_complete', route=route, request_id=number)
+                return content
+            response.read = observed_read
+        except Exception:
+            pass  # An unpatchable response keeps the original read untouched.
+        return response
+    director.open = observed
+    try: yield trace
+    finally: director.open = original
 
 
 def execute(master, job, source_finished=None, trace_path=None):
