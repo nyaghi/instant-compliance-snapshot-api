@@ -161,6 +161,10 @@ class WorkflowControls(unittest.TestCase):
         merged={n.name:ast.dump(n) for n in tree.body if isinstance(n,ast.FunctionDef)}
         for name in sorted(set(aurora)|set(lab)):
             if name=='attach_identity_review':continue # separate full-branch equivalence test above
+            # September 29 deliberately changes bounded literal query priority.
+            # run_license_dash_guardrails checks this planner and preserves all
+            # other existing master functions against the deployed predecessor.
+            if name=='licensed_charity_names':continue
             a,l,b=aurora.get(name),lab.get(name),base.get(name)
             if a!=b and l!=b and a!=l:continue # thirteen explicitly reviewed overlaps
             expected=a if a!=b else l
