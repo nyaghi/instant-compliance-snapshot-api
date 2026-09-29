@@ -6174,6 +6174,17 @@ def licensed_charity_identity(org, row, state, deadline):
         row["match"] = {"decision": "accepted", "score": 100, "reason": "USER_CONFIRMED_IDENTITY"}
         row["address_evidence"] = {"decision": "user_confirmed", "basis": "Identity accepted by the user for this snapshot."}
         return "accepted"
+    if state == "DC" and decision["decision"] == "rejected" and decision["reason"] != "REJECT_DIFFERENT_EIN":
+        # Evaluate the stronger full EIN-linked name plus exact office proof
+        # before preserving a generic extended-label review candidate.
+        recovered = dc_repeated_name_identity(org, row, deadline)
+        if recovered != "rejected":
+            if recovered == "possible":
+                row["match"] = {"decision": "possible", "score": 55,
+                                "reason": "MATCH_FULL_NAME_IN_EXTENDED_DC_LABEL"}
+                row["address_evidence"] = {"decision": "unavailable", "basis":
+                    "The extended DC label could not be confirmed against a complete EIN-linked name and exact office address. Identity requires confirmation."}
+            return recovered
     if state == "DC" and decision["decision"] == "rejected" and not row.get("ein"):
         # The public feed can append corrupted/repeated text to a full legal
         # name. Preserve a long whole-name prefix as a review candidate rather
@@ -6201,8 +6212,6 @@ def licensed_charity_identity(org, row, state, deadline):
         decision = {"decision": "possible", "score": 55, "reason": "MATCH_FULL_NAME_WITH_REGISTRY_YEAR"}
         row["match"] = decision
     if decision["decision"] == "rejected":
-        if state == "DC" and decision["reason"] != "REJECT_DIFFERENT_EIN":
-            return dc_repeated_name_identity(org, row, deadline)
         return "rejected"
     if state == "IL" and canonical_ein_digits(row.get("ein", "")) == canonical_ein_digits(org.ein):
         # Illinois often displays compliance agents' addresses. An exact EIN
