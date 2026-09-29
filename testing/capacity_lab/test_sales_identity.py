@@ -112,4 +112,13 @@ class SalesIdentityTests(unittest.TestCase):
         from deployment.durable_queue import normalize_submission
         with self.assertRaises(ValueError):normalize_submission({'organization_name':'Original','ein':EIN,'states':['DC'],'sales_identity':evidence()},['DC'])
 
+    def test_preparation_exports_only_master_reviewed_names(self):
+        raw=evidence()
+        raw['sources']['CO']['names'] += [candidate('Unsafe',verified=False)]
+        job={'state':'@sales_identity','version':m.APP_VERSION,
+            'payload':{'organization_name':'Original','ein':EIN,'alternate_names':[],'mode':'sales'}}
+        with patch.object(m,'sales_identity_evidence',return_value=raw):
+            result=execute(m,job)
+        self.assertEqual(result['reviewed_names'],['Former Legal Name','Other Legal Name'])
+
 if __name__=='__main__':unittest.main(verbosity=2)

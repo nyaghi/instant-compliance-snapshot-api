@@ -78,7 +78,8 @@ def prepare(master, payload, owner):
     if not isinstance(nonce, str) or not re.fullmatch(r'[a-f0-9-]{36}', nonce): raise ValueError('Invalid request ID')
     external = sorted(set(states) & {'IL', 'GA'})
     internal = sorted(set(states) - set(external))
-    if not internal: raise ValueError('Use the browser connector for these states')
+    if not internal and not (mode == 'sales' and external and not aliases):
+        raise ValueError('Use the browser connector for these states')
     request = {'organization_name': name.strip(), 'ein': ein, 'alternate_names': aliases,
         'states': internal, 'mode': mode, 'kind': 'registration',
         'state_concurrency': 20 if mode == 'sales' else 15, 'external_state_slots': len(external)}
@@ -115,6 +116,25 @@ def public_result(master, job, record):
     return data
 
 
+def connector_identity(status, record):
+    """Expose only master-reviewed names from this workflow's settled preparation."""
+    if record['mode'] != 'sales': return None
+    preparation = status.get('preparation', [])
+    if len(preparation) != 1 or preparation[0].get('phase') != 'done': return None
+    job = preparation[0]
+    value = job.get('result')
+    unavailable = {'ready': True, 'confirmed': False, 'names': []}
+    if job.get('error') or not isinstance(value, dict): return unavailable
+    names = value.get('reviewed_names')
+    if (job.get('state') != '@sales_identity' or value.get('state') != '@sales_identity'
+            or value.get('ein') != record['ein']
+            or value.get('app_version') != os.environ.get('CE_STAGING_WORKFLOW_VERSION')
+            or not isinstance(names, list) or len(names) > 32
+            or any(not isinstance(n, str) or not 1 <= len(n.strip()) <= 300 for n in names)):
+        return unavailable
+    return {'ready': True, 'confirmed': not value.get('errors'), 'names': names}
+
+
 def handle(master, handler):
     if not enabled(master):
         handler._send_json(503, {'error': 'Optimized staging execution is not enabled.'}); return
@@ -143,6 +163,8 @@ def handle(master, handler):
                 data = {key: status[key] for key in ('phase','completed','total','submitted','deadline','started','finished')}
                 data['results'] = [r for job in status['jobs'] if job['state'] in record['states']
                                    and (r := public_result(master, job, record)) is not None]
+                identity = connector_identity(status, record)
+                if identity is not None: data['connector_identity'] = identity
             elif action in ('cancel', 'release-external'):
                 call(path + '/' + action, {})
                 data = {'ok': True}

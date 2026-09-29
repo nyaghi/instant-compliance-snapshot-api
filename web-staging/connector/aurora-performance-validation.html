@@ -90,7 +90,7 @@ $('setup').addEventListener('submit',async event=>{event.preventDefault();if(run
   let timer;
   if(c.mode==='sales')timer=setTimeout(()=>controller.abort(),60000);
   try{await window.CCOptimized.run({apiBase:API,name:c.organization,ein:c.ein,states:c.states,aliases:names,mode:c.mode||'standard',credentials,signal:controller.signal,onResult:record,
-   externalLookup:state=>window.CCNYConnector.lookup({state,purpose:'registration',organization_name:c.organization,ein:c.ein,alternate_names:names,...credentials,signal:controller.signal,onProgress:message=>{$('current').textContent=`${c.organization}: ${message||state}`;}})});
+   externalLookup:(state,reviewedNames)=>window.CCNYConnector.lookup({state,purpose:'registration',organization_name:c.organization,ein:c.ein,alternate_names:reviewedNames,...credentials,signal:controller.signal,onProgress:message=>{$('current').textContent=`${c.organization}: ${message||state}`;}})});
   }catch(e){c.error=controller.signal.aborted?'SALES_TIME_LIMIT':e.message;}
   finally{clearTimeout(timer);}
   for(const state of c.states)if(!seen.has(state))record({state,ein:c.ein,status:'Unable to Confirm',success:false,status_reason:c.mode==='sales'?'SALES_TIME_LIMIT':'WORKFLOW_INCOMPLETE',comments:'This check did not finish within its available time. Registration remains unconfirmed.',app_version:VERSION});

@@ -42,3 +42,36 @@ test('caller deadline cancels worker tasks and rejects later evidence',async()=>
  await new Promise(setImmediate);ctrl.abort();deliver();await pending;
  assert.equal(seen.length,0);assert(calls.includes('cancel'));
 });
+
+test('Sales connector waits for same-workflow reviewed names, including connector-only selection',async()=>{
+ const calls=[],lookups=[];let polls=0;
+ const cc=setup(async(u,o)=>{const p=JSON.parse(o.body);calls.push(p);
+ if(p.action==='start')return response({token:'signed'});
+ if(p.action==='release-external')return response({ok:true});
+ if(!polls++){assert.equal(lookups.length,0);return response({finished:null,results:[]});}
+ return response({finished:1,results:[],connector_identity:{ready:true,confirmed:true,names:['Former Legal Name']}});});
+ const r=await cc.run({...base,mode:'sales',states:['GA'],externalLookup:async(state,names)=>{
+ lookups.push({state,names:[...names]});return {state,status:'Exempt'};}});
+ assert.deepEqual(lookups,[{state:'GA',names:['Former Legal Name']}]);
+ assert.equal(calls.filter(p=>p.action==='start').length,1);assert.equal(r[0].status,'Exempt');
+});
+
+test('incomplete Sales identity preserves positives but cannot establish connector non-registration',async()=>{
+ const cc=setup(async(u,o)=>{const p=JSON.parse(o.body);
+ return response(p.action==='start'?{token:'signed'}:{finished:1,results:[],
+ connector_identity:{ready:true,confirmed:false,names:['Verified Partial Name']}});});
+ const r=await cc.run({...base,mode:'sales',states:['IL','GA'],
+ externalLookup:async state=>({state,status:state==='IL'?'Current':'Not Registered',success:true})});
+ assert.equal(r[0].status,'Current');assert.equal(r[1].status,'Unable to Confirm');assert.equal(r[1].success,false);
+});
+
+test('Sales cutoff during preparation never starts a late connector search',async()=>{
+ const ctrl=new AbortController();let deliver,lookups=0;
+ const cc=setup(async(u,o)=>{const p=JSON.parse(o.body);
+ if(p.action==='start')return response({token:'signed'});if(p.action==='cancel')return response({ok:true});
+ return new Promise(resolve=>{deliver=()=>resolve(response({finished:1,results:[],
+ connector_identity:{ready:true,confirmed:true,names:['Former']}}));});});
+ const pending=cc.run({...base,mode:'sales',states:['GA'],signal:ctrl.signal,
+ externalLookup:async()=>{lookups++;return {state:'GA',status:'Current'};}});
+ await new Promise(setImmediate);ctrl.abort();deliver();await pending;assert.equal(lookups,0);
+});

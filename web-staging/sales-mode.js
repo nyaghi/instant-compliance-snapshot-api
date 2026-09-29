@@ -96,7 +96,7 @@
         await Promise.race([window.CCOptimized.run({apiBase:API_BASE,name:org,ein,states:selectedStates,
           mode:'sales',credentials:{email:$('email').value.trim(),admin_passcode:$('adminPasscode').value.trim(),device_id:getDeviceId()},
           signal:controller.signal,
-          externalLookup:state=>requestSingleState(API_BASE,ein,$('email').value.trim(),state,org,false,[],{signal:controller.signal}),
+          externalLookup:(state,names)=>requestSingleState(API_BASE,ein,$('email').value.trim(),state,org,false,names,{signal:controller.signal}),
           onResult:result=>{if(closed)return;if(performance.now()>=deadline){expire();return;}record(result.state,result);}
         }).catch(()=>{if(!closed)expire();}),expired]);
         panel.dataset.stateConcurrencyLimit=String(STATE_CONCURRENCY);

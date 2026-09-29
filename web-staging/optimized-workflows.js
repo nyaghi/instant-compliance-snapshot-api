@@ -6,6 +6,7 @@
     const {apiBase, name, ein, states, aliases=[], mode='standard', credentials,
       signal, onResult=()=>{}, externalLookup} = options;
     const results=new Map(), external=states.filter(s=>s==='IL'||s==='GA');
+    const needsIdentity=mode==='sales'&&external.length>0&&aliases.length===0;
     let token=null, externalDone=false, released=false;
     const requestId=crypto.randomUUID();
     const missing=state=>({state,ein,organization_name:name,status:'Unable to Confirm',success:false,
@@ -24,11 +25,23 @@
     }
     const cancel=()=>{if(token) void call('cancel',{},true).catch(()=>{});};
     signal?.throwIfAborted();signal?.addEventListener('abort',cancel,{once:true});
-    const connector=Promise.all(external.map(async state=>{
-      try{record(await externalLookup(state));}catch{if(!signal?.aborted)record(missing(state));}
-    })).then(()=>{externalDone=true;});
+    let connector=Promise.resolve(),connectorStarted=false;
+    const startConnector=(names,confirmed=true)=>{
+      if(connectorStarted||signal?.aborted)return;
+      connectorStarted=true;
+      connector=Promise.all(external.map(async state=>{
+        try{
+          let result=await externalLookup(state,names);
+          if(!confirmed&&/^Not Registered/.test(result.status||''))result={...missing(state),
+            status_reason:'SALES_IDENTITY_INCOMPLETE',
+            comments:'The Sales name-evidence step was incomplete. A negative name-only search cannot confirm non-registration. Run Standard for a full check.'};
+          record(result);
+        }catch{if(!signal?.aborted)record(missing(state));}
+      })).then(()=>{externalDone=true;});
+    };
+    if(!needsIdentity)startConnector(aliases);
     try {
-      if(states.length>external.length) {
+      if(states.length>external.length||needsIdentity) {
         const payload={organization_name:name,ein,alternate_names:aliases,states,mode,consent:true,request_id:requestId};
         let accepted;
         try{accepted=await call('start',payload);}catch(error){
@@ -48,6 +61,10 @@
             signal?.throwIfAborted();if(++failures>=5)throw error;
           }
           if(progress){
+            if(needsIdentity&&progress.connector_identity?.ready){
+              const identity=progress.connector_identity;
+              startConnector(identity.names,identity.confirmed===true);
+            }
             for(const result of progress.results)record(result);
             if(progress.finished!==null)break;
           }

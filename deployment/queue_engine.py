@@ -472,8 +472,12 @@ def execute(master, job, source_finished=None, trace_path=None):
     p = job['payload']
     if job['state'] == '@sales_identity':
         from deployment.lab_capacity import sales_identity_seconds
-        return master.sales_identity_evidence(p['organization_name'], p['ein'],
-                                              budget_seconds=sales_identity_seconds(job['version']))
+        evidence = master.sales_identity_evidence(p['organization_name'], p['ein'],
+                                                 budget_seconds=sales_identity_seconds(job['version']))
+        # The master applies the same EIN, release and evidence checks used by
+        # state jobs. The connector receives names, never raw source payloads.
+        evidence['reviewed_names'] = master.sales_names_from_evidence(p['ein'], evidence)
+        return evidence
     if job['state'] == '@discovery':
         if source_finished is None:
             return master.discover_organization_names(p['organization_name'], p['ein'])

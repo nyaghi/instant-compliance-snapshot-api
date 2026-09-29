@@ -69,10 +69,14 @@ def normalize_submission(payload, supported):
     kind, mode = payload.get('kind', 'registration'), payload.get('mode', 'standard')
     if kind not in ('registration', 'discovery') or mode not in ('standard', 'sales'):
         raise ValueError('Invalid workflow kind or mode')
+    reserved = payload.get('external_state_slots', 0)
+    if type(reserved) is not int or not 0 <= reserved <= 2 or (kind != 'registration' and reserved):
+        raise ValueError('Invalid browser-state reservation')
     states = payload.get('states', [])
     if not isinstance(states, list) or any(not isinstance(s, str) or s not in supported for s in states):
         raise ValueError('Unsupported state')
-    if kind == 'registration' and not states or kind == 'discovery' and states:
+    connector_identity_only = kind == 'registration' and mode == 'sales' and reserved > 0 and not aliases
+    if (kind == 'registration' and not states and not connector_identity_only) or (kind == 'discovery' and states):
         raise ValueError('Select states for registration only')
     if kind == 'discovery' and (mode != 'standard' or aliases):
         raise ValueError('Discovery takes only the entered name and EIN')
@@ -87,9 +91,6 @@ def normalize_submission(payload, supported):
     # Keep default submissions and their idempotency fingerprints unchanged.
     if concurrency != 15:
         normalized['state_concurrency'] = concurrency
-    reserved = payload.get('external_state_slots', 0)
-    if type(reserved) is not int or not 0 <= reserved <= 2 or (kind != 'registration' and reserved):
-        raise ValueError('Invalid browser-state reservation')
     if reserved:
         normalized['external_state_slots'] = reserved
     return normalized

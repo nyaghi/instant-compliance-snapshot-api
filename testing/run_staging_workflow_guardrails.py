@@ -38,6 +38,33 @@ class WorkflowControls(unittest.TestCase):
             with patch.dict(os.environ,changes):self.assertFalse(w.enabled(c))
         with patch.object(c,'APP_VERSION','2026.09.28.5'):self.assertFalse(w.enabled(c))
 
+    def test_connector_names_bound_to_settled_same_ein_and_worker_release(self):
+        value={'state':'@sales_identity','ein':self.record['ein'],
+            'app_version':os.environ['CE_STAGING_WORKFLOW_VERSION'],
+            'reviewed_names':['Former Control'],'errors':{}}
+        def status(v=value, **job):
+            return {'preparation':[dict(state='@sales_identity',phase='done',result=v,**job)]}
+        self.assertEqual(w.connector_identity(status(),self.record),
+            {'ready':True,'confirmed':True,'names':['Former Control']})
+        self.assertFalse(w.connector_identity(status({**value,'errors':{'IRS':'Timeout'}}),self.record)['confirmed'])
+        for changes in [{'ein':'987654321'},{'app_version':'old'}, {'state':'GA'},
+                        {'reviewed_names':None},{'reviewed_names':['x'*301]}]:
+            self.assertEqual(w.connector_identity(status({**value,**changes}),self.record),
+                {'ready':True,'confirmed':False,'names':[]})
+        self.assertFalse(w.connector_identity(status(error='timeout'),self.record)['confirmed'])
+        self.assertIsNone(w.connector_identity({'preparation':[]},self.record))
+        self.assertIsNone(w.connector_identity(status(),{**self.record,'mode':'standard'}))
+
+    def test_connector_only_sales_preparation_is_narrowly_allowed(self):
+        p={**self.payload,'states':['GA'],'alternate_names':[]}
+        with patch.object(w,'call',return_value={'id':self.record['id']}) as call:
+            w.prepare(c,p,self.owner)
+            request=call.call_args.args[1]
+        self.assertEqual(request['states'],[])
+        self.assertEqual(normalize_submission(request,c.SUPPORTED_STATES)['external_state_slots'],1)
+        for changes in [{'mode':'standard'},{'external_state_slots':0},{'alternate_names':['Reviewed']}]:
+            with self.assertRaises(ValueError):normalize_submission({**request,**changes},c.SUPPORTED_STATES)
+
     def test_tokens_bound_to_owner_release_and_expiration(self):
         token=w.pack(c,self.record)
         self.assertEqual(w.unpack(c,token,self.owner),self.record)
