@@ -1,5 +1,6 @@
 """Signed browser continuation controls; no live requests or credentials."""
 import copy
+import json
 import time
 import unittest
 from unittest.mock import patch
@@ -100,6 +101,18 @@ class ContinuationControls(unittest.TestCase):
         self.assertEqual(final['result']['status'], 'Unable to Confirm')
         self.assertIn('verification', final['result']['comments'])
         self.assertEqual(self.request({'action': 'cancel', 'check_token': response['check_token']})[1], {'phase': 'canceled'})
+
+    def test_failure_diagnostics_expose_public_query_stage_without_secrets(self):
+        _, response = self.start('NC')
+        _, second = self.advance(response)
+        _, final = self.request({'action': 'fail', 'check_token': second['check_token'], 'reason': 'NY_CONNECTOR_TAB_READY_TIMEOUT'})
+        trace = json.loads(final['result']['debug_trace'])['queries_attempted']
+        self.assertTrue(trace[0]['completed'])
+        self.assertFalse(trace[-1]['completed'])
+        self.assertEqual(trace[-1]['query']['state'], 'NC')
+        rendered = json.dumps(trace)
+        for secret in [self.auth['email'], self.auth['device_id'], second['check_token'], 'profile_url', 'evidence']:
+            self.assertNotIn(secret, rendered)
 
     def test_search_cleaner_rejects_payload_and_nesting_limits(self):
         query = {'state': 'AL', 'operation': 'search', 'name': 'YWCA'}

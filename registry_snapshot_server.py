@@ -5978,7 +5978,7 @@ def il_verification_recovery(record, payload, now):
     if (record.get("state") != "IL" or record.get("purpose") != "registration"
             or record.get("recovery_protocol") != "il-fresh-page-v1"
             or (record.get("connector_version") != "0.5.10"
-                and not (trial_identity() and record.get("connector_version") == "0.6.4"))
+                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5"}))
             or payload.get("reason") != "NY_CONNECTOR_IL_VERIFICATION_PENDING"
             or record.get("il_verification_recovery")
             or now + 120 >= record["issued"] + NY_CONNECTOR_TTL_SECONDS):
@@ -6064,6 +6064,16 @@ def nc_charity_record_evidence(fields):
     if not isinstance(fields, dict) or not required.issubset(fields) or not all(isinstance(fields[k], str) for k in required):
         raise ValueError("North Carolina charity result is incomplete")
     name, identifier = fields["CSL Legal Name"].strip(), fields["License"].strip()
+    aliases = fields.get("aliases", [])
+    display_name = fields.get("display_name", name)
+    if (not isinstance(aliases, list) or len(aliases) > 32
+            or any(not isinstance(n, str) or not n.strip() or len(n) > 500 for n in aliases)
+            or not isinstance(display_name, str) or not display_name.strip() or len(display_name) > 500):
+        raise ValueError("North Carolina source names are incomplete")
+    if display_name != name and name not in aliases:
+        raise ValueError("North Carolina displayed name has no bound legal-name evidence")
+    name = display_name.strip()
+    aliases = list(dict.fromkeys(n.strip() for n in aliases if n.strip() != name))
     kind = fields["CSL Type"].strip()
     valid_kind = ((re.fullmatch(r"SL\d+", identifier) and kind == "Charitable Organization")
                   or (re.fullmatch(r"EX\d+", identifier) and kind == "CSL Exempt Organization"))
@@ -6087,7 +6097,7 @@ def nc_charity_record_evidence(fields):
         status = status_from_calendar_date(effective_due) if effective_due else "Current"
     if kind == "CSL Exempt Organization" and raw.casefold() == "csl exempt":
         status = "Exempt"
-    return dict(name=name, identifier=identifier, ein="", aliases=[], raw_status=raw, status=status,
+    return dict(name=name, identifier=identifier, ein="", aliases=aliases, raw_status=raw, status=status,
                 expiration=effective_due, base_expiration=expiration, extension_end=extension,
                 initial=None, renewal=None, street="", location="", url=fields["profile_url"],
                 license_category=fields["CSL Type"].strip())
@@ -6100,7 +6110,7 @@ def nc_charity_profile_evidence(card, profile, filings=None):
     if not isinstance(profile, dict) or not required.issubset(profile) or not all(isinstance(profile[k], str) for k in required):
         raise ValueError("North Carolina profile is incomplete")
     if (profile["profile_url"] != card["url"] or profile["Registration #"].strip() != card["identifier"]
-            or normalized_match_name(profile["Name"]) != normalized_match_name(card["name"])):
+            or normalized_match_name(profile["Name"]) not in {normalized_match_name(n) for n in [card["name"], *card.get("aliases", [])]}):
         raise ValueError("North Carolina profile does not belong to the selected charity")
     result = nc_charity_record_evidence({"CSL Legal Name": profile["Name"], "CSL Type": card["license_category"],
         "License": profile["Registration #"], "Status": profile["Status"], "Expiration Date": profile["Expiration Date"],
@@ -6108,6 +6118,7 @@ def nc_charity_profile_evidence(card, profile, filings=None):
     result.update(street=profile["Street"].strip(), region=profile["State"].strip().upper(),
                   postal_code=profile["Zip"].strip(), location=", ".join(v.strip() for v in (profile["City"], profile["State"]) if v.strip()),
                   source_last_application=final_four_source_date(profile["Last Application Date"], "North Carolina application"))
+    result["aliases"] = list(dict.fromkeys(n for n in [card["name"], *card.get("aliases", [])] if n != result["name"]))
     # The profile's Last Application can be an extension request. Only an
     # explicitly labeled Renewal Charity entry populates the renewal column.
     if filings is not None:
@@ -6534,7 +6545,7 @@ def final_four_clean_evidence(payload, query):
     if query.get("operation") == "search":
         if set(payload) - {"state", "query", "complete", "verification_pending", "total", "rows", "headers"}:
             raise ValueError("Unexpected search evidence fields")
-        allowed = ({"CSL Legal Name", "CSL Type", "Status", "License", "Expiration Date", "Extension End Date", "profile_url"} if state == "NC" else
+        allowed = ({"CSL Legal Name", "CSL Type", "Status", "License", "Expiration Date", "Extension End Date", "profile_url", "display_name", "aliases"} if state == "NC" else
                    {"name", "identifier", "entity_type", "raw_status"} if state == "NV" else
                    {"name", "identifier", "city", "region", "aliases", "raw_status", "registration_date"})
         if state != "AL" and any(not isinstance(row, dict) or set(row) - allowed for row in payload.get("rows", [])):
@@ -6570,6 +6581,14 @@ def final_four_connector_failure(record, reason=""):
                "TN": "https://tncab.tnsos.gov/portal/registered-charities-search"}
     org = checker.Organization(record["organization_name"], record["ein"])
     result = licensed_charity_failure(org, state, sources[state], ValueError("Browser evidence incomplete"))
+    # Public query stages only: never export the signed continuation, device,
+    # email, verification material or collected source pages in diagnostics.
+    result.queries_attempted = [
+        {"query": {k: v for k, v in item["query"].items() if k in {"state", "operation", "name", "identifier"}}, "completed": True}
+        for item in record.get("completed", [])]
+    if record.get("pending"):
+        result.queries_attempted.append({"query": {k: v for k, v in record["pending"]["query"].items()
+                                                  if k in {"state", "operation", "name", "identifier"}}, "completed": False})
     if re.fullmatch(r"NY_CONNECTOR_[A-Z_]{1,60}", reason or ""):
         result.status_reason = reason
     why = ("The registry lookup reached its time limit before all required records were confirmed." if reason == "NY_CONNECTOR_TIMEOUT" else
@@ -23127,7 +23146,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version == "0.6.4")):
+        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5"})):
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()

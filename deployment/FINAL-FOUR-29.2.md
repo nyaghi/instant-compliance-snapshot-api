@@ -228,6 +228,34 @@ validation run.
   limit, query binding and approved-environment behavior. This backend change
   requires no additional connector version or extension reload.
 
+### 0.6.4 live controls and 0.6.5 candidate
+
+- The active 0.6.4 connector completed 15 controls (five organizations across
+  NC/NV/TN). All five TN results were conclusive. NC Make-A-Wish and Reading Is
+  Fundamental were conclusive and both populated their renewal filing dates.
+  NC Junior Achievement and Prevent Child Abuse still timed out; the earlier
+  synchronous-click change did not establish a fix. RMHC hit a duplicate-name
+  parser guard. All five NV controls failed with SEARCH_NOT_STARTED. Original
+  results are preserved; none are replaced by later retries.
+- Source inspection confirmed that some NC cards carry multiple legal names
+  and DBAs under one license. The candidate retains these as source aliases,
+  binds the display name to the card header and license, and lets the master
+  compare all aliases. Duplicate scalar statuses, licenses and dates remain
+  errors. Profiles still require the same public URL and license and a name
+  explicitly observed on that card. No shared matching rule was relaxed.
+- ORION replaces its Search button following filter edits and restores prior
+  results when returning from a detail. The candidate waits for the edited
+  form/button to settle within the original deadline. It opens subsequent
+  records from the restored result set only after checking the original query,
+  every identifier/name/type/status and the complete result count. Fresh
+  searches, including negatives, still require an observed loading cycle.
+  This correction remains a candidate until its installed version passes live
+  checks; it is not yet proven to resolve all five NV failures.
+- Failure traces now retain completed and pending public queries, without
+  credentials, device identity, source pages or signed continuation tokens.
+  The trial accepts 0.6.4 and 0.6.5 during activation; 29.1 access remains
+  unchanged. 0.6.5 is the next package to validate.
+
 ## Confirmed date interpretation
 
 The user confirmed on September 29 that a displayed extension end date is the

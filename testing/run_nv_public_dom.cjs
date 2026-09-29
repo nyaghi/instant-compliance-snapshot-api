@@ -23,7 +23,7 @@ test('Nevada form readiness includes the hydrated Starts With search-type contro
  assert.equal(h.api.registryDocumentReady(),false);
  h.context.document.querySelectorAll=read;assert.equal(h.api.registryDocumentReady(),true);
 });
-function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,truncate=false,duplicate=false,oldPageDelay=80,detailId=null,returnFormDelay=600}={}) {
+function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,truncate=false,duplicate=false,oldPageDelay=80,detailId=null,returnFormDelay=600,returnName=null,returnRows=null,repeatSearchActivity=true,replaceSearchOnInput=false,returnGridDelay=0}={}) {
  let clock=1000,serial=0,listener,loading=false,rendered=[],page=1,detail=false,searchClicks=0,opened=[],formReady=true;
  const tasks=new Map(),observers=new Set(),root={};
  const schedule=(fn,ms)=>{let id=++serial;tasks.set(id,{at:clock+ms,fn});return id;};
@@ -32,13 +32,16 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
  const mutate=(target=gridTarget,addedNodes=[],removedNodes=[])=>{for(const o of [...observers])o.fn([{type:'childList',target,addedNodes,removedNodes}]);};
  const render=()=>{rendered=rows.slice((page-1)*2,page*2);if(duplicate&&page===2)rendered=rows.slice(0,2);loading=false;mutate(gridTarget,[],[loader]);};
  const begin=()=>{if(!activity)return;loading=true;mutate(root,[loader]);schedule(render,responseDelay);};
- class Input {get value(){return this.v||'';}set value(v){this.v=v;}dispatchEvent(){}}
+ let buttonCurrent=true,staleClicks=0;
+ class Input {get value(){return this.v||'';}set value(v){this.v=v;}dispatchEvent(){if(replaceSearchOnInput){buttonCurrent=false;schedule(()=>{buttonCurrent=true;mutate();},100);}}}
  const inputs=Object.fromEntries(['entityName','entityNumber','nvBusinessId'].map(k=>[k,new Input()]));
- const searchButton={innerText:'Search',getClientRects:()=>[{}],disabled:false,click:()=>{page=1;searchClicks++;begin();}};
+ const searchButton={innerText:'Search',getClientRects:()=>[{}],disabled:false,click:()=>{page=1;searchClicks++;if(searchClicks===1||repeatSearchActivity)begin();}};
+ const staleButton={...searchButton,click:()=>staleClicks++};
  const textEl=innerText=>({innerText});
  const backButton={innerText:'Return To Results',getClientRects:()=>[{}],click:()=>{
   detail=false;formReady=false;context.location.hash='screen=external-GenericFilingsSearch&tabRoute=business';mutate();
-  schedule(()=>{formReady=true;mutate();},returnFormDelay);
+  if(returnGridDelay){rendered=[];schedule(render,returnGridDelay);}
+  schedule(()=>{formReady=true;if(returnName!==null)inputs.entityName.value=returnName;if(returnRows)rendered=returnRows;mutate();},returnFormDelay);
  }};
  const fieldValues={'Entity Name':observed[1][0],'NV Business ID':detailId||observed[1][1],'Entity Status':'Active','Entity Type':observed[1][3],FEIN:'-',
   'Solicits Charitable Contribution?':'No','IRS Registered Name':'-','Campaign Name':'-','Formation Date in Nevada':'12/10/2012',
@@ -74,7 +77,7 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
   if(q==='casex-data-table')return detail?[]:[table];
   if(q==='[role="tab"]')return [{innerText:'Business',getAttribute:()=> 'true'}];
   if(q==='[role="combobox"]')return !detail&&formReady?[textEl('Starts With')]:[textEl('STARTS_WITH')];
-  if(q==='button')return detail?[backButton]:[searchButton];
+  if(q==='button')return detail?[backButton]:[buttonCurrent?searchButton:staleButton];
   if(q==='.app-loader-pane .circle-loader')return loading?[{getClientRects:()=>[{}]}]:[];
   if(q==='[role="form"]')return detail?[form]:[];
   throw Error('Unexpected document selector '+q);
@@ -95,7 +98,7 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
   }
   assert.ok(done);assert.equal(observers.size,0);if(error)throw error;return value;
  }
- return {context,drive,api:context.testNV,get opened(){return opened;},get clicks(){return searchClicks;},get time(){return clock;},
+ return {context,drive,api:context.testNV,get opened(){return opened;},get clicks(){return searchClicks;},get staleClicks(){return staleClicks;},get time(){return clock;},
   search:()=>drive(context.testNV.nvSearch({state:'NV',operation:'search',name:'MAKE-A-WISH'},clock+45000)),
   detail:()=>{detail=true;context.location.hash='screen=Manage-Business&id=fixture';return context.testNV.nvFields('NV20121738342');},fieldValues,grid};
 }
@@ -103,6 +106,11 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
 test('Nevada collects both national records and local chapters without choosing one',async()=>{
  const f=fixture();const r=await f.search();assert.equal(r.total,4);assert.deepEqual(Array.from(r.rows,x=>x.identifier),observed.map(x=>x[1]));
  assert.equal(f.clicks,1);assert.ok(r.rows.every(r=>!('detail_url' in r)&&!('address' in r)));assert.equal(r.verification_pending,false);
+});
+
+test('Nevada waits for Search replacement caused by filter input rendering',async()=>{
+ const f=fixture({replaceSearchOnInput:true});const result=await f.search();
+ assert.equal(result.total,4);assert.equal(f.clicks,1);assert.equal(f.staleClicks,0);
 });
 test('initial empty grid cannot establish non-registration without a response',async()=>{const f=fixture({activity:false,rows:[]});await assert.rejects(f.search(),/SEARCH_NOT_STARTED/);});
 test('completed empty response is accepted only after observed loading cycle',async()=>{const f=fixture({rows:[]});const r=await f.search();assert.equal(r.total,0);assert.equal(r.complete,true);});
@@ -130,7 +138,46 @@ test('Nevada waits for search type after returning from one matching detail to a
  assert.equal(old.fields['Entity Status'],'Permanently Revoked');const started=f.time;
  const current=await f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:observed[1][1]},45000));
  assert.equal(current.fields['NV Business ID'],observed[1][1]);assert.equal(current.fields['Entity Status'],'Active');
- assert.equal(f.clicks,2);assert.ok(f.time-started>=600);assert.deepEqual(f.opened,[observed[0][1],observed[1][1]]);
+ assert.equal(f.clicks,1);assert.ok(f.time-started>=600);assert.deepEqual(f.opened,[observed[0][1],observed[1][1]]);
+});
+
+test('Nevada reuses a verified restored result set without requiring another loading cycle',async()=>{
+ const f=fixture({rows:observed.slice(0,2),repeatSearchActivity:false});await f.search();
+ await f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:observed[0][1]},45000));
+ const result=await f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:observed[1][1]},45000));
+ assert.equal(result.fields['NV Business ID'],observed[1][1]);assert.equal(f.clicks,1);
+});
+
+test('Nevada restores all pages and locates the second identity after returning from a detail',async()=>{
+ const f=fixture({repeatSearchActivity:false});await f.search();
+ await f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:observed[0][1]},45000));
+ const result=await f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:observed[1][1]},45000));
+ assert.equal(result.fields['NV Business ID'],observed[1][1]);assert.equal(f.clicks,1);
+ assert.deepEqual(f.opened,[observed[0][1],observed[1][1]]);
+});
+
+test('Nevada waits for restored rows after the form is ready without issuing a new search',async()=>{
+ const f=fixture({rows:observed.slice(0,2),returnGridDelay:1200,repeatSearchActivity:false});await f.search();
+ await f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:observed[0][1]},45000));
+ const started=f.time,result=await f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:observed[1][1]},45000));
+ assert.equal(result.fields['NV Business ID'],observed[1][1]);assert.ok(f.time-started>=1200);assert.equal(f.clicks,1);
+});
+
+test('Nevada refuses a restored result list for a changed search name',async()=>{
+ const f=fixture({rows:observed.slice(0,2),returnName:'OTHER ORGANIZATION'});await f.search();
+ await f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:observed[0][1]},45000));
+ await assert.rejects(f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:observed[1][1]},45000)),/RESTORED_QUERY_CHANGED/);
+ assert.equal(f.clicks,1);assert.deepEqual(f.opened,[observed[0][1]]);
+});
+
+test('Nevada refuses changed identities or statuses in the restored result list',async()=>{
+ for(const column of [0,1,3,6]) {
+  const replacement=observed.slice(0,2).map(r=>[...r]);replacement[1][column]='CHANGED';
+  const f=fixture({rows:observed.slice(0,2),returnRows:replacement});await f.search();
+  await f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:observed[0][1]},45000));
+  await assert.rejects(f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:observed[1][1]},45000)),/RESTORED_RESULTS_CHANGED/);
+  assert.equal(f.clicks,1);assert.deepEqual(f.opened,[observed[0][1]]);
+ }
 });
 
 test('Nevada does not search a partially mounted return form beyond its command budget',async()=>{

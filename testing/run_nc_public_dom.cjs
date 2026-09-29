@@ -8,12 +8,12 @@ const active={'CSL Legal Name':"America's Charities",'CSL Type':'Charitable Orga
 const exempt={'CSL Legal Name':'YWCA of the U.S.A.','CSL Type':'CSL Exempt Organization',Status:'CSL Exempt',License:'EX003050'};
 const txt=innerText=>({innerText,querySelector:()=>null});
 function labels(values){return Object.entries(values).map(([key,value])=>({innerText:key+':',parentElement:txt(key+': '+value)}));}
-function harness({cards=[active],total=cards.length,query="America's Charities",url=origin+'/online_services/search/Charities_Results',fields=null,periods=null,uploadLink=false}={}){
+function harness({cards=[active],total=cards.length,query="America's Charities",url=origin+'/online_services/search/Charities_Results',fields=null,periods=null,uploadLink=false,extraLabels=[],displayName=null}={}){
  const panels=new Map(),buttons=[];let clicks=0,formClicks=0;
  for(const [i,row] of cards.entries()){
   let expanded=false;
-  const panel={getClientRects:()=>expanded?[{}]:[],querySelectorAll:s=>s==='.para-small > .boldSpan'?labels(row):s==='a[href]'?[{getAttribute:()=>new URL(profile).pathname}]:[]};
-  panels.set('a'+i,panel);buttons.push({getAttribute:k=>k==='aria-controls'?'a'+i:expanded?'true':'false',click:()=>{clicks++;expanded=true;}});
+  const panel={getClientRects:()=>expanded?[{}]:[],querySelectorAll:s=>s==='.para-small > .boldSpan'?[...labels(row),...extraLabels.flatMap(labels)]:s==='a[href]'?[{getAttribute:()=>new URL(profile).pathname}]:[]};
+  panels.set('a'+i,panel);buttons.push({querySelector:s=>s==='.searchHeader'?txt(`${displayName||row['CSL Legal Name']} • (${row.License})`):null,getAttribute:k=>k==='aria-controls'?'a'+i:expanded?'true':'false',click:()=>{clicks++;expanded=true;}});
  }
  const addressValues=['14200 Park Meadow Dr Ste 330s','Chantilly','VA','20151-4210'];
  const address={innerText:'Address',parentElement:{querySelectorAll:s=>(s===':scope > .para-small > span'?addressValues:s==='.para-small > span'?['Address',...addressValues]:[]).map(txt)}};
@@ -41,6 +41,23 @@ test('NC collects only expanded, complete, query-bound cards and extension date'
 test('NC explicit exemption can omit expiration without omitting identity',async()=>{
  const h=harness({cards:[exempt],query:'YWCA'}),r=await h.api.ncRows({state:'NC',operation:'search',name:'YWCA'});
  assert.equal(r.evidence.rows[0]['Expiration Date'],'');assert.equal(r.evidence.rows[0].License,'EX003050');
+});
+
+test('NC repeated legal names and DBAs are retained as aliases on one identified card',async()=>{
+ const q={state:'NC',operation:'search',name:"America's Charities"};
+ for(const displayName of ["America's Charities",'Former Charity Name','Public DBA']) {
+  const h=harness({displayName,extraLabels:[{'CSL Legal Name':'Former Charity Name'},{'CSL DBA Name':'Public DBA'},{'CSL DBA Name':'Second DBA'}]});
+  const row=(await h.api.ncRows(q)).evidence.rows[0];
+  assert.equal(row.display_name,displayName);assert.equal(row.License,active.License);
+  assert.deepEqual(new Set([row.display_name,...row.aliases]),new Set(["America's Charities",'Former Charity Name','Public DBA','Second DBA']));
+ }
+});
+
+test('NC duplicates remain errors for status/license/dates and unbound display names',async()=>{
+ const q={state:'NC',operation:'search',name:"America's Charities"};
+ for(const key of ['Status','License','Expiration Date','Extension End Date'])
+  await assert.rejects(harness({extraLabels:[{[key]:active[key]}]}).api.ncRows(q),/DUPLICATE_FIELD/);
+ await assert.rejects(harness({displayName:'Different organization'}).api.ncRows(q),/CARD_CHANGED/);
 });
 test('NC refuses incomplete cards, partial pagination, duplicate licenses and wrong-query results',async()=>{
  const missing={...active};delete missing['Expiration Date'];

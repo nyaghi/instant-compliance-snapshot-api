@@ -302,13 +302,20 @@
     const name = field('entityName'), number = field('entityNumber'), id = field('nvBusinessId');
     if (!name || !number || !id || ![...document.querySelectorAll('[role="combobox"]')].some(el => text(el).startsWith('Starts With')))
       throw new Error("REGISTRY_NV_FORM_CHANGED");
-    set(number, ''); set(id, ''); set(name, query.name);
-    const buttons = [...document.querySelectorAll('button')].filter(el => text(el) === 'Search' && visible(el) && !el.disabled);
-    if (buttons.length !== 1) throw new Error("REGISTRY_NV_FORM_CHANGED");
+    // Form.io redraws Search when filter inputs change. Resolve the current
+    // button after that render settles, rather than clicking the old node in
+    // the same turn as input/change. This stays inside the command deadline.
+    const search = await wait(() => {
+      if (field('entityName')?.value !== query.name || field('entityNumber')?.value !== '' || field('nvBusinessId')?.value !== '') return false;
+      const buttons = [...document.querySelectorAll('button')].filter(el => text(el) === 'Search' && visible(el) && !el.disabled);
+      return buttons.length === 1 && buttons[0];
+    }, Math.max(1,Math.min(3000,deadline-Date.now())), {settle:200,action:()=>{
+      if(number.value!=='')set(number,'');if(id.value!=='')set(id,'');if(name.value!==query.name)set(name,query.name);
+    }});
     nvObserved.clear(); nvLastSearch = null;
     // The initial blank grid and old rows remain visible while ORION searches.
     // A completed loading cycle is mandatory, including for an empty response.
-    const first = await nvChanged(() => buttons[0].click(), () => nvPage('Search Results', nvSearchHeaders), deadline, {requireLoading:true});
+    const first = await nvChanged(() => search.click(), () => nvPage('Search Results', nvSearchHeaders), deadline, {requireLoading:true});
     const collected = await nvPages('Search Results', nvSearchHeaders, deadline, first);
     const rows = collected.map(({cells,node,page}) => {
       const [name,identifier,,entity_type,,,raw_status] = cells;
@@ -352,7 +359,32 @@
       // Wait for the same complete form used on initial navigation, within the
       // original command budget, before searching for the next observed record.
       await wait(() => registryDocumentReady(), Math.max(1,deadline-Date.now()), {action:()=>back.click()});
-      await nvSearch(sourceQuery, deadline);
+      // ORION restores the completed results and original filters. Repeating
+      // Search here needlessly requires a second loading cycle that the page
+      // may not emit for the same query. Reuse only the previously observed
+      // result set, after checking every restored identity and status.
+      const field = suffix => document.querySelector(`input[id$="-${suffix}"]`);
+      if (field('entityName')?.value !== sourceQuery.name || field('entityNumber')?.value !== '' || field('nvBusinessId')?.value !== '')
+        throw new Error('REGISTRY_NV_RESTORED_QUERY_CHANGED');
+      let restored = await wait(() => {
+        if ([...document.querySelectorAll('.app-loader-pane .circle-loader')].some(visible)) return false;
+        try { const page=nvPage('Search Results',nvSearchHeaders);return page.total===nvObserved.size && page; }
+        catch { return false; }
+      },Math.max(1,Math.min(5000,deadline-Date.now())));
+      while (restored.page > 1) {
+        const previous = restored.table.querySelector('button[aria-label="Go to the previous page"]');
+        if (!previous || previous.disabled) throw new Error('REGISTRY_NV_PAGINATION_INCOMPLETE');
+        restored = await nvChanged(()=>previous.click(),()=>nvPage('Search Results',nvSearchHeaders),deadline,{previous:JSON.stringify(restored.values)});
+      }
+      const rows = await nvPages('Search Results',nvSearchHeaders,deadline,restored), restoredIds = new Set();
+      if (rows.length !== nvObserved.size) throw new Error('REGISTRY_NV_RESTORED_RESULTS_CHANGED');
+      for (const {cells} of rows) {
+        const prior = nvObserved.get(cells[1]);
+        if (!prior || restoredIds.has(cells[1]) || prior.name !== cells[0] || prior.entity_type !== cells[3] || prior.raw_status !== cells[6])
+          throw new Error('REGISTRY_NV_RESTORED_RESULTS_CHANGED');
+        restoredIds.add(cells[1]);
+      }
+      for (const {cells,node,page} of rows) nvObserved.set(cells[1],{...nvObserved.get(cells[1]),node,page});
     }
     let current = nvObserved.get(query.identifier);
     if (!current || current.name !== target.name || current.entity_type !== target.entity_type) throw new Error("REGISTRY_NV_DETAIL_CHANGED");
@@ -565,7 +597,24 @@
       if(!panel)throw new Error('REGISTRY_NC_CARD_CHANGED');
       if(button.getAttribute('aria-expanded')!=='true')button.click();
       await wait(()=>visible(panel)&&panel,Math.max(1,Math.min(3000,deadline-Date.now())));
-      const fields=ncLabeled(panel,['CSL Legal Name','CSL Type','Status','License','Expiration Date','Extension End Date']);
+      const fields=ncLabeled(panel,['CSL Type','Status','License','Expiration Date','Extension End Date']);
+      // A license may expose multiple legal names and DBAs. They are identity
+      // alternatives, not duplicate scalar status/date fields. Bind the card's
+      // displayed name and license to these source-labeled names; the master
+      // still decides whether any candidate belongs to the requested entity.
+      const legal=[],other=[];
+      for(const label of panel.querySelectorAll('.para-small > .boldSpan')) {
+        const key=text(label).replace(/:$/,'').trim();
+        if(!['CSL Legal Name','CSL DBA Name'].includes(key))continue;
+        const value=text(label.parentElement).slice(text(label).length).trim();
+        if(!value||value.length>500)throw new Error('REGISTRY_NC_CARD_CHANGED');
+        (key==='CSL Legal Name'?legal:other).push(value);
+      }
+      const header=text(button.querySelector('.searchHeader')).match(/^(.+?)\s*•\s*\(((?:SL|EX)\d+)\)$/);
+      const names=[...new Set([...legal,...other])];
+      if(!legal.length||names.length>32||!header||header[2]!==fields.License||!names.includes(header[1].trim()))
+        throw new Error('REGISTRY_NC_CARD_CHANGED');
+      fields['CSL Legal Name']=legal[0];fields.display_name=header[1].trim();fields.aliases=names.filter(n=>n!==fields.display_name);
       const links=[...panel.querySelectorAll('a[href]')].filter(a=>/^\/online_services\/search\/charities_profile\/\d+$/.test(a.getAttribute('href')));
       if(links.length!==1||!fields['CSL Legal Name']||!fields['CSL Type']||!fields.Status||!fields.License||seen.has(fields.License))throw new Error('REGISTRY_NC_CARD_CHANGED');
       if(!Object.hasOwn(fields,'Expiration Date')) {

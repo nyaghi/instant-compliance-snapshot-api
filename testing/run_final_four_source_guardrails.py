@@ -113,6 +113,38 @@ class SourceControls(unittest.TestCase):
         self.assertEqual(r['base_expiration'], date(2026, 5, 15))
         self.assertIsNone(r['renewal'])
 
+    def test_nc_registry_aliases_survive_card_and_profile_binding(self):
+        fields = {**NC, 'display_name': 'Current Charity DBA',
+                  'aliases': [NC['CSL Legal Name'], 'Former Legal Charity Name']}
+        card = cc.nc_charity_record_evidence(fields)
+        self.assertEqual(card['name'], 'Current Charity DBA')
+        self.assertIn(NC['CSL Legal Name'], card['aliases'])
+        result = cc.nc_charity_profile_evidence(card, NC_PROFILE)
+        self.assertEqual(result['name'], NC_PROFILE['Name'])
+        self.assertIn('Current Charity DBA', result['aliases'])
+        self.assertIn('Former Legal Charity Name', result['aliases'])
+        for bad in [{'Name': 'Unrelated Organization'}, {'Registration #': 'SL999999'},
+                    {'profile_url': NC_PROFILE['profile_url']+'1'}]:
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                cc.nc_charity_profile_evidence(card, {**NC_PROFILE, **bad})
+
+    def test_nc_source_aliases_require_bounded_named_evidence(self):
+        for bad in [{'aliases': 'not a list'}, {'aliases': ['']}, {'aliases': [None]},
+                    {'aliases': ['x'*501]}, {'aliases': ['A']*33},
+                    {'display_name': 'Unbound displayed name', 'aliases': []}, {'display_name': None}]:
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                cc.nc_charity_record_evidence({**NC, **bad})
+
+    def test_nc_alias_payload_remains_query_bound(self):
+        query = {'state': 'NC', 'operation': 'search', 'name': 'Current Charity DBA'}
+        fields = {**NC, 'display_name': 'Current Charity DBA', 'aliases': [NC['CSL Legal Name']]}
+        payload = {'state': 'NC', 'query': query, 'complete': True, 'verification_pending': False,
+                   'total': 1, 'rows': [fields]}
+        cleaned = cc.final_four_clean_evidence(payload, query)
+        self.assertEqual(cleaned['rows'][0]['aliases'], [NC['CSL Legal Name']])
+        with self.assertRaises(ValueError):
+            cc.final_four_clean_evidence(payload, {**query, 'name': 'Other Name'})
+
     def test_nc_explicit_exemption_without_expiration_is_complete(self):
         fields = {**NC, 'CSL Legal Name': 'YWCA of the U.S.A.', 'CSL Type': 'CSL Exempt Organization',
                   'License': 'EX003050', 'Status': 'CSL Exempt', 'Expiration Date': '', 'Extension End Date': '',
