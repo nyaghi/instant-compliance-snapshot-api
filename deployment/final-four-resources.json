@@ -1,0 +1,19 @@
+{
+  "version": "2026.09.29.2-performance-lab",
+  "origin": "https://charityclarity-final-four-29-2.onrender.com",
+  "api": {
+    "id": "srv-dau1rv0u01pc73auc4jg",
+    "name": "charityclarity-final-four-29-2"
+  },
+  "worker": {
+    "id": "srv-dau1s0navr4c73fc41fg",
+    "name": "charityclarity-final-four-29-2-worker"
+  },
+  "database": {
+    "host": "dpg-dau1ru5g1s2s73b4tgn0-a",
+    "name": "cc_final_four_29_2"
+  },
+  "activated_epoch": 1790713335.1547625,
+  "expires_epoch": 1791138135.1547625,
+  "spending_cap_usd": 80
+}
