@@ -135,6 +135,12 @@ test('NC document completion does not mistake a verification interstitial for it
  h.context.document.querySelector=read;assert.equal(h.api.registryDocumentReady(),true);
  h.button.disabled=true;assert.equal(h.api.registryDocumentReady(),false);
 });
+
+test('NC visible form waits for document completion before its inline submit action',()=>{
+ const h=harness({url:origin+'/online_services/search/by_title/search_charities'});
+ h.context.document.readyState='interactive';assert.equal(h.api.registryDocumentReady(),false);assert.equal(h.formClicks(),0);
+ h.context.document.readyState='complete';assert.equal(h.api.registryDocumentReady(),true);
+});
 test('NC results readiness requires a rendered count, including an explicit zero',()=>{
  const h=harness({cards:[]});h.main.innerText='Performing security verification';assert.equal(h.api.registryDocumentReady(),false);
  h.main.innerText='Records Found: 0';assert.equal(h.api.registryDocumentReady(),true);

@@ -29,13 +29,14 @@ test('Nevada visible inputs and search type are not ready while the initial load
  assert.equal(h.api.registryDocumentReady(),false);
  h.context.document.querySelectorAll=read;assert.equal(h.api.registryDocumentReady(),true);
 });
-function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,truncate=false,duplicate=false,oldPageDelay=80,detailId=null,returnFormDelay=600,returnName=null,returnRows=null,repeatSearchActivity=true,replaceSearchOnInput=false,returnGridDelay=0}={}) {
+function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,truncate=false,duplicate=false,oldPageDelay=80,detailId=null,returnFormDelay=600,returnName=null,returnRows=null,repeatSearchActivity=true,replaceSearchOnInput=false,returnGridDelay=0,unrelatedMutations=false}={}) {
  let clock=1000,serial=0,listener,loading=false,rendered=[],page=1,detail=false,searchClicks=0,opened=[],formReady=true;
  const tasks=new Map(),observers=new Set(),root={};
  const schedule=(fn,ms)=>{let id=++serial;tasks.set(id,{at:clock+ms,fn});return id;};
  const node=selector=>({nodeType:1,matches:s=>s.split(',').map(x=>x.trim()).includes(selector),querySelector:()=>null,closest:s=>s.includes(selector)?{}:null});
  const gridTarget=node('casex-data-table'),loader=node('.circle-loader');
  const mutate=(target=gridTarget,addedNodes=[],removedNodes=[])=>{for(const o of [...observers])o.fn([{type:'childList',target,addedNodes,removedNodes}]);};
+ if(unrelatedMutations)for(let ms=50;ms<=4000;ms+=50)schedule(()=>mutate(root),ms);
  const render=()=>{rendered=rows.slice((page-1)*2,page*2);if(duplicate&&page===2)rendered=rows.slice(0,2);loading=false;mutate(gridTarget,[],[loader]);};
  const begin=()=>{if(!activity)return;loading=true;mutate(root,[loader]);schedule(render,responseDelay);};
  let buttonCurrent=true,staleClicks=0;
@@ -117,6 +118,21 @@ test('Nevada collects both national records and local chapters without choosing 
 test('Nevada waits for Search replacement caused by filter input rendering',async()=>{
  const f=fixture({replaceSearchOnInput:true});const result=await f.search();
  assert.equal(result.total,4);assert.equal(f.clicks,1);assert.equal(f.staleClicks,0);
+});
+
+test('Nevada unrelated rendering cannot starve a stable current Search button',async()=>{
+ const f=fixture({unrelatedMutations:true,replaceSearchOnInput:true});
+ const r=await f.search();assert.equal(r.total,4);assert.equal(f.clicks,1);assert.equal(f.staleClicks,0);
+});
+
+test('Nevada retains observed NR rows without treating them as issued business identities',async()=>{
+ const nr=['The Junior Swim League LLC','NR20230725-22746','NR20230725-22746','','','07/25/2023 01:17 PM','Expired'];
+ const f=fixture({rows:[observed[1],nr]}),r=await f.search();
+ assert.equal(r.total,2);assert.equal(r.rows[1].identifier,nr[1]);assert.equal(r.rows[1].entity_type,'');
+ await assert.rejects(f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:nr[1]},45000)),/COMMAND_INVALID/);
+ for(const changed of [['NO-ID',''],['NR20230725-22746','Foreign Non-Profit Corporation (80)'],['NV123','']]){
+  const row=[...nr];row[1]=changed[0];row[3]=changed[1];await assert.rejects(fixture({rows:[row]}).search(),/RESULTS_INCOMPLETE/);
+ }
 });
 test('initial empty grid cannot establish non-registration without a response',async()=>{const f=fixture({activity:false,rows:[]});await assert.rejects(f.search(),/SEARCH_NOT_STARTED/);});
 test('completed empty response is accepted only after observed loading cycle',async()=>{const f=fixture({rows:[]});const r=await f.search();assert.equal(r.total,0);assert.equal(r.complete,true);});

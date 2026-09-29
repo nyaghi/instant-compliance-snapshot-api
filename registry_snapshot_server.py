@@ -5978,7 +5978,7 @@ def il_verification_recovery(record, payload, now):
     if (record.get("state") != "IL" or record.get("purpose") != "registration"
             or record.get("recovery_protocol") != "il-fresh-page-v1"
             or (record.get("connector_version") != "0.5.10"
-                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6"}))
+                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7"}))
             or payload.get("reason") != "NY_CONNECTOR_IL_VERIFICATION_PENDING"
             or record.get("il_verification_recovery")
             or now + 120 >= record["issued"] + NY_CONNECTOR_TTL_SECONDS):
@@ -6403,7 +6403,12 @@ def final_four_search_evidence(payload, state, query):
             if not required.issubset(raw) or not all(isinstance(raw[k], str) for k in required - {"aliases"}):
                 raise ValueError(f"{state} search identity fields are incomplete")
             row = dict(raw)
-            if not row["name"].strip() or not re.fullmatch(r"CO\d+" if state == "TN" else r"NV\d+", row["identifier"]):
+            identity_ok = re.fullmatch(r"CO\d+" if state == "TN" else r"NV\d+", row["identifier"])
+            if state == "NV":
+                identity_ok = identity_ok and bool(row["entity_type"].strip())
+            if state == "NV" and re.fullmatch(r"NR\d{8}-\d+", row["identifier"]):
+                identity_ok = row["entity_type"] == "" and bool(str(row.get("raw_status") or "").strip())
+            if not row["name"].strip() or not identity_ok:
                 raise ValueError(f"{state} search identity is malformed")
             if state == "TN" and (not isinstance(row["aliases"], list) or not all(isinstance(n, str) for n in row["aliases"])):
                 raise ValueError("Tennessee alternate names are incomplete")
@@ -6607,6 +6612,7 @@ def final_four_connector_failure(record, reason=""):
     if re.fullmatch(r"NY_CONNECTOR_[A-Z_]{1,60}", reason or ""):
         result.status_reason = reason
     why = ("The registry lookup reached its time limit before all required records were confirmed." if reason == "NY_CONNECTOR_TIMEOUT" else
+           "North Carolina's displayed result count does not agree with its result cards, so the search's completeness could not be confirmed." if state == "NC" and reason == "NY_CONNECTOR_REGISTRY_NC_RESULT_COUNT_MISMATCH" else
            "The registry requires browser verification before its search can complete." if "VERIFICATION" in reason else
            "The browser connector could not preserve this registry's search sequence." if reason == "NY_CONNECTOR_INVALID_SEQUENCE" else
            "The trial browser connector is unavailable or needs an update." if reason in {"NY_CONNECTOR_UNAVAILABLE", "NY_CONNECTOR_UPDATE_REQUIRED"} else
@@ -23161,7 +23167,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6"})):
+        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7"})):
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()

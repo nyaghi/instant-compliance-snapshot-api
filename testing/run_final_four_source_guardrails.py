@@ -485,6 +485,16 @@ class LookupControls(unittest.TestCase):
         self.assertEqual(result.status, 'Unable to Confirm')
         self.assertTrue(all(q['operation'] == 'search' for q in self.calls))
 
+    def test_nv_nr_identity_is_filtered_without_inventing_a_corporation(self):
+        for name, expected in [(self.nvrow['name'], 'Unable to Confirm'), ('The Junior Swim League LLC', 'Not Registered')]:
+            def nr(query):
+                self.assertEqual(query['operation'], 'search')
+                row = {'name':name, 'identifier':'NR20230725-22746', 'entity_type':'', 'raw_status':'Expired'}
+                return {'state':'NV', 'query':query, 'complete':True, 'verification_pending':False, 'total':1, 'rows':[row]}
+            result = cc.final_four_browser_lookup(self.orgs['NV'], 'NV', nr)
+            self.assertEqual(result.status, expected)
+            self.assertFalse(result.matched_registry_identifier)
+
     def test_nc_unrelated_unissued_application_does_not_block_a_completed_negative(self):
         for name, expected in [("America's Charities", 'Needs Review'), ('Unrelated Junior League', 'Not Registered')]:
             def pending(q):

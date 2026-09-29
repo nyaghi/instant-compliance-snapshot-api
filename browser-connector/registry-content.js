@@ -12,7 +12,7 @@
   const documentId = crypto.randomUUID();
   const text = el => (el?.innerText || "").replace(/\s+/g, " ").trim();
   const visible = el => !!el && el.getClientRects().length > 0;
-  function wait(fn, ms = 25000, {root = document.documentElement, action, relevant, settle = 0, trace = () => {}} = {}) {
+  function wait(fn, ms = 25000, {root = document.documentElement, action, relevant, settle = 0, sameCandidate = null, trace = () => {}} = {}) {
     // Observe before acting. Hidden-page timers may wake much later than the
     // DOM update; they are watchdogs, not the sole observers of completion.
     return new Promise((resolve, reject) => {
@@ -31,7 +31,8 @@
         // delayed watchdog. A later mutation invalidates this candidate.
         if (candidateAt === null || candidateAt + settle > end) return incomplete();
         try {
-          if (!fn()) return incomplete();
+          const current=fn();
+          if (!current || sameCandidate && !sameCandidate(candidate,current)) return incomplete();
           if (Date.now()-candidateAt < settle) return;
           finish(candidate);
         } catch (error) { finish(null, error); }
@@ -41,7 +42,9 @@
         if (Date.now() > end) return incomplete();
         try {
           const value = fn();
-          if (!value) { candidate = null; candidateAt = null; return; }
+          if (!value) { candidate = null; candidateAt = null; clearTimeout(settleTimer); return; }
+          if (candidateAt !== null && sameCandidate?.(candidate, value)) return;
+          clearTimeout(settleTimer);
           candidate = value; candidateAt = Date.now();
           trace("observed", candidateAt-start);
           if (!settle) return finish(value);
@@ -52,7 +55,7 @@
         if (done) return;
         try { if (relevant && !relevant(list)) return; }
         catch (error) { return finish(null, error); }
-        candidate = null; candidateAt = null; clearTimeout(settleTimer);
+        if (!sameCandidate) { candidate = null; candidateAt = null; clearTimeout(settleTimer); }
         inspect();
       });
       observer.observe(root, {childList:true, subtree:true, attributes:true, characterData:true,
@@ -304,12 +307,14 @@
       throw new Error("REGISTRY_NV_FORM_CHANGED");
     // Form.io redraws Search when filter inputs change. Resolve the current
     // button after that render settles, rather than clicking the old node in
-    // the same turn as input/change. This stays inside the command deadline.
+    // the same turn as input/change. Unrelated mask/chat animations must not
+    // keep resetting the settle clock for the same button with bound inputs.
+    // This stays inside the command deadline and resets on a replaced button.
     const search = await wait(() => {
       if (field('entityName')?.value !== query.name || field('entityNumber')?.value !== '' || field('nvBusinessId')?.value !== '') return false;
       const buttons = [...document.querySelectorAll('button')].filter(el => text(el) === 'Search' && visible(el) && !el.disabled);
       return buttons.length === 1 && buttons[0];
-    }, Math.max(1,Math.min(3000,deadline-Date.now())), {settle:200,action:()=>{
+    }, Math.max(1,Math.min(3000,deadline-Date.now())), {settle:200,sameCandidate:(prior,current)=>prior===current,action:()=>{
       if(number.value!=='')set(number,'');if(id.value!=='')set(id,'');if(name.value!==query.name)set(name,query.name);
     }});
     nvObserved.clear(); nvLastSearch = null;
@@ -319,7 +324,12 @@
     const collected = await nvPages('Search Results', nvSearchHeaders, deadline, first);
     const rows = collected.map(({cells,node,page}) => {
       const [name,identifier,,entity_type,,,raw_status] = cells;
-      if (!name || !/^NV\d+$/.test(identifier) || !entity_type || !raw_status || nvObserved.has(identifier))
+      // ORION also returns NR identifiers with an explicitly blank entity type.
+      // Preserve these rows for master name filtering; never open them as an
+      // issued nonprofit corporation or silently omit a potentially matching row.
+      const identified = /^NV\d+$/.test(identifier) && !!entity_type
+        || /^NR\d{8}-\d+$/.test(identifier) && entity_type === '';
+      if (!name || !identified || !raw_status || nvObserved.has(identifier))
         throw new Error("REGISTRY_NV_RESULTS_INCOMPLETE");
       const row = {name,identifier,entity_type,raw_status};
       nvObserved.set(identifier,{...row,node,page});
@@ -589,7 +599,8 @@
     const total=Number(count[1]),buttons=[...main.querySelectorAll('#resultsSection .usa-accordion__button')];
     // A larger paginated result is incomplete until every displayed record can
     // be collected. Never infer zero from an absent or partially loaded card.
-    if(total>100||buttons.length!==total)throw new Error('REGISTRY_NC_PAGINATION_INCOMPLETE');
+    if(total>100)throw new Error('REGISTRY_NC_PAGINATION_INCOMPLETE');
+    if(buttons.length!==total)throw new Error('REGISTRY_NC_RESULT_COUNT_MISMATCH');
     const rows=[],seen=new Set();
     for(const button of buttons) {
       if(Date.now()>=deadline)throw new Error('REGISTRY_NC_RESPONSE_TIMEOUT');
@@ -747,6 +758,9 @@
     // Observe normal page readiness; do not operate any human challenge.
     if (NC) {
       if (location.pathname === '/online_services/search/by_title/search_charities') {
+        // The HTML form can precede the scripts used by its ordinary inline
+        // submit action. Do not acknowledge a click against that partial page.
+        if (document.readyState !== 'complete') return false;
         const button=document.querySelector('#SubmitButton'),words=document.querySelector('#Words');
         return !!(document.querySelector('#SearchCriteria') && document.querySelector('#Print')
           && words && [...words.options].some(o=>text(o)==='Starting With') && visible(button) && !button.disabled);

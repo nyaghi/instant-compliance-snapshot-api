@@ -304,6 +304,38 @@ take priority. Expiration and extension deadlines are not last-renewal dates.
 
 ## Confirmed Nevada interpretation
 
+### 0.6.6 live controls and 0.6.7 candidate
+
+- Ten 0.6.6 checks completed with three conclusive results: Junior Achievement
+  TN Not Registered, RMHC NC Exempt, and Reading Is Fundamental NC Current.
+  Seven remained inconclusive; all initial results are retained separately.
+- The Nevada first-search failure still occurs before completed search evidence.
+  A controlled fixture reproduces the same generic timeout when unrelated DOM
+  animation repeatedly resets the Search button's 200 ms settling clock. The
+  candidate retains the settling candidate only while it is the identical
+  button with the same bound input values. Replaced buttons and changed filters
+  reset it; the original three-second budget and fresh-response requirement stay.
+  This is a local reproduction and candidate, not yet live proof.
+- Junior Achievement NV completed its first three searches, then failed on the
+  broad Junior result set. Manual inspection of all five pages showed 103 rows,
+  including NR20230725-22746 with a blank entity type. Preserve that public row
+  for master identity filtering. A matching NR row remains an unsupported-scope
+  review and can never be opened or classified as an issued corporation. Unknown
+  identifiers and blank types for ordinary NV business IDs remain errors.
+- An isolated NC Junior diagnostic advanced after an ordinary manual Search
+  click, then exposed a separate source count inconsistency: Records Found 30,
+  but 31 rendered cards. Issued and In-Process records appear for the same legal
+  name, with different public profile IDs. Do not guess the state's counting
+  semantics or accept an incomplete negative. The error comment now describes
+  the result-count conflict. The manually assisted repeat is not a successful
+  normal-run control. The candidate also requires document completion before
+  invoking NC's inline form action; its effect on the earlier stall is unproven.
+- Some separate manual source inspection occurred during the ten-case run;
+  performance acceptance must use a subsequent run without such interactions.
+  Approved staging, production, budgets and other-state default behavior remain
+  unchanged. Complete the remaining live controls and performance checks before
+  proposing promotion.
+
 On September 29 the user directed Nevada to use the matching nonprofit
 corporation's displayed status and Annual Renewal Due Date/Expiration Date.
 Exclude registered-agent records and do not use registered-agent addresses as
