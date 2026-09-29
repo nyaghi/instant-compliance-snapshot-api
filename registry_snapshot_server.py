@@ -6170,8 +6170,10 @@ def final_four_license_result(org, state, records, deadline, source):
         if selected.get("expiration"):
             result.source_note += ("The displayed Annual Renewal Due Date/Expiration Date is "
                                    f"{selected['expiration'].isoformat()}. ")
-        result.source_note += (f"CharityClarity reports {result.status} based on the matched nonprofit corporation's "
-                               "Nevada record. Registered-agent records and registered-agent addresses are excluded from organization identity evidence. ")
+        scope = ("charitable-solicitation registration with a source-confirmed filing history"
+                 if selected.get("solicitation_statement_filed") else "nonprofit corporation's Nevada record")
+        result.source_note += (f"CharityClarity reports {result.status} based on the matched {scope}. "
+                               "Registered-agent records and registered-agent addresses are excluded from organization identity evidence. ")
         if selected.get("ein"):
             result.source_note += f"The detail FEIN {format_ein(selected['ein'])} matches the requested EIN. "
         else:
@@ -6180,7 +6182,9 @@ def final_four_license_result(org, state, records, deadline, source):
         if address.get("decision") == "corroborated":
             result.source_note += address.get("basis", "") + " "
         if selected.get("solicitation_declared") is False:
-            result.source_note += 'The separate "Solicits Charitable Contribution?" field displays No; this result describes the nonprofit corporation record and does not establish a separate charitable-solicitation filing.'
+            result.source_note += ('The separate "Solicits Charitable Contribution?" field displays No. The selected record nevertheless has an explicitly filed Charitable Solicitation Registration Statement; that filing history and the displayed registration status and renewal deadline are the evidence used here.'
+                                  if selected.get("solicitation_statement_filed") else
+                                  'The separate "Solicits Charitable Contribution?" field displays No; this result describes the nonprofit corporation record and does not establish a separate charitable-solicitation filing.')
     if selected.get("date_evidence_note"):
         result.source_note = result.source_note.rstrip() + " " + selected["date_evidence_note"]
     return result
@@ -6205,7 +6209,8 @@ def nv_charity_detail_evidence(fields, expected_business_id):
     entity_type = re.sub(r"\s+", " ", fields["Entity Type"]).strip()
     if entity_type not in {"Foreign Non-Profit Corporation (80)", "Domestic Non-Profit Corporation (82)",
                            "Domestic Non-Profit Cooperative Corporation With or Without Stock (81)",
-                           "Domestic Non-Profit Cooperative Corporation Without Stock (81)"}:
+                           "Domestic Non-Profit Cooperative Corporation Without Stock (81)",
+                           "Foreign Entities Not Required to Register In Nevada"}:
         raise ValueError("Nevada record is not a supported nonprofit corporation type")
     ein_raw = fields["FEIN"].strip()
     ein = "" if ein_raw in {"", "-"} else canonical_ein_digits(ein_raw)
@@ -6220,10 +6225,16 @@ def nv_charity_detail_evidence(fields, expected_business_id):
     status = licensed_charity_status(raw_status, expiration)
     if raw_status.casefold() == "default":
         status = "Delinquent"
+    requires_solicitation_history = entity_type == "Foreign Entities Not Required to Register In Nevada"
+    if requires_solicitation_history:
+        # This category is not a nonprofit-corporation qualification. The
+        # matching public statement history must establish its charity scope.
+        status = "Unable to Confirm"
     return dict(name=name, identifier=expected_business_id, ein=ein, aliases=list(dict.fromkeys(aliases)),
                 raw_status=raw_status, status=status, expiration=expiration,
                 initial=None, renewal=None, street="", location="",
                 solicitation_declared=solicitation == "yes", entity_type=entity_type,
+                requires_solicitation_history=requires_solicitation_history,
                 entity_formation=final_four_source_date(fields["Formation Date in Nevada"], "Nevada formation"),
                 entity_expiration=expiration)
 
@@ -6287,7 +6298,7 @@ def nv_charity_filings_evidence(record, payload):
             or not isinstance(payload.get("rows"), list) or type(payload.get("total")) is not int
             or payload["total"] < 0 or len(payload["rows"]) != payload["total"]):
         raise ValueError("Nevada filing history is incomplete or belongs to another entity")
-    dates, qualifications, seen = [], [], set()
+    dates, qualifications, solicitation_dates, seen = [], [], [], set()
     for cells in payload["rows"]:
         if not isinstance(cells, list) or len(cells) != len(headers) or not all(isinstance(v, str) for v in cells):
             raise ValueError("Nevada filing-history row is incomplete")
@@ -6306,6 +6317,11 @@ def nv_charity_filings_evidence(record, payload):
             if filed is None or filed > date.today():
                 raise ValueError("Nevada qualification filing date is invalid")
             qualifications.append(filed)
+        elif fields["Filing Type"] == "Charitable Solicitation Registration Statement":
+            filed = final_four_source_date(fields["Filed Date"], "Nevada charitable solicitation statement filed")
+            if filed is None or filed > date.today():
+                raise ValueError("Nevada charitable solicitation filing date is invalid")
+            solicitation_dates.append(filed)
     result = {**record, "annual_list_filed": max(dates) if dates else None}
     # Expose only an explicitly filed Foreign Qualification that agrees with
     # this entity's Nevada formation date. Formation alone is not registration
@@ -6313,6 +6329,17 @@ def nv_charity_filings_evidence(record, payload):
     if len(qualifications) == 1 and qualifications[0] == record.get("entity_formation"):
         result.update(initial=qualifications[0], initial_label="Foreign Qualification — Filed Date",
                       initial_type="initial_registration_filing_date")
+    if record.get("requires_solicitation_history"):
+        if not solicitation_dates or not record.get("expiration"):
+            raise ValueError("Nevada charitable solicitation scope or renewal deadline is unconfirmed")
+        raw = record["raw_status"]
+        status = licensed_charity_status("Active" if raw.casefold() == "registered" else raw, record["expiration"])
+        if raw.casefold() == "default":
+            status = "Delinquent"
+        result.update(status=status, solicitation_statement_filed=max(solicitation_dates))
+        if min(solicitation_dates) == record.get("entity_formation"):
+            result.update(initial=min(solicitation_dates), initial_type="initial_registration_filing_date",
+                          initial_label="Charitable Solicitation Registration Statement — Filed Date")
     return result
 
 
@@ -6336,7 +6363,9 @@ def final_four_date_metadata(result, final_status=None):
     elif initial and result.state == "NV" and row.get("initial_type") == "initial_registration_filing_date":
         data.update(registration_date=initial.isoformat(), registration_date_type="initial_registration_filing_date",
                     registration_date_source_label=row.get("initial_label", ""), registration_date_source_url=source,
-                    registration_date_note="Foreign Qualification filing for the matched Nevada nonprofit corporation, agreeing with its Nevada formation date. This is a corporate registration filing date, not a separate charitable-solicitation filing.")
+                    registration_date_note=("The first explicitly filed Charitable Solicitation Registration Statement agrees with this record's Nevada formation date."
+                                            if row.get("solicitation_statement_filed") else
+                                            "Foreign Qualification filing for the matched Nevada nonprofit corporation, agreeing with its Nevada formation date. This is a corporate registration filing date, not a separate charitable-solicitation filing."))
     if renewed and result.state == "NC" and row.get("renewal_type") == "renewal_filing_date":
         data.update(renewal_date=renewed.isoformat(), renewal_date_type="renewal_filing_date",
                     renewal_date_source_label=row.get("renewal_label", ""), renewal_date_source_url=row.get("renewal_url") or source,
@@ -6366,11 +6395,13 @@ def final_four_filing_metadata(result, dates, final_status=None):
                         renewal_filing_label="Filed period ending", renewal_filing_source_url=getattr(result, "source_url", ""),
                         renewal_filing_note="Latest Fiscal Year End shown in the selected Tennessee financial history; this is not a renewal submission or expiration date.")
     elif result.state == "NV":
-        filed = registration_source_date(str(row.get("annual_list_filed") or ""))
+        statement = row.get("solicitation_statement_filed")
+        filed = registration_source_date(str(statement or row.get("annual_list_filed") or ""))
         if filed:
             data.update(renewal_filing_value=filed.isoformat(), renewal_filing_type="annual_registration_submitted_date",
-                        renewal_filing_label="Annual list filed", renewal_filing_source_url=getattr(result, "source_url", ""),
-                        renewal_filing_note="Latest Annual List — Filed Date in the selected Nevada entity history; this is not the annual renewal due date or a separate charitable-solicitation filing.")
+                        renewal_filing_label="Solicitation statement filed" if statement else "Annual list filed", renewal_filing_source_url=getattr(result, "source_url", ""),
+                        renewal_filing_note=("Latest Charitable Solicitation Registration Statement — Filed Date in the selected record's complete history; this is not the annual renewal due date."
+                                             if statement else "Latest Annual List — Filed Date in the selected Nevada entity history; this is not the annual renewal due date or a separate charitable-solicitation filing."))
     return data
 
 
@@ -6469,7 +6500,8 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                 if state == "NV" and row["entity_type"] not in {
                         "Foreign Non-Profit Corporation (80)", "Domestic Non-Profit Corporation (82)",
                         "Domestic Non-Profit Cooperative Corporation With or Without Stock (81)",
-                        "Domestic Non-Profit Cooperative Corporation Without Stock (81)"}:
+                        "Domestic Non-Profit Cooperative Corporation Without Stock (81)",
+                        "Foreign Entities Not Required to Register In Nevada"}:
                     # Unsupported filing categories need review, not a guess.
                     # Do not open a registered-agent/other entity detail.
                     unreviewed_scope = True
@@ -6515,6 +6547,10 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                             record = nv_charity_filings_evidence(record, detail["filings"])
                         except ValueError:
                             record["date_evidence_note"] = "Nevada's annual-list filing history was incomplete; the last-filed date remains blank."
+                    if record.get("requires_solicitation_history") and not record.get("solicitation_statement_filed"):
+                        unreviewed_scope = True
+                        seen.add(row["identifier"])
+                        continue
             records.append(record); seen.add(row["identifier"])
         if records and index >= len(required) - 1:
             selected, review = select_licensed_charity(org, records, state, deadline)

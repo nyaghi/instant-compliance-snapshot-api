@@ -48,6 +48,17 @@ NV_FILINGS = {'identifier': NV['NV Business ID'], 'name': NV['Entity Name'], 'co
               'rows': [['10/29/2025', '10/29/2025', '20255271827', 'Annual List', 'Online', '3'],
                        ['11/07/2024', '11/07/2024', '20244455873', 'Annual List', 'Online', '3']]}
 # Filing-history fixture shortened with matching count; live NV history has 19.
+NV_SOLICITATION = {**NV, 'Entity Name': 'Five Below Foundation', 'NV Business ID': 'NV20222449441',
+    'Entity Status': 'Registered', 'Entity Type': 'Foreign Entities Not Required to Register In Nevada',
+    'IRS Registered Name': 'Five Below Foundation', 'Formation Date in Nevada': '05/12/2022',
+    'Annual Renewal Due Date/Expiration Date': '05/31/2027'}
+NV_SOLICITATION_FILINGS = {**NV_FILINGS, 'identifier': NV_SOLICITATION['NV Business ID'],
+    'name': NV_SOLICITATION['Entity Name'], 'total': 5,
+    'rows': [[d, d, number, 'Charitable Solicitation Registration Statement', source, pages]
+             for d, number, source, pages in [
+                 ('05/05/2026', '20265733038', 'Email', '2'), ('05/01/2025', '20254868597', 'Mail', '2'),
+                 ('05/31/2024', '20244119724', 'Email', '3'), ('05/31/2023', '20233375267', 'Email', '3'),
+                 ('05/12/2022', '20222317134', 'Online', '3')]]}
 TN = {'Name': 'ROCKY MOUNTAIN ELK FOUNDATION, INC.', 'CO Number': 'CO3674', 'Status': 'Active',
       'Registration Date': '09/13/1999', 'Expiration Date': '11/27/2026',
       'Address': '5705 GRANT CREEK ROAD MISSOULA MT 59808',
@@ -65,6 +76,46 @@ class SourceControls(unittest.TestCase):
     def al(self, **changes):
         return dict(headers=AL_HEADERS, rows=copy.deepcopy(AL_ROWS), total=2,
                     complete=True, verification_pending=False, **changes)
+
+    def test_nv_nonqualified_entity_requires_actual_charity_statement_history(self):
+        row = cc.nv_charity_detail_evidence(NV_SOLICITATION, NV_SOLICITATION['NV Business ID'])
+        self.assertEqual(row['status'], 'Unable to Confirm')
+        confirmed = cc.nv_charity_filings_evidence(row, NV_SOLICITATION_FILINGS)
+        self.assertEqual(confirmed['status'], 'Current')
+        self.assertEqual(confirmed['solicitation_statement_filed'], date(2026,5,5))
+        self.assertEqual(confirmed['initial'], date(2022,5,12))
+        for changes in [{'complete':False}, {'total':6}, {'name':'Different Charity'},
+                        {'identifier':'NV000000000'}, {'rows':[], 'total':0}]:
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                cc.nv_charity_filings_evidence(row, {**NV_SOLICITATION_FILINGS, **changes})
+
+    def test_nv_other_filing_types_cannot_establish_charity_scope(self):
+        row = cc.nv_charity_detail_evidence(NV_SOLICITATION, NV_SOLICITATION['NV Business ID'])
+        for kind in ['Annual List', 'Foreign Qualification', 'Declaration of Exemption', 'Unknown']:
+            history=copy.deepcopy(NV_SOLICITATION_FILINGS)
+            for cells in history['rows']: cells[3]=kind
+            with self.subTest(kind=kind), self.assertRaises(ValueError):
+                cc.nv_charity_filings_evidence(row, history)
+
+    def test_nv_solicitation_status_and_expiration_keep_adverse_precedence(self):
+        for raw, due, expected in [('Registered','05/31/2026','Delinquent'),
+                                  ('Registered','12/31/2026','Upcoming Filing'),
+                                  ('Default','05/31/2027','Delinquent'),
+                                  ('Revoked','05/31/2027','Revoked'),
+                                  ('Suspended','05/31/2027','Suspended'),
+                                  ('Withdrawn','05/31/2027','Closed / Withdrawn / Canceled')]:
+            fields={**NV_SOLICITATION,'Entity Status':raw,'Annual Renewal Due Date/Expiration Date':due}
+            row=cc.nv_charity_detail_evidence(fields,fields['NV Business ID'])
+            with self.subTest(raw=raw,due=due):
+                self.assertEqual(cc.nv_charity_filings_evidence(row,NV_SOLICITATION_FILINGS)['status'],expected)
+
+    def test_nv_solicitation_missing_deadline_and_future_filing_remain_unconfirmed(self):
+        fields={**NV_SOLICITATION,'Annual Renewal Due Date/Expiration Date':'-'}
+        row=cc.nv_charity_detail_evidence(fields,fields['NV Business ID'])
+        with self.assertRaises(ValueError): cc.nv_charity_filings_evidence(row,NV_SOLICITATION_FILINGS)
+        row=cc.nv_charity_detail_evidence(NV_SOLICITATION,NV_SOLICITATION['NV Business ID'])
+        history=copy.deepcopy(NV_SOLICITATION_FILINGS);history['rows'][0][0]='05/05/2099'
+        with self.assertRaises(ValueError): cc.nv_charity_filings_evidence(row,history)
 
     def test_al_both_candidates_preserved_for_master_selection(self):
         records = cc.al_charity_search_evidence(self.al())
@@ -515,10 +566,35 @@ class LookupControls(unittest.TestCase):
                 payload['total'] = 2
             else:
                 payload['fields']['Entity Status'] = 'Withdrawn'
+                if q['identifier']=='NV123456789':
+                    payload['fields']['NV Business ID']=q['identifier']
+                    payload['fields']['Entity Type']='Foreign Entities Not Required to Register In Nevada'
             return payload
         result = cc.final_four_browser_lookup(self.orgs['NV'], 'NV', mixed)
         self.assertEqual(result.status, 'Unable to Confirm')
         self.assertIn('filing scope', result.source_note)
+
+    def test_nv_charity_only_registration_full_lookup_and_dates(self):
+        def provider(q):
+            self.calls.append(q)
+            if q['operation']=='search':
+                row={'name':NV_SOLICITATION['Entity Name'],'identifier':NV_SOLICITATION['NV Business ID'],
+                     'entity_type':NV_SOLICITATION['Entity Type'],'raw_status':'Registered'}
+                return {'state':'NV','query':q,'complete':True,'verification_pending':False,'total':1,'rows':[row]}
+            return {'query':q,'complete':True,'fields':copy.deepcopy(NV_SOLICITATION),
+                    'source_url':self.nvurl,'filings':copy.deepcopy(NV_SOLICITATION_FILINGS)}
+        org=cc.checker.Organization('Five Below Foundation','82-5406623')
+        result=cc.final_four_browser_lookup(org,'NV',provider)
+        self.assertTrue(result.success);self.assertEqual(result.status,'Current')
+        self.assertIn('source-confirmed filing history',result.source_note)
+        self.assertIn('field displays No',result.source_note)
+        self.assertNotIn('does not establish a separate',result.source_note)
+        dates=cc.final_four_date_metadata(result)
+        filed=cc.final_four_filing_metadata(result,dates)
+        self.assertEqual(dates['registration_date'],'2022-05-12')
+        self.assertIn('Charitable Solicitation',dates['registration_date_source_label'])
+        self.assertEqual(filed['renewal_filing_value'],'2026-05-05')
+        self.assertEqual(filed['renewal_filing_label'],'Solicitation statement filed')
 
     def test_nv_wrong_or_offsite_detail_link_is_rejected(self):
         original = self.nvurl
