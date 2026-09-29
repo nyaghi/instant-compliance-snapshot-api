@@ -138,6 +138,21 @@ validation run.
 - Full first-30 spreadsheet post-validation and paired performance remain open.
   Do not promote this trial based on these partial controls.
 
+### Follow-up controls
+
+- Make-A-Wish passed Alabama with fresh discovery but Tennessee repeated an
+  incomplete response in 38.4 seconds. Live observation showed its correct
+  national record CO1629 opened, followed by a broader reviewed-alias search.
+  The candidate now awaits Kendo's asynchronous modal close before submitting
+  the next query and retains specific TN failure stages. This is a candidate
+  transport correction, not yet a verified resolution of the live failure.
+- 339 connector JavaScript tests pass, including all four new public collectors,
+  NY/IL/GA behavior, routing and reconnect isolation. A broader indiscriminate
+  run of historical UI scripts also exposed two older harness failures (20.6
+  production overlay expectation and a missing window mock in registration-date
+  UI tests). Those untouched frontend/runtime files were not changed to satisfy
+  obsolete harness assumptions; this broader run is not reported as passing.
+
 ## Confirmed date interpretation
 
 The user confirmed on September 29 that a displayed extension end date is the

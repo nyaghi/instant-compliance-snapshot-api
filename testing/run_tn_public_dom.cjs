@@ -6,8 +6,8 @@ const source=fs.readFileSync(path.join(__dirname,'../browser-connector/registry-
 const columns=[null,'Id','Id','FileNumber','DisplayName','OtherNames','Status','City','StateName','StateCode','RegistrationDate'];
 const national=['Details','unused summary','2162','CO2559','YWCA USA, INC.',"YOUNG WOMEN'S CHRISTIAN ASSOCIATION OF THE UNITED STATES OF AMERICA, INC.\nYWCA OF THE U.S.A.",'Active','WASHINGTON','DC','DC','5/12/1995'];
 const local=['Details','unused summary','3596572','CO224','YWCA NASHVILLE & MIDDLE TENNESSEE','','Active','NASHVILLE','TN','TN','11/14/1985'];
-function fixture({rows=[local,national],activity=true,ready=true,responseDelay=100,detailId='CO2559',periods=['06/30/2024','06/30/2025'],count=2}={}) {
- let clock=1000,serial=0,loading=false,doneRows=[],dialogVisible=false,opened=[];
+function fixture({rows=[local,national],activity=true,ready=true,responseDelay=100,detailId='CO2559',periods=['06/30/2024','06/30/2025'],count=2,closeDelay=0,closedInitially=true}={}) {
+ let clock=1000,serial=0,loading=false,doneRows=[],dialogVisible=!closedInitially,opened=[];
  const events=new Map(),observers=new Set(),root={};
  const later=(fn,ms)=>{let id=++serial;events.set(id,{fn,at:clock+ms});return id;};
  const target={nodeType:1,closest:()=>({}),matches:()=>false,querySelector:()=>null};
@@ -20,7 +20,7 @@ function fixture({rows=[local,national],activity=true,ready=true,responseDelay=1
   txt('Status: Active'),txt('CO Number: '+detailId),txt('Registration Date: 05/12/1995'),txt('Expiration Date: 12/31/2026')];
  const financial={querySelectorAll:q=>q==='thead th'?[txt('Fiscal Year End'),txt('Total Revenue')]:periods.map(p=>({children:[txt(p),txt('$12,345')]}))};
  const financialLink={innerText:`Financials (${count})`,parentElement:{getAttribute:()=> 'true'},click:()=>{}};
- const dialog={getClientRects:()=>dialogVisible?[{}]:[],parentElement:{querySelector:()=>({click:()=>{dialogVisible=false;}})},
+ const dialog={getClientRects:()=>dialogVisible?[{}]:[],parentElement:{querySelector:()=>({click:()=>{later(()=>{dialogVisible=false;mutate();},closeDelay);}})},
   querySelector:q=>q==='h2'?txt('YWCA USA, INC.'):q==='#DetailsTabStrip-1'?{querySelector:()=>financial}:null,
   querySelectorAll:q=>q==='h4'?h4s:q==='.col-md-6 > h4'?h4s.slice(0,4):q==='#DetailsTabStrip > li > a'?[financialLink]:[]};
  const table={querySelectorAll:q=>q==='thead th'?columns.map(c=>({getAttribute:()=>c})):doneRows.map(cells=>({children:cells.map(txt),
@@ -29,7 +29,7 @@ function fixture({rows=[local,national],activity=true,ready=true,responseDelay=1
   querySelector:q=>q==='table[role="grid"]'?table:q==='.k-pager-info'?txt(doneRows.length?`1 - ${doneRows.length} of ${doneRows.length} items`:'No items to display'):
    q==='[aria-current="page"]'?txt(doneRows.length?'1':'0'):null};
  const search={innerText:'Search',disabled:false,getClientRects:()=>ready?[{}]:[],click:()=>{
-  if(activity){loading=true;mutate([mask]);later(()=>{doneRows=rows;loading=false;mutate();},responseDelay);}
+  if(activity&&!dialogVisible){loading=true;mutate([mask]);later(()=>{doneRows=rows;loading=false;mutate();},responseDelay);}
  }};
  const document={documentElement:root,readyState:'complete',querySelector:q=>q==='#KendoWindowLevel1'?dialog:q.startsWith('input[id^=')?inputs[q.match(/="([^_]+)_/)[1]]:null,
   querySelectorAll:q=>q==='.k-grid'?[grid]:q==='button[id^="Search_"]'?[search]:q==='[id^="SearchResults_"] .k-loading-mask'?[mask]:[]};
@@ -48,10 +48,12 @@ function fixture({rows=[local,national],activity=true,ready=true,responseDelay=1
   detail:()=>drive(context.testTN.tnDetail({state:'TN',operation:'detail',identifier:'CO2559'},clock+45000))};
 }
 test('Tennessee retains national and local candidates with separate CO identifiers',async()=>{const f=fixture(),r=await f.search();assert.equal(r.total,2);assert.deepEqual(Array.from(r.rows,x=>x.identifier),['CO224','CO2559']);assert.equal(r.rows[1].aliases.length,2);assert.ok(!JSON.stringify(r).includes('unused summary'));});
-test('initial zero grid cannot become Not Registered before source completion',async()=>{const f=fixture({rows:[],activity:false});await assert.rejects(f.search(),/RESPONSE_INCOMPLETE/);});
+test('initial zero grid cannot become Not Registered before source completion',async()=>{const f=fixture({rows:[],activity:false});await assert.rejects(f.search(),/SEARCH_NOT_STARTED/);});
 test('completed zero results require the count, zero page, and explicit empty marker',async()=>{const f=fixture({rows:[]});assert.equal((await f.search()).total,0);});
 test('verification/form readiness failure is distinct from no records',async()=>{const f=fixture({ready:false});await assert.rejects(f.search(),/VERIFICATION_OR_FORM_PENDING/);});
-test('late response is not accepted',async()=>{const f=fixture({responseDelay:40000});await assert.rejects(f.search(),/RESPONSE_INCOMPLETE/);});
+test('late response is not accepted',async()=>{const f=fixture({responseDelay:40000});await assert.rejects(f.search(),/RESPONSE_PENDING/);});
+test('the next alias waits for the prior detail modal to finish closing',async()=>{const f=fixture({closedInitially:false,closeDelay:350});assert.equal((await f.search()).total,2);});
+test('a modal that never closes cannot submit or accept a new search',async()=>{const f=fixture({closedInitially:false,closeDelay:5000});await assert.rejects(f.search(),/RESPONSE_INCOMPLETE/);});
 test('duplicate CO identifiers make the result set incomplete',async()=>{const f=fixture({rows:[national,national]});await assert.rejects(f.search(),/PAGINATION_INCOMPLETE/);});
 test('detail selects the requested national CO record, not the first local chapter',async()=>{const f=fixture();await f.search();const r=await f.detail();assert.deepEqual(f.opened,['CO2559']);assert.equal(r.fields.Address,'1400 I STREET NW, SUITE 540 WASHINGTON DC 20005');assert.equal(r.fields['Expiration Date'],'12/31/2026');assert.equal(r.fields.financial_count,2);assert.equal(r.fields.financial_periods[1],'06/30/2025');assert.ok(!JSON.stringify(r).includes('ERIC ROSENBERG'));assert.ok(!JSON.stringify(r).includes('$12,345'));});
 test('wrong CO detail is not completed evidence',async()=>{const f=fixture({detailId:'CO999'});await f.search();await assert.rejects(f.detail(),/RESPONSE_INCOMPLETE/);});

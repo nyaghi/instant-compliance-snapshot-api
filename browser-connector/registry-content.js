@@ -403,13 +403,13 @@
     return {grid,rows,values,total:Number(count[3]),page:Number(current)};
   }
   async function tnChanged(action, deadline, previous=null) {
-    let loadingSeen=false;
+    let loadingSeen=false,lastParseError='';
     const loading=()=>[...document.querySelectorAll('[id^="SearchResults_"] .k-loading-mask')].some(visible);
-    return wait(()=>{
+    try { return await wait(()=>{
       loadingSeen ||= loading();
       if (!loadingSeen || loading()) return false;
-      try { const page=tnPage();return previous!==null&&JSON.stringify(page.values)===previous?false:page; }
-      catch { return false; }
+      try { const page=tnPage();lastParseError='';return previous!==null&&JSON.stringify(page.values)===previous?false:page; }
+      catch (error) { lastParseError=error.message;return false; }
     },Math.max(1,Math.min(35000,deadline-Date.now())),{action,settle:200,relevant:mutations=>{
       loadingSeen ||= loading() || mutations.some(m=>[...m.addedNodes].some(n=>n.nodeType===1
         && (n.matches?.('.k-loading-mask') || n.querySelector?.('.k-loading-mask'))));
@@ -418,20 +418,25 @@
         return el?.closest?.('[id^="SearchResults_"]') || [...m.addedNodes,...m.removedNodes].some(n=>n.nodeType===1
           && (n.matches?.('[id^="SearchResults_"]') || n.querySelector?.('[id^="SearchResults_"]')));
       });
-    }});
+    }}); } catch (error) {
+      if(error.message!=='REGISTRY_RESPONSE_INCOMPLETE')throw error;
+      throw new Error(lastParseError || (!loadingSeen ? 'REGISTRY_TN_SEARCH_NOT_STARTED' : loading() ? 'REGISTRY_TN_RESPONSE_PENDING' : 'REGISTRY_TN_RESPONSE_INCOMPLETE'));
+    }
   }
-  function tnCloseDetail() {
+  async function tnCloseDetail(deadline) {
     const dialog=document.querySelector('#KendoWindowLevel1');
     if (visible(dialog)) {
       const close=dialog.parentElement.querySelector('button[aria-label="Close"]');
       if (!close) throw new Error('REGISTRY_TN_DETAIL_CHANGED');
-      close.click();
+      // Kendo closes asynchronously. Do not submit the next alias while its
+      // modal is still intercepting the search controls.
+      await wait(()=>!visible(dialog),Math.max(1,Math.min(3000,deadline-Date.now())),{action:()=>close.click()});
     }
   }
   async function tnSearch(query,deadline) {
     if (query?.state!=='TN'||query.operation!=='search'||typeof query.name!=='string'||!query.name.trim()||query.name.length>500
         ||Object.keys(query).sort().join(',')!=='name,operation,state') throw new Error('REGISTRY_COMMAND_INVALID');
-    tnCloseDetail();
+    await tnCloseDetail(deadline);
     const button=()=>[...document.querySelectorAll('button[id^="Search_"]')].find(el=>visible(el)&&!el.disabled&&text(el)==='Search');
     let search;
     try { search=await wait(button,Math.max(1,Math.min(12000,deadline-Date.now()))); }
@@ -495,7 +500,7 @@
         ||Object.keys(query).sort().join(',')!=='identifier,operation,state')throw new Error('REGISTRY_COMMAND_INVALID');
     const selected=tnObserved.get(query.identifier);
     if(!selected)throw new Error('REGISTRY_TN_DETAIL_NOT_OBSERVED');
-    tnCloseDetail();
+    await tnCloseDetail(deadline);
     let page=tnPage();
     while(page.page!==selected.page) {
       const direction=page.page>selected.page?'previous':'next';
@@ -776,7 +781,7 @@
     if(sender.id!==chrome.runtime.id || !m?.action?.startsWith('registry-')) return false;
     handle(m).then(reply,error=>{
       const code=error?.message||'';
-      const trialReason=(NC||NV) && /^REGISTRY_(?:(?:NC|NV)_[A-Z_]+|WRONG_ORIGIN|COMMAND_INVALID|RESPONSE_INCOMPLETE)$/.test(code)
+      const trialReason=(NC||NV||TN) && /^REGISTRY_(?:(?:NC|NV|TN)_[A-Z_]+|WRONG_ORIGIN|COMMAND_INVALID|RESPONSE_INCOMPLETE)$/.test(code)
         ? 'NY_CONNECTOR_'+code : null;
       const ilReasons={REGISTRY_RESPONSE_INCOMPLETE:'NY_CONNECTOR_IL_RESPONSE_TIMEOUT',REGISTRY_RESULTS_INCOMPLETE:'NY_CONNECTOR_IL_RESULTS_INCOMPLETE',REGISTRY_TOTAL_CHANGED:'NY_CONNECTOR_IL_TOTAL_CHANGED',REGISTRY_RESULT_LIMIT:'NY_CONNECTOR_IL_RESULT_LIMIT',REGISTRY_PAGINATION_INCOMPLETE:'NY_CONNECTOR_IL_PAGINATION_INCOMPLETE'};
       reply({ok:false,reason:trialReason || (AL && code==='NY_CONNECTOR_AL_VERIFICATION_REQUIRED' ? code : TN && code==='NY_CONNECTOR_TN_VERIFICATION_OR_FORM_PENDING' ? code : /^NY_CONNECTOR_IL_(?:VERIFICATION_PENDING|FORM_READY_TIMEOUT|FORM_DISABLED|FORM_MISSING|DETAIL_(?:NOT_OPENED|BLANK|IDENTITY_INCOMPLETE|RESPONSE_TIMEOUT))$/.test(code) ? code : IL && ilReasons[code] || 'NY_CONNECTOR_INCOMPLETE'),
