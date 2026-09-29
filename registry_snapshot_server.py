@@ -23362,6 +23362,10 @@ def comment_registry_status(raw: str, status: str) -> str:
 
 
 def comments_for_result_base(result, body: str, public_facing_status: str) -> str:
+    if result.state == "NM" and getattr(result, "reason_code", "") == "NM_DETAIL_CONFIRMATION_INCOMPLETE":
+        return result.source_note + " CharityClarity reports Unable to Confirm."
+    if result.state == "NM" and getattr(result, "reason_code", "") == "NM_COMPLETED_EMPTY_FEIN_CONFIRMATION":
+        return result.source_note + " CharityClarity therefore reports Not Registered."
     if result.state == "NM" and getattr(result, "status_reason", "") == "NM_REGISTRY_ACCESS_BLOCKED":
         return result.source_note
     if result.state == "FL" and getattr(result, "reason_code", "") == "FL_CERTIFICATE_ERROR":
@@ -28248,6 +28252,11 @@ def search_wa_nm_state(org, state: str):
     else:
         raise ValueError(f"Unsupported WA/NM state adapter: {state}")
     copied = copy_external_result(org, state, external_result)
+    if state == "NM" and public_status(copied) == "Not Registered" and re.search(
+        r"detail\s+shell|no\s+New\s+Mexico\s+charity\s+registration\s+name|did\s+not\s+expose\s+a\s+charity\s+name",
+        " ".join([copied.raw_status_text or "", copied.source_note or ""]), re.I,
+    ):
+        return nm_confirm_empty_detail(org, module, copied)
     if state == "NM" and public_status(copied) not in {"Not Registered", "Site Not Reachable", "Unknown"}:
         nm_text = " ".join([
             getattr(copied, "raw_status_text", "") or "",
@@ -28310,6 +28319,54 @@ def search_wa_nm_state(org, state: str):
             copied.success = False
             copied.error = ""
     return copied
+
+
+def nm_confirm_empty_detail(org, module, first_result):
+    """A nameless FEIN shell alone is not a completed negative search."""
+    result = checker.StateResult(org.organization_name, org.ein, "NM", "Unable to Confirm",
+        f"https://secure.nmdoj.gov/CharitySearch/CharityDetail.aspx?FEIN={quote(format_ein(org.ein), safe='')}")
+    result.success = False
+    result.reason_code = "NM_DETAIL_CONFIRMATION_INCOMPLETE"
+    result.raw_status_text = "New Mexico's initial FEIN response did not identify a charity or completed filing history."
+    result.source_note = (
+        "The first New Mexico detail response lacked a charity name and filing history. "
+        "A bounded official-page confirmation did not establish a completed no-record response. "
+        "Missing page data does not establish non-registration or delinquency."
+    )
+    result.source_attempts = [{"step": "initial_fein_detail", "outcome": "nameless_detail_shell"}]
+    try:
+        html, error = module.nm_fetch_detail_html(org.ein, timeout_seconds=12)
+        if error or not html:
+            result.error = error or "Empty New Mexico confirmation response"
+            return result
+        body = module.strip_html(html)
+        rows = module.nm_parse_history_rows_from_html(html) or module.nm_parse_history_rows_from_text(body)
+        name = module.nm_registry_name_from_html(html)
+        heading = re.search(r'id=["\']MainContent_FormViewCharityDetail_LabelCharityName["\'][^>]*>(.*?)</span>', html, re.I | re.S)
+        heading_ein = re.search(r"\((\d{2}-\d{7})\)", module.strip_html(heading.group(1))) if heading else None
+        if name and rows and heading_ein and canonical_ein_digits(heading_ein.group(1)) == canonical_ein_digits(org.ein):
+            recovered = module.SearchResult(org.organization_name, org.ein, "NM", module.STATUS_UNKNOWN, "", result.source_url, "")
+            recovered.matched_registry_name = name
+            recovered.matched_registry_identifier = format_ein(org.ein)
+            submitted = module.nm_latest_submitted(rows)
+            fye = module.nm_extract_fye_from_html(html, preferred_year=submitted[0] if submitted else None)
+            recovered = nm_apply_status_history_master(module, recovered, rows, fye_text=fye)
+            recovered.source_note = " ".join(filter(None, [getattr(recovered, "source_note", ""),
+                "A bounded official-page confirmation recovered the EIN-matched charity and filing history after an initially nameless detail response."]))
+            recovered.source_attempts = result.source_attempts + [{"step": "official_fein_confirmation", "outcome": "ein_matched_history"}]
+            return copy_external_result(org, "NM", recovered)
+        if not name and not rows and re.search(r"\bCharity\s+Registration\s+Status\s+is\s+unknown\b", body, re.I) and not re.search(r"\bTax\s+Year\b", body, re.I):
+            first_result.reason_code = "NM_COMPLETED_EMPTY_FEIN_CONFIRMATION"
+            first_result.source_note = (
+                "A separate official FEIN detail confirmation returned the state's explicit 'Charity Registration Status is unknown' "
+                "message with no charity identity or tax-year filing history. The completed no-record response confirms the initial empty result."
+            )
+            first_result.source_attempts = result.source_attempts + [{"step": "official_fein_confirmation", "outcome": "explicit_no_record"}]
+            return first_result
+        result.source_attempts.append({"step": "official_fein_confirmation", "outcome": "incomplete_or_conflicting_evidence"})
+    except Exception as exc:
+        result.error = "New Mexico confirmation failed: " + type(exc).__name__
+    return result
 
 
 def nm_completed_clean_no_match_result(org, module, *attempt_results):

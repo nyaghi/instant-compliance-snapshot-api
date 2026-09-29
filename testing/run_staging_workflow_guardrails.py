@@ -121,7 +121,17 @@ class WorkflowControls(unittest.TestCase):
             text=subprocess.check_output(['git','show',ref+':registry_snapshot_server.py']).decode('utf-8')
             return {n.name:ast.dump(n) for n in ast.parse(text).body if isinstance(n,ast.FunctionDef)}
         base,aurora,lab=functions('35e61ae'),functions('a59c2d8'),functions('90ed42d')
-        merged={n.name:ast.dump(n) for n in ast.parse(Path(c.__file__).read_text(encoding='utf-8')).body if isinstance(n,ast.FunctionDef)}
+        tree=ast.parse(Path(c.__file__).read_text(encoding='utf-8'))
+        # Post-validation exposed a nameless NM detail shell classified as NR.
+        # Remove only the separately behavior-tested confirmation hook; the
+        # entire original adapter function must still match its selected parent.
+        nm=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='search_wa_nm_state')
+        hooks=[n for n in nm.body if isinstance(n,ast.If) and any(isinstance(x,ast.Call)
+            and isinstance(x.func,ast.Name) and x.func.id=='nm_confirm_empty_detail' for x in ast.walk(n))]
+        self.assertEqual(len(hooks),1)
+        self.assertEqual(ast.unparse(hooks[0].body[0]),'return nm_confirm_empty_detail(org, module, copied)')
+        nm.body.remove(hooks[0])
+        merged={n.name:ast.dump(n) for n in tree.body if isinstance(n,ast.FunctionDef)}
         for name in sorted(set(aurora)|set(lab)):
             if name=='attach_identity_review':continue # separate full-branch equivalence test above
             a,l,b=aurora.get(name),lab.get(name),base.get(name)

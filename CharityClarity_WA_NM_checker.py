@@ -998,7 +998,7 @@ finally:
     return begin, end
 
 
-def nm_fetch_detail_html(ein: str) -> tuple[str, str]:
+def nm_fetch_detail_html(ein: str, timeout_seconds: float = 35) -> tuple[str, str]:
     if curl_requests is None:
         return "", "curl_cffi is not installed"
     url = f"https://secure.nmdoj.gov/CharitySearch/CharityDetail.aspx?FEIN={format_ein(ein)}"
@@ -1006,7 +1006,7 @@ def nm_fetch_detail_html(ein: str) -> tuple[str, str]:
         response = curl_requests.get(
             url,
             impersonate="chrome136",
-            timeout=35,
+            timeout=timeout_seconds,
             headers={
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9",
