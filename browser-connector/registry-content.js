@@ -251,16 +251,16 @@
     return {table, rows, values, total:Number(info[3]), page:Number(pages[1]), pages:Number(pages[2])};
   }
   async function nvChanged(action, read, deadline, {requireLoading=false, previous=null}={}) {
-    let loadingSeen = false;
+    let loadingSeen = false, lastParseError = '';
     const loading = () => [...document.querySelectorAll('.app-loader-pane .circle-loader')].some(visible);
-    return wait(() => {
+    try { return await wait(() => {
       loadingSeen ||= loading();
       if (loading() || requireLoading && !loadingSeen) return false;
       try {
-        const value = read();
+        const value = read(); lastParseError = '';
         if (!value || previous !== null && JSON.stringify(value.values) === previous) return false;
         return value;
-      } catch { return false; } // Partial renders are not completed responses.
+      } catch (error) { lastParseError = error.message; return false; } // Partial renders are not completed responses.
     }, Math.max(1, Math.min(35000, deadline-Date.now())), {action, settle:200, relevant:mutations => {
       loadingSeen ||= loading() || mutations.some(m => [...m.addedNodes].some(n => n.nodeType === 1
         && (n.matches?.('.circle-loader, .app-loader-pane') || n.querySelector?.('.circle-loader'))));
@@ -269,7 +269,11 @@
         return el?.closest?.('casex-data-table, .app-loader-pane') || [...m.addedNodes, ...m.removedNodes].some(n => n.nodeType === 1
           && (n.matches?.('.circle-loader, .app-loader-pane, casex-data-table') || n.querySelector?.('.circle-loader, casex-data-table')));
       });
-    }});
+    }}); } catch (error) {
+      if (error.message !== 'REGISTRY_RESPONSE_INCOMPLETE') throw error;
+      throw new Error(lastParseError || (requireLoading && !loadingSeen ? 'REGISTRY_NV_SEARCH_NOT_STARTED'
+        : loading() ? 'REGISTRY_NV_RESPONSE_PENDING' : 'REGISTRY_NV_RESPONSE_INCOMPLETE'));
+    }
   }
   async function nvPages(title, headers, deadline, first) {
     let page = first || nvPage(title, headers);
@@ -344,7 +348,10 @@
     if (!target.node.isConnected) {
       const back = [...document.querySelectorAll('button')].find(el => text(el) === 'Return To Results' && visible(el));
       if (!back) throw new Error("REGISTRY_NV_DETAIL_NOT_OBSERVED");
-      await wait(() => document.querySelector('input[id$="-entityName"]'), Math.max(1,deadline-Date.now()), {action:()=>back.click()});
+      // Returning from a detail mounts inputs before the search-type choices.
+      // Wait for the same complete form used on initial navigation, within the
+      // original command budget, before searching for the next observed record.
+      await wait(() => registryDocumentReady(), Math.max(1,deadline-Date.now()), {action:()=>back.click()});
       await nvSearch(sourceQuery, deadline);
     }
     let current = nvObserved.get(query.identifier);
@@ -535,7 +542,11 @@
     const starts=words&&[...words.options].find(o=>text(o)==='Starting With');
     if(!input||!starts||!visible(button)||button.disabled||!print)throw new Error('REGISTRY_NC_FORM_CHANGED');
     set(words,starts.value);set(input,query.name);if(print.checked)print.click();
-    setTimeout(()=>button.click(),0);return {ok:true,phase:'submitted'};
+    // Dispatch the ordinary form action before acknowledging it. A deferred
+    // timer in a background tab can be throttled after the worker has already
+    // started waiting for the results document. NC's action starts an async
+    // request, so the message reply is sent before the resulting navigation.
+    button.click();return {ok:true,phase:'submitted'};
   }
   async function ncRows(query,budgetMs=45000) {
     const deadline=Date.now()+Math.max(1,Math.min(45000,budgetMs));
@@ -593,8 +604,10 @@
     if(nodes.length>500)throw new Error('REGISTRY_NC_FILINGS_LIMIT');
     const rows=nodes.map(node=>{
       const type=[...node.childNodes].filter(n=>n.nodeType===3).map(n=>n.textContent).join('').trim();
-      const dates=node.querySelectorAll(':scope > ul > li > span');
-      if(node.tagName!=='LI'||!type||dates.length!==1)throw new Error('REGISTRY_NC_FILINGS_INCOMPLETE');
+      // Some filing rows also contain an "Upload an Attachment" link in a
+      // second span. It is not a date, and must not invalidate the whole history.
+      const dates=[...node.querySelectorAll(':scope > ul > li > span')].filter(el=>!el.querySelector('a'));
+      if(node.tagName!=='LI'||!type||dates.length!==1||!/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(text(dates[0])))throw new Error('REGISTRY_NC_FILINGS_INCOMPLETE');
       return {type,date:text(dates[0])};
     });
     return {ok:true,filings:{url:location.href,complete:true,rows}};

@@ -6,9 +6,9 @@ const source=fs.readFileSync(path.join(__dirname,'../browser-connector/registry-
 const origin='https://www.sosnc.gov',profile=origin+'/online_services/search/charities_profile/5700751';
 const active={'CSL Legal Name':"America's Charities",'CSL Type':'Charitable Organization',Status:'Current Active – Filing Extension Granted',License:'SL000448','Expiration Date':'5/15/2026','Extension End Date':'11/15/2026'};
 const exempt={'CSL Legal Name':'YWCA of the U.S.A.','CSL Type':'CSL Exempt Organization',Status:'CSL Exempt',License:'EX003050'};
-const txt=innerText=>({innerText});
+const txt=innerText=>({innerText,querySelector:()=>null});
 function labels(values){return Object.entries(values).map(([key,value])=>({innerText:key+':',parentElement:txt(key+': '+value)}));}
-function harness({cards=[active],total=cards.length,query="America's Charities",url=origin+'/online_services/search/Charities_Results',fields=null,periods=null}={}){
+function harness({cards=[active],total=cards.length,query="America's Charities",url=origin+'/online_services/search/Charities_Results',fields=null,periods=null,uploadLink=false}={}){
  const panels=new Map(),buttons=[];let clicks=0,formClicks=0;
  for(const [i,row] of cards.entries()){
   let expanded=false;
@@ -28,7 +28,7 @@ function harness({cards=[active],total=cards.length,query="America's Charities",
  const context=vm.createContext({window:win,URL,location:{origin,pathname:new URL(url).pathname,href:url},crypto:{randomUUID:()=> 'fixture'},
   document:{readyState:'complete',documentElement:{},getElementById:id=>panels.get(id),
    querySelector:s=>s==='main'?main:s==='#SearchCriteria'?input:s==='#Words'?words:s==='#SubmitButton'?button:s==='#Print'?print:null,
-   querySelectorAll:s=>periods===null?[]:[{children:periods.map(([type,date])=>({tagName:'LI',childNodes:[{nodeType:3,textContent:type}],querySelectorAll:()=>date===null?[]:[txt(date)]}))}]},
+   querySelectorAll:s=>periods===null?[]:[{children:periods.map(([type,date])=>({tagName:'LI',childNodes:[{nodeType:3,textContent:type}],querySelectorAll:()=>[...(date===null?[]:[txt(date)]),...(uploadLink?[{innerText:'Upload an Attachment',querySelector:s=>s==='a'?{}:null}]:[])]}))}]},
   MutationObserver:class{observe(){}disconnect(){}},HTMLInputElement:Input,HTMLSelectElement:Select,Event:class{},setTimeout,clearTimeout,
   chrome:{runtime:{id:'fixture',onMessage:{addListener(){}}}}});
  vm.runInContext(source,context);return {api:context.testNC,context,input,words,print,button,main,panels,addressValues,clicks:()=>clicks,formClicks:()=>formClicks};
@@ -74,11 +74,25 @@ test('NC reads labeled filing types without confusing extension date for renewal
 test('NC missing history entry date cannot be silently skipped',()=>{
  const h=harness({url:profile.replace('charities_profile','charities_filings'),periods:[['Renewal Charity',null]]});assert.throws(()=>h.api.ncFilings({url:profile}));
 });
+
+test('NC attachment links do not displace or invalidate the filing date',()=>{
+ const url=profile.replace('charities_profile','charities_filings');
+ const h=harness({url,periods:[['Holding','4/7/2008'],['Renewal Charity','8/13/2026']],uploadLink:true});
+ const r=h.api.ncFilings({url:profile});assert.equal(r.filings.rows.length,2);assert.equal(r.filings.rows[1].date,'8/13/2026');
+ for(const date of [null,'not a date'])assert.throws(()=>harness({url,periods:[['Holding',date]],uploadLink:true}).api.ncFilings({url:profile}),/FILINGS_INCOMPLETE/);
+});
 test('NC ordinary form resets search type and printable view, never calls a hidden endpoint',async()=>{
  const h=harness({url:origin+'/online_services/search/by_title/search_charities'}),q={state:'NC',operation:'search',name:'Reviewed Alternate Name'};
  assert.equal(h.api.ncForm(q).phase,'submitted');assert.equal(h.input.value,q.name);assert.equal(h.words.value,'0');assert.equal(h.print.checked,false);
- await new Promise(resolve=>setTimeout(resolve,2));assert.equal(h.formClicks(),1);
+ assert.equal(h.formClicks(),1,'submission cannot be acknowledged before the ordinary click is dispatched');
  h.button.disabled=true;assert.throws(()=>h.api.ncForm(q));
+});
+
+test('NC query dispatch does not depend on a background-tab timer',()=>{
+ const h=harness({url:origin+'/online_services/search/by_title/search_charities'});
+ h.context.setTimeout=()=>{throw Error('Background timer is suspended');};
+ assert.equal(h.api.ncForm({state:'NC',operation:'search',name:'Reviewed Alternate Name'}).phase,'submitted');
+ assert.equal(h.formClicks(),1);
 });
 test('NC document completion does not mistake a verification interstitial for its search form',()=>{
  const h=harness({url:origin+'/online_services/search/by_title/search_charities'}),read=h.context.document.querySelector;

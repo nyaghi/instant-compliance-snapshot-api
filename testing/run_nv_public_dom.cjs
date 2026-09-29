@@ -23,8 +23,8 @@ test('Nevada form readiness includes the hydrated Starts With search-type contro
  assert.equal(h.api.registryDocumentReady(),false);
  h.context.document.querySelectorAll=read;assert.equal(h.api.registryDocumentReady(),true);
 });
-function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,truncate=false,duplicate=false,oldPageDelay=80,detailId='NV20121738342'}={}) {
- let clock=1000,serial=0,listener,loading=false,rendered=[],page=1,detail=false,searchClicks=0,opened=[];
+function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,truncate=false,duplicate=false,oldPageDelay=80,detailId=null,returnFormDelay=600}={}) {
+ let clock=1000,serial=0,listener,loading=false,rendered=[],page=1,detail=false,searchClicks=0,opened=[],formReady=true;
  const tasks=new Map(),observers=new Set(),root={};
  const schedule=(fn,ms)=>{let id=++serial;tasks.set(id,{at:clock+ms,fn});return id;};
  const node=selector=>({nodeType:1,matches:s=>s.split(',').map(x=>x.trim()).includes(selector),querySelector:()=>null,closest:s=>s.includes(selector)?{}:null});
@@ -36,7 +36,11 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
  const inputs=Object.fromEntries(['entityName','entityNumber','nvBusinessId'].map(k=>[k,new Input()]));
  const searchButton={innerText:'Search',getClientRects:()=>[{}],disabled:false,click:()=>{page=1;searchClicks++;begin();}};
  const textEl=innerText=>({innerText});
- const fieldValues={'Entity Name':observed[1][0],'NV Business ID':detailId,'Entity Status':'Active','Entity Type':observed[1][3],FEIN:'-',
+ const backButton={innerText:'Return To Results',getClientRects:()=>[{}],click:()=>{
+  detail=false;formReady=false;context.location.hash='screen=external-GenericFilingsSearch&tabRoute=business';mutate();
+  schedule(()=>{formReady=true;mutate();},returnFormDelay);
+ }};
+ const fieldValues={'Entity Name':observed[1][0],'NV Business ID':detailId||observed[1][1],'Entity Status':'Active','Entity Type':observed[1][3],FEIN:'-',
   'Solicits Charitable Contribution?':'No','IRS Registered Name':'-','Campaign Name':'-','Formation Date in Nevada':'12/10/2012',
   'Annual Renewal Due Date/Expiration Date':'12/31/2026'};
  const paragraphs=()=>[...Object.entries(fieldValues).map(([label,value])=>({tagName:'P',querySelector:q=>q==='strong'?textEl(label):null,nextElementSibling:{tagName:'P',innerText:value}})),
@@ -49,8 +53,8 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
   querySelectorAll:q=>{
    if(q==='[role="columnheader"]')return headers.map(h=>({getAttribute:k=>k==='aria-label'?h:null}));
    if(q==='tbody > tr[role="row"]')return rendered.map(cells=>{
-    const tr={isConnected:true,querySelectorAll:q=>q==='[role="gridcell"]'?cells.map(v=>({innerText:v,querySelector:()=>textEl(': '+v)})):[]};
-    tr.querySelector=q=>q==='[role="gridcell"]'?{}:q==='[role="gridcell"] a'?{innerText:cells[0],click:()=>{opened.push(cells[1]);detail=true;context.location.hash='screen=Manage-Business&id=fixture';schedule(()=>mutate(),10);}}:null;
+    const tr={get isConnected(){return !detail;},querySelectorAll:q=>q==='[role="gridcell"]'?cells.map(v=>({innerText:v,querySelector:()=>textEl(': '+v)})):[]};
+    tr.querySelector=q=>q==='[role="gridcell"]'?{}:q==='[role="gridcell"] a'?{innerText:cells[0],click:()=>{opened.push(cells[1]);detail=true;fieldValues['NV Business ID']=detailId||cells[1];fieldValues['Entity Status']=cells[6];context.location.hash='screen=Manage-Business&id=fixture';schedule(()=>mutate(),10);}}:null;
     return tr;
    });
    throw Error('Unexpected grid selector '+q);
@@ -69,12 +73,12 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
  const doc={documentElement:root,readyState:'complete',querySelectorAll:q=>{
   if(q==='casex-data-table')return detail?[]:[table];
   if(q==='[role="tab"]')return [{innerText:'Business',getAttribute:()=> 'true'}];
-  if(q==='[role="combobox"]')return [textEl('Starts With')];
-  if(q==='button')return [searchButton];
+  if(q==='[role="combobox"]')return !detail&&formReady?[textEl('Starts With')]:[textEl('STARTS_WITH')];
+  if(q==='button')return detail?[backButton]:[searchButton];
   if(q==='.app-loader-pane .circle-loader')return loading?[{getClientRects:()=>[{}]}]:[];
   if(q==='[role="form"]')return detail?[form]:[];
   throw Error('Unexpected document selector '+q);
- },querySelector:q=>q.startsWith('input[id$=')?inputs[q.match(/-([A-Za-z]+)"/)[1]]:null};
+ },querySelector:q=>!detail&&q.startsWith('input[id$=')?inputs[q.match(/-([A-Za-z]+)"/)[1]]:null};
  const win={};win.top=win;
  const context={window:win,document:doc,location:{origin:'https://orion.nv.gov',hash:'screen=external-GenericFilingsSearch&tabRoute=business',href:'https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=Manage-Business&id=d1b62c76-d5af-4ff3-b07d-038b7fa8d854'},
   Date:{now:()=>clock},crypto:{randomUUID:()=> 'fixture'},HTMLInputElement:Input,HTMLSelectElement:class{},Event:class{},
@@ -100,14 +104,14 @@ test('Nevada collects both national records and local chapters without choosing 
  const f=fixture();const r=await f.search();assert.equal(r.total,4);assert.deepEqual(Array.from(r.rows,x=>x.identifier),observed.map(x=>x[1]));
  assert.equal(f.clicks,1);assert.ok(r.rows.every(r=>!('detail_url' in r)&&!('address' in r)));assert.equal(r.verification_pending,false);
 });
-test('initial empty grid cannot establish non-registration without a response',async()=>{const f=fixture({activity:false,rows:[]});await assert.rejects(f.search(),/RESPONSE_INCOMPLETE/);});
+test('initial empty grid cannot establish non-registration without a response',async()=>{const f=fixture({activity:false,rows:[]});await assert.rejects(f.search(),/SEARCH_NOT_STARTED/);});
 test('completed empty response is accepted only after observed loading cycle',async()=>{const f=fixture({rows:[]});const r=await f.search();assert.equal(r.total,0);assert.equal(r.complete,true);});
 test('truncated pagination cannot become a partial positive or negative',async()=>{const f=fixture({truncate:true});await assert.rejects(f.search(),/PAGINATION_INCOMPLETE/);});
 test('pager changing before rows does not repeat the previous page',async()=>{const f=fixture({oldPageDelay:600});const r=await f.search();assert.equal(r.total,4);assert.ok(f.time>=1700);});
 test('repeated rows across pages cannot pass as complete results',async()=>{const f=fixture({duplicate:true});await assert.rejects(f.search(),/RESPONSE_INCOMPLETE|RESULTS_INCOMPLETE/);});
-test('late source response is rejected against its original command budget',async()=>{const f=fixture({responseDelay:40000});await assert.rejects(f.search(),/RESPONSE_INCOMPLETE/);});
-test('zero-result response observed only after timer throttling is not invented',async()=>{const f=fixture({activity:false,timerClamp:60000,rows:[]});await assert.rejects(f.search(),/RESPONSE_INCOMPLETE/);});
-test('wrong column schema is incomplete',async()=>{const f=fixture();const prior=f.grid.querySelectorAll;f.grid.querySelectorAll=q=>q==='[role="columnheader"]'?[]:prior(q);await assert.rejects(f.search(),/RESPONSE_INCOMPLETE/);});
+test('late source response is rejected against its original command budget',async()=>{const f=fixture({responseDelay:40000});await assert.rejects(f.search(),/RESPONSE_PENDING/);});
+test('zero-result response observed only after timer throttling is not invented',async()=>{const f=fixture({activity:false,timerClamp:60000,rows:[]});await assert.rejects(f.search(),/SEARCH_NOT_STARTED/);});
+test('wrong column schema is incomplete',async()=>{const f=fixture();const prior=f.grid.querySelectorAll;f.grid.querySelectorAll=q=>q==='[role="columnheader"]'?[]:prior(q);await assert.rejects(f.search(),/COLUMNS_CHANGED/);});
 test('Nevada extracts corporation fields and stops before registered-agent duplicates',()=>{const f=fixture();const fields=f.detail();assert.equal(fields['NV Business ID'],'NV20121738342');assert.equal(fields['Entity Status'],'Active');assert.equal(fields['Annual Renewal Due Date/Expiration Date'],'12/31/2026');assert.ok(!('Street Address' in fields));});
 test('wrong detail business ID cannot be accepted',()=>{assert.equal(fixture({detailId:'NV19931054903'}).detail(),null);});
 test('unobserved business ID cannot trigger a guessed navigation',async()=>{const f=fixture();await assert.rejects(f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:'NV999'},45000)),/NOT_OBSERVED/);assert.equal(f.opened.length,0);});
@@ -118,6 +122,22 @@ test('detail opens the requested business ID after returning to its result page'
 });
 test('opened detail with a different business ID never returns completed evidence',async()=>{
  const f=fixture({detailId:'NV999'});await f.search();await assert.rejects(f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:'NV20121738342'},45000)),/RESPONSE_INCOMPLETE/);
+});
+
+test('Nevada waits for search type after returning from one matching detail to another',async()=>{
+ const f=fixture({rows:observed.slice(0,2)});await f.search();
+ const old=await f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:observed[0][1]},45000));
+ assert.equal(old.fields['Entity Status'],'Permanently Revoked');const started=f.time;
+ const current=await f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:observed[1][1]},45000));
+ assert.equal(current.fields['NV Business ID'],observed[1][1]);assert.equal(current.fields['Entity Status'],'Active');
+ assert.equal(f.clicks,2);assert.ok(f.time-started>=600);assert.deepEqual(f.opened,[observed[0][1],observed[1][1]]);
+});
+
+test('Nevada does not search a partially mounted return form beyond its command budget',async()=>{
+ const f=fixture({rows:observed.slice(0,2),returnFormDelay:60000});await f.search();
+ await f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:observed[0][1]},45000));
+ await assert.rejects(f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:observed[1][1]},f.time+1000)),/RESPONSE_INCOMPLETE/);
+ assert.equal(f.clicks,1);
 });
 test('extra search filters are refused rather than narrowing the search invisibly',async()=>{const f=fixture();await assert.rejects(f.drive(f.api.nvSearch({state:'NV',operation:'search',name:'MAKE-A-WISH',status:'Active'},45000)),/COMMAND_INVALID/);assert.equal(f.clicks,0);});
 test('candidate Nevada access remains absent from the approved connector manifest',()=>{const m=JSON.parse(fs.readFileSync(path.join(__dirname,'../browser-connector/manifest.json'),'utf8'));assert.equal(m.version,'0.5.10');assert.ok(!JSON.stringify(m).includes('orion.nv.gov'));});

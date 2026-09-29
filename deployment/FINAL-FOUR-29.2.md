@@ -161,6 +161,26 @@ validation run.
   These last two changes still require live verification. 341 connector tests
   and 97 four-state Python controls pass, including unchanged mature logic ASTs.
 
+### Live 0.6.3 follow-up and 0.6.4 candidate
+
+- NC Make-A-Wish completed in 26.8 seconds and used its March 15, 2027 extension
+  rather than the January 15 base expiration. Its missing renewal date exposed
+  an attachment-link span in a filing row; the collector now excludes link spans
+  while still requiring exactly one valid date for every filing entry.
+- Nevada reached both matching national corporate records, but its return from
+  the first detail mounted search inputs before the search-type dropdown. The
+  candidate applies the initial form-readiness check on that return path too.
+  Tests cover two matching records, delayed dropdowns and deadline expiry; source
+  parse errors now retain their specific failure stage.
+- NC Junior Achievement's negative control twice stopped on a later generated
+  fallback, with the query filled but Search still idle. The collector previously
+  acknowledged submission before its zero-delay click timer ran. The candidate
+  dispatches that ordinary click synchronously and tests with background timers
+  suspended. This remains a hypothesis pending the live 0.6.4 repeat.
+- These changes are trial collectors only. Local controls are passing; full live
+  validation remains open, and no promotion is recommended yet. The existing
+  32-backend-state regression is running separately without a deployment mid-run.
+
 ## Confirmed date interpretation
 
 The user confirmed on September 29 that a displayed extension end date is the
