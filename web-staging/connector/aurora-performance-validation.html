@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Aurora optimized execution verification</title>
 <style>body{font:16px system-ui;color:#12345b;max-width:1100px;margin:2rem auto;padding:1rem}input,textarea,button{font:inherit;padding:.7rem;margin:.3rem}label{display:block}button{cursor:pointer}textarea{width:95%}td,th{padding:.5rem;text-align:left;border-bottom:1px solid #ddd}pre{white-space:pre-wrap}#progress{font-weight:bold}small{color:#52667f}</style>
-<script src="/optimized-workflows.js?v=20260928.5"></script>
+<script src="/optimized-workflows.js?v=20260929.1"></script>
 <script src="/identity-review.js?v=20260927.7"></script>
 <script src="/ny-connector.js?v=2026.09.27.7" defer></script></head><body>
 <h1>Aurora optimized execution verification · staging validation</h1>
@@ -19,7 +19,7 @@
 'use strict';
 if(location.origin!=='https://staging.compliance-express.com')throw Error('Staging only');
 const API='https://instant-compliance-snapshot-api-staging-8dnk.onrender.com';
-const VERSION='2026.09.28.5-staging';
+const VERSION='2026.09.29.1-staging';
 const STATES=['AK','AR','CA','CO','CT','DC','FL','GA','HI','IL','KS','KY','LA','MA','MD','ME','MI','MN','MS','ND','NH','NJ','NM','NY','OH','OK','OR','PA','RI','SC','VA','WA','WI','WV'];
 const BROWSER=new Set(['NY','IL','GA']);const $=id=>document.getElementById(id);
 let audit={scope:'Aurora optimized execution verification; approved source expectations retained',staging_version:VERSION,states:STATES,organizations:[],results:[],source_breakers:{},events:[]},stop=false,running=false,reviewCredentials=null;

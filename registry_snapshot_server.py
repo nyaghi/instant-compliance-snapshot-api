@@ -134,7 +134,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.28.5-staging").strip() or "2026.09.28.5-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.29.1-staging").strip() or "2026.09.29.1-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -6052,6 +6052,26 @@ def licensed_charity_status(raw, expiration):
     return "Unable to Confirm"
 
 
+def licensed_dash_retrieval_forms(name):
+    """Literal-search probes only; never shorten accepted identity targets."""
+    original = canonical_name_punctuation(name)
+    literal = ascii_dash_search_name(original)
+    if "-" not in literal:
+        return []
+    # RI distinguishes an em dash, double dash and single hyphen; GA also
+    # distinguishes spaces around them. A meaningful literal prefix retrieves
+    # those spellings, but every returned row still needs the full identity.
+    single = re.sub(r"\s*-+\s*", " - ", literal).strip()
+    prefix = re.split(r"\s*-+\s*", literal, maxsplit=1)[0].strip(" ,;")
+    meaningful_prefix = len(distinctive_match_tokens(prefix)) >= 2
+    # Leave ordinary word compounds such as Make-A-Wish unchanged unless the
+    # supplied spelling actually needs dash conversion or has a useful prefix.
+    forms = [single] if literal != original or re.search(r"-{2,}", literal) or meaningful_prefix else []
+    if meaningful_prefix:
+        forms.append(prefix)
+    return list(dict.fromkeys(forms))
+
+
 def licensed_charity_names(org):
     """Every reviewed name precedes bounded generated spelling/search variants."""
     primary = [org.organization_name, *known_names_for_ein(org.ein)]
@@ -6068,11 +6088,13 @@ def licensed_charity_names(org):
     # querying hundreds of low-information permutations such as "s Foundation".
     for name in required:
         added = 0
-        # Keep existing probes first. A short literal core can otherwise have
+        # Reach literal dash spellings before speculative word permutations.
+        # The same three-probe bound and all reviewed primary names remain.
+        # A short literal core can otherwise have
         # no fallback when punctuation or an entity suffix differs in the
         # registry. Reuse the mature retrieval helper without widening match
         # acceptance or exceeding the existing three-probe bound.
-        for value in (possessive_search_phrases(name) + high_signal_search_phrases(name)
+        for value in (licensed_dash_retrieval_forms(name) + possessive_search_phrases(name) + high_signal_search_phrases(name)
                       + literal_name_retrieval_forms(name)):
             value = re.sub(r"\s+", " ", value).strip()
             if value.casefold() in seen or not distinctive_match_tokens(value): continue

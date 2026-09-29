@@ -398,6 +398,10 @@ class IntegrationControls(unittest.TestCase):
         # The only additional master-rule edit exports review context privately;
         # staging still uses its original signing/interpretation branch.
         protected.discard('attach_identity_review')
+        # The September 29 dash-retrieval correction intentionally changes this
+        # bounded query planner. run_license_dash_guardrails checks its literal
+        # probes and preservation of every other existing master function.
+        protected.discard('licensed_charity_names')
         for name in sorted(protected):
             with self.subTest(function=name):self.assertEqual(merged.get(name),aurora[name])
         self.assertEqual(merged['pa_name_search_plan'],aurora['pa_name_search_plan'])

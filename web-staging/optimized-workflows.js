@@ -82,5 +82,5 @@
       return states.map(state=>results.get(state));
     } finally {signal?.removeEventListener('abort',cancel);}
   }
-  window.CCOptimized=Object.freeze({run,version:'2026.09.28.5-staging'});
+  window.CCOptimized=Object.freeze({run,version:'2026.09.29.1-staging'});
 })();

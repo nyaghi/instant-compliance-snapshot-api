@@ -2,7 +2,7 @@
 (() => {
   'use strict';
   if (location.origin !== 'https://staging.compliance-express.com') return;
-  const VERSION = '2026.09.28.5-sales';
+  const VERSION = '2026.09.29.1-sales';
   const RUN_LIMIT_MS = 60000;
   const STATE_CONCURRENCY = 20;
   const NAMES = {"IL":"Illinois", "GA":"Georgia", "AK": "Alaska", "AR": "Arkansas", "CA": "California", "CO": "Colorado", "CT": "Connecticut", "DC": "District of Columbia", "RI": "Rhode Island", "FL": "Florida", "HI": "Hawaii", "KS": "Kansas", "KY": "Kentucky", "LA": "Louisiana", "MA": "Massachusetts", "MD": "Maryland", "ME": "Maine", "MI": "Michigan", "MN": "Minnesota", "MS": "Mississippi", "ND": "North Dakota", "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico", "NY": "New York", "OH": "Ohio", "OK": "Oklahoma", "OR": "Oregon", "PA": "Pennsylvania", "SC": "South Carolina", "VA": "Virginia", "WA": "Washington", "WI": "Wisconsin", "WV": "West Virginia"};
