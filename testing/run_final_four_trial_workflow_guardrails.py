@@ -20,7 +20,7 @@ TRIAL = {'origin': 'https://fixture-final-four.onrender.com'}
 class TrialWorkflowControls(unittest.TestCase):
     def test_trial_connector_retains_approved_il_recovery_without_resetting_budget(self):
         record={'state':'IL','purpose':'registration','recovery_protocol':'il-fresh-page-v1',
-                'connector_version':'0.6.5','issued':1000,'expires':1360,
+                'connector_version':'0.6.6','issued':1000,'expires':1360,
                 'completed':[{'query':{'ein':'123456789'},'rows':[]}],
                 'pending':{'query_id':'old-query','query':{'orgName':'Example Charity'}}}
         payload={'reason':'NY_CONNECTOR_IL_VERIFICATION_PENDING','query_id':'old-query'}
@@ -36,7 +36,7 @@ class TrialWorkflowControls(unittest.TestCase):
 
     def test_trial_il_recovery_does_not_enable_unknown_clients_or_weaken_guards(self):
         base={'state':'IL','purpose':'registration','recovery_protocol':'il-fresh-page-v1',
-              'connector_version':'0.6.5','issued':1000,'expires':1360,
+              'connector_version':'0.6.6','issued':1000,'expires':1360,
               'pending':{'query_id':'query','query':{'orgName':'Example Charity'}}}
         payload={'reason':'NY_CONNECTOR_IL_VERIFICATION_PENDING','query_id':'query'}
         with patch.object(cc,'trial_identity',return_value=None):
@@ -179,7 +179,7 @@ class TrialWorkflowControls(unittest.TestCase):
             output=Path(tmp)/'trial'
             result=build(TRIAL['origin'],output)
             manifest=json.loads((output/'manifest.json').read_text(encoding='utf-8'))
-            self.assertEqual(manifest['version'],'0.6.5')
+            self.assertEqual(manifest['version'],'0.6.6')
             self.assertEqual(manifest['permissions'],['storage'])
             text=json.dumps(manifest)
             for banned in ['staging.compliance-express.com','www.compliance-express.com','charities-search.ag.ny.gov','cookies','browsingData']:

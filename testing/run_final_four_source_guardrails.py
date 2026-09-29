@@ -154,8 +154,34 @@ class SourceControls(unittest.TestCase):
         self.assertIsNone(row['expiration'])
         self.assertEqual(cc.nc_charity_record_evidence({**fields, 'Status': 'Revoked'})['status'], 'Revoked')
         self.assertEqual(cc.nc_charity_record_evidence({**fields, 'Status': 'Unrecognized'})['status'], 'Unable to Confirm')
-        for invalid in [{'License': 'SL003050'}, {'CSL Type': 'Professional Fundraiser'}]:
+        for invalid in [{'License': 'PF003050'}, {'CSL Type': 'Professional Fundraiser'}]:
             with self.assertRaises(ValueError): cc.nc_charity_record_evidence({**fields, **invalid})
+
+    def test_nc_license_prefix_does_not_override_explicit_record_category(self):
+        # Public RMHC search: EX011792 is labeled Charitable Organization;
+        # public Junior search: SL007110 is labeled CSL Exempt Organization.
+        for identifier, kind, raw, expected in [
+                ('EX011792', 'Charitable Organization', 'Withdrawn', 'Closed / Withdrawn / Canceled'),
+                ('SL007110', 'CSL Exempt Organization', 'CSL Exempt', 'Exempt')]:
+            with self.subTest(identifier=identifier):
+                row = cc.nc_charity_record_evidence({**NC, 'License': identifier,
+                    'CSL Type': kind, 'Status': raw, 'Expiration Date': '', 'Extension End Date': ''})
+                self.assertEqual(row['identifier'], identifier)
+                self.assertEqual(row['status'], expected)
+        for identifier in ['', 'PF007110', 'SL', 'EX123/SL456']:
+            with self.assertRaises(ValueError):
+                cc.nc_charity_record_evidence({**NC, 'License': identifier})
+
+    def test_nc_unissued_application_requires_explicit_source_category_and_status(self):
+        fields = {**NC, 'License': '', 'CSL Type': 'In-Process', 'Status': 'In-Process',
+                  'Expiration Date': '', 'Extension End Date': ''}
+        row = cc.nc_charity_record_evidence(fields)
+        self.assertTrue(row['unissued_application'])
+        self.assertEqual(row['status'], 'Needs Review')
+        for bad in [{'Status': 'Active'}, {'CSL Type': 'Charitable Organization'},
+                    {'Expiration Date': '12/31/2027'}, {'profile_url': 'https://example.com/profile/1'}]:
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                cc.nc_charity_record_evidence({**fields, **bad})
 
     def test_nc_extension_does_not_require_special_status_wording(self):
         for raw in ['Active', 'Current', 'Current Active']:
@@ -458,6 +484,31 @@ class LookupControls(unittest.TestCase):
         result = cc.final_four_browser_lookup(self.orgs['NV'], 'NV', self.provider)
         self.assertEqual(result.status, 'Unable to Confirm')
         self.assertTrue(all(q['operation'] == 'search' for q in self.calls))
+
+    def test_nc_unrelated_unissued_application_does_not_block_a_completed_negative(self):
+        for name, expected in [("America's Charities", 'Needs Review'), ('Unrelated Junior League', 'Not Registered')]:
+            def pending(q):
+                self.assertEqual(q['operation'], 'search')
+                row = {**NC, 'CSL Legal Name': name, 'License': '', 'CSL Type': 'In-Process',
+                       'Status': 'In-Process', 'Expiration Date': '', 'Extension End Date': ''}
+                return {'state':'NC', 'query':q, 'complete':True, 'verification_pending':False, 'total':1, 'rows':[row]}
+            result = cc.final_four_browser_lookup(self.orgs['NC'], 'NC', pending)
+            self.assertEqual(result.status, expected)
+            self.assertFalse(result.matched_registry_identifier)
+
+    def test_nv_unsupported_matching_record_prevents_an_inactive_only_conclusion(self):
+        def mixed(q):
+            payload = self.provider(q)
+            if q['operation'] == 'search':
+                payload['rows'].append({**self.nvrow, 'identifier':'NV123456789',
+                    'entity_type':'Foreign Entities Not Required to Register In Nevada'})
+                payload['total'] = 2
+            else:
+                payload['fields']['Entity Status'] = 'Withdrawn'
+            return payload
+        result = cc.final_four_browser_lookup(self.orgs['NV'], 'NV', mixed)
+        self.assertEqual(result.status, 'Unable to Confirm')
+        self.assertIn('filing scope', result.source_note)
 
     def test_nv_wrong_or_offsite_detail_link_is_rejected(self):
         original = self.nvurl

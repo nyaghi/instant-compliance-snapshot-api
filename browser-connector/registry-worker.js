@@ -9,14 +9,16 @@ async function registryMessage(job, message) {
 }
 async function registryReady(job, oldDocument = null, path = null, budgetMs = 45000) {
   const deadline = Math.min(Date.now()+Math.max(1,Math.min(45000,budgetMs)), job.activeExpiresAt);
+  let verificationPending=false;
   while (!job.closed && Date.now()<deadline) {
     try {
       const value=await registryMessage(job,{action:"registry-ready"});
+      verificationPending=job.registryState==='NC'&&value?.verification_pending===true;
       if (value?.ready && value.documentId !== oldDocument && (!path || new URL(value.url).pathname===path)) return value;
     } catch { /* Navigation or the normal public verification page is loading. */ }
     await nap(200);
   }
-  throw new Error("NY_CONNECTOR_TAB_READY_TIMEOUT");
+  throw new Error(verificationPending ? "NY_CONNECTOR_NC_VERIFICATION_PENDING" : "NY_CONNECTOR_TAB_READY_TIMEOUT");
 }
 async function registryNavigate(job, url, budgetMs = 45000) {
   if (new URL(url).origin !== registryOrigin(job.registryState)) throw new Error("NY_CONNECTOR_INCOMPLETE");
@@ -27,7 +29,16 @@ async function registryNavigate(job, url, budgetMs = 45000) {
     // Explicitly reload so the next search starts with a fresh public form.
     const current = await chrome.tabs.get(job.tab);
     if (current.url === url) await chrome.tabs.reload(job.tab);
-    else await chrome.tabs.update(job.tab,{url});
+    else {
+      const before=new URL(current.url),after=new URL(url);
+      await chrome.tabs.update(job.tab,{url});
+      // ORION changes the hash to return from a detail to search. Chrome keeps
+      // the same document/content script, so waiting for a new document ID can
+      // never succeed. The NV ready check still requires the rendered Business
+      // search form; nvSearch separately binds filters and a fresh loading cycle.
+      if(job.registryState==='NV'&&before.origin===after.origin&&before.pathname===after.pathname
+          &&before.search===after.search&&before.hash!==after.hash)previous=null;
+    }
   } else {
     const origin=await chrome.tabs.get(job.sender.tab.id);
     job.creating=chrome.tabs.create({windowId:origin.windowId,url,active:false});

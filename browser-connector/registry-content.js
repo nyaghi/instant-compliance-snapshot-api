@@ -610,19 +610,25 @@
         if(!value||value.length>500)throw new Error('REGISTRY_NC_CARD_CHANGED');
         (key==='CSL Legal Name'?legal:other).push(value);
       }
-      const header=text(button.querySelector('.searchHeader')).match(/^(.+?)\s*•\s*\(((?:SL|EX)\d+)\)$/);
+      const headerText=text(button.querySelector('.searchHeader'));
+      const pending=fields['CSL Type']==='In-Process'&&fields.Status==='In-Process'&&!fields.License;
+      const header=headerText.match(/^(.+?)\s*•\s*\(((?:SL|EX)\d+)\)$/);
+      const displayName=pending?headerText:header?.[1].trim();
       const names=[...new Set([...legal,...other])];
-      if(!legal.length||names.length>32||!header||header[2]!==fields.License||!names.includes(header[1].trim()))
+      if(!legal.length||names.length>32||(!pending&&(!header||header[2]!==fields.License))||!names.includes(displayName))
         throw new Error('REGISTRY_NC_CARD_CHANGED');
-      fields['CSL Legal Name']=legal[0];fields.display_name=header[1].trim();fields.aliases=names.filter(n=>n!==fields.display_name);
+      fields['CSL Legal Name']=legal[0];fields.display_name=displayName;fields.aliases=names.filter(n=>n!==fields.display_name);
       const links=[...panel.querySelectorAll('a[href]')].filter(a=>/^\/online_services\/search\/charities_profile\/\d+$/.test(a.getAttribute('href')));
-      if(links.length!==1||!fields['CSL Legal Name']||!fields['CSL Type']||!fields.Status||!fields.License||seen.has(fields.License))throw new Error('REGISTRY_NC_CARD_CHANGED');
+      if(links.length!==1||!fields['CSL Legal Name']||!fields['CSL Type']||!fields.Status||(!pending&&!fields.License))throw new Error('REGISTRY_NC_CARD_CHANGED');
+      const identity=pending?links[0].getAttribute('href'):fields.License;
+      if(seen.has(identity))throw new Error('REGISTRY_NC_CARD_CHANGED');
+      if(pending)fields.License='';
       if(!Object.hasOwn(fields,'Expiration Date')) {
-        if(fields['CSL Type']!=='CSL Exempt Organization')throw new Error('REGISTRY_NC_CARD_INCOMPLETE');
+        if(!pending&&fields['CSL Type']!=='CSL Exempt Organization')throw new Error('REGISTRY_NC_CARD_INCOMPLETE');
         fields['Expiration Date']='';
       }
       fields.profile_url=new URL(links[0].getAttribute('href'),location.origin).href;
-      seen.add(fields.License);rows.push(fields);
+      seen.add(identity);rows.push(fields);
     }
     return {ok:true,evidence:{state:'NC',query,complete:true,verification_pending:false,total,rows}};
   }
@@ -756,6 +762,7 @@
     if (NV && location.hash.includes('screen=external-GenericFilingsSearch')) {
       const tab=[...document.querySelectorAll('[role="tab"]')].find(el=>text(el)==='Business');
       return tab?.getAttribute('aria-selected')==='true'
+        && ![...document.querySelectorAll('.app-loader-pane .circle-loader')].some(visible)
         && ['entityName','entityNumber','nvBusinessId'].every(s=>document.querySelector(`input[id$="-${s}"]`))
         && [...document.querySelectorAll('[role="combobox"]')].some(el=>text(el).startsWith('Starts With'))
         && [...document.querySelectorAll('button')].some(el=>text(el)==='Search' && visible(el) && !el.disabled);
@@ -767,7 +774,9 @@
       if (m.query?.state!=='AL' || m.query.operation!=='search') throw new Error('REGISTRY_COMMAND_INVALID');
       return {ok:true,evidence:await alSearch(m.query,Date.now()+Math.min(45000,Number.isFinite(m.budgetMs)&&m.budgetMs>0?m.budgetMs:45000))};
     }
-    if (m.action === "registry-ready") return {ready:registryDocumentReady(), url:location.href, documentId};
+    if (m.action === "registry-ready") return {ready:registryDocumentReady(), url:location.href, documentId,
+      ...(NC ? {verification_pending:/^Just a moment/i.test(document.title||'')
+        && /Performing security verification|verifies you are not a bot/i.test(text(document.body))} : {})};
     if (NC) {
       if(m.action==='registry-nc-form')return ncForm(m.query);
       if(m.action==='registry-nc-rows')return ncRows(m.query,m.budgetMs);

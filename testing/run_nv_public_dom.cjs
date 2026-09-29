@@ -23,6 +23,12 @@ test('Nevada form readiness includes the hydrated Starts With search-type contro
  assert.equal(h.api.registryDocumentReady(),false);
  h.context.document.querySelectorAll=read;assert.equal(h.api.registryDocumentReady(),true);
 });
+test('Nevada visible inputs and search type are not ready while the initial loader remains visible',()=>{
+ const h=fixture(),read=h.context.document.querySelectorAll;
+ h.context.document.querySelectorAll=q=>q==='.app-loader-pane .circle-loader'?[{getClientRects:()=>[{}]}]:read(q);
+ assert.equal(h.api.registryDocumentReady(),false);
+ h.context.document.querySelectorAll=read;assert.equal(h.api.registryDocumentReady(),true);
+});
 function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,truncate=false,duplicate=false,oldPageDelay=80,detailId=null,returnFormDelay=600,returnName=null,returnRows=null,repeatSearchActivity=true,replaceSearchOnInput=false,returnGridDelay=0}={}) {
  let clock=1000,serial=0,listener,loading=false,rendered=[],page=1,detail=false,searchClicks=0,opened=[],formReady=true;
  const tasks=new Map(),observers=new Set(),root={};

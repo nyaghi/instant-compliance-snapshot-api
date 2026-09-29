@@ -15,7 +15,12 @@ function fixture(enabled=true){
   const docs=new Map(),calls=[],reloads=[];
   const create=h.chrome.tabs.create,update=h.chrome.tabs.update;
   h.chrome.tabs.create=async options=>{const tab=await create(options);docs.set(tab.id,++serial);return tab;};
-  h.chrome.tabs.update=async(id,options)=>{docs.set(id,++serial);return update(id,options);};
+  h.chrome.tabs.update=async(id,options)=>{
+    const before=new URL(h.tabs.get(id).url),after=options.url&&new URL(options.url);
+    // Chrome preserves the content-script document during hash-only SPA navigation.
+    if(after&&(before.origin!==after.origin||before.pathname!==after.pathname||before.search!==after.search))docs.set(id,++serial);
+    return update(id,options);
+  };
   h.chrome.tabs.reload=async id=>{reloads.push(id);docs.set(id,++serial);};
   h.chrome.tabs.sendMessage=async(id,m)=>{
     const tab=h.tabs.get(id);
@@ -69,12 +74,27 @@ test('NV starts a fresh search after a detail; TN retains its result form',async
   for(const state of ['NV','TN']){
     const h=fixture(),p=connect(h,state),search={state,operation:'search',name:'Example National Foundation'};
     await h.query(p,2,search);await h.query(p,3,{state,operation:'detail',identifier:state==='NV'?'NV1234':'CO1234'});
-    await h.query(p,4,{...search,name:'Reviewed Former Name'});
+    const next=await h.query(p,4,{...search,name:'Reviewed Former Name'});
+    assert.equal(next?.ok,true,'The next query must complete after a same-document route change');
     assert.equal(h.created.length,1);
     assert.equal(h.calls.length,3);
     assert.equal(vm.runInContext('active.finalFourReusableForm',h.context),true);
     if(state==='NV')assert.match(h.tabs.get(h.created[0]).url,/external-GenericFilingsSearch/);
   }
+});
+test('NV hash navigation still waits for its rendered search form before issuing the next query',async()=>{
+ const h=fixture(),p=connect(h,'NV'),search={state:'NV',operation:'search',name:'Example National Foundation'};
+ await h.query(p,2,search);await h.query(p,3,{state:'NV',operation:'detail',identifier:'NV1234'});
+ const send=h.chrome.tabs.sendMessage;let ready=false;
+ h.chrome.tabs.sendMessage=async(id,m)=>{
+  const response=await send(id,m);
+  if(m.action==='registry-ready'&&h.tabs.get(id).url.includes('external-GenericFilingsSearch'))response.ready=ready;
+  return response;
+ };
+ assert.equal(await h.query(p,4,{...search,name:'Reviewed Former Name'}),undefined);
+ assert.equal(h.calls.length,2);ready=true;await h.advance(300);
+ assert.equal(p.messages.find(m=>m.id===id(4)&&!m.progress)?.ok,true);
+ assert.equal(h.calls.length,3);assert.equal(h.reloads.length,0);
 });
 function ncFixture({history=true}={}) {
  const h=fixture(),original=h.chrome.tabs.sendMessage;
@@ -110,6 +130,15 @@ test('NC disallows an unobserved profile even on the correct state origin',async
 test('NC missing optional filing history preserves the complete profile with incomplete-history evidence',async()=>{
  const {h,search,detail}=ncFixture({history:false}),p=connect(h,'NC');await h.query(p,2,search);
  const r=await h.query(p,3,detail);assert.equal(r.ok,true);assert.equal(r.evidence.complete,true);assert.equal(r.evidence.filings.complete,false);
+});
+test('NC persistent visible verification is identified separately from a registry timeout',async()=>{
+ const {h,search}=ncFixture(),send=h.chrome.tabs.sendMessage;
+ h.chrome.tabs.sendMessage=async(id,m)=>m.action==='registry-ready'
+  ?{...(await send(id,m)),ready:false,verification_pending:true}:send(id,m);
+ const p=connect(h,'NC');assert.equal(await h.query(p,2,search),undefined);await h.advance(45001);
+ const r=p.messages.find(m=>m.id===id(2)&&!m.progress);
+ assert.equal(r?.ok,false);assert.equal(r?.reason,'NY_CONNECTOR_NC_VERIFICATION_PENDING');
+ assert.equal(h.calls.length,0);assert.equal(h.reloads.length,0);
 });
 test('NC production and staging remain unable to start the trial-only path',()=>{
  for(const enabled of [true,false])for(const origin of ['https://staging.compliance-express.com','https://www.compliance-express.com'])assert.equal(connect(fixture(enabled),'NC',origin).disconnected,true);

@@ -258,6 +258,44 @@ validation run.
 
 ## Confirmed date interpretation
 
+### 0.6.5 live follow-up and 0.6.6 candidate
+
+- Ten targeted 0.6.5 checks completed: TN Junior Achievement remained Not
+  Registered, NC Reading Is Fundamental remained Current, and NC Prevent Child
+  Abuse completed as Upcoming Filing using its extension date. Seven results
+  remained inconclusive. These originals are retained separately from retries.
+- NV Make-A-Wish now completed its search and both national details. Its next
+  alias search timed out because ORION changes the hash within the same document
+  while the worker required a new document ID. A corrected Chrome navigation
+  fixture reproduces that failure. The NV-only correction still waits for the
+  rendered search form, bound filters and a fresh response loading cycle.
+- Four other NV first searches failed before completion. A separately observed
+  Reading Is Fundamental repeat completed its search/detail, then reached the
+  same hash-navigation defect. Initial ORION inputs are visible while its loader
+  is active; the candidate now waits for that loader to finish before editing
+  the form. This readiness correction still requires live confirmation.
+- NC's RMHC fallback exposed EX011792 labeled Charitable Organization. The
+  public Junior search also showed SL007110 labeled CSL Exempt Organization.
+  The state parser incorrectly derived record category from the identifier
+  prefix. The candidate validates both supported prefixes and both explicit
+  charity categories independently; adverse status and identity checks remain.
+- NC Junior Achievement still stalled at the broad Junior fallback. Manual
+  search completed with 30 rows, including two In-Process cards without license
+  numbers. A later initial navigation remained on the source's visible security
+  verification page with no interactive control. This source condition is now
+  reported distinctly; no verification is solved or bypassed. The earlier form
+  submission timeout remains unresolved. Public inspection also confirmed
+  In-Process cards have legal/DBA names and profile links but no issued license.
+  The candidate preserves those cards for master name filtering: unrelated
+  applications do not spoil a complete negative, while a matching application
+  without a confirmed license produces Needs Review, never Not Registered.
+- Reading Is Fundamental NV exposes both a Withdrawn nonprofit corporation and
+  a Registered record labeled Foreign Entities Not Required to Register In
+  Nevada. That second category is outside the approved corporation mapping.
+  A matching unsupported category now prevents an inactive-only conclusion;
+  it remains a scope review rather than a guessed registration status.
+- No approved staging, production or other-state timeout behavior was changed.
+
 The user confirmed on September 29 that a displayed extension end date is the
 deadline to use instead of the original expiration date. The source does not
 need to repeat "extension" in its status label. Preserve both dates as evidence

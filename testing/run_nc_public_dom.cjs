@@ -2,7 +2,7 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const source=fs.readFileSync(path.join(__dirname,'../browser-connector/registry-content.js'),'utf8')
- .replace('  async function handle(m) {','  globalThis.testNC={ncLabeled,ncForm,ncRows,ncProfile,ncFilings,registryDocumentReady};\n  async function handle(m) {');
+ .replace('  async function handle(m) {','  globalThis.testNC={ncLabeled,ncForm,ncRows,ncProfile,ncFilings,registryDocumentReady,handle};\n  async function handle(m) {');
 const origin='https://www.sosnc.gov',profile=origin+'/online_services/search/charities_profile/5700751';
 const active={'CSL Legal Name':"America's Charities",'CSL Type':'Charitable Organization',Status:'Current Active – Filing Extension Granted',License:'SL000448','Expiration Date':'5/15/2026','Extension End Date':'11/15/2026'};
 const exempt={'CSL Legal Name':'YWCA of the U.S.A.','CSL Type':'CSL Exempt Organization',Status:'CSL Exempt',License:'EX003050'};
@@ -13,7 +13,7 @@ function harness({cards=[active],total=cards.length,query="America's Charities",
  for(const [i,row] of cards.entries()){
   let expanded=false;
   const panel={getClientRects:()=>expanded?[{}]:[],querySelectorAll:s=>s==='.para-small > .boldSpan'?[...labels(row),...extraLabels.flatMap(labels)]:s==='a[href]'?[{getAttribute:()=>new URL(profile).pathname}]:[]};
-  panels.set('a'+i,panel);buttons.push({querySelector:s=>s==='.searchHeader'?txt(`${displayName||row['CSL Legal Name']} • (${row.License})`):null,getAttribute:k=>k==='aria-controls'?'a'+i:expanded?'true':'false',click:()=>{clicks++;expanded=true;}});
+  panels.set('a'+i,panel);buttons.push({querySelector:s=>s==='.searchHeader'?txt(row['CSL Type']==='In-Process'&&!row.License?(displayName||row['CSL Legal Name']):`${displayName||row['CSL Legal Name']} • (${row.License})`):null,getAttribute:k=>k==='aria-controls'?'a'+i:expanded?'true':'false',click:()=>{clicks++;expanded=true;}});
  }
  const addressValues=['14200 Park Meadow Dr Ste 330s','Chantilly','VA','20151-4210'];
  const address={innerText:'Address',parentElement:{querySelectorAll:s=>(s===':scope > .para-small > span'?addressValues:s==='.para-small > span'?['Address',...addressValues]:[]).map(txt)}};
@@ -38,9 +38,27 @@ test('NC collects only expanded, complete, query-bound cards and extension date'
  const r=await h.api.ncRows(q);assert.equal(r.evidence.total,1);assert.equal(h.clicks(),1);
  assert.equal(r.evidence.rows[0]['Extension End Date'],'11/15/2026');assert.equal(r.evidence.rows[0].profile_url,profile);
 });
+test('NC reports visible verification without collecting tokens or submitting the form',async()=>{
+ const h=harness({url:origin+'/online_services/search/by_title/search_charities'});
+ h.context.document.title='Just a moment...';h.context.document.body=txt('Performing security verification');
+ h.context.document.querySelector=()=>null;
+ const r=await h.api.handle({action:'registry-ready'});
+ assert.equal(r.ready,false);assert.equal(r.verification_pending,true);assert.equal(h.formClicks(),0);
+ assert.deepEqual(Object.keys(r).sort(),['documentId','ready','url','verification_pending']);
+ h.context.document.title='Search Charities';assert.equal((await h.api.handle({action:'registry-ready'})).verification_pending,false);
+});
 test('NC explicit exemption can omit expiration without omitting identity',async()=>{
  const h=harness({cards:[exempt],query:'YWCA'}),r=await h.api.ncRows({state:'NC',operation:'search',name:'YWCA'});
  assert.equal(r.evidence.rows[0]['Expiration Date'],'');assert.equal(r.evidence.rows[0].License,'EX003050');
+});
+test('NC preserves an explicitly In-Process application without inventing an issued license',async()=>{
+ const row={'CSL Legal Name':'Junior League of Asheville, Inc.','CSL Type':'In-Process',Status:'In-Process'};
+ const h=harness({cards:[row],query:'Junior'});
+ const r=(await h.api.ncRows({state:'NC',operation:'search',name:'Junior'})).evidence;
+ assert.equal(r.total,1);assert.equal(r.rows[0].License,'');assert.equal(r.rows[0]['Expiration Date'],'');
+ assert.equal(r.rows[0].profile_url,profile);assert.equal(r.rows[0].Status,'In-Process');
+ for(const bad of [{...row,Status:'Active'},{...row,'CSL Type':'Charitable Organization'}])
+  await assert.rejects(harness({cards:[bad],query:'Junior'}).api.ncRows({state:'NC',operation:'search',name:'Junior'}),/CARD_CHANGED/);
 });
 
 test('NC repeated legal names and DBAs are retained as aliases on one identified card',async()=>{

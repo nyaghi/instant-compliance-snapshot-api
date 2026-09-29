@@ -5978,7 +5978,7 @@ def il_verification_recovery(record, payload, now):
     if (record.get("state") != "IL" or record.get("purpose") != "registration"
             or record.get("recovery_protocol") != "il-fresh-page-v1"
             or (record.get("connector_version") != "0.5.10"
-                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5"}))
+                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6"}))
             or payload.get("reason") != "NY_CONNECTOR_IL_VERIFICATION_PENDING"
             or record.get("il_verification_recovery")
             or now + 120 >= record["issued"] + NY_CONNECTOR_TTL_SECONDS):
@@ -6075,13 +6075,23 @@ def nc_charity_record_evidence(fields):
     name = display_name.strip()
     aliases = list(dict.fromkeys(n.strip() for n in aliases if n.strip() != name))
     kind = fields["CSL Type"].strip()
-    valid_kind = ((re.fullmatch(r"SL\d+", identifier) and kind == "Charitable Organization")
-                  or (re.fullmatch(r"EX\d+", identifier) and kind == "CSL Exempt Organization"))
-    if not name or not valid_kind:
+    pending = kind == "In-Process" and fields["Status"].strip() == "In-Process" and not identifier
+    # NC retains historical SL/EX identifiers when the explicit record category
+    # changes. Validate both source fields without deriving one from the other.
+    valid_kind = (re.fullmatch(r"(?:SL|EX)\d+", identifier)
+                  and kind in {"Charitable Organization", "CSL Exempt Organization"})
+    if not name or (not valid_kind and not pending):
         raise ValueError("North Carolina result is not an identified charity license")
     url = urlparse(fields["profile_url"])
     if url.scheme != "https" or url.netloc != "www.sosnc.gov" or not re.fullmatch(r"/online_services/search/charities_profile/\d+", url.path) or url.query or url.fragment:
         raise ValueError("North Carolina profile link is not an official charity record")
+    if pending:
+        # This public application identity is only a deduplication key. It is
+        # never presented as an issued license or accepted without review.
+        if fields["Expiration Date"].strip() or str(fields.get("Extension End Date") or "").strip():
+            raise ValueError("North Carolina unissued application has conflicting license dates")
+        return dict(name=name, identifier="NCAPP-" + url.path.rsplit("/", 1)[1], ein="", aliases=aliases,
+                    unissued_application=True, raw_status="In-Process", status="Needs Review", url=fields["profile_url"])
     raw = re.sub(r"\s+", " ", fields["Status"]).strip()
     expiration = final_four_source_date(fields["Expiration Date"], "North Carolina expiration")
     extension = final_four_source_date(fields.get("Extension End Date"), "North Carolina extension")
@@ -6444,6 +6454,10 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
             if not candidates or all(c["decision"] == "rejected" for c in candidates):
                 seen.add(row["identifier"])
                 continue
+            if state == "NC" and row.get("unissued_application"):
+                unreviewed_scope = True
+                seen.add(row["identifier"])
+                continue
             if state == "AL":
                 record = row
             else:
@@ -6502,9 +6516,10 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
             if selected and not review and selected["status"] in {"Current", "Upcoming Filing", "Exempt"}:
                 break
     result = final_four_license_result(org, state, records, deadline, sources[state])
-    if result.status == "Not Registered" and unreviewed_scope:
-        result.status = "Unable to Confirm"; result.success = False
-        result.source_note = "Nevada returned a matching entity in a registration category that could not be interpreted safely. Review the entity's filing scope; this does not establish non-registration."
+    if unreviewed_scope and result.status not in {"Current", "Upcoming Filing", "Exempt"}:
+        result.status = "Needs Review" if state == "NC" else "Unable to Confirm"; result.success = False
+        result.source_note = ("North Carolina returned an in-process charity application with a matching name but no issued license number. Review its identity and application status; this does not establish non-registration."
+                              if state == "NC" else "Nevada returned a matching entity in a registration category that could not be interpreted safely. Review the entity's filing scope; this does not establish non-registration or an inactive registration.")
     if result.status == "Not Registered" and state == "TN":
         # The current official FAQ links both registered and $50,000-and-under
         # searches to this same directory (verified 2026-09-29). Statutory
@@ -23146,7 +23161,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5"})):
+        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6"})):
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()
