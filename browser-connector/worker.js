@@ -7,6 +7,15 @@ const queue = [];
 let repair = {}, saving = Promise.resolve();
 const owned = new Set();
 let keepAliveTimer = null;
+let trialAlIdle = null, trialAlIdleTimer = null;
+function armTrialAlIdle() {
+  clearTimeout(trialAlIdleTimer);
+  if (!P.TRIAL_ORIGIN || !trialAlIdle) return;
+  const saved=trialAlIdle;
+  trialAlIdleTimer=setTimeout(()=>{
+    if (trialAlIdle===saved) {trialAlIdle=null;removeOwned(saved.id).catch(()=>{});}
+  },Math.max(0,saved.expiresAt-Date.now()));
+}
 const diagnostics = [];
 function diagnostic(type, job, detail = "") {
   diagnostics.push({ at: Date.now(), type, id: job?.lookupId || "", phase: job?.pending ? "search" : job === active ? "active" : "queued", detail: String(detail).slice(0, 180) });
@@ -29,7 +38,9 @@ const runtimeState = () => ({ schema: 2, nextStart, ownedTabs: [...owned], diagn
 function saveRuntime() {
   keepAlive();
   if (!active && !queue.length && keepAliveTimer) { clearTimeout(keepAliveTimer); keepAliveTimer = null; }
-  const value = runtimeState(); saving = saving.catch(() => {}).then(() => chrome.storage.session.set({ ccnyRuntime: value })); return saving;
+  const value = runtimeState();
+  if (P.TRIAL_ORIGIN && trialAlIdle) value.trialAlIdle=trialAlIdle;
+  saving = saving.catch(() => {}).then(() => chrome.storage.session.set({ ccnyRuntime: value })); return saving;
 }
 function newJob(sender, id, refreshOnly, saved = {}) {
   return { port: null, sender, lookupId: id, refreshOnly, registryState: "NY", enqueuedAt: Date.now(), expiresAt: Date.now() + QUEUE_TTL, activeExpiresAt: null, generation: 0, tab: null, creating: null, pending: null, acquireId: null, closed: false, timer: null, reconnectTimer: null, rateRetries: 0, timeoutRetries: 0, retryNotBefore: 0, verificationRetryUsed: false, command: null, lastResponse: null, queryRepaired: false, ...saved };
@@ -49,7 +60,11 @@ async function removeOwned(tabId) {
   owned.delete(tabId);
   try {
     const tab = await chrome.tabs.get(tabId), url = new URL(tab.url);
-    if ((["https://charitable.illinoisattorneygeneral.gov", "https://verify.sos.ga.gov"].includes(url.origin)) || url.origin === P.NY && /^\/RegistrySearch(?:\/[0-9]{2}-[0-9]{2}-[0-9]{2})?\/?$/.test(url.pathname)) await chrome.tabs.remove(tabId);
+    const trialRegistry = P.TRIAL_ORIGIN && ((url.origin === "https://orion.nv.gov" && url.pathname === "/portal/public/")
+      || (url.origin === "https://ago.igovsolution.net" && url.pathname === "/online/Lookups/Business.aspx")
+      || (url.origin === "https://tncab.tnsos.gov" && url.pathname === "/portal/registered-charities-search")
+      || (url.origin === "https://www.sosnc.gov" && /^\/online_services\/search\/(?:by_title\/search_charities|Charities_Results|charities_(?:profile|filings)\/\d+)$/.test(url.pathname)));
+    if (trialRegistry || (["https://charitable.illinoisattorneygeneral.gov", "https://verify.sos.ga.gov"].includes(url.origin)) || url.origin === P.NY && /^\/RegistrySearch(?:\/[0-9]{2}-[0-9]{2}-[0-9]{2})?\/?$/.test(url.pathname)) await chrome.tabs.remove(tabId);
   } catch { /* The tab has already closed or was taken over by the user. */ }
   await saveRuntime();
 }
@@ -70,7 +85,7 @@ const boot = (async () => {
       // Revalidate the live source tab after restart; never manufacture an
       // authorized staging origin for a tab that has navigated elsewhere.
       const sourceSender = { id: chrome.runtime.id, frameId: 0, url: sourceTab.url, documentId: saved.documentId, tab: { id: saved.tabId } };
-      if (!allowedSender(sourceSender)) continue;
+      if (!allowedSender(sourceSender) || !P.registryAllowed(saved.registryState || "NY",new URL(sourceTab.url).origin)) continue;
       const { id, tabId, documentId, active: wasActive, ...state } = saved;
       const job = newJob(sourceSender, id, !!saved.refreshOnly, state);
       if (wasActive && !active) active = job; else queue.push(job);
@@ -79,7 +94,12 @@ const boot = (async () => {
     }
   }
   for (const id of previous?.ownedTabs || []) if (Number.isInteger(id)) owned.add(id);
-  for (const id of [...owned]) if (![active, ...queue].some(j => j?.tab === id)) await removeOwned(id);
+  const idle=previous?.trialAlIdle;
+  if (P.TRIAL_ORIGIN && Number.isInteger(idle?.id) && owned.has(idle.id) && Number.isFinite(idle.expiresAt)
+      && Date.now()<idle.expiresAt && idle.expiresAt<=Date.now()+1800000 && ![active,...queue].some(j=>j?.tab===idle.id)) {
+    try {const tab=await chrome.tabs.get(idle.id);if(tab.url===registryStart('AL')) {trialAlIdle=idle;armTrialAlIdle();}} catch {}
+  }
+  for (const id of [...owned]) if (![active, ...queue].some(j => j?.tab === id) && trialAlIdle?.id!==id) await removeOwned(id);
   if (repair.phase === "repairing") await saveRepair({ ...repair, phase: "failed", reason: "NY_CONNECTOR_INTERRUPTED" });
   diagnostic("worker-start", active, `restored=${[active, ...queue].filter(Boolean).length}`);
   await saveRuntime();
@@ -131,7 +151,14 @@ async function close(job, reason, finishId) {
   const cleanup = (async () => {
     if (job.creating) await job.creating.catch(() => {});
     const tabId = job.tab; job.tab = null;
-    if (tabId !== null) await removeOwned(tabId);
+    if (tabId !== null && P.TRIAL_ORIGIN && job.registryState==='AL' && owned.has(tabId) && reason!=='NY_CONNECTOR_BROWSER_CLOSED') {
+      try {
+        const tab=await chrome.tabs.get(tabId),source=await chrome.tabs.get(job.sender.tab.id);
+        if (tab.url===registryStart('AL') && tab.windowId===source.windowId && new URL(source.url).origin===P.TRIAL_ORIGIN) {
+          trialAlIdle={id:tabId,expiresAt:Date.now()+1800000};armTrialAlIdle();
+        } else await removeOwned(tabId);
+      } catch {await removeOwned(tabId);}
+    } else if (tabId !== null) await removeOwned(tabId);
   })();
   // Browser tab/storage acknowledgements can stall. Finish stays bounded;
   // any late cleanup still refers only to this job's own tab.
@@ -371,19 +398,20 @@ async function performRefresh(job, id) {
   if (!response.ok) close(job);
 }
 chrome.tabs.onRemoved.addListener(id => {
+  if (trialAlIdle?.id===id) {trialAlIdle=null;owned.delete(id);clearTimeout(trialAlIdleTimer);saveRuntime().catch(()=>{});}
   for (const job of [active, ...queue]) {
     if (job && !job.closed && (job.tab === id || job.sender.tab.id === id)) close(job, "NY_CONNECTOR_BROWSER_CLOSED");
   }
 });
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (!allowedSender(sender) || !P.validId(message?.id) || message.action !== "ping") return false;
-  boot.then(() => respond({ ok: true, version: chrome.runtime.getManifest().version, capabilities: ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "origin-window-v1", "connection-recovery-v1", "recovery-causes-v1", "cleanup-ack-v1", "timeout-recovery-v1", "resume-v1", "verified-detail-v1", "detail-navigation-v1", "il-ga-public-dom-v1", "ga-exempt-record-v1", "ga-legacy-rows-v1", "il-ga-complete-search-v2", "il-session-reuse-v1", "il-large-pages-v1", "il-dom-events-v1", "il-verification-visibility-v1"], recovery: { phase: repair.phase || "idle", nextAllowedAt: repair.nextAllowedAt || 0, verifiedAt: repair.finishedAt || 0 } }), () => respond({ ok: false, reason: "NY_CONNECTOR_INTERRUPTED" }));
+  boot.then(() => respond({ ok: true, version: chrome.runtime.getManifest().version, capabilities: ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "origin-window-v1", "connection-recovery-v1", "recovery-causes-v1", "cleanup-ack-v1", "timeout-recovery-v1", "resume-v1", "verified-detail-v1", "detail-navigation-v1", "il-ga-public-dom-v1", "ga-exempt-record-v1", "ga-legacy-rows-v1", "il-ga-complete-search-v2", "il-session-reuse-v1", "il-large-pages-v1", "il-dom-events-v1", "il-verification-visibility-v1", ...(P.TRIAL_ORIGIN ? ["final-four-public-v1"] : [])], recovery: { phase: repair.phase || "idle", nextAllowedAt: repair.nextAllowedAt || 0, verifiedAt: repair.finishedAt || 0 } }), () => respond({ ok: false, reason: "NY_CONNECTOR_INTERRUPTED" }));
   return true;
 });
 chrome.runtime.onConnect.addListener(port => {
   const resume = port.name.startsWith("cc-ny-resume-v1:");
-  const registryState = port.name.startsWith("cc-il-lookup-v1:") ? "IL" : port.name.startsWith("cc-ga-lookup-v1:") ? "GA" : "NY";
-  if (registryState !== "NY" && new URL(port.sender.url).origin !== P.STAGING) { port.disconnect(); return; }
+  const registryState = port.name.startsWith("cc-il-lookup-v1:") ? "IL" : port.name.startsWith("cc-ga-lookup-v1:") ? "GA" : port.name.startsWith("cc-al-lookup-v1:") ? "AL" : port.name.startsWith("cc-nc-lookup-v1:") ? "NC" : port.name.startsWith("cc-nv-lookup-v1:") ? "NV" : port.name.startsWith("cc-tn-lookup-v1:") ? "TN" : "NY";
+  if (!allowedSender(port.sender) || !P.registryAllowed(registryState,new URL(port.sender.url).origin)) { port.disconnect(); return; }
   const prefix = registryState !== "NY" ? `cc-${registryState.toLowerCase()}-lookup-v1:` : resume ? "cc-ny-resume-v1:" : port.name.startsWith("cc-ny-refresh-v1:") ? "cc-ny-refresh-v1:" : "cc-ny-lookup-v1:";
   if (!allowedSender(port.sender) || !port.name.startsWith(prefix) || !P.validId(port.name.slice(prefix.length))) { port.disconnect(); return; }
   let disconnected = false;

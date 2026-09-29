@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import os
+from deployment.lab_identity import performance_origin_enabled
 from pathlib import Path
 import re
 import uuid
@@ -36,7 +37,7 @@ class NotFound(ValueError): pass
 def source_application_retry(job, result, error, now, worker):
     """One later fresh task for an explicit source error, inside Sales' cutoff."""
     if (os.environ.get('CE_LAB_ME_APPLICATION_RECOVERY') != '1'
-            or os.environ.get('PUBLIC_BASE_URL') != 'https://instant-compliance-snapshot-api-hn4v.onrender.com'
+            or not performance_origin_enabled()
             or not job['source_version'].endswith('-performance-lab')
             or job['mode'] != 'sales' or job['state'] != 'ME' or job['attempt'] != 1
             or error or job['stop_reason'] or job['deadline'] - now < 24

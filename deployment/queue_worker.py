@@ -246,10 +246,18 @@ class ResourceAdmission:
 
 
 def task_environment(settings):
+    trial = None
+    if settings.get('CE_FINAL_FOUR_TRIAL') == '1':
+        from deployment.lab_identity import trial_identity
+        trial = trial_identity(settings)
+        if not trial:
+            raise RuntimeError('Refusing state work outside the active 29.2 trial identity')
     child_env = dict(settings)
     for key in ('CE_LAB_DATABASE_URL','CE_TEST_DATABASE_URL','RENDER_API_KEY'):
         child_env.pop(key,None)
     child_env['CE_LAB_DURABLE_QUEUE']='0'
+    if trial:
+        child_env['CE_FINAL_FOUR_CHILD']='1'
     return child_env
 
 

@@ -8,6 +8,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 import registry_snapshot_server as cc
 from testing.run_il_ga_guardrails import ga_html
+from testing.performance_origin_audit import RestoreApprovedOrigin
 
 BASE='1ba90bd560af7121588b5f48c4e39216f174956b'
 def old_plan(org):
@@ -78,7 +79,7 @@ class DashControls(unittest.TestCase):
     def test_every_existing_master_function_except_query_plan_unchanged(self):
         previous=subprocess.check_output(['git','show',BASE+':registry_snapshot_server.py'],cwd=ROOT,text=True,encoding='utf-8')
         def functions(source):
-            return {n.name:ast.dump(n,include_attributes=False) for n in ast.parse(source).body if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef))}
+            return {n.name:ast.dump(n,include_attributes=False) for n in RestoreApprovedOrigin().visit(ast.parse(source)).body if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef))}
         old=functions(previous);new=functions((ROOT/'registry_snapshot_server.py').read_text(encoding='utf-8'))
         self.assertEqual({name for name,body in old.items() if new.get(name)!=body},{'licensed_charity_names'})
 

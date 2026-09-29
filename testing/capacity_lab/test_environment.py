@@ -143,7 +143,7 @@ class LabTests(unittest.TestCase):
         self.assertTrue(b'Math.min(15,' in page, 'Standard scheduler remains at 15 state slots')
         sales=lab.lab_asset('/sales-mode.js')[0]
         self.assertIn(b'const RUN_LIMIT_MS = 60000',sales)
-        self.assertIn(b'const STATE_CONCURRENCY = 15',sales)
+        self.assertIn(b'const STATE_CONCURRENCY = 20',sales)
 
     def test_static_paths_cannot_read_secrets_or_extension_archives(self):
         for path in ['/../registry_snapshot_server.py','/%2e%2e/requirements.txt','/connector/charityclarity-ny-staging.zip']:

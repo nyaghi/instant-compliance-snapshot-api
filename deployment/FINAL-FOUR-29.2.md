@@ -1,0 +1,124 @@
+# Final four states: isolated 29.2 trial
+
+## Authorization and baseline
+
+The user approved preparation and activation of a temporary matching trial on
+September 29, 2026, expecting no more than five days at approximately $16/day.
+Use a conservative maximum of $80 total and 120 hours from the first paid
+resource activation, whichever comes first. Do not extend either limit without
+new authorization. Develop and run local controls before activating resources.
+Estimated four-worker and queue-database compute is about $12/day, excluding
+applicable ancillary charges. Track those charges against the same $80 cap.
+
+Approved staging is 2026.09.29.1. Its source baseline is tag
+`approved-2026.09.29.1` (05d6af3); the deployed runtime commit is e73988d.
+Staging currently sends execution to the existing performance-lab pool. That
+pool is part of the protected baseline, despite its historical lab name.
+
+## Isolation
+
+- Keep both staging APIs, the staging frontend, the existing four workers,
+  their configuration, and the existing queue database unchanged.
+- Use branch `performance-final-four-20260929` and a distinct 29.2 origin,
+  private access key, service IDs and queue database.
+- Keep all state implementations inside the master backend. Deployment
+  wrappers own infrastructure only; no runtime state sidecars.
+- Prepare an allowlisted teardown command and timed shutdown before activation.
+  Export validation evidence before deleting the temporary queue. Cleanup must
+  target only resource IDs created and recorded for this trial.
+- Do not claim that a stopped application also stops database/storage billing.
+  Verify retirement of every temporary paid resource.
+
+## Scope and validation
+
+Add Alabama, North Carolina, Nevada and Tennessee using the current master
+name, alias, identity, status, timeout and comment protections. Preserve original
+registration and renewal/last-filed evidence only when explicitly supported by
+the source; unavailable date fields remain blank.
+
+For each new state verify a positive, a completed no-record search, ambiguous
+identities, punctuation/alias variants, unavailable/incomplete responses, and
+date/status interpretation. Human verification must never yield Not Registered.
+Corporate and charitable-solicitation evidence must be labeled accurately; see
+the explicit Nevada interpretation below.
+
+Run the mature-state regression controls and compare the same organizations
+under the old 34-state scope and new 38-state scope, in Standard and Sales.
+Report discovery timing separately from state execution, first-attempt
+conclusiveness, source limitations, and all categorized spreadsheet differences.
+Refresh the approved spreadsheet and never alter its expected results.
+
+## Source investigation in progress
+
+- AL: official Attorney General iGov public lookup requires a verification code;
+  a supported export or data-access route has not yet been established.
+- NC: the user confirmed there is no subscription and explicitly requested the
+  ordinary public-page connector on September 29. Use observed public form,
+  result-card, profile and filing-history navigation. No private endpoint or
+  verification bypass. The source notice about automated/bulk searches remains
+  a source-access consideration; this user instruction is not state permission.
+- NV: official site now links to the ORION public registry. Use the matched
+  nonprofit-corporation status under the user-confirmed interpretation below.
+- TN: production TNCaB public search exists; the old expansion placeholder used
+  a test domain. The live form requires human verification before searching.
+
+No new state is considered integrated merely because it appears in a selector.
+Do not activate paid trial resources while source access prevents a meaningful
+validation run.
+
+## Candidate integration and safeguards (September 29)
+
+- Master source parsers, bounded reviewed-name plans, identity scoring and
+  signed continuation are implemented locally for AL/NC/NV/TN. Explicit source
+  extensions and exemptions are preserved; optional filing-history failures do
+  not invalidate a complete core record, but the missing date stays blank.
+- Alabama's broad type-only request returned a source error. Name searches on
+  the same human-verified page succeeded, including the national/local YWCA
+  control and a completed synthetic no-record control. No working bulk export
+  has been established. The trial connector retains only its own Alabama tab
+  for up to 30 idle minutes; every query requires a fresh observed response.
+  It does not solve, copy, store or transmit CAPTCHA codes. A fresh challenge
+  requires human completion. Do not describe this as unattended access yet.
+- North Carolina's YWCA national record is EX003050, explicitly CSL Exempt;
+  its absent expiration is a legitimate blank. America's Charities has an
+  explicit extension through November 15, 2026 and a separately labeled last
+  renewal filing of November 17, 2025. These are fixture controls, never rules
+  keyed to an organization or EIN.
+- Trial UI assembly derives from the approved frontend and adds all four
+  selectors. The approved frontend files and installed 0.5.10 connector are
+  unchanged. A separate 0.6.0 trial package uses only the trial origin, public
+  registry permissions and session storage; it has no production/staging page
+  permission, NY page injection, cookie access or browsing-data permission.
+  New York continues on the isolated worker backend. Its ordinary 29.1 browser
+  connector remains separate. Trial DOM channels are namespaced.
+- The existing connector has one serial active lane. The trial reserves one
+  actual browser slot, leaving 14 Standard or 19 Sales internal state slots.
+  Reserving six slots for six queued sources would waste capacity; it is not
+  used. Whether the six browser sources finish quickly enough is a live-test
+  question, not an assertion from unit tests. No Sales deadline extension.
+- Child workers retain validated trial identity and the existing performance
+  paths after database/control-plane credentials are stripped. The parent must
+  validate the resource manifest before producing a secret-free child context.
+- Local regression: 302 Python and 198 JavaScript checks passed before the
+  final child-context change; its 19 focused isolation/UI checks also passed.
+  Live connector activation, deployed smoke, refreshed-sheet post-validation,
+  and measured 34-vs-38-state performance remain outstanding.
+
+## Confirmed date interpretation
+
+The user confirmed on September 29 that a displayed extension end date is the
+deadline to use instead of the original expiration date. The source does not
+need to repeat "extension" in its status label. Preserve both dates as evidence
+and explain the extension in comments. Explicit adverse registry statuses still
+take priority. Expiration and extension deadlines are not last-renewal dates.
+
+## Confirmed Nevada interpretation
+
+On September 29 the user directed Nevada to use the matching nonprofit
+corporation's displayed status and Annual Renewal Due Date/Expiration Date.
+Exclude registered-agent records and do not use registered-agent addresses as
+organization addresses. Evaluate matching duplicate nonprofit records through
+the master selector. Comments identify this as nonprofit-corporation standing
+and preserve any separate solicitation flag; do not imply a CSRS/CSRX filing has
+been verified when it has not. Formation is not a last renewal, and the annual
+due date is not a last-filed date.

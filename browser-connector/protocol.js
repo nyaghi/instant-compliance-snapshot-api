@@ -2,12 +2,30 @@
 (() => {
   "use strict";
   const STAGING = "https://staging.compliance-express.com";
-  const APP_ORIGINS = Object.freeze([STAGING, "https://www.compliance-express.com", "https://compliance-express.com"]);
+  // Only the isolated trial packager may populate this exact HTTPS origin.
+  // The installed/staging connector retains no final-four capability.
+  const TRIAL_ORIGIN = "";
+  const APP_ORIGINS = Object.freeze([STAGING, "https://www.compliance-express.com", "https://compliance-express.com", ...(TRIAL_ORIGIN ? [TRIAL_ORIGIN] : [])]);
   function allowedOrigin(origin) { return APP_ORIGINS.includes(origin); }
+  function registryAllowed(state, origin) {
+    if (["AL", "NC", "NV", "TN"].includes(state)) return !!TRIAL_ORIGIN && origin === TRIAL_ORIGIN;
+    if (["IL", "GA"].includes(state)) return origin === STAGING || (!!TRIAL_ORIGIN && origin === TRIAL_ORIGIN);
+    return state === "NY" && allowedOrigin(origin);
+  }
   const NY = "https://charities-search.ag.ny.gov";
   const FIELDS = ["ein", "orgName", "orgID", "regtype", "city", "state"];
   function validId(value) { return typeof value === "string" && /^[a-zA-Z0-9_-]{16,80}$/.test(value); }
   function validQuery(value) {
+    if (["AL", "NC", "NV", "TN"].includes(value?.state)) {
+      const keys = Object.keys(value).sort().join(",");
+      if (value.operation === "search") return keys === "name,operation,state" && typeof value.name === "string" && value.name.trim().length > 0 && value.name.length <= 500;
+      if (value.state === "AL") return false;
+      if (value.state === "NC") return value.operation === "detail" && keys === "identifier,operation,state,url"
+        && typeof value.identifier === "string" && /^(SL|EX)\d+$/.test(value.identifier) && typeof value.url === "string"
+        && /^https:\/\/www\.sosnc\.gov\/online_services\/search\/charities_profile\/\d+$/.test(value.url);
+      return value.operation === "detail" && keys === "identifier,operation,state" && typeof value.identifier === "string"
+        && (value.state === "NV" ? /^NV\d+$/ : /^CO\d+$/).test(value.identifier);
+    }
     if (value?.state === "IL" || value?.state === "GA") {
       const keys = Object.keys(value).sort().join(",");
       if (keys === "ein,state") return value.state === "IL" && typeof value.ein === "string" && /^[0-9]{9}$/.test(value.ein) && value.ein !== "000000000";
@@ -100,5 +118,5 @@
         return { orgID: row.orgID, orgName: row.orgName, ein };
       }) };
   }
-  globalThis.CCNYProtocol = Object.freeze({ STAGING, APP_ORIGINS, allowedOrigin, NY, validId, validQuery, sameQuery, publicRequest, publicResponse });
+  globalThis.CCNYProtocol = Object.freeze({ STAGING, TRIAL_ORIGIN, APP_ORIGINS, allowedOrigin, registryAllowed, NY, validId, validQuery, sameQuery, publicRequest, publicResponse });
 })();

@@ -31,7 +31,7 @@
     if (job.reconnects === 1) retry(); else job.reconnectTimer = setTimeout(retry, 1000 * job.reconnects);
   }
   function openPort(job, resume = false) {
-    const port = chrome.runtime.connect({ name: (resume ? "cc-ny-resume-v1:" : job.refreshOnly ? "cc-ny-refresh-v1:" : job.registryState === "IL" ? "cc-il-lookup-v1:" : job.registryState === "GA" ? "cc-ga-lookup-v1:" : "cc-ny-lookup-v1:") + job.lookupId });
+    const port = chrome.runtime.connect({ name: (resume ? "cc-ny-resume-v1:" : job.refreshOnly ? "cc-ny-refresh-v1:" : ["IL","GA","AL","NC","NV","TN"].includes(job.registryState) ? `cc-${job.registryState.toLowerCase()}-lookup-v1:` : "cc-ny-lookup-v1:") + job.lookupId });
     job.port = port;
     port.onMessage.addListener(message => {
       if (job.closed || job.port !== port) return;
@@ -97,7 +97,9 @@
     if (!["acquire", "refresh"].includes(m.action) && (m.action !== "search" || !P.validQuery(m.query))) return;
     if (active && active.lookupId !== m.lookup_id) { reply(m.id, { ok: false, reason: "NY_CONNECTOR_BUSY" }); return; }
     try {
-      const job = active || connect(m.lookup_id, m.action === "acquire" && m.intent === "refresh", ["IL","GA"].includes(m.intent) ? m.intent : "NY");
+      const state = ["IL","GA","AL","NC","NV","TN"].includes(m.intent) ? m.intent : "NY";
+      if (!P.registryAllowed(state,ORIGIN)) { reply(m.id,{ok:false,reason:"NY_CONNECTOR_INVALID_SEQUENCE"}); return; }
+      const job = active || connect(m.lookup_id, m.action === "acquire" && m.intent === "refresh", state);
       const request = { action: m.action, id: m.id, ...(m.query ? { query: m.query } : {}) };
       job.pending.set(m.id, request);
       try { if (!job.reconnecting) job.port.postMessage(request); } catch { reopen(job); }

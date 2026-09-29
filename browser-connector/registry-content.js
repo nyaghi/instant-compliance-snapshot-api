@@ -4,7 +4,11 @@
   if (window !== window.top) return;
   const IL = location.origin === "https://charitable.illinoisattorneygeneral.gov";
   const GA = location.origin === "https://verify.sos.ga.gov";
-  if (!IL && !GA) return;
+  const NV = location.origin === "https://orion.nv.gov";
+  const TN = location.origin === "https://tncab.tnsos.gov";
+  const NC = location.origin === "https://www.sosnc.gov";
+  const AL = location.origin === "https://ago.igovsolution.net";
+  if (!IL && !GA && !NV && !TN && !NC && !AL) return;
   const documentId = crypto.randomUUID();
   const text = el => (el?.innerText || "").replace(/\s+/g, " ").trim();
   const visible = el => !!el && el.getClientRects().length > 0;
@@ -210,8 +214,480 @@
     if (query.identifier || collected.length !== total) throw new Error("REGISTRY_RESULTS_INCOMPLETE");
     return {query, complete:true, total, rows:collected};
   }
+  // 29.2 candidate collector. The approved manifest does not activate Nevada.
+  // It uses the same DOM observer as IL: no hidden application data, registry
+  // requests, verification tokens, or status/identity decisions in the browser.
+  let nvLastSearch = null;
+  const nvObserved = new Map();
+  const nvSearchHeaders = ["Entity Name", "NV Business Id #", "Entity No.", "Entity Type", "Registered Agent Name", "Formation Date", "Status"];
+  const nvFilingHeaders = ["Filed Date", "Effective Date", "Filing Number", "Filing Type", "Source", "No. of Pages"];
+  function nvTable(title, headers) {
+    const tables = [...document.querySelectorAll('casex-data-table')].filter(el =>
+      [...el.querySelectorAll('h4')].some(h => text(h) === title));
+    if (tables.length !== 1) throw new Error("REGISTRY_NV_TABLE_INCOMPLETE");
+    const table = tables[0], grid = table.querySelector('[role="grid"]');
+    if (!grid || JSON.stringify([...grid.querySelectorAll('[role="columnheader"]')].map(el => el.getAttribute('aria-label'))) !== JSON.stringify(headers))
+      throw new Error("REGISTRY_NV_COLUMNS_CHANGED");
+    return {table, grid};
+  }
+  function nvPage(title, headers) {
+    const {table, grid} = nvTable(title, headers);
+    const rows = [...grid.querySelectorAll('tbody > tr[role="row"]')].filter(tr => tr.querySelector('[role="gridcell"]'));
+    const values = rows.map(tr => {
+      const cells = [...tr.querySelectorAll('[role="gridcell"]')];
+      if (cells.length !== headers.length) throw new Error("REGISTRY_NV_ROW_CHANGED");
+      return cells.map(cell => text(cell.querySelector('.casex-grid-responsive-data') || cell).replace(/^:\s*/, ''));
+    });
+    if (!rows.length) {
+      if (!grid.querySelector('.k-grid-norecords') || grid.getAttribute('aria-rowcount') !== '1' || table.querySelector('kendo-datapager'))
+        throw new Error("REGISTRY_NV_EMPTY_INCOMPLETE");
+      return {table, rows, values, total:0, page:1, pages:1};
+    }
+    const info = text(table.querySelector('kendo-datapager-info')).match(/^(\d+)\s*-\s*(\d+) of (\d+) items$/);
+    const pager = table.querySelector('kendo-datapager');
+    const pages = pager?.getAttribute('aria-label')?.match(/^Page (\d+) of (\d+)$/);
+    if (!info || !pages || Number(info[2])-Number(info[1])+1 !== rows.length || Number(info[3]) < rows.length || Number(info[3]) > 500)
+      throw new Error("REGISTRY_NV_PAGINATION_INCOMPLETE");
+    return {table, rows, values, total:Number(info[3]), page:Number(pages[1]), pages:Number(pages[2])};
+  }
+  async function nvChanged(action, read, deadline, {requireLoading=false, previous=null}={}) {
+    let loadingSeen = false;
+    const loading = () => [...document.querySelectorAll('.app-loader-pane .circle-loader')].some(visible);
+    return wait(() => {
+      loadingSeen ||= loading();
+      if (loading() || requireLoading && !loadingSeen) return false;
+      try {
+        const value = read();
+        if (!value || previous !== null && JSON.stringify(value.values) === previous) return false;
+        return value;
+      } catch { return false; } // Partial renders are not completed responses.
+    }, Math.max(1, Math.min(35000, deadline-Date.now())), {action, settle:200, relevant:mutations => {
+      loadingSeen ||= loading() || mutations.some(m => [...m.addedNodes].some(n => n.nodeType === 1
+        && (n.matches?.('.circle-loader, .app-loader-pane') || n.querySelector?.('.circle-loader'))));
+      return mutations.some(m => {
+        const el = m.target.nodeType === 1 ? m.target : m.target.parentElement;
+        return el?.closest?.('casex-data-table, .app-loader-pane') || [...m.addedNodes, ...m.removedNodes].some(n => n.nodeType === 1
+          && (n.matches?.('.circle-loader, .app-loader-pane, casex-data-table') || n.querySelector?.('.circle-loader, casex-data-table')));
+      });
+    }});
+  }
+  async function nvPages(title, headers, deadline, first) {
+    let page = first || nvPage(title, headers);
+    if (page.page !== 1) throw new Error("REGISTRY_NV_PAGINATION_INCOMPLETE");
+    const total = page.total, collected = [];
+    for (let expected=1; expected<=20; expected++) {
+      if (Date.now() >= deadline || page.total !== total || page.page !== expected) throw new Error("REGISTRY_NV_PAGINATION_INCOMPLETE");
+      for (let i=0;i<page.values.length;i++) collected.push({cells:page.values[i], node:page.rows[i], page:expected});
+      if (collected.length === total && page.page === page.pages) return collected;
+      const next = page.table.querySelector('button[aria-label="Go to the next page"]');
+      if (collected.length >= total || !next || next.disabled || next.getAttribute('aria-disabled') === 'true')
+        throw new Error("REGISTRY_NV_PAGINATION_INCOMPLETE");
+      page = await nvChanged(() => next.click(), () => nvPage(title, headers), deadline, {previous:JSON.stringify(page.values)});
+    }
+    throw new Error("REGISTRY_NV_PAGINATION_INCOMPLETE");
+  }
+  async function nvSearch(query, deadline) {
+    if (query?.state !== 'NV' || query.operation !== 'search' || typeof query.name !== 'string' || !query.name.trim() || query.name.length > 500
+        || Object.keys(query).sort().join(',') !== 'name,operation,state') throw new Error("REGISTRY_COMMAND_INVALID");
+    const business = [...document.querySelectorAll('[role="tab"]')].find(el => text(el) === 'Business');
+    if (business?.getAttribute('aria-selected') !== 'true' || !location.hash.includes('screen=external-GenericFilingsSearch&tabRoute=business'))
+      throw new Error("REGISTRY_WRONG_ORIGIN");
+    // The worker must open an ordinary fresh search form before this command.
+    // Refuse unrecognized filters instead of guessing a potentially narrower query.
+    const field = suffix => document.querySelector(`input[id$="-${suffix}"]`);
+    const name = field('entityName'), number = field('entityNumber'), id = field('nvBusinessId');
+    if (!name || !number || !id || ![...document.querySelectorAll('[role="combobox"]')].some(el => text(el).startsWith('Starts With')))
+      throw new Error("REGISTRY_NV_FORM_CHANGED");
+    set(number, ''); set(id, ''); set(name, query.name);
+    const buttons = [...document.querySelectorAll('button')].filter(el => text(el) === 'Search' && visible(el) && !el.disabled);
+    if (buttons.length !== 1) throw new Error("REGISTRY_NV_FORM_CHANGED");
+    nvObserved.clear(); nvLastSearch = null;
+    // The initial blank grid and old rows remain visible while ORION searches.
+    // A completed loading cycle is mandatory, including for an empty response.
+    const first = await nvChanged(() => buttons[0].click(), () => nvPage('Search Results', nvSearchHeaders), deadline, {requireLoading:true});
+    const collected = await nvPages('Search Results', nvSearchHeaders, deadline, first);
+    const rows = collected.map(({cells,node,page}) => {
+      const [name,identifier,,entity_type,,,raw_status] = cells;
+      if (!name || !/^NV\d+$/.test(identifier) || !entity_type || !raw_status || nvObserved.has(identifier))
+        throw new Error("REGISTRY_NV_RESULTS_INCOMPLETE");
+      const row = {name,identifier,entity_type,raw_status};
+      nvObserved.set(identifier,{...row,node,page});
+      return row;
+    });
+    nvLastSearch = {...query};
+    return {query,state:'NV',complete:true,verification_pending:false,total:rows.length,rows};
+  }
+  function nvFields(identifier) {
+    const fields = Object.create(null);
+    const wanted = ['Entity Name','NV Business ID','Entity Status','Entity Type','FEIN','Solicits Charitable Contribution?',
+      'IRS Registered Name','Campaign Name','Formation Date in Nevada','Annual Renewal Due Date/Expiration Date'];
+    const forms = [...document.querySelectorAll('[role="form"]')].filter(el => [...el.querySelectorAll('h4')].some(h => text(h) === 'Entity Information'));
+    if (forms.length !== 1 || !location.hash.includes('screen=Manage-Business&')) return null;
+    // Stop at Agent Information. Its duplicate NV Business ID/Status and Las
+    // Vegas address must never overwrite nonprofit-corporation identity fields.
+    for (const el of forms[0].querySelectorAll('h4, p')) {
+      if (el.tagName === 'H4' && text(el) === 'Agent Information') break;
+      const label = el.querySelector('strong');
+      if (label && wanted.includes(text(label))) {
+        if (Object.hasOwn(fields,text(label)) || el.nextElementSibling?.tagName !== 'P') throw new Error("REGISTRY_NV_DETAIL_CHANGED");
+        fields[text(label)] = text(el.nextElementSibling);
+      }
+    }
+    if (!wanted.every(k => Object.hasOwn(fields,k)) || fields['NV Business ID'] !== identifier) return null;
+    return fields;
+  }
+  async function nvDetail(query, deadline) {
+    if (query?.state !== 'NV' || query.operation !== 'detail' || !/^NV\d+$/.test(query.identifier)
+        || Object.keys(query).sort().join(',') !== 'identifier,operation,state') throw new Error("REGISTRY_COMMAND_INVALID");
+    const target = nvObserved.get(query.identifier), sourceQuery = nvLastSearch;
+    if (!target || !sourceQuery) throw new Error("REGISTRY_NV_DETAIL_NOT_OBSERVED");
+    if (!target.node.isConnected) {
+      const back = [...document.querySelectorAll('button')].find(el => text(el) === 'Return To Results' && visible(el));
+      if (!back) throw new Error("REGISTRY_NV_DETAIL_NOT_OBSERVED");
+      await wait(() => document.querySelector('input[id$="-entityName"]'), Math.max(1,deadline-Date.now()), {action:()=>back.click()});
+      await nvSearch(sourceQuery, deadline);
+    }
+    let current = nvObserved.get(query.identifier);
+    if (!current || current.name !== target.name || current.entity_type !== target.entity_type) throw new Error("REGISTRY_NV_DETAIL_CHANGED");
+    let page = nvPage('Search Results',nvSearchHeaders);
+    while (page.page > current.page) {
+      const previous = page.table.querySelector('button[aria-label="Go to the previous page"]');
+      if (!previous || previous.disabled) throw new Error("REGISTRY_NV_PAGINATION_INCOMPLETE");
+      page = await nvChanged(()=>previous.click(),()=>nvPage('Search Results',nvSearchHeaders),deadline,{previous:JSON.stringify(page.values)});
+    }
+    const matches = page.values.map((cells,i)=>({cells,node:page.rows[i]})).filter(row=>row.cells[1]===query.identifier);
+    if (matches.length !== 1 || matches[0].cells[0] !== target.name || matches[0].cells[3] !== target.entity_type)
+      throw new Error("REGISTRY_NV_DETAIL_NOT_OBSERVED");
+    const link = matches[0].node.querySelector('[role="gridcell"] a');
+    if (!link || text(link) !== target.name) throw new Error("REGISTRY_NV_DETAIL_NOT_OBSERVED");
+    const fields = await wait(()=>nvFields(query.identifier),Math.max(1,deadline-Date.now()),{action:()=>link.click()});
+    const evidence = {query,complete:true,source_url:location.href,fields};
+    try {
+      const filings = await nvPages('Filing History Details',nvFilingHeaders,deadline);
+      evidence.filings = {identifier:query.identifier,name:fields['Entity Name'],complete:true,total:filings.length,
+        headers:nvFilingHeaders,rows:filings.map(row=>row.cells)};
+    } catch {
+      // Optional history failure cannot erase a fully loaded corporate status.
+      evidence.filings = {complete:false};
+    }
+    return evidence;
+  }
+  const tnObserved = new Map();
+  function tnPage() {
+    const grids = [...document.querySelectorAll('.k-grid')].filter(el => el.closest('[id^="SearchResults_"]'));
+    if (grids.length !== 1) throw new Error('REGISTRY_TN_GRID_INCOMPLETE');
+    const grid = grids[0], table = grid.querySelector('table[role="grid"]');
+    if (!table) throw new Error('REGISTRY_TN_GRID_INCOMPLETE');
+    const columns = [...table.querySelectorAll('thead th')].map(el=>el.getAttribute('data-field'));
+    const required = ['FileNumber','DisplayName','OtherNames','Status','City','StateName','RegistrationDate'];
+    if (!required.every(name=>columns.filter(x=>x===name).length===1)) throw new Error('REGISTRY_TN_COLUMNS_CHANGED');
+    const rows = [...table.querySelectorAll('tbody > tr')];
+    const values = rows.map(tr=>{
+      if (tr.children.length !== columns.length) throw new Error('REGISTRY_TN_ROW_CHANGED');
+      const get = field => tr.children[columns.indexOf(field)];
+      const row = {name:text(get('DisplayName')),identifier:text(get('FileNumber')),city:text(get('City')),region:text(get('StateName')),
+        aliases:(get('OtherNames').innerText||'').split(/\r?\n/).map(v=>v.trim()).filter(Boolean),raw_status:text(get('Status')),
+        registration_date:text(get('RegistrationDate'))};
+      if (!row.name || !/^CO\d+$/.test(row.identifier) || !row.raw_status) throw new Error('REGISTRY_TN_ROW_CHANGED');
+      return row;
+    });
+    const info = text(grid.querySelector('.k-pager-info'));
+    const current = text(grid.querySelector('[aria-current="page"]'));
+    if (!rows.length) {
+      if (info !== 'No items to display' || current !== '0' || !text(grid).includes('No Records Available')) throw new Error('REGISTRY_TN_EMPTY_INCOMPLETE');
+      return {grid,rows,values,total:0,page:1};
+    }
+    const count = info.match(/^(\d+)\s*-\s*(\d+) of (\d+) items$/);
+    if (!count || !/^[1-9]\d*$/.test(current) || Number(count[2])-Number(count[1])+1!==rows.length || Number(count[3])>500)
+      throw new Error('REGISTRY_TN_PAGINATION_INCOMPLETE');
+    return {grid,rows,values,total:Number(count[3]),page:Number(current)};
+  }
+  async function tnChanged(action, deadline, previous=null) {
+    let loadingSeen=false;
+    const loading=()=>[...document.querySelectorAll('[id^="SearchResults_"] .k-loading-mask')].some(visible);
+    return wait(()=>{
+      loadingSeen ||= loading();
+      if (!loadingSeen || loading()) return false;
+      try { const page=tnPage();return previous!==null&&JSON.stringify(page.values)===previous?false:page; }
+      catch { return false; }
+    },Math.max(1,Math.min(35000,deadline-Date.now())),{action,settle:200,relevant:mutations=>{
+      loadingSeen ||= loading() || mutations.some(m=>[...m.addedNodes].some(n=>n.nodeType===1
+        && (n.matches?.('.k-loading-mask') || n.querySelector?.('.k-loading-mask'))));
+      return mutations.some(m=>{
+        const el=m.target.nodeType===1?m.target:m.target.parentElement;
+        return el?.closest?.('[id^="SearchResults_"]') || [...m.addedNodes,...m.removedNodes].some(n=>n.nodeType===1
+          && (n.matches?.('[id^="SearchResults_"]') || n.querySelector?.('[id^="SearchResults_"]')));
+      });
+    }});
+  }
+  function tnCloseDetail() {
+    const dialog=document.querySelector('#KendoWindowLevel1');
+    if (visible(dialog)) {
+      const close=dialog.parentElement.querySelector('button[aria-label="Close"]');
+      if (!close) throw new Error('REGISTRY_TN_DETAIL_CHANGED');
+      close.click();
+    }
+  }
+  async function tnSearch(query,deadline) {
+    if (query?.state!=='TN'||query.operation!=='search'||typeof query.name!=='string'||!query.name.trim()||query.name.length>500
+        ||Object.keys(query).sort().join(',')!=='name,operation,state') throw new Error('REGISTRY_COMMAND_INVALID');
+    tnCloseDetail();
+    const button=()=>[...document.querySelectorAll('button[id^="Search_"]')].find(el=>visible(el)&&!el.disabled&&text(el)==='Search');
+    let search;
+    try { search=await wait(button,Math.max(1,Math.min(12000,deadline-Date.now()))); }
+    catch { throw new Error('NY_CONNECTOR_TN_VERIFICATION_OR_FORM_PENDING'); }
+    // Normal page readiness only: never click verification or read its token.
+    set(document.querySelector('input[id^="Name_"]'),query.name);
+    set(document.querySelector('input[id^="Filenumber_"]'),'');
+    set(document.querySelector('input[id^="City_"]'),'');
+    tnObserved.clear();
+    let page=await tnChanged(()=>search.click(),deadline),total=page.total;
+    const rows=[];
+    for(let expected=1;expected<=50;expected++) {
+      if(Date.now()>=deadline||page.total!==total||page.page!==expected)throw new Error('REGISTRY_TN_PAGINATION_INCOMPLETE');
+      for(let i=0;i<page.values.length;i++) {
+        const row=page.values[i];
+        if(tnObserved.has(row.identifier))throw new Error('REGISTRY_TN_PAGINATION_INCOMPLETE');
+        tnObserved.set(row.identifier,{...row,page:expected});rows.push(row);
+      }
+      if(rows.length===total)return {query,state:'TN',complete:true,verification_pending:false,total,rows};
+      const next=page.grid.querySelector('button[aria-label="Go to the next page"]');
+      if(rows.length>total||!next||next.getAttribute('aria-disabled')==='true')throw new Error('REGISTRY_TN_PAGINATION_INCOMPLETE');
+      page=await tnChanged(()=>next.click(),deadline,JSON.stringify(page.values));
+    }
+    throw new Error('REGISTRY_TN_PAGINATION_INCOMPLETE');
+  }
+  function tnFields(row) {
+    const dialog=document.querySelector('#KendoWindowLevel1');
+    if(!visible(dialog))return null;
+    const fields={Name:text(dialog.querySelector('h2'))};
+    for(const el of dialog.querySelectorAll('h4')) {
+      const pair=text(el).match(/^(Status|CO Number|Registration Date|Expiration Date):\s*(.*)$/);
+      if(pair) { if(Object.hasOwn(fields,pair[1]))throw new Error('REGISTRY_TN_DETAIL_CHANGED');fields[pair[1]]=pair[2]; }
+    }
+    if(fields['CO Number']!==row.identifier||!fields.Name||!fields.Status||!Object.hasOwn(fields,'Registration Date'))return null;
+    // An absent expiration in a completed detail stays blank for master policy.
+    fields['Expiration Date'] ||= '';
+    const escaped=s=>s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    const suffix=new RegExp('\\s'+escaped(row.city)+'\\s+'+escaped(row.region)+'\\s+\\d{5}(?:-\\d{4})?$','i');
+    const addresses=[...dialog.querySelectorAll('.col-md-6 > h4')].map(text).filter(s=>suffix.test(s));
+    if(addresses.length>1)throw new Error('REGISTRY_TN_ADDRESS_AMBIGUOUS');
+    fields.Address=addresses[0]||'';
+    return fields;
+  }
+  function tnFinancials(dialog) {
+    const link=[...dialog.querySelectorAll('#DetailsTabStrip > li > a')].find(el=>/^Financials \(\d+\)$/.test(text(el)));
+    if(!link)throw new Error('REGISTRY_TN_FINANCIALS_INCOMPLETE');
+    const count=Number(text(link).match(/\((\d+)\)/)[1]);
+    if(count>500)throw new Error('REGISTRY_TN_FINANCIALS_INCOMPLETE');
+    if(link.parentElement.getAttribute('aria-expanded')!=='true')link.click();
+    const panel=dialog.querySelector('#DetailsTabStrip-1');
+    const table=panel?.querySelector('table[role="grid"]');
+    const columns=[...(table?.querySelectorAll('thead th')||[])].map(text);
+    const index=columns.indexOf('Fiscal Year End');
+    const rows=[...(table?.querySelectorAll('tbody > tr')||[])];
+    if(index<0||rows.length!==count||columns.filter(c=>c==='Fiscal Year End').length!==1)throw new Error('REGISTRY_TN_FINANCIALS_INCOMPLETE');
+    // Revenue and individual officer/contact information are not collected.
+    return {financial_periods:rows.map(row=>{if(row.children.length!==columns.length)throw new Error('REGISTRY_TN_FINANCIALS_INCOMPLETE');return text(row.children[index]);}),financial_count:count};
+  }
+  async function tnDetail(query,deadline) {
+    if(query?.state!=='TN'||query.operation!=='detail'||!/^CO\d+$/.test(query.identifier)
+        ||Object.keys(query).sort().join(',')!=='identifier,operation,state')throw new Error('REGISTRY_COMMAND_INVALID');
+    const selected=tnObserved.get(query.identifier);
+    if(!selected)throw new Error('REGISTRY_TN_DETAIL_NOT_OBSERVED');
+    tnCloseDetail();
+    let page=tnPage();
+    while(page.page!==selected.page) {
+      const direction=page.page>selected.page?'previous':'next';
+      const button=page.grid.querySelector(`button[aria-label="Go to the ${direction} page"]`);
+      if(!button||button.getAttribute('aria-disabled')==='true')throw new Error('REGISTRY_TN_PAGINATION_INCOMPLETE');
+      page=await tnChanged(()=>button.click(),deadline,JSON.stringify(page.values));
+    }
+    const indexes=page.values.map((row,index)=>({row,index})).filter(({row})=>row.identifier===selected.identifier);
+    if(indexes.length!==1||indexes[0].row.name!==selected.name)throw new Error('REGISTRY_TN_DETAIL_CHANGED');
+    const buttons=[...page.rows[indexes[0].index].querySelectorAll('button')].filter(el=>text(el)==='Details');
+    if(buttons.length!==1)throw new Error('REGISTRY_TN_DETAIL_NOT_OBSERVED');
+    const fields=await wait(()=>tnFields(selected),Math.max(1,Math.min(25000,deadline-Date.now())),{action:()=>buttons[0].click()});
+    try { Object.assign(fields,tnFinancials(document.querySelector('#KendoWindowLevel1'))); }
+    catch { fields.financial_count=-1;fields.financial_periods=[]; }
+    return {query,complete:true,fields};
+  }
+  function ncLabeled(scope, allowed) {
+    const fields={};
+    for(const label of scope.querySelectorAll('.para-small > .boldSpan')) {
+      const key=text(label).replace(/:$/,'').trim();
+      if(!allowed.includes(key))continue;
+      if(Object.hasOwn(fields,key))throw new Error('REGISTRY_NC_DUPLICATE_FIELD');
+      fields[key]=text(label.parentElement).slice(text(label).length).trim();
+    }
+    return fields;
+  }
+  function ncForm(query) {
+    if(query?.state!=='NC'||query.operation!=='search'||typeof query.name!=='string'||!query.name.trim()||query.name.length>500)
+      throw new Error('REGISTRY_NC_QUERY_INVALID');
+    if(location.pathname!=='/online_services/search/by_title/search_charities')throw new Error('REGISTRY_NC_FORM_CHANGED');
+    const input=document.querySelector('#SearchCriteria'),words=document.querySelector('#Words'),button=document.querySelector('#SubmitButton'),print=document.querySelector('#Print');
+    const starts=words&&[...words.options].find(o=>text(o)==='Starting With');
+    if(!input||!starts||!visible(button)||button.disabled||!print)throw new Error('REGISTRY_NC_FORM_CHANGED');
+    set(words,starts.value);set(input,query.name);if(print.checked)print.click();
+    setTimeout(()=>button.click(),0);return {ok:true,phase:'submitted'};
+  }
+  async function ncRows(query,budgetMs=45000) {
+    const deadline=Date.now()+Math.max(1,Math.min(45000,budgetMs));
+    if(location.pathname!=='/online_services/search/Charities_Results')throw new Error('REGISTRY_NC_RESULTS_CHANGED');
+    const main=document.querySelector('main'),body=text(main);
+    const count=/Records Found:\s*(\d+)\b/.exec(body),searched=/Words:\s*Starting With\s+Organization Name\s+(.+?)\s+Search Time\s/.exec(body);
+    if(!count||!searched||searched[1].toLocaleLowerCase()!==query.name.replace(/\s+/g,' ').trim().toLocaleLowerCase())throw new Error('REGISTRY_NC_QUERY_CHANGED');
+    const total=Number(count[1]),buttons=[...main.querySelectorAll('#resultsSection .usa-accordion__button')];
+    // A larger paginated result is incomplete until every displayed record can
+    // be collected. Never infer zero from an absent or partially loaded card.
+    if(total>100||buttons.length!==total)throw new Error('REGISTRY_NC_PAGINATION_INCOMPLETE');
+    const rows=[],seen=new Set();
+    for(const button of buttons) {
+      if(Date.now()>=deadline)throw new Error('REGISTRY_NC_RESPONSE_TIMEOUT');
+      const panel=document.getElementById(button.getAttribute('aria-controls'));
+      if(!panel)throw new Error('REGISTRY_NC_CARD_CHANGED');
+      if(button.getAttribute('aria-expanded')!=='true')button.click();
+      await wait(()=>visible(panel)&&panel,Math.max(1,Math.min(3000,deadline-Date.now())));
+      const fields=ncLabeled(panel,['CSL Legal Name','CSL Type','Status','License','Expiration Date','Extension End Date']);
+      const links=[...panel.querySelectorAll('a[href]')].filter(a=>/^\/online_services\/search\/charities_profile\/\d+$/.test(a.getAttribute('href')));
+      if(links.length!==1||!fields['CSL Legal Name']||!fields['CSL Type']||!fields.Status||!fields.License||seen.has(fields.License))throw new Error('REGISTRY_NC_CARD_CHANGED');
+      if(!Object.hasOwn(fields,'Expiration Date')) {
+        if(fields['CSL Type']!=='CSL Exempt Organization')throw new Error('REGISTRY_NC_CARD_INCOMPLETE');
+        fields['Expiration Date']='';
+      }
+      fields.profile_url=new URL(links[0].getAttribute('href'),location.origin).href;
+      seen.add(fields.License);rows.push(fields);
+    }
+    return {ok:true,evidence:{state:'NC',query,complete:true,verification_pending:false,total,rows}};
+  }
+  function ncProfile(query) {
+    if(location.href!==query.url||!/^\/online_services\/search\/charities_profile\/\d+$/.test(location.pathname))throw new Error('REGISTRY_NC_PROFILE_CHANGED');
+    const main=document.querySelector('main'),fields=ncLabeled(main,['Name','Status','Registration #','Expiration Date','Last Application Date','Extension End Date']);
+    if(!fields.Name||!fields.Status||fields['Registration #']!==query.identifier||!Object.hasOwn(fields,'Last Application Date'))throw new Error('REGISTRY_NC_PROFILE_INCOMPLETE');
+    if(!Object.hasOwn(fields,'Expiration Date')) {
+      if(!/^EX\d+$/.test(query.identifier))throw new Error('REGISTRY_NC_PROFILE_INCOMPLETE');
+      fields['Expiration Date']='';
+    }
+    const addresses=[...main.querySelectorAll('.para-small > .boldSpan')].filter(el=>text(el)==='Address');
+    if(addresses.length!==1)throw new Error('REGISTRY_NC_ADDRESS_INCOMPLETE');
+    const spans=[...addresses[0].parentElement.querySelectorAll('.para-small > span')].map(text);
+    if(spans.length!==4)throw new Error('REGISTRY_NC_ADDRESS_INCOMPLETE');
+    [fields.Street,fields.City,fields.State,fields.Zip]=spans;
+    fields.profile_url=location.href;
+    const links=[...main.querySelectorAll('a[href]')].filter(a=>a.getAttribute('href')===location.pathname.replace('charities_profile','charities_filings'));
+    return {ok:true,evidence:{query,complete:true,fields},filings_url:links.length===1?new URL(links[0].getAttribute('href'),location.origin).href:null};
+  }
+  function ncFilings(query) {
+    if(location.href!==query.url.replace('/charities_profile/','/charities_filings/'))throw new Error('REGISTRY_NC_FILINGS_CHANGED');
+    const lists=[...document.querySelectorAll('main article section.usa-section--singleEntry > ul')];
+    if(lists.length!==1)throw new Error('REGISTRY_NC_FILINGS_INCOMPLETE');
+    const nodes=[...lists[0].children];
+    if(nodes.length>500)throw new Error('REGISTRY_NC_FILINGS_LIMIT');
+    const rows=nodes.map(node=>{
+      const type=[...node.childNodes].filter(n=>n.nodeType===3).map(n=>n.textContent).join('').trim();
+      const dates=node.querySelectorAll(':scope > ul > li > span');
+      if(node.tagName!=='LI'||!type||dates.length!==1)throw new Error('REGISTRY_NC_FILINGS_INCOMPLETE');
+      return {type,date:text(dates[0])};
+    });
+    return {ok:true,filings:{url:location.href,complete:true,rows}};
+  }
+  const alHeaders = ['Name','License/Registration#','Status','Registration Type','Issued Date','Expiration Date','Address','City','State','Zip','Print'];
+  function alPage() {
+    const table = document.querySelector('table.table.table-responsive.table-bordered');
+    if (!table || !visible(table)) return null;
+    const headers = [...table.querySelectorAll('thead tr:first-child th')].map(text);
+    if (JSON.stringify(headers) !== JSON.stringify(alHeaders)) throw new Error('REGISTRY_COLUMNS_CHANGED');
+    if ([...table.querySelectorAll('thead input')].some(input=>input.value.trim())) throw new Error('REGISTRY_FILTER_CHANGED');
+    const rows = [...table.querySelectorAll('tbody tr.grid_tr')].map(tr=>{
+      const cells = [...tr.children];
+      if (cells.length !== headers.length || cells.some(el=>el.tagName !== 'TD')) throw new Error('REGISTRY_ROW_CHANGED');
+      return cells.map((el,i)=>i===10?'':text(el));
+    });
+    const number = id => { const s=text(document.getElementById(id)); if (!/^\d+$/.test(s)) throw new Error('REGISTRY_PAGINATION_INCOMPLETE'); return Number(s); };
+    const from=number('pgfrm'),to=number('pgto'),total=number('tot_pgs'),pages=number('totpg');
+    const selector=table.querySelector('tfoot select[aria-label="Page"]'),page=Number(selector?.value);
+    if (!Number.isInteger(page) || page<1 || page>pages || pages>100 || total>500 || !rows.length || from<1 || to<from
+        || to>total || to-from+1!==rows.length || (page===1 && from!==1) || (page===pages && to!==total))
+      throw new Error('REGISTRY_PAGINATION_INCOMPLETE');
+    return {table,rows,headers,from,to,total,page,pages,selector};
+  }
+  async function alSearch(query, deadline) {
+    if (location.pathname !== '/online/Lookups/Business.aspx') throw new Error('REGISTRY_WRONG_ORIGIN');
+    const input = id=>document.getElementById('ctl00_cntbdy_'+id);
+    // The connector never reads a challenge image, solves it, supplies a code,
+    // or forwards verification material. A user must verify the public page.
+    if (!input('txt_verify')?.value.trim()) throw new Error('NY_CONNECTOR_AL_VERIFICATION_REQUIRED');
+    const oldAlert = document.querySelector('#altdialog');
+    if (visible(oldAlert)) {
+      const ok=[...document.querySelectorAll('.ui-dialog button')].find(b=>visible(b) && text(b)==='Ok');
+      if (!ok) throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+      ok.click();
+      if (visible(oldAlert)) throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+    }
+    set(input('txt_linum'),''); set(input('txtcity'),'');
+    set(input('ddl_county'),'-1'); set(input('ddl_lictype'),'-1'); set(input('txt_businessname'),query.name);
+    const button=input('btn_search');
+    if (!button || !visible(button) || button.disabled) throw new Error('REGISTRY_FORM_CHANGED');
+    const oldTable=document.querySelector('table.table.table-responsive.table-bordered');
+    const oldRows=oldTable?[...oldTable.querySelectorAll('tbody tr.grid_tr')]:[];
+    const page=await wait(()=>{
+      if (input('txt_businessname')?.value!==query.name || input('txt_linum')?.value || input('txtcity')?.value
+          || input('ddl_county')?.value!=='-1' || input('ddl_lictype')?.value!=='-1') throw new Error('REGISTRY_FILTER_CHANGED');
+      const alert=document.querySelector('#altdialog');
+      if (visible(alert)) {
+        const message=text(alert).replace(/^[•\s]+/,'');
+        if (message==='No Records Found') return {rows:[],headers:alHeaders,total:0};
+        if (/verif|captcha|code/i.test(message)) throw new Error('NY_CONNECTOR_AL_VERIFICATION_REQUIRED');
+        throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+      }
+      const table=document.querySelector('table.table.table-responsive.table-bordered');
+      const currentRows=table?[...table.querySelectorAll('tbody tr.grid_tr')]:[];
+      if (!table || (table===oldTable && currentRows.length===oldRows.length && currentRows.every((r,i)=>r===oldRows[i]))) return null;
+      return alPage();
+    },Math.max(1,deadline-Date.now()),{action:()=>button.click(),settle:150});
+    if (!page.total) return {state:'AL',query,complete:true,verification_pending:false,headers:alHeaders,rows:[],total:0};
+    const rows=[...page.rows]; let current=page;
+    while (current.page < current.pages) {
+      if (Date.now()>=deadline) throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+      const target=current.page+1,priorEnd=current.to;
+      if (![...current.selector.options].some(o=>o.value===String(target))) throw new Error('REGISTRY_PAGINATION_INCOMPLETE');
+      const oldNodes=[...current.table.querySelectorAll('tbody tr.grid_tr')];
+      current=await wait(()=>{
+        const next=alPage();
+        if (!next || next.page!==target || next.from!==priorEnd+1) return null;
+        const nodes=[...next.table.querySelectorAll('tbody tr.grid_tr')];
+        if (nodes.length===oldNodes.length && nodes.every((r,i)=>r===oldNodes[i])) return null;
+        if (next.total!==page.total || next.pages!==page.pages) throw new Error('REGISTRY_TOTAL_CHANGED');
+        return next;
+      },Math.max(1,deadline-Date.now()),{action:()=>set(current.selector,String(target)),settle:150});
+      rows.push(...current.rows);
+    }
+    if (rows.length!==page.total || new Set(rows.map(r=>r[1])).size!==rows.length) throw new Error('REGISTRY_TOTAL_CHANGED');
+    return {state:'AL',query,complete:true,verification_pending:false,headers:page.headers,rows,total:page.total};
+  }
   async function handle(m) {
+    if (AL && m.action==='registry-al') {
+      if (m.query?.state!=='AL' || m.query.operation!=='search') throw new Error('REGISTRY_COMMAND_INVALID');
+      return {ok:true,evidence:await alSearch(m.query,Date.now()+Math.min(45000,Number.isFinite(m.budgetMs)&&m.budgetMs>0?m.budgetMs:45000))};
+    }
     if (m.action === "registry-ready") return {ready:document.readyState !== "loading", url:location.href, documentId};
+    if (NC) {
+      if(m.action==='registry-nc-form')return ncForm(m.query);
+      if(m.action==='registry-nc-rows')return ncRows(m.query,m.budgetMs);
+      if(m.action==='registry-nc-profile')return ncProfile(m.query);
+      if(m.action==='registry-nc-filings')return ncFilings(m.query);
+      throw new Error('REGISTRY_COMMAND_INVALID');
+    }
+    if (TN && m.action === 'registry-tn') {
+      const deadline=Date.now()+Math.min(45000,Number.isFinite(m.budgetMs)&&m.budgetMs>0?m.budgetMs:45000);
+      return {ok:true,evidence:m.query?.operation==='search'?await tnSearch(m.query,deadline):await tnDetail(m.query,deadline)};
+    }
+    if (NV && m.action === 'registry-nv') {
+      const deadline = Date.now() + Math.min(45000, Number.isFinite(m.budgetMs) && m.budgetMs > 0 ? m.budgetMs : 45000);
+      const evidence = m.query?.operation === 'search' ? await nvSearch(m.query,deadline) : await nvDetail(m.query,deadline);
+      return {ok:true,evidence};
+    }
     if (m.action === "registry-il" && IL) {
       const diagnostics = [];
       try { return {ok:true, evidence:await illinois(m.query, entry => { if (diagnostics.length < 32) diagnostics.push(entry); }, m.formWaitMs === 12000 ? 12000 : 45000), diagnostics}; }
@@ -275,7 +751,7 @@
     handle(m).then(reply,error=>{
       const code=error?.message||'';
       const ilReasons={REGISTRY_RESPONSE_INCOMPLETE:'NY_CONNECTOR_IL_RESPONSE_TIMEOUT',REGISTRY_RESULTS_INCOMPLETE:'NY_CONNECTOR_IL_RESULTS_INCOMPLETE',REGISTRY_TOTAL_CHANGED:'NY_CONNECTOR_IL_TOTAL_CHANGED',REGISTRY_RESULT_LIMIT:'NY_CONNECTOR_IL_RESULT_LIMIT',REGISTRY_PAGINATION_INCOMPLETE:'NY_CONNECTOR_IL_PAGINATION_INCOMPLETE'};
-      reply({ok:false,reason:/^NY_CONNECTOR_IL_(?:VERIFICATION_PENDING|FORM_READY_TIMEOUT|FORM_DISABLED|FORM_MISSING|DETAIL_(?:NOT_OPENED|BLANK|IDENTITY_INCOMPLETE|RESPONSE_TIMEOUT))$/.test(code) ? code : IL && ilReasons[code] || 'NY_CONNECTOR_INCOMPLETE',
+      reply({ok:false,reason:AL && code==='NY_CONNECTOR_AL_VERIFICATION_REQUIRED' ? code : TN && code==='NY_CONNECTOR_TN_VERIFICATION_OR_FORM_PENDING' ? code : /^NY_CONNECTOR_IL_(?:VERIFICATION_PENDING|FORM_READY_TIMEOUT|FORM_DISABLED|FORM_MISSING|DETAIL_(?:NOT_OPENED|BLANK|IDENTITY_INCOMPLETE|RESPONSE_TIMEOUT))$/.test(code) ? code : IL && ilReasons[code] || 'NY_CONNECTOR_INCOMPLETE',
         ...(IL && error.diagnostics ? {diagnostics:error.diagnostics} : {})});
     });
     return true;

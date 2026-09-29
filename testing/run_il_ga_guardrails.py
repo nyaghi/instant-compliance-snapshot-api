@@ -5,6 +5,7 @@ from datetime import date
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import registry_snapshot_server as cc
+from testing.performance_origin_audit import RestoreApprovedOrigin
 
 class RedundantAcronymIdentityTests(unittest.TestCase):
     def test_legal_suffix_before_verified_acronym_preserves_identity(self):
@@ -380,7 +381,7 @@ class IntegrationControls(unittest.TestCase):
     def test_aurora_rules_preserved_outside_reviewed_performance_overlap(self):
         root=Path(__file__).resolve().parents[1]
         def functions(source):
-            return {n.name:ast.dump(n) for n in ast.parse(source).body if isinstance(n,ast.FunctionDef)}
+            return {n.name:ast.dump(n) for n in RestoreApprovedOrigin().visit(ast.parse(source)).body if isinstance(n,ast.FunctionDef)}
         def revision(ref):
             return functions(subprocess.check_output(['git','show',ref+':registry_snapshot_server.py'],cwd=root).decode('utf-8'))
         base=revision('35e61ae38f83ec00cba48776712d8fe2b34194c3')

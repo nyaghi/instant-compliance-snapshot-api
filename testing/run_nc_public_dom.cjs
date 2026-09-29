@@ -1,0 +1,76 @@
+/* Public NC labels observed 2026-09-29; fake DOM only, no live browser. */
+const {test}=require('node:test'),assert=require('node:assert/strict');
+const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
+const source=fs.readFileSync(path.join(__dirname,'../browser-connector/registry-content.js'),'utf8')
+ .replace('  async function handle(m) {','  globalThis.testNC={ncLabeled,ncForm,ncRows,ncProfile,ncFilings};\n  async function handle(m) {');
+const origin='https://www.sosnc.gov',profile=origin+'/online_services/search/charities_profile/5700751';
+const active={'CSL Legal Name':"America's Charities",'CSL Type':'Charitable Organization',Status:'Current Active – Filing Extension Granted',License:'SL000448','Expiration Date':'5/15/2026','Extension End Date':'11/15/2026'};
+const exempt={'CSL Legal Name':'YWCA of the U.S.A.','CSL Type':'CSL Exempt Organization',Status:'CSL Exempt',License:'EX003050'};
+const txt=innerText=>({innerText});
+function labels(values){return Object.entries(values).map(([key,value])=>({innerText:key+':',parentElement:txt(key+': '+value)}));}
+function harness({cards=[active],total=cards.length,query="America's Charities",url=origin+'/online_services/search/Charities_Results',fields=null,periods=null}={}){
+ const panels=new Map(),buttons=[];let clicks=0,formClicks=0;
+ for(const [i,row] of cards.entries()){
+  let expanded=false;
+  const panel={getClientRects:()=>expanded?[{}]:[],querySelectorAll:s=>s==='.para-small > .boldSpan'?labels(row):s==='a[href]'?[{getAttribute:()=>new URL(profile).pathname}]:[]};
+  panels.set('a'+i,panel);buttons.push({getAttribute:k=>k==='aria-controls'?'a'+i:expanded?'true':'false',click:()=>{clicks++;expanded=true;}});
+ }
+ const address={innerText:'Address',parentElement:{querySelectorAll:()=>['14200 Park Meadow Dr Ste 330s','Chantilly','VA','20151-4210'].map(txt)}};
+ const main={innerText:`Records Found: ${total} Words: Starting With Organization Name ${query} Search Time 9/29/2026 03:50 PM`,
+  querySelectorAll:s=>s==='#resultsSection .usa-accordion__button'?buttons:s==='.para-small > .boldSpan'?[...labels(fields||{}),address]:s==='a[href]'?[{getAttribute:()=>new URL(profile).pathname.replace('charities_profile','charities_filings')}]:[]};
+ class Input{get value(){return this.v||'';}set value(v){this.v=v;}dispatchEvent(){}}
+ class Select extends Input{};
+ Object.defineProperty(Select.prototype,'value',Object.getOwnPropertyDescriptor(Input.prototype,'value'));
+ const input=new Input(),words=new Select();words.options=[{innerText:'Starting With',value:'0'}];
+ const print={checked:true,click:()=>{print.checked=false;}},button={disabled:false,getClientRects:()=>[{}],click:()=>formClicks++};
+ const win={};win.top=win;
+ const context=vm.createContext({window:win,URL,location:{origin,pathname:new URL(url).pathname,href:url},crypto:{randomUUID:()=> 'fixture'},
+  document:{readyState:'complete',documentElement:{},getElementById:id=>panels.get(id),
+   querySelector:s=>s==='main'?main:s==='#SearchCriteria'?input:s==='#Words'?words:s==='#SubmitButton'?button:s==='#Print'?print:null,
+   querySelectorAll:s=>periods===null?[]:[{children:periods.map(([type,date])=>({tagName:'LI',childNodes:[{nodeType:3,textContent:type}],querySelectorAll:()=>date===null?[]:[txt(date)]}))}]},
+  MutationObserver:class{observe(){}disconnect(){}},HTMLInputElement:Input,HTMLSelectElement:Select,Event:class{},setTimeout,clearTimeout,
+  chrome:{runtime:{id:'fixture',onMessage:{addListener(){}}}}});
+ vm.runInContext(source,context);return {api:context.testNC,context,input,words,print,button,main,panels,clicks:()=>clicks,formClicks:()=>formClicks};
+}
+test('NC collects only expanded, complete, query-bound cards and extension date',async()=>{
+ const h=harness(),q={state:'NC',operation:'search',name:"America's Charities"};
+ const r=await h.api.ncRows(q);assert.equal(r.evidence.total,1);assert.equal(h.clicks(),1);
+ assert.equal(r.evidence.rows[0]['Extension End Date'],'11/15/2026');assert.equal(r.evidence.rows[0].profile_url,profile);
+});
+test('NC explicit exemption can omit expiration without omitting identity',async()=>{
+ const h=harness({cards:[exempt],query:'YWCA'}),r=await h.api.ncRows({state:'NC',operation:'search',name:'YWCA'});
+ assert.equal(r.evidence.rows[0]['Expiration Date'],'');assert.equal(r.evidence.rows[0].License,'EX003050');
+});
+test('NC refuses incomplete cards, partial pagination, duplicate licenses and wrong-query results',async()=>{
+ const missing={...active};delete missing['Expiration Date'];
+ for(const opts of [{cards:[missing]},{total:2},{cards:[active,active]},{query:'Unrelated Name'}]){
+  const h=harness(opts);await assert.rejects(h.api.ncRows({state:'NC',operation:'search',name:"America's Charities"}));
+ }
+});
+test('NC negative requires explicit completed count and matching searched name',async()=>{
+ const h=harness({cards:[],query:'No Such Organization'});
+ assert.equal((await h.api.ncRows({state:'NC',operation:'search',name:'No Such Organization'})).evidence.total,0);
+ h.main.innerText='Loading';await assert.rejects(h.api.ncRows({state:'NC',operation:'search',name:'No Such Organization'}));
+});
+const profileFields={Name:"America's Charities",Status:active.Status,'Registration #':'SL000448','Expiration Date':'5/15/2026','Last Application Date':'5/13/2026','Extension End Date':'11/15/2026',Phone:'unrelated contact','Contact':'private person'};
+test('NC profile retains office address, excludes contact information and binds license',()=>{
+ const h=harness({url:profile,fields:profileFields}),q={state:'NC',operation:'detail',identifier:'SL000448',url:profile};
+ const r=h.api.ncProfile(q);assert.equal(r.evidence.fields.City,'Chantilly');assert.equal(r.evidence.fields['Last Application Date'],'5/13/2026');
+ assert.equal(r.evidence.fields.Contact,undefined);assert.equal(r.evidence.fields.Phone,undefined);
+ assert.throws(()=>h.api.ncProfile({...q,identifier:'SL999999'}));
+ assert.throws(()=>h.api.ncProfile({...q,url:profile+'1'}));
+});
+test('NC reads labeled filing types without confusing extension date for renewal',()=>{
+ const h=harness({url:profile.replace('charities_profile','charities_filings'),periods:[['Renewal Charity','11/17/2025'],['Federal Extension','5/13/2026']]});
+ const r=h.api.ncFilings({url:profile});assert.equal(r.filings.rows[0].type,'Renewal Charity');assert.equal(r.filings.rows[1].type,'Federal Extension');
+ assert.equal(r.filings.rows.length,2);assert.throws(()=>h.api.ncFilings({url:profile+'1'}));
+});
+test('NC missing history entry date cannot be silently skipped',()=>{
+ const h=harness({url:profile.replace('charities_profile','charities_filings'),periods:[['Renewal Charity',null]]});assert.throws(()=>h.api.ncFilings({url:profile}));
+});
+test('NC ordinary form resets search type and printable view, never calls a hidden endpoint',async()=>{
+ const h=harness({url:origin+'/online_services/search/by_title/search_charities'}),q={state:'NC',operation:'search',name:'Reviewed Alternate Name'};
+ assert.equal(h.api.ncForm(q).phase,'submitted');assert.equal(h.input.value,q.name);assert.equal(h.words.value,'0');assert.equal(h.print.checked,false);
+ await new Promise(resolve=>setTimeout(resolve,2));assert.equal(h.formClicks(),1);
+ h.button.disabled=true;assert.throws(()=>h.api.ncForm(q));
+});

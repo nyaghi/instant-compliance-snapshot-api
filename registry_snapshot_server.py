@@ -12,6 +12,7 @@ import html
 import io
 import json
 import os
+from deployment.lab_identity import performance_origin_enabled, trial_identity
 import re
 import secrets
 import smtplib
@@ -177,6 +178,8 @@ SUPPORTED_STATES = [
     # Append new jurisdictions to preserve the mature states' routing-lane indices.
     "DC", "RI", "IL", "GA",
 ]
+if trial_identity():
+    SUPPORTED_STATES.extend(["AL", "NC", "NV", "TN"])
 EXTENSION_SCENARIO_STATES = {"CA", "CT", "HI", "KY", "MA", "MD", "NJ", "NY", "OH", "PA"}
 MAX_STATES_PER_SNAPSHOT = len(SUPPORTED_STATES)
 
@@ -5997,6 +6000,682 @@ RI_PUBLIC_PORTAL = "https://ridbrprod-search.state-reg-eastern.tylerapp.com"
 RI_PUBLIC_SEARCH_API = "https://ridbrprod.state-reg-eastern.tylerapp.com/licensing/api/endpoints/v1/portal/search"
 
 
+def final_four_source_date(value, label):
+    """Reject malformed source dates; missing fields remain unavailable."""
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if text in {"", "-"}:
+        return None
+    parsed = parse_due_date(text)
+    if parsed is None:
+        raise ValueError(f"Unrecognized {label} date")
+    return parsed
+
+
+def al_charity_search_evidence(payload):
+    """Parse the observed AG license grid, only after all result pages load.
+
+    Transport is not yet wired into routing. CAPTCHA and missing/pending result
+    pages must be reported by the collector, never converted to an empty grid.
+    """
+    headers = ["Name", "License/Registration#", "Status", "Registration Type",
+               "Issued Date", "Expiration Date", "Address", "City", "State", "Zip", "Print"]
+    if (not isinstance(payload, dict) or payload.get("headers") != headers
+            or payload.get("complete") is not True or payload.get("verification_pending") is not False
+            or not isinstance(payload.get("rows"), list)
+            or type(payload.get("total")) is not int or payload["total"] < 0
+            or len(payload["rows"]) != payload["total"]):
+        raise ValueError("Alabama search did not provide a complete verified result set")
+    records, seen = [], set()
+    for cells in payload["rows"]:
+        if not isinstance(cells, list) or len(cells) != len(headers) or not all(isinstance(v, str) for v in cells):
+            raise ValueError("Alabama result columns are incomplete")
+        fields = dict(zip(headers, (re.sub(r"\s+", " ", v).strip() for v in cells)))
+        identifier, name = fields["License/Registration#"], fields["Name"]
+        if not name or not identifier or identifier in seen or not fields["Status"]:
+            raise ValueError("Alabama result identity is missing or duplicated across pages")
+        seen.add(identifier)
+        category = fields["Registration Type"]
+        # The same lookup includes fundraisers, telephone sellers and health
+        # studios. Those credentials do not establish charity registration.
+        if category not in {"Charitable Organization", "Exempted Charity", "Private Foundation"}:
+            continue
+        expiration = final_four_source_date(fields["Expiration Date"], "Alabama expiration")
+        issued = final_four_source_date(fields["Issued Date"], "Alabama issued")
+        status = licensed_charity_status(fields["Status"], expiration)
+        if category == "Exempted Charity" and fields["Status"].casefold() == "active":
+            status = "Exempt" if not expiration or expiration >= date.today() else "Delinquent"
+        records.append(dict(name=name, identifier=identifier, ein="", aliases=[], raw_status=fields["Status"],
+                            status=status, expiration=expiration, initial=None, renewal=None,
+                            source_issued=issued, source_issued_label="Issued Date", license_category=category,
+                            street=fields["Address"], region=fields["State"], postal_code=fields["Zip"],
+                            location=", ".join(v for v in [fields["City"], fields["State"]] if v),
+                            url="https://ago.igovsolution.net/online/Lookups/Business.aspx"))
+    return records
+
+
+def nc_charity_record_evidence(fields):
+    """Interpret the charity result card, keeping an explicit extension distinct.
+
+    Profile identity and filing-history acquisition remain separate from these
+    search-card fields. Never treat the expiration as the last renewal date.
+    """
+    required = {"CSL Legal Name", "CSL Type", "Status", "License", "Expiration Date", "profile_url"}
+    if not isinstance(fields, dict) or not required.issubset(fields) or not all(isinstance(fields[k], str) for k in required):
+        raise ValueError("North Carolina charity result is incomplete")
+    name, identifier = fields["CSL Legal Name"].strip(), fields["License"].strip()
+    kind = fields["CSL Type"].strip()
+    valid_kind = ((re.fullmatch(r"SL\d+", identifier) and kind == "Charitable Organization")
+                  or (re.fullmatch(r"EX\d+", identifier) and kind == "CSL Exempt Organization"))
+    if not name or not valid_kind:
+        raise ValueError("North Carolina result is not an identified charity license")
+    url = urlparse(fields["profile_url"])
+    if url.scheme != "https" or url.netloc != "www.sosnc.gov" or not re.fullmatch(r"/online_services/search/charities_profile/\d+", url.path) or url.query or url.fragment:
+        raise ValueError("North Carolina profile link is not an official charity record")
+    raw = re.sub(r"\s+", " ", fields["Status"]).strip()
+    expiration = final_four_source_date(fields["Expiration Date"], "North Carolina expiration")
+    extension = final_four_source_date(fields.get("Extension End Date"), "North Carolina extension")
+    extended = bool(re.fullmatch(r"Current Active\s*[–-]\s*Filing Extension Granted", raw, re.I))
+    if extended and extension is None:
+        raise ValueError("North Carolina extension was granted but its end date is incomplete")
+    # User-confirmed policy, 2026-09-29: an explicit extension end date takes
+    # precedence even when the status label does not repeat the word extension.
+    # Adverse statuses still go through the unchanged shared status rules.
+    effective_due = extension or expiration
+    status = licensed_charity_status(raw, effective_due)
+    if raw.casefold() == "current active" or extended:
+        status = status_from_calendar_date(effective_due) if effective_due else "Current"
+    if kind == "CSL Exempt Organization" and raw.casefold() == "csl exempt":
+        status = "Exempt"
+    return dict(name=name, identifier=identifier, ein="", aliases=[], raw_status=raw, status=status,
+                expiration=effective_due, base_expiration=expiration, extension_end=extension,
+                initial=None, renewal=None, street="", location="", url=fields["profile_url"],
+                license_category=fields["CSL Type"].strip())
+
+
+def nc_charity_profile_evidence(card, profile, filings=None):
+    """Bind NC profile and renewal history to the selected charity record."""
+    required = {"Name", "Registration #", "Status", "Expiration Date", "Last Application Date",
+                "Street", "City", "State", "Zip", "profile_url"}
+    if not isinstance(profile, dict) or not required.issubset(profile) or not all(isinstance(profile[k], str) for k in required):
+        raise ValueError("North Carolina profile is incomplete")
+    if (profile["profile_url"] != card["url"] or profile["Registration #"].strip() != card["identifier"]
+            or normalized_match_name(profile["Name"]) != normalized_match_name(card["name"])):
+        raise ValueError("North Carolina profile does not belong to the selected charity")
+    result = nc_charity_record_evidence({"CSL Legal Name": profile["Name"], "CSL Type": card["license_category"],
+        "License": profile["Registration #"], "Status": profile["Status"], "Expiration Date": profile["Expiration Date"],
+        "Extension End Date": profile.get("Extension End Date", ""), "profile_url": profile["profile_url"]})
+    result.update(street=profile["Street"].strip(), region=profile["State"].strip().upper(),
+                  postal_code=profile["Zip"].strip(), location=", ".join(v.strip() for v in (profile["City"], profile["State"]) if v.strip()),
+                  source_last_application=final_four_source_date(profile["Last Application Date"], "North Carolina application"))
+    # The profile's Last Application can be an extension request. Only an
+    # explicitly labeled Renewal Charity entry populates the renewal column.
+    if filings is not None:
+        expected_url = card["url"].replace("/charities_profile/", "/charities_filings/")
+        if not isinstance(filings, dict) or filings.get("url") != expected_url or filings.get("complete") is not True or not isinstance(filings.get("rows"), list):
+            raise ValueError("North Carolina filing history is incomplete or belongs to another record")
+        renewed = []
+        for row in filings["rows"]:
+            if not isinstance(row, dict) or not isinstance(row.get("type"), str) or not isinstance(row.get("date"), str):
+                raise ValueError("North Carolina filing entry is incomplete")
+            if row["type"].strip() == "Renewal Charity":
+                filed = final_four_source_date(row["date"], "North Carolina renewal filing")
+                if filed is None or filed > date.today():
+                    raise ValueError("North Carolina renewal filing date is invalid")
+                renewed.append(filed)
+        if renewed:
+            result.update(renewal=max(renewed), renewal_label="Renewal Charity — Filed Date", renewal_type="renewal_filing_date", renewal_url=expected_url)
+    return result
+
+
+def final_four_license_result(org, state, records, deadline, source):
+    """Use master identity/status handling with source-specific date wording."""
+    if state not in {"AL", "NC", "NV", "TN"}:
+        raise ValueError("Unsupported final-four license source")
+    result = licensed_charity_result(org, state, records, deadline, source)
+    selected = getattr(result, "_cc_license_record", {})
+    if state == "NC" and selected.get("extension_end"):
+        extension = selected["extension_end"].isoformat()
+        original = selected.get("base_expiration")
+        note = f"The state displays an extension end date of {extension}; CharityClarity uses that date for its deadline calculation. "
+        if original:
+            note += f"The original expiration date was {original.isoformat()}. "
+        result.source_note = result.source_note.replace(
+            f"The displayed license expiration date is {extension}. ", note, 1)
+    if state == "NV" and selected:
+        # User-confirmed Nevada scope: matched nonprofit corporation standing.
+        result.source_note = (f"Nevada lists {selected['name']} ({selected['identifier']}) as "
+                              f"{selected['raw_status']}, entity type {selected['entity_type']}. ")
+        if selected.get("expiration"):
+            result.source_note += ("The displayed Annual Renewal Due Date/Expiration Date is "
+                                   f"{selected['expiration'].isoformat()}. ")
+        result.source_note += (f"CharityClarity reports {result.status} based on the matched nonprofit corporation's "
+                               "Nevada record. Registered-agent records and registered-agent addresses are excluded from organization identity evidence. ")
+        if selected.get("ein"):
+            result.source_note += f"The detail FEIN {format_ein(selected['ein'])} matches the requested EIN. "
+        else:
+            result.source_note += "The public detail does not show a FEIN; matching uses the full name, reviewed alternate names, and available organization-location evidence. "
+        address = selected.get("address_evidence", {})
+        if address.get("decision") == "corroborated":
+            result.source_note += address.get("basis", "") + " "
+        if selected.get("solicitation_declared") is False:
+            result.source_note += 'The separate "Solicits Charitable Contribution?" field displays No; this result describes the nonprofit corporation record and does not establish a separate charitable-solicitation filing.'
+    if selected.get("date_evidence_note"):
+        result.source_note = result.source_note.rstrip() + " " + selected["date_evidence_note"]
+    return result
+
+
+def nv_charity_detail_evidence(fields, expected_business_id):
+    """User-approved NV rule: matched nonprofit entity status and renewal due.
+
+    Keep corporate and charity-specific evidence labeled accurately. Never use
+    registered-agent standing/address, or a formation date as a renewal date.
+    """
+    required = {"Entity Name", "NV Business ID", "Entity Status", "Entity Type", "FEIN",
+                "Solicits Charitable Contribution?", "IRS Registered Name", "Campaign Name",
+                "Formation Date in Nevada", "Annual Renewal Due Date/Expiration Date"}
+    if not isinstance(fields, dict) or not required.issubset(fields) or not all(isinstance(fields[k], str) for k in required):
+        raise ValueError("Nevada entity details are incomplete")
+    if not re.fullmatch(r"NV\d+", expected_business_id) or fields["NV Business ID"].strip() != expected_business_id:
+        raise ValueError("Nevada selected a different business record")
+    name = fields["Entity Name"].strip()
+    if not name or not fields["Entity Status"].strip():
+        raise ValueError("Nevada entity identity or status is missing")
+    entity_type = re.sub(r"\s+", " ", fields["Entity Type"]).strip()
+    if entity_type not in {"Foreign Non-Profit Corporation (80)", "Domestic Non-Profit Corporation (82)",
+                           "Domestic Non-Profit Cooperative Corporation With or Without Stock (81)",
+                           "Domestic Non-Profit Cooperative Corporation Without Stock (81)"}:
+        raise ValueError("Nevada record is not a supported nonprofit corporation type")
+    ein_raw = fields["FEIN"].strip()
+    ein = "" if ein_raw in {"", "-"} else canonical_ein_digits(ein_raw)
+    if ein_raw not in {"", "-"} and (not re.fullmatch(r"\d{2}-?\d{7}", ein_raw) or len(ein) != 9):
+        raise ValueError("Nevada public FEIN is malformed")
+    solicitation = fields["Solicits Charitable Contribution?"].strip().casefold()
+    if solicitation not in {"yes", "no"}:
+        raise ValueError("Nevada charitable solicitation field did not load")
+    aliases = [fields[k].strip() for k in ("IRS Registered Name", "Campaign Name") if fields[k].strip() not in {"", "-"}]
+    raw_status = fields["Entity Status"].strip()
+    expiration = final_four_source_date(fields["Annual Renewal Due Date/Expiration Date"], "Nevada entity expiration")
+    status = licensed_charity_status(raw_status, expiration)
+    if raw_status.casefold() == "default":
+        status = "Delinquent"
+    return dict(name=name, identifier=expected_business_id, ein=ein, aliases=list(dict.fromkeys(aliases)),
+                raw_status=raw_status, status=status, expiration=expiration,
+                initial=None, renewal=None, street="", location="",
+                solicitation_declared=solicitation == "yes", entity_type=entity_type,
+                entity_formation=final_four_source_date(fields["Formation Date in Nevada"], "Nevada formation"),
+                entity_expiration=expiration)
+
+
+def tn_charity_detail_evidence(fields, expected_identifier, search_row):
+    """Selected TNCaB charity detail plus its loaded financial-period table."""
+    required = {"Name", "CO Number", "Status", "Registration Date", "Expiration Date", "Address"}
+    if not isinstance(fields, dict) or not required.issubset(fields) or not all(isinstance(fields[k], str) for k in required):
+        raise ValueError("Tennessee charity detail is incomplete")
+    if not re.fullmatch(r"CO\d+", expected_identifier) or fields["CO Number"].strip() != expected_identifier:
+        raise ValueError("Tennessee selected a different charity record")
+    name = fields["Name"].strip()
+    if not name or normalized_match_name(name) != normalized_match_name(search_row.get("name", "")):
+        raise ValueError("Tennessee detail name differs from the selected result")
+    raw = fields["Status"].strip()
+    if not raw:
+        raise ValueError("Tennessee selected status is missing")
+    expiration = final_four_source_date(fields["Expiration Date"], "Tennessee expiration")
+    initial = final_four_source_date(fields["Registration Date"], "Tennessee registration")
+    if initial and initial > date.today():
+        raise ValueError("Tennessee original registration date is in the future")
+    # Read the complete table, not simply the first financial row. Financial
+    # periods do not replace the state's displayed expiration date.
+    periods = fields.get("financial_periods")
+    latest_period = None
+    if "financial_periods" in fields or "financial_count" in fields:
+        if not isinstance(periods, list) or type(fields.get("financial_count")) is not int or fields["financial_count"] != len(periods):
+            raise ValueError("Tennessee financial history is incomplete")
+        parsed = [final_four_source_date(v, "Tennessee fiscal period") for v in periods]
+        if any(v is None or v > date.today() for v in parsed):
+            raise ValueError("Tennessee fiscal period is missing or in the future")
+        latest_period = max(parsed, default=None)
+    city, region = str(search_row.get("city", "")).strip(), str(search_row.get("region", "")).strip().upper()
+    address = re.sub(r"\s+", " ", fields["Address"]).strip()
+    street, postal, location = "", "", ""
+    if city and re.fullmatch(r"[A-Z]{2}", region) and address:
+        full = re.fullmatch(r"(.+?)\s+" + re.escape(city) + r"\s+" + re.escape(region) + r"\s+(\d{5}(?:-\d{4})?)", address, re.I)
+        if not full:
+            raise ValueError("Tennessee search and detail organization addresses disagree")
+        street, postal, location = full[1], full[2], f"{city}, {region}"
+    aliases = search_row.get("aliases", [])
+    if not isinstance(aliases, list) or not all(isinstance(n, str) for n in aliases):
+        raise ValueError("Tennessee alternate names are malformed")
+    # TNCaB can show solicitation-name templates, not actual organization
+    # names, such as a literal 'CHAPTER NAME'. Do not export those as aliases.
+    aliases = [n.strip() for n in aliases if n.strip() and not re.search(r"['\"<\[]\s*CHAPTER NAME\s*['\">\]]", n, re.I)]
+    return dict(name=name, identifier=expected_identifier, ein="", aliases=list(dict.fromkeys(aliases)),
+                raw_status=raw, status=licensed_charity_status(raw, expiration), expiration=expiration,
+                initial=initial, initial_label="Registration Date", renewal=None,
+                latest_filed_period=latest_period, latest_filed_period_label="Fiscal Year End",
+                street=street, location=location, region=region, postal_code=postal,
+                url="https://tncab.tnsos.gov/portal/registered-charities-search")
+
+
+def nv_charity_filings_evidence(record, payload):
+    """Read the selected entity's complete annual-list history, not its due date."""
+    headers = ["Filed Date", "Effective Date", "Filing Number", "Filing Type", "Source", "No. of Pages"]
+    if (not isinstance(payload, dict) or payload.get("identifier") != record["identifier"]
+            or normalized_match_name(payload.get("name", "")) != normalized_match_name(record["name"])
+            or payload.get("headers") != headers or payload.get("complete") is not True
+            or not isinstance(payload.get("rows"), list) or type(payload.get("total")) is not int
+            or payload["total"] < 0 or len(payload["rows"]) != payload["total"]):
+        raise ValueError("Nevada filing history is incomplete or belongs to another entity")
+    dates, qualifications, seen = [], [], set()
+    for cells in payload["rows"]:
+        if not isinstance(cells, list) or len(cells) != len(headers) or not all(isinstance(v, str) for v in cells):
+            raise ValueError("Nevada filing-history row is incomplete")
+        fields = dict(zip(headers, (v.strip() for v in cells)))
+        filing = fields["Filing Number"]
+        if not filing or filing in seen:
+            raise ValueError("Nevada filing history contains an incomplete or repeated filing")
+        seen.add(filing)
+        if fields["Filing Type"] == "Annual List":
+            filed = final_four_source_date(fields["Filed Date"], "Nevada annual list filed")
+            if filed is None or filed > date.today():
+                raise ValueError("Nevada annual-list filing date is invalid")
+            dates.append(filed)
+        elif fields["Filing Type"] == "Foreign Qualification":
+            filed = final_four_source_date(fields["Filed Date"], "Nevada foreign qualification filed")
+            if filed is None or filed > date.today():
+                raise ValueError("Nevada qualification filing date is invalid")
+            qualifications.append(filed)
+    result = {**record, "annual_list_filed": max(dates) if dates else None}
+    # Expose only an explicitly filed Foreign Qualification that agrees with
+    # this entity's Nevada formation date. Formation alone is not registration
+    # evidence, and the first available annual list is not an initial filing.
+    if len(qualifications) == 1 and qualifications[0] == record.get("entity_formation"):
+        result.update(initial=qualifications[0], initial_label="Foreign Qualification — Filed Date",
+                      initial_type="initial_registration_filing_date")
+    return result
+
+
+def final_four_date_metadata(result, final_status=None):
+    """Expose selected-record dates without another source request."""
+    data = {prefix + key: "" for prefix in ("registration_date", "renewal_date")
+            for key in ("", "_type", "_source_label", "_source_url", "_note")}
+    if not registration_date_result_confirmed(result, final_status):
+        return data
+    row = getattr(result, "_cc_license_record", {})
+    if (not getattr(result, "matched_registry_identifier", "") or row.get("identifier") != result.matched_registry_identifier
+            or normalized_match_name(row.get("name", "")) != normalized_match_name(getattr(result, "matched_registry_name", ""))):
+        return data
+    source = getattr(result, "source_url", "")
+    initial = registration_source_date(str(row.get("initial") or ""))
+    renewed = registration_source_date(str(row.get("renewal") or ""))
+    if initial and result.state == "TN" and row.get("initial_label") == "Registration Date":
+        data.update(registration_date=initial.isoformat(), registration_date_type="registry_registration_date",
+                    registration_date_source_label="Registration Date", registration_date_source_url=source,
+                    registration_date_note="State-labeled registration date; the source does not specify that it is the initial registration.")
+    elif initial and result.state == "NV" and row.get("initial_type") == "initial_registration_filing_date":
+        data.update(registration_date=initial.isoformat(), registration_date_type="initial_registration_filing_date",
+                    registration_date_source_label=row.get("initial_label", ""), registration_date_source_url=source,
+                    registration_date_note="Foreign Qualification filing for the matched Nevada nonprofit corporation, agreeing with its Nevada formation date. This is a corporate registration filing date, not a separate charitable-solicitation filing.")
+    if renewed and result.state == "NC" and row.get("renewal_type") == "renewal_filing_date":
+        data.update(renewal_date=renewed.isoformat(), renewal_date_type="renewal_filing_date",
+                    renewal_date_source_label=row.get("renewal_label", ""), renewal_date_source_url=row.get("renewal_url") or source,
+                    renewal_date_note="Latest Renewal Charity filing recorded in the state history; the filing date does not by itself establish approval.")
+    return data
+
+
+def final_four_filing_metadata(result, dates, final_status=None):
+    """Keep a renewal filing, financial period and annual deadline distinct."""
+    data = {"renewal_filing_" + key: "" for key in ("value", "type", "label", "source_url", "note")}
+    if not registration_date_result_confirmed(result, final_status):
+        return data
+    row = getattr(result, "_cc_license_record", {})
+    if (not getattr(result, "matched_registry_identifier", "") or row.get("identifier") != result.matched_registry_identifier
+            or normalized_match_name(row.get("name", "")) != normalized_match_name(getattr(result, "matched_registry_name", ""))):
+        return data
+    # Rebuild from source-bound record evidence, not an arbitrary caller date.
+    verified = final_four_date_metadata(result, final_status)
+    if verified["renewal_date"]:
+        data.update(renewal_filing_value=verified["renewal_date"], renewal_filing_type="renewal_filing_date",
+                    renewal_filing_label="Renewal filed", renewal_filing_source_url=verified["renewal_date_source_url"],
+                    renewal_filing_note=verified["renewal_date_note"])
+    elif result.state == "TN" and row.get("latest_filed_period_label") == "Fiscal Year End":
+        period = registration_source_date(str(row.get("latest_filed_period") or ""))
+        if period:
+            data.update(renewal_filing_value=period.isoformat(), renewal_filing_type="filed_period_end",
+                        renewal_filing_label="Filed period ending", renewal_filing_source_url=getattr(result, "source_url", ""),
+                        renewal_filing_note="Latest Fiscal Year End shown in the selected Tennessee financial history; this is not a renewal submission or expiration date.")
+    elif result.state == "NV":
+        filed = registration_source_date(str(row.get("annual_list_filed") or ""))
+        if filed:
+            data.update(renewal_filing_value=filed.isoformat(), renewal_filing_type="annual_registration_submitted_date",
+                        renewal_filing_label="Annual list filed", renewal_filing_source_url=getattr(result, "source_url", ""),
+                        renewal_filing_note="Latest Annual List — Filed Date in the selected Nevada entity history; this is not the annual renewal due date or a separate charitable-solicitation filing.")
+    return data
+
+
+def final_four_search_evidence(payload, state, query):
+    """Accept only a completed, query-bound public result set, including paging.
+
+    These are collector contracts, not alternate registry APIs. The browser
+    transport must observe completion and the total before setting complete.
+    A blank grid during loading is not evidence of zero results.
+    """
+    if (not isinstance(payload, dict) or payload.get("state") != state
+            or payload.get("query") != query or payload.get("complete") is not True
+            or payload.get("verification_pending") is not False
+            or not isinstance(payload.get("rows"), list)
+            or type(payload.get("total")) is not int or payload["total"] < 0
+            or len(payload["rows"]) != payload["total"]):
+        raise ValueError(f"{state} search did not return a complete result set for the requested name")
+    if state == "AL":
+        return al_charity_search_evidence(payload)
+    if state not in {"NC", "NV", "TN"}:
+        raise ValueError("Unsupported final-four source")
+    rows, seen = [], set()
+    for raw in payload["rows"]:
+        if not isinstance(raw, dict):
+            raise ValueError(f"{state} search row is incomplete")
+        if state == "NC":
+            row = nc_charity_record_evidence(raw)
+        else:
+            required = {"name", "identifier", "city", "region", "aliases"} if state == "TN" else {"name", "identifier", "entity_type"}
+            if not required.issubset(raw) or not all(isinstance(raw[k], str) for k in required - {"aliases"}):
+                raise ValueError(f"{state} search identity fields are incomplete")
+            row = dict(raw)
+            if not row["name"].strip() or not re.fullmatch(r"CO\d+" if state == "TN" else r"NV\d+", row["identifier"]):
+                raise ValueError(f"{state} search identity is malformed")
+            if state == "TN" and (not isinstance(row["aliases"], list) or not all(isinstance(n, str) for n in row["aliases"])):
+                raise ValueError("Tennessee alternate names are incomplete")
+            # ORION exposes javascript:void(0) row links, not detail URLs.
+            # The collector must click the row bound to this business ID and
+            # return the resulting public detail URL with its displayed ID.
+        if row["identifier"] in seen:
+            raise ValueError(f"{state} result repeated a record across pages")
+        seen.add(row["identifier"]); rows.append(row)
+    return rows
+
+
+def final_four_browser_lookup(org, state, evidence, deadline=None):
+    """Master-owned name plan and identity selection for the four new sources.
+
+    The evidence callback collects public UI fields only. It cannot choose a
+    charity, normalize a status, or substitute an uncompleted search. Routing
+    stays disabled until the ordinary browser transport is live-validated.
+    """
+    sources = {"AL": "https://ago.igovsolution.net/online/Lookups/Business.aspx",
+               "NC": "https://www.sosnc.gov/online_services/search/by_title/search_charities",
+               "NV": "https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=external-GenericFilingsSearch&tabRoute=business",
+               "TN": "https://tncab.tnsos.gov/portal/registered-charities-search"}
+    if state not in sources:
+        raise ValueError("Unsupported final-four lookup")
+    deadline = time.monotonic() + 60 if deadline is None else deadline
+    required, generated = licensed_charity_names(org)
+    if not required:
+        raise ValueError("A reviewed organization name is required for this registry")
+    records, seen = [], set()
+    unreviewed_scope = False
+    def collect(query):
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"{state} lookup did not finish within its own budget")
+        result = evidence(query)
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"{state} response arrived after its lookup deadline")
+        return result
+    for index, name in enumerate(required + generated):
+        query = {"state": state, "operation": "search", "name": name}
+        payload = collect(query)
+        rows = final_four_search_evidence(payload, state, query)
+        for row in rows:
+            if row["identifier"] in seen:
+                continue
+            names = [row["name"], *row.get("aliases", [])]
+            candidates = [score_candidate(org.organization_name, org.ein, {"name": n, "ein": row.get("ein", "")}) for n in names if n]
+            if not candidates or all(c["decision"] == "rejected" for c in candidates):
+                seen.add(row["identifier"])
+                continue
+            if state == "AL":
+                record = row
+            else:
+                if state == "NV" and row["entity_type"] not in {
+                        "Foreign Non-Profit Corporation (80)", "Domestic Non-Profit Corporation (82)",
+                        "Domestic Non-Profit Cooperative Corporation With or Without Stock (81)",
+                        "Domestic Non-Profit Cooperative Corporation Without Stock (81)"}:
+                    # Unsupported filing categories need review, not a guess.
+                    # Do not open a registered-agent/other entity detail.
+                    unreviewed_scope = True
+                    seen.add(row["identifier"])
+                    continue
+                detail_query = {"state": state, "operation": "detail", "identifier": row["identifier"]}
+                if state == "NC": detail_query["url"] = row["url"]
+                detail = collect(detail_query)
+                if not isinstance(detail, dict) or detail.get("query") != detail_query or detail.get("complete") is not True:
+                    raise ValueError(f"{state} selected detail did not finish or belongs to another query")
+                if state == "NC":
+                    record = nc_charity_profile_evidence(row, detail.get("fields"))
+                    if detail.get("filings") is not None:
+                        try:
+                            record = nc_charity_profile_evidence(row, detail["fields"], detail["filings"])
+                        except ValueError:
+                            record["date_evidence_note"] = "North Carolina's renewal filing history was incomplete; the last-renewal date remains blank."
+                elif state == "TN":
+                    fields = detail.get("fields")
+                    base_fields = {k: v for k, v in fields.items() if k not in {"financial_periods", "financial_count"}} if isinstance(fields, dict) else fields
+                    record = tn_charity_detail_evidence(base_fields, row["identifier"], row)
+                    if isinstance(fields, dict) and ("financial_periods" in fields or "financial_count" in fields):
+                        try:
+                            record = tn_charity_detail_evidence(fields, row["identifier"], row)
+                        except ValueError:
+                            record["date_evidence_note"] = "Tennessee's financial history was incomplete; the last-filed period remains blank."
+                else:
+                    record = nv_charity_detail_evidence(detail.get("fields"), row["identifier"])
+                    if record["entity_type"] != row["entity_type"] or normalized_match_name(record["name"]) != normalized_match_name(row["name"]):
+                        raise ValueError("Nevada detail differs from the selected search identity")
+                    url = urlparse(str(detail.get("source_url") or ""))
+                    fragment_path, _, params = url.fragment.partition("?")
+                    params = parse_qs(params)
+                    if (url.scheme != "https" or url.netloc != "orion.nv.gov" or url.path != "/portal/public/"
+                            or url.query or fragment_path != "/public/nvsos/en/CaseXscreen"
+                            or set(params) != {"screen", "id"} or params.get("screen") != ["Manage-Business"]
+                            or len(params.get("id", [])) != 1
+                            or not re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", params["id"][0])):
+                        raise ValueError("Nevada detail is not an official business record")
+                    record["url"] = detail["source_url"]
+                    if detail.get("filings") is not None:
+                        try:
+                            record = nv_charity_filings_evidence(record, detail["filings"])
+                        except ValueError:
+                            record["date_evidence_note"] = "Nevada's annual-list filing history was incomplete; the last-filed date remains blank."
+            records.append(record); seen.add(row["identifier"])
+        if records and index >= len(required) - 1:
+            selected, review = select_licensed_charity(org, records, state, deadline)
+            if selected and not review and selected["status"] in {"Current", "Upcoming Filing", "Exempt"}:
+                break
+    result = final_four_license_result(org, state, records, deadline, sources[state])
+    if result.status == "Not Registered" and unreviewed_scope:
+        result.status = "Unable to Confirm"; result.success = False
+        result.source_note = "Nevada returned a matching entity in a registration category that could not be interpreted safely. Review the entity's filing scope; this does not establish non-registration."
+    if result.status == "Not Registered" and state == "TN":
+        # The current official FAQ links both registered and $50,000-and-under
+        # searches to this same directory (verified 2026-09-29). Statutory
+        # exemptions without a filing are not established by an absent row.
+        result.source_note += " Tennessee notes that some organizations may be exempt from registration by statute. An absent listing does not determine whether an exemption applies."
+    return result
+
+
+def final_four_clean_evidence(payload, query):
+    """Bounded public fields for the existing signed connector continuation.
+
+    Do not retain page source, contact names, credentials or CAPTCHA material.
+    Full source interpretation remains in the master replay, not the browser.
+    """
+    state = query.get("state")
+    if (state not in {"AL", "NC", "NV", "TN"} or not isinstance(payload, dict)
+            or payload.get("query") != query or payload.get("complete") is not True):
+        raise ValueError("Incomplete or mismatched final-four evidence")
+    def bounded(value, depth=0):
+        if depth > 6:
+            raise ValueError("Registry evidence nesting exceeded its bound")
+        if value is None or isinstance(value, bool):
+            return
+        if type(value) is int and -1 <= value <= 10000:
+            return
+        if isinstance(value, str) and len(value) <= 1500:
+            return
+        if isinstance(value, list) and len(value) <= 500:
+            for item in value: bounded(item, depth+1)
+            return
+        if isinstance(value, dict) and len(value) <= 25 and all(isinstance(k, str) and len(k) <= 100 for k in value):
+            for item in value.values(): bounded(item, depth+1)
+            return
+        raise ValueError("Registry evidence exceeded its field bound")
+    bounded(payload)
+    if len(json.dumps(payload).encode("utf-8")) > 180000:
+        raise ValueError("Registry evidence exceeded its message bound")
+    if query.get("operation") == "search":
+        if set(payload) - {"state", "query", "complete", "verification_pending", "total", "rows", "headers"}:
+            raise ValueError("Unexpected search evidence fields")
+        allowed = ({"CSL Legal Name", "CSL Type", "Status", "License", "Expiration Date", "Extension End Date", "profile_url"} if state == "NC" else
+                   {"name", "identifier", "entity_type", "raw_status"} if state == "NV" else
+                   {"name", "identifier", "city", "region", "aliases", "raw_status", "registration_date"})
+        if state != "AL" and any(not isinstance(row, dict) or set(row) - allowed for row in payload.get("rows", [])):
+            raise ValueError("Unexpected search row fields")
+        final_four_search_evidence(payload, state, query)
+    elif query.get("operation") == "detail" and state != "AL":
+        if set(payload) - {"query", "complete", "fields", "filings", "source_url"}:
+            raise ValueError("Unexpected detail evidence fields")
+        allowed = ({"Name", "Registration #", "Status", "Expiration Date", "Extension End Date", "Last Application Date", "Street", "City", "State", "Zip", "profile_url"} if state == "NC" else
+                   {"Entity Name", "NV Business ID", "Entity Status", "Entity Type", "FEIN", "Solicits Charitable Contribution?", "IRS Registered Name", "Campaign Name", "Formation Date in Nevada", "Annual Renewal Due Date/Expiration Date"} if state == "NV" else
+                   {"Name", "CO Number", "Status", "Registration Date", "Expiration Date", "Address", "financial_periods", "financial_count"})
+        fields = payload.get("fields")
+        identity_key = {"NC": "Registration #", "NV": "NV Business ID", "TN": "CO Number"}[state]
+        if not isinstance(fields, dict) or set(fields) - allowed or fields.get(identity_key) != query.get("identifier"):
+            raise ValueError("Unexpected or mismatched detail identity fields")
+        history = payload.get("filings")
+        if history is not None:
+            history_keys = {"url", "complete", "rows"} if state == "NC" else {"identifier", "name", "complete", "total", "headers", "rows"}
+            if not isinstance(history, dict) or set(history) - history_keys or state == "TN":
+                raise ValueError("Unexpected filing evidence fields")
+            if state == "NC" and any(not isinstance(row, dict) or set(row) != {"type", "date"} for row in history.get("rows", [])):
+                raise ValueError("Unexpected filing row fields")
+    else:
+        raise ValueError("Unsupported final-four query")
+    return json.loads(json.dumps(payload))
+
+
+def final_four_connector_failure(record, reason=""):
+    state = record["state"]
+    sources = {"AL": "https://ago.igovsolution.net/online/Lookups/Business.aspx",
+               "NC": "https://www.sosnc.gov/online_services/search/by_title/search_charities",
+               "NV": "https://orion.nv.gov/portal/public/",
+               "TN": "https://tncab.tnsos.gov/portal/registered-charities-search"}
+    org = checker.Organization(record["organization_name"], record["ein"])
+    result = licensed_charity_failure(org, state, sources[state], ValueError("Browser evidence incomplete"))
+    why = ("The registry lookup reached its time limit before all required records were confirmed." if reason == "NY_CONNECTOR_TIMEOUT" else
+           "The registry requires browser verification before its search can complete." if "VERIFICATION" in reason else
+           "The registry search or selected record did not return complete, confirmed information.")
+    result.source_note = f"{why} CharityClarity reports Unable to Confirm. This incomplete lookup does not establish non-registration or delinquency."
+    return response_data_for_lookup(result, "", org, org.organization_name, org.ein, state, time.perf_counter())
+
+
+def final_four_connector_advance(record):
+    """Replay only this organization's signed, query-bound source evidence."""
+    remaining = record["expires"] - time.time()
+    if remaining <= 0:
+        return {"phase": "complete", "result": final_four_connector_failure(record, "NY_CONNECTOR_TIMEOUT")}
+    def evidence(query):
+        for item in record["completed"]:
+            if item["query"] == query: return item["evidence"]
+        raise NYConnectorQueryNeeded(query)
+    org = checker.Organization(record["organization_name"], record["ein"])
+    try:
+        result = final_four_browser_lookup(org, record["state"], evidence, time.monotonic()+remaining)
+    except NYConnectorQueryNeeded as pending:
+        required, generated = licensed_charity_names(org)
+        if len(record["completed"]) >= len(required) + len(generated) + 100:
+            return {"phase": "complete", "result": final_four_connector_failure(record, "NY_CONNECTOR_QUERY_LIMIT")}
+        record["pending"] = {"query_id": secrets.token_urlsafe(18), "query": pending.params}
+        return {"phase": "search", **record["pending"]}
+    except (ValueError, TimeoutError) as exc:
+        log_event(f"{record['state']} final-four public evidence incomplete: {type(exc).__name__}")
+        return {"phase": "complete", "result": final_four_connector_failure(record, "NY_CONNECTOR_TIMEOUT" if isinstance(exc, TimeoutError) else "")}
+    if time.time() >= record["expires"]:
+        return {"phase": "complete", "result": final_four_connector_failure(record, "NY_CONNECTOR_TIMEOUT")}
+    return {"phase": "complete", "result": response_data_for_lookup(result, "", org, org.organization_name, org.ein, record["state"], time.perf_counter())}
+
+
+def final_four_connector_request(payload, origin):
+    """Isolated trial route; the approved NY/IL/GA continuation is unchanged."""
+    identity = trial_identity()
+    if not identity or origin != identity["origin"]:
+        return 404, {"error": "Not found"}
+    if not isinstance(payload, dict):
+        return 400, {"error": "Invalid registry connector request."}
+    email = normalize_email(str(payload.get("email") or ""))
+    if not is_verified_internal_passcode(email, str(payload.get("admin_passcode") or "")):
+        return 403, {"error": "Sign in with authorized Compliance Express access."}
+    if len(NY_CONNECTOR_SIGNING_KEY) < 32:
+        return 503, {"error": "The trial browser connector is not configured."}
+    device = payload.get("device_id")
+    if not isinstance(device, str) or not 8 <= len(device) <= 200:
+        return 400, {"error": "A valid browser session identifier is required."}
+    action = payload.get("action")
+    now = time.time()
+    if action == "start":
+        state, name, ein = payload.get("state"), payload.get("organization_name"), payload.get("ein")
+        mode = payload.get("mode", "standard")
+        if (state not in {"AL", "NC", "NV", "TN"} or mode not in {"sales", "standard"}
+                or payload.get("purpose", "registration") != "registration"
+                or not isinstance(name, str) or not 1 <= len(name.strip()) <= 500
+                or not isinstance(ein, str) or not re.fullmatch(r"[0-9]{2}-?[0-9]{7}", ein)
+                or ein.replace("-", "") == "000000000"):
+            return 400, {"error": "Enter a supported state, mode, organization name and nine-digit EIN."}
+        try:
+            alternate_names = normalize_reviewed_names(payload.get("alternate_names", []))
+        except ValueError as exc:
+            return 400, {"error": str(exc)}
+        record = {"email": email, "device": device, "state": state, "organization_name": name.strip(),
+                  "ein": format_ein(ein), "origin": origin, "purpose": "registration", "mode": mode,
+                  "issued": now, "expires": now + (60 if mode == "sales" else NY_CONNECTOR_TTL_SECONDS),
+                  "version": APP_VERSION, "completed": [], "pending": None,
+                  "alternate_names": alternate_names, "protocol": "final-four-public-v1"}
+    else:
+        try:
+            record = ny_connector_unpack(payload.get("check_token"), email, device)
+            if (record.get("origin") != origin or record.get("protocol") != "final-four-public-v1"
+                    or record.get("state") not in {"AL", "NC", "NV", "TN"}):
+                raise ValueError("Wrong continuation scope")
+        except (ValueError, TypeError, KeyError, UnicodeError):
+            return 410, {"error": "This registry check expired or changed. Run the state check again."}
+        if action == "cancel":
+            return 200, {"phase": "canceled"}
+        if action not in {"advance", "fail"}:
+            return 400, {"error": "Invalid registry connector action."}
+        if action == "fail":
+            reason = payload.get("reason")
+            return 200, {"phase": "complete", "result": final_four_connector_failure(record, reason if isinstance(reason, str) else "")}
+        pending = record["pending"]
+        if not pending or payload.get("query_id") != pending["query_id"]:
+            return 409, {"error": "The response is stale or belongs to another registry query."}
+        try:
+            evidence = final_four_clean_evidence(payload.get("evidence"), pending["query"])
+        except (ValueError, TypeError, KeyError):
+            return 200, {"phase": "complete", "result": final_four_connector_failure(record)}
+        record["completed"].append({"query": pending["query"], "evidence": evidence})
+        record["pending"] = None
+    names = {canonical_ein_digits(record["ein"]): tuple(record["alternate_names"])}
+    context = REVIEWED_NAME_CONTEXT.set(names)
+    try:
+        response = final_four_connector_advance(record)
+    finally:
+        REVIEWED_NAME_CONTEXT.reset(context)
+    if response["phase"] == "search":
+        try:
+            response.update(check_token=ny_connector_pack(record), expires_in=max(0, int(record["expires"]-time.time())),
+                            lookup_remaining_ms=max(0, int((record["expires"]-time.time())*1000)))
+        except ValueError:
+            return 200, {"phase": "complete", "result": final_four_connector_failure(record)}
+    return 200, response
+
+
 def registry_json_request(url, deadline, *, payload=None, form=False, headers=None):
     """Normal public-registry request, bounded by this lookup's own deadline."""
     data = None if payload is None else (urlencode(payload) if form else json.dumps(payload)).encode()
@@ -9212,14 +9891,14 @@ class MainePublicApplicationError(ValueError):
 
 def lab_me_application_recovery_enabled() -> bool:
     return (APP_VERSION.endswith('-performance-lab')
-            and os.environ.get('PUBLIC_BASE_URL') == 'https://instant-compliance-snapshot-api-hn4v.onrender.com'
+            and performance_origin_enabled()
             and LAB_LOOKUP_MODE_CONTEXT.get() == 'sales'
             and os.environ.get('CE_LAB_ME_APPLICATION_RECOVERY') == '1')
 
 
 def lab_me_prefix_coverage_enabled() -> bool:
     return (APP_VERSION.endswith("-performance-lab")
-            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and performance_origin_enabled()
             and LAB_LOOKUP_MODE_CONTEXT.get() == "sales"
             and os.environ.get("CE_LAB_ME_PREFIX_COVERAGE") == "1")
 
@@ -10175,8 +10854,7 @@ def search_or_completed(page, org, module):
     Keep its form, matching, detail parsing and filing rules; wait at the search
     click for this exact request and its results to reach the document instead.
     """
-    if not (APP_VERSION.endswith("-performance-lab") and os.environ.get("PUBLIC_BASE_URL") ==
-            "https://instant-compliance-snapshot-api-hn4v.onrender.com"):
+    if not (APP_VERSION.endswith("-performance-lab") and performance_origin_enabled()):
         return module.search_or(page, org)
     query = re.sub(r"\s+", " ", org.organization_name).strip()
     failure = []
@@ -10867,14 +11545,14 @@ def mi_name_fallback_queries(org):
 
 def lab_mi_query_dominance_enabled() -> bool:
     return (APP_VERSION.endswith("-performance-lab")
-            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and performance_origin_enabled()
             and os.environ.get("CE_LAB_MI_QUERY_DOMINANCE") == "1"
             and LAB_LOOKUP_MODE_CONTEXT.get() == "sales")
 
 
 def mi_http_names_enabled(org) -> bool:
     return (APP_VERSION.endswith("-performance-lab")
-            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and performance_origin_enabled()
             and os.environ.get("CE_LAB_MI_NAME_HTTP") == "1"
             and not getattr(org, "evidence_mode", False)
             and not CAPTURE_EVIDENCE_SCREENSHOTS and not CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT)
@@ -10902,7 +11580,7 @@ def mi_completed_query_covers(completed, query):
 
 def lab_mi_patient_transport_enabled() -> bool:
     return (APP_VERSION.endswith("-performance-lab")
-            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and performance_origin_enabled()
             and os.environ.get("CE_LAB_MI_PATIENT_TRANSPORT") == "1"
             and LAB_LOOKUP_MODE_CONTEXT.get() == "sales")
 
@@ -12825,7 +13503,7 @@ class FloridaVerifiedTransport:
 def fl_verified_transport_first() -> bool:
     """Explicit isolated-lab transport comparison; no registry rule changes."""
     return (APP_VERSION.endswith("-performance-lab")
-            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and performance_origin_enabled()
             and os.environ.get("CE_LAB_FL_TRANSPORT") == "verified-first")
 
 
@@ -12882,14 +13560,14 @@ def fl_business_lookup_enabled() -> bool:
     # Source selection is independent of the browser's transport experiment.
     # Restoring normal Chromium must not disable the complete license lookup.
     return (APP_VERSION.endswith("-performance-lab")
-            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and performance_origin_enabled()
             and os.environ.get("CE_LAB_FL_BUSINESS_LOOKUP") == "1")
 
 
 def lab_fl_form_context_options(state, org) -> dict:
     """Use native HTML form submission for the lab Sales FL browser fallback."""
     if (state == "FL" and APP_VERSION.endswith("-performance-lab")
-            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and performance_origin_enabled()
             and os.environ.get("CE_LAB_FL_SCRIPTLESS") == "1"
             and LAB_LOOKUP_MODE_CONTEXT.get() == "sales"
             and not getattr(org, "evidence_mode", False)
@@ -19239,6 +19917,8 @@ def registration_date_metadata(result, final_status=None, body="") -> dict:
     retain their exact labels. Expiration, fiscal and incorporation dates never
     fill either column. Ambiguous or unmatched records remain blank.
     """
+    if str(getattr(result, "state", "")).upper() in ("AL", "NC", "NV", "TN"):
+        return final_four_date_metadata(result, final_status)
     value = label = kind = renewal = renewal_label = renewal_kind = ""
     source_url = renewal_url = getattr(result, "source_url", "")
     detail = re.split(r"<!doctype\b|<html\b", body or "", maxsplit=1, flags=re.I)[0]
@@ -19391,6 +20071,8 @@ def renewal_filing_metadata(result, dates: dict, final_status=None, body="") -> 
     outside-state filing substitutions, or changes to the lookup result.
     Existing renewal_date fields retain their date-only contract.
     """
+    if str(getattr(result, "state", "")).upper() in ("AL", "NC", "NV", "TN"):
+        return final_four_filing_metadata(result, dates, final_status)
     empty = {"renewal_filing_" + key: "" for key in ("value", "type", "label", "source_url", "note")}
     if not registration_date_result_confirmed(result, final_status):
         return empty
@@ -20329,7 +21011,7 @@ def nj_search_body(page, query):
 
 def nj_public_query_enabled() -> bool:
     return (APP_VERSION.endswith("-performance-lab")
-            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and performance_origin_enabled()
             and os.environ.get("CE_LAB_NJ_PUBLIC_QUERY") == "1")
 
 
@@ -20947,7 +21629,7 @@ def lab_pa_completed_no_match(result, org) -> bool:
     and all Standard lookups retain their existing confirmation behavior.
     """
     return (APP_VERSION.endswith("-performance-lab")
-            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and performance_origin_enabled()
             and os.environ.get("CE_LAB_PA_COMPLETED_ZERO_REUSE") == "1"
             and LAB_LOOKUP_MODE_CONTEXT.get() == "sales"
             and bool(getattr(result, "success", False))
@@ -21134,7 +21816,7 @@ def pa_name_rows(page, selector):
     """Read the same visible rows in one browser round trip in opt-in lab Sales."""
     rows = page.locator(selector)
     if not (APP_VERSION.endswith('-performance-lab')
-            and os.environ.get('PUBLIC_BASE_URL') == 'https://instant-compliance-snapshot-api-hn4v.onrender.com'
+            and performance_origin_enabled()
             and os.environ.get('CE_LAB_PA_ROW_SNAPSHOT') == '1'
             and LAB_LOOKUP_MODE_CONTEXT.get() == 'sales'):
         return rows
@@ -21669,7 +22351,7 @@ class NYBrowserConnectionError(OSError):
 
 def lab_ny_failed_request_wakeup() -> bool:
     return (APP_VERSION.endswith("-performance-lab")
-            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and performance_origin_enabled()
             and os.environ.get("CE_LAB_NY_FAILED_REQUEST_WAKEUP") == "1"
             and LAB_LOOKUP_MODE_CONTEXT.get() == "sales")
 
@@ -21760,7 +22442,7 @@ def ny_complete_browser_response(page, predicate, submit, remaining_ms):
 
 def lab_ny_routed_detail() -> bool:
     return (APP_VERSION.endswith("-performance-lab")
-            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and performance_origin_enabled()
             and os.environ.get("CE_LAB_NY_ROUTED_DETAIL") == "1"
             and LAB_LOOKUP_MODE_CONTEXT.get() == "sales")
 
@@ -22174,6 +22856,9 @@ NY_CONNECTOR_PRODUCTION_ORIGINS = frozenset({"https://www.compliance-express.com
 def ny_connector_origin_allowed(origin):
     # Environment isolation is independent of user authentication. A production
     # API never accepts staging continuations, or vice versa.
+    if os.environ.get('CE_FINAL_FOUR_TRIAL') == '1':
+        identity = trial_identity()
+        return bool(identity and origin == identity['origin'])
     return (origin == NY_CONNECTOR_ORIGIN if APP_VERSION.endswith("-staging")
             else origin in NY_CONNECTOR_PRODUCTION_ORIGINS)
 
@@ -22391,13 +23076,13 @@ def ny_connector_request(payload, origin):
     now = time.time()
     if action == "start":
         state = payload.get("state", "NY")
-        if state not in {"NY", "IL", "GA"} or (state != "NY" and origin != NY_CONNECTOR_ORIGIN):
+        if state not in {"NY", "IL", "GA"} or (state != "NY" and origin != NY_CONNECTOR_ORIGIN and not trial_identity()):
             return 400, {"error": "Unsupported browser registry for this environment."}
         purpose = payload.get("purpose", "registration")
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"}:
+        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version == "0.6.0")):
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()
@@ -22965,6 +23650,8 @@ def ca_explicit_primary_registry_status(result) -> str:
 
 
 def true_status_from_body(result, body: str) -> str:
+    if result.state in {"AL", "NC", "NV", "TN"} and getattr(result, "status_reason", "") == "LICENSED_CHARITY_SOURCE":
+        return public_status(result)
     if result.state in {"DC", "RI", "IL", "GA"} and getattr(result, "status_reason", "") == "LICENSED_CHARITY_SOURCE":
         return public_status(result)
     if getattr(result, 'status_reason', '') == 'OR_STATUS_FROM_CONFIRMED_LIVE_PERIOD':
@@ -23384,6 +24071,8 @@ def comment_registry_status(raw: str, status: str) -> str:
 
 
 def comments_for_result_base(result, body: str, public_facing_status: str) -> str:
+    if result.state in {"AL", "NC", "NV", "TN"} and getattr(result, "status_reason", "") == "LICENSED_CHARITY_SOURCE":
+        return result.source_note
     if result.state == "NM" and getattr(result, "reason_code", "") == "NM_DETAIL_CONFIRMATION_INCOMPLETE":
         return result.source_note + " CharityClarity reports Unable to Confirm."
     if result.state == "NM" and getattr(result, "reason_code", "") == "NM_COMPLETED_EMPTY_FEIN_CONFIRMATION":
@@ -26189,7 +26878,7 @@ def ok_click_name_search_ok_button(page, org=None) -> bool:
 
 def lab_ok_completed_detail_enabled() -> bool:
     return (APP_VERSION.endswith("-performance-lab")
-            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and performance_origin_enabled()
             and os.environ.get("CE_LAB_OK_COMPLETED_DETAIL") == "1"
             and LAB_LOOKUP_MODE_CONTEXT.get() == "sales")
 
@@ -27146,7 +27835,7 @@ def lab_sales_ar_access_block_is_terminal(result) -> bool:
     Standard and transport timeouts retain their existing recovery behavior.
     """
     if not (APP_VERSION.endswith("-performance-lab")
-            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and performance_origin_enabled()
             and os.environ.get("CE_LAB_AR_BLOCK_RETRY") == "terminal"
             and LAB_LOOKUP_MODE_CONTEXT.get() == "sales"):
         return False
@@ -28076,7 +28765,7 @@ def wa_apply_detail_master(result, body: str):
 def lab_wa_readiness_waits_only() -> bool:
     """Use existing explicit readiness checks instead of redundant idle waits."""
     return (APP_VERSION.endswith("-performance-lab")
-            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and performance_origin_enabled()
             and os.environ.get("CE_LAB_WA_READY_STEPS") == "1"
             and LAB_LOOKUP_MODE_CONTEXT.get() == "sales")
 
@@ -30538,14 +31227,15 @@ def identity_review_view(record):
 def attach_identity_review(data, context):
     """Sign master-retrieved candidates, never a browser-supplied status override."""
     if (APP_VERSION.endswith('-performance-lab')
-            and os.environ.get('PUBLIC_BASE_URL') == 'https://instant-compliance-snapshot-api-hn4v.onrender.com'
-            and os.environ.get('CE_AURORA_STAGING_BRIDGE') == '1'):
+            and performance_origin_enabled()
+            and os.environ.get('CE_AURORA_STAGING_BRIDGE') == '1'
+            and not (trial_identity() and os.environ.get('CE_FINAL_FOUR_CHILD') != '1')):
         # Private authenticated worker response only. Staging signs the same
         # master-retrieved candidates with its own release and signing key.
         data['_worker_identity_review'] = json.loads(json.dumps(context,
             default=lambda value: value.isoformat() if isinstance(value, date) else str(value)))
         return
-    if not APP_VERSION.endswith("-staging") or len(NY_CONNECTOR_SIGNING_KEY) < 32:
+    if not (APP_VERSION.endswith("-staging") or trial_identity()) or len(NY_CONNECTOR_SIGNING_KEY) < 32:
         return
     rows = []
     for row in context["records"]:
@@ -30753,7 +31443,7 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
         admitted = False
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            if not APP_VERSION.endswith("-staging") or not 0 < length <= 260000:
+            if not (APP_VERSION.endswith("-staging") or trial_identity()) or not 0 < length <= 260000:
                 self._send_json(400, {"error": "Identity review is unavailable for this request."}); return
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
             if not isinstance(payload, dict): raise ValueError("Invalid review request.")
@@ -30796,6 +31486,21 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             log_error(f"Name discovery failed: {type(exc).__name__}")
             self._send_json(503, {"error": "Alternate names could not be retrieved. You can enter names manually and continue."})
+
+    def _send_final_four_connector(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= 524288:
+                self._send_json(413, {"error": "Connector input must be between 1 byte and 512 KB."})
+                return
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            code, response = final_four_connector_request(payload, self.headers.get("Origin", ""))
+            self._send_json(code, response, {"Cache-Control": "no-store"})
+        except (ValueError, TypeError, UnicodeError):
+            self._send_json(400, {"error": "Invalid registry connector request."})
+        except Exception as exc:
+            log_error(f"Final-four connector request failed: {type(exc).__name__}")
+            self._send_json(503, {"error": "The browser registry check could not be completed. Registration remains unconfirmed."})
 
     def _send_ny_connector(self):
         try:
@@ -31031,6 +31736,9 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
         self._send_json(404, {"error": "Open http://127.0.0.1:8765/ to use the registry snapshot page."})
 
     def do_POST(self) -> None:
+        if self.path == "/api/final-four-connector":
+            self._send_final_four_connector()
+            return
         if self.path == "/api/workflow":
             import sys
             from deployment.staging_workflows import handle

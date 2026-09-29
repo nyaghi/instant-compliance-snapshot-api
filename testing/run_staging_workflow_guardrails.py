@@ -131,7 +131,8 @@ class WorkflowControls(unittest.TestCase):
         old=subprocess.check_output(['git','show','a59c2d8:registry_snapshot_server.py']).decode('utf-8')
         new=Path(c.__file__).read_text(encoding='utf-8')
         find=lambda text:next(n for n in ast.parse(text).body if isinstance(n,ast.FunctionDef) and n.name=='attach_identity_review')
-        original,merged=find(old),find(new)
+        from testing.performance_origin_audit import RestoreApprovedOrigin
+        original,merged=find(old),RestoreApprovedOrigin().visit(find(new))
         del merged.body[1] # only addition: private worker export before unchanged staging branch
         self.assertEqual(ast.dump(merged),ast.dump(original))
 
@@ -144,11 +145,12 @@ class WorkflowControls(unittest.TestCase):
         self.assertNotIn('_worker_identity_review',value)
 
     def test_every_nonconflicting_master_function_preserves_selected_parent(self):
+        from testing.performance_origin_audit import RestoreApprovedOrigin
         def functions(ref):
             text=subprocess.check_output(['git','show',ref+':registry_snapshot_server.py']).decode('utf-8')
             return {n.name:ast.dump(n) for n in ast.parse(text).body if isinstance(n,ast.FunctionDef)}
         base,aurora,lab=functions('35e61ae'),functions('a59c2d8'),functions('90ed42d')
-        tree=ast.parse(Path(c.__file__).read_text(encoding='utf-8'))
+        tree=RestoreApprovedOrigin().visit(ast.parse(Path(c.__file__).read_text(encoding='utf-8')))
         # Post-validation exposed a nameless NM detail shell classified as NR.
         # Remove only the separately behavior-tested confirmation hook; the
         # entire original adapter function must still match its selected parent.

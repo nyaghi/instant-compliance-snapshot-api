@@ -1,14 +1,14 @@
-/* IL/GA transport module of the existing connector; no independent runtime. */
-const registryOrigin = state => state === "IL" ? "https://charitable.illinoisattorneygeneral.gov" : "https://verify.sos.ga.gov";
-const registryStart = state => registryOrigin(state) + (state === "IL" ? "/search" : "/verification/Search.aspx?facility=Y");
+/* Public-registry transport in the existing connector; no independent runtime. */
+const registryOrigin = state => ({IL:"https://charitable.illinoisattorneygeneral.gov",GA:"https://verify.sos.ga.gov",AL:"https://ago.igovsolution.net",NC:"https://www.sosnc.gov",NV:"https://orion.nv.gov",TN:"https://tncab.tnsos.gov"})[state];
+const registryStart = state => registryOrigin(state) + ({IL:"/search",GA:"/verification/Search.aspx?facility=Y",AL:"/online/Lookups/Business.aspx",NC:"/online_services/search/by_title/search_charities",NV:"/portal/public/#/public/nvsos/en/CaseXscreen?screen=external-GenericFilingsSearch&tabRoute=business",TN:"/portal/registered-charities-search"})[state];
 async function registryMessage(job, message) {
   if (job.closed || Date.now() >= job.activeExpiresAt) throw new Error("NY_CONNECTOR_TIMEOUT");
   const tab = await chrome.tabs.get(job.tab);
   if (new URL(tab.url).origin !== registryOrigin(job.registryState)) throw new Error("NY_CONNECTOR_INCOMPLETE");
   return chrome.tabs.sendMessage(job.tab, message, {frameId:0});
 }
-async function registryReady(job, oldDocument = null, path = null) {
-  const deadline = Math.min(Date.now()+45000, job.activeExpiresAt);
+async function registryReady(job, oldDocument = null, path = null, budgetMs = 45000) {
+  const deadline = Math.min(Date.now()+Math.max(1,Math.min(45000,budgetMs)), job.activeExpiresAt);
   while (!job.closed && Date.now()<deadline) {
     try {
       const value=await registryMessage(job,{action:"registry-ready"});
@@ -18,7 +18,7 @@ async function registryReady(job, oldDocument = null, path = null) {
   }
   throw new Error("NY_CONNECTOR_TAB_READY_TIMEOUT");
 }
-async function registryNavigate(job, url) {
+async function registryNavigate(job, url, budgetMs = 45000) {
   if (new URL(url).origin !== registryOrigin(job.registryState)) throw new Error("NY_CONNECTOR_INCOMPLETE");
   let previous;
   if (job.tab !== null) {
@@ -33,7 +33,7 @@ async function registryNavigate(job, url) {
     job.creating=chrome.tabs.create({windowId:origin.windowId,url,active:false});
     const tab=await job.creating; job.creating=null; job.tab=tab.id; owned.add(tab.id); await saveRuntime();
   }
-  return registryReady(job,previous,new URL(url).pathname);
+  return registryReady(job,previous,new URL(url).pathname,budgetMs);
 }
 async function registryIllinoisVerification(job, collect) {
   // Preserve the verification document. Reloading here resets Illinois's
@@ -62,7 +62,39 @@ async function registryIllinoisVerification(job, collect) {
   }
 }
 async function performRegistryQuery(job, query) {
-  if (!P.validQuery(query) || query.state !== job.registryState || new URL(job.sender.url).origin !== P.STAGING) throw new Error("NY_CONNECTOR_INVALID_SEQUENCE");
+  if (!P.validQuery(query) || query.state !== job.registryState || !P.registryAllowed(query.state,new URL(job.sender.url).origin)) throw new Error("NY_CONNECTOR_INVALID_SEQUENCE");
+  if (query.state === "AL") {
+    if (job.tab === null && trialAlIdle) {
+      const saved=trialAlIdle; trialAlIdle=null;
+      try {
+        const tab=await chrome.tabs.get(saved.id), source=await chrome.tabs.get(job.sender.tab.id);
+        if (owned.has(saved.id) && tab.url===registryStart('AL') && tab.windowId===source.windowId && saved.expiresAt>Date.now()) job.tab=saved.id;
+        else await removeOwned(saved.id);
+      } catch { await removeOwned(saved.id); }
+      await saveRuntime();
+    }
+    if (job.tab===null) await registryNavigate(job,registryStart('AL'));
+    else await registryReady(job,null,'/online/Lookups/Business.aspx');
+    // Reuse only the connector-owned verified page. Each command must observe
+    // a fresh result; no verification code or previous result is shared.
+    return registryMessage(job,{action:'registry-al',query,budgetMs:Math.max(1,Math.min(45000,job.activeExpiresAt-Date.now()))});
+  }
+  if (query.state === "NC") return registryNorthCarolinaQuery(job,query);
+  if (["NV", "TN"].includes(query.state)) {
+    if (query.operation === "search") {
+      if (job.tab === null || !job.finalFourReusableForm) await registryNavigate(job,registryStart(query.state));
+      else await registryReady(job,null,new URL(registryStart(query.state)).pathname);
+    } else if (job.tab === null || !job.finalFourSearchComplete) {
+      throw new Error("NY_CONNECTOR_INVALID_SEQUENCE");
+    }
+    job.finalFourReusableForm = false;
+    const response = await registryMessage(job,{action:`registry-${query.state.toLowerCase()}`,query,budgetMs:Math.max(1,Math.min(45000,job.activeExpiresAt-Date.now()))});
+    if (query.operation === "search") job.finalFourSearchComplete = response?.ok === true;
+    // TN keeps its result grid behind the detail dialog. NV navigates to a
+    // detail route, so its next name search needs a fresh ordinary search form.
+    job.finalFourReusableForm = response?.ok === true && (query.state === "TN" || query.operation === "search");
+    return response;
+  }
   if (query.state === "IL") {
     // Keep one ordinary search form through the same organization's fallbacks.
     // Reloading for every name repeatedly discards normal page readiness and
@@ -117,6 +149,36 @@ async function performRegistryQuery(job, query) {
     return registryMessage(job,{action:"registry-ga-detail",query});
   }
   return registryGaSearch(job,query);
+}
+async function registryNorthCarolinaQuery(job,query) {
+  if(query.operation==='search') {
+    const prior=await registryNavigate(job,registryStart('NC'));
+    const submitted=await registryMessage(job,{action:'registry-nc-form',query});
+    if(!submitted?.ok||submitted.phase!=='submitted')throw new Error('NY_CONNECTOR_INCOMPLETE');
+    await registryReady(job,prior.documentId,'/online_services/search/Charities_Results');
+    const result=await registryMessage(job,{action:'registry-nc-rows',query,budgetMs:Math.max(1,Math.min(45000,job.activeExpiresAt-Date.now()))});
+    if(result?.ok && result.evidence?.complete===true) {
+      job.ncProfiles ||= Object.create(null);
+      for(const row of result.evidence.rows||[])job.ncProfiles[row.License]=row.profile_url;
+    }
+    return result;
+  }
+  if(job.ncProfiles?.[query.identifier]!==query.url)throw new Error('NY_CONNECTOR_INVALID_SEQUENCE');
+  await registryNavigate(job,query.url);
+  const profile=await registryMessage(job,{action:'registry-nc-profile',query});
+  if(!profile?.ok)return profile;
+  const expected=query.url.replace('/charities_profile/','/charities_filings/');
+  if(profile.filings_url===expected) {
+    profile.evidence.filings={url:expected,complete:false,rows:[]};
+    if(job.activeExpiresAt-Date.now()>5000) {
+      try {
+        await registryNavigate(job,expected,Math.min(8000,job.activeExpiresAt-Date.now()-1000));
+        const history=await registryMessage(job,{action:'registry-nc-filings',query});
+        if(history?.ok)profile.evidence.filings=history.filings;
+      } catch { /* Optional history cannot invalidate a complete profile. */ }
+    }
+  }
+  return {ok:true,evidence:profile.evidence};
 }
 async function registryGaSearch(job, query, requestedIdentifier=null, selectedRecord=null) {
   let document=await registryNavigate(job,registryStart("GA"));

@@ -1,0 +1,142 @@
+"""Isolated UI and queue integration; approved 29.1 defaults are controls."""
+import json
+import io
+from pathlib import Path
+import subprocess
+import tempfile
+import types
+import unittest
+from unittest.mock import patch, Mock
+
+import registry_snapshot_server as cc
+from deployment import performance_lab as lab, staging_workflows as workflows, durable_queue
+from deployment.package_final_four_connector import build
+
+ROOT = Path(__file__).resolve().parents[1]
+NODE = Path.home()/'.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe'
+TRIAL = {'origin': 'https://fixture-final-four.onrender.com'}
+
+
+class TrialWorkflowControls(unittest.TestCase):
+    def payload(self):
+        return {'organization_name':'Example National Foundation','ein':'123456789','states':['IL','GA','AL','NC','NV','TN','MA'],
+                'mode':'standard','alternate_names':['Example Foundation'],'request_id':'11111111-1111-1111-1111-111111111111'}
+
+    def test_approved_templates_are_unmodified_without_active_trial(self):
+        with patch.object(lab,'trial_identity',return_value=None):
+            for name in ['index.html','sales-mode.js','optimized-workflows.js','ny-connector.js']:
+                text=(ROOT/'web-staging'/name).read_text(encoding='utf-8')
+                self.assertEqual(lab.final_four_asset(name,text),text)
+
+    def test_trial_has_38_checkboxes_and_generated_javascript_compiles(self):
+        import re
+        with patch.object(lab,'trial_identity',return_value=TRIAL), tempfile.TemporaryDirectory() as tmp:
+            for name in ['index.html','sales-mode.js','optimized-workflows.js','ny-connector.js']:
+                text=lab.final_four_asset(name,(ROOT/'web-staging'/name).read_text(encoding='utf-8'))
+                if name=='index.html':
+                    states=re.findall(r'name="states" value="([A-Z]{2})"',text)
+                    self.assertEqual(len(states),38);self.assertEqual(len(set(states)),38)
+                    self.assertIn('v2026.09.29.2',text)
+                    code='\n'.join(re.findall(r'<script(?:\s[^>]*)?>(.*?)</script>',text,re.S))
+                else: code=text
+                p=Path(tmp)/(name+'.js');p.write_text(code,encoding='utf-8')
+                result=subprocess.run([str(NODE),'--check',str(p)],capture_output=True,text=True)
+                self.assertEqual(result.returncode,0,result.stderr)
+
+    def test_template_drift_stops_assembly_instead_of_silently_skipping_routing(self):
+        with patch.object(lab,'trial_identity',return_value=TRIAL):
+            with self.assertRaises(RuntimeError): lab.final_four_asset('index.html','unrecognized replacement UI')
+            with self.assertRaises(RuntimeError): lab.final_four_asset('ny-connector.js','unrecognized connector')
+
+    def test_trial_reserves_one_actual_browser_lane_without_reducing_other_state_capacity(self):
+        payload={k:v for k,v in self.payload().items() if k!='request_id'}
+        payload['external_state_slots']=1
+        result=durable_queue.normalize_submission(payload,payload['states'])
+        self.assertEqual(durable_queue.workflow_state_limit({'payload':result}),14)
+        with self.assertRaises(ValueError):durable_queue.normalize_submission({**payload,'external_state_slots':6},payload['states'])
+
+    def test_trial_submission_uses_supplied_queue_and_sends_no_browser_jobs_to_workers(self):
+        master=types.SimpleNamespace(SUPPORTED_STATES=self.payload()['states'],APP_VERSION='fixture-performance-lab',
+                                    NY_CONNECTOR_SIGNING_KEY='fixture-secret-'*4,canonical_ein_digits=cc.canonical_ein_digits)
+        seen=[]
+        def transport(path,payload,key):
+            seen.append((path,payload,key));return {'id':'11111111-1111-1111-1111-111111111111'}
+        with patch.object(workflows,'call',side_effect=AssertionError('Never use protected staging queue')):
+            result=workflows.prepare(master,self.payload(),['fixture','device'],transport=transport,
+                                     external_states={'IL','GA','AL','NC','NV','TN'},external_slots=1)
+        self.assertEqual(result['external_states'],['AL','GA','IL','NC','NV','TN'])
+        self.assertEqual(seen[0][1]['states'],['MA']);self.assertEqual(seen[0][1]['external_state_slots'],1)
+        self.assertEqual(seen[0][1]['alternate_names'],['Example Foundation'])
+        self.assertEqual(result['state_concurrency'],15)
+
+    def test_original_submission_defaults_remain_two_browser_states(self):
+        master=types.SimpleNamespace(SUPPORTED_STATES=['IL','GA','MA'],APP_VERSION='fixture-staging',
+                                    NY_CONNECTOR_SIGNING_KEY='fixture-secret-'*4,canonical_ein_digits=cc.canonical_ein_digits)
+        payload={**self.payload(),'states':['IL','GA','MA']}
+        with patch.object(workflows,'call',return_value={'id':'11111111-1111-1111-1111-111111111111'}) as submit:
+            result=workflows.prepare(master,payload,['fixture','device'])
+        self.assertEqual(result['external_states'],['GA','IL']);self.assertEqual(submit.call_args.args[1]['external_state_slots'],2)
+
+    def test_trial_connector_origin_never_falls_back_to_production(self):
+        with patch.dict(cc.os.environ,{'CE_FINAL_FOUR_TRIAL':'1'}),patch.object(cc,'trial_identity',return_value=TRIAL):
+            self.assertTrue(cc.ny_connector_origin_allowed(TRIAL['origin']))
+            self.assertFalse(cc.ny_connector_origin_allowed('https://www.compliance-express.com'))
+            self.assertFalse(cc.ny_connector_origin_allowed('https://staging.compliance-express.com'))
+        with patch.dict(cc.os.environ,{'CE_FINAL_FOUR_TRIAL':'1'}),patch.object(cc,'trial_identity',return_value=None):
+            self.assertFalse(cc.ny_connector_origin_allowed(TRIAL['origin']))
+
+    def test_trial_routes_preserve_request_body_for_master_and_do_not_bypass_auth(self):
+        class Base:
+            def do_POST(self):
+                return ('master',self.path,self.rfile.read())
+        master=types.SimpleNamespace(RegistrySnapshotHandler=Base)
+        handler_type=lab.build_handler(master,'fixture',durable=Mock())
+        with patch.object(lab,'trial_identity',return_value=TRIAL):
+            for path in ['/api/final-four-connector','/api/ny-connector','/api/discover-names','/api/identity-review','/api/report']:
+                h=handler_type.__new__(handler_type);h.path=path;h.rfile=io.BytesIO(b'{"fixture":true}')
+                h.authorized=lambda:True
+                self.assertEqual(h.do_POST(),('master',path,b'{"fixture":true}'))
+                h.rfile=io.BytesIO(b'{"fixture":true}');h.authorized=lambda:False
+                self.assertIsNone(h.do_POST());self.assertEqual(h.rfile.tell(),0)
+
+    def test_trial_public_review_is_signed_without_leaking_worker_context(self):
+        row={'name':'Example Foundation','identifier':'X1','ein':'','location':'Boston MA','url':'https://example.test/X1',
+             'raw_status':'Current','expiration':'2027-12-31','initial':'','_identity_outcome':'conflict'}
+        data={'ein':'123456789','state':'ME','organization_name':'Example Foundation','comments':'Review location',
+              'status':'Needs Review','app_version':'fixture-performance-lab'}
+        with patch.object(cc,'trial_identity',return_value=TRIAL),patch.object(cc,'performance_origin_enabled',return_value=True), \
+                patch.object(cc,'APP_VERSION','fixture-performance-lab'),patch.object(cc,'NY_CONNECTOR_SIGNING_KEY','fixture-'*8), \
+                patch.dict(cc.os.environ,{'CE_AURORA_STAGING_BRIDGE':'1','CE_FINAL_FOUR_CHILD':''}):
+            cc.attach_identity_review(data,{'records':[row],'search_complete':True})
+            self.assertIn('identity_review',data);self.assertNotIn('_worker_identity_review',data)
+            with patch.dict(cc.os.environ,{'CE_FINAL_FOUR_CHILD':'1'}):
+                child={};cc.attach_identity_review(child,{'records':[row]})
+                self.assertIn('_worker_identity_review',child);self.assertNotIn('identity_review',child)
+
+    def test_separate_connector_package_has_no_production_staging_or_ny_access(self):
+        before=(ROOT/'browser-connector/manifest.json').read_bytes()
+        with tempfile.TemporaryDirectory() as tmp:
+            output=Path(tmp)/'trial'
+            result=build(TRIAL['origin'],output)
+            manifest=json.loads((output/'manifest.json').read_text(encoding='utf-8'))
+            self.assertEqual(manifest['version'],'0.6.0')
+            self.assertEqual(manifest['permissions'],['storage'])
+            text=json.dumps(manifest)
+            for banned in ['staging.compliance-express.com','www.compliance-express.com','charities-search.ag.ny.gov','cookies','browsingData']:
+                self.assertNotIn(banned,text)
+            self.assertEqual(manifest['content_scripts'][0]['matches'],[TRIAL['origin']+'/*'])
+            self.assertTrue(Path(result['zip']).is_file())
+            for file in output.glob('*.js'):
+                r=subprocess.run([str(NODE),'--check',str(file)],capture_output=True,text=True)
+                self.assertEqual(r.returncode,0,r.stderr)
+            with self.assertRaises(ValueError):build(TRIAL['origin'],output)
+        self.assertEqual((ROOT/'browser-connector/manifest.json').read_bytes(),before)
+
+    def test_packager_rejects_approved_origins_and_non_https_destinations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for origin in ['https://staging.compliance-express.com','https://instant-compliance-snapshot-api-hn4v.onrender.com',
+                           'http://fixture.onrender.com','https://fixture.onrender.com.evil.test','https://fixture.onrender.com/path']:
+                with self.assertRaises(ValueError):build(origin,Path(tmp)/'rejected')
+
+
+if __name__=='__main__':unittest.main(verbosity=2)

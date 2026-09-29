@@ -18,7 +18,9 @@ from urllib.parse import unquote, urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-LAB_ORIGIN = 'https://instant-compliance-snapshot-api-hn4v.onrender.com'
+from deployment.lab_identity import configured_lab_origin, trial_identity
+
+LAB_ORIGIN = configured_lab_origin()
 LAB_SERVICE_ID = 'srv-d8u0hsu7r5hc73aqfsg0'
 DISABLED_CONNECTIONS = (
     'CE_SINGLE_STATE_OVERFLOW_API_URL', 'CE_SINGLE_STATE_OVERFLOW_API_URLS',
@@ -29,13 +31,16 @@ DISABLED_CONNECTIONS = (
 
 
 def validate_environment(env):
+    trial = trial_identity(env) if env.get('CE_FINAL_FOUR_TRIAL') == '1' else None
+    if env.get('CE_FINAL_FOUR_TRIAL') == '1' and trial is None:
+        raise RuntimeError('29.2 requires its own active services and queue database')
     if env.get('PUBLIC_BASE_URL') != LAB_ORIGIN:
         raise RuntimeError('Performance entry point requires its isolated lab origin')
     service = env.get('RENDER_SERVICE_ID', LAB_SERVICE_ID)
     worker_allowed = (env.get('CE_LAB_ROLE') == 'worker'
         and service == env.get('CE_LAB_WORKER_SERVICE_ID')
         and env.get('RENDER_SERVICE_NAME') == 'charityclarity-performance-lab-worker-1')
-    if service != LAB_SERVICE_ID and not worker_allowed:
+    if trial is None and service != LAB_SERVICE_ID and not worker_allowed:
         raise RuntimeError('Performance entry point refuses another Render service')
     if service in ('srv-d8a38lnavr4c73d4ib30', 'srv-d82afqjrjlhs738j7or0'):
         raise RuntimeError('A protected staging service is never a lab worker')
@@ -50,7 +55,7 @@ def validate_environment(env):
     for key in DISABLED_CONNECTIONS:
         if env.get(key) != '':
             raise RuntimeError('Connection must be explicitly disabled: ' + key)
-    if env.get('CE_LAB_DURABLE_QUEUE') == '1':
+    if trial is None and env.get('CE_LAB_DURABLE_QUEUE') == '1':
         database = urlparse(env.get('CE_LAB_DATABASE_URL', ''))
         if database.scheme not in ('postgres', 'postgresql') or database.hostname not in (
             'dpg-dar6utvavr4c7380ou60-a', 'dpg-dar6utvavr4c7380ou60-a.oregon-postgres.render.com'
@@ -88,6 +93,45 @@ def install_http_egress_guard():
     sys.addaudithook(audit)
 
 
+def final_four_asset(name, text):
+    """Trial-only presentation/transport assembly; no registry interpretation."""
+    identity = trial_identity()
+    if not identity:
+        return text
+    def replace(old, new, count=1):
+        nonlocal text
+        if text.count(old) != count:
+            raise RuntimeError('29.2 asset no longer matches the approved template: ' + name)
+        text = text.replace(old, new)
+    if name == 'index.html':
+        import re
+        label = re.search(r'<label[^>]*><input type="checkbox" name="states" value="AK"[^>]* /> <span>Alaska</span></label>', text)
+        if not label: raise RuntimeError('Missing approved state selector template')
+        additions = ''.join(label[0].replace('value="AK"', 'value="'+state+'"').replace('>Alaska<', '>'+title+'<')
+                            for state, title in [('AL','Alabama'),('NC','North Carolina'),('NV','Nevada'),('TN','Tennessee')])
+        text = text[:label.end()] + additions + text[label.end():]
+        replace('!["IL", "GA"].includes(state)', '!["IL", "GA", "AL", "NC", "NV", "TN"].includes(state)')
+        replace('["NY", "IL", "GA"].includes(state)', '["NY", "IL", "GA", "AL", "NC", "NV", "TN"].includes(state)')
+        replace('alternateNames = runAlternateNames, {signal} = {}', 'alternateNames = runAlternateNames, {signal,mode="standard"} = {}')
+        replace('alternate_names: alternateNames, signal,', 'alternate_names: alternateNames, signal, mode,')
+        replace('v2026.09.29.1 &middot; Staging', 'v2026.09.29.2 &middot; Isolated Trial')
+    elif name == 'optimized-workflows.js':
+        replace("states.filter(s=>s==='IL'||s==='GA')", "states.filter(s=>['IL','GA','AL','NC','NV','TN'].includes(s))")
+    elif name == 'sales-mode.js':
+        replace('const NAMES = {', 'const NAMES = {"AL":"Alabama","NC":"North Carolina","NV":"Nevada","TN":"Tennessee",')
+        replace('{signal:controller.signal}', '{signal:controller.signal,mode:"sales"}', 2)
+    elif name == 'ny-connector.js':
+        text = text.replace('cc-ny-staging-v1', 'cc-final-four-trial-v1')
+        replace('state: registryState = "NY", signal })', 'state: registryState = "NY", signal, mode = "standard" })')
+        replace('{NY:"New York",IL:"Illinois",GA:"Georgia"}', '{NY:"New York",IL:"Illinois",GA:"Georgia",AL:"Alabama",NC:"North Carolina",NV:"Nevada",TN:"Tennessee"}')
+        replace('    const supported = c =>', '    const finalFour = ["AL","NC","NV","TN"].includes(registryState);\n    const supported = c => (!finalFour || c.capabilities?.includes("final-four-public-v1")) &&')
+        replace('API + "/api/ny-connector"', 'API + (finalFour ? "/api/final-four-connector" : "/api/ny-connector")')
+        replace('action: "start", state: registryState,', 'action: "start", mode, state: registryState,')
+        replace('const searchSignal = recoveryUsed ?', 'const searchSignal = (recoveryUsed || finalFour) ?')
+        replace('if (!recoveryUsed) throw error;', 'if (!recoveryUsed && !finalFour) throw error;')
+    return text
+
+
 def lab_asset(path):
     path = unquote(urlparse(path).path)
     if path in ('/', '/registry-snapshot', '/registry-snapshot/'):
@@ -101,6 +145,7 @@ def lab_asset(path):
     data = file.read_bytes()
     if file.suffix.lower() in {'.html', '.js', '.css'}:
         text = data.decode('utf-8')
+        text = final_four_asset(file.name, text)
         for origin in ('https://instant-compliance-snapshot-api-staging-8dnk.onrender.com',
                        'https://instant-compliance-snapshot-api-staging.onrender.com',
                        'https://staging.compliance-express.com'):
@@ -177,6 +222,18 @@ def build_handler(master, key, capacity=None, durable=None):
             if self.path in ('/health', '/healthz'):
                 return self._send_healthz(include_body)
             if not self.authorized(): return
+            if self.path == '/api/lab/trial-export' and trial_identity() and durable is not None:
+                # Authenticated evidence export before retiring this disposable
+                # database. The approved pool never exposes this endpoint.
+                with durable.transaction() as (connection, _):
+                    evidence = {}
+                    for table, limit in (('cc_lab_settings', 1), ('cc_lab_workflows', 1000), ('cc_lab_jobs', 40000)):
+                        count = connection.execute('SELECT count(*) AS n FROM ' + table).fetchone()['n']
+                        if count > limit:
+                            return self._send_json(413, {'error': 'Trial export needs a paginated archival pass'})
+                        evidence[table] = connection.execute('SELECT * FROM ' + table).fetchall()
+                data = json.loads(json.dumps(evidence, default=str))
+                return self._send_json(200, {'app_version': master.APP_VERSION, 'evidence': data}, {'Cache-Control':'no-store'})
             if self.path == '/api/lab/metrics':
                 with lock: data = dict(telemetry)
                 data['app_version'] = master.APP_VERSION
@@ -215,6 +272,16 @@ def build_handler(master, key, capacity=None, durable=None):
 
         def do_POST(self):
             if not self.authorized(): return
+            if trial_identity():
+                if self.path == '/api/workflow' and durable is not None:
+                    from deployment.staging_workflows import handle
+                    return handle(master, self, trial_queue=durable)
+                if self.path in ('/api/final-four-connector', '/api/ny-connector', '/api/identity-review', '/api/report'):
+                    return super().do_POST()
+                if self.path == '/api/discover-names':
+                    # The approved master already bounds concurrent discovery;
+                    # its implementation and source set are unchanged.
+                    return super().do_POST()
             if durable is not None:
                 from deployment.durable_queue import normalize_submission, Conflict, QueueFull, NotFound
                 try:
