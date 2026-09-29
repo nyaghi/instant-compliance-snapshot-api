@@ -6577,7 +6577,12 @@ def final_four_connector_failure(record, reason=""):
            "The trial browser connector is unavailable or needs an update." if reason in {"NY_CONNECTOR_UNAVAILABLE", "NY_CONNECTOR_UPDATE_REQUIRED"} else
            "The registry search or selected record did not return complete, confirmed information.")
     result.source_note = f"{why} CharityClarity reports Unable to Confirm. This incomplete lookup does not establish non-registration or delinquency."
-    return response_data_for_lookup(result, "", org, org.organization_name, org.ein, state, time.perf_counter())
+    started = time.perf_counter() - max(0, time.time() - record["issued"])
+    data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, state, started)
+    # NY transport codes are shared internally; their generic comment fallback
+    # must not erase the actual verification/timeout cause for these sources.
+    data["comments"] = result.source_note
+    return data
 
 
 def final_four_connector_advance(record):
@@ -6603,7 +6608,8 @@ def final_four_connector_advance(record):
         return {"phase": "complete", "result": final_four_connector_failure(record, "NY_CONNECTOR_TIMEOUT" if isinstance(exc, TimeoutError) else "")}
     if time.time() >= record["expires"]:
         return {"phase": "complete", "result": final_four_connector_failure(record, "NY_CONNECTOR_TIMEOUT")}
-    return {"phase": "complete", "result": response_data_for_lookup(result, "", org, org.organization_name, org.ein, record["state"], time.perf_counter())}
+    started = time.perf_counter() - max(0, time.time() - record["issued"])
+    return {"phase": "complete", "result": response_data_for_lookup(result, "", org, org.organization_name, org.ein, record["state"], started)}
 
 
 def final_four_connector_request(payload, origin):
@@ -23086,7 +23092,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version == "0.6.1")):
+        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version == "0.6.2")):
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()

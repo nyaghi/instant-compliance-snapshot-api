@@ -95,7 +95,7 @@ class ContinuationControls(unittest.TestCase):
 
     def test_failure_explains_verification_and_cancel_is_local(self):
         _, response = self.start('AL')
-        code, final = self.request({'action': 'fail', 'check_token': response['check_token'], 'reason': 'AL_VERIFICATION_REQUIRED'})
+        code, final = self.request({'action': 'fail', 'check_token': response['check_token'], 'reason': 'NY_CONNECTOR_AL_VERIFICATION_REQUIRED'})
         self.assertEqual(code, 200)
         self.assertEqual(final['result']['status'], 'Unable to Confirm')
         self.assertIn('verification', final['result']['comments'])

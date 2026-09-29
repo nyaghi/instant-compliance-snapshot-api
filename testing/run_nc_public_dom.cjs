@@ -2,7 +2,7 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const source=fs.readFileSync(path.join(__dirname,'../browser-connector/registry-content.js'),'utf8')
- .replace('  async function handle(m) {','  globalThis.testNC={ncLabeled,ncForm,ncRows,ncProfile,ncFilings};\n  async function handle(m) {');
+ .replace('  async function handle(m) {','  globalThis.testNC={ncLabeled,ncForm,ncRows,ncProfile,ncFilings,registryDocumentReady};\n  async function handle(m) {');
 const origin='https://www.sosnc.gov',profile=origin+'/online_services/search/charities_profile/5700751';
 const active={'CSL Legal Name':"America's Charities",'CSL Type':'Charitable Organization',Status:'Current Active – Filing Extension Granted',License:'SL000448','Expiration Date':'5/15/2026','Extension End Date':'11/15/2026'};
 const exempt={'CSL Legal Name':'YWCA of the U.S.A.','CSL Type':'CSL Exempt Organization',Status:'CSL Exempt',License:'EX003050'};
@@ -73,4 +73,14 @@ test('NC ordinary form resets search type and printable view, never calls a hidd
  assert.equal(h.api.ncForm(q).phase,'submitted');assert.equal(h.input.value,q.name);assert.equal(h.words.value,'0');assert.equal(h.print.checked,false);
  await new Promise(resolve=>setTimeout(resolve,2));assert.equal(h.formClicks(),1);
  h.button.disabled=true;assert.throws(()=>h.api.ncForm(q));
+});
+test('NC document completion does not mistake a verification interstitial for its search form',()=>{
+ const h=harness({url:origin+'/online_services/search/by_title/search_charities'}),read=h.context.document.querySelector;
+ h.context.document.querySelector=()=>null;assert.equal(h.api.registryDocumentReady(),false);
+ h.context.document.querySelector=read;assert.equal(h.api.registryDocumentReady(),true);
+ h.button.disabled=true;assert.equal(h.api.registryDocumentReady(),false);
+});
+test('NC results readiness requires a rendered count, including an explicit zero',()=>{
+ const h=harness({cards:[]});h.main.innerText='Performing security verification';assert.equal(h.api.registryDocumentReady(),false);
+ h.main.innerText='Records Found: 0';assert.equal(h.api.registryDocumentReady(),true);
 });

@@ -86,7 +86,7 @@ validation run.
   keyed to an organization or EIN.
 - Trial UI assembly derives from the approved frontend and adds all four
   selectors. The approved frontend files and installed 0.5.10 connector are
-  unchanged. A separate 0.6.0 trial package uses only the trial origin, public
+  unchanged. A separate 0.6.2 trial package uses only the trial origin, public
   registry permissions and session storage; it has no production/staging page
   permission, NY page injection, cookie access or browsing-data permission.
   New York continues on the isolated worker backend. Its ordinary 29.1 browser
@@ -103,6 +103,40 @@ validation run.
   final child-context change; its 19 focused isolation/UI checks also passed.
   Live connector activation, deployed smoke, refreshed-sheet post-validation,
   and measured 34-vs-38-state performance remain outstanding.
+
+## Live trial checkpoint (September 29, 20:48 UTC)
+
+- Separate Render API, three background processes and queue database are live;
+  four healthy queue workers were confirmed after rolling deployment settled.
+  The manifest records only the new resource IDs. A local retirement guard and
+  hourly backup enforce retirement by 118 hours or the $80 spending cap.
+- Read-only comparison of all six protected service configurations found no
+  changes to staging, production or the older performance pool used by staging.
+- The first trial connector rejected a search after acquisition because a
+  message without repeated intent defaulted to NY. The admission now retains
+  its registry, and reconnect checks the saved job's registry authorization.
+  Controls cover all six browser sources and refuse registry switching.
+- Tennessee's Rocky Mountain Elk control matched CO3674 and Missoula, MT,
+  returned Upcoming Filing and both available date fields in 9.6 seconds.
+- Alabama's YWCA control used five freshly discovered aliases (21.0 seconds),
+  matched the national Washington, DC record AL97-431 instead of the Birmingham
+  chapter, and returned Upcoming Filing in 2.8 seconds. A human completed the
+  currently displayed verification first; this is not proof of unattended access.
+- Mature Colorado controls returned Current for Make-A-Wish and Not Registered
+  for Junior Achievement USA, as expected. Their wall times were 6.6 and 100.7
+  seconds; the negative used two source attempts. Do not infer overall run speed
+  from the faster positive control.
+- NC and NV initial live attempts remained inconclusive. The next candidate
+  distinguishes a loaded verification/shell document from a ready registry form,
+  without bypassing human verification or widening source deadlines. Its live
+  validation is outstanding. Specific failure comments and elapsed times are
+  preserved through master response formatting.
+- Latest local controls: 313 JavaScript checks and 34 focused Python checks pass.
+  One old NY test still expected a 30-second verification cutoff; approved 29.1
+  already used 45 seconds. Only that test's boundary cases were corrected. The
+  NY runtime and its separate 30-second search-response cutoff were unchanged.
+- Full first-30 spreadsheet post-validation and paired performance remain open.
+  Do not promote this trial based on these partial controls.
 
 ## Confirmed date interpretation
 

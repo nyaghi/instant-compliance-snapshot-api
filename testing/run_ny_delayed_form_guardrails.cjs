@@ -29,12 +29,14 @@ async function lateVerification(delay, enableDelay=0, searchDelay=0){
  await tick();
  while(!reply){const t=timers.filter(t=>!t.clear).sort((a,b)=>a.due-b.due)[0];assert.ok(t);now=t.due;t.clear=true;t.fn();await tick();}
  const result={case:'Verification after '+delay+' ms; Search enabled '+enableDelay+' ms later',elapsed_ms:now,reply:JSON.parse(JSON.stringify(reply)),calls};
- if(delay>30000){assert.equal(reply.reason,'NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT');assert.deepEqual(calls,['verify']);}
+ // Approved 29.1 already waits 45 seconds for verification; search response
+ // time remains 30 seconds. Keep their boundary controls independent.
+ if(delay>=45000){assert.equal(reply.reason,'NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT');assert.deepEqual(calls,['verify']);}
  else if(enableDelay>=15000){assert.equal(reply.reason,'NY_CONNECTOR_SEARCH_BUTTON_TIMEOUT');assert.deepEqual(calls,['verify']);assert.equal(now,delay+15000);}
  else if(searchDelay>=30000){assert.equal(reply.reason,'NY_CONNECTOR_SEARCH_RESPONSE_TIMEOUT');assert.deepEqual(calls,['verify','search']);}
  else {assert.equal(reply.ok,true);assert.deepEqual(calls,['verify','search']);}
  cases.push(result);
 }
-for(const delay of [14000,16000,29000,31000,999999])test('Real verification response at '+delay+' ms',()=>lateVerification(delay));
+for(const delay of [14000,16000,29000,31000,44000,45000,46000,999999])test('Real verification response at '+delay+' ms',()=>lateVerification(delay));
 for(const delay of [0,2000,4000,10000,14900,15000,999999])test('Search UI enables '+delay+' ms after successful verification',()=>lateVerification(1000,delay));
 for(const delay of [16000,29000,31000,999999])test('Search response arrives '+delay+' ms after submit',()=>lateVerification(1000,0,delay));

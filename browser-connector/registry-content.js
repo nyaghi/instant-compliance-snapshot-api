@@ -666,12 +666,38 @@
     if (rows.length!==page.total || new Set(rows.map(r=>r[1])).size!==rows.length) throw new Error('REGISTRY_TOTAL_CHANGED');
     return {state:'AL',query,complete:true,verification_pending:false,headers:page.headers,rows,total:page.total};
   }
+  function registryDocumentReady() {
+    if (document.readyState === 'loading') return false;
+    // A loaded verification/shell document is not a loaded registry form.
+    // Observe normal page readiness; do not operate any human challenge.
+    if (NC) {
+      if (location.pathname === '/online_services/search/by_title/search_charities') {
+        const button=document.querySelector('#SubmitButton'),words=document.querySelector('#Words');
+        return !!(document.querySelector('#SearchCriteria') && document.querySelector('#Print')
+          && words && [...words.options].some(o=>text(o)==='Starting With') && visible(button) && !button.disabled);
+      }
+      if (location.pathname === '/online_services/search/Charities_Results')
+        return /Records Found:\s*\d+\b/.test(text(document.querySelector('main')));
+      if (/\/charities_profile\/\d+$/.test(location.pathname))
+        return /Registration\s*#\s*:\s*(SL|EX)\d+/.test(text(document.querySelector('main')));
+      if (/\/charities_filings\/\d+$/.test(location.pathname))
+        return document.querySelectorAll('main article section.usa-section--singleEntry > ul').length===1;
+      return false;
+    }
+    if (NV && location.hash.includes('screen=external-GenericFilingsSearch')) {
+      const tab=[...document.querySelectorAll('[role="tab"]')].find(el=>text(el)==='Business');
+      return tab?.getAttribute('aria-selected')==='true'
+        && ['entityName','entityNumber','nvBusinessId'].every(s=>document.querySelector(`input[id$="-${s}"]`))
+        && [...document.querySelectorAll('button')].some(el=>text(el)==='Search' && visible(el) && !el.disabled);
+    }
+    return true;
+  }
   async function handle(m) {
     if (AL && m.action==='registry-al') {
       if (m.query?.state!=='AL' || m.query.operation!=='search') throw new Error('REGISTRY_COMMAND_INVALID');
       return {ok:true,evidence:await alSearch(m.query,Date.now()+Math.min(45000,Number.isFinite(m.budgetMs)&&m.budgetMs>0?m.budgetMs:45000))};
     }
-    if (m.action === "registry-ready") return {ready:document.readyState !== "loading", url:location.href, documentId};
+    if (m.action === "registry-ready") return {ready:registryDocumentReady(), url:location.href, documentId};
     if (NC) {
       if(m.action==='registry-nc-form')return ncForm(m.query);
       if(m.action==='registry-nc-rows')return ncRows(m.query,m.budgetMs);
@@ -750,8 +776,10 @@
     if(sender.id!==chrome.runtime.id || !m?.action?.startsWith('registry-')) return false;
     handle(m).then(reply,error=>{
       const code=error?.message||'';
+      const trialReason=(NC||NV) && /^REGISTRY_(?:(?:NC|NV)_[A-Z_]+|WRONG_ORIGIN|COMMAND_INVALID|RESPONSE_INCOMPLETE)$/.test(code)
+        ? 'NY_CONNECTOR_'+code : null;
       const ilReasons={REGISTRY_RESPONSE_INCOMPLETE:'NY_CONNECTOR_IL_RESPONSE_TIMEOUT',REGISTRY_RESULTS_INCOMPLETE:'NY_CONNECTOR_IL_RESULTS_INCOMPLETE',REGISTRY_TOTAL_CHANGED:'NY_CONNECTOR_IL_TOTAL_CHANGED',REGISTRY_RESULT_LIMIT:'NY_CONNECTOR_IL_RESULT_LIMIT',REGISTRY_PAGINATION_INCOMPLETE:'NY_CONNECTOR_IL_PAGINATION_INCOMPLETE'};
-      reply({ok:false,reason:AL && code==='NY_CONNECTOR_AL_VERIFICATION_REQUIRED' ? code : TN && code==='NY_CONNECTOR_TN_VERIFICATION_OR_FORM_PENDING' ? code : /^NY_CONNECTOR_IL_(?:VERIFICATION_PENDING|FORM_READY_TIMEOUT|FORM_DISABLED|FORM_MISSING|DETAIL_(?:NOT_OPENED|BLANK|IDENTITY_INCOMPLETE|RESPONSE_TIMEOUT))$/.test(code) ? code : IL && ilReasons[code] || 'NY_CONNECTOR_INCOMPLETE',
+      reply({ok:false,reason:trialReason || (AL && code==='NY_CONNECTOR_AL_VERIFICATION_REQUIRED' ? code : TN && code==='NY_CONNECTOR_TN_VERIFICATION_OR_FORM_PENDING' ? code : /^NY_CONNECTOR_IL_(?:VERIFICATION_PENDING|FORM_READY_TIMEOUT|FORM_DISABLED|FORM_MISSING|DETAIL_(?:NOT_OPENED|BLANK|IDENTITY_INCOMPLETE|RESPONSE_TIMEOUT))$/.test(code) ? code : IL && ilReasons[code] || 'NY_CONNECTOR_INCOMPLETE'),
         ...(IL && error.diagnostics ? {diagnostics:error.diagnostics} : {})});
     });
     return true;

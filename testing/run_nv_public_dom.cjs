@@ -3,7 +3,7 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const original=fs.readFileSync(path.join(__dirname,'../browser-connector/registry-content.js'),'utf8');
-const source=original.replace('  async function handle(m) {','  globalThis.testNV = {nvPage,nvFields,nvChanged,nvSearch,nvDetail};\n  async function handle(m) {');
+const source=original.replace('  async function handle(m) {','  globalThis.testNV = {nvPage,nvFields,nvChanged,nvSearch,nvDetail,registryDocumentReady};\n  async function handle(m) {');
 const headers=['Entity Name','NV Business Id #','Entity No.','Entity Type','Registered Agent Name','Formation Date','Status'];
 const observed=[
  ['MAKE-A-WISH FOUNDATION OF AMERICA','NV19931054903','C6989-1993','Foreign Non-Profit Corporation (80)','C T CORPORATION SYSTEM**','06/16/1993 12:00 AM','Permanently Revoked'],
@@ -11,6 +11,12 @@ const observed=[
  ['MAKE-A-WISH FOUNDATION OF NORTHERN NEVADA, INC.','NV19821011791','C6552-1982','Domestic Non-Profit Corporation (82)','ALLISON MACKENZIE, LTD.','11/05/1982 12:00 AM','Dissolved'],
  ['MAKE-A-WISH NEVADA','NV19961252237','C26637-1996','Domestic Non-Profit Corporation (82)','Walls Law Firm','12/27/1996 12:00 AM','Active']
 ];
+test('Nevada document readiness waits for the business form after the page shell loads',()=>{
+ const h=fixture(),read=h.context.document.querySelector;
+ h.context.document.querySelector=()=>null;assert.equal(h.api.registryDocumentReady(),false);
+ h.context.document.querySelector=read;assert.equal(h.api.registryDocumentReady(),true);
+ h.context.document.readyState='loading';assert.equal(h.api.registryDocumentReady(),false);
+});
 function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,truncate=false,duplicate=false,oldPageDelay=80,detailId='NV20121738342'}={}) {
  let clock=1000,serial=0,listener,loading=false,rendered=[],page=1,detail=false,searchClicks=0,opened=[];
  const tasks=new Map(),observers=new Set(),root={};

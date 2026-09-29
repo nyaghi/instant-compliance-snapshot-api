@@ -40,7 +40,7 @@ class RestoreApprovedOrigin(ast.NodeTransformer):
         if ast.dump(node)==ast.dump(ast.parse(current,mode='eval').body):
             return ast.parse("state != 'NY' and origin != NY_CONNECTOR_ORIGIN",mode='eval').body
         if (isinstance(node.op,ast.And) and len(node.values)==2
-                and ast.dump(node.values[1])==ast.dump(ast.parse("not (trial_identity() and connector_version == '0.6.1')",mode='eval').body)):
+                and ast.dump(node.values[1])==ast.dump(ast.parse("not (trial_identity() and connector_version == '0.6.2')",mode='eval').body)):
             return self.visit(node.values[0])
         return self.generic_visit(node)
 
