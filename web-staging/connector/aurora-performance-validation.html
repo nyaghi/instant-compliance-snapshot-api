@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Aurora optimized execution verification</title>
+<style>body{font:16px system-ui;color:#12345b;max-width:1100px;margin:2rem auto;padding:1rem}input,textarea,button{font:inherit;padding:.7rem;margin:.3rem}label{display:block}button{cursor:pointer}textarea{width:95%}td,th{padding:.5rem;text-align:left;border-bottom:1px solid #ddd}pre{white-space:pre-wrap}#progress{font-weight:bold}small{color:#52667f}</style>
+<script src="/optimized-workflows.js?v=20260928.5"></script>
+<script src="/identity-review.js?v=20260927.7"></script>
+<script src="/ny-connector.js?v=2026.09.27.7" defer></script></head><body>
+<h1>Aurora optimized execution verification · staging validation</h1>
+<p>Staging post-validation. The released master backend owns name matching and status decisions. The source spreadsheet is read-only.</p>
+<form id="setup"><label>Email <input id="email" type="email" required autocomplete="off"></label><label>Staging passcode <input id="passcode" type="password" required autocomplete="off"></label>
+<label>Load local audit settings <input id="settingsFile" type="file" accept=".json,application/json"></label>
+<small>The file fills this form locally. Credentials are sent only to the staging API, never included in results or persisted.</small>
+<label>Organizations (JSON)<textarea id="cases" rows="3" required></textarea></label><button id="start">Start validation</button></form>
+<p id="persistence" role="status">Audit checkpoints are saved locally without credentials.</p><button id="restore" type="button">Restore saved checkpoint for download</button><p id="progress" role="status">Ready.</p><p id="current"></p><button id="stop" type="button" disabled>Stop scheduling new checks</button><button id="download" type="button">Download audit checkpoint</button>
+<label>Evidence section <select id="evidencePart"><option value="summary">Summary and organization timing</option><option value="full">Full checkpoint</option><option value="0">State results 1–500</option><option value="500">State results 501–1000</option><option value="1000">State results 1001–1500</option><option value="1500">State results 1501–2000</option><option value="2000">State results 2001–2500</option><option value="2500">State results 2501–3000</option><option value="3000">State results 3001–3500</option><option value="3500">State results 3501–4000</option><option value="4000">State results 4001–4500</option><option value="4500">State results 4501–5000</option><option value="5000">State results 5001–5500</option><option value="5500">State results 5501–6000</option></select></label><button id="showEvidence" type="button">Show audit evidence</button><pre id="evidence" hidden></pre>
+<table><thead><tr><th>Organization</th><th>State</th><th>Result</th><th>Seconds</th></tr></thead><tbody id="recent"></tbody></table>
+<details><summary>Audit summary</summary><pre id="summary">{}</pre></details>
+<script>
+'use strict';
+if(location.origin!=='https://staging.compliance-express.com')throw Error('Staging only');
+const API='https://instant-compliance-snapshot-api-staging-8dnk.onrender.com';
+const VERSION='2026.09.28.5-staging';
+const STATES=['AK','AR','CA','CO','CT','DC','FL','GA','HI','IL','KS','KY','LA','MA','MD','ME','MI','MN','MS','ND','NH','NJ','NM','NY','OH','OK','OR','PA','RI','SC','VA','WA','WI','WV'];
+const BROWSER=new Set(['NY','IL','GA']);const $=id=>document.getElementById(id);
+let audit={scope:'Aurora optimized execution verification; approved source expectations retained',staging_version:VERSION,states:STATES,organizations:[],results:[],source_breakers:{},events:[]},stop=false,running=false,reviewCredentials=null;
+
+// Validation evidence only: never persist credentials, tokens, cookies, or request headers.
+const checkpointDb=new Promise((resolve,reject)=>{const req=indexedDB.open('cc-aurora-performance-20260928',1);req.onupgradeneeded=()=>req.result.createObjectStore('checkpoints');req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});
+let checkpointChain=Promise.resolve();
+const rounded=ms=>Number((ms/1000).toFixed(3));
+function publicAudit(){const result=structuredClone(audit);for(const row of result.results){if(row.result?.identity_review)delete row.result.identity_review.token;}return result;}
+function persistCheckpoint(){const snapshot=publicAudit();checkpointChain=checkpointChain.then(async()=>{const db=await checkpointDb;await new Promise((resolve,reject)=>{const tx=db.transaction('checkpoints','readwrite');tx.objectStore('checkpoints').put(snapshot,'latest');tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});$('persistence').textContent=`Saved locally: ${snapshot.results.length} checks. Credentials are not saved.`;}).catch(()=>{$('persistence').textContent='Local checkpoint storage failed. Download a checkpoint to preserve results.';});return checkpointChain;}
+$('restore').addEventListener('click',async()=>{if(running)return;try{const db=await checkpointDb;const saved=await new Promise((resolve,reject)=>{const req=db.transaction('checkpoints').objectStore('checkpoints').get('latest');req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});if(!saved){$('current').textContent='No saved checkpoint.';return;}audit=saved;render();$('current').textContent='Saved checkpoint restored for download. This does not resume requests.';}catch(e){$('current').textContent='Could not restore local checkpoint.';}});
+
+// Audit-only observation of the existing public connector protocol. Never retain
+// credentials, check tokens, cookies, form HTML or browser-private data.
+const observedRequests=new Map();
+window.addEventListener('message',event=>{
+ const m=event.data;if(event.source!==window||event.origin!==location.origin||m?.channel!=='cc-ny-staging-v1')return;
+ if(m.direction==='request'){observedRequests.set(m.id,{action:m.action,lookup_id:m.lookup_id,query:m.query?{state:m.query.state,orgName:m.query.orgName,identifier:m.query.identifier,ein:m.query.ein}:null});return;}
+ if(m.direction!=='response'||m.progress)return;
+ const request=observedRequests.get(m.id);if(!request)return;observedRequests.delete(m.id);
+ audit.events.push({type:'connector_response',at:new Date().toISOString(),...request,ok:m.ok===true,reason:m.reason||'',version:m.version||'',capabilities:m.capabilities||[],diagnostics:(m.diagnostics||[]).map(d=>({phase:d.phase,event:d.event,elapsed_ms:d.elapsed_ms,visibility:d.visibility})),rows:m.evidence?.rows?.map(r=>({name:r.name,identifier:r.identifier,location:r.location}))});
+});
+function semaphore(size){let active=0;const queue=[];return async work=>{if(active>=size)await new Promise(r=>queue.push(r));active++;try{return await work();}finally{active--;queue.shift()?.();}};}
+const apiSlot=semaphore(8),discoverySlot=semaphore(2),stateSlots=Object.fromEntries(STATES.map(s=>[s,semaphore(1)]));
+function render(){const skipped=audit.results.filter(r=>r.skipped).length;const complete=audit.results.length;const total=audit.organizations.reduce((n,c)=>n+(c.states||STATES).length,0);
+ $('progress').textContent=`${audit.organizations.filter(c=>c.timing?.finished_at).length} / ${audit.organizations.length} organizations finished · ${complete} / ${total} state checks recorded / ${skipped} skipped / ${Object.keys(audit.source_breakers).join(', ')||'no stopped sources'}`;
+ const body=$('recent');body.replaceChildren();for(const row of audit.results.slice(-12).reverse()){const tr=document.createElement('tr');for(const val of [row.organization,row.state,row.result?.status||row.skipped||'Incomplete',row.seconds]){const td=document.createElement('td');td.textContent=String(val??'');tr.append(td);}const comments=document.createElement('td');comments.style.minWidth='360px';comments.textContent=row.result?.comments||row.error||'';tr.append(comments);
+ if(row.result)window.CCIdentityReview.render(comments,row.result,async(candidate_id,action)=>{
+  if(!reviewCredentials)throw Error('Run a fresh check before reviewing restored results.');
+  const response=await fetch(API+'/api/identity-review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...reviewCredentials,ein:row.ein,state:row.state,token:row.result.identity_review.token,candidate_id,action})});
+  const result=await response.json();if(!response.ok)throw Error(result.error||'Review failed');row.result=result;audit.events.push({type:'identity_decision',ein:row.ein,state:row.state,action,at:new Date().toISOString()});render();await persistCheckpoint();
+ },async()=>{throw Error('Use the main CharityClarity result to retry this state.');});body.append(tr);}
+ $('summary').textContent=JSON.stringify({scope:audit.scope,started_at:audit.started_at,finished_at:audit.finished_at,completed:complete,total,skipped,source_breakers:audit.source_breakers},null,2);
+}
+$('settingsFile').addEventListener('change',async event=>{try{const file=event.target.files?.[0];if(!file)return;if(file.size>2000000)throw Error('Settings file too large');const data=JSON.parse(await file.text());if(typeof data.email!=='string'||typeof data.admin_passcode!=='string'||!Array.isArray(data.cases))throw Error('Invalid settings');$('email').value=data.email;$('passcode').value=data.admin_passcode;$('cases').value=JSON.stringify(data.cases);$('progress').textContent=`${data.cases.length} organizations loaded. Ready.`;}catch(e){$('progress').textContent=e.message;}finally{event.target.value='';}});
+$('download').addEventListener('click',()=>{const u=URL.createObjectURL(new Blob([JSON.stringify(publicAudit(),null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=u;a.download='charityclarity-pa-random15-20260928.json';a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);});
+$('showEvidence').addEventListener('click',()=>{$('evidence').hidden=false;const data=publicAudit(),part=$('evidencePart').value;if(part==='summary'){data.results_count=data.results.length;delete data.results;data.events_count=data.events.length;delete data.events;}else if(part!=='full'){const start=Number(part);data.results=data.results.slice(start,start+500);delete data.organizations;delete data.events;}$('evidence').textContent=JSON.stringify(data,null,2);});
+$('stop').addEventListener('click',()=>{stop=true;$('stop').disabled=true;$('current').textContent='Stopping after active requests finish; remaining pairs will be recorded as not run.';});
+function isUnavailable(r){return ['Site Not Reachable','Unable to Confirm','Needs Review'].includes(r?.status)&&/unavailable|not reachable|timeout|timed out|verification|blocked|network|could not (?:be )?(?:complete|reach|retrieve)|did not (?:respond|load)/i.test([r?.comments,r?.error,r?.status_reason,r?.reason_code].join(' '));}
+$('setup').addEventListener('submit',async event=>{event.preventDefault();if(running)return;let cases;
+ try{cases=JSON.parse($('cases').value);if(!Array.isArray(cases)||!cases.length||cases.length>40||cases.some(r=>typeof r.organization!=='string'||!/^\d{2}-?\d{7}$/.test(r.ein)||!Array.isArray(r.states)||!r.states.length||r.states.some(s=>!STATES.includes(s))||new Set(r.states).size!==r.states.length))throw Error('Expected approved organizations and state subsets');}catch(e){$('progress').textContent=e.message;return;}
+ const credentials={email:$('email').value.trim(),admin_passcode:$('passcode').value,device_id:crypto.randomUUID()};
+ reviewCredentials=credentials;running=true;$('restore').disabled=true;$('start').disabled=true;$('setup').hidden=true;$('passcode').value='';$('stop').disabled=false;
+ audit.timing_method={clock:'performance.now',organization_concurrency:1,standard_state_concurrency:15,sales_state_concurrency:20,sales_deadline_seconds:60};audit.organizations=cases;audit.started_at=new Date().toISOString();render();
+ async function api(path,fields,timeout=300000){const response=await fetch(API+path,{method:'POST',headers:{'Content-Type':'application/json'},signal:AbortSignal.timeout(timeout),body:JSON.stringify({...credentials,...fields})});const data=await response.json();if(!response.ok){const e=new Error(data.error||`HTTP ${response.status}`);e.http_status=response.status;throw e;}return data;}
+ function save(row){audit.results.push(row);render();persistCheckpoint();}
+ async function browserLookup(c,state,purpose,names){return window.CCNYConnector.lookup({state,purpose,organization_name:c.organization,ein:c.ein,alternate_names:names,...credentials,onProgress:message=>{$('current').textContent=message?`${c.organization} — ${message}`:c.organization;}});}
+ async function one(c){
+  const began=performance.now();c.timing={started_at:new Date().toISOString()};
+  let names=[],discovery={};
+  if(c.mode!=='sales'){
+   const dstart=performance.now();
+   try{discovery=await api('/api/discover-names',{organization_name:c.organization,ein:c.ein},75000);names=[...new Map((discovery.names||[]).filter(n=>!n.identity_conflict).map(n=>[n.name.toLowerCase(),n.name])).values()].slice(0,32);}catch(e){discovery.error=e.message;}
+   c.timing.discovery_seconds=rounded(performance.now()-dstart);
+  }
+  c.discovery={...discovery,reviewed_names:names};
+  const started=performance.now(),controller=new AbortController(),seen=new Set();
+  const record=result=>{if(seen.has(result.state))return;seen.add(result.state);save({ordinal:c.ordinal,organization:c.organization,ein:c.ein,state:result.state,mode:c.mode,expected:c.expected?.[result.state]||'',alternate_names:names,result,seconds:rounded(performance.now()-started)});};
+  let timer;
+  if(c.mode==='sales')timer=setTimeout(()=>controller.abort(),60000);
+  try{await window.CCOptimized.run({apiBase:API,name:c.organization,ein:c.ein,states:c.states,aliases:names,mode:c.mode||'standard',credentials,signal:controller.signal,onResult:record,
+   externalLookup:state=>window.CCNYConnector.lookup({state,purpose:'registration',organization_name:c.organization,ein:c.ein,alternate_names:names,...credentials,signal:controller.signal,onProgress:message=>{$('current').textContent=`${c.organization}: ${message||state}`;}})});
+  }catch(e){c.error=controller.signal.aborted?'SALES_TIME_LIMIT':e.message;}
+  finally{clearTimeout(timer);}
+  for(const state of c.states)if(!seen.has(state))record({state,ein:c.ein,status:'Unable to Confirm',success:false,status_reason:c.mode==='sales'?'SALES_TIME_LIMIT':'WORKFLOW_INCOMPLETE',comments:'This check did not finish within its available time. Registration remains unconfirmed.',app_version:VERSION});
+  c.timing.execution_seconds=rounded(performance.now()-started);c.timing.total_seconds=rounded(performance.now()-began);c.timing.finished_at=new Date().toISOString();render();await persistCheckpoint();
+ }
+ for(const c of cases){if(stop)break;await one(c);}
+ audit.finished_at=new Date().toISOString();running=false;$('stop').disabled=true;$('current').textContent='Finished. Download the full audit for reconciliation and source review.';render();await persistCheckpoint();$('restore').disabled=false;$('download').click();
+});
+</script></body></html>
