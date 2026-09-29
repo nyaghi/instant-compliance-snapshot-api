@@ -148,7 +148,7 @@ class TrialWorkflowControls(unittest.TestCase):
             output=Path(tmp)/'trial'
             result=build(TRIAL['origin'],output)
             manifest=json.loads((output/'manifest.json').read_text(encoding='utf-8'))
-            self.assertEqual(manifest['version'],'0.6.2')
+            self.assertEqual(manifest['version'],'0.6.3')
             self.assertEqual(manifest['permissions'],['storage'])
             text=json.dumps(manifest)
             for banned in ['staging.compliance-express.com','www.compliance-express.com','charities-search.ag.ny.gov','cookies','browsingData']:

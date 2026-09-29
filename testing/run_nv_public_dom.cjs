@@ -17,6 +17,12 @@ test('Nevada document readiness waits for the business form after the page shell
  h.context.document.querySelector=read;assert.equal(h.api.registryDocumentReady(),true);
  h.context.document.readyState='loading';assert.equal(h.api.registryDocumentReady(),false);
 });
+test('Nevada form readiness includes the hydrated Starts With search-type control',()=>{
+ const h=fixture(),read=h.context.document.querySelectorAll;
+ h.context.document.querySelectorAll=q=>q==='[role="combobox"]'?[]:read(q);
+ assert.equal(h.api.registryDocumentReady(),false);
+ h.context.document.querySelectorAll=read;assert.equal(h.api.registryDocumentReady(),true);
+});
 function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,truncate=false,duplicate=false,oldPageDelay=80,detailId='NV20121738342'}={}) {
  let clock=1000,serial=0,listener,loading=false,rendered=[],page=1,detail=false,searchClicks=0,opened=[];
  const tasks=new Map(),observers=new Set(),root={};

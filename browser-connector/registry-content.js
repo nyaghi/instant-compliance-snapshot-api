@@ -576,7 +576,9 @@
     }
     const addresses=[...main.querySelectorAll('.para-small > .boldSpan')].filter(el=>text(el)==='Address');
     if(addresses.length!==1)throw new Error('REGISTRY_NC_ADDRESS_INCOMPLETE');
-    const spans=[...addresses[0].parentElement.querySelectorAll('.para-small > span')].map(text);
+    // The address label is also a direct span inside a .para-small container.
+    // Read only the nested address block, never the outer label/contact fields.
+    const spans=[...addresses[0].parentElement.querySelectorAll(':scope > .para-small > span')].map(text);
     if(spans.length!==4)throw new Error('REGISTRY_NC_ADDRESS_INCOMPLETE');
     [fields.Street,fields.City,fields.State,fields.Zip]=spans;
     fields.profile_url=location.href;
@@ -693,6 +695,7 @@
       const tab=[...document.querySelectorAll('[role="tab"]')].find(el=>text(el)==='Business');
       return tab?.getAttribute('aria-selected')==='true'
         && ['entityName','entityNumber','nvBusinessId'].every(s=>document.querySelector(`input[id$="-${s}"]`))
+        && [...document.querySelectorAll('[role="combobox"]')].some(el=>text(el).startsWith('Starts With'))
         && [...document.querySelectorAll('button')].some(el=>text(el)==='Search' && visible(el) && !el.disabled);
     }
     return true;

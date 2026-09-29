@@ -86,7 +86,7 @@ validation run.
   keyed to an organization or EIN.
 - Trial UI assembly derives from the approved frontend and adds all four
   selectors. The approved frontend files and installed 0.5.10 connector are
-  unchanged. A separate 0.6.2 trial package uses only the trial origin, public
+  unchanged. A separate 0.6.3 trial package uses only the trial origin, public
   registry permissions and session storage; it has no production/staging page
   permission, NY page injection, cookie access or browsing-data permission.
   New York continues on the isolated worker backend. Its ordinary 29.1 browser
@@ -152,6 +152,14 @@ validation run.
   production overlay expectation and a missing window mock in registration-date
   UI tests). Those untouched frontend/runtime files were not changed to satisfy
   obsolete harness assumptions; this broader run is not reported as passing.
+- Connector 0.6.2 live repeat completed Make-A-Wish Tennessee in 25.5 seconds
+  with all six reviewed aliases, matching CO1629. NC reached the profile but
+  rejected its address: the descendant selector included the outer "Address"
+  label along with four nested values. The 0.6.3 candidate scopes those values
+  to the nested block. Nevada's ready check now also waits for its search-type
+  dropdown to populate, matching the collector's existing form requirements.
+  These last two changes still require live verification. 341 connector tests
+  and 97 four-state Python controls pass, including unchanged mature logic ASTs.
 
 ## Confirmed date interpretation
 

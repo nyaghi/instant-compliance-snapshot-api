@@ -15,7 +15,8 @@ function harness({cards=[active],total=cards.length,query="America's Charities",
   const panel={getClientRects:()=>expanded?[{}]:[],querySelectorAll:s=>s==='.para-small > .boldSpan'?labels(row):s==='a[href]'?[{getAttribute:()=>new URL(profile).pathname}]:[]};
   panels.set('a'+i,panel);buttons.push({getAttribute:k=>k==='aria-controls'?'a'+i:expanded?'true':'false',click:()=>{clicks++;expanded=true;}});
  }
- const address={innerText:'Address',parentElement:{querySelectorAll:()=>['14200 Park Meadow Dr Ste 330s','Chantilly','VA','20151-4210'].map(txt)}};
+ const addressValues=['14200 Park Meadow Dr Ste 330s','Chantilly','VA','20151-4210'];
+ const address={innerText:'Address',parentElement:{querySelectorAll:s=>(s===':scope > .para-small > span'?addressValues:s==='.para-small > span'?['Address',...addressValues]:[]).map(txt)}};
  const main={innerText:`Records Found: ${total} Words: Starting With Organization Name ${query} Search Time 9/29/2026 03:50 PM`,
   querySelectorAll:s=>s==='#resultsSection .usa-accordion__button'?buttons:s==='.para-small > .boldSpan'?[...labels(fields||{}),address]:s==='a[href]'?[{getAttribute:()=>new URL(profile).pathname.replace('charities_profile','charities_filings')}]:[]};
  class Input{get value(){return this.v||'';}set value(v){this.v=v;}dispatchEvent(){}}
@@ -30,7 +31,7 @@ function harness({cards=[active],total=cards.length,query="America's Charities",
    querySelectorAll:s=>periods===null?[]:[{children:periods.map(([type,date])=>({tagName:'LI',childNodes:[{nodeType:3,textContent:type}],querySelectorAll:()=>date===null?[]:[txt(date)]}))}]},
   MutationObserver:class{observe(){}disconnect(){}},HTMLInputElement:Input,HTMLSelectElement:Select,Event:class{},setTimeout,clearTimeout,
   chrome:{runtime:{id:'fixture',onMessage:{addListener(){}}}}});
- vm.runInContext(source,context);return {api:context.testNC,context,input,words,print,button,main,panels,clicks:()=>clicks,formClicks:()=>formClicks};
+ vm.runInContext(source,context);return {api:context.testNC,context,input,words,print,button,main,panels,addressValues,clicks:()=>clicks,formClicks:()=>formClicks};
 }
 test('NC collects only expanded, complete, query-bound cards and extension date',async()=>{
  const h=harness(),q={state:'NC',operation:'search',name:"America's Charities"};
@@ -59,6 +60,11 @@ test('NC profile retains office address, excludes contact information and binds 
  assert.equal(r.evidence.fields.Contact,undefined);assert.equal(r.evidence.fields.Phone,undefined);
  assert.throws(()=>h.api.ncProfile({...q,identifier:'SL999999'}));
  assert.throws(()=>h.api.ncProfile({...q,url:profile+'1'}));
+});
+test('NC address label cannot displace the street and missing address values remain incomplete',()=>{
+ const h=harness({url:profile,fields:profileFields}),q={state:'NC',operation:'detail',identifier:'SL000448',url:profile};
+ const r=h.api.ncProfile(q);assert.equal(r.evidence.fields.Street,'14200 Park Meadow Dr Ste 330s');
+ assert.equal(r.evidence.fields.Zip,'20151-4210');h.addressValues.pop();assert.throws(()=>h.api.ncProfile(q),/ADDRESS_INCOMPLETE/);
 });
 test('NC reads labeled filing types without confusing extension date for renewal',()=>{
  const h=harness({url:profile.replace('charities_profile','charities_filings'),periods:[['Renewal Charity','11/17/2025'],['Federal Extension','5/13/2026']]});
