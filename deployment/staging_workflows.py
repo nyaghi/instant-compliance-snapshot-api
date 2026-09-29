@@ -92,6 +92,9 @@ def prepare(master, payload, owner):
 
 
 def public_result(master, job, record):
+    # A retry can retain its earlier response while the final attempt runs.
+    # Publish only settled jobs so that response cannot overwrite the retry.
+    if job.get('phase') != 'done': return None
     result = job.get('result')
     if not isinstance(result, dict):
         if job['phase'] != 'done': return None

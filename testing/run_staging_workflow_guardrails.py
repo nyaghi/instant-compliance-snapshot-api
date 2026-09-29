@@ -82,12 +82,17 @@ class WorkflowControls(unittest.TestCase):
         result={'ein':'123456789','state':'PA','status':'Delinquent','success':True,
             'app_version':'2026.09.28.5-performance-lab','matched_registry_identifier':'101',
             'initial_registration_date':'2020-01-01','comments':'Loaded blank filing fields.', 'lab_task_metrics':{}}
-        actual=w.public_result(c,{'result':result,'state':'PA'},self.record)
+        actual=w.public_result(c,{'result':result,'state':'PA','phase':'done'},self.record)
         for key in ['status','success','matched_registry_identifier','initial_registration_date','comments']:
             self.assertEqual(actual[key],result[key])
         self.assertNotIn('lab_task_metrics',actual);self.assertEqual(actual['app_version'],c.APP_VERSION)
         for changes in [{'ein':'987654321'},{'state':'CT'},{'app_version':'old-performance-lab'}]:
-            with self.assertRaises(ValueError):w.public_result(c,{'result':{**result,**changes},'state':'PA'},self.record)
+            with self.assertRaises(ValueError):w.public_result(c,{'result':{**result,**changes},'state':'PA','phase':'done'},self.record)
+
+    def test_retry_intermediate_response_is_not_published(self):
+        for phase in ['queued','running']:
+            self.assertIsNone(w.public_result(c,{'phase':phase,'state':'PA',
+                'result':{'status':'Site Not Reachable','success':False}},self.record))
 
     def test_incomplete_jobs_never_become_definitive_negatives(self):
         for phase in ['queued','running','done']:
@@ -107,7 +112,7 @@ class WorkflowControls(unittest.TestCase):
         result={'ein':'123456789','state':'WI','app_version':'2026.09.28.5-performance-lab',
             'status':'Needs Review','_worker_identity_review':{'records':[]}}
         with patch.object(c,'attach_identity_review') as attach:
-            value=w.public_result(c,{'result':result,'state':'WI'},self.record)
+            value=w.public_result(c,{'result':result,'state':'WI','phase':'done'},self.record)
             attach.assert_called_once_with(value,{'records':[]})
         self.assertNotIn('_worker_identity_review',value)
 
