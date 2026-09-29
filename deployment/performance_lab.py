@@ -119,7 +119,11 @@ def final_four_asset(name, text):
         replace("states.filter(s=>s==='IL'||s==='GA')", "states.filter(s=>['IL','GA','AL','NC','NV','TN'].includes(s))")
         replace("headers:{'Content-Type':'application/json'}", "headers:{'Content-Type':'application/json','Authorization':'Bearer '+credentials.admin_passcode}")
     elif name == 'sales-mode.js':
+        replace("const VERSION = '2026.09.29.1-sales';", "const VERSION = '2026.09.29.2-sales-trial';")
         replace('const NAMES = {', 'const NAMES = {"AL":"Alabama","NC":"North Carolina","NV":"Nevada","TN":"Tennessee",')
+        replace('Choose any or all 34 states.', 'Choose any or all ${STATES.length} states.')
+        replace('Select all 34</button>', 'Select all ${STATES.length}</button>')
+        replace('Staging · Sales Mode ${VERSION}', 'Isolated Trial · Sales Mode ${VERSION}')
         replace('{signal:controller.signal}', '{signal:controller.signal,mode:"sales"}', 2)
     elif name == 'ny-connector.js':
         text = text.replace('cc-ny-staging-v1', 'cc-final-four-trial-v1')
