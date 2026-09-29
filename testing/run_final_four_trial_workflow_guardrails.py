@@ -18,6 +18,37 @@ TRIAL = {'origin': 'https://fixture-final-four.onrender.com'}
 
 
 class TrialWorkflowControls(unittest.TestCase):
+    def test_trial_connector_retains_approved_il_recovery_without_resetting_budget(self):
+        record={'state':'IL','purpose':'registration','recovery_protocol':'il-fresh-page-v1',
+                'connector_version':'0.6.4','issued':1000,'expires':1360,
+                'completed':[{'query':{'ein':'123456789'},'rows':[]}],
+                'pending':{'query_id':'old-query','query':{'orgName':'Example Charity'}}}
+        payload={'reason':'NY_CONNECTOR_IL_VERIFICATION_PENDING','query_id':'old-query'}
+        with patch.object(cc,'trial_identity',return_value=TRIAL):
+            response=cc.il_verification_recovery(record,payload,1060)
+            self.assertIsNotNone(response)
+            self.assertEqual(response['query'],{'orgName':'Example Charity'})
+            self.assertNotEqual(response['query_id'],'old-query')
+            self.assertEqual(record['issued'],1000);self.assertEqual(record['expires'],1360)
+            self.assertEqual(len(record['completed']),1)
+            payload['query_id']=response['query_id']
+            self.assertIsNone(cc.il_verification_recovery(record,payload,1080))
+
+    def test_trial_il_recovery_does_not_enable_unknown_clients_or_weaken_guards(self):
+        base={'state':'IL','purpose':'registration','recovery_protocol':'il-fresh-page-v1',
+              'connector_version':'0.6.4','issued':1000,'expires':1360,
+              'pending':{'query_id':'query','query':{'orgName':'Example Charity'}}}
+        payload={'reason':'NY_CONNECTOR_IL_VERIFICATION_PENDING','query_id':'query'}
+        with patch.object(cc,'trial_identity',return_value=None):
+            self.assertIsNone(cc.il_verification_recovery(dict(base),payload,1060))
+        with patch.object(cc,'trial_identity',return_value=TRIAL):
+            for change in [{'connector_version':'0.6.3'},{'connector_version':'9.9.9'},
+                           {'state':'GA'},{'purpose':'identity'},{'recovery_protocol':''}]:
+                self.assertIsNone(cc.il_verification_recovery({**base,**change},payload,1060))
+            self.assertIsNone(cc.il_verification_recovery(dict(base),payload,1180))
+            self.assertIsNone(cc.il_verification_recovery(dict(base),{**payload,'query_id':'wrong'},1060))
+            self.assertIsNone(cc.il_verification_recovery(dict(base),{**payload,'reason':'NY_CONNECTOR_IL_RESPONSE_TIMEOUT'},1060))
+
     def payload(self):
         return {'organization_name':'Example National Foundation','ein':'123456789','states':['IL','GA','AL','NC','NV','TN','MA'],
                 'mode':'standard','alternate_names':['Example Foundation'],'request_id':'11111111-1111-1111-1111-111111111111'}

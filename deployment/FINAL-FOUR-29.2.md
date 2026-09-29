@@ -220,6 +220,13 @@ validation run.
   its existing, origin-bound ping. It sends no credentials or registry query for
   this diagnostic and does not reload an extension. This avoids inferring an
   active version from the installed files alone. The approved frontend is unchanged.
+- Compatibility review found that Illinois's existing one-time fresh-page
+  recovery accepted only version 0.5.10. The separate 0.6.4 package contains that
+  same recovery capability, but the backend version gate would disable it in
+  the trial. A failing control demonstrated the omission. The trial-only gate
+  now admits 0.6.4 while preserving the original deadline, evidence, one-retry
+  limit, query binding and approved-environment behavior. This backend change
+  requires no additional connector version or extension reload.
 
 ## Confirmed date interpretation
 
