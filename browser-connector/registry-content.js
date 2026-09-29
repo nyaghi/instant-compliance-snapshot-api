@@ -253,9 +253,19 @@
       throw new Error("REGISTRY_NV_PAGINATION_INCOMPLETE");
     return {table, rows, values, total:Number(info[3]), page:Number(pages[1]), pages:Number(pages[2])};
   }
-  async function nvChanged(action, read, deadline, {requireLoading=false, previous=null}={}) {
-    let loadingSeen = false, lastParseError = '';
+  async function nvChanged(action, read, deadline, {requireLoading=false, previous=null, retryNotStarted=null}={}) {
+    let loadingSeen = false, lastParseError = '', retryTimer;
     const loading = () => [...document.querySelectorAll('.app-loader-pane .circle-loader')].some(visible);
+    const start = () => {
+      action();
+      // A fresh ORION form can redraw without submitting the first Search.
+      // Retry that read-only action once, only if no loading cycle has begun.
+      // Keep observing throughout; never restart a pending request or its budget.
+      if (requireLoading && retryNotStarted) retryTimer = setTimeout(() => {
+        if (Date.now() >= deadline || loadingSeen || loading()) return;
+        try { retryNotStarted(); } catch (error) { lastParseError=error.message; }
+      }, Math.min(3000, Math.max(1, deadline-Date.now())));
+    };
     try { return await wait(() => {
       loadingSeen ||= loading();
       if (loading() || requireLoading && !loadingSeen) return false;
@@ -264,7 +274,7 @@
         if (!value || previous !== null && JSON.stringify(value.values) === previous) return false;
         return value;
       } catch (error) { lastParseError = error.message; return false; } // Partial renders are not completed responses.
-    }, Math.max(1, Math.min(35000, deadline-Date.now())), {action, settle:200, relevant:mutations => {
+    }, Math.max(1, Math.min(35000, deadline-Date.now())), {action:start, settle:200, relevant:mutations => {
       loadingSeen ||= loading() || mutations.some(m => [...m.addedNodes].some(n => n.nodeType === 1
         && (n.matches?.('.circle-loader, .app-loader-pane') || n.querySelector?.('.circle-loader'))));
       return mutations.some(m => {
@@ -276,7 +286,7 @@
       if (error.message !== 'REGISTRY_RESPONSE_INCOMPLETE') throw error;
       throw new Error(lastParseError || (requireLoading && !loadingSeen ? 'REGISTRY_NV_SEARCH_NOT_STARTED'
         : loading() ? 'REGISTRY_NV_RESPONSE_PENDING' : 'REGISTRY_NV_RESPONSE_INCOMPLETE'));
-    }
+    } finally { clearTimeout(retryTimer); }
   }
   async function nvPages(title, headers, deadline, first) {
     let page = first || nvPage(title, headers);
@@ -320,7 +330,17 @@
     nvObserved.clear(); nvLastSearch = null;
     // The initial blank grid and old rows remain visible while ORION searches.
     // A completed loading cycle is mandatory, including for an empty response.
-    const first = await nvChanged(() => search.click(), () => nvPage('Search Results', nvSearchHeaders), deadline, {requireLoading:true});
+    const first = await nvChanged(() => search.click(), () => nvPage('Search Results', nvSearchHeaders), deadline, {
+      requireLoading:true, retryNotStarted:()=>{
+        // Re-read the current visible controls. A changed query must not be
+        // submitted or allowed to inherit the original query's evidence.
+        if (field('entityName')?.value !== query.name || field('entityNumber')?.value !== '' || field('nvBusinessId')?.value !== '') return;
+        const buttons=[...document.querySelectorAll('button')].filter(el=>text(el)==='Search' && visible(el) && !el.disabled);
+        if (business?.getAttribute('aria-selected')==='true'
+            && [...document.querySelectorAll('[role="combobox"]')].some(el=>text(el).startsWith('Starts With'))
+            && buttons.length===1) buttons[0].click();
+      }
+    });
     const collected = await nvPages('Search Results', nvSearchHeaders, deadline, first);
     const rows = collected.map(({cells,node,page}) => {
       const [name,identifier,,entity_type,,,raw_status] = cells;

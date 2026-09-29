@@ -344,3 +344,9 @@ the master selector. Comments identify this as nonprofit-corporation standing
 and preserve any separate solicitation flag; do not imply a CSRS/CSRX filing has
 been verified when it has not. Formation is not a last renewal, and the annual
 due date is not a last-filed date.
+
+### 0.6.7 live controls and 0.6.8 bounded Nevada recovery
+
+The six-case 0.6.7 control produced four unattended Nevada SEARCH_NOT_STARTED results on the first query. North Carolina Prevent Child Abuse completed as Upcoming Filing in 16.451 seconds. Observing the RMHC Nevada page did not resolve its stalled search, so visibility is not established as the cause. For the final Nevada diagnostic, an ordinary manual Search click started the stalled query and the collector then advanced through its aliases. Its final unsupported-category review remains unresolved; that assisted run is not a passing unattended control. Raw results and the assistance note are retained in the validation output.
+
+Candidate 0.6.8 retries the current Nevada Search once after three seconds only if no loading cycle has been observed. It rechecks the bound name, blank identifier filters, Starts With mode and current visible enabled button. It never retries a pending source response, extends the existing command deadline or treats a blank initial grid as a negative. This is an evidence-based recovery for a missed first submission; the source application's internal cause is not proven. Other state collectors and all status/identity rules remain unchanged. Live validation is still required.

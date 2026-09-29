@@ -52,7 +52,7 @@ class RestoreApprovedOrigin(ast.NodeTransformer):
         return self.generic_visit(node)
 
     def visit_BoolOp(self, node):
-        current = "record.get('connector_version') != '0.5.10' and not (trial_identity() and record.get('connector_version') in {'0.6.4', '0.6.5', '0.6.6', '0.6.7'})"
+        current = "record.get('connector_version') != '0.5.10' and not (trial_identity() and record.get('connector_version') in {'0.6.4', '0.6.5', '0.6.6', '0.6.7', '0.6.8'})"
         if ast.dump(node) == ast.dump(ast.parse(current, mode='eval').body):
             return ast.parse("record.get('connector_version') != '0.5.10'", mode='eval').body
         if ast.dump(node)==ast.dump(ast.parse('APP_VERSION.endswith("-staging") or trial_identity()',mode='eval').body):
@@ -65,7 +65,7 @@ class RestoreApprovedOrigin(ast.NodeTransformer):
         if ast.dump(node)==ast.dump(ast.parse(current,mode='eval').body):
             return ast.parse("state != 'NY' and origin != NY_CONNECTOR_ORIGIN",mode='eval').body
         if (isinstance(node.op,ast.And) and len(node.values)==2
-                and ast.dump(node.values[1])==ast.dump(ast.parse("not (trial_identity() and connector_version in {'0.6.4', '0.6.5', '0.6.6', '0.6.7'})",mode='eval').body)):
+                and ast.dump(node.values[1])==ast.dump(ast.parse("not (trial_identity() and connector_version in {'0.6.4', '0.6.5', '0.6.6', '0.6.7', '0.6.8'})",mode='eval').body)):
             return self.visit(node.values[0])
         return self.generic_visit(node)
 

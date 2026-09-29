@@ -29,7 +29,7 @@ test('Nevada visible inputs and search type are not ready while the initial load
  assert.equal(h.api.registryDocumentReady(),false);
  h.context.document.querySelectorAll=read;assert.equal(h.api.registryDocumentReady(),true);
 });
-function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,truncate=false,duplicate=false,oldPageDelay=80,detailId=null,returnFormDelay=600,returnName=null,returnRows=null,repeatSearchActivity=true,replaceSearchOnInput=false,returnGridDelay=0,unrelatedMutations=false}={}) {
+function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,truncate=false,duplicate=false,oldPageDelay=80,detailId=null,returnFormDelay=600,returnName=null,returnRows=null,repeatSearchActivity=true,replaceSearchOnInput=false,returnGridDelay=0,unrelatedMutations=false,ignoredSearches=0,changedQueryBeforeRetry=false}={}) {
  let clock=1000,serial=0,listener,loading=false,rendered=[],page=1,detail=false,searchClicks=0,opened=[],formReady=true;
  const tasks=new Map(),observers=new Set(),root={};
  const schedule=(fn,ms)=>{let id=++serial;tasks.set(id,{at:clock+ms,fn});return id;};
@@ -42,7 +42,11 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
  let buttonCurrent=true,staleClicks=0;
  class Input {get value(){return this.v||'';}set value(v){this.v=v;}dispatchEvent(){if(replaceSearchOnInput){buttonCurrent=false;schedule(()=>{buttonCurrent=true;mutate();},100);}}}
  const inputs=Object.fromEntries(['entityName','entityNumber','nvBusinessId'].map(k=>[k,new Input()]));
- const searchButton={innerText:'Search',getClientRects:()=>[{}],disabled:false,click:()=>{page=1;searchClicks++;if(searchClicks===1||repeatSearchActivity)begin();}};
+ const searchButton={innerText:'Search',getClientRects:()=>[{}],disabled:false,click:()=>{
+  page=1;searchClicks++;
+  if(changedQueryBeforeRetry&&searchClicks===1)schedule(()=>{inputs.entityName.value='OTHER ENTITY';mutate();},1000);
+  if(searchClicks>ignoredSearches&&(searchClicks===1||repeatSearchActivity))begin();
+ }};
  const staleButton={...searchButton,click:()=>staleClicks++};
  const textEl=innerText=>({innerText});
  const backButton={innerText:'Return To Results',getClientRects:()=>[{}],click:()=>{
@@ -123,6 +127,31 @@ test('Nevada waits for Search replacement caused by filter input rendering',asyn
 test('Nevada unrelated rendering cannot starve a stable current Search button',async()=>{
  const f=fixture({unrelatedMutations:true,replaceSearchOnInput:true});
  const r=await f.search();assert.equal(r.total,4);assert.equal(f.clicks,1);assert.equal(f.staleClicks,0);
+});
+
+test('Nevada retries a fresh form once when its first Search never starts a response',async()=>{
+ const f=fixture({ignoredSearches:1}),r=await f.search();
+ assert.equal(r.total,4);assert.equal(f.clicks,2);assert.ok(f.time<6000);
+});
+
+test('Nevada never repeats Search after loading has started, even for a slow response',async()=>{
+ const f=fixture({responseDelay:6000}),r=await f.search();
+ assert.equal(r.total,4);assert.equal(f.clicks,1);
+});
+
+test('Nevada no-activity retry does not extend the command budget or invent a negative',async()=>{
+ const f=fixture({activity:false,rows:[]});await assert.rejects(f.search(),/SEARCH_NOT_STARTED/);
+ assert.equal(f.clicks,2);assert.ok(f.time<=36200);
+});
+
+test('Nevada refuses to retry a Search whose name was changed after submission',async()=>{
+ const f=fixture({ignoredSearches:1,changedQueryBeforeRetry:true});
+ await assert.rejects(f.search(),/SEARCH_NOT_STARTED/);assert.equal(f.clicks,1);
+});
+
+test('Nevada throttled retry cannot execute beyond the original deadline',async()=>{
+ const f=fixture({activity:false,timerClamp:60000,rows:[]});
+ await assert.rejects(f.search(),/SEARCH_NOT_STARTED/);assert.equal(f.clicks,1);
 });
 
 test('Nevada retains observed NR rows without treating them as issued business identities',async()=>{
