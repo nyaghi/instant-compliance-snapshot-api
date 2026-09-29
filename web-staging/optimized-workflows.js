@@ -15,8 +15,9 @@
       results.set(result.state,result);onResult(result);
     };
     async function call(action,extra={},detached=false) {
+      const timeout=AbortSignal.timeout(detached?10000:25000);
       const response=await fetch(apiBase+'/api/workflow',{method:'POST',
-        headers:{'Content-Type':'application/json'},signal:detached?AbortSignal.timeout(10000):signal,
+        headers:{'Content-Type':'application/json'},signal:!detached&&signal?AbortSignal.any([signal,timeout]):timeout,
         body:JSON.stringify({...credentials,action,token,...extra})});
       if(!response.ok) throw new Error('State-check progress is temporarily unavailable ('+response.status+').');
       return response.json();

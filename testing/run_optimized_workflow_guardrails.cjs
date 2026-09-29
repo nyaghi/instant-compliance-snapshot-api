@@ -20,6 +20,12 @@ test('retrying an interrupted submission uses the same request identity',async()
  return response({finished:1,results:[{state:'CO',status:'Current'}]});});
  await cc.run({...base,states:['CO']});assert.equal(ids.length,2);assert.equal(ids[0],ids[1]);
 });
+
+test('Standard progress requests retain a network deadline without a caller signal',async()=>{
+ const cc=setup(async(u,o)=>{assert(o.signal instanceof AbortSignal);const p=JSON.parse(o.body);
+  return response(p.action==='start'?{token:'signed'}:{finished:1,results:[{state:'CO',status:'Current'}]});});
+ const r=await cc.run({...base,states:['CO']});assert.equal(r[0].status,'Current');
+});
 test('progress failure preserves earlier evidence and never becomes Not Registered',async()=>{
  let count=0;const calls=[];const cc=setup(async(u,o)=>{let p=JSON.parse(o.body);calls.push(p.action);
  if(p.action==='start')return response({token:'signed'});if(p.action==='cancel')return response({ok:true});
