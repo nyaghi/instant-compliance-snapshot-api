@@ -86,7 +86,7 @@ validation run.
   keyed to an organization or EIN.
 - Trial UI assembly derives from the approved frontend and adds all four
   selectors. The approved frontend files and installed 0.5.10 connector are
-  unchanged. A separate 0.6.3 trial package uses only the trial origin, public
+  unchanged. A separate 0.6.4 trial package uses only the trial origin, public
   registry permissions and session storage; it has no production/staging page
   permission, NY page injection, cookie access or browsing-data permission.
   New York continues on the isolated worker backend. Its ordinary 29.1 browser
@@ -201,6 +201,25 @@ validation run.
   all other mature matching/status/timing remains compared with approved 29.1.
 - This correction is trial-only pending live Young Life and prior NJ controls.
   No approved staging or production files/targets were changed.
+
+### Live exemption control and interim regression follow-up
+
+- All 16 NJ controls passed on f3708e4, including Young Life returning Exempt
+  in 6.52 seconds. The original failed 32-state run is retained separately.
+- Focus on the Family subsequently repeated two conservative outcomes. Its NJ
+  EIN search shows zero records, while the name search shows an Exempt record
+  with both EIN and registration number blank. Its 8605 Explorer Drive address
+  agrees with same-EIN CA/CO records. That case is outside the exact-EIN exception
+  and remains open for identity review, rather than broadening the correction.
+- Mississippi shows the longer name "Focus on the Family, a California nonprofit
+  religious corporation", Current - Exempted, file 100002691. Its address is 8655
+  Explorer Drive; same-EIN CA/CO records show 8605. The current name matcher
+  conservatively returns Needs Review. No broad descriptor-stripping change or
+  spreadsheet correction has been made. Remaining independent controls continue.
+- The isolated validation form now reports the active connector version using
+  its existing, origin-bound ping. It sends no credentials or registry query for
+  this diagnostic and does not reload an extension. This avoids inferring an
+  active version from the installed files alone. The approved frontend is unchanged.
 
 ## Confirmed date interpretation
 

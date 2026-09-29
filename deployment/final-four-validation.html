@@ -5,6 +5,7 @@
 <script src="/ny-connector.js" defer></script><script src="/optimized-workflows.js" defer></script></head>
 <body><h1>CharityClarity 29.2 — Isolated validation</h1>
 <p>Uses the master name discovery, workflow and browser connector. Staging 29.1 is separate.</p>
+<p id="connectorStatus">Checking the trial connector…</p><button id="checkConnector" type="button">Check trial connector</button>
 <form id="setup"><label>Compliance Express email<input id="email" type="email" required autocomplete="off"></label>
 <label>Private trial key<input id="passcode" type="password" required autocomplete="off"></label>
 <label>Load local validation settings<input id="settingsFile" type="file" accept="application/json,.json"></label>
@@ -18,6 +19,29 @@
 const VERSION='2026.09.29.2-performance-lab',API=location.origin;
 const setup=document.getElementById('setup'),progress=document.getElementById('progress'),output=document.getElementById('results');
 const EXTERNAL=new Set(['IL','GA','AL','NC','NV','TN']);
+let connectorCheck=null;
+function checkConnector(){
+ if(connectorCheck)return connectorCheck;
+ const status=document.getElementById('connectorStatus'),button=document.getElementById('checkConnector');
+ status.textContent='Checking the trial connector…';button.disabled=true;
+ connectorCheck=new Promise(resolve=>{
+  const id=crypto.randomUUID().replaceAll('-','');let timer;
+  const finish=response=>{clearTimeout(timer);window.removeEventListener('message',receive);
+   status.textContent=response?.ok&&typeof response.version==='string'
+    ?`Active trial connector: ${response.version}. Required for this validation: 0.6.4.`
+    :'The trial connector did not respond. Activate the installed trial connector, then check again.';
+   resolve(response);
+  };
+  const receive=event=>{const m=event.data;
+   if(event.source===window&&event.origin===location.origin&&m?.channel==='cc-final-four-trial-v1'&&m.direction==='response'&&m.id===id&&!m.progress)finish(m);
+  };
+  window.addEventListener('message',receive);timer=setTimeout(()=>finish(null),5000);
+  window.postMessage({channel:'cc-final-four-trial-v1',direction:'request',id,action:'ping'},location.origin);
+ }).finally(()=>{connectorCheck=null;button.disabled=false;});
+ return connectorCheck;
+}
+document.getElementById('checkConnector').addEventListener('click',checkConnector);
+window.addEventListener('load',checkConnector,{once:true});
 document.getElementById('settingsFile').addEventListener('change',async event=>{
  const file=event.target.files?.[0];if(!file)return;
  try{if(file.size>1000000)throw Error('Settings file too large');const settings=JSON.parse(await file.text());
