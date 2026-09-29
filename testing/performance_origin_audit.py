@@ -9,8 +9,30 @@ ORIGIN = 'https://instant-compliance-snapshot-api-hn4v.onrender.com'
 
 
 class RestoreApprovedOrigin(ast.NodeTransformer):
+    def visit_FunctionDef(self, node):
+        # Independently tested source exception: the public NJ grid can expose
+        # an exact-EIN Exempt row without a registration number. Only the new
+        # helper and the two exact acquisition prefixes below are normalized;
+        # the existing status, matching, timeout and other-state code is exact.
+        if node.name == 'nj_exact_ein_exempt_row':
+            return None
+        return self.generic_visit(node)
+
+    def visit_Assign(self, node):
+        for query in ('query', 'ein'):
+            expected = ast.parse('exemption = nj_exact_ein_exempt_row(data, ' + query + ')').body[0]
+            if ast.dump(node) == ast.dump(expected):
+                return None
+        return self.generic_visit(node)
+
     def visit_If(self, node):
         for source in [
+            'if exemption is not None:\n return [exemption]',
+            '''if exemption is not None:
+ body = f"Charity Name: {exemption[0]}\\nStatus Exempt Federal EIN {ein}\\n"
+ result = checker.StateResult(org.organization_name, org.ein, "NJ", checker.STATUS_UNKNOWN, base + path)
+ result.matched_registry_identifier = ein
+ return nj_result_from_body(None, org, result, body, ein), body''',
             'if trial_identity():\n SUPPORTED_STATES.extend(["AL", "NC", "NV", "TN"])',
             "if os.environ.get('CE_FINAL_FOUR_TRIAL') == '1':\n identity = trial_identity()\n return bool(identity and origin == identity['origin'])",
         ]:

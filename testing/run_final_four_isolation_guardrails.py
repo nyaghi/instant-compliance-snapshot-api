@@ -119,11 +119,12 @@ class IsolationControls(unittest.TestCase):
             self.assertIsNotNone(identity.trial_identity(os.environ,manifest,2000))
 
     def test_environment_gate_does_not_change_registry_or_queue_code(self):
-        """Restore only the allowlisted origin expressions, then compare ASTs."""
+        """Compare all mature code outside audited origin and NJ acquisition additions."""
         class Restore(RestoreApprovedOrigin):
             def visit_FunctionDef(self, node):
                 # These new, not-yet-routed source parsers are checked by the
-                # final-four controls. Every pre-existing function stays exact.
+                # final-four controls. The exact NJ exemption acquisition
+                # additions are audited separately; all other functions stay exact.
                 if node.name in {'final_four_source_date', 'al_charity_search_evidence',
                                  'nc_charity_record_evidence', 'nv_charity_detail_evidence',
                                  'final_four_license_result', 'tn_charity_detail_evidence',
@@ -137,7 +138,7 @@ class IsolationControls(unittest.TestCase):
                     route = ast.parse('if self.path == "/api/final-four-connector":\n self._send_final_four_connector()\n return').body[0]
                     if ast.dump(node.body[0]) == ast.dump(route):
                         node.body.pop(0)
-                return self.generic_visit(node)
+                return super().visit_FunctionDef(node)
             def visit_ImportFrom(self, node):
                 return None if node.module == 'deployment.lab_identity' else node
             def visit_UnaryOp(self, node):

@@ -20918,6 +20918,31 @@ def nj_next_due_date_from_body(body: str) -> date | None:
     return context.get("computed_due_date")
 
 
+def nj_exact_ein_exempt_row(data, query):
+    """A completed NJ exemption may explicitly have no registration number."""
+    if (not isinstance(query, str) or not re.fullmatch(r"\d{9}", query) or query == "000000000"
+            or not isinstance(data, dict) or type(data.get("ItemCount")) is not int or data["ItemCount"] != 1
+            or type(data.get("PageNumber")) is not int or data["PageNumber"] != 1 or data.get("MoreRecords") is not False
+            or any(data.get(k) for k in ("Error", "error", "ErrorMessage", "errorMessage")) or data.get("Success") is False
+            or not isinstance(data.get("Records"), list) or len(data["Records"]) != 1):
+        return None
+    record = data["Records"][0]
+    attrs = record.get("Attributes") if isinstance(record, dict) else None
+    if not isinstance(attrs, list):
+        return None
+    fields = {}
+    for attribute in attrs:
+        if not isinstance(attribute, dict) or not isinstance(attribute.get("Name"), str) or attribute["Name"] in fields:
+            return None
+        fields[attribute["Name"]] = attribute.get("DisplayValue")
+    name, credential, status, ein = [fields.get(k) for k in ("name", "accountnumber", "crsm_filestanding", "crsm_federalein")]
+    if (not isinstance(name, str) or not useful_registry_name(name) or credential not in (None, "")
+            or status != "Exempt" or not isinstance(ein, str) or not re.fullmatch(r"\d{2}-?\d{7}", ein)
+            or canonical_ein_digits(ein) != query):
+        return None
+    return (re.sub(r"\s+", " ", name).strip(), "", query, "Exempt")
+
+
 def nj_completed_query_rows(request, query):
     """Bind a fully received portal grid to the exact search that produced it."""
     try:
@@ -20935,6 +20960,9 @@ def nj_completed_query_rows(request, query):
                 or "json" not in response.headers.get("content-type", "").lower()):
             return None
         data = response.json()
+        exemption = nj_exact_ein_exempt_row(data, query)
+        if exemption is not None:
+            return [exemption]
         records = data.get("Records") if isinstance(data, dict) else None
         count = data.get("ItemCount") if isinstance(data, dict) else None
         if (not isinstance(records, list) or type(count) is not int or count < len(records)
@@ -21293,6 +21321,12 @@ def search_nj_public_details(org):
                     return result, " ".join([result.raw_status_text, result.source_note])
                 # Any unresolved query still requires the original browser path.
                 return None
+            exemption = nj_exact_ein_exempt_row(data, ein)
+            if exemption is not None:
+                body = f"Charity Name: {exemption[0]}\nStatus Exempt Federal EIN {ein}\n"
+                result = checker.StateResult(org.organization_name, org.ein, "NJ", checker.STATUS_UNKNOWN, base + path)
+                result.matched_registry_identifier = ein
+                return nj_result_from_body(None, org, result, body, ein), body
             records = data.get("Records")
             if (type(data.get("ItemCount")) is not int or data["ItemCount"] != 1
                     or data.get("MoreRecords") is not False or data.get("PageNumber") != 1

@@ -181,6 +181,27 @@ validation run.
   validation remains open, and no promotion is recommended yet. The existing
   32-backend-state regression is running separately without a deployment mid-run.
 
+### Existing-state regression finding: NJ blank-number exemption
+
+- The first 16 organizations completed 512 backend checks, with 508 spreadsheet
+  matches, three proposed source/sheet differences and one inconclusive result.
+  Differences are Reading Is Fundamental FL (Current), Earthjustice MI (Pending),
+  Year Up RI (Current), and Young Life NJ (Unable to Verify). Expectations remain
+  unchanged. This count excludes all six browser states and is not final acceptance.
+- Young Life NJ repeated the same failure individually. Its public EIN search
+  visibly shows one Exempt row, matching EIN and Colorado Springs address, with
+  no NJ registration number. Both existing acquisition paths rejected the blank
+  number. The narrow candidate accepts only a complete, unique, exact-EIN row
+  with explicit Exempt status and blank number, using the existing interpreter.
+- Six new controls cover the exception and reject wrong EIN, other statuses,
+  malformed/duplicate/partial/error responses and unbound browser queries. 119
+  Python controls pass, including existing NJ positive, negative, timeout and
+  fallback behavior plus final-four/isolation tests. The AST audit normalizes
+  only the two exact NJ acquisition additions and independently tested helper;
+  all other mature matching/status/timing remains compared with approved 29.1.
+- This correction is trial-only pending live Young Life and prior NJ controls.
+  No approved staging or production files/targets were changed.
+
 ## Confirmed date interpretation
 
 The user confirmed on September 29 that a displayed extension end date is the
