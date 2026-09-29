@@ -1,11 +1,16 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
 const event=()=>{const fs=[];return {addListener:f=>fs.push(f),emit:v=>fs.forEach(f=>f(v))};};
-function bridge(){
- const requests=[],replies=[],ports=[],timers=[],origin='https://staging.compliance-express.com';let now=0;
+function bridge(trial=false){
+ const requests=[],replies=[],ports=[],timers=[],origin=trial?'https://fixture-final-four.onrender.com':'https://staging.compliance-express.com';let now=0;
  const window={top:null,addEventListener:(n,f)=>requests.push(f),postMessage:m=>replies.push(m)};window.top=window;
  const runtime={lastError:null,connect:o=>{const p={name:o.name,sent:[],onMessage:event(),onDisconnect:event(),postMessage:m=>p.sent.push(m),disconnect:()=>p.onDisconnect.emit()};ports.push(p);return p;}};
  const ctx={window,chrome:{runtime},location:{origin},setInterval:()=>0,clearInterval:()=>{},setTimeout:(fn,ms)=>{const t={fn,due:now+ms};timers.push(t);return t;},clearTimeout:t=>{if(t)t.clear=true;}};
- for(const f of ['protocol.js','staging-bridge.js'])vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../browser-connector',f),'utf8'),ctx);
+ for(const f of ['protocol.js','staging-bridge.js']){
+  let source=fs.readFileSync(path.join(__dirname,'../browser-connector',f),'utf8');
+  if(trial&&f==='protocol.js')source=source.replace('const TRIAL_ORIGIN = "";',`const TRIAL_ORIGIN = ${JSON.stringify(origin)};`)
+   .replace('function registryAllowed(state, origin) {','function registryAllowed(state, origin) { if (origin !== TRIAL_ORIGIN || state === "NY") return false;');
+  vm.runInNewContext(source,ctx);
+ }
  return {ports,replies,runtime,send:m=>requests[0]({source:window,origin,data:{channel:'cc-ny-staging-v1',direction:'request',lookup_id:'original-lookup-1234',...m}}),advance:ms=>{now+=ms;for(const t of [...timers])if(!t.clear&&t.due<=now){t.clear=true;t.fn();}}};
 }
 test('bridge reconnect replays same search ID/query and reports diagnostic reason',()=>{
@@ -22,4 +27,15 @@ test('missing restart handshake terminates after three reconnect attempts',()=>{
  const h=bridge(),id='original-command-1234';h.send({action:'acquire',id});h.ports[0].disconnect();
  h.advance(10000);h.advance(2000);h.advance(10000);h.advance(3000);h.advance(10000);
  assert.equal(h.ports.length,4);assert.ok(h.replies.some(r=>r.id===id&&r.reason==='NY_CONNECTOR_INTERRUPTED'));
+});
+for(const state of ['IL','GA','AL','NC','NV','TN'])test(`trial bridge retains ${state} after admission and refuses registry switching`,()=>{
+ const h=bridge(true),acquire='acquire-command-1234',search='search-command-12345';
+ h.send({action:'acquire',id:acquire,intent:state});h.ports[0].onMessage.emit({id:acquire,ok:true});
+ const query=['IL','GA'].includes(state)?{state,orgName:'Example Foundation'}:{state,operation:'search',name:'Example Foundation'};
+ h.send({action:'search',id:search,query});assert.equal(h.ports[0].sent.at(-1).id,search);
+ assert.equal(h.replies.some(r=>r.id===search&&!r.ok),false);
+ h.send({action:'search',id:'crossed-command-1234',intent:state==='NC'?'NV':'NC',query});
+ assert.equal(h.replies.at(-1).reason,'NY_CONNECTOR_INVALID_SEQUENCE');
+ h.ports[0].disconnect();h.ports[1].onMessage.emit({action:'resumed'});
+ assert.deepEqual(h.ports[1].sent.at(-1).query,query);
 });

@@ -10,7 +10,7 @@ function connect(h,state,origin=TRIAL,number=1){
   h.chrome.runtime.onConnect.emit(p);return p;
 }
 function fixture(enabled=true){
-  const h=harness(enabled?{trialOrigin:TRIAL}:{});let serial=0;
+  const h=harness(enabled?{trialOrigin:TRIAL,trialOnly:true}:{});let serial=0;
   if (enabled) h.tabs.get(1).url=TRIAL+'/';
   const docs=new Map(),calls=[],reloads=[];
   const create=h.chrome.tabs.create,update=h.chrome.tabs.update;
@@ -155,4 +155,12 @@ test('AL is disabled outside the trial and cannot request unsupported detail or 
  const h=fixture(),valid=q=>vm.runInContext(`P.validQuery(${JSON.stringify(q)})`,h.context);
  assert.equal(valid({state:'AL',operation:'search',name:'Example'}),true);
  assert.equal(valid({state:'AL',operation:'detail',identifier:'CO123'}),false);assert.equal(valid({state:'AL',ein:'123456789'}),false);
+});
+for(const state of ['AL','NV','TN'])test(`${state} trial reconnect resumes its admitted registry without enabling New York`,async()=>{
+ const h=fixture(),p=connect(h,state),query={state,operation:'search',name:'Example Foundation'};
+ assert.equal((await h.query(p,2,query)).ok,true);p.disconnect();await tick();
+ const resumed=h.connect(1,undefined,false,true);await tick();
+ assert.equal(resumed.disconnected,false);assert.ok(resumed.messages.some(m=>m.action==='resumed'));
+ assert.equal((await h.query(resumed,2,query)).ok,true);assert.equal(h.created.length,1);
+ assert.equal(h.connect(99).disconnected,true);
 });

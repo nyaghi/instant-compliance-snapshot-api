@@ -27,6 +27,7 @@ function harness(initial={}) {
   for(const file of ['protocol.js','registry-worker.js','worker.js']) {
     let source=fs.readFileSync(path.join(root,file),'utf8');
     if(file==='protocol.js' && initial.trialOrigin) source=source.replace('const TRIAL_ORIGIN = "";',`const TRIAL_ORIGIN = ${JSON.stringify(initial.trialOrigin)};`);
+    if(file==='protocol.js' && initial.trialOrigin && initial.trialOnly) source=source.replace('function registryAllowed(state, origin) {','function registryAllowed(state, origin) { if (origin !== TRIAL_ORIGIN || state === "NY") return false;');
     vm.runInContext(source,context);
   }
   function connect(n=1,sender={id:chrome.runtime.id,frameId:0,url:tabs.get(1).url,tab:{id:1}},refresh=false,resume=false) {

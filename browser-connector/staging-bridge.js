@@ -97,7 +97,10 @@
     if (!["acquire", "refresh"].includes(m.action) && (m.action !== "search" || !P.validQuery(m.query))) return;
     if (active && active.lookupId !== m.lookup_id) { reply(m.id, { ok: false, reason: "NY_CONNECTOR_BUSY" }); return; }
     try {
-      const state = ["IL","GA","AL","NC","NV","TN"].includes(m.intent) ? m.intent : "NY";
+      // Acquire chooses the registry; subsequent search messages deliberately
+      // omit intent and must retain that admitted registry.
+      const state = active?.registryState || (["IL","GA","AL","NC","NV","TN"].includes(m.intent) ? m.intent : "NY");
+      if (active && m.intent && m.intent !== state) { reply(m.id,{ok:false,reason:"NY_CONNECTOR_INVALID_SEQUENCE"}); return; }
       if (!P.registryAllowed(state,ORIGIN)) { reply(m.id,{ok:false,reason:"NY_CONNECTOR_INVALID_SEQUENCE"}); return; }
       const job = active || connect(m.lookup_id, m.action === "acquire" && m.intent === "refresh", state);
       const request = { action: m.action, id: m.id, ...(m.query ? { query: m.query } : {}) };
