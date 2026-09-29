@@ -5,6 +5,7 @@
 <script src="/identity-review.js?v=20260927.7"></script>
 <script src="/ny-connector.js?v=2026.09.27.7" defer></script></head><body>
 <h1>Aurora optimized execution verification · staging validation</h1>
+<button id="openApplication" type="button">Open actual application control</button><div id="applicationControl"></div>
 <p>Staging post-validation. The released master backend owns name matching and status decisions. The source spreadsheet is read-only.</p>
 <form id="setup"><label>Email <input id="email" type="email" required autocomplete="off"></label><label>Staging passcode <input id="passcode" type="password" required autocomplete="off"></label>
 <label>Load local audit settings <input id="settingsFile" type="file" accept=".json,application/json"></label>
@@ -22,6 +23,15 @@ const VERSION='2026.09.28.5-staging';
 const STATES=['AK','AR','CA','CO','CT','DC','FL','GA','HI','IL','KS','KY','LA','MA','MD','ME','MI','MN','MS','ND','NH','NJ','NM','NY','OH','OK','OR','PA','RI','SC','VA','WA','WI','WV'];
 const BROWSER=new Set(['NY','IL','GA']);const $=id=>document.getElementById(id);
 let audit={scope:'Aurora optimized execution verification; approved source expectations retained',staging_version:VERSION,states:STATES,organizations:[],results:[],source_breakers:{},events:[]},stop=false,running=false,reviewCredentials=null;
+$('openApplication').addEventListener('click',()=>{
+ const access=reviewCredentials||{email:$('email').value,admin_passcode:$('passcode').value};
+ if(!access.email||!access.admin_passcode){$('current').textContent='Load local audit settings first.';return;}
+ const frame=document.createElement('iframe');frame.title='Actual Aurora application control';frame.style.cssText='width:100%;height:1000px;border:1px solid #ddd';
+ frame.addEventListener('load',()=>{const doc=frame.contentDocument;if(!doc.getElementById('stagingEmail'))return;
+  doc.getElementById('stagingEmail').value=access.email;doc.getElementById('stagingPasscode').value=access.admin_passcode;
+  doc.getElementById('stagingUnlockButton').click();});
+ frame.src='/';$('applicationControl').replaceChildren(frame);
+});
 
 // Validation evidence only: never persist credentials, tokens, cookies, or request headers.
 const checkpointDb=new Promise((resolve,reject)=>{const req=indexedDB.open('cc-aurora-performance-20260928',1);req.onupgradeneeded=()=>req.result.createObjectStore('checkpoints');req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});
