@@ -48,6 +48,35 @@ class TrialWorkflowControls(unittest.TestCase):
             with self.assertRaises(RuntimeError): lab.final_four_asset('index.html','unrecognized replacement UI')
             with self.assertRaises(RuntimeError): lab.final_four_asset('ny-connector.js','unrecognized connector')
 
+    def test_validation_shell_has_no_credential_and_script_compiles(self):
+        import re
+        text=(ROOT/'deployment/final-four-validation.html').read_text()
+        self.assertIn('window.CCOptimized.run',text);self.assertIn('window.CCNYConnector.lookup',text)
+        self.assertIn("mode==='sales'?60000:900000",text)
+        self.assertNotIn('value="fixture',text)
+        with tempfile.TemporaryDirectory() as tmp:
+            p=Path(tmp)/'validation.js';p.write_text('\n'.join(re.findall(r'<script(?:\s[^>]*)?>(.*?)</script>',text,re.S)))
+            result=subprocess.run([str(NODE),'--check',str(p)],capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+
+    def test_public_trial_test_shell_does_not_expose_api_or_old_pool_assets(self):
+        class Base: pass
+        master=types.SimpleNamespace(RegistrySnapshotHandler=Base)
+        queue=Mock();handler_type=lab.build_handler(master,'fixture',durable=queue)
+        for active in (TRIAL,None):
+            with patch.object(lab,'trial_identity',return_value=active):
+                for path in ['/connector/final-four-validation.html','/ny-connector.js','/api/lab/trial-export','/api/lab/metrics','/index.html']:
+                    h=handler_type.__new__(handler_type);h.path=path;h.authorized=Mock(return_value=False)
+                    h.send_response=Mock();h.send_header=Mock();h.end_headers=Mock();h.wfile=io.BytesIO()
+                    h._get(True)
+                    public=active and path in ['/connector/final-four-validation.html','/ny-connector.js']
+                    if public:
+                        h.authorized.assert_not_called();h.send_response.assert_called_once_with(200)
+                        self.assertGreater(len(h.wfile.getvalue()),0)
+                    else:
+                        h.authorized.assert_called_once();h.send_response.assert_not_called()
+        queue.transaction.assert_not_called();queue.metrics.assert_not_called()
+
     def test_trial_reserves_one_actual_browser_lane_without_reducing_other_state_capacity(self):
         payload={k:v for k,v in self.payload().items() if k!='request_id'}
         payload['external_state_slots']=1

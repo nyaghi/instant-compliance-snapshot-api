@@ -117,6 +117,7 @@ def final_four_asset(name, text):
         replace('v2026.09.29.1 &middot; Staging', 'v2026.09.29.2 &middot; Isolated Trial')
     elif name == 'optimized-workflows.js':
         replace("states.filter(s=>s==='IL'||s==='GA')", "states.filter(s=>['IL','GA','AL','NC','NV','TN'].includes(s))")
+        replace("headers:{'Content-Type':'application/json'}", "headers:{'Content-Type':'application/json','Authorization':'Bearer '+credentials.admin_passcode}")
     elif name == 'sales-mode.js':
         replace('const NAMES = {', 'const NAMES = {"AL":"Alabama","NC":"North Carolina","NV":"Nevada","TN":"Tennessee",')
         replace('{signal:controller.signal}', '{signal:controller.signal,mode:"sales"}', 2)
@@ -126,6 +127,7 @@ def final_four_asset(name, text):
         replace('{NY:"New York",IL:"Illinois",GA:"Georgia"}', '{NY:"New York",IL:"Illinois",GA:"Georgia",AL:"Alabama",NC:"North Carolina",NV:"Nevada",TN:"Tennessee"}')
         replace('    const supported = c =>', '    const finalFour = ["AL","NC","NV","TN"].includes(registryState);\n    const supported = c => (!finalFour || c.capabilities?.includes("final-four-public-v1")) &&')
         replace('API + "/api/ny-connector"', 'API + (finalFour ? "/api/final-four-connector" : "/api/ny-connector")')
+        replace('headers: { "Content-Type": "application/json" }', 'headers: { "Content-Type": "application/json", "Authorization": "Bearer " + admin_passcode }')
         replace('action: "start", state: registryState,', 'action: "start", mode, state: registryState,')
         replace('const searchSignal = recoveryUsed ?', 'const searchSignal = (recoveryUsed || finalFour) ?')
         replace('if (!recoveryUsed) throw error;', 'if (!recoveryUsed && !finalFour) throw error;')
@@ -134,6 +136,8 @@ def final_four_asset(name, text):
 
 def lab_asset(path):
     path = unquote(urlparse(path).path)
+    if path == '/connector/final-four-validation.html' and trial_identity():
+        return (ROOT/'deployment/final-four-validation.html').read_bytes(), 'text/html'
     if path in ('/', '/registry-snapshot', '/registry-snapshot/'):
         path = '/index.html'
     root = (ROOT / 'web-staging').resolve()
@@ -221,6 +225,17 @@ def build_handler(master, key, capacity=None, durable=None):
         def _get(self, include_body):
             if self.path in ('/health', '/healthz'):
                 return self._send_healthz(include_body)
+            # This empty test form contains no credentials or results. Its API
+            # calls still require the private trial key, including the master
+            # passcode checks. No customer/backend data becomes public.
+            if trial_identity() and urlparse(self.path).path in (
+                    '/connector/final-four-validation.html','/ny-connector.js','/optimized-workflows.js'):
+                body,kind=lab_asset(self.path)
+                self.send_response(200);self.send_header('Content-Type',kind)
+                self.send_header('Content-Length',str(len(body)));self.send_header('Cache-Control','no-store')
+                self.end_headers()
+                if include_body:self.wfile.write(body)
+                return
             if not self.authorized(): return
             if self.path == '/api/lab/trial-export' and trial_identity() and durable is not None:
                 # Authenticated evidence export before retiring this disposable

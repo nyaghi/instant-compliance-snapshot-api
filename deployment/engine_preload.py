@@ -33,6 +33,11 @@ if not sys.platform.startswith('linux'):
 for key in ('CE_LAB_DATABASE_URL','CE_TEST_DATABASE_URL','RENDER_API_KEY'):
     os.environ.pop(key,None)
 os.environ['CE_LAB_DURABLE_QUEUE']='0'
+if os.environ.get('CE_FINAL_FOUR_TRIAL') == '1':
+    # validate_environment above confirmed the parent resource identity. The
+    # forkserver template also needs the credential-free child identity before
+    # multiprocessing reimports the API entry point in its warm-ready child.
+    os.environ['CE_FINAL_FOUR_CHILD']='1'
 install_http_egress_guard()
 started, cpu_started = time.monotonic(), time.process_time()
 import registry_snapshot_server as master

@@ -102,6 +102,22 @@ class IsolationControls(unittest.TestCase):
         env={'PUBLIC_BASE_URL':identity.APPROVED_ORIGIN,'CE_LAB_DATABASE_URL':'fixture','RENDER_API_KEY':'fixture','CE_LAB_DURABLE_QUEUE':'1'}
         self.assertEqual(task_environment(env),{'PUBLIC_BASE_URL':identity.APPROVED_ORIGIN,'CE_LAB_DURABLE_QUEUE':'0'})
 
+    def test_forkserver_preload_preserves_validated_identity_before_main_is_reimported(self):
+        import sys
+        from deployment import performance_lab
+        env,manifest=self.fixture()
+        prefix=(ROOT/'deployment/engine_preload.py').read_text().split('started, cpu_started =',1)[0]
+        def validated_parent(actual):
+            self.assertIsNotNone(identity.trial_identity(actual,manifest,2000))
+            self.assertIn('CE_LAB_DATABASE_URL',actual)
+        with patch.dict(os.environ,env,clear=True),patch.object(sys,'platform','linux'), \
+                patch.object(performance_lab,'validate_environment',side_effect=validated_parent), \
+                patch.object(performance_lab,'install_http_egress_guard'):
+            exec(compile(prefix,'preload-identity-control','exec'),{})
+            self.assertEqual(os.environ['CE_FINAL_FOUR_CHILD'],'1')
+            self.assertNotIn('CE_LAB_DATABASE_URL',os.environ)
+            self.assertIsNotNone(identity.trial_identity(os.environ,manifest,2000))
+
     def test_environment_gate_does_not_change_registry_or_queue_code(self):
         """Restore only the allowlisted origin expressions, then compare ASTs."""
         class Restore(RestoreApprovedOrigin):
