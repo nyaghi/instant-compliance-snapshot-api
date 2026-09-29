@@ -1,0 +1,6 @@
+{
+  "source": "https://erls.wvsos.gov/OnlineCharitiesSearch/Search",
+  "retrieved": "2026-09-26T18:42:46.682757+00:00",
+  "detail_source": "POST /OnlineCharitiesSearch/CharitiesInformation, public target 4703 from selected registry row 5533",
+  "note": "Public form verification token replaced in offline fixture. Expected matching rules unchanged."
+}

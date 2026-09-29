@@ -1,0 +1,20 @@
+[
+  {
+    "file": "271635830-search.html",
+    "source_url": "https://charitableregistration.ohioago.gov/Charities/ResearchCharities",
+    "retrieved": "2026-09-26",
+    "sha256": "88aa3a46a41ca9b81f298a1782d6c2fba19c597630a627fd9935ddef9eda80df"
+  },
+  {
+    "file": "521089824-11811319-detail.html",
+    "source_url": "https://charitableregistration.ohioago.gov/Charities/OrganizationDetails?Id=11811319",
+    "retrieved": "2026-09-26",
+    "sha256": "bc5e04664e9a5970d04d7c5950c6f26960cb4764552285fa01b3849fc9fc096f"
+  },
+  {
+    "file": "521089824-search.html",
+    "source_url": "https://charitableregistration.ohioago.gov/Charities/ResearchCharities",
+    "retrieved": "2026-09-26",
+    "sha256": "ce0d60875aeeb4dad4483740b305cf1120dbc8ccd7acea3dd3ca35c52c4fa8fb"
+  }
+]

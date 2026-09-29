@@ -2,9 +2,9 @@
 (() => {
   'use strict';
   if (location.origin !== 'https://staging.compliance-express.com') return;
-  const VERSION = '2026.09.27-sales.1';
+  const VERSION = '2026.09.28.5-sales';
   const RUN_LIMIT_MS = 60000;
-  const STATE_CONCURRENCY = 15;
+  const STATE_CONCURRENCY = 20;
   const NAMES = {"IL":"Illinois", "GA":"Georgia", "AK": "Alaska", "AR": "Arkansas", "CA": "California", "CO": "Colorado", "CT": "Connecticut", "DC": "District of Columbia", "RI": "Rhode Island", "FL": "Florida", "HI": "Hawaii", "KS": "Kansas", "KY": "Kentucky", "LA": "Louisiana", "MA": "Massachusetts", "MD": "Maryland", "ME": "Maine", "MI": "Michigan", "MN": "Minnesota", "MS": "Mississippi", "ND": "North Dakota", "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico", "NY": "New York", "OH": "Ohio", "OK": "Oklahoma", "OR": "Oregon", "PA": "Pennsylvania", "SC": "South Carolina", "VA": "Virginia", "WA": "Washington", "WI": "Wisconsin", "WV": "West Virginia"};
   const STATES = Object.freeze(Object.keys(NAMES).sort((a,b)=>NAMES[a].localeCompare(NAMES[b],'en')));
   // Display grouping only: never infer a registry outcome from a failed request.
@@ -92,6 +92,15 @@
     progress();const timer=setInterval(()=>{if(performance.now()>=deadline)expire();else progress();},100);
     const deadlineTimer=setTimeout(expire,Math.max(0,deadline-performance.now()));
     try {
+      if(window.CCOptimized){
+        await Promise.race([window.CCOptimized.run({apiBase:API_BASE,name:org,ein,states:selectedStates,
+          mode:'sales',credentials:{email:$('email').value.trim(),admin_passcode:$('adminPasscode').value.trim(),device_id:getDeviceId()},
+          signal:controller.signal,
+          externalLookup:state=>requestSingleState(API_BASE,ein,$('email').value.trim(),state,org,false,[],{signal:controller.signal}),
+          onResult:result=>{if(closed)return;if(performance.now()>=deadline){expire();return;}record(result.state,result);}
+        }).catch(()=>{if(!closed)expire();}),expired]);
+        panel.dataset.stateConcurrencyLimit=String(STATE_CONCURRENCY);
+      } else {
       const queue=[...selectedStates.filter(s=>s==='NY'),...selectedStates.filter(s=>s!=='NY')];let cursor=0,inFlight=0,peak=0;
       async function worker(){while(!closed && cursor<queue.length){if(performance.now()>=deadline){expire();return;}const state=queue[cursor++];inFlight++;peak=Math.max(peak,inFlight);
         let result;
@@ -104,6 +113,7 @@
       }}
       await Promise.race([Promise.all(Array.from({length:Math.min(STATE_CONCURRENCY,queue.length)},worker)),expired]);
       panel.dataset.peakConcurrency=String(peak);
+      }
     } finally {
       closed=true;clearTimeout(deadlineTimer);clearInterval(timer);busy=false;progress();
       for(const el of [$('ccSalesRun'),$('ccSalesMode'),$('ccStandardMode'),$('ccSalesName'),$('ccSalesEin'),$('ccSalesConsent'),$('ccSalesStates')]) el.disabled=false;

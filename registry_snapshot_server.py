@@ -29,7 +29,7 @@ from datetime import date, datetime, timedelta
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import FunctionType, ModuleType, SimpleNamespace
 from urllib.parse import parse_qs, quote, unquote, urlencode, urljoin, urlparse
 import urllib.error
 import urllib.request
@@ -134,7 +134,7 @@ ARTIFACTS_DIR = Path(os.environ.get("CE_ARTIFACTS_DIR", str(BASE_DIR / "artifact
 PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
-APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.28.4-staging").strip() or "2026.09.28.4-staging"
+APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.28.5-staging").strip() or "2026.09.28.5-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -518,6 +518,8 @@ PIN_STORE: dict[str, dict] = {}
 VERIFICATION_TOKENS: dict[str, dict] = {}
 ORG_NAME_CACHE: dict[str, str] = {}
 PUBLIC_PROFILE_CACHE: dict[str, dict] = {}
+SALES_PROFILE_CONTEXT = ContextVar("sales_same_workflow_profile", default={})
+LAB_LOOKUP_MODE_CONTEXT = ContextVar("lab_lookup_mode", default="standard")
 def load_checker():
     spec = importlib.util.spec_from_file_location("charity_state_checker_v9", CHECKER_PATH)
     if spec is None or spec.loader is None:
@@ -528,6 +530,7 @@ def load_checker():
     return module
 
 
+@lru_cache(maxsize=8192)
 def canonical_name_punctuation(value: str) -> str:
     """Normalize punctuation only, including recognizable UTF-8 decoding damage."""
     value = value or ""
@@ -658,6 +661,7 @@ def load_wa_nm_module():
         module.apply_wa_detail_to_result = wa_apply_detail_master
         module.read_wa_detail = wa_read_completed_detail
         module.switch_to_fein_mode = wa_select_ready_fein_mode
+        module.fill_name_and_search = wa_fill_ready_name_and_search
         module.original_nm_apply_status_history = module.apply_nm_rows_to_result
         module.apply_nm_rows_to_result = lambda result, rows, fye_text="", context=None: nm_apply_status_history_master(
             module, result, rows, fye_text=fye_text, context=context
@@ -675,6 +679,14 @@ def load_ks_weekly_checker():
             )
         else:
             KS_WEEKLY_CHECKER = load_module_from_path("charity_ks_weekly_checker", KS_WEEKLY_CHECKER_PATH)
+        # Parsing is pure in the exact workbook bytes. Keep one parsed version;
+        # changed bytes miss the cache, and load_live_records still refreshes
+        # source metadata. The validated weekly asset itself is not modified.
+        KS_WEEKLY_CHECKER.records_from_workbook_bytes = lru_cache(maxsize=1)(
+            KS_WEEKLY_CHECKER.records_from_workbook_bytes)
+        # Pure text transformations: no EIN, reviewed alias, date or result.
+        KS_WEEKLY_CHECKER.normalize_name = lru_cache(maxsize=16384)(KS_WEEKLY_CHECKER.normalize_name)
+        KS_WEEKLY_CHECKER.normalize_legal_name = lru_cache(maxsize=16384)(KS_WEEKLY_CHECKER.normalize_legal_name)
     return KS_WEEKLY_CHECKER
 
 
@@ -706,6 +718,17 @@ def evidence_url(state: str, org_name: str, ein: str = "") -> str:
     if org_name:
         query.append(f"org={quote(org_name, safe='')}")
     return f"{url}?{'&'.join(query)}" if query else url
+
+
+def launch_lookup_browser(playwright, **kwargs):
+    """Lab-only startup reuse; private launch remains the default and fallback."""
+    if os.environ.get("CE_LAB_BROWSER_POOL_CONFIG"):
+        from deployment.browser_pool import leased_browser
+        browser = leased_browser(playwright, kwargs)
+        if browser is not None:
+            launch_lookup_browser.lab_reused = True
+            return browser
+    return playwright.chromium.launch(**kwargs)
 
 
 def configure_browser_context(context) -> None:
@@ -1557,48 +1580,57 @@ def md_automatic_extension_due_date(fy_end: date) -> date:
     return fifteenth_day_after_fiscal_year_end(fy_end, 11)
 
 
+@lru_cache(maxsize=1)
+def or_snapshot_index_from_bytes(body: bytes):
+    """Pure immutable index of exact extract bytes; never stores a status."""
+    from types import MappingProxyType
+    reader = csv.reader(io.StringIO(body.decode("utf-8", errors="ignore"), newline=""), delimiter="\t")
+    headers, names, periods = (), {}, {}
+    for index, row in enumerate(reader):
+        if index == 0:
+            headers = tuple(row)
+        if len(row) >= 7:
+            key = re.sub(r"\D", "", row[4])
+            # Preserve each original reader's first qualifying row, including
+            # a short name-only row before a complete filing-period row.
+            names.setdefault(key, tuple(row))
+            if len(row) >= 16:
+                periods.setdefault(key, tuple(row))
+    return headers, MappingProxyType(names), MappingProxyType(periods)
+
+
+def validated_or_snapshot_index():
+    path = weekly_asset("OR", "Charity_OR.txt")
+    if path is None:
+        return (), {}, {}
+    # Validate freshness on every call. Changed bytes cannot hit the old index.
+    return or_snapshot_index_from_bytes(path.read_bytes())
+
+
 def fiscal_period_for_ein(ein: str) -> tuple[date | None, date | None]:
     target = re.sub(r"\D", "", ein or "")
-    if not target or not weekly_asset("OR", "Charity_OR.txt"):
+    if not target:
         return None, None
-
-    with weekly_asset("OR", "Charity_OR.txt").open("r", encoding="utf-8", errors="ignore", newline="") as f:
-        reader = csv.reader(f, delimiter="\t")
-        for row in reader:
-            if len(row) < 16:
-                continue
-            if re.sub(r"\D", "", row[4]) != target:
-                continue
-            period_start = parse_ce_date(row[14])
-            period_end = parse_ce_date(row[15])
-            return period_start, period_end
+    row = validated_or_snapshot_index()[2].get(target)
+    if row:
+        return parse_ce_date(row[14]), parse_ce_date(row[15])
     return None, None
 
 
 def organization_name_for_ein(ein: str) -> str:
     target = re.sub(r"\D", "", ein or "")
-    if not target or not weekly_asset("OR", "Charity_OR.txt"):
+    if not target:
         return ""
-    with weekly_asset("OR", "Charity_OR.txt").open("r", encoding="utf-8", errors="ignore", newline="") as f:
-        reader = csv.reader(f, delimiter="\t")
-        for row in reader:
-            if len(row) < 7:
-                continue
-            if re.sub(r"\D", "", row[4]) == target:
-                return (row[6] or "").strip().strip('"')
-    return ""
+    row = validated_or_snapshot_index()[1].get(target)
+    return (row[6] or "").strip().strip('"') if row else ""
 
 
 def or_snapshot_row_for_ein(ein: str) -> list[str] | None:
     target = re.sub(r"\D", "", ein or "")
-    if len(target) != 9 or not weekly_asset("OR", "Charity_OR.txt"):
+    if len(target) != 9:
         return None
-    with weekly_asset("OR", "Charity_OR.txt").open("r", encoding="utf-8", errors="ignore", newline="") as f:
-        reader = csv.reader(f, delimiter="\t")
-        for row in reader:
-            if len(row) >= 16 and re.sub(r"\D", "", row[4]) == target:
-                return row
-    return None
+    row = validated_or_snapshot_index()[2].get(target)
+    return list(row) if row is not None else None
 
 
 def or_snapshot_headers() -> list[str]:
@@ -1820,6 +1852,13 @@ def public_profile_for_ein(ein: str) -> dict:
         return {}
     if target in PUBLIC_PROFILE_CACHE:
         return PUBLIC_PROFILE_CACHE[target]
+    # Lazy reuse: do not populate the normal cache until the unchanged lookup
+    # actually requests this source. Comment-only cache-presence checks retain
+    # their behavior. The queue supplies only this workflow's exact-EIN source.
+    seed = SALES_PROFILE_CONTEXT.get().get(target)
+    if seed is not None:
+        PUBLIC_PROFILE_CACHE[target] = json.loads(json.dumps(seed))
+        return PUBLIC_PROFILE_CACHE[target]
     try:
         url = f"https://projects.propublica.org/nonprofits/api/v2/organizations/{target}.json"
         request = urllib.request.Request(url, headers={"User-Agent": "ComplianceExpressRegistrySnapshot/1.0"})
@@ -1866,6 +1905,7 @@ IDENTITY_SOURCE_SLOTS = threading.BoundedSemaphore(256)
 IDENTITY_BROWSER_SLOTS = threading.BoundedSemaphore(4)
 IDENTITY_DEADLINE_SECONDS = 60.0
 IDENTITY_MAX_NAMES = 32
+IDENTITY_REQUEST_TRACE = ContextVar("identity_request_trace", default=None)
 
 
 def identity_name_key(value: str) -> str:
@@ -1947,6 +1987,60 @@ def identity_fetch(url: str, deadline: float, *, headers=None, max_bytes=4_000_0
     if len(body) > max_bytes:
         raise ValueError("Identity source exceeds size limit")
     return body
+
+
+def identity_failure_evidence(exc) -> dict:
+    """Bounded diagnostics: never expose exception messages, URLs or headers."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return {"failure_kind": "http_error", "http_status": exc.code}
+    cause = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    if isinstance(cause, ssl.SSLError):
+        return {"failure_kind": "tls_error"}
+    if isinstance(cause, TimeoutError):
+        return {"failure_kind": "timeout"}
+    if isinstance(cause, ConnectionError):
+        return {"failure_kind": "connection_error"}
+    if isinstance(exc, (ValueError, TypeError, KeyError)):
+        return {"failure_kind": "invalid_response"}
+    return {"failure_kind": "source_error"}
+
+
+def identity_discovery_fetch(url, deadline, *, stage, **kwargs):
+    """One bounded recovery for transient CA/PA discovery transport failures.
+
+    The original discovery deadline is shared by both attempts. Completed or
+    invalid responses, EIN conflicts and TLS failures never trigger recovery.
+    """
+    trace = IDENTITY_REQUEST_TRACE.get()
+    for attempt in (1, 2):
+        started = time.monotonic()
+        try:
+            body = identity_fetch(url, deadline, **kwargs)
+        except Exception as exc:
+            detail = identity_failure_evidence(exc)
+            if trace is not None and len(trace) < 32:
+                trace.append({"stage": stage, "attempt": attempt,
+                    "seconds": round(time.monotonic() - started, 3), **detail})
+            transient = detail["failure_kind"] in {"timeout", "connection_error"}
+            pause = 0.35
+            if isinstance(exc, urllib.error.HTTPError):
+                transient = exc.code in {408, 429, 502, 503, 504}
+                retry_after = (exc.headers or {}).get("Retry-After")
+                if retry_after is not None:
+                    # Unknown/date-form advice is not permission to retry early.
+                    if re.fullmatch(r"\d+(?:\.\d+)?", str(retry_after).strip()):
+                        pause = max(pause, float(retry_after))
+                    else:
+                        transient = False
+                exc.close()
+            if attempt == 2 or not transient or not 0 <= pause <= 2 or deadline - time.monotonic() < pause + 1:
+                raise
+            time.sleep(pause)
+        else:
+            if trace is not None and len(trace) < 32:
+                trace.append({"stage": stage, "attempt": attempt,
+                    "seconds": round(time.monotonic() - started, 3), "completed": True})
+            return body
 
 
 def identity_candidate(name, source, evidence_type, url, source_date="", historical=False):
@@ -2054,7 +2148,8 @@ def registry_address_evidence(ein: str, location: str, *, candidate_ein: str = "
 def identity_ca_names(ein: str, deadline: float) -> dict:
     query = {"where": {"and": [{"entityStatus": {"neq": "Not Listed"}}, {"fein": format_ein(ein)}]}, "limit": 20}
     url = checker.CA_EVOKE_API_ROOT + "/data/objects/entity/instances?" + urlencode({"filter": json.dumps(query, separators=(",", ":"))})
-    rows = json.loads(identity_fetch(url, deadline, headers={"Referer": checker.CA_EVOKE_PUBLIC_PORTAL_URL}))
+    rows = json.loads(identity_discovery_fetch(url, deadline, stage="CA_EIN_search",
+        headers={"Referer": checker.CA_EVOKE_PUBLIC_PORTAL_URL}))
     if not isinstance(rows, list):
         raise ValueError("California identity response is incomplete")
     names, records = [], []
@@ -2079,10 +2174,10 @@ def identity_ca_names(ein: str, deadline: float) -> dict:
     return {"names": names, "complete": len(rows) < 20, "source_url": url, "organization_records": records}
 
 
-def identity_co_names(ein: str, deadline: float) -> dict:
+def identity_co_names(ein: str, deadline: float, *, request_timeout=6.0) -> dict:
     url = "https://data.colorado.gov/resource/37wu-kn3g.json?" + urlencode({
         "$limit": "100", "$where": f"fein='{format_ein(ein)}'", "$order": "registrationapproveddate DESC"})
-    rows = json.loads(identity_fetch(url, deadline))
+    rows = json.loads(identity_fetch(url, deadline, request_timeout=request_timeout))
     if not isinstance(rows, list):
         raise ValueError("Colorado identity response is incomplete")
     names, entities, seen, records, addresses = [], set(), set(), [], set()
@@ -2341,7 +2436,7 @@ def identity_irs_historical_names(ein: str, latest_object_id: str, deadline: flo
             "historical_note": "Up to three oldest available electronic IRS filer headers checked for former names; this is not an exhaustive name history."}
 
 
-def identity_irs_names(ein: str, deadline: float) -> dict:
+def identity_irs_names(ein: str, deadline: float, *, metadata_only: bool = False, latest_only: bool = False) -> dict:
     api_url = f"https://projects.propublica.org/nonprofits/api/v2/organizations/{ein}.json"
     payload = json.loads(identity_fetch(api_url, deadline))
     org = payload.get("organization") or {}
@@ -2363,6 +2458,9 @@ def identity_irs_names(ein: str, deadline: float) -> dict:
         result["group_name_note"] = "IRS group-ruling metadata identifies this subordinate in its secondary name field. The group primary name was not added as an organization alias."
     PUBLIC_PROFILE_CACHE[ein] = payload
     result["address"] = {key: org.get(key) for key in ("ein", "street", "city", "state", "zipcode")}
+    if metadata_only:
+        result["limitation"] = "Sales identity check uses current IRS organization metadata only; Form 990 history was not searched."
+        return result
     object_id = str(org.get("latest_object_id") or "")
     if not re.fullmatch(r"\d{18}", object_id):
         result["limitation"] = "IRS organization name checked; a machine-readable latest Form 990 was not available."
@@ -2374,6 +2472,9 @@ def identity_irs_names(ein: str, deadline: float) -> dict:
             result["note"] = "The latest available Form 990 discloses no DBA in its DBA field; other sources may list alternate names."
     except Exception:
         result["limitation"] = "IRS organization name checked; the latest Form 990 header could not be confirmed."
+    if latest_only:
+        result["scope_note"] = "Current IRS metadata and latest available filer header; historical filings were not searched."
+        return result
     try:
         history = identity_irs_historical_names(ein, object_id, min(deadline - 0.2, time.monotonic() + 26.0))
         result["names"].extend(history.pop("names")); result.update(history)
@@ -2381,6 +2482,130 @@ def identity_irs_names(ein: str, deadline: float) -> dict:
             result.update(complete=False, limitation="Current IRS names retained; some historical filer headers could not be checked.")
     except Exception:
         result.update(complete=False, historical_complete=False, limitation="Current IRS names retained; historical IRS names could not be checked within this discovery request.")
+    return result
+
+
+
+def sales_identity_evidence(organization_name: str, ein: str, *, budget_seconds=6.0) -> dict:
+    """Small same-run EIN identity step; it never supplies a state's status.
+
+    Called by the isolated lab scheduler with CO and IRS permits reserved. Its
+    bounded allowance is inside the existing 60-second Sales workflow, not
+    a preparatory run. No prior organization's cache or reviewed names is used.
+    """
+    requested = canonical_ein_digits(ein)
+    if len(requested) != 9:
+        raise ValueError("Sales identity requires a valid EIN")
+    if budget_seconds not in (6.0, 10.0):
+        raise ValueError("Unsupported Sales identity allowance")
+    started = time.monotonic()
+    deadline = started + budget_seconds
+    ordinary_deadline = started + 6.0
+    # Oregon reads the already validated local extract only; it makes no live
+    # source request and therefore needs no extra registry permit.
+    def collect_irs():
+        retrieved_after = time.time()
+        result = identity_irs_names(requested, ordinary_deadline, latest_only=True)
+        # identity_irs_names has just fetched and verified the exact EIN. Keep
+        # that source response, not a classification, within this one workflow.
+        payload = PUBLIC_PROFILE_CACHE.get(requested)
+        if (isinstance(payload, dict) and isinstance(payload.get("organization"), dict)
+                and canonical_ein_digits(str(payload["organization"].get("ein") or "")) == requested):
+            result["public_profile"] = {
+                "url": f"https://projects.propublica.org/nonprofits/api/v2/organizations/{requested}.json",
+                "retrieved_after": retrieved_after, "payload": json.loads(json.dumps(payload))}
+        return result
+    collectors = {"CO": lambda: identity_co_names(requested, deadline, request_timeout=budget_seconds) if budget_seconds != 6.0 else identity_co_names(requested, deadline),
+                  "IRS": collect_irs,
+                  "OR": lambda: identity_or_names(requested, ordinary_deadline)}
+    timings = {}
+    def timed(source, fn):
+        source_started = time.monotonic()
+        try:
+            return fn()
+        finally:
+            timings[source] = round(time.monotonic() - source_started, 3)
+    executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="sales-identity")
+    futures = {source: executor.submit(timed, source, fn) for source, fn in collectors.items()}
+    sources, errors = {}, {}
+    try:
+        for source, future in futures.items():
+            try:
+                sources[source] = future.result(timeout=max(.001, deadline-time.monotonic()))
+                if sources[source].get("complete") is False:
+                    errors[source] = "Incomplete identity evidence"
+            except Exception as exc:
+                errors[source] = type(exc).__name__
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+    return {"state": "@sales_identity", "ein": requested, "app_version": APP_VERSION,
+            "sources": sources, "errors": errors, "seconds": time.monotonic()-started, "source_seconds": dict(timings),
+            "scope": "Current IRS metadata/latest filer header, Colorado EIN records and the validated Oregon extract; limited identity assistance, not full discovery."}
+
+
+def sales_names_from_evidence(ein: str, evidence: dict) -> list[str]:
+    """Accept only internal same-release, same-EIN evidence; no client field."""
+    if (not isinstance(evidence, dict) or evidence.get("state") != "@sales_identity"
+            or evidence.get("app_version") != APP_VERSION
+            or evidence.get("ein") != canonical_ein_digits(ein)):
+        raise ValueError("Sales identity evidence does not belong to this lookup")
+    names = []
+    for source in ("CO", "IRS", "OR"):
+        for item in (evidence.get("sources", {}).get(source) or {}).get("names", []):
+            if item.get("verified") is True and not item.get("identity_conflict") and item.get("evidence"):
+                names.append(item["name"])
+    # Keep every verified distinct spelling up to the normal reviewed-name cap.
+    return normalize_reviewed_names(list(dict.fromkeys(names))[:IDENTITY_MAX_NAMES])
+
+
+
+
+def run_sales_lookups_with_source_evidence(organizations: list[dict], states: list[str], evidence: dict) -> list[dict]:
+    """Reuse a current exact-EIN source only inside one isolated Sales state job.
+
+    Unusable/missing data leaves the existing live fetch intact. No source is
+    persisted in the warm template, and no stored status replaces a new check.
+    """
+    if len(organizations) != 1:
+        raise ValueError("Sales source evidence requires one organization")
+    target = canonical_ein_digits(organizations[0]["ein"])
+    sales_names_from_evidence(target, evidence)  # Same-release/EIN envelope fence.
+    source = (evidence.get("sources", {}).get("IRS") or {}).get("public_profile")
+    seeds = {}
+    try:
+        if isinstance(source, dict):
+            age = time.time() - float(source["retrieved_after"])
+            payload = source["payload"]
+            expected = f"https://projects.propublica.org/nonprofits/api/v2/organizations/{target}.json"
+            if (source.get("url") == expected and 0 <= age <= 60
+                    and isinstance(payload, dict) and isinstance(payload.get("organization"), dict)
+                    and canonical_ein_digits(str(payload["organization"].get("ein") or "")) == target):
+                encoded = json.dumps(payload)
+                if len(encoded.encode("utf-8")) <= 4_000_000:
+                    seeds[target] = json.loads(encoded)
+    except (KeyError, TypeError, ValueError, OverflowError):
+        pass
+    token = SALES_PROFILE_CONTEXT.set(seeds)
+    try:
+        return run_state_lookups_parallel(organizations, states)
+    finally:
+        SALES_PROFILE_CONTEXT.reset(token)
+
+
+def sales_result_with_identity(result: dict, evidence: dict) -> dict:
+    names = sales_names_from_evidence(result.get("ein", ""), evidence)
+    result["sales_identity"] = {"names": names, "errors": evidence.get("errors", {}),
+                               "scope": evidence.get("scope"), "seconds": evidence.get("seconds")}
+    note = "This Sales check included names confirmed against the same EIN in current IRS metadata, the latest filer header, Colorado records or the latest validated Oregon extract. Oregon names retain their source refresh date; time-sensitive changes should be confirmed with the registry."
+    if names:
+        result["comments"] = (str(result.get("comments") or "") + " " + note).strip()
+    # Source failure is not a completed negative identity search. Name-only
+    # negatives remain uncertain if this bounded identity assistance failed.
+    name_search_states = {"AR", "CT", "DC", "FL", "KS", "KY", "LA", "ME", "MS", "ND", "NH", "OK", "RI", "SC", "WI", "WV"}
+    if (evidence.get("errors") and result.get("state") in name_search_states
+            and result.get("status") == "Not Registered"):
+        result.update(status="Unable to Confirm", success=False, reason_code="SALES_IDENTITY_INCOMPLETE",
+            comments="The entered-name search found no qualifying registration, but the bounded EIN identity check did not finish confirming alternate names. Registration remains unconfirmed; run Standard for a full check.")
     return result
 
 
@@ -2472,7 +2697,7 @@ def identity_wa_names(ein: str, deadline: float) -> dict:
     return result
 
 
-def identity_oh_names(ein: str, deadline: float) -> dict:
+def oh_ein_search_source(ein: str, deadline: float) -> tuple[str, str]:
     """Read the public form's EIN result table without allocating a browser."""
     url = "https://charitableregistration.ohioago.gov/Charities/ResearchCharities"
     fields = {"OrgNameFilterCriteria": "1", "OrgNameOrDBAName": "", "EINFilterCriteria": "3",
@@ -2487,6 +2712,11 @@ def identity_oh_names(ein: str, deadline: float) -> dict:
         and re.search(r'\bvalue=["\']3["\']', tag) for tag in re.findall(r'<option\b[^>]*>', selected[1], re.I))
     if not value or canonical_ein_digits(value[1]) != ein or not equals:
         raise ValueError("Ohio identity response did not confirm the submitted EIN query")
+    return url, source
+
+
+def identity_oh_names(ein: str, deadline: float) -> dict:
+    url, source = oh_ein_search_source(ein, deadline)
     names, rejected = [], []
     tables = [table for table in re.findall(r"<table\b[^>]*>.*?</table>", source, re.I | re.S)
         if re.search(r"<caption>\s*Search results", table, re.I) and "DBA Name" in table and "EIN" in table]
@@ -2509,7 +2739,8 @@ def identity_pa_names(ein: str, deadline: float) -> dict:
     url = "https://www.charities.pa.gov/#/page/searchCharities"
     detail_url = "https://www.charities.pa.gov/#/page/charitiesEntityDetails"
     def post(payload):
-        return json.loads(identity_fetch("https://www.charities.pa.gov/api/Charities/Search", deadline,
+        return json.loads(identity_discovery_fetch("https://www.charities.pa.gov/api/Charities/Search", deadline,
+            stage="PA_EIN_search" if payload["SearchMode"] == "CHARITIES_SEARCH_EXTERNAL" else "PA_alias_detail",
             headers={"Content-Type": "application/json", "Accept": "application/json"},
             data=json.dumps(payload).encode()))
     data = post({"SearchMode": "CHARITIES_SEARCH_EXTERNAL", "EntityName": None, "EIN": ein,
@@ -2553,8 +2784,9 @@ def identity_pa_names(ein: str, deadline: float) -> dict:
                 if item: result["names"].append(item)
                 elif value: result["rejected_name_fields"].append(str(value))
                 else: result["complete"] = False
-        except Exception:
+        except Exception as exc:
             result["complete"] = False
+            result.setdefault("detail_failures", []).append(identity_failure_evidence(exc))
     if not result["complete"]:
         result["limitation"] = "Pennsylvania's usable EIN-confirmed names were retained; the full name list could not be confirmed."
     return result
@@ -2648,7 +2880,7 @@ def identity_browser_names(source: str, ein: str, deadline: float) -> dict:
         remaining = lambda: max(1, int((deadline - time.monotonic()) * 1000))
         if remaining() < 500: raise TimeoutError("Identity source deadline reached")
         with checker.sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True, timeout=remaining())
+            browser = launch_lookup_browser(playwright, headless=True, timeout=remaining())
             try:
                 context = browser.new_context(ignore_https_errors=True, user_agent=BROWSER_USER_AGENT)
                 page = context.new_page()
@@ -3274,11 +3506,21 @@ def discover_organization_names(organization_name: str, ein: str) -> dict:
     futures, results = {}, []
     def run(source, queued):
         started = time.monotonic()
+        trace = []
+        token = IDENTITY_REQUEST_TRACE.set(trace)
         try:
-            result = identity_source_result(source, ein, deadline)
+            try:
+                result = identity_source_result(source, ein, deadline)
+            except Exception as exc:
+                result = {"source": source, "complete": False, "names": [],
+                    "limitation": "This source could not be confirmed during name discovery.",
+                    **identity_failure_evidence(exc)}
+                if isinstance(exc, urllib.error.HTTPError): exc.close()
             return {**result, "queue_seconds": round(started - queued, 3),
-                    "service_seconds": round(time.monotonic() - started, 3)}
+                    "service_seconds": round(time.monotonic() - started, 3),
+                    **({"request_attempts": trace} if trace else {})}
         finally:
+            IDENTITY_REQUEST_TRACE.reset(token)
             IDENTITY_SOURCE_SLOTS.release()
     for source in (*IDENTITY_STATES, "IRS"):
         cached = identity_cached_source_result(source, ein)
@@ -3389,6 +3631,10 @@ def public_profile_latest_tax_period_for_ein(ein: str) -> tuple[int, tuple[int, 
 
 def resolved_organization_name(ein: str, supplied_name: str = "") -> str:
     supplied_name = (supplied_name or "").strip()
+    # A supplied name already wins below. Do not fetch unused fallback names
+    # for every state request; EIN/address evidence is obtained by its own checks.
+    if supplied_name:
+        return supplied_name
     reference_name = organization_name_for_ein(ein)
     profile_name = public_profile_name_for_ein(ein)
     known_names = known_names_for_ein(ein)
@@ -4761,6 +5007,24 @@ def acronym_prefix_expands_to_registry(original_name: str, registry_name: str) -
     return prefix == registry_acronym[: len(prefix)]
 
 
+def memoize_reviewed_name_targets(function):
+    """Reuse pure target generation only for an identical reviewed-name context."""
+    @lru_cache(maxsize=512)
+    def cached(name, ein, reviewed_names):
+        # Called only by wrapped, whose current context supplies this key.
+        return tuple(function(name, ein))
+
+    @wraps(function)
+    def wrapped(name, ein=""):
+        # Include even an empty alias tuple: removing an alias must not restore
+        # an earlier approval. Return a new list so callers cannot mutate cache.
+        return list(cached(name, ein, tuple(known_names_for_ein(ein))))
+    wrapped.cache_clear = cached.cache_clear
+    wrapped.cache_info = cached.cache_info
+    return wrapped
+
+
+@memoize_reviewed_name_targets
 def organization_match_target_variants(name: str, ein: str = "") -> list[str]:
     """Safe names used to accept a registry row after a broad search query.
 
@@ -5937,6 +6201,8 @@ def licensed_charity_identity(org, row, state, deadline):
         decision = {"decision": "possible", "score": 55, "reason": "MATCH_FULL_NAME_WITH_REGISTRY_YEAR"}
         row["match"] = decision
     if decision["decision"] == "rejected":
+        if state == "DC" and decision["reason"] != "REJECT_DIFFERENT_EIN":
+            return dc_repeated_name_identity(org, row, deadline)
         return "rejected"
     if state == "IL" and canonical_ein_digits(row.get("ein", "")) == canonical_ein_digits(org.ein):
         # Illinois often displays compliance agents' addresses. An exact EIN
@@ -5970,6 +6236,58 @@ def licensed_charity_identity(org, row, state, deadline):
     if decision["decision"] == "possible" and address.get("decision") != "corroborated":
         return "possible"
     return "accepted"
+
+
+def dc_repeated_name_prefix(registry_name, verified_name):
+    """Recognize joined duplicate text, not an ordinary longer organization name.
+
+    The complete reference must precede a mid-word join. Everything after it
+    must be repeated multi-letter fragments of that same name. A new chapter,
+    affiliate or geographic term cannot be stripped by this rule.
+    """
+    words = re.findall(r"[A-Z0-9]+", str(verified_name).upper())
+    if len(words) < 4 or len(set(words)) < 4:
+        return False
+    base = " ".join(words)
+    raw_words = re.findall(r"[A-Z0-9]+", str(registry_name).upper())
+    # A trailing plural does not create a new identity term.
+    raw_words = [w[:-1] if w.endswith("S") and w[:-1] in words else w for w in raw_words]
+    raw = " ".join(raw_words)
+    if not raw.startswith(base) or raw.startswith(base + " ") or raw == base:
+        return False
+    tail = raw[len(base):].replace(" ", "")
+    reference = base.replace(" ", "")
+    if not 8 <= len(tail) <= 2 * len(reference):
+        return False
+    # Bound both the amount of source corruption and the segmentation work.
+    reachable = {0}
+    for _ in range(3):
+        reachable = {end for start in reachable for end in range(start + 8, len(tail) + 1)
+                     if tail[start:end] in reference}
+        if len(tail) in reachable:
+            return True
+    return False
+
+
+def dc_repeated_name_identity(org, row, deadline):
+    """DC-only recovery requires the full EIN-linked name AND exact office evidence."""
+    targets = [org.organization_name, *known_names_for_ein(org.ein)]
+    if not any(dc_repeated_name_prefix(row["name"], target) for target in targets):
+        return "rejected"
+    address = licensed_charity_street_evidence(org, row, deadline)
+    for record in address.get("cross_state_records", []):
+        for name in record.get("names", []):
+            if dc_repeated_name_prefix(row["name"], name):
+                row["match"] = {"score": 80, "decision": "accepted",
+                                "reason": "MATCH_EIN_LINKED_NAME_REPEATED_TEXT", "verified_name": name}
+                row["address_evidence"] = {**address, "basis":
+                    "DC's displayed name contains joined repeated text. Its complete legal-name prefix and exact street, "
+                    "state and ZIP agree with the organization record retrieved by EIN in " + record.get("source", "another state") +
+                    ". The original DC name is retained; the address alone was not used to establish identity."}
+                return "accepted"
+    # A plausible corrupt name must not become a definitive negative when its
+    # independent name/address corroboration is missing or unavailable.
+    return "possible"
 
 
 def select_licensed_charity(org, rows, state, deadline):
@@ -6027,6 +6345,24 @@ def select_licensed_charity(org, rows, state, deadline):
     return max(pool, key=lambda r: (r.get("expiration") or date.min, r["identifier"])), ""
 
 
+def dc_corroborated_result_match(result):
+    """Retain the selected DC recovery evidence in result diagnostics only."""
+    if getattr(result, "state", "") != "DC" or not getattr(result, "success", False):
+        return {}
+    row = getattr(result, "_cc_license_record", {})
+    match, address = row.get("match", {}), row.get("address_evidence", {})
+    if (match.get("decision") != "accepted" or match.get("reason") != "MATCH_EIN_LINKED_NAME_REPEATED_TEXT"
+            or address.get("decision") != "corroborated"
+            or row.get("name") != getattr(result, "matched_registry_name", "")
+            or row.get("identifier") != getattr(result, "matched_registry_identifier", "")):
+        return {}
+    if not any(canonical_ein_digits(record.get("ein", "")) == canonical_ein_digits(result.ein)
+               and any(dc_repeated_name_prefix(row["name"], name) for name in record.get("names", []))
+               for record in address.get("cross_state_records", [])):
+        return {}
+    return dict(match)
+
+
 def licensed_charity_result(org, state, rows, deadline, source, *, freshness=""):
     result = checker.StateResult(org.organization_name, format_ein(org.ein), state, "Not Registered", source)
     result.status_reason = "LICENSED_CHARITY_SOURCE"
@@ -6047,6 +6383,10 @@ def licensed_charity_result(org, state, rows, deadline, source, *, freshness="")
         if state == "GA" and not selected.get("ein") and selected.get("address_evidence", {}).get("decision") == "unavailable":
             selected["_optional_identity_review"] = True
             result._cc_identity_review = {"records": rows, "search_complete": True, "freshness": freshness}
+        if state == "DC" and dc_corroborated_result_match(result):
+            result.reason_code = selected["match"]["reason"]
+            result.identity_anchor = "cross_state_name_address"
+            result.identity_review_evidence = {"kind": "cross_state_name_address", "name": selected["match"]}
         result.source_note = f"{state} lists {selected['name']} ({selected['identifier']}) as {selected['raw_status']}. "
         if selected.get("expiration"):
             result.computed_due_date = selected["expiration"].isoformat()
@@ -6107,13 +6447,21 @@ def licensed_charity_failure(org, state, source, exc):
     return result
 
 
+def dc_license_query_patterns(names):
+    """Reduce redundant OR predicates without changing the union of candidates."""
+    plans = list(dict.fromkeys(tuple(re.findall(r"[A-Z0-9]+", name.upper())) for name in names))
+    plans = [p for p in plans if p]
+    def covered_by(broad, narrow):
+        iterator = iter(narrow)
+        return all(any(token == item for item in iterator) for token in broad)
+    return ["%" + "%".join(plan) + "%" for plan in plans
+            if not any(other != plan and covered_by(other, plan) for other in plans)]
+
+
 def dc_charity_records(org, deadline):
     required, generated = licensed_charity_names(org)
     clauses = []
-    for name in required + generated:
-        tokens = re.findall(r"[A-Z0-9]+", name.upper())
-        if not tokens: continue
-        pattern = "%" + "%".join(tokens) + "%"
+    for pattern in dc_license_query_patterns(required + generated):
         for field in ("ENTITYNAME", "ENTITYTRADENAME"):
             clause = f"UPPER({field}) LIKE '{pattern}'"
             if clause not in clauses: clauses.append(clause)
@@ -7371,10 +7719,13 @@ def sc_detail_filing_ein(detail_html: str, deadline: float) -> str:
     return ""
 
 
-def sc_related_entity_requires_ein(original: str, candidate: str) -> bool:
+def sc_related_entity_requires_ein(original: str, candidate: str, ein: str = "") -> bool:
     markers = {"alumni", "auxiliary", "chapter", "affiliate"}
     return bool((set(normalized_match_name(candidate).split()) & markers)
-                - set(normalized_match_name(original).split()))
+                - set(normalized_match_name(original).split())) or (
+                    score_candidate(original, ein, {"name": candidate})["decision"] != "accepted"
+                    and not any(complete_name_identity_key(candidate) == complete_name_identity_key(target)
+                                for target in organization_match_target_variants(original, ein)))
 
 
 def sc_official_detail_lookup(org) -> object | None:
@@ -7501,7 +7852,8 @@ def sc_official_detail_lookup(org) -> object | None:
             continue
         detail_text = sc_html_to_text(detail_html)
         registry_name = str(best["name"])
-        if sc_related_entity_requires_ein(original_name, registry_name):
+        filing_ein = ""
+        if sc_related_entity_requires_ein(original_name, registry_name, org.ein):
             filing_ein = sc_detail_filing_ein(detail_html, time.monotonic() + 10)
             if filing_ein != canonical_ein_digits(org.ein):
                 if not filing_ein: identity_unconfirmed = True
@@ -7574,11 +7926,16 @@ def sc_official_detail_lookup(org) -> object | None:
             )
         else:
             result.source_note = f"South Carolina returned safe registry match {registry_name} ({public_id}) from the official result list."
+        if filing_ein:
+            result.verified_registry_ein = filing_ein
+            result.identity_anchor = "EIN"
+            result.reason_code = "MATCH_SC_FILING_EIN"
+            result.source_note += " The state-filed Form 990 confirms the requested EIN."
         return result
-    if identity_unconfirmed:
+    if identity_unconfirmed or rejected_ids:
         return checker.StateResult(original_name, org.ein, "SC", "Unable to Confirm", url,
-            raw_status_text="Related organization found; its filing EIN could not be confirmed",
-            source_note="The related organization's name alone does not establish that it is the requested entity. Its state-filed return could not confirm the EIN.", success=False)
+            raw_status_text="Similar organization found; its filing EIN did not confirm the requested entity",
+            source_note="South Carolina returned a similar or related name, but its state-filed return did not confirm the requested EIN. No status was assigned to that name-only candidate.", success=False)
     if last_html and re.search(r"\bNo\s+results\s+found\b", sc_html_to_text(last_html), re.I):
         result = checker.StateResult(
             original_name,
@@ -7599,8 +7956,9 @@ def result_has_safe_matched_registry_name(result, original_name: str, ein: str =
     return bool(matched and registry_name_is_safe_for_org(matched, original_name, ein))
 
 
-def search_sc_resilient(page, org):
-    official_result = sc_official_detail_lookup(org)
+def search_sc_resilient(page, org, *, official_checked=False, official_result=None):
+    if not official_checked:
+        official_result = sc_official_detail_lookup(org)
     if official_result and public_status(official_result) != "Not Registered":
         return official_result
     reachable, _, preflight_result = preflight_name_search_registry(org, "SC")
@@ -8709,6 +9067,7 @@ class MaineRegistrySession:
             response.raise_for_status()
             self.form_html = response.text
             self.url = response.url
+        me_raise_public_application_error(self.form_html)
         fields = {}
         for hidden in re.finditer(r'<input[^>]+type="hidden"[^>]*>', self.form_html, re.I):
             tag = hidden.group(0)
@@ -8730,6 +9089,8 @@ class MaineRegistrySession:
             timeout=me_request_timeout(self.deadline, ME_FAST_DIRECT_POST_TIMEOUT_SECONDS))
         response.raise_for_status()
         self.stage = "completed search parsing"
+        if lab_me_prefix_coverage_enabled():
+            self.completed_search_html = response.text
         rows = me_parse_search_rows(response.text)
         # A results document can carry its own WebForms state without the search
         # form. Never submit that document's hidden fields as the next search.
@@ -8738,7 +9099,18 @@ class MaineRegistrySession:
         return rows, self
 
 
+def me_raise_public_application_error(result_html):
+    """Recognize the same explicit public error on entry and result pages."""
+    if lab_me_application_recovery_enabled():
+        title = re.search(r'<title\b[^>]*>(.*?)</title>', result_html, re.I | re.S)
+        text = re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]+>', ' ', result_html))).strip()
+        if (title and re.sub(r'\s+', ' ', title[1]).strip() == 'ALMS License Information : Error'
+                and 'An error has been encountered while processing your request. Please try again at a later time.' in text):
+            raise MainePublicApplicationError('Maine returned its public application-error page and requested a later retry')
+
+
 def me_parse_search_rows(result_html):
+    me_raise_public_application_error(result_html)
     rows: list[dict[str, str]] = []
     for match in re.finditer(
         r'<tr[^>]*>\s*<td[^>]*>\s*<a\s+href="(?P<href>ShowDetail\.aspx[^"]+)"[^>]*>(?P<name>.*?)</a>\s*</td>\s*'
@@ -8803,6 +9175,93 @@ def me_browser_search_rows(page, query, deadline):
     return me_parse_search_rows(page.content()), MaineBrowserDetailReader(page, deadline)
 
 
+class MainePublicApplicationError(ValueError):
+    """Explicit public registry error, never an empty search result."""
+
+
+def lab_me_application_recovery_enabled() -> bool:
+    return (APP_VERSION.endswith('-performance-lab')
+            and os.environ.get('PUBLIC_BASE_URL') == 'https://instant-compliance-snapshot-api-hn4v.onrender.com'
+            and LAB_LOOKUP_MODE_CONTEXT.get() == 'sales'
+            and os.environ.get('CE_LAB_ME_APPLICATION_RECOVERY') == '1')
+
+
+def lab_me_prefix_coverage_enabled() -> bool:
+    return (APP_VERSION.endswith("-performance-lab")
+            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and LAB_LOOKUP_MODE_CONTEXT.get() == "sales"
+            and os.environ.get("CE_LAB_ME_PREFIX_COVERAGE") == "1")
+
+
+def me_covering_literal_prefix(query, queries):
+    """Coalesce only literal-prefix queries, never aliases with different starts."""
+    choices = []
+    for other in queries:
+        if other == query:
+            continue
+        prefix = os.path.commonprefix([query.casefold(), other.casefold()]).strip()
+        if len(prefix) < 4 or not re.fullmatch(r"[a-z0-9 &'\-]+", prefix):
+            continue
+        covered = sum(candidate.casefold().startswith(prefix) for candidate in queries)
+        if covered >= 2:
+            choices.append((covered, len(prefix), prefix))
+    return max(choices)[2] if choices else query
+
+
+def me_complete_prefix_list(body, rows, submitted_query="") -> bool:
+    # Default pagination is allowed only when every advertised row is present.
+    # An Active Only filter or partial response cannot cover the original plan.
+    if not re.search(r"</html\s*>\s*$", body, re.I):
+        return False
+    text = html.unescape(re.sub(r"<[^>]+>", " ", body))
+    # Maine renders an empty search on the completed search form, without the
+    # result table's Active Only control. Verify the actual submitted criteria.
+    if not rows and submitted_query and re.search(
+            r"\bNo records found for the search criteria entered\.", text, re.I):
+        form = re.findall(r'<form\b[^>]*\bid=["\']SearchForm["\'][^>]*>', body, re.I)
+        name = re.findall(r'<input\b[^>]*\bname=["\'][^"\']*scCompanyName["\'][^>]*>', body, re.I)
+        regulator = re.findall(r'<select\b[^>]*\bname=["\'][^"\']*scRegulator["\'][^>]*>(.*?)</select>', body, re.I | re.S)
+        begins = re.findall(r'<input\b[^>]*\bname=["\'][^"\']*\$ctl24["\'][^>]*>', body, re.I)
+        value = re.search(r'\bvalue=(["\'])(.*?)\1', name[0], re.S) if len(name) == 1 else None
+        selected = re.findall(r'<option\b[^>]*\bselected\b[^>]*>', regulator[0], re.I) if len(regulator) == 1 else []
+        checked = [tag for tag in begins if re.search(r"\bchecked(?:\s|=|/?>)", tag, re.I)]
+        return (len(form) == 1 and value is not None
+                and html.unescape(value[2]) == me_query_for_form(submitted_query, body)
+                and len(selected) == 1 and bool(re.search(r'\bvalue=["\']4076["\']', selected[0]))
+                and len(checked) == 1 and bool(re.search(r'\bvalue=["\']BW["\']', checked[0])))
+    active = re.findall(r'<input\b[^>]*\bid=["\']cbActiveOnly["\'][^>]*>', body, re.I)
+    if len(active) != 1 or re.search(r"\bchecked(?:\s|=|/?>)", active[0], re.I):
+        return False
+    counts = re.findall(r"(?<![\d,])(\d[\d,]*)\s+records?\s+found\b", text, re.I)
+    return (len(counts) == 1 and bool(re.fullmatch(r"\d+|\d{1,3}(?:,\d{3})+", counts[0]))
+            and int(counts[0].replace(",", "")) == len(rows))
+
+
+def me_search_with_prefix_coverage(session, query, queries):
+    """Fresh completed rows reused within this private lookup session only."""
+    session.covered_source_query = ""
+    if not lab_me_prefix_coverage_enabled() or not queries or query == queries[0]:
+        return session.search(query)
+    prefix = me_covering_literal_prefix(query, queries)
+    if prefix == query:
+        return session.search(query)
+    coverage = getattr(session, "_cc_complete_prefix_lists", None)
+    if coverage is None:
+        coverage = session._cc_complete_prefix_lists = {}
+    if prefix not in coverage:
+        remaining = queries[queries.index(query):] if query in queries else []
+        if sum(candidate.casefold().startswith(prefix) for candidate in remaining) < 2:
+            return session.search(query)
+        rows, _ = session.search(prefix)
+        body = getattr(session, "completed_search_html", "")
+        coverage[prefix] = ([dict(row) for row in rows] if me_complete_prefix_list(body, rows, prefix) else None)
+    if coverage[prefix] is not None:
+        session.covered_source_query = prefix
+        return [dict(row) for row in coverage[prefix]], session
+    # An oversized, filtered or incomplete prefix list saves no searches.
+    return session.search(query)
+
+
 def me_fast_direct_confirmation_result(org, page=None, deadline=None):
     deadline = deadline or (time.perf_counter() + 105)
     search_deadline = deadline - 24  # Two bounded detail reads cannot be consumed by name queries.
@@ -8817,6 +9276,7 @@ def me_fast_direct_confirmation_result(org, page=None, deadline=None):
     pending = []
     sessions = []
     session = None
+    application_error = False
     if progress.get("best_row"):
         best_row = dict(progress["best_row"])
         best_opener = MaineRegistrySession(deadline)
@@ -8834,7 +9294,11 @@ def me_fast_direct_confirmation_result(org, page=None, deadline=None):
                     if session is None:
                         session = MaineRegistrySession(search_deadline)
                         sessions.append(session)
-                    rows, opener = session.search(query)
+                    rows, opener = me_search_with_prefix_coverage(session, query, queries)
+                    if session.covered_source_query:
+                        attempt_evidence["covered_by_completed_prefix"] = session.covered_source_query
+                        completed.update(candidate for candidate in queries
+                                         if candidate.casefold().startswith(session.covered_source_query))
                 else:
                     if page is None:
                         continue
@@ -8854,6 +9318,10 @@ def me_fast_direct_confirmation_result(org, page=None, deadline=None):
                     if score > best_score:
                         best_row, best_opener, best_score = row, opener, score
                 log_event(f"ME search phase={phase} query={query!r} seconds={time.perf_counter()-started:.2f} rows={len(rows)}")
+            except MainePublicApplicationError as exc:
+                application_error = True
+                last_error = str(exc)
+                attempt_evidence.update(error=last_error, stage='source application error')
             except Exception as exc:
                 last_error = f"{type(exc).__name__}: {str(exc)[:120]}"
                 attempt_evidence.update(error=last_error, stage=getattr(session, "stage", phase) if phase == "direct" else phase)
@@ -8873,15 +9341,23 @@ def me_fast_direct_confirmation_result(org, page=None, deadline=None):
                 source_attempts.append(attempt_evidence)
             if (best_row and best_score[1] == 3
                     and registry_active_tiebreak(best_row.get("status", "")) > 0
-                    and best_row.get("address_evidence", {}).get("decision") != "conflict") or time.perf_counter() >= search_deadline or (phase == "direct" and len(pending) >= 2):
+                    and best_row.get("address_evidence", {}).get("decision") != "conflict") or time.perf_counter() >= search_deadline or (phase == "direct" and len(pending) >= 2) or application_error:
                 break
-        if best_row or time.perf_counter() >= search_deadline:
+        if best_row or time.perf_counter() >= search_deadline or application_error:
             break
     checked_any = bool(completed)
     last_error = "" if len(completed) == len(queries) else (last_error or "Incomplete Maine search")
     # Keep the selected session through detail retrieval, then close every
     # transport regardless of positive, negative, or incomplete result.
     try:
+        if application_error:
+            result = checker.StateResult(org.organization_name, org.ein, 'ME', 'Site Not Reachable',
+                NAME_SEARCH_PREFLIGHT_URLS['ME'], success=False,
+                raw_status_text='Maine public registry application error',
+                source_note='Maine returned its own application-error page and requested a later retry. No registration conclusion could be drawn.',
+                error=last_error)
+            result.reason_code = 'ME_SOURCE_APPLICATION_ERROR'
+            return result
         if best_opener is not None:
             best_opener.deadline = deadline
         if best_row:
@@ -9278,6 +9754,9 @@ def copy_external_result(org, state: str, external_result):
             "CharityClarity reports Site Not Reachable. This lookup did not confirm the organization's identity or status; "
             "it does not establish non-registration or delinquency."
         )
+    if state_upper == "WA" and getattr(external_result, "verified_registry_ein", "") and external_result.verified_registry_ein == canonical_ein_digits(org.ein):
+        result.verified_registry_ein = external_result.verified_registry_ein
+        result.identity_anchor = "EIN"
     return result
 
 
@@ -9416,7 +9895,7 @@ def search_la_downloaded_export(page, org):
     result = checker.StateResult(org.organization_name, org.ein, "LA", "Unable to Verify", "https://www.ag.state.la.us/Charity/Registration/Listing")
     export_path = weekly_asset("LA", "downloadable-data/LA.xlsx")
     source_type, error = "deployed weekly state Excel export", ""
-    if export_path is None:
+    if export_path is None and page is not None:
         export_path, source_type, error = la_download_registered_charities_export(page)
     if not export_path:
         result.raw_status_text = "Louisiana registered charities export could not be downloaded"
@@ -9658,6 +10137,130 @@ def patch_mi_module_for_fast_lookups(module) -> None:
     module._cc_fast_lookup_patch = True
 
 
+def search_or_completed(page, org, module):
+    """Lab guard: classify only the finished, submitted Oregon search response.
+
+    The bundled parser's fixed pause cannot prove an asynchronous search ended.
+    Keep its form, matching, detail parsing and filing rules; wait at the search
+    click for this exact request and its results to reach the document instead.
+    """
+    if not (APP_VERSION.endswith("-performance-lab") and os.environ.get("PUBLIC_BASE_URL") ==
+            "https://instant-compliance-snapshot-api-hn4v.onrender.com"):
+        return module.search_or(page, org)
+    query = re.sub(r"\s+", " ", org.organization_name).strip()
+    failure = []
+    completed = []
+
+    def is_query(request):
+        try:
+            url = urlparse(request.url)
+            fields = parse_qs(request.post_data or "", keep_blank_values=True)
+            return (url.scheme == "https" and url.hostname == "justice.oregon.gov"
+                and url.path.casefold().rstrip("/") == "/charities/charity/results"
+                and request.method == "POST" and len(fields.get("Name", [])) == 1
+                and re.sub(r"\s+", " ", fields["Name"][0]).strip() == query
+                and fields.get("EIN", [""]) == [""])
+        except Exception:
+            return False
+
+    class SearchButton:
+        def __init__(self, target): self.target = target
+        def __getattr__(self, name): return getattr(self.target, name)
+        def click(self, *args, **kwargs):
+            deadline = time.monotonic() + min(float(kwargs.get("timeout", 10000)), 10000.0) / 1000
+            try:
+                with page.expect_event("requestfinished", predicate=is_query,
+                        timeout=max(1, int((deadline-time.monotonic())*1000))) as event:
+                    self.target.click(*args, **kwargs)
+                response = event.value.response()
+                if response is None or response.status != 200:
+                    raise ValueError("Oregon submitted search returned an unsuccessful response")
+                body = response.text()  # requestfinished confirms the full response body arrived.
+                if (not body.strip() or len(body)>1_000_000 or re.search(
+                        r"verify you are human|captcha|access denied|service unavailable", body, re.I)):
+                    raise ValueError("Oregon search response was empty, blocked or invalid")
+                remaining = deadline-time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("Oregon search completion allowance exhausted")
+                page.wait_for_function(r"""expected => {
+                    const actual = document.querySelector('#results');
+                    const parsed = document.createElement('div'); parsed.innerHTML = expected;
+                    const text = el => (el?.textContent || '').replace(/\s+/g, ' ').trim();
+                    const sourceGrid = parsed.querySelector('#grid');
+                    const actualGrid = actual?.querySelector('#grid');
+                    if (sourceGrid && actualGrid && text(parsed.querySelector('#search-results')) ===
+                            text(actual.querySelector('#search-results')) && window.jQuery?.fn?.dataTable?.isDataTable(actualGrid)) {
+                        // All rows already arrived in this completed response.
+                        // Expose the state's client-side pages to the existing
+                        // parser; never interpret only the first 25 records.
+                        const count = grid => grid.querySelectorAll('tbody tr:not(:has(td.dataTables_empty))').length;
+                        if (count(actualGrid) < count(sourceGrid)) {
+                            window.jQuery(actualGrid).DataTable().page.len(-1).draw(false);
+                        }
+                    }
+                    const snapshot = root => {
+                        const grid = root.querySelector('#grid');
+                        if (grid) {
+                            // The state's DataTables script adds controls, sorts
+                            // rows and inserts an empty-table placeholder. Those
+                            // decorations are not charity records. Compare every
+                            // source record and its links, plus the query heading.
+                            const rows = Array.from(grid.querySelectorAll('tbody tr'))
+                                .filter(row => !row.querySelector('td.dataTables_empty'))
+                                .map(row => JSON.stringify({
+                                    cells: Array.from(row.querySelectorAll('td')).map(text),
+                                    links: Array.from(row.querySelectorAll('a')).map(a => a.getAttribute('href'))
+                                })).sort();
+                            return JSON.stringify({heading: text(root.querySelector('#search-results')), rows});
+                        }
+                        const copy = root.cloneNode(true);
+                        copy.querySelectorAll('script,style').forEach(el => el.remove());
+                        const value = text(copy);
+                        return /\bno (?:matching )?records? (?:were )?found\b/i.test(value) ? value : null;
+                    };
+                    const source = snapshot(parsed);
+                    return actual && source !== null && snapshot(actual) === source;
+                }""", arg=body, timeout=max(1, int(remaining*1000)))
+                completed.append(True)
+            except Exception:
+                failure.append(True)
+                raise
+
+    class SearchPage:
+        def __getattr__(self, name): return getattr(page, name)
+        def locator(self, selector, *args, **kwargs):
+            target = page.locator(selector, *args, **kwargs)
+            return SearchButton(target) if selector == "#search" else target
+
+    # Clone only this function's globals; never mutate the shared module or
+    # time.sleep. Its four-second post-search pause is redundant after the
+    # completed response and every displayed record have been verified above.
+    # All other waits, including detail readiness, remain unchanged.
+    skipped = []
+    class QueryClock:
+        def __getattr__(self, name): return getattr(time, name)
+        def sleep(self, seconds):
+            if seconds == 4 and completed and not skipped:
+                skipped.append(True)
+                return
+            time.sleep(seconds)
+    search = module.search_or
+    if isinstance(search, FunctionType):
+        original = search
+        search = FunctionType(original.__code__, {**original.__globals__, "time": QueryClock()},
+                              original.__name__, original.__defaults__, original.__closure__)
+        search.__kwdefaults__ = original.__kwdefaults__
+    result = search(SearchPage(), org)
+    if failure or not completed:
+        result.status = "Unable to Verify"
+        result.raw_status_text = "Oregon submitted search did not finish with confirmed results"
+        result.source_note = ("Oregon did not finish displaying a complete response for the submitted search. "
+                              "Registration status could not be confirmed; this does not establish non-registration.")
+        result.reason_code = "OR_INCOMPLETE_QUERY_RESPONSE"
+        result.success = False
+    return result
+
+
 def search_bundled_extension_state(page, org, state: str):
     state = state.upper()
     module = state_extension_module(state)
@@ -9857,11 +10460,15 @@ def search_bundled_extension_state(page, org, state: str):
             if best_result is not None and (time.perf_counter() - started) >= min(NAME_SEARCH_VARIANT_MAX_SECONDS, 30.0):
                 return best_result
             active_org = org_with_name(org, variant)
-            external_result = module.search_or(
+            external_result = search_or_completed(
                 page,
                 module.Organization(organization_name=active_org.organization_name, ein=active_org.ein),
+                module,
             )
             result = copy_external_result(org, "OR", external_result)
+            if getattr(result, "reason_code", "") == "OR_INCOMPLETE_QUERY_RESPONSE":
+                result.success = False
+                return result
             if public_status(result) == "Site Not Reachable":
                 return result
             if not result_is_retryable_name_miss(result):
@@ -9895,11 +10502,15 @@ def search_bundled_extension_state(page, org, state: str):
                 return annotate_or_empty_reports(result)
             best_candidate_name = best_or_registry_name_from_page()
             if best_candidate_name:
-                external_result = module.search_or(
+                external_result = search_or_completed(
                     page,
                     module.Organization(organization_name=best_candidate_name, ein=org.ein),
+                    module,
                 )
                 result = copy_external_result(org, "OR", external_result)
+                if getattr(result, "reason_code", "") == "OR_INCOMPLETE_QUERY_RESPONSE":
+                    result.success = False
+                    return result
                 if not result.matched_registry_name:
                     result.matched_registry_name = or_registry_name_from_detail() or best_candidate_name
                 if or_detail_ein_mismatches(result.matched_registry_name or best_candidate_name):
@@ -9931,7 +10542,7 @@ def search_bundled_extension_state(page, org, state: str):
                 if not result_is_retryable_name_miss(result):
                     return annotate_or_empty_reports(result)
             best_result = result
-        return best_result or copy_external_result(org, "OR", module.search_or(page, bundle_org))
+        return best_result or copy_external_result(org, "OR", search_or_completed(page, bundle_org, module))
     else:
         raise ValueError(f"Unsupported bundled extension state: {state}")
     return copy_external_result(org, state, external_result)
@@ -10165,26 +10776,7 @@ def mi_name_fallback_candidate_is_safe(candidate_name: str, original_name: str, 
     return True
 
 
-def search_mi_name_fallback(page, org):
-    module = state_extension_module("MI")
-    patch_mi_module_for_fast_lookups(module)
-    result = checker.StateResult(org.organization_name, org.ein, "MI", "Unable to Verify", module.MI_SEARCH_URL)
-    safe_targets = organization_match_target_variants(org.organization_name, org.ein)
-    started = time.perf_counter()
-    deadline = started + MI_LOOKUP_MAX_SECONDS
-    lookup_deadline = getattr(page, "_cc_mi_lookup_deadline", None)
-    if isinstance(lookup_deadline, (int, float)):
-        deadline = min(deadline, lookup_deadline)
-    result.success = False
-    result.reason_code = "MI_NAME_SEARCH_INCOMPLETE"
-    result.queries_attempted = []
-    result.source_attempts = []
-    def incomplete(message):
-        result.status = "Unable to Verify"
-        result.raw_status_text = "Michigan organization-name search did not complete"
-        result.source_note = message + " No negative registration conclusion was drawn."
-        result.success = False
-        return result
+def mi_name_fallback_queries(org):
     def portal_query(value):
         # Michigan's public form rejects typographic dashes before submitting.
         # Adapt query punctuation only; keep original names/aliases for identity.
@@ -10212,7 +10804,7 @@ def search_mi_name_fallback(page, org):
         if variant not in variants:
             variants.append(variant)
     if not variants:
-        return incomplete("No usable organization-name query was available after the EIN search.")
+        return []
     def mi_variant_priority(value: str) -> tuple[int, int, str]:
         cleaned = re.sub(r"\s+", " ", value or "").strip()
         has_legal_suffix = bool(re.search(r"\b(inc\.?|incorporated|corp\.?|corporation|llc|ltd\.?|limited)\b", cleaned, re.I))
@@ -10227,16 +10819,176 @@ def search_mi_name_fallback(page, org):
     variants = sorted(variants, key=lambda value: (
         value.strip().casefold() != portal_query(org.organization_name).strip().casefold(), mi_variant_priority(value)))
 
+    planned = variants[:4]
+    if lab_mi_query_dominance_enabled():
+        # Keep the exact bounded query set. A planned broader All-words query
+        # goes first so its completed zero can cover narrower versions.
+        remaining, planned = list(planned), []
+        while remaining:
+            first = next((query for query in remaining if not any(
+                other != query and mi_completed_query_covers(other, query)
+                and not mi_completed_query_covers(query, other)
+                for other in remaining)), remaining[0])
+            remaining.remove(first)
+            planned.append(first)
+    return planned
+
+
+def lab_mi_query_dominance_enabled() -> bool:
+    return (APP_VERSION.endswith("-performance-lab")
+            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and os.environ.get("CE_LAB_MI_QUERY_DOMINANCE") == "1"
+            and LAB_LOOKUP_MODE_CONTEXT.get() == "sales")
+
+
+def mi_http_names_enabled(org) -> bool:
+    return (APP_VERSION.endswith("-performance-lab")
+            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and os.environ.get("CE_LAB_MI_NAME_HTTP") == "1"
+            and not getattr(org, "evidence_mode", False)
+            and not CAPTURE_EVIDENCE_SCREENSHOTS and not CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT)
+
+
+def mi_completed_query_covers(completed, query):
+    """A completed zero for broader All-words terms covers a joined spelling.
+
+    Michigan's plan uses Includes / All words. Joining the same required
+    words with a hyphen cannot broaden that search. Keep every different word
+    and alias; only reuse a fully completed zero for this same organization.
+    """
+    original = set(completed.casefold().split())
+    joined = set(re.sub(r"(?<=\w)-(?=\w)", " ", query).casefold().split())
+    # A zero for the narrower joined spelling cannot cover separated words.
+    covered = bool(original) and (original.issubset(set(query.casefold().split()))
+                                  or original.issubset(joined))
+    if not covered and original and lab_mi_query_dominance_enabled():
+        # Includes / All words with added terminal punctuation cannot broaden
+        # a completed zero for the same unpunctuated required words. Do not
+        # strip punctuation from the completed query or alter internal marks.
+        covered = original.issubset({word.rstrip(',.;:') for word in query.casefold().split()})
+    return covered
+
+
+def lab_mi_patient_transport_enabled() -> bool:
+    return (APP_VERSION.endswith("-performance-lab")
+            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and os.environ.get("CE_LAB_MI_PATIENT_TRANSPORT") == "1"
+            and LAB_LOOKUP_MODE_CONTEXT.get() == "sales")
+
+
+def mi_name_http_empty_queries(session, org, headers, lookup_deadline):
+    """Complete the same name queries in this already accepted public session.
+
+    Only a full, exact-query-echoed zero result is reused. Any positive,
+    ambiguous, incomplete, blocked or failed response remains for the existing
+    browser matching path. No status is classified here and no session escapes
+    this lookup. The outer EIN probe owns and closes the session.
+    """
+    url = "https://www.ag.state.mi.us/CharitableTrust/frmDefault.aspx"
+    results_url = "https://www.ag.state.mi.us/CharitableTrust/frmSearchResults.aspx"
+    deadline = time.monotonic() + min(24.0, max(0.0, lookup_deadline - time.perf_counter()))
+    completed = []
+    def read(method, data=None):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Michigan name transport allowance exhausted")
+        response = session.request(method, url, data=data,
+            headers={**headers, "Referer":url, "Origin":"https://www.ag.state.mi.us"},
+            timeout=min(4.0 if method == "GET" else (24.0 if lab_mi_patient_transport_enabled() else 18.0), remaining), verify=True, stream=True)
+        try:
+            expected = url if method == "GET" else results_url
+            if response.status_code != 200 or response.url != expected:
+                raise ValueError("Michigan name response changed or incomplete")
+            if any(not str(r.url).startswith("https://www.ag.state.mi.us/CharitableTrust/") for r in response.history):
+                raise ValueError("Michigan name response left the official portal")
+            chunks=[];size=0
+            for chunk in response.iter_content():
+                size+=len(chunk)
+                if size>1_000_000 or time.monotonic()>=deadline:
+                    raise TimeoutError("Michigan name response allowance exceeded")
+                chunks.append(chunk)
+            source=b"".join(chunks).decode("utf-8")
+            if not re.search(r"</html>\s*$", source, re.I):
+                raise ValueError("Michigan name response is partial")
+            return source
+        finally:
+            response.close()
+    try:
+        # Complete the same bounded plan in the accepted session. Each query
+        # still requires its own complete, echoed zero response; all remaining
+        # positive, failed or ambiguous queries stay on the browser path.
+        for query in mi_name_fallback_queries(org):
+            if any(mi_completed_query_covers(old, query) for old in completed):
+                continue
+            form=read("GET")
+            if not all(identifier in form for identifier in
+                ("ctl00_MainContent_txtName", "ctl00_MainContent_txtEIN", "ctl00_MainContent_btnTextSearch")):
+                break
+            fields=sc_extract_hidden_fields(form)
+            if not fields.get("__VIEWSTATE"):
+                break
+            fields.update({"__LASTFOCUS":"", "__EVENTTARGET":"", "__EVENTARGUMENT":"",
+                "ctl00$MainContent$rbSearchType":"0", "ctl00$MainContent$ddlName1":"Includes",
+                "ctl00$MainContent$ddlName2":"All words", "ctl00$MainContent$txtName":query,
+                "ctl00$MainContent$txtPurpose":"", "ctl00$MainContent$ddlPurpose2":"All words",
+                "ctl00$MainContent$txtEIN":"", "ctl00$MainContent$txtCity":"",
+                "ctl00$MainContent$txtCounty":"", "ctl00$MainContent$txtState":"",
+                "ctl00$MainContent$btnTextSearch":"Search", "ctl00$MainContent$txtFileNo":""})
+            body=sc_html_to_text(read("POST", fields))
+            compact=re.sub(r"\s+", " ", body).strip()
+            echoes=re.findall(r"Name Includes:\s*(.*?)\s*\(All words\);", compact, re.I)
+            normalize=lambda value:re.sub(r"\s+", " ", value).strip().casefold()
+            counts=re.findall(r"\b(\d+)\s+record\(s\)\s+found\b",compact,re.I)
+            if (echoes != [query] and [normalize(v) for v in echoes] != [normalize(query)]):
+                break
+            if (counts != ["0"] or "No records found for your search criteria" not in compact
+                    or "Results for the following input:" not in compact
+                    or "Organization Type: Charity or Public Safety Organization" not in compact
+                    or re.search(r"(?:Federal\s+EIN|FEIN|EIN)\s*:|verify you are human|captcha|access denied|maintenance|too many requests",compact,re.I)):
+                break
+            completed.append(query)
+    except Exception:
+        pass  # Uncompleted queries remain on the original browser path.
+    return completed
+
+
+def search_mi_name_fallback(page, org):
+    module = state_extension_module("MI")
+    patch_mi_module_for_fast_lookups(module)
+    result = checker.StateResult(org.organization_name, org.ein, "MI", "Unable to Verify", module.MI_SEARCH_URL)
+    safe_targets = organization_match_target_variants(org.organization_name, org.ein)
+    started = time.perf_counter()
+    deadline = started + MI_LOOKUP_MAX_SECONDS
+    lookup_deadline = getattr(page, "_cc_mi_lookup_deadline", None)
+    if isinstance(lookup_deadline, (int, float)):
+        deadline = min(deadline, lookup_deadline)
+    result.success = False
+    result.reason_code = "MI_NAME_SEARCH_INCOMPLETE"
+    result.queries_attempted = []
+    result.source_attempts = []
+    def incomplete(message):
+        result.status = "Unable to Verify"
+        result.raw_status_text = "Michigan organization-name search did not complete"
+        result.source_note = message + " No negative registration conclusion was drawn."
+        result.success = False
+        return result
+    variants = mi_name_fallback_queries(org)
+    if not variants:
+        return incomplete("No usable organization-name query was available after the EIN search.")
+
     progress = getattr(page, "_cc_mi_search_progress", None)
     identity = (org.organization_name, canonical_ein_digits(org.ein))
     if not isinstance(progress, dict) or progress.get("identity") != identity:
         progress = {}
     completed_empty_queries = list(progress.get("completed_empty_name_queries", []))
+    result.source_attempts.extend(f"Completed Michigan name query via the same-session public form: {query}"
+                                 for query in progress.get("http_completed_empty_name_queries", []))
     opened_session = False
     for variant in variants[:4]:
         query_tokens = set(variant.casefold().split())
         covered = next((query for query in completed_empty_queries
-                        if set(query.casefold().split()).issubset(query_tokens)), None)
+                        if set(query.casefold().split()).issubset(query_tokens)
+                        or (mi_http_names_enabled(org) and mi_completed_query_covers(query, variant))), None)
         if covered is not None:
             result.source_attempts.append(f"Skipped redundant Michigan query: {variant}; completed zero-result query: {covered}")
             continue
@@ -10468,7 +11220,11 @@ def search_mi_http_completion_probe(org, lookup_deadline=None):
             submitted = session.post(
                 source_url,
                 data=form_fields,
-                timeout=request_timeout(MI_SEARCH_RESPONSE_TIMEOUT_MS / 1000),
+                # Loaded-source traces showed the 35s sublimit discarding a
+                # pending response and repeating the same expensive query.
+                # Spend more of the existing 55s allowance on that response;
+                # the request clamp and workflow's 60s cutoff still apply.
+                timeout=request_timeout(45.0 if lab_mi_patient_transport_enabled() else MI_SEARCH_RESPONSE_TIMEOUT_MS / 1000),
                 headers={
                     **headers,
                     "Referer": source_url,
@@ -10478,6 +11234,9 @@ def search_mi_http_completion_probe(org, lookup_deadline=None):
             )
             submitted.raise_for_status()
             submitted_text = sc_html_to_text(submitted.text or "")
+            if (mi_http_names_enabled(org) and lookup_deadline is not None
+                    and re.search(r"\b0\s+record\(s\)\s+found\b|\bno\s+records?\s+found\b|\bno\s+results?\s+found\b", submitted_text, re.I)):
+                result._cc_mi_completed_empty_names = mi_name_http_empty_queries(session, org, headers, lookup_deadline)
             break
         except Exception as exc:
             last_exception = exc
@@ -10736,6 +11495,7 @@ def normalized_match_name(value: str) -> str:
     return re.sub(r"\s+", " ", normalized).strip()
 
 
+@lru_cache(maxsize=8192)
 def complete_name_identity_key(value: str) -> str:
     """Case/punctuation/entity-suffix equality without deleting name articles."""
     value = canonical_name_punctuation(value).casefold()
@@ -10756,6 +11516,12 @@ WEAK_NAME_MATCH_TOKENS = {
 
 
 def distinctive_match_tokens(value: str) -> set[str]:
+    # Give callers their own mutable set; cached public-name tokens are immutable.
+    return set(_cached_distinctive_match_tokens(value))
+
+
+@lru_cache(maxsize=32768)
+def _cached_distinctive_match_tokens(value: str) -> frozenset[str]:
     tokens = set()
     for token in re.findall(r"[a-z0-9]+", normalized_match_name(value or "")):
         if token in WEAK_NAME_MATCH_TOKENS:
@@ -10763,7 +11529,7 @@ def distinctive_match_tokens(value: str) -> set[str]:
         if len(token) < 2:
             continue
         tokens.add(token)
-    return tokens
+    return frozenset(tokens)
 
 
 def distinctive_overlap_is_sufficient(row_norm: str, target_norm: str) -> bool:
@@ -10870,6 +11636,7 @@ def single_plural_token_variant_match(left: str, right: str) -> bool:
     return False
 
 
+@lru_cache(maxsize=8192)
 def redundant_bracket_acronym_key(value: str) -> tuple[str, bool]:
     """Remove only an uppercase acronym repeating the immediately preceding words."""
     value = canonical_name_punctuation(value or "")
@@ -11968,6 +12735,14 @@ class FloridaVerifiedTransport:
             return route.fallback()
         if BLOCK_HEAVY_BROWSER_RESOURCES and request.resource_type in {"image", "media", "font"}:
             return route.abort()
+        if fl_verified_transport_first() and request.resource_type != "document":
+            # Keep independent assets concurrent in Chromium. The experiment
+            # targets document navigation; serial asset forwarding delays every POST.
+            return route.fallback()
+        if fl_verified_transport_first() and not isinstance(self.error, FloridaCertificateError):
+            # A fresh document request owns its error. A prior timeout must not
+            # invalidate a later fully received response; trust failures stay fatal.
+            self.error = None
         try:
             remaining = self.deadline - time.monotonic()
             if remaining <= 0:
@@ -11980,7 +12755,10 @@ class FloridaVerifiedTransport:
             outgoing = urllib.request.Request(request.url, data=request.post_data_buffer,
                                               headers=headers, method=request.method)
             try:
-                response = self.opener.open(outgoing, timeout=min(8.0, remaining))
+                # Loaded public pages sometimes need more than eight seconds
+                # for a POST. Avoid restarting that same request in the lab;
+                # the lookup and workflow deadlines still bound the operation.
+                response = self.opener.open(outgoing, timeout=min(12.0 if fl_verified_transport_first() else 8.0, remaining))
             except urllib.error.HTTPError as exc:
                 response = exc  # Preserve HTTP errors and redirects for the existing lookup.
             with response:
@@ -12013,12 +12791,178 @@ class FloridaVerifiedTransport:
             route.abort("failed")
 
 
+def fl_verified_transport_first() -> bool:
+    """Explicit isolated-lab transport comparison; no registry rule changes."""
+    return (APP_VERSION.endswith("-performance-lab")
+            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and os.environ.get("CE_LAB_FL_TRANSPORT") == "verified-first")
+
+
 def search_fl(page, org):
     transport = FloridaVerifiedTransport(page)
     try:
         return search_fl_with_transport(page, org, transport)
     finally:
         transport.close()
+
+
+def fl_reviewed_alias_address(org, row_name, row_text, deadline):
+    """An EIN-linked alias can collide with another Florida legal entity.
+
+    Read the organization location already present in this candidate's header;
+    use the master office corroboration rule, not Florida-specific identity rules.
+    Exact primary names retain their existing path and make no extra request.
+    """
+    if (not is_reviewed_alias(org.ein, row_name)
+            or normalized_match_name(row_name) in {
+                normalized_match_name(name) for name in organization_match_target_variants(org.organization_name, "")}):
+        return {}
+    header = re.split(r"\bPrint\b|\bAlso\s+Soliciting\s+as\b|\b(?:License/)?Registration Number\b",
+                      row_text, maxsplit=1, flags=re.I)[0].strip()
+    location = re.search(r",\s*([^,]+),\s*([A-Z]{2})\s*$", header, re.I)
+    if not location or time.monotonic() >= deadline:
+        return {"decision": "unavailable", "registry_location": ""}
+    place = f"{location[1].strip()}, {location[2].upper()}"
+    evidence = reconciled_registry_address(org.ein, row_name, place, registry_state="FL", deadline=deadline)
+    return {**evidence, "registry_location": place}
+
+
+def fl_completed_search_form_available(page):
+    """Reuse only the completed same-origin ASP.NET search form and its new viewstate."""
+    try:
+        if page.url.split("?", 1)[0] != FL_CHECK_A_CHARITY_URL:
+            return False
+        return page.evaluate("""() => {
+            const input = document.querySelector('input[name="ctl00$cpMainContent$BusinessNameTb"]');
+            const form = input && input.form;
+            const button = form && form.querySelector('input[name="ctl00$cpMainContent$SingleSearchBt"]');
+            const viewstate = form && form.querySelector('input[name="__VIEWSTATE"]');
+            return Boolean(input && !input.disabled && input.getClientRects().length &&
+                button && !button.disabled && button.getClientRects().length &&
+                viewstate && viewstate.value && form.method.toLowerCase() === 'post' &&
+                new URL(form.action, location.href).href.split('?')[0] === location.href.split('?')[0]);
+        }""") is True
+    except Exception:
+        return False
+
+
+def fl_business_lookup_enabled() -> bool:
+    """Isolated lab opt-in to the state's alternate public charity-license page."""
+    # Source selection is independent of the browser's transport experiment.
+    # Restoring normal Chromium must not disable the complete license lookup.
+    return (APP_VERSION.endswith("-performance-lab")
+            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and os.environ.get("CE_LAB_FL_BUSINESS_LOOKUP") == "1")
+
+
+def lab_fl_form_context_options(state, org) -> dict:
+    """Use native HTML form submission for the lab Sales FL browser fallback."""
+    if (state == "FL" and APP_VERSION.endswith("-performance-lab")
+            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and os.environ.get("CE_LAB_FL_SCRIPTLESS") == "1"
+            and LAB_LOOKUP_MODE_CONTEXT.get() == "sales"
+            and not getattr(org, "evidence_mode", False)
+            and not CAPTURE_EVIDENCE_SCREENSHOTS and not CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT):
+        return {"java_script_enabled": False}
+    return {}
+
+
+def fl_business_candidate_rows(source: str) -> list:
+    """Read complete, unfiltered business-license cards; never infer a negative."""
+    if not re.search(r"</html>\s*$", source or "", re.I):
+        return []
+    text = html_to_text(source)
+    counts = re.findall(r"Records Found\s*:\s*(\d+)", text)
+    names = re.findall(r'<table\b[^>]*id=["\']cpMainContent_MasterGv_dataTab_(\d+)["\'][^>]*>.*?<strong[^>]*>(.*?)</strong>', source, re.I | re.S)
+    cards = re.findall(r'<div\b[^>]*id=["\']cpMainContent_MasterGv_maindiv_(\d+)["\'][^>]*>(.*?)<div\b[^>]*id=["\']cpMainContent_MasterGv_dvContractMovers_\1["\']', source, re.I | re.S)
+    if (len(counts) != 1 or not 0 < int(counts[0]) <= 20
+            or len(cards) != int(counts[0]) or len(names) != len(cards)
+            or [int(n[0]) for n in cards] != list(range(len(cards)))):
+        return []
+    rows = []
+    for number, card in cards:
+        card_names = [html_to_text(name) for index, name in names if index == number]
+        if len(card_names) != 1:
+            return []
+        name = card_names[0]
+        # A card must contain exactly one full charity license row. Preserve
+        # suspended/revoked evidence and refuse unrecognized status labels.
+        licenses = re.findall(r'<tr\b[^>]*>\s*<td\b[^>]*>\s*Charitable Organization\s*</td>\s*<td\b[^>]*>(.*?)</td>\s*<td\b[^>]*>(.*?)</td>\s*<td\b[^>]*>(.*?)</td>\s*<td\b[^>]*>(.*?)</td>\s*</tr>', card, re.I | re.S)
+        if len(licenses) != 1:
+            return []
+        identifier, issued, expires, status = [html_to_text(v) for v in licenses[0]]
+        if not re.fullmatch(r"CH\d+", identifier) or not re.fullmatch(r"[A-Za-z -]{1,60}", status):
+            return []
+        try:
+            expiry = datetime.strptime(expires, "%m/%d/%y").date()
+            issue = datetime.strptime(issued, "%m/%d/%y").date()
+        except ValueError:
+            return []
+        if issue > date.today() or expiry.year < 1990:
+            return []
+        header = html_to_text(card).split("License Type", 1)[0]
+        place = re.search(r",\s*([^,]+),\s*([A-Z]{2})\s+\d{5}(?:-\d{4})?(?:\s|$)", header)
+        if not place:
+            return []
+        # Normalize source fields for the existing FL matcher/classifier. The
+        # city/state stays before the license label for shared alias checking.
+        evidence = (f"Business Name {name}, {place[1].strip()}, {place[2]} "
+                    f"License/Registration Number {identifier} "
+                    f"Expiration Date {expiry.month}/{expiry.day}/{expiry.year} Status {status}")
+        rows.append({"text": evidence, "business_evidence": {
+            "identifier": identifier, "name": name, "initial": issued, "status": status,
+            "initial_label": "Issued", "initial_type": "initial_credential_issue_date",
+            "url": "https://csapp.fdacs.gov/CSPublicApp/BusinessSearch/BusinessSearch.aspx"}})
+    return rows
+
+
+def fl_business_public_rows(query: str, deadline: float) -> list:
+    """One TLS-verified public search, bounded by the remaining lookup time."""
+    url = "https://csapp.fdacs.gov/CSPublicApp/BusinessSearch/BusinessSearch.aspx"
+    http_seconds = 8.0 if fl_business_lookup_enabled() and os.environ.get("CE_LAB_FL_HTTP_PATIENT") == "1" else 4.0
+    deadline = min(deadline, time.monotonic() + 2 * http_seconds)
+    try:
+        opener = urllib.request.build_opener(
+            urllib.request.HTTPSHandler(context=fl_verified_ssl_context()), FloridaNoRedirect(),
+            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        def read(data=None):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Florida alternate public search deadline")
+            request = urllib.request.Request(url, data=data, headers={
+                "User-Agent": BROWSER_USER_AGENT, "Accept-Encoding": "identity"})
+            with opener.open(request, timeout=min(http_seconds, remaining)) as response:
+                if response.status != 200 or response.geturl() != url:
+                    raise ValueError("Unexpected Florida alternate response")
+                chunks, size = [], 0
+                while True:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("Florida alternate public search deadline")
+                    chunk = response.read1(min(65536, 2_000_001-size))
+                    if not chunk:
+                        break
+                    chunks.append(chunk); size += len(chunk)
+                    if size > 2_000_000:
+                        raise ValueError("Oversize Florida alternate response")
+                declared = response.headers.get("Content-Length")
+                if time.monotonic() >= deadline or (declared and
+                        (not declared.isdigit() or int(declared) != size)):
+                    raise ValueError("Incomplete Florida alternate response")
+                return b"".join(chunks).decode("utf-8")
+        fields = html_hidden_inputs(read())
+        if not fields.get("__VIEWSTATE"):
+            return []
+        fields.update({"ctl00$cpMainContent$BusinessNameTb": query,
+            "ctl00$cpMainContent$LicenseTb": "", "ctl00$cpMainContent$txtPhone": "",
+            "ctl00$cpMainContent$txtCity": "", "ctl00$cpMainContent$CountyDl": " X",
+            "ctl00$cpMainContent$LicenseTypeDl": "CH",
+            "ctl00$cpMainContent$SingleSearchBt": "Search"})
+        # Explicitly exclude the active-only checkbox. An empty/incomplete
+        # alternate result falls back to the original primary lookup.
+        fields.pop("ctl00$cpMainContent$chkActive", None)
+        return fl_business_candidate_rows(read(urlencode(fields).encode("utf-8")))
+    except Exception:
+        return []
 
 
 def search_fl_with_transport(page, org, transport):
@@ -12164,6 +13108,8 @@ def search_fl_with_transport(page, org, transport):
             if deadline_expired():
                 raise TimeoutError("FL lookup exceeded its bounded search window")
             try:
+                if fl_verified_transport_first():
+                    transport.enable()
                 page.goto(url, wait_until="commit", timeout=remaining_ms(12000))
                 if transport.error:
                     raise transport.error
@@ -12185,6 +13131,96 @@ def search_fl_with_transport(page, org, transport):
                 if attempt == 0:
                     time.sleep(min(1, remaining_seconds()))
         raise last_error
+
+    def select_fl_candidate(candidate_rows):
+        nonlocal alias_review
+        best_candidate = None
+        best_score = -10000
+        best_rank = (-10000, -1)
+        if not any(re.search(r"\bCH\d+\b", row.get("text", ""), re.I) for row in candidate_rows):
+            raise ValueError("Florida search response contained neither registration rows nor an explicit no-record message")
+        for candidate in candidate_rows:
+            row_text = re.sub(r"\s+", " ", candidate.get("text") or "").strip()
+            row_name = (
+                text_between_labels(row_text, "Business Name", ["License/Registration Number", "Registration Number", "Expiration Date", "Status"])
+                or clean_fl_registry_name(re.split(r"\bLicense/Registration Number\b|\bRegistration Number\b|\bExpiration Date\b", row_text, maxsplit=1, flags=re.I)[0])
+            )
+            row_name = clean_fl_registry_name(row_name)
+            name_score = target_name_score(row_name, safe_targets)
+            if name_score < 0:
+                continue
+            if not reviewed_name_candidate_is_safe(row_name, original_name, org.ein):
+                continue
+            if re.search(r"\bAdvanced\s+Search\b", row_name, re.I):
+                continue
+            if florida_local_chapter_mismatch(row_name):
+                continue
+            if florida_related_entity_mismatch(row_name):
+                continue
+            if florida_missing_requested_wrapper_with_new_scope(row_name):
+                continue
+            if florida_nested_unrelated_entity_mismatch(row_name):
+                continue
+            address = fl_reviewed_alias_address(org, row_name, row_text, deadline)
+            if address and address.get("decision") != "corroborated":
+                alias_review = {"name": row_name, "address": address}
+                continue
+            score = name_score
+            if re.search(r"\bCH\d+\b", row_text, re.I):
+                score += 40
+            row_status = text_between_labels(row_text, "Status", ["Expiration Date", "Solicitation", "Business Name", "License/Registration Number"])
+            if isinstance(candidate.get("index"), int):
+                row_status = registry_candidate_fields(page.locator("tr").nth(candidate["index"])).get("status", "") or row_status
+            rank = (score, registry_exact_active_tiebreak(row_name, safe_targets, row_status))
+            if rank > best_rank:
+                best_rank = rank
+                best_score = score
+                best_candidate = {"row_text": row_text, "row_name": row_name, "address": address}
+        return best_candidate
+
+    def finish_fl_candidate(result, best_candidate):
+        row_text = best_candidate["row_text"]
+        if best_candidate["address"]:
+            result.address_evidence = best_candidate["address"]
+            result.identity_anchor = "cross_state_name_address"
+        exp_date = first_date_near_label(row_text, ["Expiration Date", "Expiration", "Expires"])
+        suspended_match = re.search(r"\bSuspended\b", row_text, re.I)
+        revoked_match = re.search(r"\bRevoked\b", row_text, re.I)
+        if not exp_date:
+            if suspended_match:
+                result.status = "Suspended"
+                result.raw_status_text = "Status: Suspended"
+                result.source_note = "FL uses the registration status shown next to the Check-A-Charity registration number."
+                result.matched_registry_name = clean_fl_registry_name(best_candidate["row_name"])
+                id_match = re.search(r"\bCH\d+\b", row_text, re.I)
+                result.matched_registry_identifier = id_match.group(0).upper() if id_match else ""
+                result.success = True
+                return result
+            if revoked_match:
+                result.status = "Revoked"
+                result.raw_status_text = "Status: Revoked"
+                result.source_note = "FL uses the registration status shown next to the Check-A-Charity registration number."
+                result.matched_registry_name = clean_fl_registry_name(best_candidate["row_name"])
+                id_match = re.search(r"\bCH\d+\b", row_text, re.I)
+                result.matched_registry_identifier = id_match.group(0).upper() if id_match else ""
+                result.success = True
+                return result
+            return None
+        if suspended_match:
+            result.status = "Suspended"
+            result.raw_status_text = f"Status: Suspended | Expiration Date {format_date(exp_date)}"
+        elif revoked_match:
+            result.status = "Revoked"
+            result.raw_status_text = f"Status: Revoked | Expiration Date {format_date(exp_date)}"
+        else:
+            result.status = classify_expiration_date(exp_date)
+            result.raw_status_text = f"Expiration Date {format_date(exp_date)}"
+        result.source_note = "FL uses the expiration date shown by Check-A-Charity."
+        result.matched_registry_name = clean_fl_registry_name(best_candidate["row_name"])
+        id_match = re.search(r"\bCH\d+\b", row_text, re.I)
+        result.matched_registry_identifier = id_match.group(0).upper() if id_match else ""
+        result.success = True
+        return result
 
     generated_variants = [
         *possessive_search_phrases(original_name),
@@ -12221,8 +13257,29 @@ def search_fl_with_transport(page, org, transport):
             variants.append(variant)
     best_result = None
     last_error = None
+    alias_review = None
     search_variants = reviewed_queries_first(original_name, org.ein, variants, limit=8)
     final_exact_retry_added = False
+    completed_search_form = False
+    if (fl_business_lookup_enabled() and search_variants and not getattr(org, "evidence_mode", False)
+            and not CAPTURE_EVIDENCE_SCREENSHOTS and not CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT):
+        rows = fl_business_public_rows(canonical_name_punctuation(original_name), deadline)
+        exact = [row for row in rows if normalized_match_name(row["business_evidence"]["name"])
+                 in {normalized_match_name(name) for name in safe_targets}]
+        # Extra/inactive names cannot displace the requested legal entity.
+        # Multiple exact credentials remain on the existing browser path.
+        if len(exact) == 1 and exact[0]["business_evidence"]["status"] in {
+                "Registered", "Active Small Charity", "Suspended", "Revoked"}:
+            candidate = select_fl_candidate(exact)
+            if candidate is not None:
+                evidence = exact[0]["business_evidence"]
+                alternate = checker.StateResult(original_name, org.ein, "FL", checker.STATUS_UNKNOWN, evidence["url"])
+                confirmed = finish_fl_candidate(alternate, candidate)
+                if confirmed is not None:
+                    confirmed.source_note = "FL uses the charity license status and expiration date in the official FDACS Business Lookup."
+                    confirmed._cc_registration_date_evidence = evidence
+                    confirmed._cc_fl_business_source_verified = True
+                    return confirmed
     for variant in search_variants:
         if deadline_expired():
             break
@@ -12233,7 +13290,10 @@ def search_fl_with_transport(page, org, transport):
                 page.set_default_navigation_timeout(remaining_ms(12000))
             except Exception:
                 pass
-            load_fl_search_page()
+            if not (completed_search_form and fl_completed_search_form_available(page)):
+                load_fl_search_page()
+            # Any failed fill, submission, or parse requires a fresh document.
+            completed_search_form = False
             try:
                 page.locator('input[name*="BusinessName" i], input[id*="BusinessName" i], input[type="text"]').first.wait_for(state="visible", timeout=remaining_ms(6000))
             except Exception:
@@ -12259,6 +13319,7 @@ def search_fl_with_transport(page, org, transport):
             text = readable_page_text(page)
             if transport.error:
                 raise transport.error
+            completed_search_form = True
             if no_registry_results_seen(text):
                 result.status = checker.STATUS_NOT_REGISTERED
                 result.raw_status_text = "No matching organization record"
@@ -12274,44 +13335,7 @@ def search_fl_with_transport(page, org, transport):
                 }).filter((row) => row.text && /License\\/Registration Number|Expiration Date|Solicitation|Business Name|CH\\d+/i.test(row.text));
                 """
             )
-            best_candidate = None
-            best_score = -10000
-            best_rank = (-10000, -1)
-            if not any(re.search(r"\bCH\d+\b", row.get("text", ""), re.I) for row in candidate_rows):
-                raise ValueError("Florida search response contained neither registration rows nor an explicit no-record message")
-            for candidate in candidate_rows:
-                row_text = re.sub(r"\s+", " ", candidate.get("text") or "").strip()
-                row_name = (
-                    text_between_labels(row_text, "Business Name", ["License/Registration Number", "Registration Number", "Expiration Date", "Status"])
-                    or clean_fl_registry_name(re.split(r"\bLicense/Registration Number\b|\bRegistration Number\b|\bExpiration Date\b", row_text, maxsplit=1, flags=re.I)[0])
-                )
-                row_name = clean_fl_registry_name(row_name)
-                name_score = target_name_score(row_name, safe_targets)
-                if name_score < 0:
-                    continue
-                if not reviewed_name_candidate_is_safe(row_name, original_name, org.ein):
-                    continue
-                if re.search(r"\bAdvanced\s+Search\b", row_name, re.I):
-                    continue
-                if florida_local_chapter_mismatch(row_name):
-                    continue
-                if florida_related_entity_mismatch(row_name):
-                    continue
-                if florida_missing_requested_wrapper_with_new_scope(row_name):
-                    continue
-                if florida_nested_unrelated_entity_mismatch(row_name):
-                    continue
-                score = name_score
-                if re.search(r"\bCH\d+\b", row_text, re.I):
-                    score += 40
-                row_status = text_between_labels(row_text, "Status", ["Expiration Date", "Solicitation", "Business Name", "License/Registration Number"])
-                if isinstance(candidate.get("index"), int):
-                    row_status = registry_candidate_fields(page.locator("tr").nth(candidate["index"])).get("status", "") or row_status
-                rank = (score, registry_exact_active_tiebreak(row_name, safe_targets, row_status))
-                if rank > best_rank:
-                    best_rank = rank
-                    best_score = score
-                    best_candidate = {"row_text": row_text, "row_name": row_name}
+            best_candidate = select_fl_candidate(candidate_rows)
             if not best_candidate:
                 result.status = checker.STATUS_NOT_REGISTERED
                 result.raw_status_text = "No matching organization record"
@@ -12319,47 +13343,13 @@ def search_fl_with_transport(page, org, transport):
                 result.success = True
                 best_result = result
                 continue
-            row_text = best_candidate["row_text"]
-            exp_date = first_date_near_label(row_text, ["Expiration Date", "Expiration", "Expires"])
-            suspended_match = re.search(r"\bSuspended\b", row_text, re.I)
-            revoked_match = re.search(r"\bRevoked\b", row_text, re.I)
-            if not exp_date:
-                if suspended_match:
-                    result.status = "Suspended"
-                    result.raw_status_text = "Status: Suspended"
-                    result.source_note = "FL uses the registration status shown next to the Check-A-Charity registration number."
-                    result.matched_registry_name = clean_fl_registry_name(best_candidate["row_name"])
-                    id_match = re.search(r"\bCH\d+\b", row_text, re.I)
-                    result.matched_registry_identifier = id_match.group(0).upper() if id_match else ""
-                    result.success = True
-                    return result
-                if revoked_match:
-                    result.status = "Revoked"
-                    result.raw_status_text = "Status: Revoked"
-                    result.source_note = "FL uses the registration status shown next to the Check-A-Charity registration number."
-                    result.matched_registry_name = clean_fl_registry_name(best_candidate["row_name"])
-                    id_match = re.search(r"\bCH\d+\b", row_text, re.I)
-                    result.matched_registry_identifier = id_match.group(0).upper() if id_match else ""
-                    result.success = True
-                    return result
-                best_result = result
-                continue
-            if suspended_match:
-                result.status = "Suspended"
-                result.raw_status_text = f"Status: Suspended | Expiration Date {format_date(exp_date)}"
-            elif revoked_match:
-                result.status = "Revoked"
-                result.raw_status_text = f"Status: Revoked | Expiration Date {format_date(exp_date)}"
-            else:
-                result.status = classify_expiration_date(exp_date)
-                result.raw_status_text = f"Expiration Date {format_date(exp_date)}"
-            result.source_note = "FL uses the expiration date shown by Check-A-Charity."
-            result.matched_registry_name = clean_fl_registry_name(best_candidate["row_name"])
-            id_match = re.search(r"\bCH\d+\b", row_text, re.I)
-            result.matched_registry_identifier = id_match.group(0).upper() if id_match else ""
-            result.success = True
-            return result
+            classified = finish_fl_candidate(result, best_candidate)
+            if classified is not None:
+                return classified
+            best_result = result
+            continue
         except Exception as exc:
+            completed_search_form = False
             last_error = exc
             result.error = f"FL error: {exc}"
             if isinstance(exc, FloridaCertificateError):
@@ -12382,6 +13372,19 @@ def search_fl_with_transport(page, org, transport):
             if deadline_expired():
                 break
             continue
+    if alias_review:
+        address = alias_review["address"]
+        place = address.get("registry_location") or "an unconfirmed location"
+        explanation = (f"Florida returned alternate-name candidate {alias_review['name']} in {place}, "
+                       "but the available EIN-linked address evidence did not confirm that it is the requested organization.")
+        if address.get("ein_linked_location"):
+            explanation += f" The EIN-linked organization record lists {address['ein_linked_location']}."
+        review = checker.StateResult(original_name, org.ein, "FL", "Unable to Confirm", url,
+            raw_status_text="Alternate-name identity was not corroborated", source_note=explanation,
+            success=False, error="")
+        review.reason_code = "FL_ALIAS_IDENTITY_UNCONFIRMED"
+        review.address_evidence = address
+        return review
     if best_result and not last_error:
         if deadline_expired():
             best_result.source_note = " ".join(
@@ -12937,13 +13940,111 @@ def ohio_detail_url(page_name: str, detail_id: str) -> str:
     return f"https://charitableregistration.ohioago.gov/Charities/{quote(page_name)}?Id={quote(detail_id)}"
 
 
+def search_oh_direct_details(org):
+    """Use the public EIN form and detail HTML; incomplete evidence falls back."""
+    ein = canonical_ein_digits(org.ein)
+    if len(ein) != 9:
+        return None
+    deadline = time.monotonic() + 10.0
+    try:
+        url, source = oh_ein_search_source(ein, deadline)
+        if not re.search(r"</html\s*>", source, re.I):
+            return None
+        tables = [table for table in re.findall(r"<table\b[^>]*>.*?</table>", source, re.I | re.S)
+                  if re.search(r"<caption>\s*Search results", table, re.I) and "DBA Name" in table and "EIN" in table]
+        # A missing result table still uses the existing no-record/name-fallback
+        # workflow. Never infer a negative from an unavailable direct response.
+        if len(tables) != 1 or not re.search(r"Page\s+1\s+of\s+1", html_to_text(source), re.I):
+            return None
+        refs = []
+        for row in re.findall(r"<tr\b[^>]*>(.*?)</tr>", tables[0], re.I | re.S):
+            cells = [html_to_text(cell).strip() for cell in re.findall(r"<td\b[^>]*>(.*?)</td>", row, re.I | re.S)]
+            if len(cells) < 9 or canonical_ein_digits(cells[2]) != ein:
+                continue
+            for kind, identifier in re.findall(r"OpenDetailsLink\('([^']+)','(\d+)'\)", html.unescape(row)):
+                refs.append({'pageName':kind, 'id':identifier, 'registryName':cells[0], 'inCompliance':cells[8]})
+        targets = organization_match_target_variants(org.organization_name, org.ein)
+        detail = max(refs, key=lambda item: (
+            target_name_score(item['registryName'], targets),
+            registry_exact_active_tiebreak(item['registryName'], targets,
+                'Active' if item['inCompliance'].strip().casefold() == 'yes' else '')), default=None)
+        if detail is None:
+            return None
+        detail_url = ohio_detail_url(detail['pageName'], detail['id'])
+        source = identity_fetch(detail_url, deadline, headers={'Accept':'text/html'}).decode('utf-8', 'replace')
+        if not re.search(r"</html\s*>", source, re.I):
+            return None
+        markup = re.sub(r"<(script|style|noscript)\b[^>]*>.*?</\1\s*>", '', source, flags=re.I | re.S)
+        body = html_to_text(markup)
+        confirmed = re.search(r'Employer Identification Number\s*\(EIN\)\s*:?[\s]*(\d{2}-?\d{7})\b', body, re.I)
+        if not confirmed or canonical_ein_digits(confirmed[1]) != ein:
+            return None
+        if not all(label in body for label in ('Organization Name', 'Fiscal Year End')):
+            return None
+        if not any(label in body for label in ('Registration Status', 'Exemption Status')):
+            return None
+        result = checker.StateResult(org.organization_name, org.ein, 'OH', checker.STATUS_UNKNOWN, url)
+        return oh_result_from_detail_text(result, body, detail_url, detail['id']), body
+    except Exception:
+        return None
+
+
+def oh_result_from_detail_text(result, detail_text, detail_url, detail_id):
+    month_names = {name.lower(): index for index, name in enumerate(calendar.month_name) if name}
+    month_names.update({name.lower(): index for index, name in enumerate(calendar.month_abbr) if name})
+    site_name = text_between_labels(detail_text, "Organization Name", ["Organization Phone", "EIN", "Registration Status"])
+    registration_status = text_between_labels(detail_text, "Registration Status", ["Annual Reports Filed", "Most Recent Report Filing Year", "Fiscal Year End"])
+    exemption_status = text_between_labels(detail_text, "Exemption Status", ["Annual Reports Filed", "Most Recent Report Filing Year", "Fiscal Year End", "Street Address", "Organization Phone"])
+    filing_year_raw = text_between_labels(detail_text, "Most Recent Report Filing Year", ["The financial information below", "Fiscal Year End", "Total Revenue"])
+    fiscal_year_end_raw = text_between_labels(detail_text, "Fiscal Year End", ["Street Address", "Organization Phone", "Most Recent Report Filing Year"])
+    filing_year_match = re.search(r"\b(20\d{2})\b", filing_year_raw or "")
+    fiscal_month = month_names.get((fiscal_year_end_raw or "").split()[0].lower()) if fiscal_year_end_raw else None
+    result.source_url = detail_url
+    result.matched_registry_name = clean_registry_name(site_name)
+    result.matched_registry_identifier = detail_id
+    result.raw_status_text = (
+        f"Registration Status: {registration_status or 'N/A'} | "
+        f"Exemption Status: {exemption_status or 'N/A'} | "
+        f"Most Recent Report Filing Year: {filing_year_raw or 'N/A'} | "
+        f"Fiscal Year End: {fiscal_year_end_raw or 'N/A'}"
+    )
+    if re.search(r"\bnot\s+required\s+to\s+register\b", " ".join([exemption_status or "", registration_status or ""]), re.I):
+        result.status = "Exempt"
+    elif re.search(r"\bexempt\b", " ".join([exemption_status or "", registration_status or ""]), re.I):
+        result.status = "Exempt"
+    elif re.search(r"\bpending\b", registration_status or "", re.I):
+        result.status = "Pending"
+    elif re.search(r"\b(dissolved|closed|withdrawn|cancel(?:ed|led)|terminated|inactive)\b", registration_status or "", re.I):
+        result.status = "Closed / Withdrawn / Canceled"
+    elif re.search(r"\b(revoked|suspended)\b", registration_status or "", re.I):
+        result.status = registration_status.title()
+    elif filing_year_match and fiscal_month:
+        due = ohio_due_date(int(filing_year_match.group(1)), fiscal_month)
+        result.status = classify_expiration_date(due)
+        result.raw_status_text += f" | Next Due: {format_date(due)}"
+    elif re.search(r"\bregistered\b|\bin\s+compliance\b|\byes\b", registration_status or "", re.I):
+        result.status = checker.STATUS_CURRENT
+    elif re.search(r"\b(?:N/A|none|no\s+annual\s+reports?)\b", filing_year_raw or "", re.I) or not filing_year_raw:
+        result.status = "Delinquent"
+        result.raw_status_text += " | Filing record not available"
+        result.source_note = (
+            "OH confirmed a matching organization record, but the public detail page did not show an exemption "
+            "or a usable annual-report filing year. CharityClarity treats confirmed non-exempt Ohio records "
+            "without filing evidence as Delinquent rather than Unknown."
+        )
+    else:
+        result.status = checker.STATUS_UNKNOWN
+    if not result.source_note:
+        result.source_note = "OH uses EIN search first and computes the next base annual-report due date from the public detail page."
+    result.success = True
+    return result
+
+
 def search_oh(page, org):
     url = "https://charitableregistration.ohioago.gov/Charities/ResearchCharities"
     result = checker.StateResult(org.organization_name or format_ein(org.ein), org.ein, "OH", checker.STATUS_UNKNOWN, url)
     ein_digits = re.sub(r"\D", "", org.ein or "")
     formatted_ein = format_ein(org.ein)
-    month_names = {name.lower(): index for index, name in enumerate(calendar.month_name) if name}
-    month_names.update({name.lower(): index for index, name in enumerate(calendar.month_abbr) if name})
     search_summary_text = ""
     if len(ein_digits) != 9:
         result.error = "OH: EIN search requires a 9-digit EIN."
@@ -13103,52 +14204,7 @@ def search_oh(page, org):
                 result.source_note = "Ohio returned a matching search record, but its detail page was unavailable or incomplete after a retry."
                 result.success = False
             return result
-        site_name = text_between_labels(detail_text, "Organization Name", ["Organization Phone", "EIN", "Registration Status"])
-        registration_status = text_between_labels(detail_text, "Registration Status", ["Annual Reports Filed", "Most Recent Report Filing Year", "Fiscal Year End"])
-        exemption_status = text_between_labels(detail_text, "Exemption Status", ["Annual Reports Filed", "Most Recent Report Filing Year", "Fiscal Year End", "Street Address", "Organization Phone"])
-        filing_year_raw = text_between_labels(detail_text, "Most Recent Report Filing Year", ["The financial information below", "Fiscal Year End", "Total Revenue"])
-        fiscal_year_end_raw = text_between_labels(detail_text, "Fiscal Year End", ["Street Address", "Organization Phone", "Most Recent Report Filing Year"])
-        filing_year_match = re.search(r"\b(20\d{2})\b", filing_year_raw or "")
-        fiscal_month = month_names.get((fiscal_year_end_raw or "").split()[0].lower()) if fiscal_year_end_raw else None
-        result.source_url = detail_url
-        result.matched_registry_name = clean_registry_name(site_name)
-        result.matched_registry_identifier = detail_id
-        result.raw_status_text = (
-            f"Registration Status: {registration_status or 'N/A'} | "
-            f"Exemption Status: {exemption_status or 'N/A'} | "
-            f"Most Recent Report Filing Year: {filing_year_raw or 'N/A'} | "
-            f"Fiscal Year End: {fiscal_year_end_raw or 'N/A'}"
-        )
-        if re.search(r"\bnot\s+required\s+to\s+register\b", " ".join([exemption_status or "", registration_status or ""]), re.I):
-            result.status = "Exempt"
-        elif re.search(r"\bexempt\b", " ".join([exemption_status or "", registration_status or ""]), re.I):
-            result.status = "Exempt"
-        elif re.search(r"\bpending\b", registration_status or "", re.I):
-            result.status = "Pending"
-        elif re.search(r"\b(dissolved|closed|withdrawn|cancel(?:ed|led)|terminated|inactive)\b", registration_status or "", re.I):
-            result.status = "Closed / Withdrawn / Canceled"
-        elif re.search(r"\b(revoked|suspended)\b", registration_status or "", re.I):
-            result.status = registration_status.title()
-        elif filing_year_match and fiscal_month:
-            due = ohio_due_date(int(filing_year_match.group(1)), fiscal_month)
-            result.status = classify_expiration_date(due)
-            result.raw_status_text += f" | Next Due: {format_date(due)}"
-        elif re.search(r"\bregistered\b|\bin\s+compliance\b|\byes\b", registration_status or "", re.I):
-            result.status = checker.STATUS_CURRENT
-        elif re.search(r"\b(?:N/A|none|no\s+annual\s+reports?)\b", filing_year_raw or "", re.I) or not filing_year_raw:
-            result.status = "Delinquent"
-            result.raw_status_text += " | Filing record not available"
-            result.source_note = (
-                "OH confirmed a matching organization record, but the public detail page did not show an exemption "
-                "or a usable annual-report filing year. CharityClarity treats confirmed non-exempt Ohio records "
-                "without filing evidence as Delinquent rather than Unknown."
-            )
-        else:
-            result.status = checker.STATUS_UNKNOWN
-        if not result.source_note:
-            result.source_note = "OH uses EIN search first and computes the next base annual-report due date from the public detail page."
-        result.success = True
-        return result
+        return oh_result_from_detail_text(result, detail_text, detail_url, detail_id)
     except Exception as exc:
         result.error = f"OH error: {exc}"
         return result
@@ -15224,6 +16280,55 @@ def hi_submit_completed_search(page, name, fein, deadline):
             # painting over the retry's table. This is a normal search retry.
             page.reload(wait_until="domcontentloaded", timeout=remaining_ms())
 
+
+
+def hi_direct_details_from_source(org, source: str, url: str):
+    """Accept a complete, same-EIN public detail document; otherwise use search."""
+    if not re.search(r"</html\s*>", source, re.I) or not re.search(r"<h2[^>]*>.*?Documents.*?</h2>", source, re.I | re.S):
+        return None
+    pairs = [(sc_html_to_text(key).strip().rstrip(":"), sc_html_to_text(value).strip())
+             for key, value in re.findall(r"<dt\b[^>]*>(.*?)</dt>\s*<dd\b[^>]*>(.*?)</dd>", source, re.S | re.I)]
+    fields = dict(pairs)
+    if any(sum(key == label for key, _ in pairs) != 1 for label in ("FEIN", "Primary Name", "Registration Status", "Registration Type")):
+        return None
+    if len(canonical_ein_digits(org.ein)) != 9 or canonical_ein_digits(fields.get("FEIN", "")) != canonical_ein_digits(org.ein):
+        return None
+    name = useful_registry_name(fields.get("Primary Name", ""))
+    status = fields.get("Registration Status", "")
+    kind = fields.get("Registration Type", "")
+    if not name or not status or not kind:
+        return None
+    # Preserve public document text, excluding code/styles. No script payload,
+    # missing page or HTTP failure can establish a registration status.
+    markup = re.sub(r"<(script|style|noscript)\b[^>]*>.*?</\1\s*>", "", source, flags=re.I | re.S)
+    markup = re.sub(r"</(?:div|p|dt|dd|li|h[1-6]|tr|section)>|<br\s*/?>", "\n", markup, flags=re.I)
+    body = "\n".join(filter(None, (sc_html_to_text(line).strip() for line in markup.splitlines())))
+    result = checker.StateResult(org.organization_name, org.ein, "HI", status, url)
+    result.raw_status_text = f"Registration Status: {status} | Registration Type: {kind}"
+    result.matched_registry_name = name
+    result.matched_registry_identifier = fields["FEIN"]
+    result.source_note = "Hawaii detail page confirmed the requested FEIN exactly; registration status and filings are from the Hawaii detail page."
+    result.success = True
+    if not hi_indicates_exempt_registration(body):
+        # The existing filing reader uses only content() and url. Keep its tax
+        # year, attachment, IRS fallback and incomplete-document rules intact.
+        document = SimpleNamespace(content=lambda: source, url=url)
+        annotate_irs_based_state_period(result, hi_public_filing_period(document, org.ein))
+    return result, body
+
+
+def search_hi_direct_details(org):
+    digits = canonical_ein_digits(org.ein)
+    if len(digits) != 9:
+        return None
+    url = f"https://charity.ehawaii.gov/charity/{digits}/details.html"
+    try:
+        source = identity_fetch(url, time.monotonic()+8, headers={"Accept": "text/html"}).decode("utf-8", "replace")
+        return hi_direct_details_from_source(org, source, url)
+    except Exception:
+        # A missing direct URL is not a completed no-match search. The existing
+        # EIN-first/name-fallback browser workflow remains the fallback.
+        return None
 
 def search_hi_precise(page, org):
     url = "https://charity.ehawaii.gov/charity/new-search.html"
@@ -17851,7 +18956,7 @@ def search_wi_backend_browser_fallback(org, max_seconds: float | None = None, pr
         browser = None
         context = None
         try:
-            browser = p.chromium.launch(headless=True)
+            browser = launch_lookup_browser(p, headless=True)
             context = browser.new_context(user_agent=BROWSER_USER_AGENT, locale="en-US")
             configure_browser_context(context)
             page = context.new_page()
@@ -17944,39 +19049,71 @@ def enrich_registration_date_sources(result, final_status=None, lookup_started=N
     """Optional date-only read after status is settled; failures cannot alter it.
 
     Florida's existing Check-A-Charity source omits issuance. Its separate public
-    license lookup exposes it using the SAME accepted CH number. Two requests,
-    six seconds total at most, no retry or new identity/matching decision.
+    license lookup exposes it using the SAME accepted CH number. A bounded
+    transport recovery never changes the accepted organization or its status.
     """
     if (getattr(result, "state", "") != "FL" or not registration_date_result_confirmed(result, final_status)
             or curl_requests is None or not registration_date_budget_available(lookup_started)):
+        return
+    if fl_business_lookup_enabled() and getattr(result, "_cc_fl_business_source_verified", False):
         return
     identifier = str(getattr(result, "matched_registry_identifier", "") or "")
     if not re.fullmatch(r"CH\d+", identifier):
         return
     url = "https://csapp.fdacs.gov/CSPublicApp/BusinessSearch/BusinessSearch.aspx"
-    date_deadline = time.monotonic() + 6.0
+    # The optional date gets at most 12 seconds, still inside the state's
+    # existing budget. It may recover one transient transport failure.
+    remaining = 12.0 if lookup_started is None else max(0.0, min(
+        BATCH_FANOUT_STATE_TIMEOUT_SECONDS, BATCH_STATE_LOOKUP_TIMEOUT_SECONDS,
+        SINGLE_STATE_OVERFLOW_TIMEOUT_SECONDS) - (time.perf_counter()-lookup_started))
+    date_deadline = time.monotonic() + min(12.0, remaining)
+    diagnostics = result.registration_date_diagnostics = []
+    started = time.monotonic()
+    step = "session"
+    response = None
     try:
         with curl_requests.Session(impersonate="chrome136") as session:
-            response = session.get(url, timeout=3)
+            step = "form"
+            response = session.get(url, timeout=min(6.0, max(.001, date_deadline-time.monotonic())))
             response.raise_for_status()
             fields = html_hidden_inputs(response.text)
             if "__VIEWSTATE" not in fields:
+                diagnostics.append({"transport": "curl", "step": step, "reason": "FORM_INCOMPLETE"})
                 return
             fields.update({"ctl00$cpMainContent$LicenseTb": identifier, "ctl00$cpMainContent$SingleSearchBt": "Search"})
-            response = session.post(url, data=fields, timeout=3)
+            step = "credential"
+            if time.monotonic() >= date_deadline:
+                raise TimeoutError("Florida optional registration-date deadline reached")
+            # Let slow form/credential responses finish instead of restarting
+            # after three seconds. The total date allowance is still 12s.
+            response = session.post(url, data=fields, timeout=min(6.0, date_deadline-time.monotonic()))
             response.raise_for_status()
+            if time.monotonic() >= date_deadline:
+                raise TimeoutError("Florida optional registration-date deadline reached")
             result._cc_registration_date_evidence = fl_registration_issue_evidence(response.text, identifier, result.matched_registry_name)
+            diagnostics.append({"transport": "curl", "step": step,
+                "reason": "CONFIRMED" if result._cc_registration_date_evidence else "DATE_EVIDENCE_UNCONFIRMED",
+                "seconds": round(time.monotonic()-started, 3)})
     except Exception as exc:
         # No status/comment change and no failure propagated to the primary lookup.
         result._cc_registration_date_evidence = {}
-        if getattr(exc, "code", None) == 60:  # curl certificate verification failure only.
+        code = getattr(exc, "code", None)
+        status = getattr(response, "status_code", None)
+        recoverable = (code in {6, 7, 28, 35, 52, 55, 56, 60} or isinstance(exc, (TimeoutError, OSError))
+                       or status in {408, 429, 500, 502, 503, 504})
+        diagnostics.append({"transport": "curl", "step": step, "reason": type(exc).__name__,
+            "curl_code": code, "http_status": status, "seconds": round(time.monotonic()-started, 3)})
+        if recoverable and date_deadline-time.monotonic() >= 1.0:
             result._cc_registration_date_evidence = fl_verified_registration_issue(
-                identifier, result.matched_registry_name, date_deadline)
+                identifier, result.matched_registry_name, date_deadline, diagnostics)
 
 
-def fl_verified_registration_issue(identifier, selected_name, deadline):
-    """Recover the existing optional date read without extending its six seconds."""
+def fl_verified_registration_issue(identifier, selected_name, deadline, diagnostics=None):
+    """One fresh, TLS-verified optional date read within its remaining deadline."""
     url = "https://csapp.fdacs.gov/CSPublicApp/BusinessSearch/BusinessSearch.aspx"
+    diagnostics = diagnostics if diagnostics is not None else []
+    started = time.monotonic()
+    step = "form"
     try:
         opener = urllib.request.build_opener(
             urllib.request.HTTPSHandler(context=fl_verified_ssl_context()), FloridaNoRedirect(),
@@ -17987,18 +19124,37 @@ def fl_verified_registration_issue(identifier, selected_name, deadline):
                 raise TimeoutError("Florida optional registration-date deadline reached")
             request = urllib.request.Request(url, data=data, headers={"User-Agent": BROWSER_USER_AGENT,
                 "Accept-Encoding": "identity"})
-            with opener.open(request, timeout=min(3.0, remaining)) as response:
-                body = response.read(2_000_001)
-                if len(body) > 2_000_000 or time.monotonic() >= deadline:
+            with opener.open(request, timeout=min(4.0, remaining)) as response:
+                chunks, size = [], 0
+                while True:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("Florida optional registration-date deadline reached")
+                    chunk = response.read1(min(65536, 2_000_001-size))
+                    if not chunk:
+                        break
+                    chunks.append(chunk); size += len(chunk)
+                    if size > 2_000_000:
+                        raise ValueError("Incomplete Florida optional registration-date read")
+                declared = response.headers.get("Content-Length")
+                if (time.monotonic() >= deadline or declared and
+                        (not declared.isdigit() or int(declared) != size)):
                     raise ValueError("Incomplete Florida optional registration-date read")
-                return body.decode("utf-8")
+                return b"".join(chunks).decode("utf-8")
         fields = html_hidden_inputs(read())
         if "__VIEWSTATE" not in fields:
+            diagnostics.append({"transport": "verified_tls", "step": step, "reason": "FORM_INCOMPLETE"})
             return {}
         fields.update({"ctl00$cpMainContent$LicenseTb": identifier, "ctl00$cpMainContent$SingleSearchBt": "Search"})
+        step = "credential"
         source = read(urlencode(fields).encode("utf-8"))
-        return fl_registration_issue_evidence(source, identifier, selected_name)
-    except Exception:
+        evidence = fl_registration_issue_evidence(source, identifier, selected_name)
+        diagnostics.append({"transport": "verified_tls", "step": step,
+            "reason": "CONFIRMED" if evidence else "DATE_EVIDENCE_UNCONFIRMED",
+            "seconds": round(time.monotonic()-started, 3)})
+        return evidence
+    except Exception as exc:
+        diagnostics.append({"transport": "verified_tls", "step": step, "reason": type(exc).__name__,
+            "seconds": round(time.monotonic()-started, 3)})
         return {}  # Optional dates cannot alter a confirmed registration result.
 
 
@@ -18408,6 +19564,12 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         address = getattr(result, "address_evidence", {}) or getattr(result, "identity_evidence", {}).get("address", {})
         if address.get("cross_state_records") and address.get("basis") not in data["comments"]:
             data["comments"] += " " + address["basis"] + " Compliance status comes from this state's own registry record."
+    if result.state == "FL" and result.success and getattr(result, "identity_anchor", "") == "cross_state_name_address":
+        address = getattr(result, "address_evidence", {})
+        if address.get("basis"):
+            data["comments"] += " " + address["basis"] + " Compliance status comes from Florida's own registry record."
+    if result.state == "FL" and getattr(result, "reason_code", "") == "FL_ALIAS_IDENTITY_UNCONFIRMED":
+        data["comments"] = result.source_note + " Registration status remains unconfirmed; this does not establish non-registration."
     enrich_registration_date_sources(result, data["status"], lookup_started)
     data["evidence_url"] = ""
     data["lookup_seconds"] = round(time.perf_counter() - lookup_started, 2)
@@ -18441,7 +19603,9 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
         "wi_reviewed_identity_evidence",
         "wi_identity_diagnostics",
         "identity_review_evidence",
+        "registration_date_diagnostics",
         "source_truth_conflict",
+        "verified_registry_ein",
     ]:
         evidence_value = getattr(result, evidence_key, None)
         if evidence_value is not None:
@@ -18510,13 +19674,20 @@ def debug_trace_for_result(result, org, state: str, interpreted_status: str) -> 
     if matched_name:
         matched_identifier = getattr(result, "matched_registry_identifier", "") or ""
         candidate_ein = matched_identifier if normalized_ein_key(matched_identifier) == normalized_ein_key(getattr(org, "ein", "")) else ""
+        verified_ein = getattr(result, "verified_registry_ein", "")
+        if state in {"WA", "SC"} and verified_ein and normalized_ein_key(verified_ein) == normalized_ein_key(getattr(org, "ein", "")):
+            candidate_ein = verified_ein
         decision = score_candidate(
             getattr(org, "organization_name", ""),
             getattr(org, "ein", ""),
             {"name": matched_name, "ein": candidate_ein},
         )
+        if state in {"WA", "SC"} and verified_ein and normalized_ein_key(verified_ein) == normalized_ein_key(getattr(org, "ein", "")):
+            decision = {"decision": "accepted", "reason": "MATCH_EIN_EXACT", "score": max(100, decision["score"])}
         if mn_confirmed_alias_evidence(result):
             decision = {"decision": "accepted", "reason": "MATCH_STATE_CONFIRMED_ALTERNATE_NAME", "score": 80}
+        if state == "DC":
+            decision = dc_corroborated_result_match(result) or decision
         status_reason_code = getattr(result, "reason_code", "") or reason_code_for_result(result, interpreted_status)
         if (
             decision.get("decision") == "rejected"
@@ -18632,7 +19803,9 @@ def nj_loaded_detail_body(page, org, wait_seconds: float = 0.0) -> str:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return ""
-        time.sleep(min(0.25, remaining))
+        # Keep Playwright dispatching frame-navigation events while the detail
+        # document loads. A Python sleep leaves page.frames at about:blank.
+        page.wait_for_timeout(min(250, remaining * 1000))
 
 
 def nj_missing_period_result(result) -> bool:
@@ -18671,7 +19844,90 @@ def nj_reload_detail_body(page, org) -> str:
         return ""
 
 
+def nj_selected_public_detail(page, target, org) -> str:
+    """Read the public response for an already-scored exact-EIN row.
+
+    This is the same registration selection used by the public detail modal.
+    Ambiguous, incomplete or changed responses keep the existing browser path.
+    No results are shared between pages, organizations or lookup jobs.
+    """
+    if (getattr(org, "evidence_mode", False) or CAPTURE_EVIDENCE_SCREENSHOTS
+            or CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT):
+        return ""
+    try:
+        digits = canonical_ein_digits(org.ein)
+        if len(digits) != 9:
+            return ""
+        row = target.evaluate('''element => {
+            const row = element.closest('[role="row"]');
+            if (!row) return null;
+            const field = key => row.querySelector('[data-automation-key="' + key + '"]')?.innerText || '';
+            return {name: field('name'), ein: field('crsm_federalein'), credential: field('accountnumber')};
+        }''')
+        if not isinstance(row, dict) or canonical_ein_digits(row.get("ein", "")) != digits:
+            return ""
+        name, credential = row.get("name", "").strip(), row.get("credential", "").strip()
+        if not name or not re.fullmatch(r"CH\d+", credential):
+            return ""
+        deadline = time.monotonic() + 6.0
+
+        def get(path: str, content_type: str) -> str:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("NJ public detail allowance exhausted")
+            response = page.request.get("https://charportal.dca.njoag.gov" + path,
+                timeout=max(1, min(4000, int(remaining * 1000))), max_redirects=0)
+            try:
+                parsed = urlparse(response.url)
+                if (response.status != 200 or parsed.scheme != "https"
+                        or parsed.netloc != "charportal.dca.njoag.gov"
+                        or parsed.path != path.split("?", 1)[0]
+                        or content_type not in response.headers.get("content-type", "").lower()):
+                    raise ValueError("NJ public detail response changed or incomplete")
+                body = response.body()
+                if len(body) > 1_000_000:
+                    raise ValueError("NJ public detail exceeded the bounded response size")
+                return body.decode("utf-8")
+            finally:
+                response.dispose()
+
+        selection = json.loads(get("/retrieveRegistration/?" + urlencode({"name": name, "chNum": credential}), "json"))
+        if (selection.get("charityName", "").strip().casefold() != name.casefold()
+                or not str(selection.get("numberOfResults", "")).isdigit()
+                or int(selection["numberOfResults"]) < 1):
+            return ""
+        # A count alone cannot prove identity. Bind the returned registration
+        # to the already selected row with both its EIN and CH identifier.
+        identifiers = [selection.get(k, "") for k in ("accountId", "charityRegistrationId")]
+        if not all(isinstance(value, str) and re.fullmatch(
+                r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", value) for value in identifiers):
+            return ""
+        body = get("/CHR-Public-Details-Page/?" + urlencode(dict(zip(("id", "rid"), identifiers))), "html")
+        if not re.search(r"</html>\s*(?:<!--[\s\S]*?-->\s*)*$", body, re.I):
+            return ""
+        fields = {}
+        for tag in re.findall(r"<input\b[^>]*>", body, re.I):
+            attrs = {key.lower(): html.unescape(value) for key, _, value in
+                re.findall(r'''\b(id|value)\s*=\s*(["'])(.*?)\2''', tag, re.I)}
+            if attrs.get("id") in {"crsm_federalein", "accountnumber"}:
+                fields.setdefault(attrs["id"], []).append(attrs.get("value", ""))
+        if (fields.get("crsm_federalein") != [digits] or fields.get("accountnumber") != [credential]
+                or not nj_filing_context_from_body(body).get("computed_due_date")):
+            return ""
+        return body
+    except Exception:
+        return ""
+
+
 def nj_detail_body(page, org) -> str:
+    if getattr(page, "_cc_nj_query_incomplete", False) is True:
+        return ""  # Never recover status from a prior query's detail or grid.
+    cache_key = (page.url, canonical_ein_digits(org.ein), org.organization_name)
+    cached = getattr(page, "_cc_nj_selected_detail", None)
+    if (isinstance(cached, tuple) and len(cached) == 2 and cached[0] == cache_key
+            and not getattr(org, "evidence_mode", False)
+            and not CAPTURE_EVIDENCE_SCREENSHOTS and not CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT):
+        return cached[1]
     pieces = [registry_page_body(page)]
     loaded_detail = nj_loaded_detail_body(page, org)
     if loaded_detail:
@@ -18743,6 +19999,11 @@ def nj_detail_body(page, org) -> str:
 
     if candidates:
         candidates.sort(key=lambda item: item[0], reverse=True)
+        public_detail = nj_selected_public_detail(page, candidates[0][1], org)
+        if public_detail:
+            body = "\n".join([*pieces, public_detail])
+            page._cc_nj_selected_detail = (cache_key, body)
+            return body
         try:
             candidates[0][1].click(timeout=5000)
             clicked = True
@@ -18934,44 +20195,591 @@ def nj_next_due_date_from_body(body: str) -> date | None:
     return context.get("computed_due_date")
 
 
+def nj_completed_query_rows(request, query):
+    """Bind a fully received portal grid to the exact search that produced it."""
+    try:
+        parsed = urllib.parse.urlsplit(request.url)
+        if (parsed.scheme != "https" or parsed.hostname != "charportal.dca.njoag.gov"
+                or not parsed.path.startswith("/_services/entity-grid-data.json/")
+                or request.method != "POST"):
+            return None
+        sent = request.post_data_json
+        if (not isinstance(sent, dict) or sent.get("search") != query or sent.get("page") != 1
+                or any(sent.get(k) for k in ("filter", "metaFilter", "odataFilterQuery", "nlSearchFilter"))):
+            return None
+        response = request.response()
+        if (response.url != request.url or response.status != 200
+                or "json" not in response.headers.get("content-type", "").lower()):
+            return None
+        data = response.json()
+        records = data.get("Records") if isinstance(data, dict) else None
+        count = data.get("ItemCount") if isinstance(data, dict) else None
+        if (not isinstance(records, list) or type(count) is not int or count < len(records)
+                or data.get("PageNumber") != 1 or type(data.get("MoreRecords")) is not bool
+                or (data["MoreRecords"] is False and count != len(records))):
+            return None
+        if not records:
+            return [] if count == 0 and data["MoreRecords"] is False else None
+        rows = []
+        for record in records:
+            attributes = record.get("Attributes") if isinstance(record, dict) else None
+            if not isinstance(attributes, list):
+                return None
+            values = {a.get("Name"): a.get("DisplayValue") for a in attributes if isinstance(a, dict)}
+            row = tuple(re.sub(r"\s+", " ", str(values.get(k) or "")).strip() for k in ("name", "accountnumber"))
+            if not all(row):
+                return None
+            evidence = tuple(re.sub(r"\s+", " ", str(values.get(k) or "")).strip() for k in
+                             ("crsm_federalein", "crsm_filestanding", "crsm_addressline1",
+                              "crsm_mailingcity", "crsm_mailingstate", "crsm_mailingzip"))
+            rows.append(row + tuple(value for value in evidence if value))
+        return rows
+    except Exception:
+        return None
+
+
+def nj_search_body(page, query):
+    """Reuse only this page's ready form; never treat a prior grid as a new result."""
+    page._cc_nj_query_incomplete = True
+    url = "https://charportal.dca.njoag.gov/Charity-Registration/CHR-Public-Search-Page/"
+    selector = '#SearchBox28, input[placeholder="Search"], input[aria-label*="partial text" i], input[id^="SearchBox"], input[type="search"]'
+    box = page.locator(selector).first
+    ready = getattr(page, "_cc_nj_search_ready", False) is True and page.url == url
+    page._cc_nj_search_ready = False
+    if ready:
+        try:
+            if page.locator('#modalIframe').is_visible():
+                page.locator('[role="dialog"]:has(#modalIframe) button[title="Close"]').click(timeout=1000)
+                page.locator('#modalIframe').wait_for(state="hidden", timeout=1000)
+            ready = box.is_visible()
+        except Exception:
+            ready = False
+    if not ready:
+        page.goto(url, wait_until="domcontentloaded", timeout=60000)
+    box.wait_for(state="visible", timeout=10000)
+    started_requests = set()
+    completed = []
+
+    def on_request(request):
+        started_requests.add(request)
+
+    def on_finished(request):
+        if request not in started_requests:
+            return
+        rows = nj_completed_query_rows(request, query)
+        if rows is not None:
+            completed.append(rows)
+
+    page.on("request", on_request)
+    page.on("requestfinished", on_finished)
+    try:
+        box.fill(query)
+        page.keyboard.press("Enter")
+        deadline = time.monotonic() + 12
+        while time.monotonic() < deadline:
+            if completed:
+                rows = completed[-1]
+                grid = page.locator('.public-search-grid')
+                text = re.sub(r"\s+", " ", grid.inner_text(timeout=1000))
+                rendered_rows = [re.sub(r"\s+", " ", value) for value in grid.locator('[role="row"]').all_inner_texts()]
+                # Read the page only after it renders this query's completed response.
+                visible = (bool(re.search(r"no records(?: to show| found)?", text, re.I)) if not rows
+                           else all(any(all(value in rendered for value in row) for rendered in rendered_rows) for row in rows))
+                if visible and box.input_value() == query:
+                    page._cc_nj_search_ready = True
+                    page._cc_nj_query_incomplete = False
+                    return page.locator("body").inner_text(timeout=1000)
+            page.wait_for_timeout(100)
+        return None
+    finally:
+        page.remove_listener("request", on_request)
+        page.remove_listener("requestfinished", on_finished)
+
+
+def nj_public_query_enabled() -> bool:
+    return (APP_VERSION.endswith("-performance-lab")
+            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and os.environ.get("CE_LAB_NJ_PUBLIC_QUERY") == "1")
+
+
+class NJCompletedPublicQueries:
+    """Private progress from one lookup's completed, unfiltered public queries."""
+    def __init__(self, ein):
+        self.ein = ein
+        self.created = time.monotonic()
+        self.queries = set()
+
+
+def nj_zero_reuse_enabled() -> bool:
+    return (nj_public_query_enabled()
+            and os.environ.get("CE_LAB_NJ_ZERO_REUSE") == "1"
+            and not CAPTURE_EVIDENCE_SCREENSHOTS
+            and not CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT
+            and LAB_LOOKUP_MODE_CONTEXT.get() == "sales")
+
+
+def nj_name_fallback_queries(org):
+    return build_search_queries(
+        org.organization_name,
+        org.ein,
+        include_ein=False,
+        include_ein_aliases=True,
+        include_name_segments=True,
+        include_compact_legal_suffixes=True,
+        include_leading_article_variants=True,
+        max_queries=int(os.environ.get("CE_NJ_NAME_FALLBACK_MAX_VARIANTS", "10")),
+    )
+
+
+def nj_complete_public_zero(data) -> bool:
+    return (isinstance(data, dict) and type(data.get("ItemCount")) is int
+            and data["ItemCount"] == 0 and data.get("Records") == []
+            and data.get("MoreRecords") is False and type(data.get("PageNumber")) is int
+            and data["PageNumber"] == 1
+            and not any(data.get(k) for k in ("Error", "error", "ErrorMessage", "errorMessage"))
+            and data.get("Success") is not False)
+
+
+def nj_complete_other_ein_rows(data, ein) -> bool:
+    """A complete name response whose every row explicitly identifies another EIN."""
+    if (not isinstance(data, dict) or type(data.get("ItemCount")) is not int
+            or not 1 <= data["ItemCount"] <= 10
+            or not isinstance(data.get("Records"), list)
+            or len(data["Records"]) != data["ItemCount"]
+            or data.get("MoreRecords") is not False
+            or type(data.get("PageNumber")) is not int or data["PageNumber"] != 1
+            or any(data.get(k) for k in ("Error", "error", "ErrorMessage", "errorMessage"))
+            or data.get("Success") is False or not re.fullmatch(r"\d{9}", ein or "")):
+        return False
+    for row in data["Records"]:
+        attrs = row.get("Attributes") if isinstance(row, dict) else None
+        if not isinstance(attrs, list) or not all(isinstance(a, dict) for a in attrs):
+            return False
+        fields = {}
+        for key in ("name", "accountnumber", "crsm_federalein"):
+            values = [a for a in attrs if a.get("Name") == key]
+            if len(values) != 1 or not isinstance(values[0].get("DisplayValue"), str):
+                return False
+            fields[key] = values[0]["DisplayValue"].strip()
+            raw = values[0].get("Value")
+            if raw is not None and raw != fields[key]:
+                return False
+        other = fields["crsm_federalein"]
+        if (not fields["name"] or not fields["accountnumber"]
+                or not re.fullmatch(r"\d{2}-?\d{7}", other)
+                or canonical_ein_digits(other) in (ein, "000000000")):
+            return False
+    return True
+
+
+def nj_same_lookup_zero_queries(org):
+    progress = getattr(org, "_cc_nj_completed_public_queries", None)
+    if (nj_zero_reuse_enabled() and not getattr(org, "evidence_mode", False)
+            and isinstance(progress, NJCompletedPublicQueries)
+            and progress.ein == canonical_ein_digits(org.ein)
+            and 0 <= time.monotonic() - progress.created < 60):
+        return set(progress.queries)
+    return set()
+
+
+def nj_complete_grid_enabled() -> bool:
+    return nj_zero_reuse_enabled() and os.environ.get("CE_LAB_NJ_COMPLETE_GRID") == "1"
+
+
+def nj_complete_grid_excludes_org(data, org) -> bool:
+    """Exclude only a complete fresh grid, using the master identity rules.
+
+    A missing EIN is not a mismatch. Such a row can be excluded only when
+    both master name checks reject it against the legal name and known aliases.
+    Any matching/unknown/malformed identity leaves the original browser path.
+    """
+    ein = canonical_ein_digits(org.ein)
+    if (not re.fullmatch(r"\d{9}", ein) or not isinstance(data, dict)
+            or type(data.get("ItemCount")) is not int or not 1 <= data["ItemCount"] <= 50
+            or not isinstance(data.get("Records"), list)
+            or len(data["Records"]) != data["ItemCount"]
+            or data.get("MoreRecords") is not False
+            or type(data.get("PageNumber")) is not int or data["PageNumber"] != 1
+            or any(data.get(k) for k in ("Error", "error", "ErrorMessage", "errorMessage"))
+            or data.get("Success") is False):
+        return False
+    targets = organization_match_target_variants(org.organization_name, org.ein)
+    if not targets:
+        return False
+    credentials = set()
+    for row in data["Records"]:
+        attrs = row.get("Attributes") if isinstance(row, dict) else None
+        if not isinstance(attrs, list) or not all(isinstance(a, dict) for a in attrs):
+            return False
+        fields = {}
+        for key in ("name", "accountnumber", "crsm_federalein"):
+            values = [a for a in attrs if a.get("Name") == key]
+            if not values and key == "crsm_federalein":
+                fields[key] = ""
+                continue
+            if len(values) != 1 or not isinstance(values[0].get("DisplayValue"), str):
+                return False
+            value = values[0]["DisplayValue"].strip()
+            raw = values[0].get("Value")
+            if raw is not None and raw != value:
+                return False
+            fields[key] = value
+        name, credential, other = [fields[k] for k in ("name", "accountnumber", "crsm_federalein")]
+        if (not useful_registry_name(name) or not re.fullmatch(r"CH\d+", credential)
+                or credential in credentials):
+            return False
+        credentials.add(credential)
+        if other:
+            if (not re.fullmatch(r"\d{2}-?\d{7}", other)
+                    or canonical_ein_digits(other) in (ein, "000000000")):
+                return False
+        elif (target_name_score(name, targets) >= 0
+                or registry_name_is_safe_against_targets(name, targets, org.organization_name, org.ein)):
+            return False
+    return True
+
+
+def nj_public_request_timeout(request_path, remaining):
+    """Finish the selected detail within the existing overall request allowance."""
+    patient_detail = (nj_public_query_enabled()
+                      and LAB_LOOKUP_MODE_CONTEXT.get() == "sales"
+                      and os.environ.get("CE_LAB_NJ_PATIENT_DETAIL") == "1"
+                      and request_path.startswith("/CHR-Public-Details-Page/?"))
+    return min(10.0 if patient_detail else 4.0, remaining)
+
+
+def search_nj_public_details(org):
+    """Fresh public EIN query and detail; only one fully confirmed record qualifies.
+
+    Uses the anonymous portal's observed query protocol with its fresh session
+    and request-verification token. No organization results or tokens are shared.
+    Ambiguous, incomplete or changed responses keep the existing browser path.
+    An explicit lab Sales opt-in may also finish the unchanged no-match path
+    after every planned EIN/name query has completed without a qualifying row.
+    """
+    if (not nj_public_query_enabled() or curl_requests is None
+            or getattr(org, "evidence_mode", False) or CAPTURE_EVIDENCE_SCREENSHOTS
+            or CAPTURE_LIGHTWEIGHT_SOURCE_SNAPSHOT):
+        return None
+    ein = canonical_ein_digits(org.ein)
+    if len(ein) != 9:
+        return None
+    progress = NJCompletedPublicQueries(ein) if nj_zero_reuse_enabled() else None
+    org._cc_nj_completed_public_queries = progress
+    base = "https://charportal.dca.njoag.gov"
+    path = "/Charity-Registration/CHR-Public-Search-Page/"
+    view = "Portal - Charity - Public Search Subgrid"
+    # Six fresh, identity-checked responses can take just over twelve seconds
+    # under load. Finish that existing request sequence instead of discarding
+    # its final document and restarting in the browser. The workflow's own
+    # queue-inclusive Sales cutoff still terminates this entire task at 60s.
+    started = time.monotonic()
+    deadline = started + 18.0
+
+    def input_values(source, key, expected):
+        values = []
+        for tag in re.findall(r"<input\b[^>]*>", source, re.I):
+            attrs = {k.lower(): html.unescape(v) for k, _, v in
+                re.findall(r'''\b(id|name|value)\s*=\s*(["'])(.*?)\2''', tag, re.I)}
+            if attrs.get(key) == expected:
+                values.append(attrs.get("value", ""))
+        return values
+
+    try:
+        with curl_requests.Session() as session:
+            def fetch(request_path, content_type, payload=None, token=""):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("NJ public query allowance exhausted")
+                assert request_path.startswith("/") and not request_path.startswith("//")
+                headers = {"Accept": "application/json" if content_type == "json" else "text/html"}
+                if payload is not None:
+                    headers.update({"__RequestVerificationToken": token,
+                        "X-Requested-With": "XMLHttpRequest", "Origin": base, "Referer": base + path})
+                response = session.request("POST" if payload is not None else "GET", base + request_path,
+                    json=payload, headers=headers, timeout=nj_public_request_timeout(request_path, remaining), allow_redirects=False,
+                    verify=True, stream=True)
+                try:
+                    if (response.status_code != 200 or response.url != base + request_path
+                            or content_type not in response.headers.get("Content-Type", "").lower()):
+                        raise ValueError("NJ public query response changed or incomplete")
+                    pieces, size = [], 0
+                    maximum_bytes = (2_000_000 if nj_complete_grid_enabled() and payload is not None
+                                     and payload.get("pageSize") == 50 else 1_000_000)
+                    for chunk in response.iter_content():
+                        size += len(chunk)
+                        if size > maximum_bytes or time.monotonic() >= deadline:
+                            raise ValueError("NJ public query response exceeded its allowance")
+                        pieces.append(chunk)
+                    return b"".join(pieces).decode("utf-8")
+                finally:
+                    response.close()
+
+            source = fetch(path, "html")
+            if not re.search(r"</html>\s*(?:<!--[\s\S]*?-->\s*)*$", source, re.I):
+                return None
+            if re.search(r"verify you are human|human verification|access denied|too many requests", html_to_text(source), re.I):
+                return None
+            cfg = json.loads(fetch("/_services/portal/GetListViewConfiguration/" + quote(view, safe=""), "json"))
+            layouts = cfg.get("layouts")
+            if cfg.get("filterenabled") is not False or not isinstance(layouts, list) or len(layouts) != 1:
+                return None
+            layout = layouts[0]
+            config = layout.get("Configuration", {})
+            if (layout.get("ViewName") != view or config.get("ViewId") != cfg.get("defaultViewId")
+                    or config.get("EntityName") != "account" or config.get("Search", {}).get("Enabled") is not True
+                    or not {"name", "accountnumber", "crsm_federalein", "crsm_filestanding"}.issubset(
+                        {c.get("LogicalName") for c in layout.get("Columns", []) if isinstance(c, dict)})):
+                return None
+            query_path = cfg.get("getDataUrl", "")
+            secure_config = layout.get("Base64SecureConfiguration")
+            if (not isinstance(query_path, str) or not re.fullmatch(
+                    r"/_services/entity-grid-data\.json/[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", query_path)
+                    or not isinstance(secure_config, str) or not secure_config or len(secure_config) > 100_000):
+                return None
+            tokens = input_values(fetch("/_layout/tokenhtml", "html"), "name", "__RequestVerificationToken")
+            if len(tokens) != 1 or not tokens[0]:
+                return None
+            payload = {"base64SecureConfiguration": secure_config, "sortExpression": "", "search": ein,
+                "page": 1, "pageSize": 10, "filter": None, "metaFilter": "", "timezoneOffset": 0,
+                "customParameters": [], "odataFilterQuery": "", "nlSearchFilter": ""}
+            data = json.loads(fetch(query_path, "json", payload, tokens[0]))
+            if progress is not None and nj_complete_public_zero(data):
+                if nj_complete_grid_enabled():
+                    # Finish the bounded fresh name plan before paying for a
+                    # browser restart. This is measured from the original start;
+                    # the queue still enforces its unchanged total Sales cutoff.
+                    deadline = started + 30.0
+                progress.queries.add(ein)
+                planned_queries = nj_name_fallback_queries(org)
+                for query in planned_queries:
+                    if query in progress.queries:
+                        continue
+                    name_payload = {**payload, "search": query}
+                    if nj_complete_grid_enabled():
+                        name_payload["pageSize"] = 50
+                    named = json.loads(fetch(query_path, "json", name_payload, tokens[0]))
+                    if not (nj_complete_public_zero(named) or nj_complete_other_ein_rows(named, ein)
+                            or (nj_complete_grid_enabled() and nj_complete_grid_excludes_org(named, org))):
+                        break  # Positive/ambiguous/unusable queries keep browser matching.
+                    progress.queries.add(query)
+                # The unchanged fallback can finish without opening a browser
+                # only when this lookup has already completed its entire plan.
+                if {ein, *planned_queries}.issubset(nj_same_lookup_zero_queries(org)):
+                    result = search_nj_with_name_fallback(None, org)
+                    return result, " ".join([result.raw_status_text, result.source_note])
+                # Any unresolved query still requires the original browser path.
+                return None
+            records = data.get("Records")
+            if (type(data.get("ItemCount")) is not int or data["ItemCount"] != 1
+                    or data.get("MoreRecords") is not False or data.get("PageNumber") != 1
+                    or not isinstance(records, list) or len(records) != 1):
+                return None
+            attrs = records[0].get("Attributes")
+            if not isinstance(attrs, list):
+                return None
+            fields = {}
+            for attribute in attrs:
+                if not isinstance(attribute, dict):
+                    return None
+                key = attribute.get("Name")
+                if key in fields:
+                    return None
+                fields[key] = attribute.get("DisplayValue")
+            name, credential, state_status, found_ein = [fields.get(k) for k in
+                ("name", "accountnumber", "crsm_filestanding", "crsm_federalein")]
+            if (not all(isinstance(v, str) and v.strip() for v in (name, credential, state_status, found_ein))
+                    or canonical_ein_digits(found_ein) != ein or not re.fullmatch(r"CH\d+", credential)):
+                return None
+            selection = json.loads(fetch("/retrieveRegistration/?" + urlencode({"name": name, "chNum": credential}), "json"))
+            if (selection.get("charityName", "").strip().casefold() != name.strip().casefold()
+                    or not str(selection.get("numberOfResults", "")).isdigit()
+                    or int(selection["numberOfResults"]) < 1):
+                return None
+            identifiers = [selection.get(k, "") for k in ("accountId", "charityRegistrationId")]
+            if not all(isinstance(v, str) and re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", v)
+                       for v in identifiers):
+                return None
+            detail = fetch("/CHR-Public-Details-Page/?" + urlencode(dict(zip(("id", "rid"), identifiers))), "html")
+            if (not re.search(r"</html>\s*(?:<!--[\s\S]*?-->\s*)*$", detail, re.I)
+                    or input_values(detail, "id", "crsm_federalein") != [ein]
+                    or input_values(detail, "id", "accountnumber") != [credential]
+                    or not nj_filing_context_from_body(detail).get("computed_due_date")):
+                return None
+            body = f"Charity Name: {name}\nStatus {state_status} Federal EIN {ein}\nNJ Registration # {credential}\n" + detail
+            result = checker.StateResult(org.organization_name, org.ein, "NJ", checker.STATUS_UNKNOWN, base + path)
+            # Preserve the same EIN identity anchor as the browser result. Both
+            # the unique row and its selected detail have confirmed this EIN.
+            result.matched_registry_identifier = ein
+            return nj_result_from_body(None, org, result, body, ein), body
+    except Exception:
+        return None
+
+
+def nj_result_from_body(page, org, result, body, ein_digits):
+    status = ""
+    status_patterns = [
+        ("Noncompliant", r"\bnon\W*compliant\b"),
+        ("Exempt", r"\bexempt\b"),
+        ("Delinquent", r"\bdelinquent\b"),
+        ("Retired", r"\bretired\b"),
+        ("Withdrawn", r"\bwithdrawn\b"),
+        ("Revoked", r"\brevoked\b"),
+        ("Suspended", r"\bsuspended\b"),
+        ("Expired", r"\bexpired\b"),
+        ("Pending", r"\bpending\b"),
+        ("Compliant", r"\bcompliant\b"),
+        ("Active", r"\bactive\b"),
+        ("Current", r"\bcurrent\b"),
+    ]
+    if ein_digits and ein_line_has_registry_pattern(body, org.ein, r"\bnon\W*compliant\b"):
+        status = "Noncompliant"
+    if not status and ein_digits and ein_digits in re.sub(r"\D", "", body):
+        compact_body = re.sub(r"\s+", " ", body)
+        for match in re.finditer(r"\bnon\W*compliant\b", compact_body, re.I):
+            start = max(0, match.start() - 260)
+            end = min(len(compact_body), match.end() + 260)
+            window = compact_body[start:end]
+            if ein_digits in re.sub(r"\D", "", window):
+                status = "Noncompliant"
+                break
+    if not status and ein_digits and ein_digits in re.sub(r"\D", "", body):
+        try:
+            rows = page.locator("tr")
+            best_status = ""
+            best_score = (-999, -999, -999)
+            for i in range(min(rows.count(), 80)):
+                row_text = re.sub(r"\s+", " ", rows.nth(i).inner_text(timeout=1500)).strip()
+                if ein_digits not in re.sub(r"\D", "", row_text):
+                    continue
+                row_status = ""
+                for label, pattern in status_patterns:
+                    if re.search(pattern, row_text, re.I):
+                        row_status = label
+                        break
+                if not row_status:
+                    continue
+                try:
+                    name_priority = checker.name_match_priority(row_text, org.organization_name)
+                except Exception:
+                    name_priority = -1
+                status_priority = checker.active_row_priority(row_text)
+                if (name_priority == 5 or ein_digits in re.sub(r"\D", "", row_text)) and status_priority in {70, 85}:
+                    status_priority += 100
+                row_score = (name_priority, status_priority, -i)
+                if row_score > best_score:
+                    best_score = row_score
+                    best_status = row_status
+            if best_status:
+                status = best_status
+        except Exception:
+            pass
+    if not status and ein_digits and ein_digits in re.sub(r"\D", "", body):
+        body_candidates = []
+        compact_body = re.sub(r"\s+", " ", body)
+        for label, pattern in status_patterns:
+            for match in re.finditer(pattern, compact_body, re.I):
+                start = max(0, match.start() - 220)
+                end = min(len(compact_body), match.end() + 220)
+                window = compact_body[start:end]
+                if ein_digits not in re.sub(r"\D", "", window):
+                    continue
+                try:
+                    name_priority = checker.name_match_priority(window, org.organization_name)
+                except Exception:
+                    name_priority = -1
+                status_priority = checker.active_row_priority(label)
+                if status_priority in {70, 85}:
+                    status_priority += 100
+                body_candidates.append((status_priority, name_priority, -match.start(), label))
+        if body_candidates:
+            body_candidates.sort(reverse=True)
+            status = body_candidates[0][3]
+    if not status:
+        status_match = re.search(r"Status\s+([A-Za-z][A-Za-z /-]+?)\s+Federal\s+EIN", re.sub(r"\s+", " ", body), re.I)
+        if status_match:
+            status = status_match.group(1).strip()
+    registry_name = useful_registry_name(checker.extract_labeled_value_from_text(body, ["Organization Name", "Charity Name", "Legal Name", "Name"]))
+    if not registry_name and ein_digits:
+        for line in re.split(r"[\r\n]+", body or ""):
+            line_text = re.sub(r"\s+", " ", line).strip()
+            if ein_digits not in re.sub(r"\D", "", line_text):
+                continue
+            registry_name = useful_registry_name(re.split(r"\b(?:Federal\s+EIN|EIN|Status|Registration)\b", line_text, maxsplit=1, flags=re.I)[0])
+            if registry_name:
+                break
+    result.matched_registry_name = registry_name
+    nj_context = nj_filing_context_from_body(body)
+    nj_due_date = nj_context.get("computed_due_date")
+    if (
+        not nj_due_date
+        and re.search(r"\b(compliant|current|active)\b", status or "", re.I)
+        and (not ein_digits or ein_digits in re.sub(r"\D", "", body or ""))
+    ):
+        try:
+            time.sleep(1.0)
+            retry_body = nj_detail_body(page, org)
+            retry_context = nj_filing_context_from_body(retry_body)
+            retry_due_date = retry_context.get("computed_due_date")
+            if retry_due_date:
+                body = retry_body
+                nj_context = retry_context
+                nj_due_date = retry_due_date
+        except Exception:
+            pass
+    result.raw_status_text = status or "Status not found"
+    if nj_due_date:
+        result.raw_status_text = f"{result.raw_status_text} | Next Filing Due: {format_date(nj_due_date)}"
+    if nj_context:
+        if nj_context.get("last_year_on_record"):
+            result.last_year_on_record = nj_context["last_year_on_record"]
+        fiscal_end = nj_context.get("fiscal_year_end")
+        if fiscal_end:
+            result.fiscal_year_end = f"{fiscal_end[0]}/{fiscal_end[1]}"
+        if nj_context.get("next_required_period"):
+            result.next_required_period = format_date(nj_context["next_required_period"])
+        if nj_due_date:
+            result.computed_due_date = format_date(nj_due_date)
+        result.status_reason = "NJ_STATUS_FROM_REGISTRY_FILING_PERIOD"
+        result.source_attempts = [nj_context.get("source_evidence", "NJ registry filing-period evidence parsed.")]
+    if re.search(r"\b(retired|withdrawn|terminated|cancelled|canceled|closed)\b", status, re.I):
+        result.status = "Closed / Withdrawn / Canceled"
+    elif re.search(r"\bnon\W*compliant\b", status, re.I):
+        result.status = "Delinquent"
+    elif nj_due_date and re.search(r"\b(compliant|current|active)\b", status, re.I):
+        result.status = status_from_calendar_date(nj_due_date)
+        result.source_note = "New Jersey raw Status was checked against fiscal-period due-date evidence from the public page."
+    elif re.search(r"\b(compliant|current|active)\b", status, re.I):
+        result.status = checker.STATUS_CURRENT
+        result.raw_status_text = f"{result.raw_status_text} | NJ filing-period evidence not visible"
+        result.source_note = (
+            "New Jersey returned an exact registry status, but CharityClarity did not retrieve a usable "
+            "last accepted fiscal period or due-date section from the public page. CharityClarity returned Current "
+            "based on New Jersey's raw Compliant/Active registry status."
+        )
+        result.source_confidence = "raw_status_without_filing_period_evidence"
+        result.status_reason = "NJ_RAW_COMPLIANT_STATUS_NO_FILING_PERIOD_EVIDENCE"
+    else:
+        result.status = status or checker.STATUS_UNKNOWN
+    if not result.source_note:
+        result.source_note = "New Jersey uses the public search result Status value."
+    result.success = True
+    return result
+
+
 def search_nj_direct(page, org):
     url = "https://charportal.dca.njoag.gov/Charity-Registration/CHR-Public-Search-Page/"
     result = checker.StateResult(org.organization_name, org.ein, "NJ", checker.STATUS_UNKNOWN, url)
+    page._cc_nj_selected_detail = None  # A new search always obtains fresh evidence.
     try:
         ein_digits = re.sub(r"\D", "", org.ein or "")
-        page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        time.sleep(1)
-        input_box = None
-        for selector in [
-            "#SearchBox28",
-            'input[placeholder="Search"]',
-            'input[aria-label*="partial text" i]',
-            'input[id^="SearchBox"]',
-            'input[type="search"]',
-            'input[type="text"]',
-        ]:
-            try:
-                candidate = page.locator(selector).first
-                candidate.wait_for(state="visible", timeout=5000)
-                input_box = candidate
-                break
-            except Exception:
-                continue
-        if not input_box:
-            result.error = "Could not find NJ search box"
+        body = nj_search_body(page, ein_digits or org.organization_name)
+        if body is None:
+            result.status = "Unable to Verify"
+            result.source_note = "New Jersey did not finish the submitted search with a complete, matching response. Registration status could not be confirmed."
+            result.reason_code = "NJ_INCOMPLETE_QUERY_RESPONSE"
+            result.success = False
             return result
-
-        input_box.fill("")
-        input_box.fill(ein_digits or org.organization_name)
-        page.keyboard.press("Enter")
-        body = ""
-        deadline = time.time() + 12
-        while time.time() < deadline:
-            body = page.locator("body").inner_text(timeout=5000)
-            body_digits = re.sub(r"\D", "", body)
-            if (ein_digits and ein_digits in body_digits) or re.search(r"no records found|no records|no matching|0 results", body, re.I):
-                break
-            time.sleep(0.75)
         if re.search(r"no records found|no records|no matching|0 results", body, re.I):
             result.raw_status_text = "No record found"
             result.status = checker.STATUS_NOT_REGISTERED
@@ -18996,161 +20804,22 @@ def search_nj_direct(page, org):
         except Exception:
             pass
 
-        status = ""
-        status_patterns = [
-            ("Noncompliant", r"\bnon\W*compliant\b"),
-            ("Exempt", r"\bexempt\b"),
-            ("Delinquent", r"\bdelinquent\b"),
-            ("Retired", r"\bretired\b"),
-            ("Withdrawn", r"\bwithdrawn\b"),
-            ("Revoked", r"\brevoked\b"),
-            ("Suspended", r"\bsuspended\b"),
-            ("Expired", r"\bexpired\b"),
-            ("Pending", r"\bpending\b"),
-            ("Compliant", r"\bcompliant\b"),
-            ("Active", r"\bactive\b"),
-            ("Current", r"\bcurrent\b"),
-        ]
-        if ein_digits and ein_line_has_registry_pattern(body, org.ein, r"\bnon\W*compliant\b"):
-            status = "Noncompliant"
-        if not status and ein_digits and ein_digits in re.sub(r"\D", "", body):
-            compact_body = re.sub(r"\s+", " ", body)
-            for match in re.finditer(r"\bnon\W*compliant\b", compact_body, re.I):
-                start = max(0, match.start() - 260)
-                end = min(len(compact_body), match.end() + 260)
-                window = compact_body[start:end]
-                if ein_digits in re.sub(r"\D", "", window):
-                    status = "Noncompliant"
-                    break
-        if not status and ein_digits and ein_digits in re.sub(r"\D", "", body):
-            try:
-                rows = page.locator("tr")
-                best_status = ""
-                best_score = (-999, -999, -999)
-                for i in range(min(rows.count(), 80)):
-                    row_text = re.sub(r"\s+", " ", rows.nth(i).inner_text(timeout=1500)).strip()
-                    if ein_digits not in re.sub(r"\D", "", row_text):
-                        continue
-                    row_status = ""
-                    for label, pattern in status_patterns:
-                        if re.search(pattern, row_text, re.I):
-                            row_status = label
-                            break
-                    if not row_status:
-                        continue
-                    try:
-                        name_priority = checker.name_match_priority(row_text, org.organization_name)
-                    except Exception:
-                        name_priority = -1
-                    status_priority = checker.active_row_priority(row_text)
-                    if (name_priority == 5 or ein_digits in re.sub(r"\D", "", row_text)) and status_priority in {70, 85}:
-                        status_priority += 100
-                    row_score = (name_priority, status_priority, -i)
-                    if row_score > best_score:
-                        best_score = row_score
-                        best_status = row_status
-                if best_status:
-                    status = best_status
-            except Exception:
-                pass
-        if not status and ein_digits and ein_digits in re.sub(r"\D", "", body):
-            body_candidates = []
-            compact_body = re.sub(r"\s+", " ", body)
-            for label, pattern in status_patterns:
-                for match in re.finditer(pattern, compact_body, re.I):
-                    start = max(0, match.start() - 220)
-                    end = min(len(compact_body), match.end() + 220)
-                    window = compact_body[start:end]
-                    if ein_digits not in re.sub(r"\D", "", window):
-                        continue
-                    try:
-                        name_priority = checker.name_match_priority(window, org.organization_name)
-                    except Exception:
-                        name_priority = -1
-                    status_priority = checker.active_row_priority(label)
-                    if status_priority in {70, 85}:
-                        status_priority += 100
-                    body_candidates.append((status_priority, name_priority, -match.start(), label))
-            if body_candidates:
-                body_candidates.sort(reverse=True)
-                status = body_candidates[0][3]
-        if not status:
-            status_match = re.search(r"Status\s+([A-Za-z][A-Za-z /-]+?)\s+Federal\s+EIN", re.sub(r"\s+", " ", body), re.I)
-            if status_match:
-                status = status_match.group(1).strip()
-        registry_name = useful_registry_name(checker.extract_labeled_value_from_text(body, ["Organization Name", "Charity Name", "Legal Name", "Name"]))
-        if not registry_name and ein_digits:
-            for line in re.split(r"[\r\n]+", body or ""):
-                line_text = re.sub(r"\s+", " ", line).strip()
-                if ein_digits not in re.sub(r"\D", "", line_text):
-                    continue
-                registry_name = useful_registry_name(re.split(r"\b(?:Federal\s+EIN|EIN|Status|Registration)\b", line_text, maxsplit=1, flags=re.I)[0])
-                if registry_name:
-                    break
-        result.matched_registry_name = registry_name
-        nj_context = nj_filing_context_from_body(body)
-        nj_due_date = nj_context.get("computed_due_date")
-        if (
-            not nj_due_date
-            and re.search(r"\b(compliant|current|active)\b", status or "", re.I)
-            and (not ein_digits or ein_digits in re.sub(r"\D", "", body or ""))
-        ):
-            try:
-                time.sleep(1.0)
-                retry_body = nj_detail_body(page, org)
-                retry_context = nj_filing_context_from_body(retry_body)
-                retry_due_date = retry_context.get("computed_due_date")
-                if retry_due_date:
-                    body = retry_body
-                    nj_context = retry_context
-                    nj_due_date = retry_due_date
-            except Exception:
-                pass
-        result.raw_status_text = status or "Status not found"
-        if nj_due_date:
-            result.raw_status_text = f"{result.raw_status_text} | Next Filing Due: {format_date(nj_due_date)}"
-        if nj_context:
-            if nj_context.get("last_year_on_record"):
-                result.last_year_on_record = nj_context["last_year_on_record"]
-            fiscal_end = nj_context.get("fiscal_year_end")
-            if fiscal_end:
-                result.fiscal_year_end = f"{fiscal_end[0]}/{fiscal_end[1]}"
-            if nj_context.get("next_required_period"):
-                result.next_required_period = format_date(nj_context["next_required_period"])
-            if nj_due_date:
-                result.computed_due_date = format_date(nj_due_date)
-            result.status_reason = "NJ_STATUS_FROM_REGISTRY_FILING_PERIOD"
-            result.source_attempts = [nj_context.get("source_evidence", "NJ registry filing-period evidence parsed.")]
-        if re.search(r"\b(retired|withdrawn|terminated|cancelled|canceled|closed)\b", status, re.I):
-            result.status = "Closed / Withdrawn / Canceled"
-        elif re.search(r"\bnon\W*compliant\b", status, re.I):
-            result.status = "Delinquent"
-        elif nj_due_date and re.search(r"\b(compliant|current|active)\b", status, re.I):
-            result.status = status_from_calendar_date(nj_due_date)
-            result.source_note = "New Jersey raw Status was checked against fiscal-period due-date evidence from the public page."
-        elif re.search(r"\b(compliant|current|active)\b", status, re.I):
-            result.status = checker.STATUS_CURRENT
-            result.raw_status_text = f"{result.raw_status_text} | NJ filing-period evidence not visible"
-            result.source_note = (
-                "New Jersey returned an exact registry status, but CharityClarity did not retrieve a usable "
-                "last accepted fiscal period or due-date section from the public page. CharityClarity returned Current "
-                "based on New Jersey's raw Compliant/Active registry status."
-            )
-            result.source_confidence = "raw_status_without_filing_period_evidence"
-            result.status_reason = "NJ_RAW_COMPLIANT_STATUS_NO_FILING_PERIOD_EVIDENCE"
-        else:
-            result.status = status or checker.STATUS_UNKNOWN
-        if not result.source_note:
-            result.source_note = "New Jersey uses the public search result Status value."
-        result.success = True
-        return result
+        return nj_result_from_body(page, org, result, body, ein_digits)
     except Exception as exc:
         result.error = f"NJ error: {exc}"
         return result
 
 
 def search_nj_with_name_fallback(page, org):
-    result = search_nj_direct(page, org)
+    completed = nj_same_lookup_zero_queries(org)
+    if canonical_ein_digits(org.ein) in completed:
+        result = checker.StateResult(org.organization_name, org.ein, "NJ", checker.STATUS_NOT_REGISTERED,
+            "https://charportal.dca.njoag.gov/Charity-Registration/CHR-Public-Search-Page/")
+        result.raw_status_text = "No record found"
+        result.source_note = "New Jersey's public EIN query completed with no matching record."
+        result.success = True
+    else:
+        result = search_nj_direct(page, org)
     if public_status(result) != "Not Registered":
         return result
     fallback_started = time.monotonic()
@@ -19158,16 +20827,9 @@ def search_nj_with_name_fallback(page, org):
         fallback_budget_seconds = float(os.environ.get("CE_NJ_NAME_FALLBACK_SECONDS", "32"))
     except Exception:
         fallback_budget_seconds = 32.0
-    for variant in build_search_queries(
-        org.organization_name,
-        org.ein,
-        include_ein=False,
-        include_ein_aliases=True,
-        include_name_segments=True,
-        include_compact_legal_suffixes=True,
-        include_leading_article_variants=True,
-        max_queries=int(os.environ.get("CE_NJ_NAME_FALLBACK_MAX_VARIANTS", "10")),
-    ):
+    for variant in nj_name_fallback_queries(org):
+        if variant in completed:
+            continue
         if time.monotonic() - fallback_started > fallback_budget_seconds:
             result.source_note = (
                 (result.source_note or "New Jersey search returned no matching record.")
@@ -19176,7 +20838,8 @@ def search_nj_with_name_fallback(page, org):
             return result
         fallback_org = SimpleNamespace(organization_name=variant, ein="")
         fallback = search_nj_direct(page, fallback_org)
-        if public_status(fallback) == "Site Not Reachable":
+        if (public_status(fallback) == "Site Not Reachable"
+                or getattr(fallback, "reason_code", "") == "NJ_INCOMPLETE_QUERY_RESPONSE"):
             return copy_name_fallback_result(org, fallback)
         if public_status(fallback) == "Not Registered":
             continue
@@ -19186,11 +20849,15 @@ def search_nj_with_name_fallback(page, org):
                 + " CharityClarity used a name fallback after the EIN search returned no matching record."
             )
             return copy_name_fallback_result(org, fallback)
+    if completed:
+        result.source_note = ("New Jersey's public EIN and planned organization-name queries completed "
+                              "without a qualifying matching record.")
     return result
 
 
 def pa_guard_search_completion(result, org, observations):
     """An empty Angular table is not evidence that PA's search request finished."""
+    result._cc_pa_completed_negative = None
     status = public_status(result)
     if status not in {"Not Registered", "Unknown", "Unable to Confirm", "Site Not Reachable"}:
         return result
@@ -19210,6 +20877,7 @@ def pa_guard_search_completion(result, org, observations):
     negative_complete = (exact and all(row.get("complete") for row in searches)
                          and names_completed and not missed_ein_row and not failures)
     if status == "Not Registered" and negative_complete:
+        result._cc_pa_completed_negative = (org.organization_name, ein)
         return result
     if status != "Not Registered" and not failures:
         return result
@@ -19240,8 +20908,26 @@ def pa_guard_search_completion(result, org, observations):
     return result
 
 
+def lab_pa_completed_no_match(result, org) -> bool:
+    """Reuse this lookup's request-bound negative instead of repeating the UI.
+
+    The original delayed confirmation predates the completed-request guard.
+    Only that guard can set this private proof; stale/failed/partial searches
+    and all Standard lookups retain their existing confirmation behavior.
+    """
+    return (APP_VERSION.endswith("-performance-lab")
+            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and os.environ.get("CE_LAB_PA_COMPLETED_ZERO_REUSE") == "1"
+            and LAB_LOOKUP_MODE_CONTEXT.get() == "sales"
+            and bool(getattr(result, "success", False))
+            and public_status(result) == "Not Registered"
+            and getattr(result, "_cc_pa_completed_negative", None)
+                == (org.organization_name, canonical_ein_digits(org.ein)))
+
+
 def search_pa_with_name_fallback(page, org):
     observations = []
+    started = time.monotonic()
 
     def observe_request(request):
         for row in observations:
@@ -19262,7 +20948,8 @@ def search_pa_with_name_fallback(page, org):
             payload = {}
         payload = payload if isinstance(payload, dict) else {}
         row = {"request": request, "step": step, "ein": payload.get("EIN") or "",
-               "name": payload.get("EntityName") or "", "complete": False}
+               "name": payload.get("EntityName") or "", "complete": False,
+               "started_seconds": round(time.monotonic() - started, 3)}
         observations.append(row)
         return row
 
@@ -19271,6 +20958,7 @@ def search_pa_with_name_fallback(page, org):
         if row is None:
             return
         row["http_status"] = response.status
+        row["response_seconds"] = round(time.monotonic() - started, 3)
         if not 200 <= response.status < 300:
             return
         if row["step"] != "search":
@@ -19282,6 +20970,8 @@ def search_pa_with_name_fallback(page, org):
             if isinstance(rows, list) and all(isinstance(item, dict) for item in rows):
                 row["complete"] = True
                 row["row_eins"] = [canonical_ein_digits(item.get("EIN", "")) for item in rows]
+                row["completed_seconds"] = round(time.monotonic() - started, 3)
+                row["row_count"] = len(rows)
         except Exception:
             pass
 
@@ -19290,15 +20980,45 @@ def search_pa_with_name_fallback(page, org):
         if row is not None:
             row["failure"] = "Public registry request failed"
 
+    def wait_for_search(query, request_offset, deadline, ein=""):
+        # Pump Playwright events while waiting for this submitted query, not an
+        # earlier response or the temporarily empty Angular results table.
+        key = lambda value: re.sub(r"\s+", " ", str(value or "")).strip().casefold()
+        while True:
+            if time.monotonic() > deadline:
+                return False
+            matching = [row for row in observations[request_offset:]
+                        if row["step"] == "search" and (
+                            canonical_ein_digits(row.get("ein", "")) == canonical_ein_digits(ein)
+                            and not row.get("name") if ein else
+                            not row.get("ein") and key(row.get("name")) == key(query))]
+            if matching:
+                row = matching[-1]
+                if row.get("complete"):
+                    return row
+                if row.get("failure") or row.get("http_status", 0) >= 400:
+                    return False
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            page.wait_for_timeout(min(100, max(1, remaining * 1000)))
+
     listeners = [("request", observe_request), ("response", observe_response), ("requestfailed", observe_failure)]
     for event, listener in listeners:
         page.on(event, listener)
     try:
         guard = lambda result: pa_guard_search_completion(result, org, observations + getattr(result, "_pa_api_attempts", []))
-        return guard(search_pa_with_name_fallback_core(page, org, guard))
+        result = guard(search_pa_with_name_fallback_core(page, org, guard,
+                       wait_for_search, lambda: len(observations)))
+        result.source_attempts = [{key: row.get(key) for key in
+            ("step", "ein", "name", "http_status", "complete", "failure",
+             "started_seconds", "response_seconds", "completed_seconds", "row_count")}
+            for row in observations + getattr(result, "_pa_api_attempts", [])]
+        return result
     finally:
         for event, listener in listeners:
             page.remove_listener(event, listener)
+
 
 
 def pa_name_search_plan(org):
@@ -19321,6 +21041,7 @@ def pa_name_search_plan(org):
             names.append(name)
             seen.add(name.casefold())
     return names[:10]
+
 
 
 def pa_completed_name_rows(org, rows, url):
@@ -19377,8 +21098,73 @@ def pa_completed_name_rows(org, rows, url):
     return result
 
 
-def search_pa_with_name_fallback_core(page, org, completion_guard):
-    result = completion_guard(checker.search_pa(page, org))
+
+def pa_name_rows(page, selector):
+    """Read the same visible rows in one browser round trip in opt-in lab Sales."""
+    rows = page.locator(selector)
+    if not (APP_VERSION.endswith('-performance-lab')
+            and os.environ.get('PUBLIC_BASE_URL') == 'https://instant-compliance-snapshot-api-hn4v.onrender.com'
+            and os.environ.get('CE_LAB_PA_ROW_SNAPSHOT') == '1'
+            and LAB_LOOKUP_MODE_CONTEXT.get() == 'sales'):
+        return rows
+    try:
+        data = rows.evaluate_all('''nodes => nodes.slice(0, 100).map(row => {
+            const style = getComputedStyle(row);
+            if (style.display === 'contents' || style.contentVisibility !== 'visible')
+                throw new Error('Use ordinary visibility');
+            const rect = row.getBoundingClientRect();
+            const visible = style.visibility === 'visible' && rect.width > 0 && rect.height > 0;
+            if (!visible) return {visible:false,text:'',count:0,first:'',fifth:''};
+            const cells = row.querySelectorAll('td');
+            return {visible:true,text:row.innerText,count:cells.length,
+                    first:cells.length >= 5 ? cells[0].innerText : '',
+                    fifth:cells.length >= 5 ? cells[4].innerText : ''};
+        })''')
+        if (not isinstance(data, list) or len(data) > 100 or any(
+                not isinstance(item, dict) or type(item.get('visible')) is not bool
+                or type(item.get('count')) is not int or item['count'] < 0
+                or any(not isinstance(item.get(key), str) for key in ('text', 'first', 'fifth'))
+                for item in data)):
+            return rows
+        def row_view(item):
+            def cell(index):
+                if index not in (0, 4): raise IndexError(index)
+                return SimpleNamespace(inner_text=lambda **kwargs: item['first' if index == 0 else 'fifth'])
+            def cells(selector):
+                if selector != 'td': raise ValueError('Unsupported snapshot selector')
+                return SimpleNamespace(count=lambda: item['count'], nth=cell)
+            return SimpleNamespace(is_visible=lambda **kwargs: item['visible'],
+                inner_text=lambda **kwargs: item['text'], locator=cells)
+        views = [row_view(item) for item in data]
+        return SimpleNamespace(count=lambda: len(views), nth=lambda index: views[index])
+    except Exception:
+        return rows
+
+
+
+def pa_prepare_name_fallback_form(page, url):
+    """A completed PA search leaves its form usable without another idle wait."""
+    ready = (page.url == url
+             and page.locator('input[name="EIN"]').is_visible()
+             and page.locator('input[name="entityName"]').is_visible()
+             and page.get_by_role("button", name=re.compile(r"^Clear$", re.I)).first.is_visible())
+    if not ready:
+        page.goto(url, wait_until="domcontentloaded", timeout=12000)
+        checker.safe_wait_for_network_idle(page, timeout=2500)
+        time.sleep(0.4)
+
+
+
+def search_pa_with_name_fallback_core(page, org, completion_guard, completion_wait=None, request_offset=None):
+    # Retain Aurora's complete-name/API fallback and await the exact EIN
+    # response when the optimized observer is supplied. A loaded empty result
+    # remains distinct from a request which did not complete.
+    if completion_wait is not None and request_offset is not None:
+        initial_offset = request_offset()
+        result = completion_guard(checker.search_pa(page, org, wait_for_ein=lambda ein:
+            completion_wait("", initial_offset, time.monotonic() + 12.0, ein=ein)))
+    else:
+        result = completion_guard(checker.search_pa(page, org))
     if public_status(result) != "Not Registered": return result
     url = "https://www.charities.pa.gov/#/page/searchCharities"
     try: budget = max(1.0, float(os.environ.get("CE_PA_NAME_FALLBACK_SECONDS", "20")))
@@ -19437,6 +21223,7 @@ def search_pa_with_name_fallback_core(page, org, completion_guard):
     result.queries_attempted = attempted
     result._pa_api_attempts = attempts
     return result
+
 
 
 def md_filing_context(result, body: str) -> dict:
@@ -19845,11 +21632,60 @@ class NYConnectorQueryNeeded(Exception):
         self.params = dict(params)
 
 
+class NYBrowserConnectionError(OSError):
+    """The matching browser request explicitly failed before completing."""
+
+
+def lab_ny_failed_request_wakeup() -> bool:
+    return (APP_VERSION.endswith("-performance-lab")
+            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and os.environ.get("CE_LAB_NY_FAILED_REQUEST_WAKEUP") == "1"
+            and LAB_LOOKUP_MODE_CONTEXT.get() == "sales")
+
+
+def ny_wait_for_completed_or_failed_response(page, predicate, submit, remaining_ms):
+    """Observe this submission's complete response or explicit transport failure.
+
+    A failed request cannot produce response/requestfinished events. Detect it
+    promptly instead of consuming the full wait before the existing one retry.
+    Only requests started during this submission participate; old/other queries
+    cannot complete or fail it. HTTP rejection still returns without body reads.
+    """
+    started=set();matched={};finished=set();failed=set()
+    def response_seen(response):
+        if response.request in started and predicate(response) and "response" not in matched:
+            matched["response"]=response
+    def request_failed(request):
+        if request in started and predicate(SimpleNamespace(url=request.url,request=request)):
+            failed.add(request)
+    hooks=[("request",lambda request:started.add(request)),("response",response_seen),
+           ("requestfinished",lambda request:finished.add(request)),("requestfailed",request_failed)]
+    attached=[]
+    try:
+        for event,callback in hooks:
+            page.on(event,callback);attached.append((event,callback))
+        submit()
+        while True:
+            remaining=remaining_ms()
+            response=matched.get("response")
+            if response is not None:
+                if response.status != 200 or response.request in finished:
+                    return response
+                if response.request in failed:
+                    raise NYBrowserConnectionError("New York's matching browser request failed before its response completed")
+            elif failed:
+                raise NYBrowserConnectionError("New York's matching browser request failed before response headers arrived")
+            page.wait_for_timeout(min(100,remaining))
+    finally:
+        for event,callback in attached:
+            page.remove_listener(event,callback)
+
+
 class NYBrowserResponse:
     """Expose only the completed official response; never retain verification tokens."""
     def __init__(self, response):
         self.status_code = response.status
-        self.payload = response.json()
+        self.payload = response.json() if self.status_code == 200 else {}
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -19857,6 +21693,73 @@ class NYBrowserResponse:
 
     def json(self):
         return self.payload
+
+
+def ny_complete_browser_response(page, predicate, submit, remaining_ms):
+    """Wait for this response's complete body within the original request budget."""
+    if lab_ny_failed_request_wakeup():
+        return ny_wait_for_completed_or_failed_response(page,predicate,submit,remaining_ms)
+    matched = {}
+
+    class HeadersRejected(Exception):
+        pass
+
+    def capture(response):
+        if not predicate(response):
+            return False
+        matched["request"] = response.request
+        return True
+
+    try:
+        # Register before submission: a short response can finish before the
+        # expect_response context returns. Correlate by request, not just URL.
+        with page.expect_request_finished(
+                lambda request: request == matched.get("request"), timeout=remaining_ms()):
+            with page.expect_response(capture, timeout=remaining_ms()) as pending:
+                submit()
+            response = pending.value
+            if response.status != 200:
+                # A rejection needs no body. Cancel the pending completion wait
+                # and let the existing status/verification rules handle it.
+                raise HeadersRejected()
+        return response
+    except HeadersRejected:
+        return response
+
+
+def lab_ny_routed_detail() -> bool:
+    return (APP_VERSION.endswith("-performance-lab")
+            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and os.environ.get("CE_LAB_NY_ROUTED_DETAIL") == "1"
+            and LAB_LOOKUP_MODE_CONTEXT.get() == "sales")
+
+
+def ny_open_registry_detail(page, identifier: str, remaining_ms):
+    """Open the confirmed result through the site's existing detail route.
+
+    The official component still obtains its own fresh verification token and
+    requests the same detail. Only the redundant full-document reload changes;
+    no API is called here, no token is read and no prior result is supplied.
+    """
+    link = page.get_by_role("link", name=identifier, exact=True)
+    if not lab_ny_routed_detail():
+        return link.click(timeout=remaining_ms())
+    source = "https://charities-search.ag.ny.gov/RegistrySearch"
+    if page.url != source or getattr(page, "_cc_ny_search_url", None) != source:
+        raise ValueError("New York detail navigation requires its confirmed search page")
+    link.wait_for(state="visible", timeout=remaining_ms())
+    if link.count() != 1:
+        raise ValueError("New York detail link is not unique")
+    href = link.get_attribute("href", timeout=remaining_ms())
+    target = source + "/" + quote(identifier, safe="")
+    if not href or urljoin(source, href) != target:
+        raise ValueError("New York detail link does not match the confirmed record")
+    remaining_ms()
+    page.evaluate("""target => {
+        const state = {...history.state, idx:(history.state?.idx ?? 0)+1};
+        history.pushState(state, '', target);
+        dispatchEvent(new PopStateEvent('popstate', {state}));
+    }""", target)
 
 
 def ny_browser_registry_response(page, operation: str, params: dict, timeout: float):
@@ -19867,19 +21770,36 @@ def ny_browser_registry_response(page, operation: str, params: dict, timeout: fl
         if remaining <= 0:
             raise TimeoutError("New York browser request time limit reached")
         return remaining
+    search_url = getattr(page, "_cc_ny_search_url", None)
+    if isinstance(search_url, str) and page.url != search_url:
+        # A previous detail belongs to this same verified EIN search. Use
+        # browser history so the next confirmed candidate is opened from the
+        # retained results, without clearing verification or changing filters.
+        page.go_back(wait_until="commit", timeout=remaining_ms())
+        page.wait_for_url(search_url, wait_until="commit", timeout=remaining_ms())
     if operation == "RegistrySearch":
+        page._cc_ny_search_url = page.url
+        # The official clear action restores unused controls to null. Filling
+        # an unused EIN with "" sends ein= on a later name search, which the
+        # registry rejects as HTTP 400 rather than treating as an absent filter.
+        page.get_by_role("button", name="Clear fields", exact=True).click(timeout=remaining_ms())
         for field in ("ein", "orgName", "orgID"):
-            page.locator(f"#{field}").fill(str(params.get(field) or ""), timeout=remaining_ms())
+            if field in params:
+                page.locator(f"#{field}").fill(str(params.get(field) or ""), timeout=remaining_ms())
         search = page.get_by_role("button", name="Search", exact=True)
         if not search.is_enabled():
             try:
-                with page.expect_response(lambda response: urlparse(response.url).path == "/api/recaptcha/verify"
-                                          and response.request.method == "POST", timeout=remaining_ms()) as verification:
-                    page.get_by_role("button", name="Verify", exact=True).click(timeout=remaining_ms())
-                verified = verification.value
+                verified = ny_complete_browser_response(page,
+                    lambda response: urlparse(response.url).path == "/api/recaptcha/verify"
+                    and response.request.method == "POST",
+                    lambda: page.get_by_role("button", name="Verify", exact=True).click(timeout=remaining_ms()), remaining_ms)
                 if verified.status != 200 or verified.json().get("verified") is not True:
                     raise NYVerificationRequired("New York did not accept the browser verification")
                 page.wait_for_function("Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === 'Search' && !b.disabled)", timeout=remaining_ms())
+            except (TimeoutError, checker.PlaywrightTimeoutError, NYBrowserConnectionError):
+                # An unanswered request is not an explicit verification denial.
+                # Preserve the existing one-retry policy and original deadline.
+                raise
             except Exception as exc:
                 if isinstance(exc, NYVerificationRequired):
                     raise
@@ -19907,17 +21827,17 @@ def ny_browser_registry_response(page, operation: str, params: dict, timeout: fl
                 elif actual[0] != expected:
                     return False
             return True
-        with page.expect_response(submitted_response, timeout=remaining_ms()) as pending:
-            search.click(timeout=remaining_ms())
-        return NYBrowserResponse(pending.value)
+        response = ny_complete_browser_response(page, submitted_response,
+            lambda: search.click(timeout=remaining_ms()), remaining_ms)
+        return NYBrowserResponse(response)
     if operation == "RegistryDetail":
         identifier = str(params["orgID"])
-        with page.expect_response(lambda response: urlparse(response.url).hostname == "charities-search-api.ag.ny.gov"
-                                  and urlparse(response.url).path == "/api/FileNet/RegistryDetail"
-                                  and parse_qs(urlparse(response.url).query).get("orgID", [""])[0] == identifier,
-                                  timeout=remaining_ms()) as pending:
-            page.get_by_role("link", name=identifier, exact=True).click(timeout=remaining_ms())
-        return NYBrowserResponse(pending.value)
+        response = ny_complete_browser_response(page,
+            lambda response: urlparse(response.url).hostname == "charities-search-api.ag.ny.gov"
+            and urlparse(response.url).path == "/api/FileNet/RegistryDetail"
+            and parse_qs(urlparse(response.url).query).get("orgID", [""])[0] == identifier,
+            lambda: ny_open_registry_detail(page, identifier, remaining_ms), remaining_ms)
+        return NYBrowserResponse(response)
     raise ValueError("Unexpected New York registry operation")
 
 
@@ -19925,23 +21845,43 @@ def search_ny_verified(org):
     """Use the same master matching/status code with the verified browser transport."""
     if not BROWSER_LOOKUP_SEMAPHORE.acquire(timeout=10.0):
         return browser_capacity_busy_result(org.organization_name, org.ein, "NY")
+    stage, attempts = "browser startup", []
+    started = time.perf_counter()
     try:
         with checker.sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = launch_lookup_browser(p, headless=True)
             try:
                 context = browser.new_context(user_agent=BROWSER_USER_AGENT, locale="en-US")
                 # Verification resources must load normally; no heavy-resource filter.
                 page = context.new_page()
-                page.goto("https://charities-search.ag.ny.gov/RegistrySearch", wait_until="domcontentloaded", timeout=15000)
-                page.get_by_role("button", name="Verify", exact=True).wait_for(timeout=12000)
-                return search_ny_direct(org, browser_page=page)
+                # Preserve the existing 15+12 second readiness allowance, but
+                # wait for the actual Verify control after navigation commits.
+                # DOMContentLoaded can lag that control during script startup.
+                ready_deadline = time.perf_counter() + 27
+                stage = "page navigation"
+                response = page.goto("https://charities-search.ag.ny.gov/RegistrySearch", wait_until="commit", timeout=15000)
+                if response is not None and response.status >= 400:
+                    attempts.append(f"NY page navigation: HTTP {response.status}")
+                    raise RuntimeError("New York navigation HTTP error")
+                attempts.append(f"NY {stage}: complete in {time.perf_counter()-started:.2f}s")
+                stage = "verification control readiness"
+                remaining_ms = int((ready_deadline-time.perf_counter())*1000)
+                if remaining_ms <= 0:
+                    raise TimeoutError("New York readiness time limit reached")
+                page.get_by_role("button", name="Verify", exact=True).wait_for(timeout=remaining_ms)
+                attempts.append(f"NY {stage}: complete in {time.perf_counter()-started:.2f}s")
+                stage = "verified registry lookup"
+                result = search_ny_direct(org, browser_page=page)
+                result.source_attempts = attempts + list(getattr(result, "source_attempts", []) or [])
+                return result
             finally:
                 browser.close()
     except Exception as exc:
         result = checker.StateResult(org.organization_name, org.ein, "NY", "Unable to Confirm", "https://charities-search.ag.ny.gov/RegistrySearch")
-        result.raw_status_text = "New York verification/search page did not become ready"
-        result.source_note = "New York's verified search could not be completed. Confirm directly in the state registry."
-        result.status_reason = "NY_VERIFICATION_REQUIRED"
+        result.raw_status_text = f"New York {stage} did not complete"
+        result.source_note = f"New York {stage} did not complete, so registration status could not be confirmed."
+        result.status_reason = "NY_BROWSER_READINESS_INCOMPLETE"
+        result.source_attempts = attempts + [f"NY {stage}: {type(exc).__name__} after {time.perf_counter()-started:.2f}s"]
         result.success = False
         log_event(f"NY verified browser unavailable: {type(exc).__name__}")
         return result
@@ -20045,8 +21985,8 @@ def search_ny_direct(org, browser_page=None, registry_search_provider=None, regi
             except Exception as exc:
                 code = getattr(exc, "code", None)
                 http_status = getattr(response, "status_code", None)
-                result._ny_transport_failure = isinstance(exc, (TimeoutError, OSError)) or code in {6, 7, 28, 35, 52, 55, 56} or http_status in {403, 408, 429, 500, 502, 503, 504}
-                transient = isinstance(exc, TimeoutError) or code in {7, 28, 52, 55, 56} or http_status in {408, 429, 500, 502, 503, 504}
+                result._ny_transport_failure = isinstance(exc, (TimeoutError, checker.PlaywrightTimeoutError, OSError)) or code in {6, 7, 28, 35, 52, 55, 56} or http_status in {403, 408, 429, 500, 502, 503, 504}
+                transient = isinstance(exc, (TimeoutError, checker.PlaywrightTimeoutError, NYBrowserConnectionError)) or code in {7, 28, 52, 55, 56} or http_status in {408, 429, 500, 502, 503, 504}
                 label = f"HTTP {http_status}" if isinstance(http_status, int) else type(exc).__name__
                 result.source_attempts.append(f"{attempt}: {label} in {time.perf_counter() - started:.2f}s")
                 # One retry for the entire lookup, inside the original deadline.
@@ -21543,6 +23483,8 @@ def comments_for_result_base(result, body: str, public_facing_status: str) -> st
         failure = "did not respond in time" if re.search(r"timeout|timed out", combined + " " + (getattr(result, "error", "") or ""), re.I) else "could not be accessed"
         return f"{source} {failure}, so CharityClarity could not complete the check and reports Site Not Reachable. This does not mean the organization is unregistered or delinquent."
     if status in {"Needs Review", "Unable to Verify", "Unable to Confirm", "Unknown", "No Confirmed Match"}:
+        if state == "MS" and getattr(result, "reason_code", "") == "MS_IDENTITY_UNCONFIRMED":
+            return note
         if state == "MS" and getattr(result, "reason_code", "") == "MS_REVIEWED_SEARCH_INCOMPLETE":
             return ("Mississippi did not complete searches for all reviewed organization names within the lookup window. "
                     "Registration status remains unconfirmed; an incomplete search does not establish non-registration or delinquency.")
@@ -22372,19 +24314,29 @@ def nh_parse_pdf_table_records(pdf_bytes: bytes) -> tuple[list[dict], str]:
     return records, updated_label
 
 
+@lru_cache(maxsize=1)
+def nh_records_from_snapshot_bytes(snapshot_bytes: bytes, pdf_digest: str) -> tuple[list[dict], str]:
+    # Cache parsing only, keyed by exact source bytes and the verified PDF.
+    # Every caller still validates current manifest freshness and both files.
+    payload = json.loads(snapshot_bytes)
+    if payload.get("source_sha256") != pdf_digest:
+        raise ValueError("NH parsed records do not match the verified source PDF")
+    records = [nh_record_from_cells(row) for row in payload["records"]]
+    if payload.get("source_record_count") != len(records) or not payload.get("updated_label"):
+        raise ValueError("NH parsed record reconciliation is missing or incomplete")
+    return records, f"{payload['updated_label']} from bundled NH PDF"
+
+
 def nh_download_live_pdf_records() -> tuple[list[dict], str]:
     # Like KY, use the validated parsed asset during checks. The master parser
     # runs during refresh, avoiding a full-document parse on the first request.
     snapshot_path = weekly_asset("NH", "downloadable-data/NH-records.json")
     if snapshot_path is not None:
-        payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
         pdf_path = weekly_asset("NH", "registered-charities.pdf")
-        if pdf_path is None or payload.get("source_sha256") != hashlib.sha256(pdf_path.read_bytes()).hexdigest():
+        if pdf_path is None:
             raise ValueError("NH parsed records do not match the verified source PDF")
-        records = [nh_record_from_cells(row) for row in payload["records"]]
-        if payload.get("source_record_count") != len(records) or not payload.get("updated_label"):
-            raise ValueError("NH parsed record reconciliation is missing or incomplete")
-        return records, f"{payload['updated_label']} from bundled NH PDF"
+        return nh_records_from_snapshot_bytes(
+            snapshot_path.read_bytes(), hashlib.sha256(pdf_path.read_bytes()).hexdigest())
     pdf_source = NH_LIVE_PDF_URL
     try:
         local_path = weekly_asset("NH", "registered-charities.pdf")
@@ -22418,6 +24370,11 @@ def nh_download_live_pdf_records() -> tuple[list[dict], str]:
 
 def nh_live_pdf_records() -> tuple[list[dict], str]:
     global NH_LIVE_PDF_RECORDS, NH_LIVE_PDF_LOADED_AT, NH_LIVE_PDF_UPDATED_LABEL
+    if weekly_asset("NH", "downloadable-data/NH-records.json") is not None:
+        records, label = nh_download_live_pdf_records()
+        if len(records) < 1000:
+            raise RuntimeError("New Hampshire PDF was empty or incomplete; registration cannot be determined")
+        return records, label
     now = time.time()
     if NH_LIVE_PDF_RECORDS is not None and now - NH_LIVE_PDF_LOADED_AT < NH_LIVE_PDF_MAX_AGE_SECONDS and weekly_asset("NH", "registered-charities.pdf") is not None:
         return NH_LIVE_PDF_RECORDS, NH_LIVE_PDF_UPDATED_LABEL
@@ -23470,6 +25427,27 @@ def search_batch_browser_state(page, org, state: str):
             matched_name = getattr(external_result, "matched_registry_name", "") or getattr(external_result, "organization_name", "")
             if matched_name and not ms_registry_name_is_safe(matched_name, org.organization_name, org.ein):
                 continue
+            # A broad search phrase may locate a related entity. It is not proof
+            # that the candidate is the requested organization or reviewed alias.
+            candidate = {
+                "name": matched_name,
+                "ein": getattr(external_result, "verified_registry_ein", ""),
+            }
+            decision = max((score_candidate(target, org.ein, candidate)
+                            for target in [org.organization_name, *known_names_for_ein(org.ein)]),
+                           key=lambda item: item["score"])
+            if decision["decision"] != "accepted":
+                external_result.status = "Needs Review"
+                external_result.success = False
+                external_result.reason_code = "MS_IDENTITY_UNCONFIRMED"
+                external_result.source_note = (
+                    f"Mississippi returned {matched_name}, but its name could not be confirmed as "
+                    f"{org.organization_name} or a reviewed alternate name, and no matching registry EIN was verified. "
+                    "A similar name may identify a separate regional organization. CharityClarity reports Needs Review; "
+                    "the candidate's registration status has not been assigned to the requested organization."
+                )
+                best_external = external_result
+                continue
             if variant_name != org.organization_name:
                 external_result.source_note = " ".join(part for part in [
                     getattr(external_result, "source_note", "") or "",
@@ -23489,6 +25467,17 @@ def search_batch_browser_state(page, org, state: str):
             external_result.source_confidence = "incomplete_search"
             external_result.reason_code = "MS_REVIEWED_SEARCH_INCOMPLETE"
             external_result.source_note = "Mississippi did not complete searches for all reviewed identities within the lookup window; non-registration was not established."
+        if getattr(external_result, "reason_code", "") == "MS_IDENTITY_UNCONFIRMED":
+            result = checker.StateResult(org.organization_name, org.ein, state, "Needs Review",
+                                         getattr(external_result, "source_url", "") or "")
+            result.success = False
+            result.reason_code = external_result.reason_code
+            result.source_note = external_result.source_note
+            result.raw_status_text = "Mississippi candidate identity unconfirmed"
+            result.queries_attempted = attempted_identity_queries
+            result.rejected_candidates = [{"name": getattr(external_result, "matched_registry_name", ""),
+                                           "reason": "Identity unconfirmed; status not applied"}]
+            return result
     elif state == "OK":
         external_result = search_ok_with_variants(page, org, module)
     else:
@@ -24163,6 +26152,43 @@ def ok_click_name_search_ok_button(page, org=None) -> bool:
         return False
 
 
+def lab_ok_completed_detail_enabled() -> bool:
+    return (APP_VERSION.endswith("-performance-lab")
+            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and os.environ.get("CE_LAB_OK_COMPLETED_DETAIL") == "1"
+            and LAB_LOOKUP_MODE_CONTEXT.get() == "sales")
+
+
+def ok_open_selected_detail(page, link, org, module, filing_number):
+    """Wait for the selected full document instead of unrelated network idle."""
+    if not lab_ok_completed_detail_enabled():
+        link.click(timeout=ok_action_timeout(org, 5000))
+        module.safe_wait_for_network_idle(page, timeout=20000)
+        page.wait_for_timeout(2500)
+        return
+    identifier = str(filing_number)
+    if not re.fullmatch(r"[0-9]+", identifier):
+        raise ValueError("Oklahoma selected filing number is invalid")
+    target = "https://www.sos.ok.gov/corp/charityDetail.aspx?id=" + identifier
+    href = link.get_attribute("href", timeout=ok_action_timeout(org, 1000))
+    if not href or urljoin(page.url, href) != target:
+        raise ValueError("Oklahoma detail link does not match the selected record")
+    # Register both listeners before the click: an HTTP response can finish
+    # before its DOM is ready, and DOM readiness must not accept a stale page.
+    # Preserve the original maximum click + idle + pause allowance (27.5s).
+    # Readiness may return early; a slow source does not lose its old window.
+    with page.expect_request_finished(lambda request: request.is_navigation_request()
+            and request.frame == page.main_frame and request.url == target,
+            timeout=ok_action_timeout(org, 27500)):
+        with page.expect_navigation(wait_until="domcontentloaded", timeout=ok_action_timeout(org, 27500)) as pending:
+            link.click(timeout=ok_action_timeout(org, 5000), no_wait_after=True)
+        response = pending.value
+        if response is None or response.status != 200 or response.url != target:
+            raise ValueError("Oklahoma selected detail response was incomplete or unexpected")
+    if page.url != target:
+        raise ValueError("Oklahoma detail navigation left the selected record")
+
+
 def search_ok_precise(page, org, module):
     result = module.SearchResult(
         organization_name=org.organization_name,
@@ -24252,9 +26278,7 @@ def search_ok_precise(page, org, module):
             return result
 
         _, selected_filing_link, matched_name, filing_number = selected
-        selected_filing_link.click(timeout=ok_action_timeout(org, 5000))
-        module.safe_wait_for_network_idle(page, timeout=20000)
-        page.wait_for_timeout(2500)
+        ok_open_selected_detail(page, selected_filing_link, org, module, filing_number)
 
         detail_text = module.body_text(page, timeout=15000)
         status_text = module.extract_labeled_value_from_text(detail_text, ["Status"])
@@ -25080,6 +27104,23 @@ def search_ar_name_variants_once(page, org):
     return result
 
 
+def lab_sales_ar_access_block_is_terminal(result) -> bool:
+    """Do not occupy a Sales source lane retrying an explicit access denial.
+
+    This is an isolated-lab scheduling policy, never identity/status evidence.
+    Standard and transport timeouts retain their existing recovery behavior.
+    """
+    if not (APP_VERSION.endswith("-performance-lab")
+            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and os.environ.get("CE_LAB_AR_BLOCK_RETRY") == "terminal"
+            and LAB_LOOKUP_MODE_CONTEXT.get() == "sales"):
+        return False
+    read = result.get if isinstance(result, dict) else lambda key, default=None: getattr(result, key, default)
+    return (read("state") == "AR" and read("success") is False
+            and str(read("status", "")).strip().lower() == "site not reachable"
+            and bool(re.fullmatch(r"AR registry returned bot-verification or block page(?: after submit)?", str(read("error", "")))))
+
+
 def search_ar_serialized(page, org):
     global AR_LAST_LOOKUP_FINISHED
     with AR_LOOKUP_LOCK:
@@ -25098,7 +27139,7 @@ def search_ar_serialized(page, org):
                     time.sleep(AR_TRANSIENT_RETRY_DELAY_SECONDS)
             result = search_ar_name_variants_once(page, org)
             last_result = result
-            if not ar_transient_unreachable_result(result):
+            if lab_sales_ar_access_block_is_terminal(result) or not ar_transient_unreachable_result(result):
                 AR_LAST_LOOKUP_FINISHED = time.perf_counter()
                 return result
 
@@ -25466,7 +27507,137 @@ checker.registry_candidate_fields = registry_candidate_fields
 checker.md_prefer_active_entry_body = md_prefer_active_entry_body
 
 
-def search_wv_precise(page, org):
+def registry_table_text_snapshot(rows, limit: int, columns: tuple[int, ...]) -> list:
+    """Read bounded visible cell text in one browser round trip.
+
+    Selection and interpretation remain with the caller. Missing cells remain
+    explicit, and an unreadable response is never a completed negative lookup.
+    """
+    values = rows.evaluate_all("""(rows, options) => rows.slice(0, options.limit).map((row, index) => {
+        const cells = row.querySelectorAll('td');
+        return {index, count: cells.length, values: options.columns.map(column =>
+            column < cells.length ? cells[column].innerText : null)};
+    })""", {"limit": limit, "columns": list(columns)})
+    if (not isinstance(values, list) or len(values) > limit or any(
+            not isinstance(row, dict) or row.get("index") != index
+            or not isinstance(row.get("count"), int) or row["count"] < 0
+            or not isinstance(row.get("values"), list) or len(row["values"]) != len(columns)
+            or any(not isinstance(value, str) if column < row["count"] else value is not None
+                   for column, value in zip(columns, row["values"]))
+            for index, row in enumerate(values))):
+        raise ValueError("Registry table text was incomplete")
+    return values
+
+
+class WestVirginiaPublicLookup:
+    """Read the registry's existing public form and detail responses.
+
+    This transport does not select a candidate or interpret its status. The
+    master WV rules below still own aliases, ranking and detail confirmation.
+    """
+    def __init__(self, deadline):
+        self.deadline = deadline
+        self.body = ""
+        self.opener = urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+
+    @staticmethod
+    def text(source):
+        source = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", "", source, flags=re.I|re.S)
+        source = re.sub(r"</(?:div|label|tr|td|p|h[1-6])\s*>|<br\b[^>]*>", "\n", source, flags=re.I)
+        text = html.unescape(re.sub(r"<[^>]+>", "", source))
+        lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
+        # The registry's heading is uppercased by CSS in the browser. Preserve
+        # its label and the block boundaries required by the existing date reader.
+        return "\n".join("CHARITIES DETAILS" if line == "Charities Details" else line for line in lines if line)
+
+    def read(self, path, fields=None):
+        if path not in {"Search", "CharitiesInformation"}:
+            raise ValueError("Unexpected West Virginia public form")
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("West Virginia public response budget exhausted")
+        url = "https://erls.wvsos.gov/OnlineCharitiesSearch/" + path
+        request = urllib.request.Request(url,
+            data=urlencode(fields).encode("utf-8") if fields is not None else None,
+            headers={"User-Agent": BROWSER_USER_AGENT, "Accept-Encoding": "identity"})
+        with self.opener.open(request, timeout=min(8.0, remaining)) as response:
+            if response.status != 200 or response.url != url:
+                raise ValueError("West Virginia public response was not the requested page")
+            body = response.read(2_000_001)
+            if len(body) > 2_000_000 or time.monotonic() >= self.deadline:
+                raise TimeoutError("West Virginia public response was incomplete")
+            source = body.decode(response.headers.get_content_charset() or "utf-8", "replace")
+        if not re.search(r"</html\s*>", source, re.I):
+            raise ValueError("West Virginia public document was incomplete")
+        self.body = self.text(source)
+        return source
+
+    def search(self, query):
+        source = self.read("Search")
+        form = re.search(r'<form\b[^>]*id=["\']frm_Search["\'][^>]*>(.*?)(?:</form>|</section>)', source, re.I|re.S)
+        if not form or 'CharitiesSearch-CharitiesSearch_txtName' not in form[1]:
+            raise ValueError("West Virginia public search form was incomplete")
+        # These are the page's documented ready-handler defaults, including
+        # 'All' rating options inserted by its JavaScript. Never use the first
+        # static rating option (Gold), which would silently narrow the search.
+        for field in ("ddlCharityRatingNational", "ddlCharityRatingWV"):
+            if not re.search(r"\$\('#" + field + r"'\)\.prepend\(new Option\(\"All\", \"\"\)\)\.val\(\"\"\)", source):
+                raise ValueError("West Virginia public search defaults changed")
+        fields = html_hidden_inputs(form[1])
+        if not fields.get("__RequestVerificationToken"):
+            raise ValueError("West Virginia public form verification field was missing")
+        for tag in re.findall(r'<(?:input|select)\b[^>]*>', form[1], re.I):
+            name = re.search(r'\bname=["\']([^"\']+)["\']', tag, re.I)
+            if name and not re.search(r'\btype=["\'](?:button|submit|hidden)["\']', tag, re.I):
+                fields[name[1]] = ""
+        fields.update({"ddlType": "1", "CharitiesSearch-CharitiesSearch_txtName": query})
+        source = self.read("Search", fields)
+        message = html_hidden_inputs(source).get("hdnMessage", "")
+        if message == "No records found with your search criteria.":
+            return message, []
+        tables = re.findall(r'<table\b[^>]*\bid=["\']xhtml_grid["\'][^>]*>(.*?)</table>', source, re.I|re.S)
+        page = re.search(r"Page\s+1\s+of\s+1,\s+records\s+1\s+to\s+(\d+)\s+of\s+(\d+)", self.body)
+        if len(tables) != 1 or not page or page[1] != page[2] or int(page[1]) > 100:
+            raise ValueError("West Virginia public result table was incomplete or paginated")
+        if "$.submitForm('/OnlineCharitiesSearch/CharitiesInformation', { CharitiesId: id })" not in source:
+            raise ValueError("West Virginia detail navigation changed")
+        records = []
+        for row in re.findall(r'<tr\b[^>]*>(.*?)</tr>', tables[0], re.I|re.S):
+            cells = re.findall(r'<td\b[^>]*>(.*?)</td>', row, re.I|re.S)
+            if not cells:
+                continue
+            target = re.findall(r"\bonclick=[\"']NavigateLienInfo\((\d+)\)[\"']", row)
+            if len(cells) != 5 or len(target) != 1:
+                raise ValueError("West Virginia public result row was incomplete")
+            values = [html_to_text(cells[index]) for index in (0, 1, 4)]
+            if not all(values) or not re.fullmatch(r"[A-Z]?\d{1,20}", values[0]):
+                raise ValueError("West Virginia public result row had no identity")
+            records.append({"index": len(records), "count": 5, "values": values, "target": target[0]})
+        if len(records) != int(page[1]):
+            raise ValueError("West Virginia public result row count did not reconcile")
+        return self.body, records
+
+    def detail(self, target, identifier):
+        if not str(target).isdigit() or not re.fullmatch(r"[A-Z]?\d{1,20}", str(identifier)):
+            raise ValueError("West Virginia selected identifier was malformed")
+        self.read("CharitiesInformation", {"CharitiesId": target})
+        if not re.search(r"\bID:\s*" + re.escape(identifier) + r"\s+Initial Registration Date:", self.body):
+            raise ValueError("West Virginia detail identifier did not match the selected row")
+        return self.body
+
+
+def search_wv_public_details(org):
+    lookup = WestVirginiaPublicLookup(time.monotonic() + 16.0)
+    result = search_wv_precise(None, org, public_lookup=lookup)
+    # Keep the established browser completion path for negative searches,
+    # incomplete data and any unexpected public-page format.
+    if not result.success or public_status(result) == "Not Registered":
+        return None
+    return result, lookup.body
+
+
+def search_wv_precise(page, org, *, public_lookup=None):
     result = checker.StateResult(
         org.organization_name,
         org.ein,
@@ -25525,27 +27696,32 @@ def search_wv_precise(page, org):
                 continue
             if time.perf_counter() >= deadline:
                 break
-            page.goto(WV_SEARCH_URL, wait_until="domcontentloaded", timeout=action_timeout(WV_GOTO_TIMEOUT_MS))
-            safe_wait_for_network_idle(page, timeout=WV_NETWORK_IDLE_TIMEOUT_MS)
-            if time.perf_counter() >= deadline:
-                break
-            try:
-                page.locator("#ddlType").select_option(label="CHARITABLE ORGANIZATIONS", timeout=2500)
-            except Exception:
-                pass
+            if public_lookup is not None:
+                searched_queries.append(query_name)
+                body, snapshot = public_lookup.search(query_name)
+                rows = None
+            else:
+                page.goto(WV_SEARCH_URL, wait_until="domcontentloaded", timeout=action_timeout(WV_GOTO_TIMEOUT_MS))
+                safe_wait_for_network_idle(page, timeout=WV_NETWORK_IDLE_TIMEOUT_MS)
+                if time.perf_counter() >= deadline:
+                    break
+                try:
+                    page.locator("#ddlType").select_option(label="CHARITABLE ORGANIZATIONS", timeout=2500)
+                except Exception:
+                    pass
 
-            name_input = page.locator("#CharitiesSearch-CharitiesSearch_txtName").first
-            name_input.wait_for(state="visible", timeout=3000)
-            name_input.fill(query_name, timeout=action_timeout(3000))
-            searched_queries.append(query_name)
+                name_input = page.locator("#CharitiesSearch-CharitiesSearch_txtName").first
+                name_input.wait_for(state="visible", timeout=3000)
+                name_input.fill(query_name, timeout=action_timeout(3000))
+                searched_queries.append(query_name)
 
-            page.locator("#CharitiesSearch-CharitiesSearch_btnSearch").click(timeout=action_timeout(4000))
-            safe_wait_for_network_idle(page, timeout=WV_SEARCH_IDLE_TIMEOUT_MS)
-            page.wait_for_timeout(WV_RESULTS_SETTLE_MS)
-            if time.perf_counter() >= deadline:
-                break
+                page.locator("#CharitiesSearch-CharitiesSearch_btnSearch").click(timeout=action_timeout(4000))
+                safe_wait_for_network_idle(page, timeout=WV_SEARCH_IDLE_TIMEOUT_MS)
+                page.wait_for_timeout(WV_RESULTS_SETTLE_MS)
+                if time.perf_counter() >= deadline:
+                    break
 
-            body = registry_page_body(page)
+                body = registry_page_body(page)
             query_targets = list(dict.fromkeys([
                 *safe_targets,
                 *organization_match_target_variants(query_name, org.ein),
@@ -25554,25 +27730,25 @@ def search_wv_precise(page, org):
                 completed_queries.append(query_name)
                 continue
 
-            rows = page.locator("tr")
-            try:
-                row_count = min(rows.count(), 100)
-            except Exception as exc:
-                raise TimeoutError("West Virginia result table did not finish loading") from exc
-            if row_count:
+            if public_lookup is None:
+                rows = page.locator("tr")
+                try:
+                    snapshot = registry_table_text_snapshot(rows, 100, (0, 1, 4))
+                except Exception as exc:
+                    raise TimeoutError("West Virginia result table did not finish loading") from exc
+            if snapshot:
                 saw_result_rows = True
                 progress["saw_result_rows"] = True
             readable_record_rows = 0
-            for index in range(row_count):
+            for record in snapshot:
                 action_timeout(1000)
-                row = rows.nth(index)
+                row = record["target"] if public_lookup is not None else rows.nth(record["index"])
                 try:
-                    cells = row.locator("td")
-                    if cells.count() < 5:
+                    if record["count"] < 5:
                         continue
-                    registry_id = re.sub(r"\s+", " ", cells.nth(0).inner_text(timeout=1000)).strip()
-                    registry_name = structured_registry_name(cells.nth(1).inner_text(timeout=1000), org.organization_name, org.ein)
-                    status_text = re.sub(r"\s+", " ", cells.nth(4).inner_text(timeout=1000)).strip()
+                    registry_id = re.sub(r"\s+", " ", record["values"][0]).strip()
+                    registry_name = structured_registry_name(record["values"][1], org.organization_name, org.ein)
+                    status_text = re.sub(r"\s+", " ", record["values"][2]).strip()
                 except Exception as exc:
                     raise TimeoutError("West Virginia result rows did not finish loading") from exc
                 if not registry_id or not registry_name:
@@ -25633,12 +27809,14 @@ def search_wv_precise(page, org):
             return result
 
         row, registry_id, registry_name, row_status, selected_targets = best
-        link = row.locator("a").first
-        link.click(timeout=5000)
-        safe_wait_for_network_idle(page, timeout=WV_SEARCH_IDLE_TIMEOUT_MS)
-        page.wait_for_timeout(WV_RESULTS_SETTLE_MS)
-
-        detail_text = registry_page_body(page)
+        if public_lookup is not None:
+            detail_text = public_lookup.detail(row, registry_id)
+        else:
+            link = row.locator("a").first
+            link.click(timeout=5000)
+            safe_wait_for_network_idle(page, timeout=WV_SEARCH_IDLE_TIMEOUT_MS)
+            page.wait_for_timeout(WV_RESULTS_SETTLE_MS)
+            detail_text = registry_page_body(page)
         detail_name = structured_registry_name(text_between_labels(detail_text, "Organization Name", ["Expiration Date", "Contact Name", "Status", "Street Address"]), org.organization_name, org.ein)
         if not detail_name or not re.search(r"\b(?:Status|Expiration Date)\b", detail_text):
             raise TimeoutError("West Virginia selected organization detail did not finish loading")
@@ -25745,6 +27923,41 @@ def wa_select_ready_fein_mode(page, timeout_seconds: float = 24.0) -> None:
     raise TimeoutError("Washington EIN search mode did not become ready; no EIN search was submitted. " + last_error)
 
 
+def wa_fill_ready_name_and_search(page, org_name: str) -> bool:
+    """Do not wait for a hidden EIN field after switching to name search."""
+    try:
+        ein_box = page.locator("#FEINNoSearchField").first
+        if ein_box.is_visible():
+            ein_box.fill("")
+    except Exception:
+        pass
+    name_box = page.locator("#txtKeywordSearch").first
+    name_box.wait_for(state="visible", timeout=10000)
+    name_box.click(timeout=5000, force=True)
+    time.sleep(1)
+    name_box.fill("")
+    name_box.type(org_name, delay=35)
+    page.evaluate("""() => {
+        const nameBox = document.querySelector('#txtKeywordSearch');
+        if (nameBox) {
+            nameBox.dispatchEvent(new Event('input', { bubbles: true }));
+            nameBox.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+    }""")
+    time.sleep(1)
+    for candidate in [
+        page.get_by_role("button", name=re.compile(r"^Search$", re.I)),
+        page.locator("button").filter(has_text=re.compile(r"^Search$", re.I)).first,
+        page.locator("input[value='Search']").first,
+    ]:
+        try:
+            candidate.click(timeout=5000, force=True)
+            return True
+        except Exception:
+            continue
+    return False
+
+
 def wa_detail_field(body: str, label: str) -> str:
     """Read an exact field label; never consume the following empty-field label."""
     match = re.search(rf"(?im)^[ \t]*{re.escape(label)}[ \t]*:?[ \t]*\r?\n([^\r\n]*)", body or "")
@@ -25781,6 +27994,11 @@ def wa_apply_detail_master(result, body: str):
     module = load_wa_nm_module()
     requested = re.sub(r"\D", "", result.ein or "")
     observed = re.sub(r"\D", "", wa_detail_field(body, "FEIN Number"))
+    # Clear prior provenance if this result object is reused for an incomplete
+    # or conflicting detail. Only the loaded matching field can restore it.
+    result.verified_registry_ein = ""
+    result.identity_anchor = ""
+    result.reason_code = ""
     if not requested or requested != observed:
         result.status = "Unable to Confirm"
         result.raw_status_text = ("Washington detail page returned a different EIN." if observed else
@@ -25789,6 +28007,9 @@ def wa_apply_detail_master(result, body: str):
                              "The selected detail record remained incomplete after a bounded wait; registration status was not inferred.")
         result.success = False
         return result
+    result.verified_registry_ein = observed
+    result.identity_anchor = "EIN"
+    result.reason_code = "MATCH_EIN_EXACT"
     status = wa_detail_field(body, "Status")
     renewal = next((v for label in ("Renewal Date", "Renewal Due Date", "Renewal")
                     if (v := wa_detail_field(body, label))), "")
@@ -25817,12 +28038,116 @@ def wa_apply_detail_master(result, body: str):
     return result
 
 
+def lab_wa_readiness_waits_only() -> bool:
+    """Use existing explicit readiness checks instead of redundant idle waits."""
+    return (APP_VERSION.endswith("-performance-lab")
+            and os.environ.get("PUBLIC_BASE_URL") == "https://instant-compliance-snapshot-api-hn4v.onrender.com"
+            and os.environ.get("CE_LAB_WA_READY_STEPS") == "1"
+            and LAB_LOOKUP_MODE_CONTEXT.get() == "sales")
+
+
+def lab_wa_public_detail(org, module):
+    """One fresh unique-EIN public detail; all other cases keep the UI lookup.
+
+    These are the search form's own public requests. Search-row status alone
+    is never used, and an empty search is not accepted as a negative result.
+    """
+    if not (lab_wa_readiness_waits_only()
+            and os.environ.get("CE_LAB_WA_PUBLIC_DETAIL") == "1"):
+        return None
+    ein = canonical_ein_digits(org.ein)
+    if len(ein) != 9:
+        return None
+    started = time.monotonic()
+    deadline = started + 24.0
+    trace = {"stage": "search_request"}
+    try:
+        fields = {"Type": "FEINNo", "PageID": 1, "PageCount": 10, "IsSearch": "true",
+            "FEINNo": ein, "PrincipalAddress[ID]": 0, "PrincipalAddress[Country]": "USA",
+            "SortBy": "FEINNo", "SortType": "ASC"}
+        rows = json.loads(identity_fetch(
+            "https://ccfs-api.prod.sos.wa.gov/api/CFTPublicSearch/GetCFPublicSearchList", deadline,
+            headers={"Content-Type": "application/x-www-form-urlencoded", "Referer": "https://ccfs.sos.wa.gov/"},
+            data=urlencode(fields).encode(), request_timeout=18.0))
+        trace.update(stage="search_validation", search_seconds=round(time.monotonic() - started, 3))
+        if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+            return None
+        row = rows[0]
+        if (canonical_ein_digits(str(row.get("FEINNumber") or "")) != ein
+                or row.get("BusinessType") != "Charity"
+                or not isinstance(row.get("EntityName"), str) or not row["EntityName"].strip()):
+            return None
+        identifier = row.get("CFTId")
+        if type(identifier) is not int or identifier <= 0 or not str(row.get("RegistrationNumber") or "").isdigit():
+            return None
+        # A claimed larger result set must be handled by the established UI
+        # selection path rather than treating a truncated page as unique.
+        counts = [row.get("TotalPageCount", 0), (row.get("Criteria") or {}).get("TotalRowCount", 0)]
+        if any(value is not None and (type(value) is not int or value > 1 or value < 0) for value in counts):
+            return None
+        trace["stage"] = "detail_request"
+        detail_started = time.monotonic()
+        detail = json.loads(identity_fetch(
+            "https://ccfs-api.prod.sos.wa.gov/api/CFTCommon/GetOnlieCharitiSummaryById?" +
+            urlencode({"CharityID": identifier, "Type": "Charity"}), deadline,
+            headers={"Referer": "https://ccfs.sos.wa.gov/"}, request_timeout=6.0))
+        trace.update(stage="detail_validation", detail_seconds=round(time.monotonic() - detail_started, 3))
+        if (not isinstance(detail, dict) or detail.get("CharityID") != identifier
+                or detail.get("CFTId") != identifier
+                or str(detail.get("RegistrationNumber") or "") != str(row["RegistrationNumber"])
+                or canonical_ein_digits(str(detail.get("FEINNumber") or "")) != ein
+                or detail.get("BusinessType") != "CHARITABLE ORGANIZATION"):
+            return None
+        status, optional = detail.get("Status"), detail.get("IsOptionalRegistration")
+        if not isinstance(status, str) or not status.strip() or type(optional) is not bool:
+            return None
+        # Only the visible detail's own fields feed the existing interpreter.
+        # Placeholder/minimum dates cannot become usable renewal dates.
+        date_text = detail.get("RenewalDate") or ""
+        due = module.parse_date(str(date_text).split("T", 1)[0])
+        renewal = due.strftime("%m/%d/%Y") if due and due.year >= 1900 else ""
+        if not renewal and not optional and not re.search(r"closed|withdraw|cancel|revok|inactive", status, re.I):
+            return None
+        if any("\n" in value or "\r" in value for value in [status, row["EntityName"]]):
+            return None
+        body = f"FEIN Number:\n{ein}\nStatus:\n{status}\nRenewal Date:\n{renewal}\nIs Optional Charities?\n{'Yes' if optional else 'No'}"
+        aka = row.get("AKANames") or ""
+        if not isinstance(aka, str):
+            return None
+        registry_name = module.normalize_spaces(row["EntityName"] + (f"({aka})" if aka else ""))
+        result = module.SearchResult(organization_name=org.organization_name, ein=org.ein, state="WA",
+            status=module.STATUS_UNKNOWN, raw_status_text="", source_url=module.WA_SEARCH_URL, source_note="",
+            matched_registry_name=registry_name)
+        result = wa_apply_detail_master(result, body)
+        if not result.success or result.status in {"Unable to Confirm", module.STATUS_UNKNOWN}:
+            return None
+        result.source_note += " The public search and selected detail data were read directly from the same official requests used by the Washington page."
+        trace["stage"] = "accepted_detail"
+        return result
+    except Exception as exc:
+        trace.update(identity_failure_evidence(exc))
+        log_event("WA public detail fallback " + json.dumps(identity_failure_evidence(exc), sort_keys=True))
+        return None
+    finally:
+        # Fixed labels and elapsed times only: no names, EINs, bodies or secrets.
+        trace["seconds"] = round(time.monotonic() - started, 3)
+        try:
+            print("CC_LAB_WA_PUBLIC_DETAIL " + json.dumps(trace, sort_keys=True), flush=True)
+        except Exception:
+            pass
+
+
 def search_wa_nm_state(org, state: str):
     state = (state or "").upper()
     module = load_wa_nm_module()
     external_org = module.Organization(organization_name=org.organization_name, ein=org.ein)
     if state == "WA":
-        external_result = module.search_wa(external_org, show_process=False)
+        external_result = lab_wa_public_detail(org, module)
+        if external_result is None:
+            if lab_wa_readiness_waits_only():
+                external_result = module.search_wa(external_org, show_process=False, readiness_waits_only=True)
+            else:
+                external_result = module.search_wa(external_org, show_process=False)
         wa_raw = " ".join([
             getattr(external_result, "raw_status_text", "") or "",
             getattr(external_result, "source_note", "") or "",
@@ -26382,7 +28707,7 @@ def search_nm_status_history_fallback(org, module):
     )
     try:
         with checker.sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = launch_lookup_browser(p, headless=True)
             context = browser.new_context(user_agent=BROWSER_USER_AGENT, locale="en-US")
             page = context.new_page()
             try:
@@ -26608,6 +28933,61 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                 BROWSER_LOOKUP_SEMAPHORE.release()
         return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
 
+    if state in {"CA", "VA"} and not capture_source_snapshot:
+        # These existing paths use HTTP exclusively. CA retains its selected
+        # registration records on the result; legacy blank-page scrolling adds
+        # neither filing evidence nor dates.
+        try:
+            result = checker.search_ca(None, org) if state == "CA" else search_va_direct(org)
+            body = "" if state == "CA" else " ".join(filter(None, [result.raw_status_text, result.source_note,
+                                          result.matched_registry_name, result.matched_registry_identifier]))
+        except Exception as exc:
+            log_error(f"{state} lookup for {format_ein(ein)} failed before completion: {exc}")
+            result = checker.StateResult(organization_name or f"EIN {format_ein(ein)}", format_ein(ein), state, "Site Not Reachable", "")
+            result.raw_status_text = "Lookup could not be completed"
+            result.source_note = "Public registry lookup could not be completed."
+            result.error = str(exc)
+            result.success = False
+        result = ensure_state_result(result, org, state)
+        return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
+
+    if state == "NJ" and not capture_source_snapshot:
+        direct = search_nj_public_details(org)
+        if direct is not None:
+            result, body = direct
+            return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
+
+    if state in {"HI", "OH", "WV"} and not capture_source_snapshot:
+        direct = (search_hi_direct_details(org) if state == "HI" else
+                  search_oh_direct_details(org) if state == "OH" else search_wv_public_details(org))
+        if direct is not None:
+            result, body = direct
+            return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
+
+    sc_official_checked = state == "SC" and not capture_source_snapshot
+    sc_official_result = None
+    if sc_official_checked:
+        try:
+            sc_official_result = sc_official_detail_lookup(org)
+        except Exception as exc:
+            sc_official_result = checker.StateResult(organization_name, ein, state, "Site Not Reachable", "")
+            sc_official_result.raw_status_text = "Lookup could not be completed"
+            sc_official_result.source_note = "Public registry lookup could not be completed."
+            sc_official_result.error = str(exc)
+            sc_official_result.success = False
+    if sc_official_result and public_status(sc_official_result) != "Not Registered":
+        return response_data_for_lookup(sc_official_result, "", org, organization_name, ein, state, lookup_started)
+
+    if state == "LA" and not capture_source_snapshot and weekly_asset("LA", "downloadable-data/LA.xlsx") is not None:
+        # A verified local export needs neither a browser nor a network request.
+        # If the asset expires/disappears between checks, the normal browser path
+        # remains the owner of live download recovery.
+        result = search_la_downloaded_export(None, org)
+        if result.success:
+            body = " ".join(filter(None, [result.raw_status_text, result.source_note,
+                                          result.matched_registry_name, result.matched_registry_identifier]))
+            return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
+
     if state == "CT":
         lookup_started = time.perf_counter()
         result = search_ct_direct(org)
@@ -26640,12 +29020,6 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
             ]).strip()
             return response_data_for_lookup(result, body, org, organization_name, ein, state, lookup_started)
 
-    if state == "FL":
-        lookup_started = time.perf_counter()
-        reachable, preflight_note = quick_registry_preflight(FL_CHECK_A_CHARITY_URL, FL_PREFLIGHT_TIMEOUT_SECONDS)
-        if not reachable:
-            print(f"FL preflight did not respond; continuing to bounded browser lookup: {preflight_note}", flush=True)
-
     result = None
     lookup_started = time.perf_counter()
     browser_admitted = BROWSER_LOOKUP_SEMAPHORE.acquire(timeout=BROWSER_LOOKUP_ACQUIRE_SECONDS)
@@ -26664,7 +29038,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     "--no-sandbox",
                     "--disable-dev-shm-usage",
                 ]
-            browser = p.chromium.launch(headless=True, **launch_kwargs)
+            browser = launch_lookup_browser(p, headless=True, **launch_kwargs)
             if state == "AK":
                 result, body = search_ak_with_registration_evidence(browser, org, artifact_name)
                 if public_status(result) not in {"Not Registered", "Site Not Reachable"} and not (result.matched_registry_name or "").strip():
@@ -26689,6 +29063,7 @@ def run_state_lookup(organization_name: str, ein: str, state: str, capture_sourc
                     })
                 if state == "LA":
                     context_kwargs["accept_downloads"] = True
+                context_kwargs.update(lab_fl_form_context_options(state, org))
                 context = browser.new_context(**context_kwargs)
                 if state == "AR":
                     context.add_init_script(
@@ -26836,6 +29211,7 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     and public_status(result) == "Not Registered"
                     and BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS > 0
                     and elapsed_before_confirmation < 35.0
+                    and not lab_pa_completed_no_match(result, org)
                 ):
                     time.sleep(min(BATCH_NO_MATCH_CONFIRMATION_DELAY_SECONDS, 5.0))
                     confirmed_result = search_pa_with_name_fallback(page, org)
@@ -26854,7 +29230,8 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     result.matched_registry_identifier or "",
                 ]).strip()
             elif state == "SC":
-                result = search_sc_resilient(page, org)
+                result = search_sc_resilient(page, org, official_checked=sc_official_checked,
+                                             official_result=sc_official_result)
             elif state == "HI":
                 result = search_hi_precise(page, org)
                 if public_status(result) != "Not Registered":
@@ -26899,6 +29276,12 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                     )
                 ):
                     page._cc_mi_lookup_deadline = mi_deadline
+                    completed_names = getattr(mi_probe_result, "_cc_mi_completed_empty_names", [])
+                    if completed_names:
+                        progress["identity"] = (org.organization_name, canonical_ein_digits(org.ein))
+                        progress["http_completed_empty_name_queries"] = list(completed_names)
+                        progress["completed_empty_name_queries"] = list(dict.fromkeys([
+                            *progress.get("completed_empty_name_queries", []), *completed_names]))
                     page._cc_mi_search_progress = progress
                     result = search_mi_name_fallback(page, org)
                 if (
@@ -27683,10 +30066,14 @@ def run_single_state_lookup_reliably(organization_name: str, ein: str, state: st
                   if state == "ME" else run_state_lookup(organization_name, ein, state, wi_progress=wi_progress)
                   if state == "WI" else run_state_lookup(organization_name, ein, state))
         result["semantic_attempts"] = attempt
+        if state == "AR" and lab_sales_ar_access_block_is_terminal(result):
+            return result
         if state == "ME":
             me_attempt_history.append({key: result.get(key) for key in (
                 "semantic_attempts", "status", "reason_code", "error", "source_note", "lookup_seconds", "me_queue_seconds", "source_attempts")})
             result["me_attempt_history"] = list(me_attempt_history)
+            if result.get('reason_code') == 'ME_SOURCE_APPLICATION_ERROR':
+                return result  # The lab queue owns the one delayed, fenced recovery.
             if attempt > 1 and result.get("success"):
                 result["runner_recovery"] = "Maine completed after one delayed recovery attempt."
         if state == "MI":
@@ -28062,6 +30449,14 @@ def identity_review_view(record):
 
 def attach_identity_review(data, context):
     """Sign master-retrieved candidates, never a browser-supplied status override."""
+    if (APP_VERSION.endswith('-performance-lab')
+            and os.environ.get('PUBLIC_BASE_URL') == 'https://instant-compliance-snapshot-api-hn4v.onrender.com'
+            and os.environ.get('CE_AURORA_STAGING_BRIDGE') == '1'):
+        # Private authenticated worker response only. Staging signs the same
+        # master-retrieved candidates with its own release and signing key.
+        data['_worker_identity_review'] = json.loads(json.dumps(context,
+            default=lambda value: value.isoformat() if isinstance(value, date) else str(value)))
+        return
     if not APP_VERSION.endswith("-staging") or len(NY_CONNECTOR_SIGNING_KEY) < 32:
         return
     rows = []
@@ -28548,6 +30943,11 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
         self._send_json(404, {"error": "Open http://127.0.0.1:8765/ to use the registry snapshot page."})
 
     def do_POST(self) -> None:
+        if self.path == "/api/workflow":
+            import sys
+            from deployment.staging_workflows import handle
+            handle(sys.modules[__name__], self)
+            return
         if self.path == "/api/identity-review":
             self._send_identity_review()
             return

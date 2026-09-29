@@ -1,0 +1,4 @@
+-r ../requirements.txt
+psycopg[binary]==3.3.3
+psycopg-pool==3.3.3
+pywin32==311; sys_platform == 'win32'

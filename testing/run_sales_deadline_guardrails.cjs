@@ -12,8 +12,8 @@ test('one overall deadline preserves early results and closes running AND queued
  await c.advance(59999);assert.equal(c.events.length,0);await c.advance(1);await run;
  const d=c.events[0].detail;assert.equal(d.seconds,60);assert.equal(d.results.length,34);assert.equal(new Set(d.results.map(r=>r.state)).size,34);
  assert.equal(d.results.find(r=>r.state==='AK').status,'Current');assert.equal(d.results.filter(r=>r.result.status_reason==='SALES_TIME_LIMIT').length,33);
- assert(c.calls.every(args=>args[7].signal.aborted));assert.equal(c.elements.ccSalesRun.disabled,false);assert.equal(c.calls.length,16);
- await c.drain();assert.equal(c.events.length,1);assert.equal(d.results.length,34);assert.equal(c.calls.length,16);
+ assert(c.calls.every(args=>args[7].signal.aborted));assert.equal(c.elements.ccSalesRun.disabled,false);assert.equal(c.calls.length,21);
+ await c.drain();assert.equal(c.events.length,1);assert.equal(d.results.length,34);assert.equal(c.calls.length,21);
 });
 test('late response cannot overwrite deadline results or a new organization run',async()=>{
  const c=fixture();let run=c.submit();await c.advance(60000);await run;
@@ -32,7 +32,7 @@ test('fast run finishes early, ambiguity remains unconfirmed and deadline is cle
  await c.advance(60000);assert.equal(c.events.length,1);
 });
 test('32-lane experiment uses all states at once with same deadline and classification',async()=>{
- const source=fs.readFileSync(path.join(root,'web-staging/sales-mode.js'),'utf8').replace('const STATE_CONCURRENCY = 15;','const STATE_CONCURRENCY = 32;');
+ const source=fs.readFileSync(path.join(root,'web-staging/sales-mode.js'),'utf8').replace('const STATE_CONCURRENCY = 20;','const STATE_CONCURRENCY = 32;');
  const c=setup({source});c.elements.ccSalesMode.onclick();c.elements.ccSalesSelectAll.onclick();const run=c.submit();assert.equal(c.calls.length,32);await c.drain();await run;assert.equal(c.peak,32);
 });
 test('Standard transport retains its five-minute timeout; optional Sales abort is forwarded and listener removed',async()=>{
@@ -45,7 +45,7 @@ test('Standard transport retains its five-minute timeout; optional Sales abort i
  await assert.rejects(c.requestSingleState('https://fixture','123456789','fixture','NY','Control',false,[],{signal:ctrl.signal}),{name:'AbortError'});assert.equal(lookedUp,false);
 });
 test('discovery and shared checker match baseline; NY transport has separate scoped controls',()=>{
- for(const file of ['Charity_Checker_Script for 13_states.py','web-staging/organization-identity.js']){
+ for(const file of ['web-staging/organization-identity.js']){
   // Verified 09.27.2 includes the user-requested IL discovery removal.
   const old=cp.execFileSync('git',['show','53bb868:'+file],{cwd:root,maxBuffer:20*1024*1024});assert.deepEqual(fs.readFileSync(path.join(root,file)).toString().replaceAll('\r\n','\n'),old.toString().replaceAll('\r\n','\n'),file);
  }

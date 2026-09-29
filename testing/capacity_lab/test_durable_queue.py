@@ -1,0 +1,1042 @@
+"""Real PostgreSQL integration, concurrent connections and independent workers.
+
+Requires CE_TEST_DATABASE_URL pointing to the isolated lab database. Every test
+uses a random schema and drops only that schema; it cannot erase the live queue.
+No registry network calls and no customer browser are involved.
+"""
+import concurrent.futures
+from contextlib import contextmanager
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import unittest
+import uuid
+from unittest.mock import patch
+
+import psycopg
+from psycopg import sql
+from deployment.durable_queue import Queue, Conflict, QueueFull, NotFound, normalize_submission
+from deployment.queue_worker import ProcessTree, Supervisor, process_running
+
+ROOT = Path(__file__).resolve().parents[2]
+VERSION = 'fixture-performance-lab'
+STATES = ['CO','ME','AR','NY','CA','LA']
+
+
+def payload(ein='123456789', states=None, **changes):
+    return normalize_submission({'ein': ein, 'organization_name': 'Fixture Foundation',
+        'alternate_names': ['Official Former Name'], 'states': states or ['CO'], **changes}, STATES)
+
+
+@unittest.skipUnless(os.environ.get('CE_TEST_DATABASE_URL'), 'Real lab Postgres required')
+class DurableTests(unittest.TestCase):
+    def setUp(self):
+        self.dsn = os.environ['CE_TEST_DATABASE_URL']
+        self.schema = 'cc_test_'+uuid.uuid4().hex
+        with psycopg.connect(self.dsn, autocommit=True) as c:
+            c.execute(sql.SQL('CREATE SCHEMA {}').format(sql.Identifier(self.schema)))
+        self.q = Queue(self.dsn, test_schema=self.schema)
+        self.q.initialize(VERSION, {'CO':30,'ME':1,'AR':1,'CA':4,'IRS':4})
+        self.extra = []
+
+    def tearDown(self):
+        for q in self.extra: q.close()
+        self.q.close()
+        with psycopg.connect(self.dsn, autocommit=True) as c:
+            c.execute(sql.SQL('DROP SCHEMA {} CASCADE').format(sql.Identifier(self.schema)))
+
+    def second(self):
+        q = Queue(self.dsn, test_schema=self.schema); self.extra.append(q); return q
+
+    def submit(self, p=None, scope='a', key=None):
+        return self.q.submit(scope, key or uuid.uuid4().hex, p or payload(), VERSION, ['CO','ME','IRS'])[0]
+
+    def worker(self, q=None, slots=8):
+        ident = uuid.uuid4().hex
+        (q or self.q).register_worker(ident, VERSION, slots)
+        return ident
+
+    def finish(self, job, q=None):
+        return (q or self.q).complete(job['owner'], job['id'], job['token'],
+            {'ein':job['payload']['ein'],'state':job['state'],'app_version':VERSION,'status':'Current'})
+
+    def claim_available(self, q, worker, maximum):
+        # Real supervisors retry busy claims and renew leases while other
+        # workers acquire work. The external test connection can take >12s to
+        # acquire 20 jobs; that client-side cutoff must not masquerade as a
+        # smaller runtime capacity. Keep all exact 15/20/source-cap assertions.
+        jobs=[];deadline=time.monotonic()+30;heartbeat=0
+        while time.monotonic()<deadline:
+            if time.monotonic()>=heartbeat:
+                q.heartbeat(worker,[(j['id'],j['token']) for j in jobs])
+                heartbeat=time.monotonic()+3
+            if len(jobs)<maximum:
+                job=q.claim(worker)
+                if job:jobs.append(job)
+                else:time.sleep(.03+int(worker[-2:],16)/10000)
+            else:time.sleep(.05)
+        return jobs
+
+    def sales_without_review(self, **changes):
+        return payload(mode='sales', alternate_names=[], states=['CO','LA'], **changes)
+
+    def test_registration_state_ceiling_across_workers_for_both_modes(self):
+        states = [f'T{i:02}' for i in range(32)]
+        for mode in ('standard', 'sales'):
+            for limit in (5, 10, 15, 20):
+                with self.subTest(mode=mode, limit=limit):
+                    p = normalize_submission({'ein':f'{100000000+limit:09}',
+                        'organization_name':'Concurrency fixture', 'states':states,
+                        'mode':mode, 'alternate_names':['Reviewed fixture'],
+                        'state_concurrency':limit}, states)
+                    ident = self.submit(p)
+                    workers = [self.worker(slots=12), self.worker(slots=12)]
+                    held = []
+                    def renew():
+                        for worker in workers:
+                            self.q.heartbeat(worker, [(j['id'],j['token']) for j in held if j['owner']==worker])
+                    for i in range(limit):
+                        renew()
+                        job = self.q.claim(workers[i % 2])
+                        self.assertIsNotNone(job)
+                        self.assertEqual(job['workflow_id'], ident)
+                        held.append(job)
+                    renew()
+                    for worker in workers:
+                        self.assertIsNone(self.q.claim(worker))
+                    # A process stopping still owns its concurrency reservation.
+                    with self.q.transaction() as (c, now):
+                        c.execute("UPDATE cc_lab_jobs SET phase='stopping' WHERE id=%s", (held[0]['id'],))
+                    self.assertIsNone(self.q.claim(workers[0]))
+                    released = held.pop(0)
+                    self.assertTrue(self.finish(released))
+                    renew()
+                    replacement = self.q.claim(released['owner'])
+                    self.assertIsNotNone(replacement)
+                    held.append(replacement)
+                    self.assertIsNone(self.q.claim(released['owner']))
+                    status = self.q.status('a', ident)
+                    self.assertEqual(status['deadline']-status['submitted'], 60 if mode=='sales' else 900)
+                    self.q.cancel('a', ident)
+                    for job in held:
+                        self.q.complete(job['owner'],job['id'],job['token'],error='TEST_CANCELED')
+                    self.assertIsNotNone(self.q.status('a',ident)['finished'])
+
+    def test_busy_claim_returns_before_lock_release_without_reserving_work(self):
+        ident=self.submit();worker=self.worker();other=self.second()
+        pool=concurrent.futures.ThreadPoolExecutor(1)
+        self.addCleanup(pool.shutdown)
+        with self.q.transaction() as (c,now):
+            future=pool.submit(other.claim,worker)
+            try:
+                claimed=future.result(timeout=2)
+            except concurrent.futures.TimeoutError:
+                self.fail('A busy claim blocked the worker instead of returning to completion/deadline supervision')
+            self.assertIsNone(claimed)
+            row=c.execute('SELECT phase,owner,attempt FROM cc_lab_jobs WHERE workflow_id=%s',(ident,)).fetchone()
+            self.assertEqual(row,{'phase':'queued','owner':None,'attempt':0})
+        job=other.claim(worker)
+        self.assertEqual(job['workflow_id'],ident)
+        self.assertEqual(job['attempt'],1)
+        self.finish(job,other)
+
+    def test_sales_thirty_two_across_three_workers_and_standard_default(self):
+        # Hold fixture time fixed while testing capacity over the external DB
+        # connection. Dozens of remote claims must not consume the Sales window.
+        # Separate deadline tests below use the real database clock.
+        original_transaction = self.q.transaction
+        with original_transaction() as (_, fixture_now):
+            pass
+        @contextmanager
+        def fixture_transaction(*args, **kwargs):
+            with original_transaction(*args, **kwargs) as acquired:
+                yield None if acquired is None else (acquired[0], fixture_now)
+        clock_patch = patch.object(self.q, 'transaction', fixture_transaction)
+        clock_patch.start()
+        self.addCleanup(clock_patch.stop)
+        states = [f'T{i:02}' for i in range(33)]
+        for mode, limit in [('sales', 32), ('standard', 15)]:
+            with self.subTest(mode=mode):
+                request = {'ein':f'{100000000+limit:09}', 'organization_name':'Ceiling fixture',
+                           'states':states, 'mode':mode, 'alternate_names':['Reviewed fixture']}
+                if mode == 'sales':request['state_concurrency'] = 32
+                p = normalize_submission(request, states)
+                if mode == 'standard':self.assertNotIn('state_concurrency', p)
+                ident = self.submit(p)
+                workers = [self.worker(slots=12) for _ in range(3)]
+                held = []
+                for i in range(limit):
+                    job = self.q.claim(workers[i % 3])
+                    self.assertIsNotNone(job)
+                    self.assertEqual(job['workflow_id'], ident)
+                    held.append(job)
+                for worker in workers:self.assertIsNone(self.q.claim(worker))
+                with self.q.transaction() as (c, now):
+                    c.execute("UPDATE cc_lab_jobs SET phase='stopping' WHERE id=%s", (held[0]['id'],))
+                self.assertIsNone(self.q.claim(workers[0]))
+                released = held.pop(0)
+                self.assertTrue(self.finish(released))
+                replacement = self.q.claim(released['owner'])
+                self.assertIsNotNone(replacement)
+                held.append(replacement)
+                self.assertIsNone(self.q.claim(released['owner']))
+                status = self.q.status('a', ident)
+                self.assertEqual(status['deadline']-status['submitted'], 60 if mode=='sales' else 900)
+                self.q.cancel('a', ident)
+                for job in held:self.q.complete(job['owner'],job['id'],job['token'],error='TEST_CANCELED')
+                self.assertIsNotNone(self.q.status('a',ident)['finished'])
+
+    def test_busy_claim_does_not_allow_canceled_work_to_resurrect(self):
+        ident=self.submit();worker=self.worker();other=self.second()
+        with concurrent.futures.ThreadPoolExecutor(1) as pool:
+            with self.q.transaction():
+                self.assertIsNone(pool.submit(other.claim,worker).result(timeout=2))
+        self.q.cancel('a',ident)
+        self.assertIsNone(other.claim(worker))
+        state=self.q.status('a',ident)
+        self.assertEqual(state['phase'],'canceled')
+        self.assertEqual(state['jobs'][0]['attempt'],0)
+
+    def test_sales_identity_is_inside_same_deadline_and_hidden_from_state_counts(self):
+        ident=self.submit(self.sales_without_review());worker=self.worker()
+        before=self.q.status('a',ident)
+        self.assertEqual(before['total'],2);self.assertEqual(len(before['preparation']),1)
+        self.assertEqual(before['deadline']-before['submitted'],60)
+        seed=self.q.claim(worker);self.assertEqual(seed['state'],'@sales_identity')
+        self.assertEqual(seed['resources'],['CO','IRS']);self.assertLessEqual(seed['run_seconds'],8)
+        self.assertIsNone(self.q.claim(worker))
+        proof={'state':'@sales_identity','ein':seed['payload']['ein'],'app_version':VERSION,'sources':{'IRS':{'public_profile':{'url':'https://projects.propublica.org/nonprofits/api/v2/organizations/'+seed['payload']['ein']+'.json','retrieved_after':time.time(),'payload':{'organization':{'ein':seed['payload']['ein'],'name':'Same workflow source'}}}}},'errors':{}}
+        self.q.complete(worker,seed['id'],seed['token'],proof)
+        state=self.q.claim(worker);self.assertNotEqual(state['state'],'@sales_identity')
+        self.assertEqual(state['sales_identity'],proof);self.assertEqual(state['payload']['alternate_names'],[])
+        after=self.q.status('a',ident);self.assertEqual(after['deadline'],before['deadline']);self.assertEqual(after['completed'],0)
+
+    def test_identity_failure_is_propagated_conservatively_without_blocking_states(self):
+        self.submit(self.sales_without_review());worker=self.worker();seed=self.q.claim(worker)
+        self.q.complete(worker,seed['id'],seed['token'],error='TASK_DEADLINE')
+        state=self.q.claim(worker)
+        self.assertEqual(state['sales_identity']['errors'],{'identity':'TASK_DEADLINE'})
+        self.assertEqual(state['sales_identity']['ein'],state['payload']['ein'])
+
+    def test_identity_grace_lease_does_not_extend_sales_cutoff(self):
+        with patch.dict(os.environ,{'CE_LAB_SALES_IDENTITY_GRACE':'1'}):
+            ident=self.submit(self.sales_without_review());worker=self.worker()
+            before=self.q.status('a',ident);seed=self.q.claim(worker)
+            self.assertEqual(seed['state'],'@sales_identity')
+            self.assertGreater(seed['run_seconds'],11);self.assertLessEqual(seed['run_seconds'],12)
+            self.assertEqual(seed['resources'],['CO','IRS'])
+            self.assertEqual(before['deadline']-before['submitted'],60)
+            self.q.complete(worker,seed['id'],seed['token'],error='TASK_DEADLINE')
+            state=self.q.claim(worker)
+            self.assertEqual(state['sales_identity']['errors'],{'identity':'TASK_DEADLINE'})
+            self.assertEqual(self.q.status('a',ident)['deadline'],before['deadline'])
+
+    def test_late_identity_grace_remains_bounded_by_workflow(self):
+        with patch.dict(os.environ,{'CE_LAB_SALES_IDENTITY_GRACE':'1'}):
+            ident=self.submit(self.sales_without_review());worker=self.worker()
+            with self.q.transaction() as (c,now):
+                c.execute('UPDATE cc_lab_workflows SET deadline=%s WHERE id=%s',(now+3,ident))
+            seed=self.q.claim(worker)
+            self.assertEqual(seed['state'],'@sales_identity');self.assertLess(seed['run_seconds'],3)
+
+    def test_identity_cannot_change_reviewed_sales_or_standard_input(self):
+        for p in (payload(mode='sales'),payload(alternate_names=[])):
+            ident=self.submit(p);worker=self.worker();job=self.q.claim(worker)
+            self.assertNotEqual(job['state'],'@sales_identity');self.assertNotIn('sales_identity',job)
+            self.assertEqual(self.q.status('a',ident)['preparation'],[])
+            self.finish(job)
+
+    def test_identity_deadline_does_not_allow_queued_state_after_minute(self):
+        ident=self.submit(self.sales_without_review());worker=self.worker();seed=self.q.claim(worker)
+        with self.q.transaction() as (c,now):
+            c.execute('UPDATE cc_lab_workflows SET deadline=%s WHERE id=%s',(now-1,ident))
+        self.q.status('a',ident)
+        self.assertIsNone(self.q.claim(worker))
+        self.finish(seed)
+        final=self.q.status('a',ident)
+        self.assertEqual(final['phase'],'expired');self.assertEqual(final['completed'],2)
+        self.assertTrue(all(j['result'] is None for j in final['jobs']+final['preparation']))
+
+    def test_identity_evidence_cannot_cross_workflow_or_ein(self):
+        worker=self.worker();a=self.submit(self.sales_without_review(ein='123456789'));seed=self.q.claim(worker)
+        with self.assertRaises(ValueError):
+            self.q.complete(worker,seed['id'],seed['token'],{'ein':'987654321','state':'@sales_identity','app_version':VERSION})
+        self.finish(seed)
+        b=self.submit(self.sales_without_review(ein='987654321'))
+        claimed=[self.q.claim(worker) for _ in range(3)]
+        other=next(j for j in claimed if j and j['workflow_id']==b)
+        self.assertEqual(other['state'],'@sales_identity');self.assertNotIn('sales_identity',other)
+
+    def test_sales_identity_uses_same_global_source_permits(self):
+        worker=self.worker(slots=12)
+        with self.q.transaction() as (c,now):
+            c.execute("UPDATE cc_lab_settings SET registry_limits='{" + '\"CO\":1,\"IRS\":1}' + "'::jsonb WHERE id=1")
+        self.submit(self.sales_without_review(ein='123456789'));first=self.q.claim(worker)
+        self.submit(self.sales_without_review(ein='987654321'))
+        self.assertIsNone(self.q.claim(worker))
+        self.finish(first)
+        second=self.q.claim(worker);self.assertEqual(second['state'],'@sales_identity')
+        self.assertNotEqual(second['workflow_id'],first['workflow_id'])
+
+    def test_idempotency_and_active_ein_dedupe_across_connections(self):
+        q2 = self.second()
+        with concurrent.futures.ThreadPoolExecutor(6) as pool:
+            rows = list(pool.map(lambda i: (self.q if i%2 else q2).submit('a','same',payload(),VERSION), range(12)))
+        self.assertEqual(len({r[0] for r in rows}), 1)
+        self.assertEqual(sum(r[1] for r in rows), 1)
+        self.assertEqual(self.submit(key='another'), rows[0][0])
+        with self.assertRaises(Conflict): self.submit(payload(alternate_names=[]), key='same')
+        with self.assertRaises(Conflict): self.submit(payload(mode='sales'))
+
+    def completion(self, job):
+        return (job['id'],job['token'],{'ein':job['payload']['ein'],
+                'state':job['state'],'app_version':VERSION,'status':'Current'},None)
+
+    def test_sales_cutoff_rejects_late_results_and_never_starts_waiting_jobs(self):
+        ident=self.submit(payload(mode='sales',states=['CO','LA']));worker=self.worker()
+        job=self.q.claim(worker)
+        with self.q.transaction() as (c,now):
+            c.execute('UPDATE cc_lab_workflows SET deadline=%s WHERE id=%s',(now-1,ident))
+        snapshot=self.q.status('a',ident)
+        self.assertEqual(snapshot['stop_reason'],'deadline')
+        self.assertIsNone(self.q.claim(worker))
+        self.assertTrue(self.q.complete_many(worker,[self.completion(job)])[0])
+        final=self.q.status('a',ident)
+        self.assertEqual(final['phase'],'expired')
+        self.assertTrue(all(j['result'] is None and j['error'] for j in final['jobs']))
+
+    def test_batched_completion_preserves_independent_jobs_and_fences(self):
+        worker=self.worker();other=self.worker();jobs=[]
+        for i in range(5):
+            self.submit(payload(ein=f'{100000001+i:09d}'))
+            jobs.append(self.q.claim(other if i==4 else worker))
+        self.q.cancel('a',jobs[2]['workflow_id'])
+        entries=[self.completion(j) for j in jobs]
+        entries[1]=(entries[1][0],str(uuid.uuid4()),entries[1][2],None)
+        self.assertEqual(self.q.complete_many(worker,entries),[True,False,True,True,False])
+        with self.q.transaction() as (c,now):
+            rows={r['id']:r for r in c.execute('SELECT * FROM cc_lab_jobs')}
+        self.assertEqual(rows[jobs[0]['id']]['result']['status'],'Current')
+        self.assertEqual(rows[jobs[1]['id']]['phase'],'running')
+        self.assertIsNone(rows[jobs[2]['id']]['result'])
+        self.assertIn('CANCELED',rows[jobs[2]['id']]['error'])
+        self.assertEqual(rows[jobs[3]['id']]['result']['status'],'Current')
+        self.assertEqual(rows[jobs[4]['id']]['phase'],'running')
+
+    def test_batched_completion_invalid_evidence_rolls_back_every_job(self):
+        worker=self.worker();self.submit(payload(states=['CO','LA']))
+        jobs=[self.q.claim(worker),self.q.claim(worker)]
+        for key,value in [('ein','987654321'),('state','WRONG'),('app_version','wrong')]:
+            entries=[self.completion(j) for j in jobs];entries[1][2][key]=value
+            with self.assertRaises(ValueError):self.q.complete_many(worker,entries)
+            with self.q.transaction() as (c,now):
+                self.assertEqual(c.execute("SELECT count(*) AS n FROM cc_lab_jobs WHERE phase='running'").fetchone()['n'],2)
+                self.assertEqual(c.execute("SELECT count(*) AS n FROM cc_lab_events WHERE event='finished'").fetchone()['n'],0)
+        with self.assertRaises(ValueError):self.q.complete_many(worker,[])
+        with self.assertRaises(ValueError):self.q.complete_many(worker,[self.completion(jobs[0])]*2)
+        self.assertEqual(self.q.complete_many(worker,[self.completion(j) for j in jobs]),[True,True])
+
+    def test_batched_completion_write_failure_rolls_back_and_recovers(self):
+        worker=self.worker();self.submit(payload(states=['CO','LA']))
+        jobs=[self.q.claim(worker),self.q.claim(worker)];original=self.q.event
+        calls=[]
+        def broken(c,now,event,*args,**kwargs):
+            original(c,now,event,*args,**kwargs)
+            if event=='finished':
+                calls.append(event)
+                if len(calls)==2:c.execute('SELECT * FROM nonexistent_completion_failure_fixture')
+        entries=[self.completion(j) for j in jobs]
+        with patch.object(self.q,'event',broken):
+            with self.assertRaises(psycopg.errors.UndefinedTable):self.q.complete_many(worker,entries)
+        with self.q.transaction() as (c,now):
+            self.assertEqual(c.execute("SELECT count(*) AS n FROM cc_lab_jobs WHERE phase='running'").fetchone()['n'],2)
+            self.assertEqual(c.execute("SELECT count(*) AS n FROM cc_lab_events WHERE event='finished'").fetchone()['n'],0)
+        self.assertEqual(self.q.complete_many(worker,entries),[True,True])
+
+    def test_settlement_does_not_rewrite_unchanged_active_workflow(self):
+        ident=self.submit();worker=self.worker();self.q.claim(worker)
+        with self.q.transaction() as (c,now):
+            before=c.execute('SELECT xmin::text AS revision,phase FROM cc_lab_workflows WHERE id=%s',(ident,)).fetchone()
+        self.q.metrics()
+        with self.q.transaction() as (c,now):
+            after=c.execute('SELECT xmin::text AS revision,phase FROM cc_lab_workflows WHERE id=%s',(ident,)).fetchone()
+        self.assertEqual(before['phase'],'active');self.assertEqual(before,after)
+
+    def test_admission_observation_does_not_change_job_or_capacity(self):
+        ident=self.submit();worker=self.worker();job=self.q.claim(worker)
+        observation={'window_seconds':3,'seconds_by_reason':{'cpu_pressure':2,'claim_transaction':1},
+                     'counts_by_reason':{'cpu_pressure':4,'claim_transaction':1}}
+        allowed=self.q.heartbeat(worker,[(job['id'],job['token'])],observation=observation)
+        self.assertIn(job['id'],allowed)
+        with self.q.transaction() as (conn,now):
+            row=conn.execute("SELECT detail FROM cc_lab_events WHERE event='worker_admission'").fetchone()
+            held=conn.execute("SELECT count(*) AS n FROM cc_lab_jobs WHERE phase='running'").fetchone()['n']
+        self.assertEqual(row['detail'],{'worker':worker,**observation})
+        self.assertEqual(held,1)
+        self.finish(job)
+        self.assertEqual(self.q.status('a',ident)['phase'],'completed')
+
+    def test_ny_explicit_activation_claims_real_work_and_preserves_limits(self):
+        disabled=self.submit(payload(states=['NY']))
+        self.assertEqual(self.q.status('a',disabled)['jobs'][0]['error'],'NY_COLLECTOR_NOT_CONFIGURED')
+        self.q.ny_enabled=True
+        enabled=self.submit(payload('987654321',states=['NY']))
+        job=self.q.claim(self.worker())
+        self.assertEqual(job['workflow_id'],enabled)
+        self.assertEqual(job['state'],'NY')
+        self.assertEqual(job['resources'],['NY'])
+        self.finish(job)
+
+    def test_batched_heartbeat_preserves_owner_token_phase_and_deadline_guards(self):
+        worker=self.worker();other=self.worker();jobs=[]
+        for i in range(5):
+            self.submit(payload(ein=f'{100000001+i:09d}'))
+            jobs.append(self.q.claim(other if i==4 else worker))
+        self.finish(jobs[2])
+        with self.q.transaction() as (c,now):
+            c.execute('UPDATE cc_lab_jobs SET lease_until=%s WHERE id=ANY(%s)',(now+10,[j['id'] for j in jobs]))
+            c.execute('UPDATE cc_lab_jobs SET run_until=%s WHERE id=%s',(now-1,jobs[3]['id']))
+            before={r['id']:r['lease_until'] for r in c.execute('SELECT id,lease_until FROM cc_lab_jobs')}
+        pairs=[(j['id'],j['token']) for j in jobs]
+        pairs[1]=(jobs[1]['id'],str(uuid.uuid4()))
+        pairs.append((str(uuid.uuid4()),str(uuid.uuid4())))
+        self.assertEqual(self.q.heartbeat(worker,pairs),[jobs[0]['id']])
+        with self.q.transaction() as (c,now):
+            after={r['id']:r['lease_until'] for r in c.execute('SELECT id,lease_until FROM cc_lab_jobs')}
+        self.assertGreater(after[jobs[0]['id']],before[jobs[0]['id']])
+        self.assertTrue(all(after[j['id']]==before[j['id']] for j in jobs[1:]))
+        self.assertEqual(self.q.heartbeat(worker,[]),[])
+
+    def test_batched_heartbeat_failure_rolls_back_every_lease_and_recovers(self):
+        worker=self.worker();self.submit(payload(states=['CO','LA']))
+        jobs=[self.q.claim(worker),self.q.claim(worker)]
+        with self.q.transaction() as (c,now):
+            c.execute('UPDATE cc_lab_jobs SET lease_until=%s',(now+10,))
+            before={r['id']:r['lease_until'] for r in c.execute('SELECT id,lease_until FROM cc_lab_jobs')}
+        original=self.q.transaction
+        class BrokenConnection:
+            def __init__(self,c):self.c=c;self.updates=0
+            def pipeline(self):return self.c.pipeline()
+            def execute(self,query,*args,**kwargs):
+                if query.startswith('UPDATE cc_lab_jobs SET lease_until='):
+                    self.updates+=1
+                    if self.updates==2:return self.c.execute('SELECT * FROM nonexistent_heartbeat_failure_fixture')
+                return self.c.execute(query,*args,**kwargs)
+        @contextmanager
+        def broken():
+            with original() as (c,now):yield BrokenConnection(c),now
+        pairs=[(j['id'],j['token']) for j in jobs]
+        with patch.object(self.q,'transaction',broken):
+            with self.assertRaises(psycopg.errors.UndefinedTable):self.q.heartbeat(worker,pairs)
+        with self.q.transaction() as (c,now):
+            after={r['id']:r['lease_until'] for r in c.execute('SELECT id,lease_until FROM cc_lab_jobs')}
+        self.assertEqual(before,after)
+        self.assertEqual(self.q.heartbeat(worker,pairs),[j['id'] for j in jobs])
+
+    def test_recent_measured_duration_priority_keeps_organization_fairness(self):
+        old=self.submit(payload(states=['CO','LA']))
+        worker=self.worker()
+        for _ in range(2):
+            job=self.q.claim(worker);self.finish(job)
+        with self.q.transaction() as (c,now):
+            c.execute('UPDATE cc_lab_jobs SET claimed=%s,finished=%s WHERE workflow_id=%s AND state=%s',(now-70,now-10,old,'LA'))
+            c.execute('UPDATE cc_lab_jobs SET claimed=%s,finished=%s WHERE workflow_id=%s AND state=%s',(now-12,now-10,old,'CO'))
+        a=self.submit(payload(states=['CO','LA']))
+        b=self.submit(payload('987654321',states=['CO','LA']))
+        first,second=self.q.claim(worker),self.q.claim(worker)
+        self.assertEqual({first['workflow_id'],second['workflow_id']},{a,b})
+        self.assertEqual([first['state'],second['state']],['LA','LA'])
+        self.finish(first);self.finish(second)
+        self.assertEqual(self.q.claim(worker)['state'],'CO')
+
+    def test_idle_claim_skips_history_but_refreshes_worker(self):
+        worker = self.worker()
+        with self.q.transaction() as (c, now):
+            c.execute('UPDATE cc_lab_workers SET heartbeat=%s WHERE id=%s', (now-100, worker))
+        queries = []
+        original = self.q.transaction
+
+        class ObservedConnection:
+            def __init__(self, conn): self.conn = conn
+            def pipeline(self): return self.conn.pipeline()
+            def execute(self, query, *args, **kwargs):
+                queries.append(query)
+                return self.conn.execute(query, *args, **kwargs)
+
+        @contextmanager
+        def observed(**kwargs):
+            with original(**kwargs) as acquired:
+                yield (ObservedConnection(acquired[0]),acquired[1]) if acquired is not None else None
+
+        with patch.object(self.q, 'transaction', observed):
+            self.assertIsNone(self.q.claim(worker))
+        self.assertFalse(any('percentile_cont' in query for query in queries))
+        with original() as (c, now):
+            heartbeat = c.execute('SELECT heartbeat FROM cc_lab_workers WHERE id=%s', (worker,)).fetchone()['heartbeat']
+            self.assertLess(now-heartbeat, 5)
+
+    def seed_duration_history(self):
+        old=self.submit(payload(states=['CO','LA']));worker=self.worker()
+        for _ in range(2):self.finish(self.q.claim(worker))
+        with self.q.transaction() as (c,now):
+            c.execute('UPDATE cc_lab_jobs SET claimed=%s,finished=%s WHERE workflow_id=%s AND state=%s',
+                      (now-70,now-10,old,'LA'))
+            c.execute('UPDATE cc_lab_jobs SET claimed=%s,finished=%s WHERE workflow_id=%s AND state=%s',
+                      (now-12,now-10,old,'CO'))
+        self.q._duration_cache=None  # Fixture rewrites historical durations directly.
+        return worker
+
+    def test_sales_fast_first_preserves_all_states_deadline_and_org_fairness(self):
+        worker=self.seed_duration_history()
+        a=self.submit(payload(states=['CO','LA'],mode='sales'))
+        b=self.submit(payload('987654321',states=['CO','LA'],mode='sales'))
+        first,second=self.q.claim(worker),self.q.claim(worker)
+        self.assertEqual({first['workflow_id'],second['workflow_id']},{a,b})
+        self.assertEqual([first['state'],second['state']],['CO','CO'])
+        self.finish(first);self.finish(second)
+        third,fourth=self.q.claim(worker),self.q.claim(worker)
+        self.assertEqual([third['state'],fourth['state']],['LA','LA'])
+        self.assertEqual({third['workflow_id'],fourth['workflow_id']},{a,b})
+        for job in (third,fourth):self.finish(job)
+        for ident in (a,b):
+            result=self.q.status('a',ident)
+            self.assertEqual(result['total'],2);self.assertEqual(result['deadline']-result['submitted'],60)
+            self.assertTrue(all(j['result']['status']=='Current' for j in result['jobs']))
+
+    def test_mixed_modes_keep_standard_slow_first_and_sales_fast_first(self):
+        worker=self.seed_duration_history()
+        standard=self.submit(payload(states=['CO','LA']))
+        sales=self.submit(payload('987654321',states=['CO','LA'],mode='sales'))
+        jobs=[self.q.claim(worker),self.q.claim(worker)]
+        self.assertEqual({j['workflow_id']:j['state'] for j in jobs},{standard:'LA',sales:'CO'})
+        self.assertEqual(len({j['workflow_id'] for j in jobs}),2)
+
+    def test_tail_policy_changes_only_order_and_preserves_caps_fairness_and_cutoff(self):
+        worker=self.seed_duration_history();self.q.sales_policy='tail-aware'
+        # Use a measured feasible slow source (the legacy fixture is 60s).
+        with self.q.transaction() as (c,now):
+            c.execute("UPDATE cc_lab_jobs SET claimed=finished-12 WHERE state='LA'")
+            c.execute("UPDATE cc_lab_settings SET registry_limits=jsonb_set(registry_limits,'{LA}','1'::jsonb)")
+        a=self.submit(payload(states=['CO','LA'],mode='sales'))
+        b=self.submit(payload('987654321',states=['CO','LA'],mode='sales'))
+        first,second=self.q.claim(worker),self.q.claim(worker)
+        self.assertEqual(first['state'],'LA')
+        self.assertEqual(second['state'],'CO')  # The only LA permit is held.
+        self.assertNotEqual(first['workflow_id'],second['workflow_id'])
+        self.finish(first);self.finish(second)
+        third,fourth=self.q.claim(worker),self.q.claim(worker)
+        self.assertEqual({j['state'] for j in (third,fourth)},{'CO','LA'})
+        self.finish(third);self.finish(fourth)
+        for ident in (a,b):
+            result=self.q.status('a',ident)
+            self.assertEqual(result['total'],2)
+            self.assertEqual(result['deadline']-result['submitted'],60)
+            self.assertTrue(all(j['result']['status']=='Current' for j in result['jobs']))
+
+    def test_tail_policy_falls_back_on_scarce_pool_without_relaxing_reservations(self):
+        worker=self.seed_duration_history();self.q.sales_policy='tail-aware'
+        with self.q.transaction() as (c,now):
+            c.execute("UPDATE cc_lab_jobs SET claimed=finished-40 WHERE state='LA'")
+            c.execute('UPDATE cc_lab_workers SET slots=1 WHERE id=%s',(worker,))
+        self.q._duration_cache=None
+        self.submit(payload(states=['CO','LA'],mode='sales'))
+        self.submit(payload('987654321',states=['CO','LA'],mode='sales'))
+        first=self.q.claim(worker)
+        self.assertEqual(first['state'],'CO')
+        self.assertIsNone(self.q.claim(worker))
+        with self.q.transaction() as (c,now):
+            event=c.execute("SELECT detail FROM cc_lab_events WHERE event='claimed' AND job_id=%s",(first['id'],)).fetchone()['detail']
+        self.assertEqual(event['sales_policy'],'shortest')
+        self.assertEqual(event['sales_policy_configured'],'tail-aware')
+
+    def test_pipelined_claim_failure_rolls_back_job_and_dispatch(self):
+        ident = self.submit()
+        worker = self.worker()
+        with patch.object(self.q, 'event', side_effect=RuntimeError('Fixture claim event failure')):
+            with self.assertRaisesRegex(RuntimeError, 'Fixture claim event failure'):
+                self.q.claim(worker)
+        state = self.q.status('a', ident)
+        self.assertEqual(state['phase'], 'queued')
+        self.assertIsNone(state['started'])
+        self.assertEqual(state['jobs'][0]['phase'], 'queued')
+        self.assertEqual(state['jobs'][0]['attempt'], 0)
+        self.assertIsNotNone(self.q.claim(worker))
+
+    def test_worker_headroom_ceiling_cannot_bypass_physical_or_workflow_limit(self):
+        worker=self.worker(slots=12)
+        for i in range(20):self.submit(payload(f'{i+1:09}'))
+        self.assertIsNone(self.q.claim(worker,slot_limit=0))
+        jobs=[self.q.claim(worker,slot_limit=2,admission_evidence={'reason':'fixture'}) for _ in range(3)]
+        self.assertEqual(sum(j is not None for j in jobs),2)
+        more=[self.q.claim(worker,slot_limit=100) for _ in range(12)]
+        self.assertEqual(sum(j is not None for j in more),10)
+        self.assertIsNone(self.q.claim(worker,slot_limit=100))
+        second=self.worker(slots=12)
+        self.assertEqual(sum(self.q.claim(second) is not None for _ in range(12)),3)
+        with self.q.transaction() as (c,_):
+            evidence=c.execute("SELECT detail FROM cc_lab_events WHERE event='claimed' AND detail->'admission'->>'reason'='fixture'").fetchall()
+        self.assertEqual(len(evidence),2)
+
+    def test_scope_isolation_and_completed_result_replay(self):
+        a, b = self.submit(scope='a'), self.submit(scope='b')
+        self.assertNotEqual(a,b)
+        with self.assertRaises(NotFound): self.q.status('b',a)
+        with self.assertRaises(NotFound): self.q.cancel('b',a)
+        w=self.worker(); j=self.q.claim(w); self.finish(j)
+        self.assertIsNotNone(self.q.status('a',a)['finished'])
+
+    def test_15_workflow_ceiling_across_independent_workers(self):
+        q2 = self.second()
+        for i in range(20): self.submit(payload(f'{i+1:09}'))
+        workers = [self.worker(q2 if i%2 else self.q) for i in range(4)]
+        def claims(pair):
+            i,w=pair; q=q2 if i%2 else self.q
+            return self.claim_available(q,w,8)
+        with concurrent.futures.ThreadPoolExecutor(4) as pool: groups=list(pool.map(claims, enumerate(workers)))
+        jobs=[j for g in groups for j in g]
+        self.assertEqual(len(jobs),15)
+        m=self.q.metrics(); self.assertEqual(sum(r['count'] for r in m['workflows'] if r['phase'] in ('active','attention','stopping')),15)
+        self.finish(jobs[0])
+        self.assertIsNotNone(self.q.claim(workers[0]))
+
+    def test_explicit_twenty_workflow_trial_preserves_global_ceiling(self):
+        with self.q.transaction() as (c, now):
+            c.execute('UPDATE cc_lab_settings SET workflow_limit=20 WHERE id=1')
+        self.q.initialize(VERSION, {'CO':30,'ME':1,'AR':1,'CA':4,'IRS':4}, workflow_limit=20)
+        with self.assertRaises(ValueError):
+            self.q.initialize(VERSION, {}, workflow_limit=21)
+        with self.assertRaises(Conflict):
+            self.q.initialize(VERSION, {'CO':30,'ME':1,'AR':1,'CA':4,'IRS':4})
+        for i in range(21): self.submit(payload(f'{i+1:09}'))
+        workers = [self.worker() for _ in range(4)]
+        with concurrent.futures.ThreadPoolExecutor(4) as pool:
+            groups = list(pool.map(lambda w:self.claim_available(self.q,w,8), workers))
+        jobs = [j for group in groups for j in group]
+        self.assertEqual(len(jobs), 20)
+        self.assertEqual(len({j['workflow_id'] for j in jobs}), 20)
+        self.finish(jobs[0])
+        self.assertIsNotNone(self.q.claim(workers[0]))
+
+    def test_registry_limit_discovery_reservation_and_fairness(self):
+        q2=self.second(); w1=self.worker(); w2=self.worker(q2)
+        a=self.submit(payload(states=['ME','CO','AR']))
+        b=self.submit(payload('987654321',states=['ME','CO']))
+        jobs=[self.q.claim(w1),q2.claim(w2),self.q.claim(w1),q2.claim(w2)]
+        self.assertEqual(len({j['workflow_id'] for j in jobs[:2]}),2)
+        self.assertEqual(sum(j['state']=='ME' for j in jobs if j),1)
+        self.assertEqual(q2.claim(w2),None)
+        discovery=self.submit(normalize_submission({'ein':'123123123','organization_name':'Discovery', 'kind':'discovery'},STATES))
+        self.assertIsNone(q2.claim(w2))  # ME lane is already held.
+        for j in jobs: self.finish(j)
+        j=q2.claim(w2)
+        self.assertIsNotNone(j)
+        if j['state']!='@discovery': self.finish(j); j=q2.claim(w2)
+        self.assertEqual(j['weight'],4)
+
+    def test_three_twelve_slot_replicas_keep_global_workflow_and_ny_caps(self):
+        queues = [self.q, self.second(), self.second()]
+        for q in queues:
+            q.ny_enabled = True
+        # Production NY cap is two; use the same shared cap in this isolated schema.
+        with self.q.transaction() as (c, _):
+            c.execute("UPDATE cc_lab_settings SET registry_limits=jsonb_set(registry_limits,'{NY}','2'::jsonb)")
+        for i in range(20):
+            self.submit(payload(f'{i+1:09}', states=['CO', 'NY']))
+        workers = [self.worker(q, slots=12) for q in queues]
+        def claim(pair):
+            q, w = pair
+            return self.claim_available(q,w,12)
+        with concurrent.futures.ThreadPoolExecutor(3) as pool:
+            groups = list(pool.map(claim, zip(queues, workers)))
+        jobs = [j for group in groups for j in group]
+        self.assertEqual(len({j['id'] for j in jobs}), len(jobs))
+        self.assertEqual(len({j['workflow_id'] for j in jobs}), 15)
+        self.assertEqual(sum(j['state'] == 'NY' for j in jobs), 2)
+        self.assertTrue(all(len(group) <= 12 for group in groups))
+        self.assertEqual(sum(r['count'] for r in self.q.metrics()['workflows'] if r['phase'] == 'queued'), 5)
+
+    def test_earlier_discovery_finishes_before_younger_overlapping_work(self):
+        with self.q.transaction() as (c,_):
+            c.execute("UPDATE cc_lab_settings SET registry_limits=jsonb_set(registry_limits,'{CO}','2'::jsonb)")
+        worker=self.worker(slots=12)
+        self.submit(payload(states=['ME']));held=self.q.claim(worker)
+        discovery=self.submit(normalize_submission({'ein':'222222222','organization_name':'Discovery','kind':'discovery'},STATES))
+        self.submit(payload('333333333',states=['CO','LA']))
+        self.submit(payload('444444444',states=['CO']))
+        unrelated=self.q.claim(worker);self.assertEqual(unrelated['state'],'LA')
+        self.assertIsNone(self.q.claim(worker))  # Younger CO work waits; LA did not.
+        self.finish(held)
+        ready=self.q.claim(worker)
+        self.assertEqual(ready['workflow_id'],discovery)
+        self.assertEqual(ready['state'],'@discovery')
+        self.assertIsNone(self.q.claim(worker))  # Discovery keeps priority while running.
+        self.finish(ready)
+        self.assertEqual(self.q.claim(worker)['state'],'CO')
+        self.assertEqual(self.q.claim(worker)['state'],'CO')
+        self.assertIsNone(self.q.claim(worker))  # Actual CO cap is still enforced.
+
+    def test_new_discovery_cannot_preempt_older_registration_work(self):
+        worker=self.worker(slots=12)
+        self.submit(payload(states=['ME']));held=self.q.claim(worker)
+        older=self.submit(payload('333333333',states=['CO']))
+        self.submit(normalize_submission({'ein':'222222222','organization_name':'Discovery','kind':'discovery'},STATES))
+        job=self.q.claim(worker)
+        self.assertEqual(job['workflow_id'],older)
+        self.assertEqual(job['state'],'CO')
+
+    def test_all_earlier_discoveries_finish_before_younger_overlapping_work(self):
+        with self.q.transaction() as (c,_):
+            c.execute("UPDATE cc_lab_settings SET registry_limits=jsonb_set(registry_limits,'{ME}','2'::jsonb)")
+        worker=self.worker(slots=12)
+        for ein in ('222222222','333333333'):
+            self.submit(normalize_submission({'ein':ein,'organization_name':'Discovery','kind':'discovery'},STATES))
+        first=self.q.claim(worker);second=self.q.claim(worker)
+        younger=self.submit(payload('444444444',states=['CO']))
+        self.assertIsNone(self.q.claim(worker))
+        self.finish(first)
+        self.assertIsNone(self.q.claim(worker))
+        self.finish(second)
+        self.assertEqual(self.q.claim(worker)['workflow_id'],younger)
+
+    def test_waiting_discovery_outside_workflow_ceiling_cannot_block_active_work(self):
+        with self.q.transaction() as (c,_):
+            c.execute('UPDATE cc_lab_settings SET workflow_limit=1')
+        worker=self.worker(slots=12)
+        active=self.submit(payload(states=['CO','ME']))
+        self.assertEqual(self.q.claim(worker)['state'],'CO')
+        self.submit(normalize_submission({'ein':'222222222','organization_name':'Discovery','kind':'discovery'},STATES))
+        next_job=self.q.claim(worker)
+        self.assertEqual(next_job['workflow_id'],active);self.assertEqual(next_job['state'],'ME')
+
+    def test_unfit_multi_source_job_does_not_reserve_small_worker_capacity(self):
+        with self.q.transaction() as (c,_):
+            c.execute("UPDATE cc_lab_settings SET registry_limits=jsonb_set(registry_limits,'{CO}','1'::jsonb)")
+        worker=self.worker(slots=2)
+        self.submit(payload(states=['ME']));self.q.claim(worker)
+        self.submit(normalize_submission({'ein':'222222222','organization_name':'Discovery','kind':'discovery'},STATES))
+        self.submit(payload('333333333',states=['CO']))
+        self.assertEqual(self.q.claim(worker)['state'],'CO')
+
+    def test_canceling_waiting_discovery_removes_its_priority_reservation(self):
+        with self.q.transaction() as (c,_):
+            c.execute("UPDATE cc_lab_settings SET registry_limits=jsonb_set(registry_limits,'{CO}','1'::jsonb)")
+        worker=self.worker(slots=12)
+        self.submit(payload(states=['ME']));self.q.claim(worker)
+        discovery=self.submit(normalize_submission({'ein':'222222222','organization_name':'Discovery','kind':'discovery'},STATES))
+        self.submit(payload('333333333',states=['CO']))
+        self.assertIsNone(self.q.claim(worker))
+        self.q.cancel('a',discovery)
+        self.assertEqual(self.q.claim(worker)['state'],'CO')
+
+    def test_cancel_retains_capacity_until_termination_ack(self):
+        ident=self.submit(payload(states=['CO','ME'])); w=self.worker(); j=self.q.claim(w)
+        self.q.cancel('a',ident)
+        st=self.q.status('a',ident); self.assertEqual(st['phase'],'stopping'); self.assertIsNone(st['finished'])
+        self.assertEqual(self.q.heartbeat(w,[(j['id'],j['token'])]),[])
+        self.assertTrue(self.q.complete(w,j['id'],j['token'],error='TASK_STOPPED'))
+        st=self.q.status('a',ident); self.assertEqual(st['phase'],'canceled')
+        self.assertTrue(all(r['phase']=='done' for r in st['jobs']))
+
+    def test_expired_lease_quarantines_without_duplicate_dispatch(self):
+        ident=self.submit(payload(states=['ME'])); w=self.worker(); j=self.q.claim(w)
+        with self.q.transaction() as (c,now): c.execute('UPDATE cc_lab_jobs SET lease_until=%s WHERE id=%s',(now-1,j['id']))
+        self.assertEqual(self.q.status('a',ident)['phase'],'attention')
+        replacement=self.worker()
+        self.assertIsNone(self.q.claim(replacement))
+        self.assertEqual(self.q.heartbeat(w,[(j['id'],j['token'])]),[])
+        self.q.confirm_worker_stopped(w,'Fixture supervisor verified all descendant process IDs have exited')
+        newer=self.q.claim(replacement)
+        self.assertNotEqual(newer['token'],j['token'])
+        self.assertFalse(self.finish(j))
+        self.assertTrue(self.finish(newer))
+        self.assertEqual(self.q.status('a',ident)['phase'],'completed')
+
+    def test_deadline_counts_queue_time_and_does_not_create_negative(self):
+        ident=self.submit(payload(mode='sales')); w=self.worker()
+        with self.q.transaction() as (c,now):
+            row=c.execute('SELECT * FROM cc_lab_workflows WHERE id=%s',(ident,)).fetchone()
+            self.assertEqual(row['deadline']-row['submitted'],60)
+            c.execute('UPDATE cc_lab_workflows SET deadline=%s WHERE id=%s',(now-1,ident))
+        self.assertIsNone(self.q.claim(w))
+        st=self.q.status('a',ident); self.assertEqual(st['phase'],'expired')
+        self.assertIsNone(st['jobs'][0]['result']); self.assertEqual(st['jobs'][0]['error'],'WORKFLOW_DEADLINE')
+
+    def test_discovery_queue_wait_does_not_consume_execution_allowance(self):
+        ident=self.submit(normalize_submission({'ein':'123123123','organization_name':'Discovery','kind':'discovery'},STATES))
+        with self.q.transaction() as (c,now):
+            row=c.execute('SELECT * FROM cc_lab_workflows WHERE id=%s',(ident,)).fetchone()
+            self.assertEqual(row['deadline']-row['submitted'],270)
+            c.execute('UPDATE cc_lab_workflows SET submitted=%s,deadline=%s WHERE id=%s',(now-180,now+10,ident))
+        job=self.q.claim(self.worker())
+        self.assertEqual(job['run_seconds'],90)
+        state=self.q.status('a',ident)
+        self.assertEqual(state['deadline']-state['started'],90)
+        self.assertGreaterEqual(state['queue_seconds'],180)
+
+    def test_expired_discovery_queue_cannot_start_new_execution_budget(self):
+        ident=self.submit(normalize_submission({'ein':'123123123','organization_name':'Discovery','kind':'discovery'},STATES))
+        with self.q.transaction() as (c,now):c.execute('UPDATE cc_lab_workflows SET deadline=%s WHERE id=%s',(now-1,ident))
+        self.assertIsNone(self.q.claim(self.worker()))
+        state=self.q.status('a',ident)
+        self.assertEqual(state['phase'],'expired');self.assertEqual(state['jobs'][0]['attempt'],0)
+        self.assertIsNone(state['jobs'][0]['result'])
+
+    def test_discovery_recovery_does_not_reset_execution_deadline(self):
+        ident=self.submit(normalize_submission({'ein':'123123123','organization_name':'Discovery','kind':'discovery'},STATES))
+        worker=self.worker();job=self.q.claim(worker)
+        with self.q.transaction() as (c,now):
+            deadline=now+30
+            c.execute('UPDATE cc_lab_workflows SET deadline=%s WHERE id=%s',(deadline,ident))
+        self.q.confirm_worker_stopped(worker,'Fixture: isolated process tree termination proven')
+        replacement=self.q.claim(self.worker())
+        self.assertEqual(replacement['attempt'],2)
+        self.assertLessEqual(replacement['run_seconds'],30)
+        self.assertEqual(self.q.status('a',ident)['deadline'],deadline)
+
+    def test_registration_deadlines_remain_unchanged(self):
+        for ein,mode,seconds in [('123123123','standard',900),('234234234','sales',60)]:
+            ident=self.submit(payload(ein,mode=mode))
+            with self.q.transaction() as (c,now):
+                row=c.execute('SELECT * FROM cc_lab_workflows WHERE id=%s',(ident,)).fetchone()
+            self.assertEqual(row['deadline']-row['submitted'],seconds)
+
+    def discovery(self, ein='123123123'):
+        return self.submit(normalize_submission({'ein':ein,'organization_name':'Discovery','kind':'discovery'},STATES))
+
+    def test_returned_sources_free_permits_not_job_weight_or_unfinished_sources(self):
+        ident=self.discovery(); worker=self.worker(slots=4); job=self.q.claim(worker)
+        younger=self.submit(payload('987654321',states=['CO','ME']))
+        second=self.worker(slots=4)
+        self.assertIsNone(self.q.claim(second))
+        self.assertTrue(self.q.release_discovery_sources(worker,job['id'],job['token'],['CO']))
+        self.assertIsNone(self.q.claim(worker))  # Full physical weight still held.
+        next_job=self.q.claim(second);self.assertEqual(next_job['state'],'CO')
+        self.assertEqual(next_job['workflow_id'],younger)
+        self.assertIsNone(self.q.claim(second))  # ME is still executing/reserved.
+        self.assertTrue(self.q.release_discovery_sources(worker,job['id'],job['token'],['CO']))
+        with self.q.transaction() as (c,_):
+            row=c.execute('SELECT * FROM cc_lab_jobs WHERE id=%s',(job['id'],)).fetchone()
+            events=c.execute("SELECT count(*) AS n FROM cc_lab_events WHERE event='discovery_sources_finished'").fetchone()['n']
+        self.assertEqual(set(row['resources']),{'ME','IRS'});self.assertEqual(row['weight'],4)
+        self.assertEqual(row['phase'],'running');self.assertEqual(events,1)
+        self.finish(next_job);self.finish(job)
+        self.assertEqual(self.q.claim(second)['state'],'ME')
+
+    def test_discovery_release_rejects_wrong_identity_irs_unknown_and_cancellation(self):
+        ident=self.discovery();worker=self.worker();job=self.q.claim(worker)
+        for owner,token,sources in [('other',job['token'],['CO']),(worker,'stale',['CO']),
+                                     (worker,job['token'],['CO','XX']),(worker,job['token'],['IRS'])]:
+            self.assertFalse(self.q.release_discovery_sources(owner,job['id'],token,sources))
+        self.q.cancel('a',ident)
+        self.assertFalse(self.q.release_discovery_sources(worker,job['id'],job['token'],['CO']))
+        with self.q.transaction() as (c,_):
+            row=c.execute('SELECT * FROM cc_lab_jobs WHERE id=%s',(job['id'],)).fetchone()
+        self.assertEqual(row['released_resources'],[])
+
+    def test_discovery_release_recovery_restores_all_sources_and_fences_old_token(self):
+        ident=self.discovery();worker=self.worker();job=self.q.claim(worker)
+        self.assertTrue(self.q.release_discovery_sources(worker,job['id'],job['token'],['CO']))
+        self.q.confirm_worker_stopped(worker,'Fixture: entire isolated process tree proven dead')
+        newer=self.q.claim(self.worker())
+        self.assertEqual(set(newer['resources']),{'CO','ME','IRS'})
+        self.assertEqual(newer['released_resources'],[]);self.assertEqual(newer['attempt'],2)
+        self.assertFalse(self.q.release_discovery_sources(worker,job['id'],job['token'],['ME']))
+        self.finish(newer);self.assertEqual(self.q.status('a',ident)['phase'],'completed')
+
+    def test_expired_lease_cannot_release_discovery_source(self):
+        self.discovery();worker=self.worker();job=self.q.claim(worker)
+        with self.q.transaction() as (c,now):
+            c.execute('UPDATE cc_lab_jobs SET lease_until=%s WHERE id=%s',(now-1,job['id']))
+        self.assertFalse(self.q.release_discovery_sources(worker,job['id'],job['token'],['CO']))
+
+    def test_indexed_duration_estimates_equal_previous_window_query(self):
+        ident=self.submit();worker=self.worker();job=self.q.claim(worker);self.finish(job)
+        with self.q.transaction() as (c,now):
+            for i in range(100):
+                # Include recent, old, failed, retried and out-of-bound history.
+                state=['CO','ME','CA'][i%3];duration=(i%35)*11
+                finished=now-i*10-(90000 if i>90 else 0);error='FAILED' if i%11==0 else None
+                attempt=2 if i%13==0 else 1
+                history=uuid.uuid4().hex
+                c.execute("INSERT INTO cc_lab_workflows SELECT %s,scope,ein,fingerprint,payload,kind,mode,source_version,"
+                          "phase,stop_reason,submitted,deadline,started,finished,dispatched FROM cc_lab_workflows WHERE id=%s",
+                          (history,ident))
+                c.execute("INSERT INTO cc_lab_jobs(id,workflow_id,state,resources,weight,phase,attempt,claimed,finished,error) "
+                          "VALUES (%s,%s,%s,'[]',1,'done',%s,%s,%s,%s)",
+                          (uuid.uuid4().hex,history,state,attempt,finished-duration,finished,error))
+            states=[r['state'] for r in c.execute('SELECT DISTINCT state FROM cc_lab_jobs')]
+            previous={r['state']:r['seconds'] for r in c.execute(
+                "SELECT state,percentile_cont(0.5) WITHIN GROUP (ORDER BY seconds) AS seconds FROM "
+                "(SELECT state,finished-claimed AS seconds,row_number() OVER (PARTITION BY state ORDER BY finished DESC) AS n "
+                "FROM cc_lab_jobs WHERE phase='done' AND error IS NULL AND attempt=1 AND finished>=%s "
+                "AND claimed IS NOT NULL AND finished>claimed AND finished-claimed<=300) recent WHERE n<=20 GROUP BY state",(now-86400,))}
+            self.assertEqual(self.q.duration_estimates(c,now,states),previous)
+            expected_tails={r['state']:r['seconds'] for r in c.execute(
+                "SELECT state,percentile_cont(0.95) WITHIN GROUP (ORDER BY seconds) AS seconds FROM "
+                "(SELECT state,finished-claimed AS seconds,row_number() OVER (PARTITION BY state ORDER BY finished DESC) AS n "
+                "FROM cc_lab_jobs WHERE phase='done' AND error IS NULL AND attempt=1 AND finished>=%s "
+                "AND claimed IS NOT NULL AND finished>claimed AND finished-claimed<=300) recent WHERE n<=20 GROUP BY state",(now-86400,))}
+            self.assertEqual(self.q.duration_estimates(c,now,states).tails,expected_tails)
+
+    def test_expired_running_work_cannot_publish_late_success(self):
+        ident=self.submit(); w=self.worker(); j=self.q.claim(w)
+        with self.q.transaction() as (c,now): c.execute('UPDATE cc_lab_workflows SET deadline=%s WHERE id=%s',(now-1,ident))
+        self.finish(j)
+        st=self.q.status('a',ident); self.assertEqual(st['phase'],'expired'); self.assertIsNone(st['jobs'][0]['result'])
+
+    def test_api_restart_preserves_jobs_names_and_results(self):
+        ident=self.submit(); w=self.worker(); j=self.q.claim(w); self.finish(j)
+        self.q.close(); self.q=Queue(self.dsn,test_schema=self.schema)
+        st=self.q.status('a',ident); self.assertEqual(st['jobs'][0]['result']['status'],'Current')
+        with self.q.transaction() as (c,_):
+            saved=c.execute('SELECT payload FROM cc_lab_workflows WHERE id=%s',(ident,)).fetchone()['payload']
+        self.assertEqual(saved,payload())
+
+    def test_normal_progress_does_not_take_scheduler_lock(self):
+        ident=self.submit(); worker=self.worker(); job=self.q.claim(worker)
+        q2=self.second()
+        with concurrent.futures.ThreadPoolExecutor(1) as pool:
+            with self.q.transaction() as (c,now):
+                status=pool.submit(q2.status,'a',ident).result(timeout=5)
+                self.assertEqual(status['phase'],'active')
+                self.assertEqual(status['jobs'][0]['phase'],'running')
+                self.assertNotIn('lease_until',status['jobs'][0])
+        self.finish(job)
+
+    def test_normal_progress_is_read_only_and_enforces_scope(self):
+        ident=self.submit()
+        with patch.object(self.q,'transaction',side_effect=AssertionError('Read took scheduler lock')):
+            status=self.q.status('a',ident)
+            self.assertEqual(status['phase'],'queued');self.assertEqual(status['queue_position'],1)
+            with self.assertRaises(NotFound):self.q.status('other-scope',ident)
+        with self.q.transaction() as (c,now):
+            self.assertEqual(c.execute('SELECT count(*) AS n FROM cc_lab_events').fetchone()['n'],1)
+
+    def test_progress_snapshot_is_consistent_across_uncommitted_finish(self):
+        ident=self.submit();worker=self.worker();job=self.q.claim(worker);q2=self.second()
+        with self.q.transaction() as (c,now):
+            c.execute("UPDATE cc_lab_jobs SET phase='done',finished=%s,error='fixture' WHERE id=%s",(now,job['id']))
+            self.q._settle(c,now)
+            status=q2.status('a',ident)
+            self.assertEqual(status['phase'],'active');self.assertEqual(status['completed'],0)
+        status=q2.status('a',ident)
+        self.assertEqual(status['phase'],'completed');self.assertEqual(status['completed'],1)
+
+    def test_progress_still_settles_expired_queued_and_dead_worker(self):
+        ident=self.submit(payload(mode='sales'))
+        with self.q.transaction() as (c,now):
+            c.execute('UPDATE cc_lab_workflows SET deadline=%s WHERE id=%s',(now-1,ident))
+        status=self.q.status('a',ident)
+        self.assertEqual(status['phase'],'expired');self.assertEqual(status['jobs'][0]['error'],'WORKFLOW_DEADLINE')
+        ident=self.submit(payload('987654321'));worker=self.worker();job=self.q.claim(worker)
+        with self.q.transaction() as (c,now):
+            c.execute('UPDATE cc_lab_jobs SET lease_until=%s WHERE id=%s',(now-1,job['id']))
+        self.assertEqual(self.q.status('a',ident)['phase'],'attention')
+        self.assertIsNone(self.q.claim(self.worker()))
+
+    def test_version_identity_and_queue_bounds(self):
+        with self.assertRaises(Conflict): self.q.register_worker('wrong','wrong-performance-lab',8)
+        ident=self.submit(); w=self.worker(); j=self.q.claim(w)
+        with self.assertRaises(ValueError): self.q.complete(w,j['id'],j['token'],{'ein':'111111111','state':'CO','app_version':VERSION})
+        with self.q.transaction() as (c,_): c.execute('UPDATE cc_lab_settings SET backlog_limit=1 WHERE id=1')
+        with self.assertRaises(QueueFull): self.submit(payload('987654321'))
+        self.finish(j)
+        self.assertFalse(self.finish(j))
+
+    def test_two_supervisors_preserve_output_and_kill_descendants(self):
+        command=[sys.executable,str(ROOT/'testing/capacity_lab/queue_fixture_task.py')]
+        q2=self.second()
+        with tempfile.TemporaryDirectory() as temp:
+            marker=Path(temp)/'child.pid'
+            env={**os.environ,'CC_FIXTURE_DESCENDANT':str(marker),'CC_FIXTURE_DELAY':'.3'}
+            a=Supervisor(self.q,VERSION,2,command,env)
+            b=Supervisor(q2,VERSION,2,command,{**os.environ,'CC_FIXTURE_DELAY':'.3'})
+            ids=[self.submit(payload(f'{i+1:09}',states=['CO','CA'])) for i in range(4)]
+            threads=[threading.Thread(target=s.run) for s in (a,b)]
+            for t in threads:t.start()
+            try:
+                end=time.monotonic()+45
+                while time.monotonic()<end:
+                    states=[self.q.status('a',i) for i in ids]
+                    if all(s['finished'] for s in states):break
+                    time.sleep(.3)
+                self.assertTrue(all(s['finished'] for s in states),states)
+                for st in states:
+                    for job in st['jobs']:
+                        self.assertIsNone(job['error'])
+                        self.assertEqual(job['result']['reviewed_names'],['Official Former Name'])
+                        self.assertEqual(job['result']['registration_date'],'2000-01-01')
+                        self.assertEqual(len(job['result']['identity_anchor']['locations']),2)
+                with self.q.transaction() as (c,_):
+                    owners={r['owner'] for r in c.execute('SELECT owner FROM cc_lab_jobs')}
+                self.assertEqual(owners,{a.id,b.id})
+                self.assertTrue(marker.is_file())
+                self.assertFalse(process_running(int(marker.read_text())))
+            finally:
+                a.stop(); b.stop()
+                for t in threads:t.join(20)
+                self.assertFalse(any(t.is_alive() for t in threads))
+
+    def test_os_worker_loss_requires_confirmed_death_then_recovers(self):
+        ident=self.submit(payload(states=['CO']))
+        with tempfile.TemporaryDirectory() as temp:
+            marker=Path(temp)/'worker.id'
+            env={**os.environ,'CC_TEST_SCHEMA':self.schema,'CC_FIXTURE_DELAY':'120'}
+            tree=ProcessTree([sys.executable,str(ROOT/'testing/capacity_lab/queue_fixture_worker.py'),str(marker)],{},temp,env)
+            try:
+                end=time.monotonic()+30; job=None
+                while time.monotonic()<end:
+                    with self.q.transaction() as (c,_):
+                        job=c.execute("SELECT * FROM cc_lab_jobs WHERE workflow_id=%s AND phase='running'",(ident,)).fetchone()
+                    if job and marker.is_file():break
+                    time.sleep(.2)
+                self.assertIsNotNone(job)
+                worker=marker.read_text()
+                tree.stop()
+                self.assertFalse(process_running(tree.pid))
+                with self.q.transaction() as (c,now):c.execute('UPDATE cc_lab_jobs SET lease_until=%s WHERE id=%s',(now-1,job['id']))
+                self.assertEqual(self.q.status('a',ident)['phase'],'attention')
+                replacement=self.worker()
+                self.assertIsNone(self.q.claim(replacement))
+                self.q.confirm_worker_stopped(worker,'OS test verified supervisor and descendants terminated via Job Object/process group')
+                newer=self.q.claim(replacement)
+                self.assertEqual(newer['attempt'],2)
+                self.assertFalse(self.q.complete(worker,job['id'],job['token'],error='late stale completion'))
+                self.finish(newer)
+                self.assertEqual(self.q.status('a',ident)['phase'],'completed')
+            finally:tree.stop()
+
+
+class InputTests(unittest.TestCase):
+    def test_sales_thirty_two_is_explicit_and_standard_and_discovery_are_unchanged(self):
+        self.assertEqual(payload(mode='sales',state_concurrency=32)['state_concurrency'],32)
+        self.assertEqual(payload(mode='sales'),payload(mode='sales',state_concurrency=15))
+        for value in (31,33,'32',32.0,True):
+            with self.subTest(value=value),self.assertRaises(ValueError):payload(mode='sales',state_concurrency=value)
+        with self.assertRaises(ValueError):payload(state_concurrency=32)
+        with self.assertRaises(ValueError):
+            normalize_submission({'ein':'123456789','organization_name':'Discovery','kind':'discovery','state_concurrency':32},STATES)
+
+    def test_lab_state_concurrency_is_bounded_and_default_is_identical(self):
+        self.assertEqual(payload(), payload(state_concurrency=15))
+        for limit in (5, 10, 20):
+            self.assertEqual(payload(state_concurrency=limit)['state_concurrency'], limit)
+        for value in (0, 1, 4, 6, 16, 32, True, None, '5', 5.0):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                payload(state_concurrency=value)
+        with self.assertRaises(ValueError):
+            normalize_submission({'ein':'123456789','organization_name':'Discovery',
+                                  'kind':'discovery','state_concurrency':5}, STATES)
+
+    def test_rejects_credentials_scope_injection_and_invalid_inputs(self):
+        for change in ({'scope':'another-company'}, {'admin_passcode':'secret'}, {'ein':'000000000'},
+                       {'states':['XX']}, {'alternate_names':['x']*33}, {'kind':'shell'}):
+            with self.subTest(change=change),self.assertRaises(ValueError): payload(**change)
+
+
+if __name__=='__main__': unittest.main(verbosity=2)

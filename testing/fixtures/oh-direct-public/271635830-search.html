@@ -1,0 +1,452 @@
+
+	    
+<!DOCTYPE html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="/Commonsettings/agfavicon.ico" type="image/x-icon" rel="shortcut icon" />
+    <link href="/Commonsettings/agfavicon.ico" type="image/x-icon" rel="icon" />
+    <title>CRISP: Research Charities</title>
+    <link href="/Content/AgoLogoCss?v=bWtmnLGZu0WKA-4mOtbOOWPExZ0WTp9vohOcGX2SQNk1" rel="stylesheet"/>
+
+    
+    
+    <link href="/Content/BootstrapCss?v=ClicnLdrU59zV4fPRGz7L4aq27UTTHI_mTD-y51kXiI1" rel="stylesheet"/>
+
+    <link href="/Content/CRISP/css?v=Cn4vCCfCBA7U3yq4vfr-9ubWuFHRSVMNZK58tGR4DTg1" rel="stylesheet"/>
+
+    <link href="/Content/css?v=1ywPiZTRSoN2LzmpNTgxYIazgvuei0gNsStItvrVhDA1" rel="stylesheet"/>
+
+
+</head>
+<body>
+    <div id="wrapper" class="pageBackground">
+        <div class="main container-fluid">
+                <div class="row">
+                    <div class="col-md-3 col-lg-3"> <div class="topbar hidden-xs"><div class="container"><div class="hidden-xs" id="logos"><div class="pull-right"></div></div></div></div></div>
+                    <div class="col-md-7 col-lg-7"> 
+    
+ </div>
+                    <div class="col-md-2 col-lg-2 float-end"> 
+
+ </div>
+                </div>  
+                
+
+
+        </div>
+        <div class="body body-content container-fluid">
+            
+
+
+            
+
+
+
+<script src="/Scripts/jquery-3.5.1.js"></script>
+<script src="/Scripts/CRISP/Utility.js"></script>
+<script src="/Scripts/CRISP/AccountProfile.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/popper.js@1.12.9/dist/umd/popper.min.js" integrity="sha384-ApNbgh9B+Y1QKtv3Rn7W3mgPxhU9K/ScQsAP7hUibX39j7fakFPskvXusvfa0b4Q" crossorigin="anonymous"></script>
+<script src="/Scripts/bootstrap.min.js"></script>
+<script type="text/javascript">
+    $(document).ready(function () {
+        $("body").removeClass("loading");
+
+        $('[data-bs-toggle="tooltip"]').tooltip();
+
+        // Add remove loading class on body element based on Ajax request status
+        $(document).on({
+            ajaxStart: function () {
+                $("body").addClass("loading");
+            },
+            ajaxStop: function () {
+                $("body").removeClass("loading");
+            }
+        });
+    });
+
+</script>
+
+
+
+
+
+<div class="main d-print-none">
+    <nav class="navbar navbar-expand-lg">
+        <ul class="navbar-nav me-auto">
+            
+            <li class="nav-item">
+                <a class="nav-link" href="https://charitable.ohioago.gov/" target="_blank">Charitable Ohio</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="https://charitable.ohioago.gov/Charity-Registration" target="_blank">Charitable Registration</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="https://charitable.ohioago.gov/Research-Charities/View-Charity-Annual-Report-Filings" target="_blank">Charity Registration Filings</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="https://charitable.ohioago.gov/File-a-Complaint" target="_blank">File a Complaint</a>
+            </li>
+        </ul>
+    </nav>
+</div>
+
+<body class="loading">
+    
+
+
+
+
+<div class="container-fluid">
+    
+    <div class="m-1">
+        
+        <h1>Research Charities</h1>
+<form action="#results" enctype="multipart/form-data" id="frmResearchCharities" method="post">            <p>Charities and donors can use this page to search for a charity. The information provided will indicate whether the organization is registered and in compliance with reporting requirements. You can also view a charity’s profile, their past annual report filings, information about their bingo activities, and fundraising campaigns conducted by professional solicitors on the charity’s behalf.</p>
+            <h2>Search Criteria</h2>
+            <div class="form-group row">
+                <div class="col-4">
+                    <label for="OrgNameOrDBAName">Organization Name/DBA</label>
+                </div>
+                <div class="col-4">
+                    <div class="form-group row">
+                        <div class="col-5">
+                            <label class="visually-hidden" for="ddlOrgNameFilterCriteriaList">Organization Name/DBA Search Filter</label>
+<select class="form-control form-select" id="ddlOrgNameFilterCriteriaList" name="OrgNameFilterCriteria"><option selected="selected" value="1">Contains</option>
+<option value="2">Begins With</option>
+<option value="3">Equals</option>
+<option value="4">Ends With</option>
+</select>                        </div>
+                        <div class="col-7">
+                            <input class="form-control" data-val="true" data-val-length="Organization Name/DBA can have a max of 100 characters." data-val-length-max="100" id="OrgNameOrDBAName" maxLength="100" name="OrgNameOrDBAName" type="text" value="" />
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="form-group row">
+                <div class="col-4">
+                    <label for="EIN">Employer Identification Number</label>
+                    
+
+<style>
+    a.crisp_tooltip {
+        text-decoration: none !important;
+    }
+</style>
+
+<a href="#" class="crisp_tooltip" data-bs-toggle="tooltip" data-bs-html="true" data-bs-original-title='&lt;!DOCTYPE HTML PUBLIC &quot;-//W3C//DTD HTML 4.0 Transitional//EN&quot;&gt;
+&lt;HTML&gt;&lt;HEAD&gt;
+&lt;META content=&quot;text/html; charset=unicode&quot; http-equiv=Content-Type&gt;
+&lt;META name=GENERATOR content=&quot;MSHTML 11.00.10570.1001&quot;&gt;&lt;/HEAD&gt;
+&lt;BODY&gt;&lt;SPAN data-teams=&quot;true&quot;&gt;To search for a full EIN, enter the dash after the 
+first two digits (e.g., 12-3456789). If searching for a partial EIN, include the 
+dash if searching for the first two digits or more of the EIN (e.g., 12- or 
+12-34).&lt;/SPAN&gt;&lt;/BODY&gt;&lt;/HTML&gt;
+'>
+    <img alt="Hover over this text to see the tooltip" class="tooltipImg" src="/Images/QuestionIcon.gif" width="15" height="15" />
+</a>
+                </div>
+                <div class="col-4">
+                    <div class="form-group row">
+                        <div class="col-5">
+                            <label class="visually-hidden" for="ddlEINFilterCriteriaList">EIN Search Filter</label>
+<select class="form-control form-select" id="ddlEINFilterCriteriaList" name="EINFilterCriteria"><option value="1">Contains</option>
+<option value="2">Begins With</option>
+<option selected="selected" value="3">Equals</option>
+<option value="4">Ends With</option>
+</select>                        </div>
+                        <div class="col-7">
+                            <input class="form-control" data-val="true" data-val-length="Employer Identification Number can have a max of 11 characters." data-val-length-max="11" id="EIN" maxLength="10" name="EIN" placeholder="00-0000000" type="text" value="27-1635830" />
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="form-group row">
+                <div class="col-4">
+                    <label for="OrganizationPurposeCategoryValue">Organization Purpose Category</label>
+                </div>
+                <div class="col-4">
+<select class="form-control form-select" id="OrganizationPurposeCategoryValue" name="OrganizationPurposeCategoryValue"><option selected="selected" value="">--Select One--</option>
+<option value="15">A Arts, Culture, and Humanities</option>
+<option value="16">B Educational Institutions</option>
+<option value="17">C Environmental Quality Protection, Beautification</option>
+<option value="18">D Animal related</option>
+<option value="19">E Health, General &amp; Rehabilitative</option>
+<option value="20">F Mental Health, Crisis Intervention</option>
+<option value="21">G Disease, Disorders, Medical Disciplines</option>
+<option value="22">H Medical Research</option>
+<option value="23">I Crime, Legal Related</option>
+<option value="24">J Employment, Job Related</option>
+<option value="25">K Agriculture, Food, Nutrition</option>
+<option value="26">L Housing, Shelter</option>
+<option value="27">M Public Safety, Disaster Preparedness and Relief</option>
+<option value="28">N Recreation, Sports, Leisure, Athletics</option>
+<option value="29">O Youth Development</option>
+<option value="30">P Human Services</option>
+<option value="31">Q International, Foreign Affairs, and National Security</option>
+<option value="32">R Civil Rights, Social Action, Advocacy</option>
+<option value="33">S Community Improvement, Capacity Building</option>
+<option value="34">T Philanthropy, Voluntarism, and Grantmaking</option>
+<option value="35">U Science and Technology Research Institutes</option>
+<option value="36">V Social Science Research Institutes</option>
+<option value="37">W Public, Society Benefit</option>
+<option value="38">X Religion, Spiritual Development</option>
+<option value="39">Y Mutual/Membership Benefit Organizations, Other</option>
+<option value="40">Z Unknown</option>
+</select>                </div>
+            </div>
+            <div class="form-group row">
+                <div class="col-4">
+                    <label for="City">City</label>
+                </div>
+                <div class="col-3">
+                    <input class="form-control" data-val="true" data-val-length="City can have a max of 50 characters." data-val-length-max="50" id="City" maxLength="50" name="City" type="text" value="" />
+                </div>
+            </div>
+            <div class="form-group row">
+                <div class="col-4">
+                    <label for="StateCode">State</label>
+                </div>
+                <div class="col-2">
+<select class="form-control form-select" id="StateCode" name="StateCode"><option selected="selected" value="">--Select One--</option>
+<option value="AL">Alabama</option>
+<option value="AK">Alaska</option>
+<option value="AZ">Arizona</option>
+<option value="AR">Arkansas</option>
+<option value="AA">Armed Forces Americas</option>
+<option value="AE">Armed Forces Europe</option>
+<option value="AP">Armed Forces Pacific</option>
+<option value="CA">California</option>
+<option value="CO">Colorado</option>
+<option value="CT">Connecticut</option>
+<option value="DE">Delaware</option>
+<option value="DC">District of Columbia</option>
+<option value="FL">Florida</option>
+<option value="GA">Georgia</option>
+<option value="HI">Hawaii</option>
+<option value="ID">Idaho</option>
+<option value="IL">Illinois</option>
+<option value="IN">Indiana</option>
+<option value="IA">Iowa</option>
+<option value="KS">Kansas</option>
+<option value="KY">Kentucky</option>
+<option value="LA">Louisiana</option>
+<option value="ME">Maine</option>
+<option value="MD">Maryland</option>
+<option value="MA">Massachusetts</option>
+<option value="MI">Michigan</option>
+<option value="MN">Minnesota</option>
+<option value="MS">Mississippi</option>
+<option value="MO">Missouri</option>
+<option value="MT">Montana</option>
+<option value="NE">Nebraska</option>
+<option value="NV">Nevada</option>
+<option value="NH">New Hampshire</option>
+<option value="NJ">New Jersey</option>
+<option value="NM">New Mexico</option>
+<option value="NY">New York</option>
+<option value="NC">North Carolina</option>
+<option value="ND">North Dakota</option>
+<option value="OH">Ohio</option>
+<option value="OK">Oklahoma</option>
+<option value="OR">Oregon</option>
+<option value="PA">Pennsylvania</option>
+<option value="RI">Rhode Island</option>
+<option value="SC">South Carolina</option>
+<option value="SD">South Dakota</option>
+<option value="TN">Tennessee</option>
+<option value="TX">Texas</option>
+<option value="UT">Utah</option>
+<option value="VT">Vermont</option>
+<option value="VA">Virginia</option>
+<option value="WA">Washington</option>
+<option value="WV">West Virginia</option>
+<option value="WI">Wisconsin</option>
+<option value="WY">Wyoming</option>
+</select>                </div>
+            </div>
+            <div class="form-group row">
+                <div class="col-4">
+                    <label for="ZipCode">Zip Code</label>
+                </div>
+                <div class="col-2">
+                    <input class="form-control" data-val="true" data-val-length="Zip Code can have a max of 10 characters." data-val-length-max="10" id="ZipCode" maxLength="10" name="ZipCode" placeholder="00000-0000" type="text" value="" />
+                </div>
+            </div>
+            <div class="form-group row">
+                <div class="col-4">
+                    <label for="CountyId">County</label>
+                </div>
+                <div class="col-4">
+                    <select class="form-control form-select" id="CountyId" name="CountyId"><option selected="selected" value="">--Select One--</option>
+</select>
+                </div>
+            </div>
+            <input type="submit" class="btn btn-primary" onclick="return OnSubmitPage();" value="Search" id="OnSubmit" />
+            <input type="button" class="btn btn-primary" value="Clear Search Fields" onclick="return ClearFields();" />
+            <br /><br />
+
+
+<div class="card border-dark">
+    <div class="card-header">Search Results</div>
+
+    <div class="card-body">
+        <table class="table table-striped table-hover">
+            <caption>
+                Search results<br>
+                   <span>Columns Organization Name, DBA Name, EIN , Organization Purpose Category, City, State, Zip, County, In Compliance </span>
+            </caption>
+            <thead>
+                <tr>
+                    <th scope="col">
+                        Organization Name
+                    </th>
+                    <th scope="col">DBA Name</th>
+                    <th scope="col">
+                        EIN
+                    </th>
+                    <th scope="col">
+                        Organization Purpose Category
+                    </th>
+                    <th scope="col">
+                        City
+                    </th>
+                    <th scope="col">
+                        State
+                    </th>
+                    <th scope="col">
+                        Zip
+                    </th>
+                    <th scope="col">
+                        County
+                    </th>
+                    <th scope="col">
+                        In Compliance
+                        <a href="#" data-bs-toggle="tooltip" data-bs-html="true" title='Indicates whether the organization is current with its registration requirements with the Ohio Attorney General&#39;s Office.'>
+                            <img alt="Hover over this text to see the tooltip" class="tooltipImg" src="/Images/QuestionIcon.gif" width="15" height="15" />
+                        </a>
+                    </th>
+                    <th scope="col">Details</th>
+                </tr>
+            </thead>
+            <tbody>
+                    <tr>
+                        <td colspan="12" align="center">
+                            No organizations found
+                        </td>
+                    </tr>
+            </tbody>
+        </table>
+
+    </div>
+</div>            <br />
+            <div class="alert alert-light">
+                <p>Learning about an organization and its activities can help donors make wise giving decisions. In addition to checking whether an organization is in compliance with its reporting requirements with the Ohio Attorney General’s Office, other good sources of information include:</p>
+                <ul>
+                    <li>The IRSs Exempt Organizations Selection Check can be used to verify if an organization has a valid 501I(3) or other tax-exempt designation. The <a href="http://apps.irs.gov/app/eos/" target="_blank">IRS also lists organizations</a> that have had their tax exempt status revoked.</li>
+                    <li>The organization’s IRS Form 990 will include information regarding how the group raises and uses its funds, and other operational details about the group. Important details to pay attention to include the percent of expenditures that are used on program expenses rather than management and fundraising expenses. Descriptions of programs and expenses are often revealing, as well as reported information about travel and compensation levels. Self-dealing transactions between the charity and one or more of its directors should also be examined.</li>
+                    <li>Private watchdog organizations often review data and reports on organizations and may grade them based on various spending standards and other procedures.  Some of those groups are <a href="http://www.charitywatch.org/" target="_blank">CharityWatch</a>, <a href="http://www.charitynavigator.org/" target="_blank">Charity Navigator</a>, <a href="http://www.guidestar.org/" target="_blank">GuideStar</a> and the <a href="http://www.give.org/" target="_blank">Better Business Bureau Wise Giving Alliance</a>.  Your local Better Business Bureau may also be a resource and can be identified through the Wise Giving Alliance link above.</li>
+                    <li>Internet searches can often reveal useful information about accomplishments of the organization, or information about questionable activities.</li>
+                    <li>The organization’s written and web-based materials can also be an important source of information.</li>
+                </ul>
+            </div>
+</form>    </div>
+</div>
+<link href="/Content/CRISP/CRISP_Pagination.css" rel="stylesheet" />
+<script src="/Scripts/CRISP/Charities.js"></script>
+</body>
+
+<div class="overlay">
+    <div class="row col-4 position-absolute top-50 start-50 translate-middle">
+        <p class="text-center">
+            <img src="/Images/loading.gif" width="50px" alt="waiting for content to load" />
+            <br />
+            Please wait...
+        </p>
+    </div>
+</div>
+        </div>
+        <footer>
+            <div class="footer-container d-print-none">
+                <div class="container-fluid">
+                    <div class="row">
+                        <div class="col-xs-12 col-md-3 footer-col">
+                            <div class="contact-title"><a class="footer-link" href="https://charitable.ohioago.gov/About-the-Charitable-Law-Section" target="_blank">About Us</a></div>
+                            <p>
+                                Ohio Attorney General's Office<br>
+                                Charitable Law Section<br>
+                                30 E. Broad St., 25th Floor<br>
+                                Columbus, OH 43215<br>
+                                Phone: 800-282-0515
+                            </p>
+                        </div>
+                        <div class="col-xs-12 col-md-3 footer-col">
+                            <div class="contact-title">Quick Links</div>
+                            <p>
+                                <a class="footer-link" href="https://charitable.ohioago.gov/Resources-for-Charities" target="_blank">Resources for Charities</a><br>
+                                <a class="footer-link" href="https://charitable.ohioago.gov/Charitable-Webinars" target="_blank">Charitable Webinars</a><br>
+                                <a class="footer-link" href="https://charitable.ohioago.gov/Charitable-Gaming" target="_blank">Charitable Gaming</a><br>
+                                <a class="footer-link" href="https://charitable.ohioago.gov/Professional-Fundraisers" target="_blank">Professional Fundraisers</a>
+                            </p>
+                        </div>
+                        <div class="col-xs-12 col-md-3 footer-col">
+                            <div class="contact-title">&nbsp;</div>
+                            <p>
+                                <a class="footer-link" href="https://charitable.ohioago.gov/Scholarship-Granting-Organization-Certification" target="_blank">Scholarship Granting Organization Certification</a><br>
+                                <a class="footer-link" href="https://charitable.ohioago.gov/Charitable-Transactions" target="_blank">Charitable Transactions & Probate</a><br>
+                                <a class="footer-link" href="https://charitable.ohioago.gov/Charitable-Advisory-Council" target="_blank">Charitable Advisory Council</a><br>
+                                <a class="footer-link" href="https://charitable.ohioago.gov/Charity-Registration" target="_blank">Charity Registration</a>
+                            </p>
+                        </div>
+                        <div class="col-xs-12 col-md-3 footer-col">
+                            <div class="contact-title">News & Updates</div>
+                            <p><a class="SubscriptionButton btn btn-primary" href="https://public.govdelivery.com/accounts/OHAG/subscriber/new" target="blank">Sign Up</a></p>
+                            <div class="contact-title">Privacy</div>
+                            <p><a class="footer-link" href="https://www.ohioattorneygeneral.gov/Files/Services/OAGPrivacyNotice" target="_blank">Privacy Statement</a></p>
+                        </div>
+                    </div>
+                </div>
+                <div class="copyright">
+                    <div class="container-fluid">
+                        <div class="row">
+                            <div class="col-md-4 col-lg-4">Copyright 2026 - Ohio Attorney General. All rights reserved.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </footer>
+    </div>
+
+
+<script src="/bundles/jquery?v=ZrcA40qXsIOEDSEuFAlu1vDq6tfcjbCQqT4KBV_jf4s1"></script>
+
+<script src="/Scripts/boostrap?v=mP-ZFlRNcTfWpKbz59mphZ1z2tdxaXJ0o5tFJCBw7781"></script>
+
+<script src="/bundles/knockout?v=8C2HZTEhg-4SlR23jR0VIRqK2jmCLEckMvQFq6wFpeY1"></script>
+
+<script src="/bundles/TwitterBootstrapMvc?v=0ZhFFW1dqwROtTztQn_1aqvnZhp_QXi03YIpacAD8qs1"></script>
+
+<script src="/bundles/agobind?v=EzWTmw6zgIAFlxIW_JXLGFDRqBWHwrRBwZbp6RdubRM1"></script>
+
+<script src="/bundles/moment?v=XL1TaGX1Lrp4bBDR1eQ3i7SgH16c4IMgNUum1cOsjIU1"></script>
+
+
+
+    
+
+    <script src="/bundles/respond?v=sbFboOuLdtmhD0n_uFzollmELtGkPsU5cTntphHFa-01"></script>
+
+    <script src="/bundles/modernizr?v=inCVuEFe6J4Q07A0AcRsbJic_UE5MwpRMNGcOtk94TE1"></script>
+
+    <script src="/Scripts/boostrap?v=mP-ZFlRNcTfWpKbz59mphZ1z2tdxaXJ0o5tFJCBw7781"></script>
+
+
+
+</body>
+</html><script id="f5_cspm">(function(){var f5_cspm={f5_p:'LNHCKFGBIFDKHOMMBNCLHIEJCNMPFKFALIKJHMEMBOICALNINGANCBOHJFNOGMBIMEEBKPDDAAPIIEFBPECAMHNGAAHDIGECDPGONDHHOHEOCBNDFMNDDMGNDLLJINOI',setCharAt:function(str,index,chr){if(index>str.length-1)return str;return str.substr(0,index)+chr+str.substr(index+1);},get_byte:function(str,i){var s=(i/16)|0;i=(i&15);s=s*32;return((str.charCodeAt(i+16+s)-65)<<4)|(str.charCodeAt(i+s)-65);},set_byte:function(str,i,b){var s=(i/16)|0;i=(i&15);s=s*32;str=f5_cspm.setCharAt(str,(i+16+s),String.fromCharCode((b>>4)+65));str=f5_cspm.setCharAt(str,(i+s),String.fromCharCode((b&15)+65));return str;},set_latency:function(str,latency){latency=latency&0xffff;str=f5_cspm.set_byte(str,40,(latency>>8));str=f5_cspm.set_byte(str,41,(latency&0xff));str=f5_cspm.set_byte(str,35,2);return str;},wait_perf_data:function(){try{var wp=window.performance.timing;if(wp.loadEventEnd>0){var res=wp.loadEventEnd-wp.navigationStart;if(res<60001){var cookie_val=f5_cspm.set_latency(f5_cspm.f5_p,res);window.document.cookie='f5avr2019214749aaaaaaaaaaaaaaaa_cspm_='+encodeURIComponent(cookie_val)+';path=/;'+'';}
+return;}}
+catch(err){return;}
+setTimeout(f5_cspm.wait_perf_data,100);return;},go:function(){var chunk=window.document.cookie.split(/\s*;\s*/);for(var i=0;i<chunk.length;++i){var pair=chunk[i].split(/\s*=\s*/);if(pair[0]=='f5_cspm'&&pair[1]=='1234')
+{var d=new Date();d.setTime(d.getTime()-1000);window.document.cookie='f5_cspm=;expires='+d.toUTCString()+';path=/;'+';';setTimeout(f5_cspm.wait_perf_data,100);}}}}
+f5_cspm.go();}());</script>

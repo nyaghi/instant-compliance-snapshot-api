@@ -507,7 +507,7 @@
 
         <div>&copy; <span id="year"></span> Compliance Express</div>
 
-          <div class="font-semibold text-slate-600">CharityClarity Aurora v2026.09.28.4 &middot; Staging</div>
+          <div class="font-semibold text-slate-600">CharityClarity Aurora v2026.09.28.5 &middot; Staging</div>
         <div>No legal or tax advice.</div>
 
       </div>
@@ -518,9 +518,9 @@
 
 
 
-  <script src="/ny-connector.js?v=2026.09.28.2-aurora"></script>
+  <script src="/ny-connector.js?v=2026.09.28.5-aurora"></script>
   <script src="/organization-identity.js?v=20260927.1"></script>
-  <script src="/identity-review.js?v=2026.09.28.2-aurora"></script>
+  <script src="/identity-review.js?v=2026.09.28.5-aurora"></script>
   <script>
 
     const API_BASE = "https://instant-compliance-snapshot-api-staging-8dnk.onrender.com";
@@ -1264,6 +1264,12 @@
 
     async function requestSingleState(apiBase, einValue, emailValue, state, organizationNameValue, isConnectionRetry = false, alternateNames = runAlternateNames, {signal} = {}) {
       signal?.throwIfAborted();
+      if (window.CCOptimized && internalUnlocked && !["IL", "GA"].includes(state)) {
+        const rows = await window.CCOptimized.run({apiBase, name:organizationNameValue, ein:einValue,
+          states:[state], aliases:alternateNames, credentials:{email:emailValue,
+            admin_passcode:adminPasscode.value.trim(),device_id:getDeviceId()}, signal});
+        return rows[0];
+      }
       if (["NY", "IL", "GA"].includes(state) && window.location.origin === "https://staging.compliance-express.com") {
         if (state === "NY" && !isConnectionRetry) lastNyInput = { apiBase, einValue, emailValue, organizationNameValue, alternateNames: [...alternateNames] };
         try {
@@ -1453,6 +1459,15 @@
 
 
     async function runStateChecks(states, einValue, emailValue, organizationNameValue) {
+      if (window.CCOptimized && internalUnlocked) {
+        let completed=0;
+        return window.CCOptimized.run({apiBase:API_BASE,name:organizationNameValue,ein:einValue,
+          states,aliases:runAlternateNames,mode:'standard',
+          credentials:{email:emailValue,admin_passcode:adminPasscode.value.trim(),device_id:getDeviceId()},
+          externalLookup:state=>requestSingleState(API_BASE,einValue,emailValue,state,organizationNameValue,false,runAlternateNames),
+          onResult:()=>{completed++;progressCount.textContent=`${completed} of ${states.length}`;
+            progressBar.style.width=`${Math.max(12,Math.round(completed/states.length*100))}%`;}});
+      }
 
       const results = [];
 
@@ -1710,7 +1725,8 @@
 
   </script>
 
-  <script src="/sales-mode.js?v=2026.09.28.2-aurora"></script>
+  <script src="/optimized-workflows.js?v=2026.09.28.5"></script>
+  <script src="/sales-mode.js?v=2026.09.28.5-aurora"></script>
 </body>
 
 </html>

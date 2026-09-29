@@ -236,7 +236,7 @@ def switch_to_fein_mode(page) -> None:
     time.sleep(1)
 
 
-def fill_fein_and_search(page, ein: str) -> bool:
+def fill_fein_and_search(page, ein: str, *, readiness_waits_only: bool = False) -> bool:
     try:
         name_box = page.locator("#txtKeywordSearch").first
         if name_box.is_visible():
@@ -248,7 +248,8 @@ def fill_fein_and_search(page, ein: str) -> bool:
     fein_box = page.locator("#FEINNoSearchField").first
     fein_box.wait_for(state="visible", timeout=10000)
     fein_box.click(timeout=5000, force=True)
-    time.sleep(1)
+    if not readiness_waits_only:
+        time.sleep(1)
     fein_box.fill("")
     fein_box.type(digits_only(ein), delay=50)
     if digits_only(fein_box.input_value()) != digits_only(ein):
@@ -264,7 +265,8 @@ def fill_fein_and_search(page, ein: str) -> bool:
         }
         """
     )
-    time.sleep(1)
+    if not readiness_waits_only:
+        time.sleep(1)
 
     for candidate in [
         page.get_by_role("button", name=re.compile(r"^Search$", re.I)),
@@ -573,11 +575,39 @@ def find_result_link(page, org_name: str):
     return candidates[0][4]
 
 
-def wait_for_result_link_or_no_value(page, org_name: str, timeout_seconds: int = 45, require_search_response: bool = False):
+def wa_completed_search_rendered(page) -> bool:
+    """A completed request and its rendered rows replace general network idle."""
+    tracker = wa_search_tracker_state(page)
+    if not tracker.get("completed") or tracker.get("pending"):
+        return False
+    if tracker.get("failed") or not 200 <= int(tracker.get("lastStatus") or 0) < 300:
+        raise RuntimeError("Washington search response failed before its rows were ready.")
+    text = tracker.get("lastText") or ""
+    if wa_search_response_is_empty(text):
+        # The existing zero-results branch still requires an explicit page message.
+        return True
+    try:
+        rows = json.loads(text)
+        if not isinstance(rows, list) or not rows:
+            return False
+        names = [normalize_name(row.get("EntityName") or "") for row in rows if isinstance(row, dict)]
+        if len(names) != len(rows) or not all(names):
+            return False
+        rendered = normalize_name(" ".join(page.locator("table").all_inner_texts()))
+        return all(name in rendered for name in names)
+    except (ValueError, TypeError):
+        return False
+
+
+def wait_for_result_link_or_no_value(page, org_name: str, timeout_seconds: int = 45, require_search_response: bool = False, *, require_complete_before_link: bool = False):
     deadline = time.time() + timeout_seconds
     no_value_seen = False
     while time.time() < deadline:
-        scroll_to_results(page)
+        if require_complete_before_link and not wa_completed_search_rendered(page):
+            time.sleep(0.2)
+            continue
+        if not require_complete_before_link:
+            scroll_to_results(page)
         link = find_result_link(page, org_name)
         if link:
             return link
@@ -603,7 +633,12 @@ def wait_for_result_link_or_no_value(page, org_name: str, timeout_seconds: int =
     return "NO_VALUE" if no_value_seen else None
 
 
-def search_wa(org: Organization, show_process: bool = False) -> SearchResult:
+def search_wa(org: Organization, show_process: bool = False, *, readiness_waits_only: bool = False) -> SearchResult:
+    # The master supplies explicit ready-field and completed-detail checks.
+    # Standalone callers without those hooks retain the original waits.
+    readiness_waits_only = bool(readiness_waits_only
+        and callable(globals().get("read_wa_detail"))
+        and callable(globals().get("apply_wa_detail_to_result")))
     result = SearchResult(
         organization_name=org.organization_name,
         ein=org.ein,
@@ -621,21 +656,28 @@ def search_wa(org: Organization, show_process: bool = False) -> SearchResult:
         page = context.new_page()
         try:
             page.goto(WA_SEARCH_URL, wait_until="domcontentloaded", timeout=45000)
-            safe_wait_for_network_idle(page, timeout=10000)
-            time.sleep(1)
+            if not readiness_waits_only:
+                safe_wait_for_network_idle(page, timeout=10000)
+                time.sleep(1)
             install_wa_search_tracker(page)
 
             switch_to_fein_mode(page)
-            time.sleep(1)
+            if not readiness_waits_only:
+                time.sleep(1)
 
-            if not fill_fein_and_search(page, org.ein):
+            if not fill_fein_and_search(page, org.ein, readiness_waits_only=readiness_waits_only):
                 result.error = "Could not click the Washington Search button."
                 return result
 
-            safe_wait_for_network_idle(page, timeout=8000)
-            time.sleep(1)
+            if not readiness_waits_only:
+                safe_wait_for_network_idle(page, timeout=8000)
+                time.sleep(1)
 
-            found = wait_for_result_link_or_no_value(page, org.organization_name, timeout_seconds=22, require_search_response=True)
+            if readiness_waits_only:
+                found = wait_for_result_link_or_no_value(page, org.organization_name, timeout_seconds=22,
+                    require_search_response=True, require_complete_before_link=True)
+            else:
+                found = wait_for_result_link_or_no_value(page, org.organization_name, timeout_seconds=22, require_search_response=True)
             if found == "NO_VALUE":
                 found = wa_name_fallback_result_link(page, org)
                 if not found:
@@ -665,13 +707,20 @@ def search_wa(org: Organization, show_process: bool = False) -> SearchResult:
                 result.matched_registry_name = ""
             try:
                 found.scroll_into_view_if_needed(timeout=5000)
-                time.sleep(1)
+                if not readiness_waits_only:
+                    time.sleep(1)
             except Exception:
                 pass
-            found.click(timeout=5000, force=True)
+            if readiness_waits_only:
+                # A forced click can hit the loading overlay even after rows
+                # render. Normal actionability waits for the row to receive it.
+                found.click(timeout=5000)
+            else:
+                found.click(timeout=5000, force=True)
 
-            safe_wait_for_network_idle(page, timeout=10000)
-            time.sleep(1)
+            if not readiness_waits_only:
+                safe_wait_for_network_idle(page, timeout=10000)
+                time.sleep(1)
 
             detail_text = (read_wa_detail(page, result) if callable(globals().get("read_wa_detail"))
                            else page.locator("body").inner_text(timeout=15000))

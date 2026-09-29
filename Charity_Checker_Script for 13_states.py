@@ -1749,7 +1749,7 @@ def extract_pa_result_expiration(page, ein: str, organization_name: str = ""):
         candidates.sort(key=lambda item: (item[0], item[5], item[1], item[2]), reverse=True)
         return candidates[0][3], candidates[0][4]
     return "", ""
-def search_pa(page, org: Organization) -> StateResult:
+def search_pa(page, org: Organization, wait_for_ein=None) -> StateResult:
     url = "https://www.charities.pa.gov/#/page/searchCharities"
     result = StateResult(org.organization_name, org.ein, "PA", STATUS_UNKNOWN, url)
     try:
@@ -1784,6 +1784,9 @@ def search_pa(page, org: Organization) -> StateResult:
         if not ein_input:
             result.error = "Could not find PA EIN input"
             return result
+        # Returning to the same Angular route can retain the preceding name
+        # fallback. Reset every search filter before the EIN-only confirmation.
+        page.get_by_role("button", name=re.compile(r"^Clear$", re.I)).first.click(timeout=1500)
         ein_input.fill("")
         ein_input.fill(ein)
 
@@ -1791,16 +1794,26 @@ def search_pa(page, org: Organization) -> StateResult:
             result.error = "Could not click PA Search button"
             return result
 
+        if wait_for_ein is not None and not wait_for_ein(ein):
+            result.raw_status_text = "Pennsylvania EIN search did not complete"
+            result.source_note = "Pennsylvania did not finish the submitted EIN search; registration status remains unconfirmed."
+            result.reason_code = "PA_INCOMPLETE_SEARCH"
+            return result
         row_text, expiration_raw = extract_pa_result_expiration(page, ein, org.organization_name)
         if not row_text:
             formatted_ein = format_ein_with_dash(ein)
             if formatted_ein and formatted_ein != ein:
                 retry_input = find_pa_ein_input(page)
                 if retry_input:
-                    retry_input.fill("")
-                    retry_input.fill(formatted_ein)
-                    if click_pa_search_button(page):
-                        row_text, expiration_raw = extract_pa_result_expiration(page, ein, org.organization_name)
+                    maximum = retry_input.get_attribute("maxlength") or ""
+                    # A browser truncates a formatted EIN in a digits-only field,
+                    # leaving its search button disabled. Keep the completed EIN
+                    # result rather than trying an input the field cannot hold.
+                    if not (maximum.isdigit() and len(formatted_ein) > int(maximum)):
+                        retry_input.fill("")
+                        retry_input.fill(formatted_ein)
+                        if click_pa_search_button(page):
+                            row_text, expiration_raw = extract_pa_result_expiration(page, ein, org.organization_name)
         if not row_text:
             result.raw_status_text = "No matching EIN result"
             result.status = STATUS_NOT_REGISTERED

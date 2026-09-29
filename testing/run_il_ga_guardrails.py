@@ -377,38 +377,32 @@ class IntegrationControls(unittest.TestCase):
         ui=(Path(__file__).resolve().parents[1]/'web-staging/index.html').read_text()
         self.assertIn('linear-gradient(90deg, #cbd5e1 0%, #cbd5e1 50%, #fca5a5 50%, #fca5a5 100%)',ui)
         self.assertIn('if (normalized === "not registered / non-compliant") return "status-il-combined"',ui)
-    def test_mature_state_functions_unchanged_from_09245(self):
+    def test_aurora_rules_preserved_outside_reviewed_performance_overlap(self):
         root=Path(__file__).resolve().parents[1]
-        previous=subprocess.check_output(['git','show','35e61ae:registry_snapshot_server.py'],cwd=root).decode('utf-8')
-        functions=lambda source:{n.name:ast.dump(n) for n in ast.parse(source).body if isinstance(n,ast.FunctionDef)}
-        old,new=functions(previous),functions((root/'registry_snapshot_server.py').read_text(encoding='utf-8'))
-        changed={k for k in old if old[k]!=new.get(k)}
-        self.assertEqual(changed,{'public_status','identity_rows_names','licensed_charity_identity','registration_date_metadata',
-            # September 27: negative DBA answers cannot become search aliases.
-            'identity_candidate',
-            # Rhode Island retrieval order; no matching/status acceptance changes.
-            'search_ri',
-            # NM access-block normalization; all other adapters retain parity.
-            'copy_external_result',
-            # Final-50 scoped PA/KY fixes and shared office normalization.
-            'search_pa_with_name_fallback','search_pa_with_name_fallback_core',
-            'pa_guard_search_completion','irs_period_for_label','licensed_charity_street_evidence',
-            # Next-50 audit: bounded literal fallback for short legal cores.
-            'licensed_charity_names',
-            # Next-50 audit: retain pending status in the Michigan name fallback.
-            'search_mi_name_fallback',
-            'true_status_from_body','comments_for_result_base','run_state_lookup','ny_connector_failure',
-            'ny_connector_clean_response','ny_connector_advance','ny_connector_request','ny_connector_unpack','normalize_registry_match_fields',
-            # Shared verified-acronym fix covered above and by release regression.
-            'redundant_bracket_acronym_key',
-            # DC-specific transient recovery; RI policy independently tested.
-            'registry_json_request',
-            # User-reviewed GA exemption priority and DC/GA source transparency.
-            'select_licensed_charity','licensed_charity_result','dc_charity_records',
-            # User-requested identity decisions and same-EIN historical offices.
-            'response_data_for_lookup','identity_source_cache_key','reason_code_for_result',
-            'wi_confirm_cross_state_credential','wi_best_match_from_html','wi_best_match_from_markdown',
-            'search_wi','search_wi_sidecar','identity_co_names'})
+        def functions(source):
+            return {n.name:ast.dump(n) for n in ast.parse(source).body if isinstance(n,ast.FunctionDef)}
+        def revision(ref):
+            return functions(subprocess.check_output(['git','show',ref+':registry_snapshot_server.py'],cwd=root).decode('utf-8'))
+        base=revision('35e61ae38f83ec00cba48776712d8fe2b34194c3')
+        aurora=revision('a59c2d8b3ad478ee4b442f831ec0834875d91e08')
+        performance=revision('90ed42de07be0864d3a07817b36e0217ff3e49b7')
+        merged=functions((root/'registry_snapshot_server.py').read_text(encoding='utf-8'))
+        overlap={name for name in base if aurora.get(name)!=base[name] and performance.get(name)!=base[name]}
+        self.assertEqual(overlap, {'comments_for_result_base','copy_external_result','dc_charity_records',
+            'identity_co_names','licensed_charity_identity','licensed_charity_result','pa_guard_search_completion',
+            'redundant_bracket_acronym_key','response_data_for_lookup','run_state_lookup','search_mi_name_fallback',
+            'search_pa_with_name_fallback','search_pa_with_name_fallback_core'})
+        # Preserve every Aurora-only correction and every state rule untouched
+        # by the performance branch, including new IL/GA and identity reviews.
+        protected={name for name in aurora if name not in performance or performance[name]==base.get(name)}
+        # The only additional master-rule edit exports review context privately;
+        # staging still uses its original signing/interpretation branch.
+        protected.discard('attach_identity_review')
+        for name in sorted(protected):
+            with self.subTest(function=name):self.assertEqual(merged.get(name),aurora[name])
+        self.assertEqual(merged['pa_name_search_plan'],aurora['pa_name_search_plan'])
+        self.assertEqual(merged['pa_completed_name_rows'],aurora['pa_completed_name_rows'])
+
 
 
 class GeorgiaLocationEvidenceTests(unittest.TestCase):

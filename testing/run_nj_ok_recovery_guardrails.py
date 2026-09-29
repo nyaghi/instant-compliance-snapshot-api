@@ -12,7 +12,7 @@ class Tests(unittest.TestCase):
 
     def test_existing_frame_does_not_require_another_click(self):
         frame=SimpleNamespace(url='https://example.test/CHR-Public-Details-Page/',content=lambda:'Example Relief 123456789 Next Filing Due: 12/31/2026')
-        page=SimpleNamespace(frames=[frame])
+        page=SimpleNamespace(frames=[frame],url='https://charportal.dca.njoag.gov/Charity-Registration/CHR-Public-Search-Page/')
         with patch.object(c,'registry_page_body',return_value='Compliant'):
             self.assertIn('12/31/2026',c.nj_detail_body(page,self.org()))
 
@@ -48,8 +48,9 @@ class Tests(unittest.TestCase):
     def test_attached_empty_field_waits_for_value(self):
         clock=[0.0];frame=Mock(url='https://example.test/CHR-Public-Details-Page/')
         frame.content.side_effect=['Example Relief <input id="crsm_fiscalyearenddate" value="">','Example Relief <input id="crsm_fiscalyearenddate" value="2025-06-30">']
-        with patch.object(c.time,'monotonic',side_effect=lambda:clock[0]),patch.object(c.time,'sleep',side_effect=lambda n:clock.__setitem__(0,clock[0]+n)):
-            body=c.nj_loaded_detail_body(SimpleNamespace(frames=[frame]),self.org(),1)
+        page=SimpleNamespace(frames=[frame],wait_for_timeout=lambda ms:clock.__setitem__(0,clock[0]+ms/1000))
+        with patch.object(c.time,'monotonic',side_effect=lambda:clock[0]):
+            body=c.nj_loaded_detail_body(page,self.org(),1)
         self.assertIn('2025-06-30',body);self.assertEqual(frame.content.call_count,2)
 
     def test_other_record_date_is_not_accepted(self):

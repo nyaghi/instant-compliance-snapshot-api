@@ -243,7 +243,10 @@ class CompletionControls(unittest.TestCase):
         link.first.click.side_effect=click
         row=Mock();row.locator.side_effect=lambda selector:cell_list if selector=='td' else link
         rows=Mock();rows.count.return_value=1;rows.nth.return_value=row
-        if count_failure:rows.count.side_effect=TimeoutError('table not readable')
+        rows.evaluate_all.return_value=[{'index':0,'count':5,'values':['123','Example Charity','Active']}]
+        if count_failure:
+            rows.count.side_effect=TimeoutError('table not readable')
+            rows.evaluate_all.side_effect=TimeoutError('table not readable')
         page.locator.side_effect=lambda selector:rows if selector=='tr' else Mock()
         def body(_):
             if opened and opened[-1]:

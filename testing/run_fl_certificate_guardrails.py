@@ -151,14 +151,16 @@ class OptionalDateTests(unittest.TestCase):
             start=time.monotonic();c.enrich_registration_date_sources(r,"Current")
         self.assertEqual(r.status,"Current");self.assertTrue(r.success)
         self.assertEqual(recovery.call_args.args[:2],("CH123","Example Foundation"))
-        self.assertLessEqual(recovery.call_args.args[2]-start,6.1)
+        self.assertLessEqual(recovery.call_args.args[2]-start,12.1)
         self.assertEqual(r._cc_registration_date_evidence,{"identifier":"CH123"})
-    def test_no_extra_recovery_for_ordinary_optional_network_failure(self):
+    def test_one_bounded_recovery_for_optional_network_failure(self):
         r=c.checker.StateResult("Example Foundation","123456789","FL","Current",c.FL_CHECK_A_CHARITY_URL)
         r.success=True;r.matched_registry_identifier="CH123";r.matched_registry_name="Example Foundation"
-        with patch.object(c.curl_requests,"Session",side_effect=TimeoutError("network")),patch.object(c,"fl_verified_registration_issue") as recovery:
+        with patch.object(c.curl_requests,"Session",side_effect=TimeoutError("network")),patch.object(c,"fl_verified_registration_issue",return_value={}) as recovery:
             c.enrich_registration_date_sources(r,"Current")
-        recovery.assert_not_called();self.assertEqual(r._cc_registration_date_evidence,{})
+        recovery.assert_called_once();self.assertEqual(r._cc_registration_date_evidence,{})
+        self.assertEqual(r.registration_date_diagnostics[0]['reason'],'TimeoutError')
+        self.assertEqual(r.status,'Current');self.assertTrue(r.success)
     def test_exhausted_date_budget_cannot_start_network(self):
         with patch.object(c.urllib.request,"build_opener") as opener:
             self.assertEqual(c.fl_verified_registration_issue("CH123","Example",time.monotonic()-1),{})

@@ -1,0 +1,1115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="X-UA-Compatible" content="chrome=1">
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge,chrome=1">
+    <meta id="viewport" name="viewport" content="user-scalable=0, width=device-width, height=device-height, initial-scale=0.5, maximum-scale=0.5" />
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="X-UA-Compatible" content="IE=8,9,10,11">
+    <link href="/Themes/Default/CSS/jquery-ui.css" rel="stylesheet"/>
+<link href="/Themes/Default/CSS/autocomplete.css" rel="stylesheet"/>
+<link href="/Themes/Default/CSS/font-awesome.css" rel="stylesheet"/>
+<link href="/Themes/Default/CSS/gridview.css" rel="stylesheet"/>
+<link href="/Themes/Default/CSS/jquery.timeentry.css" rel="stylesheet"/>
+<link href="/Themes/Default/CSS/styles.css" rel="stylesheet"/>
+<link href="/Themes/Default/CSS/sweetalert.css" rel="stylesheet"/>
+<link href="/Content/bootstrap.css" rel="stylesheet"/>
+<link href="/Content/sidemenu.css" rel="stylesheet"/>
+<link href="/Content/bootstrap-datepicker.min.css" rel="stylesheet"/>
+<link href="/Content/bootstrap_nv_theme.css" rel="stylesheet"/>
+<link href="/Content/custom-bootstrap-flex.css" rel="stylesheet"/>
+
+    <script src="/Scripts/jquery-1.11.3.min.js"></script>
+<script src="/Scripts/jquery-ui.js"></script>
+<script src="/Scripts/modernizr-2.6.2.js"></script>
+<script src="/Scripts/ezant-1.0.js"></script>
+<script src="/Scripts/xhtmlgrid.js"></script>
+<script src="/Scripts/cenuity-0.1.js"></script>
+<script src="/Scripts/CountryRules.js"></script>
+<script src="/Scripts/ezantExtension.js"></script>
+<script src="/Scripts/jquery.maskedinput.js"></script>
+<script src="/Scripts/jquery.timeentry.js"></script>
+<script src="/Scripts/common.js"></script>
+<script src="/Scripts/jquery.cookie.js"></script>
+<script src="/Scripts/sweetalert.min.js"></script>
+<script src="/Scripts/sidemenu.js"></script>
+<script src="/Scripts/ezval-1.0.js"></script>
+<script src="/Scripts/maskUpload.js"></script>
+<script src="/Scripts/bootstrap.js"></script>
+<script src="/Scripts/AutoComplete.js"></script>
+
+    <script src="/Scripts/tinymce/jquery.tinymce.min.js"></script>
+<script src="/Scripts/tinymce/tinymce.js"></script>
+<script src="/Scripts/tinymce/tinymce.min.js"></script>
+
+    <script src="/Scripts/gcr-acc-bsd-scripts/UCC/gcr.acc.bsd.AuthorizingParty.js"></script>
+<script src="/Scripts/gcr-acc-bsd-scripts/UCC/gcr.acc.bsd.Collateral.js"></script>
+<script src="/Scripts/gcr-acc-bsd-scripts/UCC/gcr.acc.bsd.DebtorInfromation.js"></script>
+<script src="/Scripts/gcr-acc-bsd-scripts/UCC/gcr.acc.bsd.Miscellaneous.js"></script>
+<script src="/Scripts/gcr-acc-bsd-scripts/UCC/gcr.acc.bsd.SendAdditionalAcknolowledgement.js"></script>
+<script src="/Scripts/gcr-acc-bsd-scripts/UCC/gcr.acc.bsd.ucc11advancedsearch.js"></script>
+<script src="/Scripts/gcr-acc-bsd-scripts/UCC/gcr.acc.bsd.ucc11search.js"></script>
+<script src="/Scripts/gcr-acc-bsd-scripts/UCC/gcr.pcc.crd.iq.shared.FeatureClaimInformation.js"></script>
+
+    <link href="/Content/onlineWorkflows.css" rel="stylesheet"/>
+
+    <script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.additionalbusinessinformation.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.addressfields.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.AdhocWorkflow.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.BusinessAddressMailingAddress.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.BusinessOfficeAddress.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.BusinessOfficeAddressMark.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.BusinessOfficeAddressNotary.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.businessSignature.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.CharitableSolicitationsScreenComponent.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.commercialregisteredagent.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.documentprocessingeditingmodel.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.exchangessignature.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.FirmBusinessAddressMailingAddress.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.jurisdiction.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.mergersignature.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.namefields.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.notaryaddressfields.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.NotaryAmendment.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.NotaryCancellationSignature.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.NotarySearch.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.NotaryViolationAndOnlineComplaint.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.registernamefield.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.registernamefieldRA.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.requiredFilings.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.Supportingdocumentation.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.WorkFlowNevigation.js"></script>
+
+    <script src="/Scripts/gcr-acc-bsd-scripts/gcr.acc.bsd.js"></script>
+<script src="/Scripts/Apps/Shared/gcr.pcc.crd.iq.shared.js"></script>
+
+    <link rel="shortcut icon" href="/favicon.ico" />
+    <link rel="icon" href="/favicon.ico" />
+    <title>West Virginia Secretary of State - Enterprise Registration &amp; Licensing System</title>
+    <style>
+
+        .navbar-toggle {
+            position: fixed;
+            float: right;
+            padding: 0px 10px;
+            margin-top: 0px;
+            margin-right: 0px !important;
+            margin-bottom: 8px;
+            background-color: transparent;
+            background-image: none;
+            border: 1px solid transparent;
+            border-radius: 0px;
+            z-index: 9999 !important;
+        }
+
+        .table thead {
+            background-color: #234C72;
+            color: #ffffff;
+            font-weight: bold;
+        }
+    </style>
+
+    <style type="text/css">
+        .ui-widget-header {
+            background: #043252 !important;
+            color: white !important;
+            font-weight: bold !important;
+        }
+
+        .ui-dialog-titlebar-close {
+            width: 23px !important;
+        }
+    </style>
+
+</head>
+
+
+<body class="bodybg2 sidebar-mini">
+    <div class="wrapper">
+        <!-- Main Header -->
+        <header class="main-header pagetitle ">
+
+            <!-- Header Navbar -->
+            <nav class=" navbar-static-top" role="navigation">
+
+                <!-- Sidebar toggle button-->
+                <div class="col-md-6 col-sm-6 col-xs-8 nopad-left">
+                    <a href="#" class="sidebar-toggle hidden-sm hidden-md hidden-lg navbar-toggle collapsed" ; type="button" data-toggle="collapse" data-target="#navbar" aria-expanded="false" aria-controls="navbar">
+                        <span class="sr-only">Toggle navigation</span>
+                    </a>
+                    <a class="logo1">
+                        <div class="page_title2" style="padding-left: 93px;">
+                            Charities Information
+                        </div>
+                    </a>
+                </div>
+                <!-- Navbar Right Menu -->
+                <div class="navbar-custom-menu col-md-6 col-sm-6 col-xs-4 nopad-left">
+                    <ul class="pull-right cart_list">
+
+
+
+
+
+                        <li>
+                        </li>
+                        <li>
+                        </li>
+                    </ul>
+                </div>
+            </nav>
+        </header>
+
+        <nav class="navbar navbar-default navbar-fixed-top nav_background">
+            <div class="container-fluid">
+                <div class="row">
+                    <div class="col-md-12">
+                        <div class="col-lg-2">
+                            <div class="navbar-header">
+                                <a class="navbar-brand" href="" style="padding: 0px;">
+                                    <img alt="Brand" style="height: 81px; max-height: 81px; min-height: 81px;position:relative;z-index:999;" src="/Themes/WV/Images/core_banner.png">
+                                </a>
+                            </div>
+                        </div>
+                        <div class="col-lg-10">
+                            <div style="">
+                                <div id="navbar" class="navbar-collapse collapse">
+                                    <ul id="movenav" class="nav navbar-nav"></ul>
+
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </nav>
+        <!-- Content Wrapper. Contains page content -->
+        <div class="" style="width:unset;">
+            <section class="content">
+                
+
+<input name="__RequestVerificationToken" type="hidden" value="fixture-public-form-token" />
+<div class="panel panel-primary">
+    <div class="panel-heading">Charities Details</div>
+    <div class="panel-body">
+        <div class="">
+            <div class="panel-default">
+
+<div class="panel panel-default">
+    <div class="panel-heading">Charities Information</div>
+    <div class="panel-body">
+        <div class="row form-group">
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_CharitiesInformation_lblID">ID:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                5533
+            </div>
+
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_CharitiesInformation_lblRegistrationDate">Initial Registration Date:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                03/14/2007
+            </div>
+        </div>
+
+        <div class="row form-group">
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_CharitiesInformation_lblLastRegistrationDate">Last Registration Date:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                03/14/2026
+            </div>
+        </div>
+
+        <div class="row form-group">
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_CharitiesInformation_lblOrganizationName">Organization Name:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                Comic Relief, Inc.
+            </div>
+
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_CharitiesInformation_lblExpirationDate">Expiration Date:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                03/14/2027
+            </div>
+        </div>
+
+        <div class="row form-group">
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_CharitiesInformation_lblContactName">Contact Name:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                Lisa Bui
+            </div>
+
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_CharitiesInformation_lblStatus">Status:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                Active
+            </div>
+        </div>
+
+        <div class="row form-group">
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_CharitiesInformation_lblPhysicaladdress">Street Address:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                120 Broadway 22nd Floor, New York, NY 10271, USA
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_CharitiesInformation_lblpcounty">County:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                
+            </div>
+        </div>
+
+        <div class="row form-group">
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_CharitiesInformation_lblMailingAddress">Mailing Address:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                120 Broadway 22nd Floor, New York, NY 10271, USA
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_CharitiesInformation_lblMailingAddresscounty">County:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                
+            </div>
+        </div>
+
+        <div class="row form-group">
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_CharitiesInformation_lblEmailAddress">Email Address:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                <a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="0560776a7664616a45666a62606b667c62696a6764692b666a68">[email&#160;protected]</a>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_CharitiesInformation_lblPhone">Phone:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                (332) 333-1824
+            </div>
+        </div>
+
+        <div class="row form-group">
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_CharitiesInformation_lblFaxNumber">Fax Number:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                N/A
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_CharitiesInformation_lblWebsite">Website:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                www.comicrelief.org
+            </div>
+        </div>
+
+        <div class="row form-group">
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_CharitiesInformation_lblLegallyEstablishedDate">Legally Established Date:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                12/04/2006
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_CharitiesInformation_lblLegallyEstablishedPlace">Legally Established Place:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                , Delaware
+            </div>
+        </div>
+
+        <div class="row form-group">
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_CharitiesInformation_lblClassification">Classification:</label>
+            </div>
+            <div class="col-lg-9 col-md-9 col-sm-9">
+                Youth Organizations, 
+            </div>
+        </div>
+
+        <div class="row form-group">
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_CharitiesInformation_lblPurpose">Purpose:</label>
+            </div>
+            <div class="col-lg-9 col-md-9 col-sm-9" style="text-overflow: ellipsis;word-break: break-word;">
+                To end child poverty, one nose at a time. Money raised supports programs that ensure children in need are safe, healthy and educated. Half of Red Nose Day&#39;s grant money will be spent right here in America on projects close to home. The other half will be spent in some of the poorest communities in Latin America, Africa and Asia.
+            </div>
+        </div>
+    </div>
+    </div>
+
+
+
+
+
+<div class="panel panel-default">
+    <div class="panel-heading">Representative  Information</div>
+    <div class="panel-body">
+        <div class="row form-group">
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_RepresentativeInformation_lblRepresentative">Representative Name:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                Emily Rosado 
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_RepresentativeInformation_lblBusinessName">Business Name:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                Cogency Global Inc
+            </div>
+        </div>
+        <div class="row form-group">
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_RepresentativeInformation_lblAddress">Address:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                122 E 42nd Street 18th Fl, New York, NY 10168, USA
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_RepresentativeInformation_lblAddresscounty">County:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                
+            </div>
+        </div>
+
+        <div class="row form-group">
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_RepresentativeInformation_lblPhone">Phone Number:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                (212) 629-8704
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_RepresentativeInformation_lblEmailAddress">Email:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                <a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="fe9b8c918d9f9a91be9d91999b909d879992919c9f92d09d9193">[email&#160;protected]</a>
+            </div>
+        </div>
+    </div>
+</div>
+<div class="panel panel-default">
+    <div class="panel-heading">Principal West Virginia Address</div>
+    <div class="panel-body">
+        <div class="row form-group">
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_PrincipalWestVirginiaAddress_lblAddress">Address:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                N/A
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_PrincipalWestVirginiaAddress_lblcounty">County:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                
+            </div>
+        </div>
+    </div>
+</div>
+
+
+
+
+
+
+<div class="panel panel-default">
+    <div class="panel-heading">DBA</div>
+    <div class="panel-body">
+        <div class="row form-group">
+            <div class="row form-group panel-primary">
+                <div class="panel-heading">
+                    <label class="control-label" id="CharitiesSearch_DBA_lblName">Name</label>
+                </div>
+            </div>
+                    <div class="row form-group">
+                        <div class="">
+                            America Gives Back (old name)
+                        </div>
+                    </div>
+                    <div class="row form-group">
+                        <div class="">
+                            Charity Projects Entertainment Fund(old name)
+                        </div>
+                    </div>
+                    <div class="row form-group">
+                        <div class="">
+                            Red Nose Day Foundation
+                        </div>
+                    </div>
+        </div>
+    </div>
+</div>
+
+
+
+
+
+
+<div class="panel panel-default">
+    <div class="panel-heading">Tax Information</div>
+    <div class="panel-body">
+        <div class="row form-group">
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_TaxInformation_lblIRSExempt">IRS Exempt:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                Yes
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_TaxInformation_lblRegisteredOtherStateAddress">Registered in Other States:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                AL, AK, AR, CA, CO, CT, DC, FL, GA, IL, KS, KY, ME, MD, MA, MI, MN, MS, NV, NH, NJ, NM, NY, NC, ND, OH, OK, OR, PA, RI, SC, TN, UT, VA, WA, WI
+            </div>
+        </div>
+
+        <div class="row form-group">
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_TaxInformation_lblTaxExempt">Tax Deductible:</label>
+            </div>
+            <div class="col-lg-9 col-md-9 col-sm-9">
+                Yes
+            </div>
+        </div>
+    </div>
+    </div>
+
+
+
+
+
+<div class="panel panel-default">
+    <div class="panel-heading">Restrictions on Solicitation</div>
+    <div class="panel-body">
+        <div class="row form-group">
+            <div class="row form-group">
+                <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                    <label class="control-label" id="CharitiesSearch_RestrictionsonSolicitaion_lblEnjoined">Enjoined States:</label>
+                </div>
+                <div class="col-lg-9 col-md-9 col-sm-9">
+                    No
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+
+
+
+
+
+<div class="panel panel-default">
+    <div class="panel-heading">
+            <span>Fundraising Counsels</span>
+    </div>
+    <div class="panel-body panel-primary">
+        <div class="row form-group panel-heading">
+                <div class="col-lg-2 col-md-2 col-sm-2">
+                    <label class="control-label" id="CharitiesSearch_FundraisingCounsels_lblAddress">Name of Chapter/Branch/Affiliate</label>
+                </div>
+                <div class="col-lg-2 col-md-2 col-sm-2">
+                    <label class="control-label" id="CharitiesSearch_FundraisingCounsels_lblAddress">Name</label>
+                </div>
+                <div class="col-lg-2 col-md-2 col-sm-2">
+                    <label class="control-label" id="CharitiesSearch_FundraisingCounsels_lblContractStartDate">Contract Start Date</label>
+                </div>
+                <div class="col-lg-2 col-md-2 col-sm-2">
+                    <label class="control-label" id="CharitiesSearch_FundraisingCounsels_lblContractEndDate">Contract End Date</label>
+                </div>
+            <div class="col-lg-4 col-md-4 col-sm-4">
+                <label class="control-label" id="CharitiesSearch_FundraisingCounsels_lblcounty">Address</label>
+            </div>
+        </div>
+            <div class="row form-group">
+                <div class="text-center">
+                    <span>No Records</span>
+                </div>
+            </div>
+
+    </div>
+</div>
+
+
+
+
+
+<div class="panel panel-default">
+    <div class="panel-heading">Charities Rating</div>
+    <div class="panel-body">
+        <div class="row form-group">
+            <p>
+                This rating system is based on the amount of money that was disbursed for program services (charitable purpose) divided by the WV disbursements or total disbursements (for National Rating) from the charity during the last year.
+                Gold – Over 90%,  Silver – 70% to 90%,  Bronze – 50% to 70%
+            </p>
+        </div>
+        <div class="row form-group">
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_CharitiesRating_lblAddress">WV Rating:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                Non Categorized
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3 label-side">
+                <label class="control-label" id="CharitiesSearch_CharitiesRating_lblcounty">National Rating:</label>
+            </div>
+            <div class="col-lg-3 col-md-3 col-sm-3">
+                Non Categorized
+            </div>
+        </div>
+    </div>
+</div>
+
+
+
+
+
+<div class="panel panel-default">
+    <div class="panel-heading">Financial Information</div>
+    <div class="panel-body panel-primary">
+        <div class="row form-group panel-heading">
+            <div class="col-lg-4 col-md-4 col-sm-4">
+                <label class="control-label" id="CharitiesSearch_FinancialInformation_lblContributions">Contributions</label>
+            </div>
+            <div class="col-lg-4 col-md-4 col-sm-4">
+                <label class="control-label" id="CharitiesSearch_FinancialInformation_lblAMount">Amount</label>
+            </div>
+            <div class="col-lg-4 col-md-4 col-sm-4">
+                <label class="control-label" id="CharitiesSearch_FinancialInformation_lblPercentage">Percent of Contributions</label>
+            </div>
+        </div>   
+        <div class="row form-group">
+            <div class="col-lg-4 col-md-4 col-sm-4">
+                <label class="control-label" id="CharitiesSearch_FinancialInformation_lblWVContributions">WV Contributions</label>
+            </div>
+            <div class="col-lg-4 col-md-4 col-sm-4">
+                $4,866.00
+            </div>
+            <div class="col-lg-4 col-md-4 col-sm-4">
+                0.1<span>%</span>
+            </div>
+        </div>
+        <div class="row form-group">
+            <div class="col-lg-4 col-md-4 col-sm-4">
+                <label class="control-label" id="CharitiesSearch_FinancialInformation_lblTotalContributions">Total Contributions</label>
+            </div>
+            <div class="col-lg-4 col-md-4 col-sm-4">
+                $8,971,269.00
+            </div>
+            <div class="col-lg-4 col-md-4 col-sm-4">
+                &nbsp;
+            </div>
+        </div>
+        <br />
+        <div class="row form-group panel-heading">
+            <div class="col-lg-4 col-md-4 col-sm-4">
+                <label class="control-label" id="CharitiesSearch_FinancialInformation_lblDisbursements">Disbursements</label>
+            </div>
+            <div class="col-lg-4 col-md-4 col-sm-4">
+                <label class="control-label" id="CharitiesSearch_FinancialInformation_lblAmount">Amount</label>
+            </div>
+            <div class="col-lg-4 col-md-4 col-sm-4">
+                <label class="control-label" id="CharitiesSearch_FinancialInformation_lblPercentage">Percent of Disbursements</label>
+            </div>
+        </div>
+        <div class="row form-group">
+            <div class="col-lg-4 col-md-4 col-sm-4">
+                <label class="control-label" id="CharitiesSearch_FinancialInformation_lblAdministrativeDisbursements">Administrative Disbursements</label>
+            </div>
+            <div class="col-lg-4 col-md-4 col-sm-4">
+                $2,455,247.00
+            </div>
+            <div class="col-lg-4 col-md-4 col-sm-4">
+               12.1<span>%</span>
+            </div>
+        </div>
+        <div class="row form-group">
+            <div class="col-lg-4 col-md-4 col-sm-4">
+                <label class="control-label" id="CharitiesSearch_FinancialInformation_lblFundraisingDisbursements">Fundraising Disbursements</label>
+            </div>
+            <div class="col-lg-4 col-md-4 col-sm-4">
+                $5,275,715.00
+            </div>
+            <div class="col-lg-4 col-md-4 col-sm-4">
+                26<span>%</span>
+            </div>
+        </div>
+        <div class="row form-group">
+            <div class="col-lg-4 col-md-4 col-sm-4">
+                <label class="control-label" id="CharitiesSearch_FinancialInformation_lblProgramDisbursements">Program Disbursements</label>
+            </div>
+            <div class="col-lg-4 col-md-4 col-sm-4">
+                $12,530,733.00
+            </div>
+            <div class="col-lg-4 col-md-4 col-sm-4">
+                61.8<span>%</span>
+            </div>
+        </div>
+        <br />
+        <div class="row form-group">
+            <div class="col-lg-4 col-md-4 col-sm-4">
+                <label class="control-label" id="CharitiesSearch_FinancialInformation_lblTotalDisbursements">Total Disbursements</label>
+            </div>
+            <div class="col-lg-4 col-md-4 col-sm-4">
+                $20,261,695.00
+            </div>
+            <div class="col-lg-4 col-md-4 col-sm-4">
+                <span>100.0%</span>
+            </div>
+        </div>
+        <div class="row form-group">
+            <div class="col-lg-4 col-md-4 col-sm-4">
+                <label class="control-label" id="CharitiesSearch_FinancialInformation_lblWVProgramDisbursements">WV Program Disbursements</label>
+            </div>
+            <div class="col-lg-4 col-md-4 col-sm-4">
+                $0.00
+            </div>
+            <div class="col-lg-4 col-md-4 col-sm-4">
+                0<span>%</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+
+
+
+
+            </div>
+            <div class="form-group">
+                <div class="row" align="right">
+                    <input type="button" name="btnSearch" value="Filing History" class="button loading" onclick="submitFilingHistory('4703')" />
+                    <input type="button" name="btnSearch"  value="Name History" class="button loading" onclick="submitNameHistory('4703')" />
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="form-group">
+        <div class="row" align="center">
+                <input type="button" id="btnBack" name="btnBack" value="Back" class="button loading" onclick="submitBack();" />
+                <input type="button" id="btnReturntoSearch" name="btnReturntoSearch" value="Return to Search" class="button loading" onclick="location.href='/OnlineCharitiesSearch/Search'" />
+                <input type="button" id="" name="" value="Return to Results" class="button loading" onclick="GoToSearchedResults()" />
+
+        </div>
+    </div>
+</div>
+<script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script>
+    function submitBack() {
+      window.location.href = '/OnlineCharitiesSearch/SearchResults';
+    }
+    function GoToSearchedResults() {
+        window.location.href = '/OnlineCharitiesSearch/SearchResults';
+    }
+
+    function submitCorrespondence(id) {
+        $.submitForm('/OnlineCharitiesSearch/CorrespondenceHistory', { CharitiesId: id });
+    }
+
+    function submitPaymentHistory(id) {
+        $.submitForm('/OnlineCharitiesSearch/PaymentsHistory', { CharitiesId: id });
+    }
+
+    function submitFilingHistory(id) {
+        $.submitForm('/OnlineCharitiesSearch/FillingsHistory', { CharitiesId: id });
+    }
+
+    function submitNotesHistory(id) {
+        $.submitForm('/OnlineCharitiesSearch/NotesHistory', { CharitiesId: id });
+    }
+
+    function submitNameHistory(id) {
+        $.submitForm('/OnlineCharitiesSearch/NameHistory', { CharitiesId: id });
+    }
+
+    function closeWindow() {
+        window.close();
+    }
+</script>
+
+            </section>
+        </div>
+        <!-- Main Footer -->
+        <!--For Checking JavaScript Injection Check.-->
+        
+
+
+    </div>
+<script type="text/javascript">
+    $helper = function () {
+
+        var config = {
+            settings: {
+
+                //Account
+                Login: '/',
+                ValidateToken: '/Account/ValidateToken',
+
+                CountryCode: 'USA',
+                StateCode: 'WV',
+
+                // Address Fields Shared View
+                GetCountiesByZipCode: '/Registration/GetCountiesByZipCode',
+                GetCityCountyListByZipCode: '/Registration/GetCityCountyListByZipCode',
+                GetCityCountyListByState: '/Registration/GetCityCountyListByState',
+                GetCityCountyListByZipCodeForNotary: '/Registration/GetCityCountyListByZipCodeForNotary',
+                GetCityCountyListByZipCodeForNotaryMailingAddress: '/Registration/GetCityCountyListByZipCodeForNotaryMailingAddress',
+                //For Delete Upload File
+                DeleteUploadFile: '/OnlineDocumentProcessingHelper/FilingInformationDeleteFile',
+                FileUploadSize: '50',
+            }
+        };
+
+        var enums = {
+            Actions: {
+                Save: 'Save',
+                Update: 'Update',
+                Delete: 'Delete',
+                Success: 'Success',
+                Error: 'Error',
+                Exception: 'Exception',
+                Next: "Next",
+                Warning: "Warning",
+                Duplicate: "Duplicate",
+            },
+            Weekdays: {
+                Sunday: 1,
+                Monday: 2,
+                Tuesday: 3,
+                Wednesday: 4,
+                Thursday: 5,
+                Friday: 6,
+                Saturday: 7
+            },
+            Locales: {
+                Countries: {
+                    USA: 'USA',
+                }
+            },
+            TransactionTypes: {
+                CertificateOfAmendmentSoleProprietor: '15218',
+                CertificateOfAmendmentGeneralPartnership: '15219',
+                TradeMarkAmendment: '10499',
+                TradeMarkRenewal: '10498',
+                TradeMarkAssignment: '10500',
+
+            },
+            BusinessFilingTypes: {
+                AmendmenttoaForeignLimitedPartnership87A: '132',
+                ArticlesOfOrganization: '79',
+                AmendmenttoArticlesofOrganizationBeforeIssuanceofMemberInterest: '149',
+                AmendmenttoaForeignLimitedPartnership88: '133',
+                AmendmenttoCertificateofBusinessTrust: '134',
+                AmendmenttoForeignLimitedLiabilityPartnership: '135',
+                AmendmenttoaLimitedLiabilityLimitedPartnership87A: '158',
+                AmendmenttoaLimitedLiabilityLimitedPartnership88: '4384',
+                AmendmentforRegistrationofaForeignLimitedLiabilityCompany: '105',
+                CertificateOfCorrection: '138',
+                ArticlesOfAmendment_ForeignRegistration: '105',
+                OfficerStatement: '141',
+                OfficersStatement: '141',
+                StatementOfAbandoment: '91',
+                StatementOfBankruptcy: '92',
+                StatementOfChange: '93',
+                StatementOfChange_Member_Manager: '94',
+                StatementOfDivision: '95',
+                StatementOfIneffectiveness: '96',
+                SuretyBond: '98',
+                SuretyBondCancellation: '99',
+                ApplicationForAuthority: '100',
+                ApplicationForRegistration: '101',
+                ApplicationForRenewalOfNameRegistration: '102',
+                ApplicationForUseOfIndistinguishableName2: '103',
+                ApplicationForWithdrawal: '104',
+                ArticlesOfAmendment_ForeignRegistration: '105',
+                ArticlesOfAmendmentToApplicationForAuthority: '106',
+                CancelForeignRegistration: '107',
+                CancellationOfRegisteredForeignCorporationName: '108',
+                ForeignStateAmendment: '109',
+                RegistrationOfForeignCorporationName: '110',
+                Reservation2: '1',
+                Reservation3CopyOf2: '113',
+                reservation4CopyOf2: '114',
+                AllStepWorkflow: '115',
+                CommercialRegisteredAgentRegistration: '4358',
+                AmendmentAfterFirstMeetingofDirectors: '211',
+                CommercialRegisteredAgentStatementofChange: '4359',
+                ResignationofRegisteredAgent: '4357',
+                CancellationofAppointmentofRegisteredAgentbyNonFilingDomesticEntities: '4371',
+                CertificateofAcceptancebyRegisteredAgent: '3235',
+                CommercialRegisteredAgentTerminationStatement: '4360',
+                NoncommercialRegisteredAgentStatementofChange: '4361',
+                RepresentedEntityStatementofChange: '4362',
+                RegisteredAgentListingRegistration: '4363',
+                RegisteredAgentListingAmendment: '4364',
+                AppointmentofRegisteredAgent: '4365',
+                AppointmentofRegisteredAgentbyNonqualifiedForeignEntities: '4366',
+                CancellationofAppointmentofRegisteredAgentbyNonqualifiedForeignEntities: '4372',
+                AppointmentofRegisteredAgentbyNonresidentGuardianofAdult: '4373',
+                AbandonmentofConversion: '1',
+                AbandonmentofDomestication: '2',
+                AbandonmentofMerger: '3',
+                AbandonmentofShareExchange: '4',
+                AdministrativeDissolution: '5',
+                Amendment: '6',
+                ArticlesofMutualBankConversion: '18',
+                AssumedName: '19',
+                AssumedNameCancellation: '20',
+                BusinessEntityReport: '21',
+                BusinessSummary: '22',
+                CertificatePursuanttoNRS78209: '204',
+                Cancellation: '23',
+                CertificateofDissolution: '26',
+                CertificateofExistence: '27',
+                CertificateofFact: '28',
+                CertifiedCopiesRequest: '30',
+                CharterSurrender_Conversion: '33',
+                CharterSurrender_Domestication: '34',
+                Consolidation: '35',
+                Conversion: '3274',
+                ArticlesofDomestication: '3280',
+                Correction: '138',
+                Dissolution: '3234',
+                Domestication: '40',
+                DueandDiligentSearch: '41',
+                Formation: '42',
+                RAChange: '57',
+                CommercialRegisteredAgentRegistration: '4358',
+                CommercialRegisteredAgentStatementofChange: '4359',
+                ResignationofRegisteredAgent: '4357',
+                CancellationofAppointmentofRegisteredAgentbyNonFilingDomesticEntities: '4371',
+                CertificateofAcceptancebyRegisteredAgent: '3235',
+                CommercialRegisteredAgentTerminationStatement: '4360',
+                NoncommercialRegisteredAgentStatementofChange: '4361',
+                RepresentedEntityStatementofChange: '4362',
+                RegisteredAgentListingRegistration: '4363',
+                RegisteredAgentListingAmendment: '4364',
+                AppointmentofRegisteredAgentbyNonFilingDomesticEntities: '4365',
+                AppointmentofRegisteredAgentbyNonqualifiedForeignEntities: '4366',
+                CancellationofAppointmentofRegisteredAgentbyNonqualifiedForeignEntities: '4372',
+                AppointmentofRegisteredAgentbyNonresidentGuardianofAdult: '4373',
+                InitialList: '3277',
+                AmendedList: '3278',
+                AnnualList: '3279',
+                RegistrationLimitedLiabilityLimitedPartnership87A: '3291',
+                RegistrationLimitedLiabilityLimitedPartnership88: '3292',
+                ForeignLimitedLiabilitPartnership: '145',
+                ForeignQualification: '130',
+                ForeignNonprofitNRS80: '4376',
+                ForeignBusinessTrust: '131',
+                RegistrationForeignLimitedPartnership87A: '146',
+                RegistrationForeignLimitedPartnership88: '147',
+                ApplicationforForeignLimitedLiabilityCompanyRegistration: '140',
+                ForeignLimitedLiabilityLimitedPartnership87A: '143',
+                ForeignLimitedLiabilityLimitedPartnership88: '144',
+                RegistrationForeignLLC: '148',
+                GeneralPartnershipRenewal: '3261',
+                MergerBusinessfilingType: '3281',
+                ExchangeEntity: '3282',
+                StatementPartnershipAuthority: '125',
+                CancellationOfPartnershipAuthority: '4355',
+                RegistrationLimitedPartnership88: '128',
+                GeneralPartnershipRenewal: '3261',
+                GeneralPartnershipRegistration: '3258',
+                OtherNT7BusinessLicenseRegistration: '3267',
+                SoleProprietorRenewal: '3257',
+                SoleProprietorRegistration: '3251',
+                OtherNT7BusinessLicenseRenewal: '3269',
+                CertificateofAmendmentSoleProprietorandGeneralPartnership: '4390',
+                CertificateofAmendmentNT7BusinessLicenseOther: '3275',
+                CancellationStatementSoleProprietorGeneralPartnership: '4389',
+                CancellationStatementNT7BusinessLicenseOther: '4388',
+                MiscellaneousNameReservation: '4354',
+                AmendmentAfterFirstMeetingofDirectors: '211',
+                AmendmentLimitedPartnership88: '151',
+                AmendmentBeforeFirstMeetingofDirectors: '156',
+                TerminationofAmendmentBeforeIssuanceofStock: '160',
+                TerminationofAmendmentforaLimitedLiabilityCompany: '162',
+                AmendmentBeforeIssuanceofStock: '199',
+                ApplicationofRevival: '3268',
+                CertificateofReinstatement: '3276',
+                NT7BusinessLicenseOther: '3267',
+                AmendmentLimitedPartnership88: '151',
+                AmendmentLimitedPartnership87A: '150',
+                FormtoAccompanyMiscellaneousFilingsAmendment: '5139',
+                CharitableSolicitationRegistrationStatement: '4305',
+                ExemptionFromCharitableSolicitationStatement: '4353',
+                AmendmentLimitedLiabilityLimitedPartnership87A: '4404',
+                AmendedandRestatedArticles: '196',
+                StatementofAlternateDueDate: '3239',
+                AmendmentAfterIssuanceofStock: '203',
+                AmendedModifiedNameResolution: '3263',
+                AmendmenttoaLimitedLiabilityLimitedPartnership87A: '4394',
+                AmendmenttoaLimitedLiabilityLimitedPartnership88: '4384',
+                RegisteredAgentListingRegistration: '4363',
+                ArticlesOfIncorporation_Nonprofit: '77',
+                ArticlesOfIncorporation_ForProfit: '76',
+                CertificateofChangeofAddressoftheLimitedPartnershipsRecordsOffice: '169',
+                CertificateofChangeofPrincipalOffice: '137',
+                CharitableSolicitationRegistrationStatement: '4305',
+                ExemptionFromCharitableSolicitationStatement: '4353',
+                AmendmenttoArticlesofOrganization: '152',
+                RestatedArticles: '194',
+                StatementPartnershipAuthority: '125',
+                CertificateofResignation: '172',
+                CertificateofDesignation: '4392',
+                AmendedCertificationofStockDesignationAfterIssuanceofClassSeries: '209',
+                AmendedCertificationofStockDesignationBeforeIssuanceofClassSeries: '206',
+            },
+            RegisterAgentTypes: {
+                CommercialRegisteredAgent: '1',
+                NonCommercialRegisteredAgent: '2',
+                RepresentedEntity: '3'
+            },
+            BusinessTypeModel: {
+                Conversion: 'Conversion',
+                Listing: 'Listing',
+                RenewalNT7: 'Renewal NT7',
+                Amendment: 'Amendment',
+                Mergers: 'Mergers',
+                SoleorPartnershipRenewal: 'SoleorPartnershipRenewal',
+                OtherNT7Renewal: 'OtherNT7Renewal',
+                DomesticAmendment: 'Domestic Amendment',
+                ForeignAmendment: 'Foreign Amendment',
+                AnnualRenewal: 'AnnualRenewal',
+                AmendmentRenewal: 'AmendmentRenewal',
+                SolePropietor: 'SolePropietor',
+                Exchanges: 'Exchanges'
+            },
+            filingCategory: {
+                Business: '1',
+                UCC: '2',
+                Trademarks: '3',
+                Notary: '4',
+                Authentication: '5',
+                Charities: '8'
+            },
+            submissionmeets: {
+                Days: 90
+            },
+            BusinessType: {
+                ForeignLimitedLLP87A: '10157',
+                ForeignLimitedPartnership88: '10164',
+                ForeignNonprofitCorporations: '10161',
+                ForeignCorporation: '10160',
+                ForeignBusinessTrust: '10120',
+                ForeignLimitedPartnership87A: '10163',
+                ForeignLimitedLiabilityCompany: '19',
+                ForeignLimitedLiabilityLimitedPartnership87A: '10157',
+                ForeignLimitedLiabilityLimitedPartnership88: '10158',
+                ForeignLimitedLiabilityPartnership: '10159',
+                ForeignNonProfitCorporation: '10161',
+                ForeignBusinessTrust: '10120',
+                DomesticNonprofitCooperativeCorporationWithStock: '10168',
+                DomesticNonprofitCooperativeCorporationWithoutStock: '10167',
+                DomesticLLC: '7',
+                DomesticCorporationSole: '10109',
+                DomesticProfessionalLLC: '10115',
+                DomesticLimitedLiabilityLimitedPartnership87A: '10186',
+                DomesticLimitedLiabilityLimitedPartnership88: '10187',
+                DomesticProfessionalCorporation: '36',
+                DomesticLimitedPartnership87A: '10170',
+                DomesticLimitedPartnership88: '10171',
+
+                NT7BusinessLicenseGeneralPartnership: '10209',
+                NT7BusinessLicenseOther: '10210',
+                NT7BusinessLicenseSoleProprietor: '10208',
+
+                CourtappointedNonresidentGuardianofAdult: '10229',
+
+                DomesticProfessionalBenefitCorp: '36',
+                DomesticCorporation: '10104',
+                DomesticBusinessTrust: '10105',
+                DomesticCloseCorp: '10106',
+                DomesticProfessionalLLC: '10115',
+                DomesticCooperativeAssociation: '10166',
+                DomesticLimitedLiabilityPartnership: '10184',
+
+                ForeignProfessional: '23',
+                ForeignProfLimitedLiabilityCompany: '10218',
+                ForeignCorporationSole: '10219',
+                ForeignLimitedLiabilityPartnership87: '10231',
+                ForeignCloseCorporation: '10232',
+                ForeignCooperativeAssociation: '10233',
+                ForeignEntitiesNotRequiredtoRegisterinNevada: '10224',
+                AddNonQualified: '10244',
+                DomesticNonprofit: '10',
+                DomesticProfessionalAssociation: '10154',
+
+
+
+            },
+            Workflows: {
+                AmendmentSecuredPartyChange: '150',
+                AmendmentSecuredPartyAdd: '149',
+                AmendmentDebtorDelete: '148',
+                AmendmentDebtorChange: '147',
+                AmendmentDebtorAdd: '146',
+            },
+            principalTitle: {
+                Director: '4',
+                Trustee: '5',
+                Officers: '1001',
+
+
+            },
+            StockFee: {
+                InitialListFlatFee: parseFloat('150.00').toFixed(2),
+            }
+        };
+        return { config: config, enums: enums }
+    }();
+</script>
+
+
+<script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/v31edd6df95cf4e85bb4c19e7a9bdbcba1788362987495" integrity="sha512-iIg7k2xntmwu6/uSb5tpc/hySgZc4eoL31yB29W6tJFo2akwjPWcEqnCEdJvGexCL0KEQwVYv5BlowfhVz26hg==" data-cf-beacon='{"version":"2024.11.0","token":"89367734a440490aa8b2ff330f58cc38","spa":2}' crossorigin="anonymous"></script>
+</body>
+</html>
+
+<!--Script For Checking JavaScript Injection Check.-->
+<script>
+    $(document).ready(function ()
+    {
+        $("[type = text]").on("blur", function () {
+            var message = $(this).val();
+            var encodedMsg = $('<div />').text(message).html();
+
+            if (message.indexOf("<script>") != -1) {
+                $(this).val('');//Making Empty Entire Text if we writen <script> tag.
+            }
+
+        });
+
+        $("textarea").on("blur", function () {
+            var message = $(this).val();
+            var encodedMsg = $('<div />').text(message).html();
+
+            if (message.indexOf("<script>") != -1) {
+                $(this).val('');//Making Empty Entire Text if we writen <script> tag.
+            }
+
+        });
+    });
+</script>
