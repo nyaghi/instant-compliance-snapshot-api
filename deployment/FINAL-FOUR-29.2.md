@@ -647,3 +647,21 @@ and completes inside 110 seconds, duplicate conflict controls, restored-detail
 controls, and existing IL/GA/NC/TN/AL/NY connector tests. 308 JavaScript and 169
 Python checks passed before packaging. Live results require activation of this
 new connector; unit tests are not a claim that live registry timing is fixed.
+
+The same candidate includes a narrow name-reservation detail check. The public
+CCA search row C20190204-2019 has a blank type; opening it shows Name Reservation
+Information and explicitly says it has not been linked to a business. Blank
+NR/C rows are no longer assumed to be corporations or discarded by prefix.
+Only an observed matching row may be opened, and its official reservation URL,
+complete fields, exact identifier/name and unlinked statement must agree before
+exclusion. Linked, incomplete, conflicting and unknown records remain reviews.
+The public Back control restores the normal search. Identity, status and date
+rules for ordinary nonprofit records are unchanged.
+
+The 6b0572f live control recovered Aeon and Man in the Mirror as Delinquent;
+Outward Bound remained Upcoming Filing, Classical Learning Test remained Not
+Registered, and Summit's IL/GA/TN controls remained Current. Eight organizations
+and ten outcomes were saved. A separate Give Something Back NC diagnostic
+returned Delinquent after an ordinary manual Search click on a stalled form;
+it is assisted evidence, not an unassisted validation pass. Its intermittent
+navigation/verification cause remains under investigation.

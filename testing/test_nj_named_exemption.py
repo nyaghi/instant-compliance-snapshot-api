@@ -62,7 +62,8 @@ class NamedExemption(unittest.TestCase):
         root=Path(__file__).resolve().parents[1]
         old=ast.parse(subprocess.check_output(['git','show','887ccc7:registry_snapshot_server.py'],cwd=root).decode('utf-8'))
         new=ast.parse((root/'registry_snapshot_server.py').read_text(encoding='utf-8'))
-        from testing.performance_origin_audit import restore_ms_0613
+        from testing.performance_origin_audit import restore_ms_0613, restore_nv_reservation_0614
+        new=restore_nv_reservation_0614(new)
         new.body=[restored for node in new.body
                   if (restored := restore_ms_0613(node) if isinstance(node,ast.FunctionDef) else node) is not None]
         functions=lambda tree:{n.name:ast.dump(n) for n in tree.body if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef))}

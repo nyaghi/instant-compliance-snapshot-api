@@ -6468,6 +6468,28 @@ def final_four_search_evidence(payload, state, query):
     return rows
 
 
+def nv_name_reservation_evidence(fields, identifier, source_url):
+    """Confirm a public name reservation, never infer it from an ID prefix."""
+    required = {'Reserved Name', 'Entity Number', 'Status', 'Formation Date',
+                'Expiration Date', 'Linked Entity Information'}
+    url = urlparse(str(source_url or ''))
+    route, _, query = url.fragment.partition('?')
+    params = parse_qs(query)
+    if (not isinstance(fields, dict) or set(fields) != required
+            or not all(isinstance(v, str) for v in fields.values())
+            or fields['Entity Number'] != identifier
+            or not re.fullmatch(r'(?:NR|C)\d{8}-\d+', identifier)
+            or not fields['Reserved Name'].strip() or not fields['Status'].strip()
+            or url.scheme != 'https' or url.netloc != 'orion.nv.gov'
+            or url.path != '/portal/public/' or url.query
+            or route != '/public/nvsos/en/CaseXscreen'
+            or set(params) != {'screen', 'id'} or params['screen'] != ['NameReservationDetails']
+            or len(params['id']) != 1
+            or not re.fullmatch(r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}', params['id'][0])):
+        raise ValueError('Nevada name reservation detail is incomplete or mismatched')
+    return fields['Linked Entity Information'] == 'This name reservation has not been linked to a business'
+
+
 def final_four_browser_lookup(org, state, evidence, deadline=None):
     """Master-owned name plan and identity selection for the four new sources.
 
@@ -6531,6 +6553,19 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
             if state == "AL":
                 record = row
             else:
+                if state == 'NV' and not row['entity_type'] and re.fullmatch(r'(?:NR|C)\d{8}-\d+', row['identifier']):
+                    detail_query = {'state': state, 'operation': 'detail', 'identifier': row['identifier']}
+                    detail = collect(detail_query)
+                    if not isinstance(detail, dict) or detail.get('query') != detail_query or detail.get('complete') is not True:
+                        raise ValueError('Nevada name reservation detail did not finish')
+                    unlinked = nv_name_reservation_evidence(detail.get('fields'), row['identifier'], detail.get('source_url'))
+                    if normalized_match_name(detail['fields']['Reserved Name']) != normalized_match_name(row['name']):
+                        raise ValueError('Nevada name reservation differs from the observed search row')
+                    if unlinked:
+                        excluded_nv_entities.append({'name': row['name'], 'identifier': row['identifier'],
+                                                     'entity_type': 'Unlinked name reservation'})
+                        seen.add(row['identifier'])
+                        continue
                 if state == "NV" and (row.get("business_identifier_missing") is True or row["entity_type"] not in {
                         "Foreign Non-Profit Corporation (80)", "Domestic Non-Profit Corporation (82)",
                         "Domestic Non-Profit Cooperative Corporation With or Without Stock (81)",
@@ -6607,9 +6642,9 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                     break
     result = final_four_license_result(org, state, records, deadline, sources[state])
     if excluded_nv_entities:
-        result.rejected_candidates = [{**row, "reason": "Explicit entity type outside the approved Nevada nonprofit/charity scope"}
+        result.rejected_candidates = [{**row, "reason": "Confirmed record outside the approved Nevada nonprofit/charity scope"}
                                       for row in excluded_nv_entities[:20]]
-        result.source_note += " Same-name business records explicitly classified outside the nonprofit/charity scope were excluded."
+        result.source_note += " Same-name records confirmed to be outside the nonprofit/charity scope were excluded."
     if unreviewed_scope and result.status not in {"Current", "Upcoming Filing", "Exempt"}:
         result.status = "Needs Review" if state == "NC" else "Unable to Confirm"; result.success = False
         result.source_note = ("North Carolina returned an in-process charity application with a matching name but no issued license number. Review its identity and application status; this does not establish non-registration."
@@ -6675,6 +6710,11 @@ def final_four_clean_evidence(payload, query):
     elif query.get("operation") == "detail" and state != "AL":
         if set(payload) - {"query", "complete", "fields", "filings", "source_url"}:
             raise ValueError("Unexpected detail evidence fields")
+        if state == 'NV' and re.fullmatch(r'(?:NR|C)\d{8}-\d+', str(query.get('identifier', ''))):
+            if 'filings' in payload:
+                raise ValueError('Unexpected name reservation history')
+            nv_name_reservation_evidence(payload.get('fields'), query['identifier'], payload.get('source_url'))
+            return json.loads(json.dumps(payload))
         allowed = ({"Name", "Registration #", "Status", "Expiration Date", "Extension End Date", "Last Application Date", "Street", "City", "State", "Zip", "profile_url"} if state == "NC" else
                    {"Entity Name", "NV Business ID", "Entity Status", "Entity Type", "FEIN", "Solicits Charitable Contribution?", "IRS Registered Name", "Campaign Name", "Formation Date in Nevada", "Annual Renewal Due Date/Expiration Date"} if state == "NV" else
                    {"Name", "CO Number", "Status", "Registration Date", "Expiration Date", "Address", "financial_periods", "financial_count"})

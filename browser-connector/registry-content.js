@@ -369,8 +369,9 @@
   async function nvReturnSearch(deadline) {
     const onSearch=()=>location.hash.includes('screen=external-GenericFilingsSearch&tabRoute=business');
     if (!onSearch()) {
-      if (!location.hash.includes('screen=Manage-Business&')) throw new Error('REGISTRY_WRONG_ORIGIN');
-      const buttons=[...document.querySelectorAll('button')].filter(el=>text(el)==='Return To Search'&&visible(el)&&!el.disabled);
+      const reservation=location.hash.includes('screen=NameReservationDetails&');
+      if (!reservation&&!location.hash.includes('screen=Manage-Business&')) throw new Error('REGISTRY_WRONG_ORIGIN');
+      const buttons=[...document.querySelectorAll('button')].filter(el=>text(el)===(reservation?'Back':'Return To Search')&&visible(el)&&!el.disabled);
       if (buttons.length!==1) throw new Error('REGISTRY_NV_RETURN_SEARCH_MISSING');
       // Follow the public app's own reset/navigation action. Assigning a hash
       // alone can retain a partially restored search form after a detail.
@@ -470,13 +471,40 @@
     if (!wanted.every(k => Object.hasOwn(fields,k)) || fields['NV Business ID'] !== identifier) return null;
     return fields;
   }
+  function nvReservationFields(identifier) {
+    if (!location.hash.includes('screen=NameReservationDetails&')) return null;
+    const forms=[...document.querySelectorAll('[role="form"]')].filter(el=>[...el.querySelectorAll('h4')].some(h=>text(h)==='Name Reservation Information'));
+    if(forms.length!==1)return null;
+    const wanted=['Reserved Name','Entity Number','Status','Formation Date','Expiration Date'];
+    const fields=Object.create(null);
+    let linkedSection=false;
+    for(const el of forms[0].querySelectorAll('h4, p')) {
+      if(el.tagName==='H4'&&text(el)==='Linked Entity Information') {
+        linkedSection=true;
+        continue;
+      }
+      if(linkedSection) {
+        if(el.tagName==='H4')break;
+        if(el.tagName==='P'&&text(el)){fields['Linked Entity Information']=text(el);break;}
+        continue;
+      }
+      const label=el.querySelector('strong');
+      if(label&&wanted.includes(text(label))) {
+        if(Object.hasOwn(fields,text(label))||el.nextElementSibling?.tagName!=='P')throw new Error('REGISTRY_NV_DETAIL_CHANGED');
+        fields[text(label)]=text(el.nextElementSibling);
+      }
+    }
+    if(!wanted.every(k=>Object.hasOwn(fields,k))||fields['Entity Number']!==identifier||!fields['Reserved Name']||!fields.Status||!fields['Linked Entity Information'])return null;
+    return fields;
+  }
   async function nvDetail(query, deadline) {
-    if (query?.state !== 'NV' || query.operation !== 'detail' || !/^NV\d+$/.test(query.identifier)
+    if (query?.state !== 'NV' || query.operation !== 'detail' || !/^(?:NV\d+|(?:NR|C)\d{8}-\d+)$/.test(query.identifier)
         || Object.keys(query).sort().join(',') !== 'identifier,operation,state') throw new Error("REGISTRY_COMMAND_INVALID");
     const target = nvObserved.get(query.identifier), sourceQuery = nvLastSearch;
     if (!target || !sourceQuery) throw new Error("REGISTRY_NV_DETAIL_NOT_OBSERVED");
     if (!target.node.isConnected) {
-      const back = [...document.querySelectorAll('button')].find(el => text(el) === 'Return To Results' && visible(el));
+      const backLabel=location.hash.includes('screen=NameReservationDetails&')?'Back':'Return To Results';
+      const back = [...document.querySelectorAll('button')].find(el => text(el) === backLabel && visible(el));
       if (!back) throw new Error("REGISTRY_NV_DETAIL_NOT_OBSERVED");
       // Returning from a detail mounts inputs before the search-type choices.
       // Wait for the same complete form used on initial navigation, within the
@@ -535,7 +563,12 @@
       throw new Error("REGISTRY_NV_DETAIL_NOT_OBSERVED");
     const link = matches[0].node.querySelector('[role="gridcell"] a');
     if (!link || text(link) !== target.name) throw new Error("REGISTRY_NV_DETAIL_NOT_OBSERVED");
-    const fields = await wait(()=>nvFields(query.identifier),Math.max(1,deadline-Date.now()),{action:()=>link.click()});
+    const reservation=/^(?:NR|C)\d{8}-\d+$/.test(query.identifier)&&target.entity_type==='';
+    const fields = await wait(()=>reservation?nvReservationFields(query.identifier):nvFields(query.identifier),Math.max(1,deadline-Date.now()),{action:()=>link.click()});
+    if(reservation) {
+      if(fields['Reserved Name']!==target.name)throw new Error('REGISTRY_NV_DETAIL_CHANGED');
+      return {query,complete:true,source_url:location.href,fields};
+    }
     const evidence = {query,complete:true,source_url:location.href,fields};
     try {
       const filings = await nvPages('Filing History Details',nvFilingHeaders,deadline);

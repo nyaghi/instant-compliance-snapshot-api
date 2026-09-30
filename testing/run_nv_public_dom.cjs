@@ -3,7 +3,7 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const original=fs.readFileSync(path.join(__dirname,'../browser-connector/registry-content.js'),'utf8');
-const source=original.replace('  async function handle(m) {','  globalThis.testNV = {nvPage,nvFields,nvChanged,nvSearch,nvDetail,nvReturnSearch,registryDocumentReady};\n  async function handle(m) {');
+const source=original.replace('  async function handle(m) {','  globalThis.testNV = {nvPage,nvFields,nvReservationFields,nvChanged,nvSearch,nvDetail,nvReturnSearch,registryDocumentReady};\n  async function handle(m) {');
 const headers=['Entity Name','NV Business Id #','Entity No.','Entity Type','Registered Agent Name','Formation Date','Status'];
 const observed=[
  ['MAKE-A-WISH FOUNDATION OF AMERICA','NV19931054903','C6989-1993','Foreign Non-Profit Corporation (80)','C T CORPORATION SYSTEM**','06/16/1993 12:00 AM','Permanently Revoked'],
@@ -41,7 +41,7 @@ test('Nevada visible inputs and search type are not ready while the initial load
  assert.equal(h.api.registryDocumentReady(),false);
  h.context.document.querySelectorAll=read;assert.equal(h.api.registryDocumentReady(),true);
 });
-function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,truncate=false,duplicate=false,oldPageDelay=80,detailId=null,returnFormDelay=600,returnName=null,returnRows=null,repeatSearchActivity=true,replaceSearchOnInput=false,returnGridDelay=0,unrelatedMutations=false,ignoredSearches=0,changedQueryBeforeRetry=false,pageSizeControl=false,initialPageSize=2,pagingMissing=0,resizeIgnored=false,resizeTotalDrift=false}={}) {
+function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,truncate=false,duplicate=false,oldPageDelay=80,detailId=null,returnFormDelay=600,returnName=null,returnRows=null,repeatSearchActivity=true,replaceSearchOnInput=false,returnGridDelay=0,unrelatedMutations=false,ignoredSearches=0,changedQueryBeforeRetry=false,pageSizeControl=false,initialPageSize=2,pagingMissing=0,resizeIgnored=false,resizeTotalDrift=false,reservation=false}={}) {
  let clock=1000,serial=0,listener,loading=false,rendered=[],page=1,detail=false,searchClicks=0,opened=[],formReady=true;
  let pageSize=initialPageSize,sizeMenu=false,resizeClicks=0;
  const tasks=new Map(),observers=new Set(),root={};
@@ -75,14 +75,18 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
   {tagName:'H4',innerText:'Agent Information'},
   {tagName:'P',querySelector:()=>textEl('NV Business ID'),nextElementSibling:{tagName:'P',innerText:'AGENT-ID'}},
   {tagName:'P',querySelector:()=>textEl('Entity Status'),nextElementSibling:{tagName:'P',innerText:'Inactive'}}];
- const form={querySelectorAll:q=>q==='h4'?[textEl('Entity Information'),textEl('Agent Information')]:paragraphs()};
+ const reservationFields={'Reserved Name':rows[0]?.[0]||'','Entity Number':rows[0]?.[1]||'','Status':'Expired','Formation Date':'02/04/2019','Expiration Date':''};
+ const form={querySelectorAll:q=>reservation?(q==='h4'?[textEl('Name Reservation Information'),textEl('Linked Entity Information')]:[
+  ...Object.entries(reservationFields).map(([label,value])=>({tagName:'P',querySelector:s=>s==='strong'?textEl(label):null,nextElementSibling:{tagName:'P',innerText:value}})),
+  {tagName:'H4',innerText:'Linked Entity Information'},{tagName:'P',innerText:'This name reservation has not been linked to a business'},
+  {tagName:'H4',innerText:'Filing Information'}]):q==='h4'?[textEl('Entity Information'),textEl('Agent Information')]:paragraphs()};
  const grid={getAttribute:k=>k==='aria-rowcount'?String(rendered.length+1):null,
   querySelector:q=>q==='.k-grid-norecords'&&!rendered.length?{}:null,
   querySelectorAll:q=>{
    if(q==='[role="columnheader"]')return headers.map(h=>({getAttribute:k=>k==='aria-label'?h:null}));
    if(q==='tbody > tr[role="row"]')return rendered.map(cells=>{
     const tr={get isConnected(){return !detail;},querySelectorAll:q=>q==='[role="gridcell"]'?cells.map(v=>({innerText:v,querySelector:()=>textEl(': '+v)})):[]};
-    tr.querySelector=q=>q==='[role="gridcell"]'?{}:q==='[role="gridcell"] a'?{innerText:cells[0],click:()=>{opened.push(cells[1]);detail=true;fieldValues['NV Business ID']=detailId||cells[1];fieldValues['Entity Status']=cells[6];context.location.hash='screen=Manage-Business&id=fixture';schedule(()=>mutate(),10);}}:null;
+    tr.querySelector=q=>q==='[role="gridcell"]'?{}:q==='[role="gridcell"] a'?{innerText:cells[0],click:()=>{opened.push(cells[1]);detail=true;fieldValues['NV Business ID']=detailId||cells[1];fieldValues['Entity Status']=cells[6];context.location.hash='screen='+(reservation?'NameReservationDetails':'Manage-Business')+'&id=fixture';schedule(()=>mutate(),10);}}:null;
     return tr;
    });
    throw Error('Unexpected grid selector '+q);
@@ -109,7 +113,7 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
   if(q==='casex-data-table')return detail?[]:[table];
   if(q==='[role="tab"]')return [{innerText:'Business',getAttribute:()=> 'true'}];
   if(q==='[role="combobox"]')return !detail&&formReady?[textEl('Starts With')]:[textEl('STARTS_WITH')];
-  if(q==='button')return detail?[backButton,returnSearchButton]:[buttonCurrent?searchButton:staleButton];
+  if(q==='button')return detail?(reservation?[{...backButton,innerText:'Back'}]:[backButton,returnSearchButton]):[buttonCurrent?searchButton:staleButton];
   if(q==='.app-loader-pane .circle-loader')return loading?[{getClientRects:()=>[{}]}]:[];
   if(q==='[role="form"]')return detail?[form]:[];
   throw Error('Unexpected document selector '+q);
@@ -132,8 +136,26 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
  }
  return {context,drive,api:context.testNV,get opened(){return opened;},get clicks(){return searchClicks;},get resizeClicks(){return resizeClicks;},get pageSize(){return pageSize;},get staleClicks(){return staleClicks;},get time(){return clock;},
   search:(budget=45000)=>drive(context.testNV.nvSearch({state:'NV',operation:'search',name:'MAKE-A-WISH'},clock+budget)),
-  detail:()=>{detail=true;context.location.hash='screen=Manage-Business&id=fixture';return context.testNV.nvFields('NV20121738342');},fieldValues,grid};
+  detail:()=>{detail=true;context.location.hash='screen=Manage-Business&id=fixture';return context.testNV.nvFields('NV20121738342');},fieldValues,reservationFields,grid};
 }
+
+test('Nevada opens an observed matching reservation, binds its identity and returns using Back',async()=>{
+ const row=['CCA','C20190204-2019','C20190204-2019','','','','Expired'];
+ const h=fixture({rows:[row],reservation:true});await h.search();
+ const result=await h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:row[1]},h.time+45000));
+ assert.equal(result.fields['Entity Number'],row[1]);assert.equal(result.fields['Reserved Name'],'CCA');
+ assert.equal(result.fields['Linked Entity Information'],'This name reservation has not been linked to a business');
+ assert.ok(!('filings' in result));assert.equal(h.opened.length,1);
+ await h.drive(h.api.nvReturnSearch(h.time+10000));assert.equal(h.api.registryDocumentReady(),true);
+});
+
+test('Nevada never reads a reservation as corporate status or accepts a changed reservation identity',async()=>{
+ const row=['Example Charity','NR20230725-22746','NR20230725-22746','','','','Expired'];
+ const h=fixture({rows:[row],reservation:true});await h.search();
+ h.reservationFields['Entity Number']='C20190204-2019';
+ await assert.rejects(h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:row[1]},h.time+3000)),/REGISTRY_RESPONSE_INCOMPLETE/);
+ assert.equal(h.api.nvFields(row[1]),null);
+});
 
 function manyPublicRows(n){return Array.from({length:n},(_,i)=>['Example Chapter '+i,'NV'+String(20000000+i),'E123456789-0','Foreign Non-Profit Corporation (80)','','01/01/2020','Active']);}
 
@@ -270,7 +292,7 @@ test('Nevada retains observed NR rows without treating them as issued business i
  const nr=['The Junior Swim League LLC','NR20230725-22746','NR20230725-22746','','','07/25/2023 01:17 PM','Expired'];
  const f=fixture({rows:[observed[1],nr]}),r=await f.search();
  assert.equal(r.total,2);assert.equal(r.rows[1].identifier,nr[1]);assert.equal(r.rows[1].entity_type,'');
- await assert.rejects(f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:nr[1]},45000)),/COMMAND_INVALID/);
+ await assert.rejects(f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:nr[1]},45000)),/RESPONSE_INCOMPLETE/);
  for(const changed of [['NO-ID',''],['NR20230725-22746','Foreign Non-Profit Corporation (80)'],['NV123','']]){
   const row=[...nr];row[1]=changed[0];row[3]=changed[1];await assert.rejects(fixture({rows:[row]}).search(),/RESULTS_INCOMPLETE/);
  }
@@ -280,7 +302,7 @@ test('Nevada dated C rows without an entity type are retained only as unclassifi
  const row=['MIRROR MAGIC FOTO BOOTH','C20180913-0530','C20180913-0530','','','','Expired'];
  const h=fixture({rows:[observed[1],row]}),r=await h.search();
  assert.equal(r.total,2);assert.equal(r.rows[1].identifier,row[1]);assert.equal(r.rows[1].entity_type,'');
- await assert.rejects(h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:row[1]},45000)),/COMMAND_INVALID/);
+ await assert.rejects(h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:row[1]},45000)),/RESPONSE_INCOMPLETE/);
  for(const changed of [[...row.slice(0,2),'C20180914-0530',...row.slice(3)], [...row.slice(0,3),'Foreign Non-Profit Corporation (80)',...row.slice(4)], [...row.slice(0,6),'']])
   await assert.rejects(fixture({rows:[changed]}).search(),/RESULTS_INCOMPLETE/);
 });

@@ -691,12 +691,12 @@ class LookupControls(unittest.TestCase):
         import ast
         from pathlib import Path
         import subprocess
-        from testing.performance_origin_audit import restore_nv_business_scope_0613, restore_trial_0614
+        from testing.performance_origin_audit import restore_nv_business_scope_0613, restore_trial_0614, restore_nv_reservation_0614
         root = Path(__file__).resolve().parents[1]
         before = ast.parse(subprocess.check_output(
             ['git', 'show', '9a7ea66:registry_snapshot_server.py'], cwd=root).decode('utf-8'))
         after = ast.parse((root / 'registry_snapshot_server.py').read_text(encoding='utf-8'))
-        after = restore_trial_0614(after)
+        after = restore_trial_0614(restore_nv_reservation_0614(after))
         after.body = [restore_nv_business_scope_0613(n) if isinstance(n, ast.FunctionDef) else n
                       for n in after.body]
         self.assertEqual(ast.dump(after), ast.dump(before))
@@ -705,12 +705,52 @@ class LookupControls(unittest.TestCase):
         for identifier in ['NR20230725-22746', 'C20180913-0530']:
             for name, expected in [(self.nvrow['name'], 'Unable to Confirm'), ('The Junior Swim League LLC', 'Not Registered')]:
                 def nr(query):
-                    self.assertEqual(query['operation'], 'search')
+                    if query['operation'] == 'detail':
+                        return self.reservation(query, name, linked='Linked business information requires review')
                     row = {'name':name, 'identifier':identifier, 'entity_type':'', 'raw_status':'Expired'}
                     return {'state':'NV', 'query':query, 'complete':True, 'verification_pending':False, 'total':1, 'rows':[row]}
                 result = cc.final_four_browser_lookup(self.orgs['NV'], 'NV', nr)
                 self.assertEqual(result.status, expected)
                 self.assertFalse(result.matched_registry_identifier)
+
+    def reservation(self, query, name, linked='This name reservation has not been linked to a business'):
+        return {'query':query, 'complete':True,
+                'source_url':self.nvurl.replace('Manage-Business', 'NameReservationDetails'),
+                'fields':{'Reserved Name':name, 'Entity Number':query['identifier'], 'Status':'Expired',
+                          'Formation Date':'02/04/2019', 'Expiration Date':'', 'Linked Entity Information':linked}}
+
+    def test_nv_confirmed_unlinked_reservation_is_not_a_charity_registration(self):
+        for identifier in ['NR20230725-22746', 'C20190204-2019']:
+            for corporate_status, expected in [(None, 'Not Registered'), ('Revoked', 'Revoked')]:
+                def provider(q):
+                    if q['operation'] == 'detail' and q['identifier'] == identifier:
+                        detail = self.reservation(q, self.nvrow['name'])
+                        self.assertEqual(cc.final_four_clean_evidence(detail, q), detail)
+                        return detail
+                    data = self.provider(q)
+                    if q['operation'] == 'search':
+                        data['rows'] = ([self.nvrow] if corporate_status else []) + [
+                            {'name':self.nvrow['name'], 'identifier':identifier, 'entity_type':'', 'raw_status':'Expired'}]
+                        data['total'] = len(data['rows'])
+                    else:
+                        data['fields']['Entity Status'] = corporate_status
+                    return data
+                result = cc.final_four_browser_lookup(self.orgs['NV'], 'NV', provider)
+                self.assertEqual(result.status, expected)
+                self.assertEqual(result.rejected_candidates[-1]['entity_type'], 'Unlinked name reservation')
+
+    def test_nv_reservation_requires_exact_source_and_complete_identity(self):
+        q = {'state':'NV', 'operation':'detail', 'identifier':'C20190204-2019'}
+        good = self.reservation(q, 'Example Charity')
+        for field, value in [('Entity Number','C20190204-2020'), ('Reserved Name',''), ('Status','')]:
+            bad = {**good, 'fields':{**good['fields'],field:value}}
+            with self.assertRaises(ValueError):cc.final_four_clean_evidence(bad,q)
+        for url in [self.nvurl,good['source_url'].replace('orion.nv.gov','example.org'),good['source_url']+'&extra=1']:
+            with self.assertRaises(ValueError):cc.final_four_clean_evidence({**good,'source_url':url},q)
+        with self.assertRaises(ValueError):cc.final_four_clean_evidence({**good,'complete':False},q)
+        with self.assertRaises(ValueError):cc.final_four_clean_evidence({**good,'fields':{}},q)
+        with self.assertRaises(ValueError):cc.final_four_clean_evidence({**good,'filings':{}},q)
+        self.assertFalse(cc.nv_name_reservation_evidence({**good['fields'],'Linked Entity Information':'Linked business'},q['identifier'],good['source_url']))
 
     def test_nc_unrelated_unissued_application_does_not_block_a_completed_negative(self):
         for name, expected in [("America's Charities", 'Needs Review'), ('Unrelated Junior League', 'Not Registered')]:
