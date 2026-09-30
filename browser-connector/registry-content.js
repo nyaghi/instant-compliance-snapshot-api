@@ -222,6 +222,7 @@
   // requests, verification tokens, or status/identity decisions in the browser.
   let nvLastSearch = null;
   const nvObserved = new Map();
+  const nvTrace = (phase, detail={}) => console.info('CharityClarity NV collector', JSON.stringify({phase,...detail}));
   const nvSearchHeaders = ["Entity Name", "NV Business Id #", "Entity No.", "Entity Type", "Registered Agent Name", "Formation Date", "Status"];
   const nvFilingHeaders = ["Filed Date", "Effective Date", "Filing Number", "Filing Type", "Source", "No. of Pages"];
   function nvStartsWithSelected() {
@@ -323,6 +324,7 @@
     for (let expected=1; expected<=maximumPages; expected++) {
       if (Date.now() >= deadline || page.total !== total || page.page !== expected) throw new Error("REGISTRY_NV_PAGINATION_INCOMPLETE");
       for (let i=0;i<page.values.length;i++) collected.push({cells:page.values[i], node:page.rows[i], page:expected});
+      if (expected<=2 || expected===page.pages) nvTrace('page-collected',{page:expected,pages:page.pages,rows:collected.length,total});
       if (collected.length === total && page.page === page.pages) return collected;
       const next = page.table.querySelector('button[aria-label="Go to the next page"]');
       if (collected.length >= total || !next || next.disabled || next.getAttribute('aria-disabled') === 'true')
@@ -388,6 +390,7 @@
   async function nvSearch(query, deadline) {
     if (query?.state !== 'NV' || query.operation !== 'search' || typeof query.name !== 'string' || !query.name.trim() || query.name.length > 500
         || Object.keys(query).sort().join(',') !== 'name,operation,state') throw new Error("REGISTRY_COMMAND_INVALID");
+    nvTrace('search-started',{name:query.name});
     const business = [...document.querySelectorAll('[role="tab"]')].find(el => text(el) === 'Business');
     if (business?.getAttribute('aria-selected') !== 'true' || !location.hash.includes('screen=external-GenericFilingsSearch&tabRoute=business'))
       throw new Error("REGISTRY_WRONG_ORIGIN");
@@ -428,6 +431,7 @@
     });
     first = await nvExpandSearchPage(first,deadline);
     const collected = await nvPages('Search Results', nvSearchHeaders, deadline, first);
+    nvTrace('pages-complete',{rows:collected.length});
     const rows = collected.map(({cells,node,page}) => {
       // Keep every completed public row for master identity filtering. An
       // explicit blank business ID uses its visible entity number only as a
@@ -450,6 +454,7 @@
       return row;
     }).filter(Boolean);
     nvLastSearch = {...query};
+    nvTrace('search-returned',{rows:rows.length});
     return {query,state:'NV',complete:true,verification_pending:false,total:rows.length,rows};
   }
   function nvFields(identifier) {
@@ -901,6 +906,10 @@
     if (!input('txt_verify')?.value.trim()) throw new Error('NY_CONNECTOR_AL_VERIFICATION_REQUIRED');
     const oldAlert = document.querySelector('#altdialog');
     if (visible(oldAlert)) {
+      // A rejected code remains in the form. Resubmitting it would create a
+      // replacement challenge and can invalidate a verification in progress.
+      // Leave that dialog for the person verifying; never recycle its code.
+      if (/verif|captcha|code/i.test(text(oldAlert))) throw new Error('NY_CONNECTOR_AL_VERIFICATION_REQUIRED');
       const ok=[...document.querySelectorAll('.ui-dialog button')].find(b=>visible(b) && text(b)==='Ok');
       if (!ok) throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
       ok.click();
@@ -1083,6 +1092,7 @@
     if(sender.id!==chrome.runtime.id || !m?.action?.startsWith('registry-')) return false;
     handle(m).then(reply,error=>{
       const code=error?.message||'';
+      if (NV) nvTrace('command-failed',{code:/^REGISTRY_[A-Z_]+$/.test(code)?code:'UNEXPECTED_ERROR'});
       const trialReason=(NC||NV||TN) && /^REGISTRY_(?:(?:NC|NV|TN)_[A-Z_]+|WRONG_ORIGIN|COMMAND_INVALID|RESPONSE_INCOMPLETE)$/.test(code)
         ? 'NY_CONNECTOR_'+code : null;
       const ilReasons={REGISTRY_RESPONSE_INCOMPLETE:'NY_CONNECTOR_IL_RESPONSE_TIMEOUT',REGISTRY_RESULTS_INCOMPLETE:'NY_CONNECTOR_IL_RESULTS_INCOMPLETE',REGISTRY_TOTAL_CHANGED:'NY_CONNECTOR_IL_TOTAL_CHANGED',REGISTRY_RESULT_LIMIT:'NY_CONNECTOR_IL_RESULT_LIMIT',REGISTRY_PAGINATION_INCOMPLETE:'NY_CONNECTOR_IL_PAGINATION_INCOMPLETE'};

@@ -3,9 +3,22 @@ const registryOrigin = state => ({IL:"https://charitable.illinoisattorneygeneral
 const registryStart = state => registryOrigin(state) + ({IL:"/search",GA:"/verification/Search.aspx?facility=Y",AL:"/online/Lookups/Business.aspx",NC:"/online_services/search/by_title/search_charities",NV:"/portal/public/#/public/nvsos/en/CaseXscreen?screen=external-GenericFilingsSearch&tabRoute=business",TN:"/portal/registered-charities-search"})[state];
 async function registryMessage(job, message) {
   if (job.closed || Date.now() >= job.activeExpiresAt) throw new Error("NY_CONNECTOR_TIMEOUT");
-  const tab = await chrome.tabs.get(job.tab);
-  if (new URL(tab.url).origin !== registryOrigin(job.registryState)) throw new Error("NY_CONNECTOR_INCOMPLETE");
-  return chrome.tabs.sendMessage(job.tab, message, {frameId:0});
+  const send=async()=>{
+    const tab = await chrome.tabs.get(job.tab);
+    if (new URL(tab.url).origin !== registryOrigin(job.registryState)) throw new Error("NY_CONNECTOR_INCOMPLETE");
+    return chrome.tabs.sendMessage(job.tab, message, {frameId:0});
+  };
+  if (job.registryState!=='NV' || !Number.isFinite(message.budgetMs)) return send();
+  // The page's observer timeout cannot bound an unanswered Chrome message.
+  // Enforce the same allowance in the worker; failure closes this job's tab,
+  // so a late response cannot be consumed by the following organization.
+  let timer;
+  try {
+    return await Promise.race([send(),new Promise((_,reject)=>{
+      timer=setTimeout(()=>reject(new Error('NY_CONNECTOR_REGISTRY_NV_COMMAND_TIMEOUT')),
+        Math.max(1,Math.min(message.budgetMs,job.activeExpiresAt-Date.now())));
+    })]);
+  } finally {clearTimeout(timer);}
 }
 async function registryReady(job, oldDocument = null, path = null, budgetMs = 45000, ncSubmittedQuery = null) {
   const started = Date.now();

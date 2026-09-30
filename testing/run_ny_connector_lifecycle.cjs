@@ -52,6 +52,23 @@ test('readiness advertises the installed manifest version',async()=>{
   await tick();assert.equal(response.ok,true);assert.equal(response.version,h.chrome.runtime.getManifest().version);
 });
 
+test('NV unanswered content message ends at its command allowance without extending the job',async()=>{
+ const h=harness();h.tabs.set(3,{id:3,url:'https://orion.nv.gov/portal/public/'});
+ let release;h.chrome.tabs.sendMessage=()=>new Promise(resolve=>{release=resolve;});
+ const job={tab:3,registryState:'NV',activeExpiresAt:310000,closed:false};
+ const promise=h.context.registryMessage(job,{action:'registry-nv',budgetMs:110000});
+ const rejected=assert.rejects(promise,/NV_COMMAND_TIMEOUT/);await tick();
+ await h.advance(110000);await rejected;
+ assert.equal(job.activeExpiresAt,310000);
+ release({ok:true});await tick();
+});
+
+test('NV completed content response clears its worker deadline',async()=>{
+ const h=harness();h.tabs.set(3,{id:3,url:'https://orion.nv.gov/portal/public/'});
+ const result=await h.context.registryMessage({tab:3,registryState:'NV',activeExpiresAt:310000,closed:false},{action:'registry-nv',budgetMs:45000});
+ assert.equal(result.ok,true);assert.ok(h.timers.filter(t=>t.ms===45000).every(t=>t.cleared));
+});
+
 test('one owned tab serves EIN and name; finish closes only that tab',async()=>{
   const h=harness(),p=h.connect();assert.equal((await h.query(p,11)).ok,true);assert.equal((await h.query(p,12,name)).ok,true);
   assert.equal(h.created.length,1);assert.deepEqual(h.queries.map(q=>q.tab),[100,100]);assert.deepEqual(h.queries.map(q=>q.query),[ein,name]);

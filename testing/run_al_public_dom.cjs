@@ -33,12 +33,12 @@ function harness({rows=[row],total=rows.length,page=1,pages=1,from=1,to=rows.len
  const win={};win.top=win;
  const context=vm.createContext({window:win,location:{origin:'https://ago.igovsolution.net',pathname:'/online/Lookups/Business.aspx'},crypto:{randomUUID:()=> 'fixture'},
   document:{documentElement:{},getElementById:id=>id.startsWith('ctl00_cntbdy_')?inputs[id.slice('ctl00_cntbdy_'.length)]:labels[id]===undefined?null:txt(String(labels[id])),
-    querySelector:s=>s==='#altdialog'?alert:s==='table.table.table-responsive.table-bordered'?table:null,querySelectorAll:()=>[]},
+    querySelector:s=>s==='#altdialog'?alert:s==='table.table.table-responsive.table-bordered'?table:null,querySelectorAll:s=>s==='.ui-dialog button'?[{...txt('Ok'),click:()=>{if(alert)alert.getClientRects=()=>[];alert=null;}}]:[]},
   MutationObserver:class{constructor(fn){this.fn=fn;}observe(){observer=this.fn;}disconnect(){observer=null;}},
   HTMLInputElement:Input,HTMLSelectElement:Select,Event:class{constructor(type){this.type=type;}},setTimeout,clearTimeout,
   chrome:{runtime:{id:'fixture',onMessage:{addListener(){}}}}});
  vm.runInContext(source,context);
- return {api:context.testAL,inputs,clicks:()=>clicks,actions:()=>({pageActions,sizeActions}),load:()=>{table=makeTable();},filters:v=>{filters=v;},headers};
+ return {api:context.testAL,inputs,clicks:()=>clicks,actions:()=>({pageActions,sizeActions}),load:()=>{table=makeTable();},filters:v=>{filters=v;},alert:message=>{alert=message?txt(message):null;},headers};
 }
 const q={state:'AL',operation:'search',name:'YWCA'};
 test('AL clears restrictive filters and collects all public identity fields without verification material',async()=>{
@@ -53,6 +53,22 @@ test('AL explicit fresh no-record alert is conclusive source evidence',async()=>
 test('AL missing or rejected verification is never automated or accepted as no records',async()=>{
  const h=harness({verification:''});await assert.rejects(h.api.alSearch(q,Date.now()+1000),/VERIFICATION_REQUIRED/);assert.equal(h.clicks(),0);
  await assert.rejects(harness({outcome:'verification'}).api.alSearch(q,Date.now()+1000),/VERIFICATION_REQUIRED/);
+});
+
+test('AL does not dismiss a rejected-code dialog and submit the same code again',async()=>{
+ const h=harness();h.alert('Verification code incorrect');
+ for(let i=0;i<3;i++)await assert.rejects(h.api.alSearch(q,Date.now()+1000),/VERIFICATION_REQUIRED/);
+ assert.equal(h.clicks(),0);
+ // Simulate the person completing the public challenge. The next ordinary
+ // query can run without reloading or weakening the source result checks.
+ h.alert(null);const result=await h.api.alSearch(q,Date.now()+1000);
+ assert.equal(result.total,1);assert.equal(h.clicks(),1);
+});
+
+test('AL may dismiss a previous no-record alert before a fresh search',async()=>{
+ const h=harness();h.alert('No Records Found');
+ const result=await h.api.alSearch(q,Date.now()+1000);
+ assert.equal(result.total,1);assert.equal(h.clicks(),1);
 });
 test('AL source error and unchanged prior grid cannot be returned as completed results',async()=>{
  await assert.rejects(harness({outcome:'error'}).api.alSearch(q,Date.now()+1000));

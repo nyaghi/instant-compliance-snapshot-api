@@ -751,3 +751,36 @@ in the same bounded plan are omitted. Every reviewed alias remains. The covering
 query must complete; failures/truncation still prevent a negative. No additional
 time, worker, queue, concurrent-state or Sales-budget changes are introduced.
 The connector remains 0.6.16: this is a backend-only follow-up requiring no reload.
+
+### 0.6.17 candidate: rejected Alabama challenges and unanswered Nevada messages
+
+The aab62f1 live control completed Give Something Back NC in 72.515 seconds,
+using its extension deadline and every required discovered name. Summit's
+IL/GA/TN controls remained Current, including full-address corroboration of
+the Tennessee alias. Five backend smoke cases retained their results.
+
+Alabama's post-verification repeat still returned verification required.
+The collector previously dismissed any old alert and clicked Search again,
+including an alert rejecting the unchanged verification code. The candidate
+leaves rejection dialogs untouched and returns verification required without
+another search click. This does not solve or bypass a challenge.
+
+Nevada public-stage logging on a65b192 shows six browser queries returning
+within 31.005 seconds, then the CCA query waiting until the 300-second global
+deadline. The visible registry was complete on page 2 of 2, 101-160 of 160,
+with no loader. A fresh-page comparison also reached that same final page.
+This localizes the stall to collection/message return, not master parsing;
+the precise content-collector failure is still unproven. The old worker only
+passed a 110-second allowance to the content script but did not bound an
+unanswered Chrome message. The candidate enforces that same allowance in
+the worker and records public collector phases to diagnose the remaining
+failure. It neither increases the global deadline nor accepts partial rows.
+
+The a65b192 UI diagnostic export contains only explicit public query fields
+and phase timing. Credentials, continuation signatures and challenge material
+are excluded. This remains restricted to the isolated trial.
+
+The updated workbook preserves initial failures and orders attempts by their
+execution timestamps, not download order. A later download of an older run
+must not overwrite a newer attempt. 0.6.17 needs activation and live controls
+before any claim that Alabama or the remaining Nevada case is resolved.
