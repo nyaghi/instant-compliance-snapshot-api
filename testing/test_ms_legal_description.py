@@ -114,6 +114,8 @@ class Tests(unittest.TestCase):
     def test_scope_keeps_shared_matching_discovery_budgets_and_other_states_exact(self):
         old = ast.parse(subprocess.check_output(['git', 'show', 'bc56e10:registry_snapshot_server.py'], cwd=ROOT).decode())
         new = ast.parse((ROOT / 'registry_snapshot_server.py').read_text(encoding='utf-8'))
+        from testing.performance_origin_audit import restore_nv_business_scope_0613
+        new.body = [restore_nv_business_scope_0613(n) if isinstance(n, ast.FunctionDef) else n for n in new.body]
         functions = lambda tree: {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
         before, after = functions(old), functions(new)
         self.assertEqual({name for name in before if ast.dump(before[name]) != ast.dump(after[name])},

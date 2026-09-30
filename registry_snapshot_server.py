@@ -6489,6 +6489,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
     unreviewed_scope = False
     missing_nv_business_id = False
     scope_reviews = []
+    excluded_nv_entities = []
     def collect(query):
         if time.monotonic() >= deadline:
             raise TimeoutError(f"{state} lookup did not finish within its own budget")
@@ -6506,6 +6507,19 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
             names = [row["name"], *row.get("aliases", [])]
             candidates = [score_candidate(org.organization_name, org.ein, {"name": n, "ein": row.get("ein", "")}) for n in names if n]
             if not candidates or all(c["decision"] == "rejected" for c in candidates):
+                seen.add(row["identifier"])
+                continue
+            if state == "NV" and row["entity_type"] in {
+                    "Domestic Corporation (78)", "Domestic Limited Liability Company (86)",
+                    "NT7 Business License Sole Proprietor"}:
+                # These explicitly labeled business categories are outside the
+                # approved nonprofit-corporation/charity-registration scope.
+                # A same-name business must not make a separate, confirmed
+                # nonprofit record ambiguous. Unknown/blank types and charity
+                # registrations with incomplete filing evidence still require
+                # review in the branch below.
+                excluded_nv_entities.append({"name": row["name"], "identifier": row["identifier"],
+                                             "entity_type": row["entity_type"]})
                 seen.add(row["identifier"])
                 continue
             if state == "NC" and row.get("unissued_application"):
@@ -6592,6 +6606,10 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                         org, selected, records, unreviewed_scope=unreviewed_scope):
                     break
     result = final_four_license_result(org, state, records, deadline, sources[state])
+    if excluded_nv_entities:
+        result.rejected_candidates = [{**row, "reason": "Explicit entity type outside the approved Nevada nonprofit/charity scope"}
+                                      for row in excluded_nv_entities[:20]]
+        result.source_note += " Same-name business records explicitly classified outside the nonprofit/charity scope were excluded."
     if unreviewed_scope and result.status not in {"Current", "Upcoming Filing", "Exempt"}:
         result.status = "Needs Review" if state == "NC" else "Unable to Confirm"; result.success = False
         result.source_note = ("North Carolina returned an in-process charity application with a matching name but no issued license number. Review its identity and application status; this does not establish non-registration."

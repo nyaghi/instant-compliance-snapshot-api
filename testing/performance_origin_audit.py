@@ -5,6 +5,20 @@ surrounding state parsing, matching, timing and classification ASTs remain exact
 """
 import ast
 
+def restore_nv_business_scope_0613(node):
+    """Restore only the exact reviewed Nevada category exclusion for old audits."""
+    import hashlib
+    import subprocess
+    from pathlib import Path
+    if (node.name != 'final_four_browser_lookup' or
+            hashlib.sha256(ast.dump(node).encode()).hexdigest() !=
+            '3baad52924c4ea7546e60e6d09606852ee798dff83901cd0f725999f8b2dc314'):
+        return node
+    baseline = ast.parse(subprocess.check_output(
+        ['git', 'show', '9a7ea66:registry_snapshot_server.py'],
+        cwd=Path(__file__).resolve().parents[1]).decode('utf-8'))
+    return next(n for n in baseline.body if isinstance(n, ast.FunctionDef) and n.name == node.name)
+
 _MS_0613_HASHES = {'ms_detail_identity_fields': '8b5c2feace2ac4ccd5157aa0d2f1464eb5e2d7ab0168e010009c84da6acfc99d', 'ms_legal_description_identity': '5ea30499734e4ec31c60bf522a981f9b894c00b3fbf797243eb2e6b70ae57390', 'search_ms_fast': '421b139d9ccebe395ab9d0e57e5004a1ab788235c6897f13b73f5c765c10bac8', 'search_batch_browser_state': '21fb4d0ae7228977dcd82cdedd83573904a18fd6e84f6288394f469209feed8f'}
 
 

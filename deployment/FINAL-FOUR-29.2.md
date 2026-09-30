@@ -604,3 +604,23 @@ targeted checks and a control sample are required before recommendation.
 The official MS detail for an affected case appends a jurisdiction/legal-form description to its full name. The existing identity guard left it unconfirmed despite a matching office. The follow-up reads the selected detail's Registered Name and Address sections, retains the complete source label, and allows that narrow legal-form interpretation only when the full underlying name and EIN-linked organization address pass the existing master identity checks. Different EINs, unknown/conflicting offices, chapter suffixes, incomplete or duplicate details remain unconfirmed. This is an MS source-field interpretation; shared name matching and other states are unchanged.
 
 An added negative control also exposed an existing MS fall-through: when the earlier name guard rejected the first candidate, its positive result could remain selected. Rejections now enter the existing identity-review path. Mississippi's query budget, discovery settings, worker capacity, and overall workflow deadlines are unchanged. Exact-AST scope controls and 40 recorded MS controls accompany live positive, negative and unrelated-state follow-ups. No further connector version is needed for this backend-only change.
+
+### September 30 Nevada entity-category follow-up
+
+The completed 0.6.13 targeted live run showed Aeon and Man in the Mirror were
+left unconfirmed because same-name ordinary corporations and LLCs were treated
+as unresolved charity candidates alongside separate charitable records. The
+master Nevada lookup now excludes three explicit public business categories
+outside the approved nonprofit/charity scope: Domestic Corporation (78),
+Domestic Limited Liability Company (86), and NT7 Business License Sole
+Proprietor. Rejections retain their source identifiers and category. Blank or
+unrecognized categories still require review; a completed search is still
+required before a negative result. No organization-specific override is used.
+
+Controls cover mixed nonprofit/business records, adverse nonprofit records,
+business-only results, unknown categories and incomplete searches. An exact
+AST audit compares the whole master module with deployed commit 9a7ea66 after
+normalizing only the reviewed function hash. Shared matching, other states,
+discovery, capacity and deadlines remain unchanged. This backend-only change
+requires deployment to the isolated trial and live affected/control retests.
+The separate broad-alias paging and NC navigation failures remain open.

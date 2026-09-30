@@ -636,6 +636,70 @@ class LookupControls(unittest.TestCase):
         self.assertEqual(result.queries_attempted[0]['scope_review']['identifier'],self.nvrow['identifier'])
         self.assertTrue(all(q['operation'] == 'search' for q in self.calls))
 
+    def test_nv_named_business_categories_do_not_override_confirmed_nonprofit(self):
+        for status in ['Active', 'Withdrawn']:
+            for kind in ['Domestic Corporation (78)', 'Domestic Limited Liability Company (86)',
+                         'NT7 Business License Sole Proprietor']:
+                self.calls.clear()
+                def mixed(q):
+                    data = self.provider(q)
+                    if q['operation'] == 'search':
+                        data['rows'].append({**self.nvrow, 'identifier': 'NV123456789', 'entity_type': kind})
+                        data['total'] = 2
+                    else:
+                        self.assertNotEqual(q['identifier'], 'NV123456789')
+                        data['fields']['Entity Status'] = status
+                    return data
+                with self.subTest(status=status, kind=kind):
+                    result = cc.final_four_browser_lookup(self.orgs['NV'], 'NV', mixed)
+                    self.assertTrue(result.success)
+                    self.assertEqual(result.matched_registry_identifier, self.nvrow['identifier'])
+                    self.assertNotIn(result.status, ['Unable to Confirm', 'Needs Review', 'Not Registered'])
+                    self.assertEqual(result.rejected_candidates[0]['entity_type'], kind)
+
+    def test_nv_only_explicit_business_records_finish_as_no_qualifying_registration(self):
+        self.nvrow['entity_type'] = 'Domestic Corporation (78)'
+        result = cc.final_four_browser_lookup(self.orgs['NV'], 'NV', self.provider)
+        self.assertEqual(result.status, 'Not Registered')
+        self.assertTrue(result.success)
+        self.assertTrue(all(q['operation'] == 'search' for q in self.calls))
+        self.assertIn('outside the nonprofit/charity scope', result.source_note)
+
+    def test_nv_unknown_category_remains_review_even_with_excluded_business(self):
+        def mixed(q):
+            data = self.provider(q)
+            if q['operation'] == 'search':
+                data['rows'] = [dict(self.nvrow, entity_type='Unrecognized Public Category'),
+                                dict(self.nvrow, identifier='NV123456789', entity_type='Domestic Corporation (78)')]
+                data['total'] = 2
+            return data
+        result = cc.final_four_browser_lookup(self.orgs['NV'], 'NV', mixed)
+        self.assertEqual(result.status, 'Unable to Confirm')
+        self.assertFalse(result.success)
+        self.assertIn('Unrecognized Public Category', result.source_note)
+
+    def test_nv_incomplete_business_search_never_establishes_negative(self):
+        def incomplete(q):
+            data = self.provider(q)
+            data['rows'] = [dict(self.nvrow, entity_type='Domestic Corporation (78)')]
+            data['complete'] = False
+            return data
+        with self.assertRaises(ValueError):
+            cc.final_four_browser_lookup(self.orgs['NV'], 'NV', incomplete)
+
+    def test_nv_scope_patch_preserves_every_other_master_function_and_setting(self):
+        import ast
+        from pathlib import Path
+        import subprocess
+        from testing.performance_origin_audit import restore_nv_business_scope_0613
+        root = Path(__file__).resolve().parents[1]
+        before = ast.parse(subprocess.check_output(
+            ['git', 'show', '9a7ea66:registry_snapshot_server.py'], cwd=root).decode('utf-8'))
+        after = ast.parse((root / 'registry_snapshot_server.py').read_text(encoding='utf-8'))
+        after.body = [restore_nv_business_scope_0613(n) if isinstance(n, ast.FunctionDef) else n
+                      for n in after.body]
+        self.assertEqual(ast.dump(after), ast.dump(before))
+
     def test_nv_nr_identity_is_filtered_without_inventing_a_corporation(self):
         for identifier in ['NR20230725-22746', 'C20180913-0530']:
             for name, expected in [(self.nvrow['name'], 'Unable to Confirm'), ('The Junior Swim League LLC', 'Not Registered')]:
