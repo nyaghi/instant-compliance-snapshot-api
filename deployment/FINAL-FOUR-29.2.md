@@ -665,3 +665,15 @@ and ten outcomes were saved. A separate Give Something Back NC diagnostic
 returned Delinquent after an ordinary manual Search click on a stalled form;
 it is assisted evidence, not an unassisted validation pass. Its intermittent
 navigation/verification cause remains under investigation.
+
+Alabama's verified session completed 28 of 30 checks without another challenge.
+Young Life's Seattle fallback exposed a collector race: selecting final page 2
+immediately changed the selector while page 1 still showed records 1-5 of 7.
+Strict final-page validation ran before checking whether the rows were fresh.
+The collector now waits for new row nodes before validating the final counters.
+A delayed-page regression reproduces the old failure. Page collection also
+uses its already verified nodes, consecutive boundaries and counts directly,
+without an extra settling timer on every page. This avoids background timer
+amplification for broad aliases such as ELI (267 records on 54 pages), while
+preserving the same 45-second allowance and complete-result requirements.
+These two Alabama cases require an unassisted repeat on the activated package.

@@ -915,13 +915,22 @@
       if (![...current.selector.options].some(o=>o.value===String(target))) throw new Error('REGISTRY_PAGINATION_INCOMPLETE');
       const oldNodes=[...current.table.querySelectorAll('tbody tr.grid_tr')];
       current=await wait(()=>{
+        // The selector changes immediately, before the final page's rows and
+        // counters. Reject stale rows only after observing a fresh page, so
+        // this normal intermediate state cannot fail strict final-page checks.
+        const pendingTable=document.querySelector('table.table.table-responsive.table-bordered');
+        const pendingNodes=pendingTable?[...pendingTable.querySelectorAll('tbody tr.grid_tr')]:[];
+        if (!pendingNodes.length || pendingNodes.length===oldNodes.length && pendingNodes.every((r,i)=>r===oldNodes[i])) return null;
         const next=alPage();
         if (!next || next.page!==target || next.from!==priorEnd+1) return null;
         const nodes=[...next.table.querySelectorAll('tbody tr.grid_tr')];
         if (nodes.length===oldNodes.length && nodes.every((r,i)=>r===oldNodes[i])) return null;
         if (next.total!==page.total || next.pages!==page.pages) throw new Error('REGISTRY_TOTAL_CHANGED');
         return next;
-      },Math.max(1,deadline-Date.now()),{action:()=>set(current.selector,String(target)),settle:150});
+      // Fresh nodes, consecutive boundaries, exact counts and the same total
+      // establish page completion. An extra settling timer per page adds
+      // background-tab throttling without providing additional evidence.
+      },Math.max(1,deadline-Date.now()),{action:()=>set(current.selector,String(target))});
       rows.push(...current.rows);
     }
     if (rows.length!==page.total || new Set(rows.map(r=>r[1])).size!==rows.length) throw new Error('REGISTRY_TOTAL_CHANGED');

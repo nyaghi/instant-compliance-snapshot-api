@@ -6,7 +6,7 @@ const source=fs.readFileSync(path.join(__dirname,'../browser-connector/registry-
 const headers=['Name','License/Registration#','Status','Registration Type','Issued Date','Expiration Date','Address','City','State','Zip','Print'];
 const row=['YWCA of the USA National Board','AL97-431','Active','Charitable Organization','08/29/2001','03/28/2027','1400 I Street NW','Washington','DC','20005','Print'];
 const txt=innerText=>({innerText,getClientRects:()=>[{}]});
-function harness({rows=[row],total=rows.length,page=1,pages=1,from=1,to=rows.length,verification='user-entered-test-placeholder',outcome='success'}={}){
+function harness({rows=[row],total=rows.length,page=1,pages=1,from=1,to=rows.length,verification='user-entered-test-placeholder',outcome='success',delayedPage=false}={}){
  let table=null,alert=null,observer=null,clicks=0,pageValue=page,filters=[];
  const labels={pgfrm:from,pgto:to,tot_pgs:total,totpg:pages};
  class Input{get value(){return this.v||'';}set value(v){this.v=v;}dispatchEvent(){}}
@@ -17,7 +17,7 @@ function harness({rows=[row],total=rows.length,page=1,pages=1,from=1,to=rows.len
  const makeTable=()=>{
   const nodes=rows.map(r=>({children:r.map(v=>({...txt(v),tagName:'TD'}))}));
   const selector=new Select();selector.value=String(pageValue);selector.options=Array.from({length:pages},(_,i)=>({value:String(i+1)}));
-  selector.dispatchEvent=e=>{if(e.type==='change') {pageValue=Number(selector.value);labels.pgfrm=2;labels.pgto=2;rows=[[...row.slice(0,1),'AL97-999',...row.slice(2)]];table=makeTable();observer?.();}};
+  selector.dispatchEvent=e=>{if(e.type==='change') {pageValue=Number(selector.value);const complete=()=>{labels.pgfrm=2;labels.pgto=2;rows=[[...row.slice(0,1),'AL97-999',...row.slice(2)]];table=makeTable();observer?.();};if(delayedPage){observer?.();setTimeout(complete,10);}else complete();}};
   return {...txt('grid'),querySelectorAll:s=>s==='thead tr:first-child th'?headers.map(txt):s==='thead input'?filters:s==='tbody tr.grid_tr'?nodes:[],querySelector:()=>selector};
  };
  const search={...txt('Search'),disabled:false,click:()=>{
@@ -57,6 +57,10 @@ test('AL source error and unchanged prior grid cannot be returned as completed r
 });
 test('AL pagination collects subsequent observed rows without skipping a page',async()=>{
  const h=harness({total:2,pages:2});const r=await h.api.alSearch(q,Date.now()+1500);
+ assert.equal(r.total,2);assert.deepEqual(Array.from(r.rows,r=>r[1]),['AL97-431','AL97-999']);
+});
+test('AL final-page selector may change before its rows and counters arrive',async()=>{
+ const h=harness({total:2,pages:2,delayedPage:true});const r=await h.api.alSearch(q,Date.now()+1500);
  assert.equal(r.total,2);assert.deepEqual(Array.from(r.rows,r=>r[1]),['AL97-431','AL97-999']);
 });
 test('AL incomplete count, changed columns and residual filters are rejected',()=>{
