@@ -350,3 +350,57 @@ due date is not a last-filed date.
 The six-case 0.6.7 control produced four unattended Nevada SEARCH_NOT_STARTED results on the first query. North Carolina Prevent Child Abuse completed as Upcoming Filing in 16.451 seconds. Observing the RMHC Nevada page did not resolve its stalled search, so visibility is not established as the cause. For the final Nevada diagnostic, an ordinary manual Search click started the stalled query and the collector then advanced through its aliases. Its final unsupported-category review remains unresolved; that assisted run is not a passing unattended control. Raw results and the assistance note are retained in the validation output.
 
 Candidate 0.6.8 retries the current Nevada Search once after three seconds only if no loading cycle has been observed. It rechecks the bound name, blank identifier filters, Starts With mode and current visible enabled button. It never retries a pending source response, extends the existing command deadline or treats a blank initial grid as a negative. This is an evidence-based recovery for a missed first submission; the source application's internal cause is not proven. Other state collectors and all status/identity rules remain unchanged. Live validation is still required.
+
+### Nevada charitable-solicitation-only records, September 29
+
+Random-sample source inspection found that `Foreign Entities Not Required to
+Register In Nevada` can have actual Charitable Solicitation Registration
+Statements. The earlier type whitelist stopped before inspecting that history.
+The master now opens this precise category, but cannot classify it until the
+complete, query-bound filing history contains an explicitly dated statement and
+the record displays its renewal deadline. Annual Lists, Foreign Qualifications,
+exemption declarations and blank histories do not establish this category's
+charity scope. Registered-agent records remain excluded. Existing nonprofit
+corporation interpretation is unchanged.
+
+The original registration date is shown only when the earliest explicit
+statement date agrees with the record's formation date. The latest statement
+submission is labeled separately from the displayed renewal deadline. An
+inconsistent solicitation Boolean is preserved and explained in comments;
+explicit adverse statuses continue to take precedence.
+
+Commit d0a65e849c6a10349cf364baa053375d79c73ad3 is deployed only to the
+disposable trial. All 198 Python controls passed. The live Five Below Foundation
+control returned Current in 44.6 seconds, initial registration 2022-05-12 and
+latest statement filed 2026-05-05, with renewal due 2027-05-31. Colorado Current
+and Not Registered controls also passed. Connector 0.6.8 is unchanged by this
+backend correction. Broader random-30 validation is still in progress; the
+separate Nevada navigation timeouts are not claimed resolved.
+
+### Random-30 evidence and 0.6.9 candidate
+
+The random sample exposed an unrelated RMHC chapter row with an explicitly
+blank NV Business ID, a visible Entity Number E38494562024-0, and a complete
+Expired status. Rejecting the entire search before master name filtering was
+too strict. The candidate preserves such rows with their visible entity number
+as the row key and an explicit missing-business-ID marker. The master can reject
+an unrelated name, but a matching row without a usable NV ID remains review-only.
+It cannot trigger detail navigation or a guessed registration status. Duplicate,
+unknown and malformed identities still fail conservatively. Restored result
+sets must preserve all of these row identities.
+
+A read-only observation during Partnership for a Healthier America's Nevada
+run caught a returned form with the visible selected search-type label
+STARTS_WITH, rather than Starts With. The candidate accepts this precise enum
+label only with the selected public DOM choice's STARTS_WITH identity and its
+matching removal control. Partial controls and other search modes remain
+unready. This observation identifies a readiness weakness, but is not proof
+that it caused every timeout: that particular run later advanced and failed
+on the broad PHA query's pagination. Local controls cover the enum label,
+missing choice identity, wrong mode, no-response negative prevention, restored
+rows, optional history, adverse statuses and existing-state isolation.
+
+The candidate passed 369 JavaScript and 200 Python checks. It is not a live
+validated fix yet. The running 0.6.8 random sample is preserved before any
+activation. Broad-alias completion failures, Alabama verification and remaining
+source/identity reviews are separate open issues; do not promote the expansion.

@@ -557,6 +557,34 @@ class LookupControls(unittest.TestCase):
             self.assertEqual(result.status, expected)
             self.assertFalse(result.matched_registry_identifier)
 
+    def test_nv_blank_business_id_is_filtered_but_never_opened_or_classified(self):
+        for name, expected in [(self.nvrow['name'], 'Unable to Confirm'), ('Unrelated Regional Charity', 'Not Registered')]:
+            def pending(q):
+                self.assertEqual(q['operation'], 'search')
+                row = {'name':name, 'identifier':'E38494562024-0', 'entity_number':'E38494562024-0',
+                       'business_identifier_missing':True, 'entity_type':'Foreign Entities Not Required to Register In Nevada',
+                       'raw_status':'Expired'}
+                return cc.final_four_clean_evidence({'state':'NV', 'query':q, 'complete':True,
+                    'verification_pending':False, 'total':1, 'rows':[row]}, q)
+            result = cc.final_four_browser_lookup(self.orgs['NV'], 'NV', pending)
+            self.assertEqual(result.status, expected)
+            self.assertFalse(result.matched_registry_identifier)
+            if expected == 'Unable to Confirm':
+                self.assertIn('blank NV Business ID', result.source_note)
+
+    def test_nv_blank_business_id_contract_cannot_accept_invented_or_duplicate_identity(self):
+        q={'state':'NV','operation':'search','name':self.nvrow['name']}
+        row={'name':self.nvrow['name'],'identifier':'E38494562024-0','entity_number':'E38494562024-0',
+             'business_identifier_missing':True,'entity_type':'Foreign Entities Not Required to Register In Nevada','raw_status':'Expired'}
+        for changes in [{'business_identifier_missing':False},{'entity_number':'E00000002024-0'},
+                        {'identifier':'NV123'},{'raw_status':''},{'entity_type':''}]:
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                cc.final_four_search_evidence({'state':'NV','query':q,'complete':True,'verification_pending':False,
+                                              'total':1,'rows':[{**row,**changes}]},'NV',q)
+        with self.assertRaises(ValueError):
+            cc.final_four_search_evidence({'state':'NV','query':q,'complete':True,'verification_pending':False,
+                                          'total':2,'rows':[row,row]},'NV',q)
+
     def test_nv_unsupported_matching_record_prevents_an_inactive_only_conclusion(self):
         def mixed(q):
             payload = self.provider(q)

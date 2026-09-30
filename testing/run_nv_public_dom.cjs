@@ -23,6 +23,18 @@ test('Nevada form readiness includes the hydrated Starts With search-type contro
  assert.equal(h.api.registryDocumentReady(),false);
  h.context.document.querySelectorAll=read;assert.equal(h.api.registryDocumentReady(),true);
 });
+
+test('Nevada accepts a restored STARTS_WITH label only with the selected public choice identity',async()=>{
+ const h=fixture(),read=h.context.document.querySelectorAll;
+ const selected={getAttribute:k=>k==='data-value'?'STARTS_WITH':null,querySelector:()=>({})};
+ const raw={innerText:'STARTS_WITH\nRemove item',querySelector:()=>selected};
+ h.context.document.querySelectorAll=q=>q==='[role="combobox"]'?[raw]:read(q);
+ assert.equal(h.api.registryDocumentReady(),true);
+ const result=await h.search();assert.equal(result.total,4);assert.equal(h.clicks,1);
+ raw.querySelector=()=>null;assert.equal(h.api.registryDocumentReady(),false);
+ raw.querySelector=()=>({...selected,getAttribute:()=> 'CONTAINS'});assert.equal(h.api.registryDocumentReady(),false);
+ raw.querySelector=()=>({...selected,querySelector:()=>null});assert.equal(h.api.registryDocumentReady(),false);
+});
 test('Nevada visible inputs and search type are not ready while the initial loader remains visible',()=>{
  const h=fixture(),read=h.context.document.querySelectorAll;
  h.context.document.querySelectorAll=q=>q==='.app-loader-pane .circle-loader'?[{getClientRects:()=>[{}]}]:read(q);
@@ -162,6 +174,28 @@ test('Nevada retains observed NR rows without treating them as issued business i
  for(const changed of [['NO-ID',''],['NR20230725-22746','Foreign Non-Profit Corporation (80)'],['NV123','']]){
   const row=[...nr];row[1]=changed[0];row[3]=changed[1];await assert.rejects(fixture({rows:[row]}).search(),/RESULTS_INCOMPLETE/);
  }
+});
+
+test('Nevada preserves a blank business ID with its observed entity number for master filtering',async()=>{
+ const pending=['Ronald McDonald House Charities of Northeast Indiana','','E38494562024-0','Foreign Entities Not Required to Register In Nevada','','12/19/2023 12:00 AM','Expired'];
+ const f=fixture({rows:[observed[1],pending]}),r=await f.search();
+ assert.equal(r.total,2);assert.equal(r.rows[1].identifier,pending[2]);
+ assert.equal(r.rows[1].entity_number,pending[2]);assert.equal(r.rows[1].business_identifier_missing,true);
+ await assert.rejects(f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:pending[2]},45000)),/COMMAND_INVALID/);
+ assert.equal(f.opened.length,0);
+ for(const changes of [{1:'UNKNOWN'},{2:''},{3:''},{6:''}]){
+  const row=[...pending];for(const [i,v] of Object.entries(changes))row[i]=v;
+  await assert.rejects(fixture({rows:[row]}).search(),/RESULTS_INCOMPLETE/);
+ }
+ await assert.rejects(fixture({rows:[pending,pending]}).search(),/RESULTS_INCOMPLETE/);
+});
+
+test('Nevada restores all row identities including a blank-business-ID row between two details',async()=>{
+ const pending=['Unrelated charity','','E38494562024-0','Foreign Entities Not Required to Register In Nevada','','12/19/2023 12:00 AM','Expired'];
+ const f=fixture({rows:[...observed.slice(0,2),pending]});await f.search();
+ await f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:observed[0][1]},45000));
+ const result=await f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:observed[1][1]},45000));
+ assert.equal(result.fields['NV Business ID'],observed[1][1]);assert.equal(f.opened.length,2);
 });
 test('initial empty grid cannot establish non-registration without a response',async()=>{const f=fixture({activity:false,rows:[]});await assert.rejects(f.search(),/SEARCH_NOT_STARTED/);});
 test('completed empty response is accepted only after observed loading cycle',async()=>{const f=fixture({rows:[]});const r=await f.search();assert.equal(r.total,0);assert.equal(r.complete,true);});

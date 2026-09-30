@@ -224,6 +224,28 @@
   const nvObserved = new Map();
   const nvSearchHeaders = ["Entity Name", "NV Business Id #", "Entity No.", "Entity Type", "Registered Agent Name", "Formation Date", "Status"];
   const nvFilingHeaders = ["Filed Date", "Effective Date", "Filing Number", "Filing Type", "Source", "No. of Pages"];
+  function nvStartsWithSelected() {
+    return [...document.querySelectorAll('[role="combobox"]')].some(el => {
+      if (text(el).startsWith('Starts With')) return true;
+      // ORION can restore the selected public choice using its enum label.
+      // Require that choice's DOM identity as well as the displayed label;
+      // a partial control or another search mode is not a ready Starts With.
+      const selected = el.querySelector?.('.choices__list--single [data-item][aria-selected="true"]');
+      return /^STARTS_WITH(?:\s|$)/.test(text(el))
+        && selected?.getAttribute('data-value') === 'STARTS_WITH'
+        && !!selected.querySelector('button[aria-label="Remove item: \'STARTS_WITH\'"]');
+    });
+  }
+  function nvPublicRow(cells) {
+    const [name,businessId,entity_number,entity_type,,,raw_status] = cells;
+    const missingId = businessId === '' && /^E\d{7,14}-\d$/.test(entity_number) && !!entity_type;
+    const identifier = missingId ? entity_number : businessId;
+    const identified = /^NV\d+$/.test(businessId) && !!entity_type
+      || /^NR\d{8}-\d+$/.test(businessId) && entity_type === '' || missingId;
+    if (!name || !identified || !raw_status) throw new Error('REGISTRY_NV_RESULTS_INCOMPLETE');
+    return {name,identifier,entity_type,raw_status,
+      ...(missingId ? {entity_number,business_identifier_missing:true} : {})};
+  }
   function nvTable(title, headers) {
     const tables = [...document.querySelectorAll('casex-data-table')].filter(el =>
       [...el.querySelectorAll('h4')].some(h => text(h) === title));
@@ -313,7 +335,7 @@
     // Refuse unrecognized filters instead of guessing a potentially narrower query.
     const field = suffix => document.querySelector(`input[id$="-${suffix}"]`);
     const name = field('entityName'), number = field('entityNumber'), id = field('nvBusinessId');
-    if (!name || !number || !id || ![...document.querySelectorAll('[role="combobox"]')].some(el => text(el).startsWith('Starts With')))
+    if (!name || !number || !id || !nvStartsWithSelected())
       throw new Error("REGISTRY_NV_FORM_CHANGED");
     // Form.io redraws Search when filter inputs change. Resolve the current
     // button after that render settles, rather than clicking the old node in
@@ -337,21 +359,18 @@
         if (field('entityName')?.value !== query.name || field('entityNumber')?.value !== '' || field('nvBusinessId')?.value !== '') return;
         const buttons=[...document.querySelectorAll('button')].filter(el=>text(el)==='Search' && visible(el) && !el.disabled);
         if (business?.getAttribute('aria-selected')==='true'
-            && [...document.querySelectorAll('[role="combobox"]')].some(el=>text(el).startsWith('Starts With'))
+            && nvStartsWithSelected()
             && buttons.length===1) buttons[0].click();
       }
     });
     const collected = await nvPages('Search Results', nvSearchHeaders, deadline, first);
     const rows = collected.map(({cells,node,page}) => {
-      const [name,identifier,,entity_type,,,raw_status] = cells;
-      // ORION also returns NR identifiers with an explicitly blank entity type.
-      // Preserve these rows for master name filtering; never open them as an
-      // issued nonprofit corporation or silently omit a potentially matching row.
-      const identified = /^NV\d+$/.test(identifier) && !!entity_type
-        || /^NR\d{8}-\d+$/.test(identifier) && entity_type === '';
-      if (!name || !identified || !raw_status || nvObserved.has(identifier))
+      // Keep every completed public row for master identity filtering. An
+      // explicit blank business ID uses its visible entity number only as a
+      // row key; nvDetail still refuses anything except an observed NV ID.
+      const row = nvPublicRow(cells), identifier = row.identifier;
+      if (nvObserved.has(identifier))
         throw new Error("REGISTRY_NV_RESULTS_INCOMPLETE");
-      const row = {name,identifier,entity_type,raw_status};
       nvObserved.set(identifier,{...row,node,page});
       return row;
     });
@@ -409,12 +428,19 @@
       const rows = await nvPages('Search Results',nvSearchHeaders,deadline,restored), restoredIds = new Set();
       if (rows.length !== nvObserved.size) throw new Error('REGISTRY_NV_RESTORED_RESULTS_CHANGED');
       for (const {cells} of rows) {
-        const prior = nvObserved.get(cells[1]);
-        if (!prior || restoredIds.has(cells[1]) || prior.name !== cells[0] || prior.entity_type !== cells[3] || prior.raw_status !== cells[6])
+        let row;
+        try { row=nvPublicRow(cells); }
+        catch { throw new Error('REGISTRY_NV_RESTORED_RESULTS_CHANGED'); }
+        const prior = nvObserved.get(row.identifier);
+        if (!prior || restoredIds.has(row.identifier) || prior.name !== row.name || prior.entity_type !== row.entity_type || prior.raw_status !== row.raw_status
+            || !!prior.business_identifier_missing !== !!row.business_identifier_missing)
           throw new Error('REGISTRY_NV_RESTORED_RESULTS_CHANGED');
-        restoredIds.add(cells[1]);
+        restoredIds.add(row.identifier);
       }
-      for (const {cells,node,page} of rows) nvObserved.set(cells[1],{...nvObserved.get(cells[1]),node,page});
+      for (const {cells,node,page} of rows) {
+        const identifier=nvPublicRow(cells).identifier;
+        nvObserved.set(identifier,{...nvObserved.get(identifier),node,page});
+      }
     }
     let current = nvObserved.get(query.identifier);
     if (!current || current.name !== target.name || current.entity_type !== target.entity_type) throw new Error("REGISTRY_NV_DETAIL_CHANGED");
@@ -798,7 +824,7 @@
       return tab?.getAttribute('aria-selected')==='true'
         && ![...document.querySelectorAll('.app-loader-pane .circle-loader')].some(visible)
         && ['entityName','entityNumber','nvBusinessId'].every(s=>document.querySelector(`input[id$="-${s}"]`))
-        && [...document.querySelectorAll('[role="combobox"]')].some(el=>text(el).startsWith('Starts With'))
+        && nvStartsWithSelected()
         && [...document.querySelectorAll('button')].some(el=>text(el)==='Search' && visible(el) && !el.disabled);
     }
     return true;

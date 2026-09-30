@@ -5978,7 +5978,7 @@ def il_verification_recovery(record, payload, now):
     if (record.get("state") != "IL" or record.get("purpose") != "registration"
             or record.get("recovery_protocol") != "il-fresh-page-v1"
             or (record.get("connector_version") != "0.5.10"
-                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8"}))
+                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9"}))
             or payload.get("reason") != "NY_CONNECTOR_IL_VERIFICATION_PENDING"
             or record.get("il_verification_recovery")
             or now + 120 >= record["issued"] + NY_CONNECTOR_TTL_SECONDS):
@@ -6439,6 +6439,12 @@ def final_four_search_evidence(payload, state, query):
                 identity_ok = identity_ok and bool(row["entity_type"].strip())
             if state == "NV" and re.fullmatch(r"NR\d{8}-\d+", row["identifier"]):
                 identity_ok = row["entity_type"] == "" and bool(str(row.get("raw_status") or "").strip())
+            if state == "NV" and row.get("business_identifier_missing") is True:
+                identity_ok = (isinstance(row.get("entity_number"), str)
+                               and re.fullmatch(r"E\d{7,14}-\d", row["entity_number"])
+                               and row["identifier"] == row["entity_number"]
+                               and bool(row["entity_type"].strip())
+                               and bool(str(row.get("raw_status") or "").strip()))
             if not row["name"].strip() or not identity_ok:
                 raise ValueError(f"{state} search identity is malformed")
             if state == "TN" and (not isinstance(row["aliases"], list) or not all(isinstance(n, str) for n in row["aliases"])):
@@ -6471,6 +6477,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
         raise ValueError("A reviewed organization name is required for this registry")
     records, seen = [], set()
     unreviewed_scope = False
+    missing_nv_business_id = False
     def collect(query):
         if time.monotonic() >= deadline:
             raise TimeoutError(f"{state} lookup did not finish within its own budget")
@@ -6497,13 +6504,14 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
             if state == "AL":
                 record = row
             else:
-                if state == "NV" and row["entity_type"] not in {
+                if state == "NV" and (row.get("business_identifier_missing") is True or row["entity_type"] not in {
                         "Foreign Non-Profit Corporation (80)", "Domestic Non-Profit Corporation (82)",
                         "Domestic Non-Profit Cooperative Corporation With or Without Stock (81)",
                         "Domestic Non-Profit Cooperative Corporation Without Stock (81)",
-                        "Foreign Entities Not Required to Register In Nevada"}:
+                        "Foreign Entities Not Required to Register In Nevada"}):
                     # Unsupported filing categories need review, not a guess.
                     # Do not open a registered-agent/other entity detail.
+                    missing_nv_business_id |= row.get("business_identifier_missing") is True
                     unreviewed_scope = True
                     seen.add(row["identifier"])
                     continue
@@ -6560,7 +6568,10 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
     if unreviewed_scope and result.status not in {"Current", "Upcoming Filing", "Exempt"}:
         result.status = "Needs Review" if state == "NC" else "Unable to Confirm"; result.success = False
         result.source_note = ("North Carolina returned an in-process charity application with a matching name but no issued license number. Review its identity and application status; this does not establish non-registration."
-                              if state == "NC" else "Nevada returned a matching entity in a registration category that could not be interpreted safely. Review the entity's filing scope; this does not establish non-registration or an inactive registration.")
+                              if state == "NC" else
+                              "Nevada returned a matching name with an entity number but a blank NV Business ID. The record's identity and detail could not be confirmed; review it directly with the registry. This does not establish non-registration or an inactive registration."
+                              if missing_nv_business_id else
+                              "Nevada returned a matching entity in a registration category that could not be interpreted safely. Review the entity's filing scope; this does not establish non-registration or an inactive registration.")
     if result.status == "Not Registered" and state == "TN":
         # The current official FAQ links both registered and $50,000-and-under
         # searches to this same directory (verified 2026-09-29). Statutory
@@ -6602,7 +6613,7 @@ def final_four_clean_evidence(payload, query):
         if set(payload) - {"state", "query", "complete", "verification_pending", "total", "rows", "headers"}:
             raise ValueError("Unexpected search evidence fields")
         allowed = ({"CSL Legal Name", "CSL Type", "Status", "License", "Expiration Date", "Extension End Date", "profile_url", "display_name", "aliases"} if state == "NC" else
-                   {"name", "identifier", "entity_type", "raw_status"} if state == "NV" else
+                   {"name", "identifier", "entity_type", "raw_status", "entity_number", "business_identifier_missing"} if state == "NV" else
                    {"name", "identifier", "city", "region", "aliases", "raw_status", "registration_date"})
         if state != "AL" and any(not isinstance(row, dict) or set(row) - allowed for row in payload.get("rows", [])):
             raise ValueError("Unexpected search row fields")
@@ -23203,7 +23214,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8"})):
+        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9"})):
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()
