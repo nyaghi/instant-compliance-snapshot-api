@@ -221,21 +221,36 @@
   // It uses the same DOM observer as IL: no hidden application data, registry
   // requests, verification tokens, or status/identity decisions in the browser.
   let nvLastSearch = null;
+  let nvLastSearchMode = 'STARTS_WITH';
   const nvObserved = new Map();
   const nvTrace = (phase, detail={}) => console.info('CharityClarity NV collector', JSON.stringify({phase,...detail}));
   const nvSearchHeaders = ["Entity Name", "NV Business Id #", "Entity No.", "Entity Type", "Registered Agent Name", "Formation Date", "Status"];
   const nvFilingHeaders = ["Filed Date", "Effective Date", "Filing Number", "Filing Type", "Source", "No. of Pages"];
-  function nvStartsWithSelected() {
+  function nvSearchModeSelected(mode) {
+    const label = mode === 'EXACT_MATCH' ? 'Exact Match' : 'Starts With';
     return [...document.querySelectorAll('[role="combobox"]')].some(el => {
-      if (text(el).startsWith('Starts With')) return true;
+      if (text(el).startsWith(label)) return true;
       // ORION can restore the selected public choice using its enum label.
       // Require that choice's DOM identity as well as the displayed label;
       // a partial control or another search mode is not a ready Starts With.
       const selected = el.querySelector?.('.choices__list--single [data-item][aria-selected="true"]');
-      return /^STARTS_WITH(?:\s|$)/.test(text(el))
-        && selected?.getAttribute('data-value') === 'STARTS_WITH'
-        && !!selected.querySelector('button[aria-label="Remove item: \'STARTS_WITH\'"]');
+      return new RegExp('^'+mode+'(?:\\s|$)').test(text(el))
+        && selected?.getAttribute('data-value') === mode
+        && !!selected.querySelector(`button[aria-label="Remove item: '${mode}'"]`);
     });
+  }
+  const nvStartsWithSelected = () => nvSearchModeSelected('STARTS_WITH');
+  async function nvSelectSearchMode(mode, deadline) {
+    if (!['STARTS_WITH','EXACT_MATCH'].includes(mode)) throw new Error('REGISTRY_COMMAND_INVALID');
+    if (nvSearchModeSelected(mode)) return;
+    const combos=[...document.querySelectorAll('[role="combobox"]')].filter(el=>el.querySelector('select[name="data[searchType]"]'));
+    if (combos.length!==1) throw new Error('REGISTRY_NV_FORM_CHANGED');
+    const combo=combos[0];
+    const option=await wait(()=>{
+      const options=[...combo.querySelectorAll('[role="option"]')].filter(el=>el.getAttribute('data-value')===mode&&visible(el));
+      return options.length===1&&options[0];
+    },Math.max(1,Math.min(3000,deadline-Date.now())),{action:()=>combo.click()});
+    await wait(()=>nvSearchModeSelected(mode),Math.max(1,Math.min(3000,deadline-Date.now())),{action:()=>option.click(),settle:200});
   }
   function nvPublicRow(cells) {
     const [name,businessId,entity_number,entity_type,,,raw_status] = cells;
@@ -389,7 +404,8 @@
   }
   async function nvSearch(query, deadline) {
     if (query?.state !== 'NV' || query.operation !== 'search' || typeof query.name !== 'string' || !query.name.trim() || query.name.length > 500
-        || Object.keys(query).sort().join(',') !== 'name,operation,state') throw new Error("REGISTRY_COMMAND_INVALID");
+        || !(['name,operation,state','exact_above,name,operation,state'].includes(Object.keys(query).sort().join(',')))
+        || Object.hasOwn(query,'exact_above')&&query.exact_above!==20) throw new Error("REGISTRY_COMMAND_INVALID");
     nvTrace('search-started',{name:query.name});
     const business = [...document.querySelectorAll('[role="tab"]')].find(el => text(el) === 'Business');
     if (business?.getAttribute('aria-selected') !== 'true' || !location.hash.includes('screen=external-GenericFilingsSearch&tabRoute=business'))
@@ -398,37 +414,52 @@
     // Refuse unrecognized filters instead of guessing a potentially narrower query.
     const field = suffix => document.querySelector(`input[id$="-${suffix}"]`);
     const name = field('entityName'), number = field('entityNumber'), id = field('nvBusinessId');
-    if (!name || !number || !id || !nvStartsWithSelected())
+    if (!name || !number || !id || !(nvStartsWithSelected()||nvSearchModeSelected('EXACT_MATCH')))
       throw new Error("REGISTRY_NV_FORM_CHANGED");
+    await nvSelectSearchMode('STARTS_WITH',deadline);
     // Form.io redraws Search when filter inputs change. Resolve the current
     // button after that render settles, rather than clicking the old node in
     // the same turn as input/change. Unrelated mask/chat animations must not
     // keep resetting the settle clock for the same button with bound inputs.
     // This stays inside the command deadline and resets on a replaced button.
-    const search = await wait(() => {
+    const bindSearch = () => wait(() => {
       if (field('entityName')?.value !== query.name || field('entityNumber')?.value !== '' || field('nvBusinessId')?.value !== '') return false;
       const buttons = [...document.querySelectorAll('button')].filter(el => text(el) === 'Search' && visible(el) && !el.disabled);
       return buttons.length === 1 && buttons[0];
     }, Math.max(1,Math.min(3000,deadline-Date.now())), {settle:200,sameCandidate:(prior,current)=>prior===current,action:()=>{
-      if(number.value!=='')set(number,'');if(id.value!=='')set(id,'');if(name.value!==query.name)set(name,query.name);
+      for (const [suffix,value] of [['entityNumber',''],['nvBusinessId',''],['entityName',query.name]]) {
+        const input=field(suffix);if(!input)throw new Error('REGISTRY_NV_FORM_CHANGED');
+        if(input.value!==value)set(input,value);
+      }
     }}).catch(error=>{
       if(error.message==='REGISTRY_RESPONSE_INCOMPLETE')throw new Error('REGISTRY_NV_FORM_NOT_SETTLED');
       throw error;
     });
     nvObserved.clear(); nvLastSearch = null;
+    let searchMode='STARTS_WITH', broadTotal=null;
     // The initial blank grid and old rows remain visible while ORION searches.
     // A completed loading cycle is mandatory, including for an empty response.
-    let first = await nvChanged(() => search.click(), () => nvPage('Search Results', nvSearchHeaders), deadline, {
+    const submit = async () => {
+      const search=await bindSearch();
+      return nvChanged(() => search.click(), () => nvPage('Search Results', nvSearchHeaders), deadline, {
       requireLoading:true, retryNotStarted:()=>{
         // Re-read the current visible controls. A changed query must not be
         // submitted or allowed to inherit the original query's evidence.
         if (field('entityName')?.value !== query.name || field('entityNumber')?.value !== '' || field('nvBusinessId')?.value !== '') return;
         const buttons=[...document.querySelectorAll('button')].filter(el=>text(el)==='Search' && visible(el) && !el.disabled);
         if (business?.getAttribute('aria-selected')==='true'
-            && nvStartsWithSelected()
+            && nvSearchModeSelected(searchMode)
             && buttons.length===1) buttons[0].click();
       }
-    });
+      });
+    };
+    let first=await submit();
+    if (query.exact_above===20 && first.total>query.exact_above) {
+      broadTotal=first.total;searchMode='EXACT_MATCH';
+      nvTrace('search-narrowed',{name:query.name,broad_total:broadTotal,search_mode:searchMode});
+      await nvSelectSearchMode(searchMode,deadline);
+      first=await submit();
+    }
     first = await nvExpandSearchPage(first,deadline);
     const collected = await nvPages('Search Results', nvSearchHeaders, deadline, first);
     nvTrace('pages-complete',{rows:collected.length});
@@ -454,8 +485,10 @@
       return row;
     }).filter(Boolean);
     nvLastSearch = {...query};
+    nvLastSearchMode = searchMode;
     nvTrace('search-returned',{rows:rows.length});
-    return {query,state:'NV',complete:true,verification_pending:false,total:rows.length,rows};
+    return {query,state:'NV',complete:true,verification_pending:false,total:rows.length,rows,
+      ...(query.exact_above===20?{search_mode:searchMode,broad_total:broadTotal}:{})};
   }
   function nvFields(identifier) {
     const fields = Object.create(null);
@@ -525,7 +558,8 @@
       // may not emit for the same query. Reuse only the previously observed
       // result set, after checking every restored identity and status.
       const field = suffix => document.querySelector(`input[id$="-${suffix}"]`);
-      if (field('entityName')?.value !== sourceQuery.name || field('entityNumber')?.value !== '' || field('nvBusinessId')?.value !== '')
+      if (field('entityName')?.value !== sourceQuery.name || field('entityNumber')?.value !== '' || field('nvBusinessId')?.value !== ''
+          || !nvSearchModeSelected(nvLastSearchMode))
         throw new Error('REGISTRY_NV_RESTORED_QUERY_CHANGED');
       const sourceTotal = [...nvObserved.values()].reduce((total,row)=>total+row.occurrences,0);
       let restored = await wait(() => {
@@ -1057,7 +1091,7 @@
       return tab?.getAttribute('aria-selected')==='true'
         && ![...document.querySelectorAll('.app-loader-pane .circle-loader')].some(visible)
         && ['entityName','entityNumber','nvBusinessId'].every(s=>document.querySelector(`input[id$="-${s}"]`))
-        && nvStartsWithSelected()
+        && (nvStartsWithSelected()||nvSearchModeSelected('EXACT_MATCH'))
         && [...document.querySelectorAll('button')].some(el=>text(el)==='Search' && visible(el) && !el.disabled);
     }
     return true;

@@ -2,7 +2,7 @@
    This does not load the extension or control a live browser. */
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
-const original=fs.readFileSync(path.join(__dirname,'../browser-connector/registry-content.js'),'utf8');
+const original=fs.readFileSync(process.env.CC_TEST_TRIAL_DIR?path.join(process.env.CC_TEST_TRIAL_DIR,'registry-content.js'):path.join(__dirname,'../browser-connector/registry-content.js'),'utf8');
 const source=original.replace('  async function handle(m) {','  globalThis.testNV = {nvPage,nvFields,nvReservationFields,nvChanged,nvSearch,nvDetail,nvReturnSearch,registryDocumentReady,handle};\n  async function handle(m) {');
 
 test('Nevada detail and transitional routes are not ready public search forms',()=>{
@@ -50,9 +50,10 @@ test('Nevada visible inputs and search type are not ready while the initial load
  assert.equal(h.api.registryDocumentReady(),false);
  h.context.document.querySelectorAll=read;assert.equal(h.api.registryDocumentReady(),true);
 });
-function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,truncate=false,duplicate=false,oldPageDelay=80,detailId=null,returnFormDelay=600,returnName=null,returnRows=null,repeatSearchActivity=true,replaceSearchOnInput=false,returnGridDelay=0,unrelatedMutations=false,ignoredSearches=0,changedQueryBeforeRetry=false,pageSizeControl=false,initialPageSize=2,pagingMissing=0,resizeIgnored=false,resizeTotalDrift=false,reservation=false}={}) {
+function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,truncate=false,duplicate=false,oldPageDelay=80,detailId=null,returnFormDelay=600,returnName=null,returnRows=null,repeatSearchActivity=true,replaceSearchOnInput=false,returnGridDelay=0,unrelatedMutations=false,ignoredSearches=0,changedQueryBeforeRetry=false,pageSizeControl=false,initialPageSize=2,pagingMissing=0,resizeIgnored=false,resizeTotalDrift=false,reservation=false,exactRows=null,ignoreModeChange=false}={}) {
  let clock=1000,serial=0,listener,loading=false,rendered=[],page=1,detail=false,searchClicks=0,opened=[],formReady=true;
  let pageSize=initialPageSize,sizeMenu=false,resizeClicks=0;
+ const broadRows=rows;let searchMode='STARTS_WITH',modeMenu=false,modeClicks=0,pagingClicks=0;
  const tasks=new Map(),observers=new Set(),root={};
  const schedule=(fn,ms)=>{let id=++serial;tasks.set(id,{at:clock+ms,fn});return id;};
  const node=selector=>({nodeType:1,matches:s=>s.split(',').map(x=>x.trim()).includes(selector),querySelector:()=>null,closest:s=>s.includes(selector)?{}:null});
@@ -65,12 +66,18 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
  class Input {get value(){return this.v||'';}set value(v){this.v=v;}dispatchEvent(){if(replaceSearchOnInput){buttonCurrent=false;schedule(()=>{buttonCurrent=true;mutate();},100);}}}
  const inputs=Object.fromEntries(['entityName','entityNumber','nvBusinessId'].map(k=>[k,new Input()]));
  const searchButton={innerText:'Search',getClientRects:()=>[{}],disabled:false,click:()=>{
-  page=1;searchClicks++;
+  page=1;searchClicks++;rows=searchMode==='EXACT_MATCH'?(exactRows||[]):broadRows;
   if(changedQueryBeforeRetry&&searchClicks===1)schedule(()=>{inputs.entityName.value='OTHER ENTITY';mutate();},1000);
   if(searchClicks>ignoredSearches&&(searchClicks===1||repeatSearchActivity))begin();
  }};
  const staleButton={...searchButton,click:()=>staleClicks++};
  const textEl=innerText=>({innerText});
+ const searchCombo={get innerText(){return searchMode==='EXACT_MATCH'?'Exact Match':'Starts With';},
+  querySelector:q=>q==='select[name="data[searchType]"]'?{}:null,
+  click:()=>{modeMenu=true;mutate();},querySelectorAll:q=>q==='[role="option"]'?['STARTS_WITH','EXACT_MATCH'].map(mode=>({
+    getAttribute:k=>k==='data-value'?mode:null,getClientRects:()=>modeMenu?[{}]:[],click:()=>{
+      modeClicks++;modeMenu=false;if(!ignoreModeChange)searchMode=mode;mutate();
+    }})):[]};
  const backButton={innerText:'Return To Results',getClientRects:()=>[{}],click:()=>{
   detail=false;formReady=false;context.location.hash='screen=external-GenericFilingsSearch&tabRoute=business';mutate();
   if(returnGridDelay){rendered=[];schedule(render,returnGridDelay);}
@@ -113,7 +120,7 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
   if(q==='kendo-datapager-info')return textEl(`${(page-1)*pageSize+1} - ${(page-1)*pageSize+rendered.length} of ${rows.length+(resizeTotalDrift&&resizeClicks?1:0)} items`);
   if(q==='kendo-datapager [role="combobox"][aria-label="items per page"]')return pageSizeControl?sizeCombo:null;
   if(q==='button[aria-label="Go to the next page"]')return {disabled:truncate,getAttribute:()=>truncate?'true':'false',click:()=>{
-   page++;mutate();schedule(render,oldPageDelay);
+   page++;pagingClicks++;mutate();schedule(render,oldPageDelay);
   }};
   if(q==='button[aria-label="Go to the previous page"]')return {disabled:false,click:()=>{page--;schedule(render,oldPageDelay);}};
   return null;
@@ -121,7 +128,7 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
  const doc={documentElement:root,readyState:'complete',getElementById:id=>id==='page-sizes'&&sizeMenu?sizeOptions:null,querySelectorAll:q=>{
   if(q==='casex-data-table')return detail?[]:[table];
   if(q==='[role="tab"]')return [{innerText:'Business',getAttribute:()=> 'true'}];
-  if(q==='[role="combobox"]')return !detail&&formReady?[textEl('Starts With')]:[textEl('STARTS_WITH')];
+  if(q==='[role="combobox"]')return !detail&&formReady?[searchCombo]:[textEl('STARTS_WITH')];
   if(q==='button')return detail?(reservation?[{...backButton,innerText:'Back'}]:[backButton,returnSearchButton]):[buttonCurrent?searchButton:staleButton];
   if(q==='.app-loader-pane .circle-loader')return loading?[{getClientRects:()=>[{}]}]:[];
   if(q==='[role="form"]')return detail?[form]:[];
@@ -143,7 +150,7 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
   }
   assert.ok(done);assert.equal(observers.size,0);if(error)throw error;return value;
  }
- return {context,drive,api:context.testNV,get opened(){return opened;},get clicks(){return searchClicks;},get resizeClicks(){return resizeClicks;},get pageSize(){return pageSize;},get staleClicks(){return staleClicks;},get time(){return clock;},
+ return {context,drive,api:context.testNV,get opened(){return opened;},get clicks(){return searchClicks;},get modeClicks(){return modeClicks;},get pagingClicks(){return pagingClicks;},get mode(){return searchMode;},get resizeClicks(){return resizeClicks;},get pageSize(){return pageSize;},get staleClicks(){return staleClicks;},get time(){return clock;},
   search:(budget=45000)=>drive(context.testNV.nvSearch({state:'NV',operation:'search',name:'MAKE-A-WISH'},clock+budget)),
   detail:()=>{detail=true;context.location.hash='screen=Manage-Business&id=fixture';return context.testNV.nvFields('NV20121738342');},fieldValues,reservationFields,grid};
 }
@@ -167,6 +174,46 @@ test('Nevada never reads a reservation as corporate status or accepts a changed 
 });
 
 function manyPublicRows(n){return Array.from({length:n},(_,i)=>['Example Chapter '+i,'NV'+String(20000000+i),'E123456789-0','Foreign Non-Profit Corporation (80)','','01/01/2020','Active']);}
+
+const adaptiveQuery={state:'NV',operation:'search',name:'Example',exact_above:20};
+test('master-authorized broad Nevada query switches to Exact Match before paging and binds five complete rows',async()=>{
+ const h=fixture({rows:manyPublicRows(5463),exactRows:manyPublicRows(5),initialPageSize:25});
+ const result=await h.drive(h.api.nvSearch(adaptiveQuery,h.time+45000));
+ assert.equal(result.total,5);assert.equal(result.broad_total,5463);assert.equal(result.search_mode,'EXACT_MATCH');
+ assert.deepEqual(JSON.parse(JSON.stringify(result.query)),adaptiveQuery);assert.equal(h.clicks,2);assert.equal(h.modeClicks,1);assert.equal(h.pagingClicks,0);
+ assert.equal(h.api.registryDocumentReady(),true);
+});
+test('Nevada small result set stays Starts With and an ordinary command is never narrowed',async()=>{
+ for(const size of [0,5,20]){
+  const h=fixture({rows:manyPublicRows(size),initialPageSize:25});
+  const r=await h.drive(h.api.nvSearch(adaptiveQuery,h.time+45000));
+  assert.equal(r.total,size);assert.equal(r.search_mode,'STARTS_WITH');assert.equal(r.broad_total,null);assert.equal(h.clicks,1);assert.equal(h.modeClicks,0);
+ }
+ const h=fixture({rows:manyPublicRows(21),initialPageSize:25});assert.equal((await h.search()).total,21);assert.equal(h.modeClicks,0);
+});
+test('a second Nevada search explicitly resets Exact Match to Starts With before evaluating its threshold',async()=>{
+ const h=fixture({rows:manyPublicRows(21),exactRows:[],initialPageSize:25});
+ const r=await h.drive(h.api.nvSearch(adaptiveQuery,h.time+45000));assert.equal(r.total,0);assert.equal(r.search_mode,'EXACT_MATCH');
+ const ordinary=await h.search();assert.equal(ordinary.total,21);assert.equal(h.mode,'STARTS_WITH');assert.equal(h.modeClicks,2);
+});
+test('ignored Exact Match selection or absent fresh response is incomplete, never an empty successful result',async()=>{
+ for(const opts of [{ignoreModeChange:true},{repeatSearchActivity:false}]){
+  const h=fixture({rows:manyPublicRows(21),exactRows:[],initialPageSize:25,...opts});
+  await assert.rejects(h.drive(h.api.nvSearch(adaptiveQuery,h.time+10000)),/INCOMPLETE|NOT_STARTED/);
+ }
+});
+test('exact-match detail navigation preserves the selected mode and only opens observed record identities',async()=>{
+ const h=fixture({rows:manyPublicRows(21),exactRows:observed.slice(0,2),initialPageSize:25});
+ await h.drive(h.api.nvSearch(adaptiveQuery,h.time+45000));
+ await h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:observed[0][1]},h.time+45000));
+ await h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:observed[1][1]},h.time+45000));
+ assert.equal(h.mode,'EXACT_MATCH');assert.deepEqual(h.opened,observed.slice(0,2).map(r=>r[1]));assert.equal(h.clicks,2);
+});
+test('Nevada exact narrowing accepts only the master-approved twenty-record threshold',async()=>{
+ for(const exact_above of [0,10,21,'20',null]){
+  const h=fixture();await assert.rejects(h.drive(h.api.nvSearch({...adaptiveQuery,exact_above},h.time+45000)),/COMMAND_INVALID/);assert.equal(h.clicks,0);
+ }
+});
 
 test('Nevada opens a first-page reservation after collecting a 160-row two-page search',async()=>{
  const rows=manyPublicRows(160);rows[0]=['CCA','C20190204-2019','C20190204-2019','','','','Expired'];

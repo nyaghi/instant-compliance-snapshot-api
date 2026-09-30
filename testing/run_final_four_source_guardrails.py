@@ -596,6 +596,47 @@ class LookupControls(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     cc.final_four_browser_lookup(self.orgs['NC'],'NC',lambda q:{'state':'NC','query':q,'complete':True,'verification_pending':False,'rows':[],'total':0,**changed})
 
+    def test_nv_exact_match_never_covers_a_longer_alias_or_suffix_variant(self):
+        calls=[]
+        def source(q):
+            calls.append(q)
+            exact=q['name']=='Example'
+            return {'state':'NV','query':q,'complete':True,'verification_pending':False,'rows':[],'total':0,
+                    'search_mode':'EXACT_MATCH' if exact else 'STARTS_WITH','broad_total':5463 if exact else None}
+        with patch.object(cc,'licensed_charity_names',return_value=(['Example','Reviewed Alias'],['Example Foundation','Other Longer','Other'])):
+            result=cc.final_four_browser_lookup(self.orgs['NV'],'NV',source)
+        self.assertEqual(result.status,'Not Registered')
+        self.assertEqual([q['name'] for q in calls],['Example','Reviewed Alias','Other','Example Foundation'])
+        self.assertTrue(all(q['exact_above']==20 for q in calls))
+        self.assertIn('Exact Match',result.source_note)
+        self.assertIn('reviewed aliases',result.source_note)
+
+    def test_nv_narrowed_evidence_requires_valid_mode_count_and_complete_rows(self):
+        q={'state':'NV','operation':'search','name':'Example','exact_above':20}
+        data={'state':'NV','query':q,'complete':True,'verification_pending':False,'total':0,'rows':[],
+              'search_mode':'EXACT_MATCH','broad_total':5463}
+        self.assertEqual(cc.final_four_clean_evidence(data,q),data)
+        for changes in [{'complete':False},{'total':1},{'broad_total':20},{'broad_total':'5463'},
+                        {'broad_total':True},{'search_mode':'CONTAINS'},{'search_mode':'STARTS_WITH'}]:
+            with self.subTest(changes=changes),self.assertRaises(ValueError):
+                cc.final_four_clean_evidence({**data,**changes},q)
+        ordinary={k:v for k,v in q.items() if k!='exact_above'}
+        with self.assertRaises(ValueError):cc.final_four_clean_evidence({**data,'query':ordinary},ordinary)
+        with self.assertRaises(ValueError):cc.final_four_clean_evidence({**data,'state':'TN','query':{**q,'state':'TN'}},{**q,'state':'TN'})
+
+    def test_nv_local_chapter_stays_reviewable_with_explicit_user_guidance(self):
+        org=cc.checker.Organization('Global Example Charity','12-3456789')
+        row={'name':'Global Example Charity of Northern County','identifier':'NV123456789',
+             'status':'Current','raw_status':'Active','expiration':date(2027,1,31),
+             'location':'','ein':'','url':self.nvurl}
+        with patch.object(cc,'licensed_charity_identity',return_value='possible'):
+            result=cc.licensed_charity_result(org,'NV',[row],time.monotonic()+10,self.nvurl)
+        self.assertEqual(result.status,'Needs Review');self.assertFalse(result.success)
+        self.assertTrue(result._cc_identity_review['search_complete'])
+        self.assertEqual(row['_identity_outcome'],'possible')
+        for text in ['NV123456789','local chapter','Accept match','Reject match','state status rules']:
+            self.assertIn(text,result.source_note)
+
     def test_nc_nv_later_covering_prefix_must_complete_and_preserve_every_alias(self):
         for state in ['NC','NV']:
             calls=[]

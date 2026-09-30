@@ -20,10 +20,11 @@
       const keys = Object.keys(value).sort().join(",");
       if (value.operation === "search") {
         const ordinary = keys === "name,operation,state";
+        const narrowed = !!TRIAL_ORIGIN && value.state === "NV" && keys === "exact_above,name,operation,state" && value.exact_above === 20;
         const verification = !!TRIAL_ORIGIN && value.state === "AL" && keys === "name,operation,state,verification"
           && value.verification && Object.keys(value.verification).sort().join(',') === 'code,id'
           && /^[A-Z0-9]{6}$/.test(value.verification.code) && validId(value.verification.id);
-        return (ordinary || verification) && typeof value.name === "string" && value.name.trim().length > 0 && value.name.length <= 500;
+        return (ordinary || verification || narrowed) && typeof value.name === "string" && value.name.trim().length > 0 && value.name.length <= 500;
       }
       if (value.state === "AL") return false;
       if (value.state === "NC") return value.operation === "detail" && keys === "identifier,operation,state,url"

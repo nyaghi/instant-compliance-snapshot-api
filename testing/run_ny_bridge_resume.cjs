@@ -70,3 +70,12 @@ test('trial bridge transports the AL image-bound answer without changing its que
  h.ports[0].onMessage.emit({id,ok:true,evidence:{query:{state:'AL',operation:'search',name:'Fixture Charity'},complete:true}});
  assert.equal(h.replies.at(-1).ok,true);
 });
+
+test('trial bridge transports the approved Nevada narrowing plan and exact-match evidence unchanged',()=>{
+ const h=bridge(true),acquire='acquire-command-1234',id='narrow-command-12345';
+ h.send({action:'acquire',id:acquire,intent:'NV'});h.ports[0].onMessage.emit({id:acquire,ok:true});
+ const query={state:'NV',operation:'search',name:'Example',exact_above:20};
+ h.send({action:'search',id,query});assert.deepEqual(h.ports[0].sent.at(-1).query,query);
+ const evidence={state:'NV',query,complete:true,total:0,rows:[],verification_pending:false,search_mode:'EXACT_MATCH',broad_total:5463};
+ h.ports[0].onMessage.emit({id,ok:true,evidence});assert.equal(h.replies.at(-1).ok,true);assert.deepEqual(h.replies.at(-1).evidence,evidence);
+});

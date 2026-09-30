@@ -79,6 +79,8 @@ for(const state of ['NV','TN']) {
   test(`${state} query contract rejects alternate URLs and extra filters`,()=>{
     const h=fixture();const valid=q=>vm.runInContext(`P.validQuery(${JSON.stringify(q)})`,h.context);
     assert.equal(valid(search),true);assert.equal(valid(detail),true);
+    assert.equal(valid({...search,exact_above:20}),state==='NV');
+    for(const exact_above of [0,10,21,'20',null])assert.equal(valid({...search,exact_above}),false);
     for(const q of [{...search,name:''},{...search,name:'a'.repeat(501)},{...search,city:'Other'},
       {...detail,url:'https://example.com/'},{...detail,identifier:'GA123'}, {state,ein:'123456789'}, {...detail,operation:'delete'}])assert.equal(valid(q),false);
   });

@@ -37,6 +37,17 @@ class DecisionTests(unittest.TestCase):
         self.assertEqual(r['matched_registry_identifier'],'')
     def test_reject_incomplete_is_not_negative(self):
         self.assertEqual(self.decide(self.result(complete=False),'reject')['status'],'Unable to Confirm')
+    def test_nevada_review_accept_reject_and_undo_keep_identity_separate_from_status(self):
+        row=dict(name='Example National Charity of Northern County',identifier='NV123456789',location='',ein='',
+                 url='https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=Manage-Business&id=12345678-1234-1234-1234-123456789abc',
+                 raw_status='Active',expiration=date.today()+timedelta(days=200),_identity_outcome='possible')
+        initial=self.result('NV',rows=[row])
+        accepted=self.decide(initial,'accept',status='Exempt')
+        self.assertEqual(accepted['status'],'Current')
+        self.assertEqual(accepted['matched_registry_identifier'],'NV123456789')
+        self.assertEqual(self.decide(accepted,'clear')['status'],'Needs Review')
+        self.assertEqual(self.decide(initial,'reject')['status'],'Not Registered')
+        self.assertEqual(self.decide(self.result('NV',complete=False,rows=[row]),'reject')['status'],'Unable to Confirm')
     def test_other_unresolved_candidate_prevents_negative(self):
         r=self.result();token=c.identity_review_unpack(r['identity_review']['token'],self.email,self.device)
         second={**token['records'][0],'id':'second','identifier':'REG456'};token['records'].append(second)

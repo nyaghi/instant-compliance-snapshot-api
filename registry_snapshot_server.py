@@ -5988,7 +5988,7 @@ def il_verification_recovery(record, payload, now):
     if (record.get("state") != "IL" or record.get("purpose") != "registration"
             or record.get("recovery_protocol") != "il-fresh-page-v1"
             or (record.get("connector_version") != "0.5.10"
-                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23"}))
+                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24"}))
             or payload.get("reason") != "NY_CONNECTOR_IL_VERIFICATION_PENDING"
             or record.get("il_verification_recovery")
             or now + 120 >= record["issued"] + NY_CONNECTOR_TTL_SECONDS):
@@ -6440,6 +6440,12 @@ def final_four_search_evidence(payload, state, query):
         return al_charity_search_evidence(payload)
     if state not in {"NC", "NV", "TN"}:
         raise ValueError("Unsupported final-four source")
+    if state == "NV" and ("search_mode" in payload or "broad_total" in payload):
+        mode, broad = payload.get("search_mode"), payload.get("broad_total")
+        if (query.get("exact_above") != 20 or mode not in {"STARTS_WITH", "EXACT_MATCH"}
+                or (mode == "STARTS_WITH" and broad is not None)
+                or (mode == "EXACT_MATCH" and (type(broad) is not int or not 20 < broad <= 10000))):
+            raise ValueError("Nevada search mode is not bound to the approved narrowing plan")
     rows, seen = [], set()
     for raw in payload["rows"]:
         if not isinstance(raw, dict):
@@ -6514,8 +6520,8 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
     required, generated = licensed_charity_names(org)
     if not required:
         raise ValueError("A reviewed organization name is required for this registry")
-    if state in {"NC", "NV"}:
-        # Both collectors explicitly select Starting With. Keep every reviewed
+    if state == "NC":
+        # NC explicitly selects Starting With. Keep every reviewed
         # name, but a longer generated prefix adds nothing to a shorter literal
         # prefix already in this bounded plan. The covering query must still
         # complete before a negative/adverse result; an incomplete response
@@ -6536,17 +6542,30 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
             raise TimeoutError(f"{state} response arrived after its lookup deadline")
         return result
     completed_searches = []
+    narrowed_searches = []
+    if state == "NV":
+        # Try covering generated prefixes first. Only a completed Starts With
+        # query can cover a longer fallback; Exact Match cannot omit it.
+        generated = sorted(generated, key=lambda name: len(name))
     for index, name in enumerate(required + generated):
-        # NC's collector explicitly uses Starting With. A completed literal
+        # A collector's completed Starts With query is a literal
         # prefix search already includes every result of a longer generated
         # prefix. Keep every reviewed name and all case/punctuation changes;
         # failed or truncated source responses can never establish coverage.
-        if state == "NC" and index >= len(required) and any(name.startswith(prior) for prior in completed_searches):
+        if state in {"NC", "NV"} and index >= len(required) and any(name.startswith(prior) for prior in completed_searches):
             continue
         query = {"state": state, "operation": "search", "name": name}
+        if state == "NV":
+            # User-approved Nevada strategy: inspect the first complete result
+            # page, then use the public Exact Match option above twenty hits.
+            # This is a retrieval choice, not permission to accept an identity.
+            query["exact_above"] = 20
         payload = collect(query)
         rows = final_four_search_evidence(payload, state, query)
-        completed_searches.append(name)
+        if payload.get("search_mode") == "EXACT_MATCH":
+            narrowed_searches.append(name)
+        else:
+            completed_searches.append(name)
         for row in rows:
             if row["identifier"] in seen:
                 continue
@@ -6671,6 +6690,8 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                         org, selected, records, unreviewed_scope=unreviewed_scope):
                     break
     result = final_four_license_result(org, state, records, deadline, sources[state])
+    if narrowed_searches:
+        result.source_note += " Broad Nevada name searches were narrowed using the registry's Exact Match option; reviewed aliases and applicable spelling variants remained in the search plan."
     if excluded_nv_entities:
         result.rejected_candidates = [{**row, "reason": "Confirmed record outside the approved Nevada nonprofit/charity scope"}
                                       for row in excluded_nv_entities[:20]]
@@ -6731,7 +6752,9 @@ def final_four_clean_evidence(payload, query):
     if len(json.dumps(payload).encode("utf-8")) > maximum_bytes:
         raise ValueError("Registry evidence exceeded its message bound")
     if query.get("operation") == "search":
-        if set(payload) - {"state", "query", "complete", "verification_pending", "total", "rows", "headers"}:
+        allowed_search = {"state", "query", "complete", "verification_pending", "total", "rows", "headers"}
+        if state == "NV": allowed_search.update({"search_mode", "broad_total"})
+        if set(payload) - allowed_search:
             raise ValueError("Unexpected search evidence fields")
         allowed = ({"CSL Legal Name", "CSL Type", "Status", "License", "Expiration Date", "Extension End Date", "profile_url", "display_name", "aliases"} if state == "NC" else
                    {"name", "identifier", "entity_type", "raw_status", "entity_number", "business_identifier_missing"} if state == "NV" else
@@ -7433,6 +7456,11 @@ def select_licensed_charity(org, rows, state, deadline):
             return None, (f"{state} lists {r['name']} ({r['identifier']}) in {r.get('location')}, but the EIN-linked organization "
                           f"record lists {evidence.get('ein_linked_location', 'a different location')}. The address conflict could not be corroborated.")
         if possible:
+            if state == "NV":
+                candidate = possible[0]
+                return None, (f"Nevada returned {candidate['name']} ({candidate['identifier']}), but the available EIN and organization-address evidence do not confirm that it is the requested organization. "
+                              "A similar name may belong to a separate local chapter or affiliate. Review the state record and select Accept match only if it is your organization, or Reject match if it is a different organization. "
+                              "CharityClarity will apply the state status rules to any accepted record; the name alone does not establish identity.")
             return None, f"{state} returned a similar name, {possible[0]['name']}, but the complete name and available identity evidence do not confirm this organization."
         return None, ""
     if state in {"AL", "NC", "NV", "TN"} and any(r.get("match", {}).get("reason") == "ALIAS_IDENTITY_UNCONFIRMED" for r in possible):
@@ -23592,7 +23620,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23"})):
+        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24"})):
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()
