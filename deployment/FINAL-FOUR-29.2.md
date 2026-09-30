@@ -570,3 +570,32 @@ pages. This is prepared for live validation, not evidence of live success.
 Activation of the new trial connector and the two failing alias controls are
 required before calling the correction verified. Staging 29.1, production,
 shared matching thresholds, state deadlines and discovery remain unchanged.
+
+### 0.6.13 targeted follow-up (September 30)
+
+The live 0.6.12 follow-up retained 44 inconclusive outcomes. This patch targets
+the demonstrated acquisition failures rather than changing expected statuses:
+
+- NJ completed, explicit Exempt rows may omit a registration number and EIN.
+  The row can now be parsed, but acceptance still requires the master matcher
+  plus exact EIN or EIN-linked location corroboration. Incomplete responses,
+  conflicting identities, and multiple rows do not establish an exemption.
+- AL's owned verification session can be reused by an authorized trial caller
+  in another window. Ownership, exact registry URL, expiry and trial origin
+  remain mandatory. This does not automatically solve challenges or adopt an
+  unrelated tab; the ownership/expiry explanation still needs live proof.
+- NV drops the per-page settle delay only after page identity, full row fields,
+  and totals are present. Its search command can use up to 75 seconds within
+  the unchanged overall job deadline. Detail and all other state allowances
+  stay unchanged. A stalled native Return To Search permits one fresh public
+  form reload within that original deadline, persisted across worker restart.
+- NC/NV review comments identify the unresolved candidate and category so an
+  application or unsupported entity cannot silently override a different
+  parsed record without explaining why. Selection/status rules stay unchanged.
+
+Historical source guards normalize only the literal trial-version gates and
+exact hashes of the audited NJ acquisition changes. A new scope test requires
+all other master functions (including discovery, shared matching, NM, status
+rules, and queue settings) to match commit 887ccc7. No paid-resource, worker,
+environment or protected deployment change is part of this patch. Live
+targeted checks and a control sample are required before recommendation.

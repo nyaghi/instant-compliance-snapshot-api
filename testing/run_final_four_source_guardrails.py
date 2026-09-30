@@ -632,6 +632,8 @@ class LookupControls(unittest.TestCase):
         self.nvrow['entity_type'] = 'Registered Agent'
         result = cc.final_four_browser_lookup(self.orgs['NV'], 'NV', self.provider)
         self.assertEqual(result.status, 'Unable to Confirm')
+        self.assertIn('Registered Agent', result.source_note)
+        self.assertEqual(result.queries_attempted[0]['scope_review']['identifier'],self.nvrow['identifier'])
         self.assertTrue(all(q['operation'] == 'search' for q in self.calls))
 
     def test_nv_nr_identity_is_filtered_without_inventing_a_corporation(self):

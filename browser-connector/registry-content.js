@@ -280,7 +280,7 @@
       throw new Error("REGISTRY_NV_PAGINATION_INCOMPLETE");
     return {table, rows, values, total:Number(info[3]), page:Number(pages[1]), pages:Number(pages[2])};
   }
-  async function nvChanged(action, read, deadline, {requireLoading=false, previous=null, retryNotStarted=null}={}) {
+  async function nvChanged(action, read, deadline, {requireLoading=false, previous=null, retryNotStarted=null, settle=200}={}) {
     let loadingSeen = false, lastParseError = '', retryTimer;
     const loading = () => [...document.querySelectorAll('.app-loader-pane .circle-loader')].some(visible);
     const start = () => {
@@ -301,7 +301,7 @@
         if (!value || previous !== null && JSON.stringify(value.values) === previous) return false;
         return value;
       } catch (error) { lastParseError = error.message; return false; } // Partial renders are not completed responses.
-    }, Math.max(1, Math.min(35000, deadline-Date.now())), {action:start, settle:200, relevant:mutations => {
+    }, Math.max(1, Math.min(35000, deadline-Date.now())), {action:start, settle, relevant:mutations => {
       loadingSeen ||= loading() || mutations.some(m => [...m.addedNodes].some(n => n.nodeType === 1
         && (n.matches?.('.circle-loader, .app-loader-pane') || n.querySelector?.('.circle-loader'))));
       return mutations.some(m => {
@@ -327,7 +327,12 @@
       const next = page.table.querySelector('button[aria-label="Go to the next page"]');
       if (collected.length >= total || !next || next.disabled || next.getAttribute('aria-disabled') === 'true')
         throw new Error("REGISTRY_NV_PAGINATION_INCOMPLETE");
-      page = await nvChanged(() => next.click(), () => nvPage(title, headers), deadline, {previous:JSON.stringify(page.values)});
+      page = await nvChanged(() => next.click(), () => {
+        const value=nvPage(title,headers);
+        if(value.page!==expected+1 || value.total!==total)throw new Error('REGISTRY_NV_PAGINATION_INCOMPLETE');
+        if(title==='Search Results')value.values.forEach(nvPublicRow);
+        return value;
+      }, deadline, {previous:JSON.stringify(page.values),settle:0});
     }
     throw new Error("REGISTRY_NV_PAGINATION_INCOMPLETE");
   }
@@ -926,7 +931,8 @@
       return {ok:true,evidence:m.query?.operation==='search'?await tnSearch(m.query,deadline):await tnDetail(m.query,deadline)};
     }
     if (NV && m.action === 'registry-nv') {
-      const deadline = Date.now() + Math.min(45000, Number.isFinite(m.budgetMs) && m.budgetMs > 0 ? m.budgetMs : 45000);
+      const maximum=m.query?.operation==='search'?75000:45000;
+      const deadline = Date.now() + Math.min(maximum, Number.isFinite(m.budgetMs) && m.budgetMs > 0 ? m.budgetMs : 45000);
       const evidence = m.query?.operation === 'search' ? await nvSearch(m.query,deadline) : await nvDetail(m.query,deadline);
       return {ok:true,evidence};
     }

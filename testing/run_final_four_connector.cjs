@@ -54,7 +54,7 @@ for(const state of ['NV','TN']) {
     const h=fixture(),p=connect(h,state);
     assert.equal((await h.query(p,2,search)).ok,true);assert.equal((await h.query(p,3,detail)).ok,true);
     assert.equal(h.created.length,1);assert.equal(h.calls[0].action,`registry-${state.toLowerCase()}`);
-    assert.equal(h.calls.every(c=>c.budgetMs>0&&c.budgetMs<=45000),true);
+    assert.equal(h.calls.every(c=>c.budgetMs>0&&c.budgetMs<=(state==='NV'&&c.query?.operation==='search'?75000:45000)),true);
     assert.equal(h.tabs.get(h.created[0]).active,false);
     p.onMessage.emit({action:'finish',id:id(4)});await tick();assert.deepEqual(h.removed,h.created);assert.ok(h.tabs.has(2));
   });
@@ -110,6 +110,28 @@ test('NV refuses a new alias when the native Return To Search action fails',asyn
  const r=await h.query(p,4,{...search,name:'Reviewed Former Name'});
  assert.equal(r.ok,false);assert.equal(r.reason,'NY_CONNECTOR_REGISTRY_NV_RETURN_SEARCH_MISSING');
  assert.equal(h.calls.filter(c=>c.query).length,2);assert.equal(h.reloads.length,0);
+});
+
+test('NV recovers one stalled return within the original lookup deadline',async()=>{
+ const h=fixture(),p=connect(h,'NV'),q={state:'NV',operation:'search',name:'Example National Foundation'};
+ await h.query(p,2,q);await h.query(p,3,{state:'NV',operation:'detail',identifier:'NV1234'});
+ const send=h.chrome.tabs.sendMessage;
+ h.chrome.tabs.sendMessage=async(id,m)=>m.action==='registry-nv-return'?{ok:false,reason:'NY_CONNECTOR_REGISTRY_NV_RETURN_READY_TIMEOUT'}:send(id,m);
+ assert.equal((await h.query(p,4,{...q,name:'Reviewed Former Name'})).ok,true);
+ assert.equal(h.data.session.ccnyRuntime.queue.find(j=>j.active).nvReturnRecoveryUsed,true);
+ assert.equal(h.reloads.length,1);
+ await h.query(p,5,{state:'NV',operation:'detail',identifier:'NV1234'});
+ const r=await h.query(p,6,{...q,name:'Another Reviewed Name'});
+ assert.equal(r.ok,false);assert.equal(r.reason,'NY_CONNECTOR_REGISTRY_NV_RETURN_READY_TIMEOUT');
+ assert.equal(h.created.length,1);
+});
+
+test('NV larger search allowance cannot extend the active lookup lifetime',async()=>{
+ const h=fixture(),p=connect(h,'NV'),q={state:'NV',operation:'search',name:'Example Foundation'};
+ await h.query(p,2,q);await h.advance(260000);await h.query(p,3,{...q,name:'Another Foundation'});
+ assert.ok(h.calls.at(-1).budgetMs<=40000);
+ await h.advance(40001);assert.equal(p.disconnected,true);
+ assert.equal(p.messages.at(-1).reason,'NY_CONNECTOR_TIMEOUT');
 });
 function ncFixture({history=true}={}) {
  const h=fixture(),original=h.chrome.tabs.sendMessage;
@@ -258,6 +280,17 @@ test('AL ordinary searches reuse only the trial-owned verified page, not another
  assert.equal(h.created.length,1);assert.equal(h.calls.length,2);assert.equal(h.reloads.length,0);
  p2.onMessage.emit({action:'finish',id:id(5)});await tick();await h.advance(1800001);
  assert.deepEqual(h.removed,h.created);assert.ok(h.tabs.has(2));
+});
+
+test('AL retained verification survives an authorized caller moving to another window',async()=>{
+ const h=fixture(),p=connect(h,'AL'),q={state:'AL',operation:'search',name:'Example Foundation'};
+ await h.query(p,2,q);h.tabs.get(1).windowId=44;
+ p.onMessage.emit({action:'finish',id:id(3)});await tick();
+ assert.equal(h.removed.length,0);
+ const p2=connect(h,'AL',TRIAL,2);await h.advance(3000);
+ const r=await h.query(p2,4,{...q,name:'Different Foundation'});
+ assert.equal(r.ok,true);assert.equal(h.created.length,1);assert.equal(h.reloads.length,0);
+ assert.equal(r.evidence.query.name,'Different Foundation');
 });
 
 test('AL verification-required response retains the owned page for human completion without submitting a code',async()=>{

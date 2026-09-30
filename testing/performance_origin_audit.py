@@ -8,8 +8,28 @@ import ast
 ORIGIN = 'https://instant-compliance-snapshot-api-hn4v.onrender.com'
 
 
+# Exact September 30 NJ acquisition patch. Behavioral tests cover complete
+# exemptions, query binding and identity conflicts. Historical comparisons
+# restore only these audited AST hashes; future changes still fail closed.
+_NJ_0613_HASHES = {'nj_completed_query_rows': 'ecaa72e5539ceec5f931eb8b0285c24da305036fb7e53b932c11ef8285d2f274', 'nj_name_exemption_result': 'd0de72925b09ba67ec3c71e5455465284d2028a76aef3e4d91c31bdd7a12bfa4', 'nj_search_body': 'ec59e7d7672c0604127e87e0703aa5b2d8babe80ad86de245f4679607feb849c', 'search_nj_public_details': 'bf9805bc2b8d77f72e915a94d8e5c65520a7495e88b11f2c773a734ebc41820a', 'search_nj_direct': 'e9d0d8ec01ab6e59df0141841ef648663ddd4590e784e801762e2b40c3eeaab0', 'search_nj_with_name_fallback': 'e5cacf08a1d0f597a2aed1902ab9e73978b3ab06fadd54f0700ad1e316fca103'}
+
+def restore_nj_0613(node):
+    import hashlib
+    import subprocess
+    from pathlib import Path
+    expected = _NJ_0613_HASHES.get(node.name)
+    if not expected or hashlib.sha256(ast.dump(node).encode()).hexdigest() != expected:
+        return node
+    baseline = ast.parse(subprocess.check_output(
+        ['git','show','887ccc7:registry_snapshot_server.py'],
+        cwd=Path(__file__).resolve().parents[1]).decode('utf-8'))
+    return next((n for n in baseline.body if isinstance(n,ast.FunctionDef) and n.name == node.name), None)
+
+
 class RestoreApprovedOrigin(ast.NodeTransformer):
     def visit_FunctionDef(self, node):
+        node = restore_nj_0613(node)
+        if node is None: return None
         # Independently tested source exception: the public NJ grid can expose
         # an exact-EIN Exempt row without a registration number. Only the new
         # helper and the two exact acquisition prefixes below are normalized;
@@ -55,7 +75,7 @@ class RestoreApprovedOrigin(ast.NodeTransformer):
         return self.generic_visit(node)
 
     def visit_BoolOp(self, node):
-        current = "record.get('connector_version') != '0.5.10' and not (trial_identity() and record.get('connector_version') in {'0.6.4', '0.6.5', '0.6.6', '0.6.7', '0.6.8', '0.6.9', '0.6.10', '0.6.11', '0.6.12'})"
+        current = "record.get('connector_version') != '0.5.10' and not (trial_identity() and record.get('connector_version') in {'0.6.4', '0.6.5', '0.6.6', '0.6.7', '0.6.8', '0.6.9', '0.6.10', '0.6.11', '0.6.12', '0.6.13'})"
         if ast.dump(node) == ast.dump(ast.parse(current, mode='eval').body):
             return ast.parse("record.get('connector_version') != '0.5.10'", mode='eval').body
         if ast.dump(node)==ast.dump(ast.parse('APP_VERSION.endswith("-staging") or trial_identity()',mode='eval').body):
@@ -68,7 +88,7 @@ class RestoreApprovedOrigin(ast.NodeTransformer):
         if ast.dump(node)==ast.dump(ast.parse(current,mode='eval').body):
             return ast.parse("state != 'NY' and origin != NY_CONNECTOR_ORIGIN",mode='eval').body
         if (isinstance(node.op,ast.And) and len(node.values)==2
-                and ast.dump(node.values[1])==ast.dump(ast.parse("not (trial_identity() and connector_version in {'0.6.4', '0.6.5', '0.6.6', '0.6.7', '0.6.8', '0.6.9', '0.6.10', '0.6.11', '0.6.12'})",mode='eval').body)):
+                and ast.dump(node.values[1])==ast.dump(ast.parse("not (trial_identity() and connector_version in {'0.6.4', '0.6.5', '0.6.6', '0.6.7', '0.6.8', '0.6.9', '0.6.10', '0.6.11', '0.6.12', '0.6.13'})",mode='eval').body)):
             return self.visit(node.values[0])
         return self.generic_visit(node)
 

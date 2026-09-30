@@ -131,7 +131,7 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
   assert.ok(done);assert.equal(observers.size,0);if(error)throw error;return value;
  }
  return {context,drive,api:context.testNV,get opened(){return opened;},get clicks(){return searchClicks;},get resizeClicks(){return resizeClicks;},get pageSize(){return pageSize;},get staleClicks(){return staleClicks;},get time(){return clock;},
-  search:()=>drive(context.testNV.nvSearch({state:'NV',operation:'search',name:'MAKE-A-WISH'},clock+45000)),
+  search:(budget=45000)=>drive(context.testNV.nvSearch({state:'NV',operation:'search',name:'MAKE-A-WISH'},clock+budget)),
   detail:()=>{detail=true;context.location.hash='screen=Manage-Business&id=fixture';return context.testNV.nvFields('NV20121738342');},fieldValues,grid};
 }
 
@@ -154,6 +154,13 @@ for(const count of [501,1322,5463,10000])test(`Nevada completes all ${count} row
  const h=fixture({rows:manyPublicRows(count),initialPageSize:25,pageSizeControl:true}),r=await h.search();
  assert.equal(r.total,count);assert.equal(r.rows.length,count);assert.equal(new Set(r.rows.map(x=>x.identifier)).size,count);
  assert.equal(h.pageSize,100);assert.equal(h.clicks,1);assert.ok(h.time<=46000);
+});
+
+test('Nevada completes a 5463-row alias with background timer clamping inside its bounded allowance',async()=>{
+ const h=fixture({rows:manyPublicRows(5463),initialPageSize:25,pageSizeControl:true,timerClamp:1000});
+ const r=await h.search(75000);
+ assert.equal(r.total,5463);assert.equal(r.rows.length,5463);
+ assert.equal(new Set(r.rows.map(x=>x.identifier)).size,5463);assert.ok(h.time<=75000);
 });
 test('Nevada still refuses over-limit, missing, duplicate and slow large result pages',async()=>{
  for(const options of [{rows:manyPublicRows(10001)},{rows:manyPublicRows(1322),truncate:true},

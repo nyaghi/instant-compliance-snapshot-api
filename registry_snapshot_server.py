@@ -5988,7 +5988,7 @@ def il_verification_recovery(record, payload, now):
     if (record.get("state") != "IL" or record.get("purpose") != "registration"
             or record.get("recovery_protocol") != "il-fresh-page-v1"
             or (record.get("connector_version") != "0.5.10"
-                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12"}))
+                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13"}))
             or payload.get("reason") != "NY_CONNECTOR_IL_VERIFICATION_PENDING"
             or record.get("il_verification_recovery")
             or now + 120 >= record["issued"] + NY_CONNECTOR_TTL_SECONDS):
@@ -6488,6 +6488,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
     records, seen = [], set()
     unreviewed_scope = False
     missing_nv_business_id = False
+    scope_reviews = []
     def collect(query):
         if time.monotonic() >= deadline:
             raise TimeoutError(f"{state} lookup did not finish within its own budget")
@@ -6509,6 +6510,8 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                 continue
             if state == "NC" and row.get("unissued_application"):
                 unreviewed_scope = True
+                scope_reviews.append({"name": row["name"], "identifier": row["identifier"],
+                                      "category": "In-Process", "source_url": row["url"]})
                 seen.add(row["identifier"])
                 continue
             if state == "AL":
@@ -6523,6 +6526,8 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                     # Do not open a registered-agent/other entity detail.
                     missing_nv_business_id |= row.get("business_identifier_missing") is True
                     unreviewed_scope = True
+                    scope_reviews.append({"name": row["name"], "identifier": row["identifier"],
+                                          "category": row["entity_type"], "missing_business_id": bool(row.get("business_identifier_missing"))})
                     seen.add(row["identifier"])
                     continue
                 detail_query = {"state": state, "operation": "detail", "identifier": row["identifier"]}
@@ -6567,6 +6572,8 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                             record["date_evidence_note"] = "Nevada's annual-list filing history was incomplete; the last-filed date remains blank."
                     if record.get("requires_solicitation_history") and not record.get("solicitation_statement_filed"):
                         unreviewed_scope = True
+                        scope_reviews.append({"name": record["name"], "identifier": record["identifier"],
+                                              "category": "Unconfirmed charitable-solicitation filing history", "source_url": record["url"]})
                         seen.add(row["identifier"])
                         continue
             records.append(record); seen.add(row["identifier"])
@@ -6592,6 +6599,13 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                               "Nevada returned a matching name with an entity number but a blank NV Business ID. The record's identity and detail could not be confirmed; review it directly with the registry. This does not establish non-registration or an inactive registration."
                               if missing_nv_business_id else
                               "Nevada returned a matching entity in a registration category that could not be interpreted safely. Review the entity's filing scope; this does not establish non-registration or an inactive registration.")
+        # Preserve the actual unresolved source candidates, including when a
+        # different, fully parsed record was also found. This is diagnostic
+        # evidence only; it must not relax the existing selection rules.
+        result.queries_attempted = [{"completed": True, "scope_review": row} for row in scope_reviews[:20]]
+        labels = [f"{row['name']} ({row['identifier']}; {row['category']})" for row in scope_reviews[:3]]
+        if labels:
+            result.source_note += " Review candidates: " + "; ".join(labels) + "."
     if result.status == "Not Registered" and state == "TN":
         # The current official FAQ links both registered and $50,000-and-under
         # searches to this same directory (verified 2026-09-29). Statutory
@@ -21143,6 +21157,8 @@ def nj_completed_query_rows(request, query):
         records = data.get("Records") if isinstance(data, dict) else None
         count = data.get("ItemCount") if isinstance(data, dict) else None
         if (not isinstance(records, list) or type(count) is not int or count < len(records)
+                or any(data.get(k) for k in ("Error", "error", "ErrorMessage", "errorMessage"))
+                or data.get("Success") is False
                 or data.get("PageNumber") != 1 or type(data.get("MoreRecords")) is not bool
                 or (data["MoreRecords"] is False and count != len(records))):
             return None
@@ -21153,9 +21169,13 @@ def nj_completed_query_rows(request, query):
             attributes = record.get("Attributes") if isinstance(record, dict) else None
             if not isinstance(attributes, list):
                 return None
-            values = {a.get("Name"): a.get("DisplayValue") for a in attributes if isinstance(a, dict)}
+            if any(not isinstance(a, dict) or not isinstance(a.get("Name"), str) for a in attributes):
+                return None
+            values = {a["Name"]: a.get("DisplayValue") for a in attributes}
+            if len(values) != len(attributes):
+                return None
             row = tuple(re.sub(r"\s+", " ", str(values.get(k) or "")).strip() for k in ("name", "accountnumber"))
-            if not all(row):
+            if not row[0] or (not row[1] and values.get("crsm_filestanding") != "Exempt"):
                 return None
             evidence = tuple(re.sub(r"\s+", " ", str(values.get(k) or "")).strip() for k in
                              ("crsm_federalein", "crsm_filestanding", "crsm_addressline1",
@@ -21166,9 +21186,53 @@ def nj_completed_query_rows(request, query):
         return None
 
 
+def nj_name_exemption_result(data, org, deadline):
+    """A complete unnumbered exemption still needs master identity corroboration."""
+    if (not isinstance(data, dict) or type(data.get("ItemCount")) is not int or data["ItemCount"] != 1
+            or type(data.get("PageNumber")) is not int or data["PageNumber"] != 1
+            or data.get("MoreRecords") is not False or data.get("Success") is False
+            or any(data.get(k) for k in ("Error", "error", "ErrorMessage", "errorMessage"))
+            or not isinstance(data.get("Records"), list) or len(data["Records"]) != 1):
+        return None
+    attrs = data["Records"][0].get("Attributes") if isinstance(data["Records"][0], dict) else None
+    if not isinstance(attrs, list) or any(not isinstance(a, dict) or not isinstance(a.get("Name"), str) for a in attrs):
+        return None
+    fields = {a["Name"]: a.get("DisplayValue") for a in attrs}
+    if len(fields) != len(attrs) or fields.get("crsm_filestanding") != "Exempt" or fields.get("accountnumber") not in (None, ""):
+        return None
+    name = useful_registry_name(str(fields.get("name") or ""))
+    if not name or len(canonical_ein_digits(org.ein)) != 9:
+        return None
+    region = str(fields.get("crsm_mailingstate") or "").strip()
+    city = str(fields.get("crsm_mailingcity") or "").strip()
+    row = {"name": name, "identifier": "", "ein": str(fields.get("crsm_federalein") or ""),
+           "location": ", ".join(x for x in (city, region) if x), "region": region,
+           "street": str(fields.get("crsm_addressline1") or ""),
+           "postal_code": str(fields.get("crsm_mailingzip") or ""), "status": "Exempt", "raw_status": "Exempt"}
+    if licensed_charity_identity(org, row, "NJ", deadline) != "accepted":
+        return None
+    exact_ein = canonical_ein_digits(row["ein"]) == canonical_ein_digits(org.ein)
+    if not exact_ein and row.get("address_evidence", {}).get("decision") != "corroborated":
+        return None
+    result = checker.StateResult(org.organization_name, org.ein, "NJ", "Exempt",
+        "https://charportal.dca.njoag.gov/Charity-Registration/CHR-Public-Search-Page/")
+    result.success = True; result.raw_status_text = "Exempt"
+    result.matched_registry_name = name; result.matched_registry_identifier = ""
+    result.reason_code = "NJ_COMPLETE_UNNUMBERED_EXEMPTION"
+    result.address_evidence = row.get("address_evidence", {})
+    result.identity_evidence = {"name": row.get("match", {}), "address": result.address_evidence}
+    result.source_note = ("New Jersey's completed public search lists this organization as Exempt and leaves its registration number blank. "
+                          + ("The record's EIN matches the requested EIN. " if exact_ein else
+                             "The organization name and location were corroborated against EIN-linked records. ")
+                          + result.address_evidence.get("basis", ""))
+    return result
+
+
 def nj_search_body(page, query):
     """Reuse only this page's ready form; never treat a prior grid as a new result."""
     page._cc_nj_query_incomplete = True
+    page._cc_nj_completed_data = None
+    page._cc_nj_query_diagnostic = {"query": query, "phase": "awaiting_response"}
     url = "https://charportal.dca.njoag.gov/Charity-Registration/CHR-Public-Search-Page/"
     selector = '#SearchBox28, input[placeholder="Search"], input[aria-label*="partial text" i], input[id^="SearchBox"], input[type="search"]'
     box = page.locator(selector).first
@@ -21196,7 +21260,9 @@ def nj_search_body(page, query):
             return
         rows = nj_completed_query_rows(request, query)
         if rows is not None:
-            completed.append(rows)
+            completed.append((rows, request.response().json()))
+        elif request.url.startswith("https://charportal.dca.njoag.gov/_services/entity-grid-data.json/"):
+            page._cc_nj_query_diagnostic["phase"] = "response_rejected_or_other_query"
 
     page.on("request", on_request)
     page.on("requestfinished", on_finished)
@@ -21206,7 +21272,8 @@ def nj_search_body(page, query):
         deadline = time.monotonic() + 12
         while time.monotonic() < deadline:
             if completed:
-                rows = completed[-1]
+                rows, data = completed[-1]
+                page._cc_nj_query_diagnostic["phase"] = "awaiting_matching_grid"
                 grid = page.locator('.public-search-grid')
                 text = re.sub(r"\s+", " ", grid.inner_text(timeout=1000))
                 rendered_rows = [re.sub(r"\s+", " ", value) for value in grid.locator('[role="row"]').all_inner_texts()]
@@ -21216,6 +21283,8 @@ def nj_search_body(page, query):
                 if visible and box.input_value() == query:
                     page._cc_nj_search_ready = True
                     page._cc_nj_query_incomplete = False
+                    page._cc_nj_completed_data = data
+                    page._cc_nj_query_diagnostic["phase"] = "complete"
                     return page.locator("body").inner_text(timeout=1000)
             page.wait_for_timeout(100)
         return None
@@ -21487,6 +21556,9 @@ def search_nj_public_details(org):
                     if nj_complete_grid_enabled():
                         name_payload["pageSize"] = 50
                     named = json.loads(fetch(query_path, "json", name_payload, tokens[0]))
+                    exempt = nj_name_exemption_result(named, org, deadline)
+                    if exempt is not None:
+                        return exempt, exempt.source_note
                     if not (nj_complete_public_zero(named) or nj_complete_other_ein_rows(named, ein)
                             or (nj_complete_grid_enabled() and nj_complete_grid_excludes_org(named, org))):
                         break  # Positive/ambiguous/unusable queries keep browser matching.
@@ -21701,7 +21773,7 @@ def nj_result_from_body(page, org, result, body, ein_digits):
     return result
 
 
-def search_nj_direct(page, org):
+def search_nj_direct(page, org, identity_org=None):
     url = "https://charportal.dca.njoag.gov/Charity-Registration/CHR-Public-Search-Page/"
     result = checker.StateResult(org.organization_name, org.ein, "NJ", checker.STATUS_UNKNOWN, url)
     page._cc_nj_selected_detail = None  # A new search always obtains fresh evidence.
@@ -21712,8 +21784,12 @@ def search_nj_direct(page, org):
             result.status = "Unable to Verify"
             result.source_note = "New Jersey did not finish the submitted search with a complete, matching response. Registration status could not be confirmed."
             result.reason_code = "NJ_INCOMPLETE_QUERY_RESPONSE"
+            result.queries_attempted = [getattr(page, "_cc_nj_query_diagnostic", {"query": ein_digits or org.organization_name, "phase": "incomplete"})]
             result.success = False
             return result
+        exemption = nj_name_exemption_result(getattr(page, "_cc_nj_completed_data", None), identity_org or org, time.monotonic()+8)
+        if exemption is not None:
+            return exemption
         if re.search(r"no records found|no records|no matching|0 results", body, re.I):
             result.raw_status_text = "No record found"
             result.status = checker.STATUS_NOT_REGISTERED
@@ -21771,7 +21847,7 @@ def search_nj_with_name_fallback(page, org):
             )
             return result
         fallback_org = SimpleNamespace(organization_name=variant, ein="")
-        fallback = search_nj_direct(page, fallback_org)
+        fallback = search_nj_direct(page, fallback_org, identity_org=org)
         if (public_status(fallback) == "Site Not Reachable"
                 or getattr(fallback, "reason_code", "") == "NJ_INCOMPLETE_QUERY_RESPONSE"):
             return copy_name_fallback_result(org, fallback)
@@ -23303,7 +23379,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12"})):
+        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13"})):
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()

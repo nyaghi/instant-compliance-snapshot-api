@@ -34,7 +34,7 @@ function keepAlive() {
 const rejected = reason => ["NY_CONNECTOR_VERIFICATION_REJECTED", "NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED"].includes(reason);
 const recoveryFailure = reason => rejected(reason) ? "NY_CONNECTOR_RECOVERY_REJECTED" :
   typeof reason === "string" && /^NY_CONNECTOR_[A-Z_]+$/.test(reason) ? reason : "NY_CONNECTOR_INCOMPLETE";
-const runtimeState = () => ({ schema: 2, nextStart, ownedTabs: [...owned], diagnostics: [...diagnostics], queue: [active, ...queue].filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, expiresAt: j.expiresAt, active: j === active, activeExpiresAt: j.activeExpiresAt, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, detailRetryUsed: j.detailRetryUsed, retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.command, lastResponse: j.lastResponse, queryRepaired: j.queryRepaired })) });
+const runtimeState = () => ({ schema: 2, nextStart, ownedTabs: [...owned], diagnostics: [...diagnostics], queue: [active, ...queue].filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, expiresAt: j.expiresAt, active: j === active, activeExpiresAt: j.activeExpiresAt, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, detailRetryUsed: j.detailRetryUsed, retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.command, lastResponse: j.lastResponse, queryRepaired: j.queryRepaired, nvReturnRecoveryUsed: j.nvReturnRecoveryUsed })) });
 function saveRuntime() {
   keepAlive();
   if (!active && !queue.length && keepAliveTimer) { clearTimeout(keepAliveTimer); keepAliveTimer = null; }
@@ -154,7 +154,7 @@ async function close(job, reason, finishId) {
     if (tabId !== null && P.TRIAL_ORIGIN && job.registryState==='AL' && owned.has(tabId) && reason!=='NY_CONNECTOR_BROWSER_CLOSED') {
       try {
         const tab=await chrome.tabs.get(tabId),source=await chrome.tabs.get(job.sender.tab.id);
-        if (tab.url===registryStart('AL') && tab.windowId===source.windowId && new URL(source.url).origin===P.TRIAL_ORIGIN) {
+        if (tab.url===registryStart('AL') && new URL(source.url).origin===P.TRIAL_ORIGIN) {
           trialAlIdle={id:tabId,expiresAt:Date.now()+1800000};armTrialAlIdle();
         } else await removeOwned(tabId);
       } catch {await removeOwned(tabId);}

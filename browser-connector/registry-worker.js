@@ -67,15 +67,19 @@ async function registryNorthCarolinaVisibility(job) {
     return {id:prior.id,windowId:prior.windowId};
   } catch { return null; }
 }
-async function registryNavigate(job, url, budgetMs = 45000) {
+async function registryNavigate(job, url, budgetMs = 45000, freshNvRecovery = false) {
   if (new URL(url).origin !== registryOrigin(job.registryState)) throw new Error("NY_CONNECTOR_INCOMPLETE");
+  if (freshNvRecovery && (job.registryState!=='NV' || url!==registryStart('NV') || !job.nvReturnRecoveryUsed)) throw new Error('NY_CONNECTOR_INVALID_SEQUENCE');
   let previous;
   if (job.tab !== null) {
     try { previous=(await registryMessage(job,{action:"registry-ready"})).documentId; } catch {}
     // Updating a tab to its current URL may leave the same document in place.
     // Explicitly reload so the next search starts with a fresh public form.
     const current = await chrome.tabs.get(job.tab);
-    if (current.url === url) await chrome.tabs.reload(job.tab);
+    if (freshNvRecovery) {
+      if(current.url!==url)await chrome.tabs.update(job.tab,{url});
+      await chrome.tabs.reload(job.tab);
+    } else if (current.url === url) await chrome.tabs.reload(job.tab);
     else {
       const before=new URL(current.url),after=new URL(url);
       await chrome.tabs.update(job.tab,{url});
@@ -126,7 +130,11 @@ async function performRegistryQuery(job, query) {
       const saved=trialAlIdle; trialAlIdle=null;
       try {
         const tab=await chrome.tabs.get(saved.id), source=await chrome.tabs.get(job.sender.tab.id);
-        if (owned.has(saved.id) && tab.url===registryStart('AL') && tab.windowId===source.windowId && saved.expiresAt>Date.now()) job.tab=saved.id;
+        // An authorized trial page may run in another Chrome window. The
+        // owned tab, source origin and expiry are the security boundaries;
+        // moving the caller to a dedicated validation window must not discard
+        // the already verified public session.
+        if (owned.has(saved.id) && tab.url===registryStart('AL') && new URL(source.url).origin===P.TRIAL_ORIGIN && saved.expiresAt>Date.now()) job.tab=saved.id;
         else await removeOwned(saved.id);
       } catch { await removeOwned(saved.id); }
       await saveRuntime();
@@ -141,16 +149,22 @@ async function performRegistryQuery(job, query) {
   if (["NV", "TN"].includes(query.state)) {
     if (query.operation === "search") {
       if (query.state==='NV' && job.tab!==null && !job.finalFourReusableForm) {
-        const returned=await registryMessage(job,{action:'registry-nv-return',budgetMs:Math.max(1,Math.min(45000,job.activeExpiresAt-Date.now()))});
-        if (!returned?.ok) throw new Error(returned?.reason||'NY_CONNECTOR_INCOMPLETE');
-        await registryReady(job,null,new URL(registryStart('NV')).pathname);
+        const returned=await registryMessage(job,{action:'registry-nv-return',budgetMs:Math.max(1,Math.min(10000,job.activeExpiresAt-Date.now()))});
+        if (!returned?.ok) {
+          if (returned?.reason!=='NY_CONNECTOR_REGISTRY_NV_RETURN_READY_TIMEOUT' || job.nvReturnRecoveryUsed
+              || job.activeExpiresAt-Date.now()<5000) throw new Error(returned?.reason||'NY_CONNECTOR_INCOMPLETE');
+          job.nvReturnRecoveryUsed=true;
+          diagnostic('nv-return-recovery',job,'fresh public form within original deadline');
+          await registryNavigate(job,registryStart('NV'),Math.min(45000,job.activeExpiresAt-Date.now()),true);
+        } else await registryReady(job,null,new URL(registryStart('NV')).pathname);
       } else if (job.tab === null || !job.finalFourReusableForm) await registryNavigate(job,registryStart(query.state));
       else await registryReady(job,null,new URL(registryStart(query.state)).pathname);
     } else if (job.tab === null || !job.finalFourSearchComplete) {
       throw new Error("NY_CONNECTOR_INVALID_SEQUENCE");
     }
     job.finalFourReusableForm = false;
-    const response = await registryMessage(job,{action:`registry-${query.state.toLowerCase()}`,query,budgetMs:Math.max(1,Math.min(45000,job.activeExpiresAt-Date.now()))});
+    const allowance=query.state==='NV'&&query.operation==='search'?75000:45000;
+    const response = await registryMessage(job,{action:`registry-${query.state.toLowerCase()}`,query,budgetMs:Math.max(1,Math.min(allowance,job.activeExpiresAt-Date.now()))});
     if (query.operation === "search") job.finalFourSearchComplete = response?.ok === true;
     // TN keeps its result grid behind the detail dialog. NV navigates to a
     // detail route, so its next name search uses the public Return To Search.
