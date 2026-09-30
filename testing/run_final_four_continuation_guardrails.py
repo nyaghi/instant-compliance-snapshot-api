@@ -81,7 +81,11 @@ class ContinuationControls(unittest.TestCase):
 
     def test_reviewed_names_survive_signed_round_trip_and_precede_generated_names(self):
         _, response = self.start('AL', alternate_names=['YWCA USA, Inc.'])
-        _, next_response = self.advance(response)
+        # A completed empty legal-name query must still try the reviewed alias.
+        # A fully confirmed legal-name positive has a separate early-end control.
+        evidence = self.provider(response['query'])
+        evidence.update(rows=[], total=0)
+        _, next_response = self.advance(response, evidence)
         self.assertEqual(next_response['query']['name'], 'YWCA USA, Inc.')
         self.assertEqual(cc.REVIEWED_NAME_CONTEXT.get(), {})
 

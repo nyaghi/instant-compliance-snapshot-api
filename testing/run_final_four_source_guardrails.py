@@ -495,10 +495,108 @@ class LookupControls(unittest.TestCase):
                 self.assertEqual(cc.true_status_from_body(result, unrelated_body), cc.public_status(result))
                 self.assertEqual(cc.comments_for_result_base(result, unrelated_body, cc.public_status(result)), result.source_note)
 
-    def test_every_reviewed_name_is_searched_before_positive_early_exit(self):
+    def test_complete_primary_positive_does_not_require_a_later_broken_alias(self):
         cc.REVIEWED_NAME_CONTEXT.set({'131624103': ['YWCA USA, Inc.']})
-        cc.final_four_browser_lookup(self.orgs['AL'], 'AL', self.provider)
-        self.assertEqual([q['name'] for q in self.calls], ['YWCA of the USA National Board', 'YWCA USA, Inc.'])
+        def primary_only(q):
+            if q.get('name') == 'YWCA USA, Inc.':
+                raise ValueError('Later alias verification/pagination failed')
+            return self.provider(q)
+        result = cc.final_four_browser_lookup(self.orgs['AL'], 'AL', primary_only)
+        self.assertTrue(result.success)
+        self.assertEqual(result.matched_registry_identifier, 'AL97-431')
+        self.assertEqual([q['name'] for q in self.calls], ['YWCA of the USA National Board'])
+
+    def test_primary_positive_requires_complete_search_and_detail_before_stopping(self):
+        for state in ['NC', 'NV', 'TN']:
+            self.calls.clear()
+            org = self.orgs[state]
+            # This control exercises a distinctive legal name. America's
+            # Charities has one distinctive token and remains a short-name
+            # control that must exhaust the reviewed aliases.
+            if state == 'NC':
+                org = cc.checker.Organization('Environmental Law Institute', '52-0901863')
+            cc.REVIEWED_NAME_CONTEXT.set({cc.canonical_ein_digits(org.ein): ['Unneeded Alias']})
+            def primary_only(q):
+                if q.get('name') == 'Unneeded Alias': raise ValueError('Alias incomplete')
+                data = self.provider(q)
+                if state == 'NC':
+                    if q['operation'] == 'search': data['rows'][0]['CSL Legal Name'] = org.organization_name
+                    else: data['fields']['Name'] = org.organization_name
+                return data
+            result = cc.final_four_browser_lookup(org, state, primary_only)
+            self.assertTrue(result.success, state)
+            self.assertEqual([q['operation'] for q in self.calls], ['search', 'detail'])
+
+    def test_alias_only_positive_still_checks_all_reviewed_names(self):
+        org = cc.checker.Organization('National Example Charity', '13-1624103')
+        names = ['YWCA of the USA National Board', 'YWCA USA, Inc.']
+        cc.REVIEWED_NAME_CONTEXT.set({'131624103': names})
+        cc.final_four_browser_lookup(org, 'AL', self.provider)
+        self.assertEqual([q['name'] for q in self.calls], [org.organization_name, *names])
+
+    def test_short_primary_positive_still_checks_reviewed_names(self):
+        org = cc.checker.Organization('Aeon', '41-1558711')
+        cc.REVIEWED_NAME_CONTEXT.set({'411558711': ['Aeon Foundation']})
+        def short(q):
+            data = self.provider(q)
+            data['rows'] = [copy.deepcopy(AL_ROWS[1])]
+            data['rows'][0][0] = 'Aeon'; data['total'] = 1
+            return data
+        cc.final_four_browser_lookup(org, 'AL', short)
+        self.assertEqual([q['name'] for q in self.calls], ['Aeon', 'Aeon Foundation'])
+
+    def test_closed_primary_still_searches_for_current_former_name(self):
+        org = self.orgs['AL']
+        cc.REVIEWED_NAME_CONTEXT.set({'131624103': ['YWCA USA, Inc.']})
+        def old_and_current(q):
+            data = self.provider(q); data['rows'] = [copy.deepcopy(AL_ROWS[1])]; data['total'] = 1
+            if q['name'] == org.organization_name:
+                data['rows'][0][2] = 'Inactive'
+            else:
+                data['rows'][0][0] = 'YWCA USA, Inc.'; data['rows'][0][1] = 'AL97-999'
+            return data
+        result = cc.final_four_browser_lookup(org, 'AL', old_and_current)
+        self.assertTrue(result.success)
+        self.assertEqual(result.matched_registry_identifier, 'AL97-999')
+        self.assertEqual(len(self.calls), 2)
+
+    def test_incomplete_second_candidate_cannot_be_hidden_by_primary_positive(self):
+        cc.REVIEWED_NAME_CONTEXT.set({'860481941': ['Make A Wish']})
+        def incomplete(q):
+            data = self.provider(q)
+            if q['operation'] == 'search':
+                data['rows'].append({**self.nvrow, 'identifier':'NV99999999'}); data['total'] = 2
+            elif q['identifier'] == 'NV99999999':
+                data['complete'] = False
+            return data
+        with self.assertRaises(ValueError):
+            cc.final_four_browser_lookup(self.orgs['NV'], 'NV', incomplete)
+
+    def test_conflicting_adverse_candidate_prevents_early_positive(self):
+        cc.REVIEWED_NAME_CONTEXT.set({'860481941': ['Make A Wish']})
+        def conflicting(q):
+            data = self.provider(q)
+            if q['operation'] == 'search':
+                data['rows'].append({**self.nvrow, 'identifier':'NV99999999'}); data['total'] = 2
+            elif q['identifier'] == 'NV99999999':
+                data['fields'].update({'NV Business ID':'NV99999999','Entity Status':'Revoked'})
+            return data
+        result = cc.final_four_browser_lookup(self.orgs['NV'], 'NV', conflicting)
+        self.assertFalse(result.success)
+        self.assertEqual(result.status, 'Needs Review')
+        self.assertIn('Make A Wish', [q.get('name') for q in self.calls])
+
+    def test_matching_unissued_application_prevents_early_exit(self):
+        org = self.orgs['NC']
+        cc.REVIEWED_NAME_CONTEXT.set({cc.canonical_ein_digits(org.ein): ['Other Reviewed Name']})
+        def unissued(q):
+            data = self.provider(q)
+            if q['operation'] == 'search':
+                data['rows'].append({**NC,'License':'','Status':'In-Process','CSL Type':'In-Process',
+                                     'Expiration Date':'','Extension End Date':''}); data['total'] = 2
+            return data
+        cc.final_four_browser_lookup(org, 'NC', unissued)
+        self.assertIn('Other Reviewed Name', [q.get('name') for q in self.calls])
 
     def test_completed_empty_search_uses_all_bounded_variants(self):
         for state, org in self.orgs.items():

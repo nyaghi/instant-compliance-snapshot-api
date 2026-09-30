@@ -2055,6 +2055,11 @@ def identity_candidate(name, source, evidence_type, url, source_date="", histori
     # Apply this only to discovered alias fields, never legal names or user edits.
     if evidence_type in {"DBA", "AKA / DBA", "Form 990 DBA"} and name.casefold() == "no":
         return None
+    # Public alias fields sometimes contain a template rather than an actual
+    # chapter name. Do not turn the literal quoted placeholder into a query.
+    # Legal names and user-entered alternatives are deliberately unaffected.
+    if evidence_type in {"DBA", "AKA / DBA", "Form 990 DBA", "Other Name"} and identity_alias_template(name):
+        return None
     # Some state DBA fields contain only a former-name annotation, sometimes
     # prefixed by a detached entity suffix. Preserve actual names with labels.
     label = re.sub(r"\s+", " ", re.sub(r"[^a-z]", " ", name.casefold())).strip()
@@ -2065,6 +2070,11 @@ def identity_candidate(name, source, evidence_type, url, source_date="", histori
             "evidence": [{"source": source, "type": evidence_type, "url": url,
                           "retrieved_at": datetime.now(ZoneInfo("UTC")).isoformat(),
                           "source_date": source_date}]}
+
+
+def identity_alias_template(name):
+    """Recognize explicit quoted/bracketed chapter-name placeholders only."""
+    return bool(re.search(r"['\"\u201c\u201d<\[]\s*CHAPTER\s+NAME\s*['\"\u201c\u201d>\]]", canonical_name_punctuation(str(name)), re.I))
 
 
 def identity_dba_list(value: str) -> list[str]:
@@ -6280,7 +6290,7 @@ def tn_charity_detail_evidence(fields, expected_identifier, search_row):
         raise ValueError("Tennessee alternate names are malformed")
     # TNCaB can show solicitation-name templates, not actual organization
     # names, such as a literal 'CHAPTER NAME'. Do not export those as aliases.
-    aliases = [n.strip() for n in aliases if n.strip() and not re.search(r"['\"<\[]\s*CHAPTER NAME\s*['\">\]]", n, re.I)]
+    aliases = [n.strip() for n in aliases if n.strip() and not identity_alias_template(n)]
     return dict(name=name, identifier=expected_identifier, ein="", aliases=list(dict.fromkeys(aliases)),
                 raw_status=raw, status=licensed_charity_status(raw, expiration), expiration=expiration,
                 initial=initial, initial_label="Registration Date", renewal=None,
@@ -6560,10 +6570,20 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                         seen.add(row["identifier"])
                         continue
             records.append(record); seen.add(row["identifier"])
-        if records and index >= len(required) - 1:
+        # Avoid re-running address reconciliation for each alias unless there
+        # is a primary positive candidate that could safely finish this lookup.
+        primary_positive = any(
+            row.get("status") in {"Current", "Upcoming Filing", "Exempt"}
+            and (canonical_ein_digits(row.get("ein", "")) == canonical_ein_digits(org.ein)
+                 or (normalized_match_name(row["name"]) == normalized_match_name(org.organization_name)
+                     and len(distinctive_match_tokens(org.organization_name)) >= 2))
+            for row in records)
+        if records and (index >= len(required) - 1 or (primary_positive and not unreviewed_scope)):
             selected, review = select_licensed_charity(org, records, state, deadline)
             if selected and not review and selected["status"] in {"Current", "Upcoming Filing", "Exempt"}:
-                break
+                if index >= len(required) - 1 or licensed_primary_positive_complete(
+                        org, selected, records, unreviewed_scope=unreviewed_scope):
+                    break
     result = final_four_license_result(org, state, records, deadline, sources[state])
     if unreviewed_scope and result.status not in {"Current", "Upcoming Filing", "Exempt"}:
         result.status = "Needs Review" if state == "NC" else "Unable to Confirm"; result.success = False
@@ -6878,6 +6898,29 @@ def licensed_charity_names(org):
             seen.add(value.casefold()); generated.append(value); added += 1
             if added == 3: break
     return required, generated
+
+
+def licensed_primary_positive_complete(org, selected, records, *, unreviewed_scope=False):
+    """End fallback work only after a complete search and safe primary match.
+
+    Called by the final-four adapter after every potentially matching row in
+    the completed query has been opened and evaluated by the existing master
+    selector. A failed later alias must not be needed to reconfirm a complete
+    positive legal-name record. Alias-only, short-name, adverse and ambiguous
+    outcomes still need the remaining reviewed names and bounded fallbacks.
+    This changes query completion, never name acceptance or status rules.
+    """
+    if (unreviewed_scope or not selected or selected.get("status") not in {"Current", "Upcoming Filing", "Exempt"}
+            or selected.get("_identity_outcome") != "accepted"
+            or any(row.get("_identity_outcome") in {"possible", "conflict"} for row in records)):
+        return False
+    observed_ein = canonical_ein_digits(selected.get("ein", ""))
+    if observed_ein:
+        return observed_ein == canonical_ein_digits(org.ein)
+    return (normalized_match_name(selected["name"]) == normalized_match_name(org.organization_name)
+            and len(distinctive_match_tokens(org.organization_name)) >= 2
+            and selected.get("match", {}).get("decision") == "accepted"
+            and selected.get("address_evidence", {}).get("decision") not in {"conflict", "different_ein"})
 
 
 def il_browser_name_queries(required, generated):

@@ -404,3 +404,26 @@ The candidate passed 369 JavaScript and 200 Python checks. It is not a live
 validated fix yet. The running 0.6.8 random sample is preserved before any
 activation. Broad-alias completion failures, Alabama verification and remaining
 source/identity reviews are separate open issues; do not promote the expansion.
+
+
+### September 29: complete primary positives and literal alias templates
+
+The trial master may finish a complete query once every potentially matching
+record has been inspected and the existing selector accepts a positive primary
+identity (explicit matching EIN or a full legal name with at least two
+distinctive tokens). Unresolved candidates, unissued applications, address
+conflicts, alias-only identities, short names and adverse statuses preserve the
+remaining reviewed-name search requirements. No status or identity threshold
+was relaxed; timeouts and partial searches remain inconclusive.
+
+Discovery drops only quoted/bracketed literal Chapter Name placeholders from
+DBA/AKA/Other Name source fields. Legal names, real chapter names and user-edited
+alternatives remain unchanged. This centralizes Tennessee's existing cleanup.
+
+Validation: 308 Python controls, 41 DC/RI behavioral controls and 30 core matching
+fixtures pass. Three historical DC/RI source-parity tests fail identically on the
+previously deployed HEAD because they compare against an older release; the
+approved 29.1 isolation comparison passes outside the exact audited additions.
+The six connector 0.6.9 Nevada controls returned four conclusive results and two
+return-to-search timeouts. Those initial results are preserved; deployment alone
+is not a claim that the remaining live navigation/verification failures pass.

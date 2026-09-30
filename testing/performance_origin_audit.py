@@ -14,7 +14,7 @@ class RestoreApprovedOrigin(ast.NodeTransformer):
         # an exact-EIN Exempt row without a registration number. Only the new
         # helper and the two exact acquisition prefixes below are normalized;
         # the existing status, matching, timeout and other-state code is exact.
-        if node.name == 'nj_exact_ein_exempt_row':
+        if node.name in {'nj_exact_ein_exempt_row', 'identity_alias_template'}:
             return None
         return self.generic_visit(node)
 
@@ -27,6 +27,9 @@ class RestoreApprovedOrigin(ast.NodeTransformer):
 
     def visit_If(self, node):
         for source in [
+            # The literal chapter-template cleanup is tested with real aliases,
+            # legal names and user edits. Normalize only its exact guard here.
+            'if evidence_type in {"DBA", "AKA / DBA", "Form 990 DBA", "Other Name"} and identity_alias_template(name):\n return None',
             'if exemption is not None:\n return [exemption]',
             '''if exemption is not None:
  body = f"Charity Name: {exemption[0]}\\nStatus Exempt Federal EIN {ein}\\n"

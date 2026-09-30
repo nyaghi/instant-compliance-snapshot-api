@@ -129,7 +129,7 @@ class IsolationControls(unittest.TestCase):
                                  'nc_charity_record_evidence', 'nv_charity_detail_evidence',
                                  'final_four_license_result', 'tn_charity_detail_evidence',
                                  'nc_charity_profile_evidence', 'final_four_search_evidence',
-                                 'final_four_browser_lookup', 'final_four_date_metadata',
+                                 'final_four_browser_lookup', 'licensed_primary_positive_complete', 'final_four_date_metadata',
                                  'final_four_filing_metadata', 'nv_charity_filings_evidence',
                                  'final_four_clean_evidence', 'final_four_connector_failure', 'final_four_connector_advance',
                                  'final_four_connector_request', '_send_final_four_connector'}:

@@ -29,6 +29,19 @@ class IdentityTests(unittest.TestCase):
             self.assertEqual(c.identity_candidate('No Means No Worldwide', 'Ohio', kind, 'https://source')['name'],'No Means No Worldwide')
         self.assertEqual(c.identity_candidate('No','Example','Registered name','https://source')['name'],'No')
         self.assertEqual(c.normalize_reviewed_names(['No']),['No'])
+    def test_literal_chapter_templates_are_not_discovered_aliases(self):
+        templates=['RMEF "Chapter Name"', 'The "Chapter Name" of the Rocky Mountain Elk Foundation',
+                   'INC. "CHAPTER NAME"', 'Example [Chapter Name]', 'Example “Chapter Name”']
+        for kind in ('DBA','AKA / DBA','Form 990 DBA','Other Name'):
+            for name in templates:
+                with self.subTest(kind=kind,name=name):
+                    self.assertIsNone(c.identity_candidate(name,'Example state',kind,'https://source'))
+        # Genuine named chapters, ordinary quotes, legal names and user edits
+        # must not be lost through this narrow source-alias cleanup.
+        for name in ['Example Chicago Chapter','The Chapter Name Foundation','Example "North Jersey" Chapter']:
+            self.assertEqual(c.identity_candidate(name,'Example','DBA','https://source')['name'],name)
+        self.assertEqual(c.identity_candidate(templates[0],'Example','Registered name','https://source')['name'],templates[0])
+        self.assertEqual(c.normalize_reviewed_names([templates[0]]),[templates[0]])
     def test_ca_checks_returned_ein(self):
         rows=[{'fein':'99-9999999','entityName':'Wrong Chapter','dba':'Wrong Alias'},
               {'fein':'13-1624103','legalName':'YWCA Legal','dba':'YWCA DBA','officer':'Not an Alias'}]
