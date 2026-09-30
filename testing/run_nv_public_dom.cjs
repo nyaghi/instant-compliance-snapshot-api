@@ -453,7 +453,25 @@ test('completed empty response is accepted only after observed loading cycle',as
 test('truncated pagination cannot become a partial positive or negative',async()=>{const f=fixture({truncate:true});await assert.rejects(f.search(),/PAGINATION_INCOMPLETE/);});
 test('pager changing before rows does not repeat the previous page',async()=>{const f=fixture({oldPageDelay:600});const r=await f.search();assert.equal(r.total,4);assert.ok(f.time>=1700);});
 test('repeated rows across pages cannot pass as complete results',async()=>{const f=fixture({duplicate:true});await assert.rejects(f.search(),/RESPONSE_INCOMPLETE|RESULTS_INCOMPLETE/);});
-test('late source response is rejected against its original command budget',async()=>{const f=fixture({responseDelay:40000});await assert.rejects(f.search(),/RESPONSE_PENDING/);});
+test('late source response is rejected against its original command budget',async()=>{const f=fixture({responseDelay:40000});await assert.rejects(f.search(35000),/RESPONSE_PENDING/);});
+test('Nevada gives an already loading search bounded grace without resubmitting',async()=>{
+ const f=fixture({responseDelay:40000});const r=await f.search(90000);
+ assert.equal(r.total,4);assert.equal(r.complete,true);assert.equal(f.clicks,1);assert.ok(f.time<42000);
+});
+test('Nevada pending grace accepts a completed empty response but never a pending empty grid',async()=>{
+ const f=fixture({rows:[],responseDelay:50000});const r=await f.search(90000);
+ assert.equal(r.total,0);assert.equal(r.complete,true);assert.equal(f.clicks,1);
+ const pending=fixture({rows:[],responseDelay:70000});await assert.rejects(pending.search(150000),/RESPONSE_PENDING/);
+ assert.equal(pending.clicks,1);assert.ok(pending.time<=61200);
+});
+test('Nevada slow broad and exact searches share the original command deadline',async()=>{
+ const query={state:'NV',operation:'search',name:'ELI',exact_above:20};
+ const f=fixture({rows:manyPublicRows(25),exactRows:[],responseDelay:40000});
+ const r=await f.drive(f.api.nvSearch(query,f.time+150000));assert.equal(r.total,0);assert.equal(r.search_mode,'EXACT_MATCH');assert.equal(f.clicks,2);
+ const bounded=fixture({rows:manyPublicRows(25),exactRows:[],responseDelay:40000});
+ await assert.rejects(bounded.drive(bounded.api.nvSearch(query,bounded.time+60000)),/RESPONSE_PENDING/);
+ assert.equal(bounded.clicks,2);assert.ok(bounded.time<=61000);
+});
 test('zero-result response observed only after timer throttling is not invented',async()=>{const f=fixture({activity:false,timerClamp:60000,rows:[]});await assert.rejects(f.search(),/SEARCH_NOT_STARTED/);});
 test('wrong column schema is incomplete',async()=>{const f=fixture();const prior=f.grid.querySelectorAll;f.grid.querySelectorAll=q=>q==='[role="columnheader"]'?[]:prior(q);await assert.rejects(f.search(),/COLUMNS_CHANGED/);});
 test('Nevada extracts corporation fields and stops before registered-agent duplicates',()=>{const f=fixture();const fields=f.detail();assert.equal(fields['NV Business ID'],'NV20121738342');assert.equal(fields['Entity Status'],'Active');assert.equal(fields['Annual Renewal Due Date/Expiration Date'],'12/31/2026');assert.ok(!('Street Address' in fields));});

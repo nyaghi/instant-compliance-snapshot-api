@@ -312,8 +312,9 @@
       throw new Error("REGISTRY_NV_PAGINATION_INCOMPLETE");
     return {table, rows, values, total:Number(info[3]), page:Number(pages[1]), pages:Number(pages[2])};
   }
-  async function nvChanged(action, read, deadline, {requireLoading=false, previous=null, retryNotStarted=null, settle=200}={}) {
+  async function nvChanged(action, read, deadline, {requireLoading=false, previous=null, retryNotStarted=null, settle=200, pendingGraceMs=0}={}) {
     let loadingSeen = false, lastParseError = '', retryTimer;
+    const responseEnd = Math.min(deadline, Date.now()+35000+pendingGraceMs);
     const loading = () => [...document.querySelectorAll('.app-loader-pane .circle-loader')].some(visible);
     const start = () => {
       action();
@@ -325,7 +326,7 @@
         try { retryNotStarted(); } catch (error) { lastParseError=error.message; }
       }, Math.min(3000, Math.max(1, deadline-Date.now())));
     };
-    try { return await wait(() => {
+    const ready = () => {
       loadingSeen ||= loading();
       if (loading() || requireLoading && !loadingSeen) return false;
       try {
@@ -333,7 +334,8 @@
         if (!value || previous !== null && JSON.stringify(value.values) === previous) return false;
         return value;
       } catch (error) { lastParseError = error.message; return false; } // Partial renders are not completed responses.
-    }, Math.max(1, Math.min(35000, deadline-Date.now())), {action:start, settle, relevant:mutations => {
+    };
+    const relevant = mutations => {
       loadingSeen ||= loading() || mutations.some(m => [...m.addedNodes].some(n => n.nodeType === 1
         && (n.matches?.('.circle-loader, .app-loader-pane') || n.querySelector?.('.circle-loader'))));
       return mutations.some(m => {
@@ -341,7 +343,19 @@
         return el?.closest?.('casex-data-table, .app-loader-pane') || [...m.addedNodes, ...m.removedNodes].some(n => n.nodeType === 1
           && (n.matches?.('.circle-loader, .app-loader-pane, casex-data-table') || n.querySelector?.('.circle-loader, casex-data-table')));
       });
-    }}); } catch (error) {
+    };
+    try {
+      try { return await wait(ready,Math.max(1,Math.min(35000,deadline-Date.now())),{action:start,settle,relevant}); }
+      catch (error) {
+        // Only a search that is visibly still loading receives this margin.
+        // Observe the same request; do not click again, reset its deadline,
+        // extend Sales, or add time to paging and other registry operations.
+        if (error.message !== 'REGISTRY_RESPONSE_INCOMPLETE' || !pendingGraceMs
+            || !loadingSeen || !loading() || Date.now() >= responseEnd) throw error;
+        nvTrace('search-response-grace',{remaining_ms:responseEnd-Date.now()});
+        return await wait(ready,responseEnd-Date.now(),{settle,relevant});
+      }
+    } catch (error) {
       if (error.message !== 'REGISTRY_RESPONSE_INCOMPLETE') throw error;
       throw new Error(lastParseError || (requireLoading && !loadingSeen ? 'REGISTRY_NV_SEARCH_NOT_STARTED'
         : loading() ? 'REGISTRY_NV_RESPONSE_PENDING' : 'REGISTRY_NV_RESPONSE_INCOMPLETE'));
@@ -457,8 +471,9 @@
     // A completed loading cycle is mandatory, including for an empty response.
     const submit = async () => {
       const search=await bindSearch();
+      nvTrace('search-submitted',{name:query.name,search_mode:searchMode});
       return nvChanged(() => search.click(), () => nvPage('Search Results', nvSearchHeaders), deadline, {
-      requireLoading:true, retryNotStarted:()=>{
+      requireLoading:true, pendingGraceMs:25000, retryNotStarted:()=>{
         // Re-read the current visible controls. A changed query must not be
         // submitted or allowed to inherit the original query's evidence.
         if (field('entityName')?.value !== query.name || field('entityNumber')?.value !== '' || field('nvBusinessId')?.value !== '') return;
