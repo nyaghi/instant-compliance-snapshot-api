@@ -24,7 +24,7 @@
         && typeof value.identifier === "string" && /^(SL|EX)\d+$/.test(value.identifier) && typeof value.url === "string"
         && /^https:\/\/www\.sosnc\.gov\/online_services\/search\/charities_profile\/\d+$/.test(value.url);
       return value.operation === "detail" && keys === "identifier,operation,state" && typeof value.identifier === "string"
-        && (value.state === "NV" ? /^NV\d+$/ : /^CO\d+$/).test(value.identifier);
+        && (value.state === "NV" ? /^(?:NV\d+|(?:NR|C)\d{8}-\d+)$/ : /^CO\d+$/).test(value.identifier);
     }
     if (value?.state === "IL" || value?.state === "GA") {
       const keys = Object.keys(value).sort().join(",");

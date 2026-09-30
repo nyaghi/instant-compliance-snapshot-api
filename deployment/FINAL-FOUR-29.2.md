@@ -791,3 +791,25 @@ The updated workbook preserves initial failures and orders attempts by their
 execution timestamps, not download order. A later download of an older run
 must not overwrite a newer attempt. 0.6.17 needs activation and live controls
 before any claim that Alabama or the remaining Nevada case is resolved.
+
+### 0.6.18: Nevada reservation command transport mismatch
+
+The live 0.6.17 run completed the CCA 160-row search, but emitted no collector
+`detail-started` event. The page bridge's `validQuery` accepted only NV-prefixed
+detail IDs, while the master and DOM collector already supported the observed
+C/NR reservation numbers. The bridge silently discarded C20190204-2019, before
+the worker or its deadline could run. This is an additional transport defect;
+the earlier detached-row navigation regression remains independently valid.
+
+The same bounded C/NR syntax is now accepted through the shared protocol. The
+collector still requires an observed identifier and revalidates the full row.
+Malformed detail commands for an admitted trial NV lookup receive an immediate
+invalid-sequence response instead of waiting for the global timeout. Existing
+mature-state response behavior and all budgets remain unchanged.
+
+Two new bridge tests failed before the repair and passed afterward. Coverage
+includes NV, C and NR IDs, reply propagation and malformed/path-like IDs. The
+packaging guard now runs those bridge tests against the actual namespaced trial
+package, so a working collector cannot hide a conflicting packaged protocol.
+193 JavaScript checks and 46 backend/isolation controls pass. Live activation
+and the original-alias CCA rerun are required before reporting this issue fixed.

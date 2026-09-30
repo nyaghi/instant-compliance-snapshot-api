@@ -94,7 +94,14 @@
       }
       reply(m.id, { ok: true }); return;
     }
-    if (!["acquire", "refresh"].includes(m.action) && (m.action !== "search" || !P.validQuery(m.query))) return;
+    if (!["acquire", "refresh"].includes(m.action) && (m.action !== "search" || !P.validQuery(m.query))) {
+      // A rejected command in an admitted trial lookup must not disappear and
+      // consume its entire time budget. Keep unrelated unsolicited messages
+      // and the mature connector's existing behavior unchanged.
+      if (ORIGIN === P.TRIAL_ORIGIN && m.action === "search" && active?.lookupId === m.lookup_id
+          && active.registryState === "NV") reply(m.id, {ok:false,reason:"NY_CONNECTOR_INVALID_SEQUENCE"});
+      return;
+    }
     if (active && active.lookupId !== m.lookup_id) { reply(m.id, { ok: false, reason: "NY_CONNECTOR_BUSY" }); return; }
     try {
       // Acquire chooses the registry; subsequent search messages deliberately

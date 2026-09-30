@@ -216,7 +216,7 @@ class TrialWorkflowControls(unittest.TestCase):
             output=Path(tmp)/'trial'
             result=build(TRIAL['origin'],output)
             manifest=json.loads((output/'manifest.json').read_text(encoding='utf-8'))
-            self.assertEqual(manifest['version'],'0.6.17')
+            self.assertEqual(manifest['version'],'0.6.18')
             self.assertEqual(manifest['permissions'],['storage'])
             text=json.dumps(manifest)
             for banned in ['staging.compliance-express.com','www.compliance-express.com','charities-search.ag.ny.gov','cookies','browsingData']:
@@ -226,6 +226,12 @@ class TrialWorkflowControls(unittest.TestCase):
             for file in output.glob('*.js'):
                 r=subprocess.run([str(NODE),'--check',str(file)],capture_output=True,text=True)
                 self.assertEqual(r.returncode,0,r.stderr)
+            # Exercise the packaged channel and protocol together, not only
+            # the collector in isolation. Reservation details cross both.
+            r=subprocess.run([str(NODE),'--test',str(ROOT/'testing/run_ny_bridge_resume.cjs')],
+                env={**os.environ,'CC_TEST_TRIAL_DIR':str(output),'CC_TEST_TRIAL_ORIGIN':TRIAL['origin']},
+                capture_output=True,text=True)
+            self.assertEqual(r.returncode,0,r.stdout+r.stderr)
             with self.assertRaises(ValueError):build(TRIAL['origin'],output)
         self.assertEqual((ROOT/'browser-connector/manifest.json').read_bytes(),before)
 
