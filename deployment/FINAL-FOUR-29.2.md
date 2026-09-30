@@ -770,7 +770,14 @@ within 31.005 seconds, then the CCA query waiting until the 300-second global
 deadline. The visible registry was complete on page 2 of 2, 101-160 of 160,
 with no loader. A fresh-page comparison also reached that same final page.
 This localizes the stall to collection/message return, not master parsing;
-the precise content-collector failure is still unproven. The old worker only
+the exported query is specifically detail C20190204-2019, not the CCA search.
+A DOM regression using realistically detached earlier-page rows reproduced
+`REGISTRY_NV_DETAIL_NOT_OBSERVED`: the collector assumed a detached row meant
+it was already on a detail route and looked for the wrong Back action.
+The candidate distinguishes the actual search route, returns to the saved
+page with exact page/count checks, and revalidates the complete row signature
+before clicking. Both the successful navigation and a changed-row rejection
+are covered. Live confirmation is still required. The old worker only
 passed a 110-second allowance to the content script but did not bound an
 unanswered Chrome message. The candidate enforces that same allowance in
 the worker and records public collector phases to diagnose the remaining

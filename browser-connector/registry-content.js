@@ -507,7 +507,12 @@
         || Object.keys(query).sort().join(',') !== 'identifier,operation,state') throw new Error("REGISTRY_COMMAND_INVALID");
     const target = nvObserved.get(query.identifier), sourceQuery = nvLastSearch;
     if (!target || !sourceQuery) throw new Error("REGISTRY_NV_DETAIL_NOT_OBSERVED");
-    if (!target.node.isConnected) {
+    const onSearch=location.hash.includes('screen=external-GenericFilingsSearch&tabRoute=business');
+    nvTrace('detail-started',{identifier:query.identifier,on_search:onSearch,page:target.page});
+    // Pagination detaches earlier-page rows too. That does not mean we left
+    // the search screen. Return from a detail only when actually on a detail
+    // route; otherwise navigate to the saved page and revalidate its row.
+    if (!target.node.isConnected && !onSearch) {
       const backLabel=location.hash.includes('screen=NameReservationDetails&')?'Back':'Return To Results';
       const back = [...document.querySelectorAll('button')].find(el => text(el) === backLabel && visible(el));
       if (!back) throw new Error("REGISTRY_NV_DETAIL_NOT_OBSERVED");
@@ -529,9 +534,13 @@
         catch { return false; }
       },Math.max(1,Math.min(5000,deadline-Date.now())));
       while (restored.page > 1) {
+        const expectedPage=restored.page-1,expectedTotal=restored.total;
         const previous = restored.table.querySelector('button[aria-label="Go to the previous page"]');
         if (!previous || previous.disabled) throw new Error('REGISTRY_NV_PAGINATION_INCOMPLETE');
-        restored = await nvChanged(()=>previous.click(),()=>nvPage('Search Results',nvSearchHeaders),deadline,{previous:JSON.stringify(restored.values)});
+        restored = await nvChanged(()=>previous.click(),()=>{
+          const fresh=nvPage('Search Results',nvSearchHeaders);
+          return fresh.page===expectedPage && fresh.total===expectedTotal && fresh;
+        },deadline,{previous:JSON.stringify(restored.values),settle:0});
       }
       const rows = await nvPages('Search Results',nvSearchHeaders,deadline,restored), restoredIds = new Map();
       if (rows.length !== sourceTotal) throw new Error('REGISTRY_NV_RESTORED_RESULTS_CHANGED');
@@ -559,17 +568,23 @@
     if (!current || current.name !== target.name || current.entity_type !== target.entity_type) throw new Error("REGISTRY_NV_DETAIL_CHANGED");
     let page = nvPage('Search Results',nvSearchHeaders);
     while (page.page > current.page) {
+      const expectedPage=page.page-1,expectedTotal=page.total;
       const previous = page.table.querySelector('button[aria-label="Go to the previous page"]');
       if (!previous || previous.disabled) throw new Error("REGISTRY_NV_PAGINATION_INCOMPLETE");
-      page = await nvChanged(()=>previous.click(),()=>nvPage('Search Results',nvSearchHeaders),deadline,{previous:JSON.stringify(page.values)});
+      page = await nvChanged(()=>previous.click(),()=>{
+        const fresh=nvPage('Search Results',nvSearchHeaders);
+        return fresh.page===expectedPage && fresh.total===expectedTotal && fresh;
+      },deadline,{previous:JSON.stringify(page.values),settle:0});
     }
     const matches = page.values.map((cells,i)=>({cells,node:page.rows[i]})).filter(row=>row.cells[1]===query.identifier);
-    if (matches.length !== 1 || matches[0].cells[0] !== target.name || matches[0].cells[3] !== target.entity_type)
+    if (matches.length !== 1 || JSON.stringify(matches[0].cells)!==target.signature)
       throw new Error("REGISTRY_NV_DETAIL_NOT_OBSERVED");
     const link = matches[0].node.querySelector('[role="gridcell"] a');
     if (!link || text(link) !== target.name) throw new Error("REGISTRY_NV_DETAIL_NOT_OBSERVED");
     const reservation=/^(?:NR|C)\d{8}-\d+$/.test(query.identifier)&&target.entity_type==='';
-    const fields = await wait(()=>reservation?nvReservationFields(query.identifier):nvFields(query.identifier),Math.max(1,deadline-Date.now()),{action:()=>link.click()});
+    nvTrace('detail-row-confirmed',{identifier:query.identifier,page:page.page});
+    const fields = await wait(()=>reservation?nvReservationFields(query.identifier):nvFields(query.identifier),Math.max(1,deadline-Date.now()),{action:()=>{link.click();nvTrace('detail-clicked',{identifier:query.identifier});}});
+    nvTrace('detail-returned',{identifier:query.identifier});
     if(reservation) {
       if(fields['Reserved Name']!==target.name)throw new Error('REGISTRY_NV_DETAIL_CHANGED');
       return {query,complete:true,source_url:location.href,fields};

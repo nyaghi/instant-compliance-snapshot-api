@@ -85,7 +85,7 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
   querySelectorAll:q=>{
    if(q==='[role="columnheader"]')return headers.map(h=>({getAttribute:k=>k==='aria-label'?h:null}));
    if(q==='tbody > tr[role="row"]')return rendered.map(cells=>{
-    const tr={get isConnected(){return !detail;},querySelectorAll:q=>q==='[role="gridcell"]'?cells.map(v=>({innerText:v,querySelector:()=>textEl(': '+v)})):[]};
+    const tr={get isConnected(){return !detail && rendered.includes(cells);},querySelectorAll:q=>q==='[role="gridcell"]'?cells.map(v=>({innerText:v,querySelector:()=>textEl(': '+v)})):[]};
     tr.querySelector=q=>q==='[role="gridcell"]'?{}:q==='[role="gridcell"] a'?{innerText:cells[0],click:()=>{opened.push(cells[1]);detail=true;fieldValues['NV Business ID']=detailId||cells[1];fieldValues['Entity Status']=cells[6];context.location.hash='screen='+(reservation?'NameReservationDetails':'Manage-Business')+'&id=fixture';schedule(()=>mutate(),10);}}:null;
     return tr;
    });
@@ -158,6 +158,23 @@ test('Nevada never reads a reservation as corporate status or accepts a changed 
 });
 
 function manyPublicRows(n){return Array.from({length:n},(_,i)=>['Example Chapter '+i,'NV'+String(20000000+i),'E123456789-0','Foreign Non-Profit Corporation (80)','','01/01/2020','Active']);}
+
+test('Nevada opens a first-page reservation after collecting a 160-row two-page search',async()=>{
+ const rows=manyPublicRows(160);rows[0]=['CCA','C20190204-2019','C20190204-2019','','','','Expired'];
+ const h=fixture({rows,reservation:true,initialPageSize:25,pageSizeControl:true});
+ const search=await h.search();assert.equal(search.total,160);
+ const detail=await h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:'C20190204-2019'},h.time+45000));
+ assert.equal(detail.fields['Entity Number'],'C20190204-2019');
+ assert.deepEqual(h.opened,['C20190204-2019']);assert.equal(h.clicks,1);
+});
+
+test('Nevada refuses an earlier-page record whose row changed before detail navigation',async()=>{
+ const rows=manyPublicRows(160);rows[0]=['CCA','C20190204-2019','C20190204-2019','','','','Expired'];
+ const h=fixture({rows,reservation:true,initialPageSize:100});await h.search();
+ rows[0][6]='Active';
+ await assert.rejects(h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:'C20190204-2019'},h.time+45000)),/DETAIL_NOT_OBSERVED/);
+ assert.deepEqual(h.opened,[]);
+});
 
 test('Nevada coalesces an identical source row repeated across otherwise distinct completed pages',async()=>{
  const rows=manyPublicRows(1322);
