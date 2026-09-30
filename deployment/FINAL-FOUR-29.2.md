@@ -813,3 +813,35 @@ packaging guard now runs those bridge tests against the actual namespaced trial
 package, so a working collector cannot hide a conflicting packaged protocol.
 193 JavaScript checks and 46 backend/isolation controls pass. Live activation
 and the original-alias CCA rerun are required before reporting this issue fixed.
+
+### 0.6.18 live results and 0.6.19 public-return correction
+
+The original CCA run now opens the first-page reservation after collecting all
+160 rows, and returns the completed, explicitly unlinked reservation detail.
+It then fails the next generated-name search at 40.780 seconds. A manual check
+proved the state's reservation Back action routes to ExistingBusinessFilings,
+which redirects to sign-in, rather than the public business search.
+
+0.6.19 reopens the fixed public search after a completed reservation. It does
+not enter credentials or follow the sign-in route. If another detail from the
+same result set is required, it first repeats that exact public query and
+requires unchanged complete rows and count before opening the observed ID.
+Changed results remain inconclusive. Other NV details retain their public
+return workflow. No state or overall deadline increases.
+
+The Man in the Mirror NV control exposed a timer regression introduced in
+0.6.17: the worker's 10-second return watchdog won the race against the page's
+10-second timeout reply, suppressing the existing fresh-form recovery. Transport
+now uses the original overall job deadline; individual DOM allowances remain.
+A late timeout reply test and original job expiry test cover both conditions.
+197 JavaScript controls and 46 backend/isolation checks passed. Activation and
+live NV controls are still required.
+
+After the approved 0.6.18 AL verification, all three original-alias controls
+completed: Environmental Law Institute Delinquent (AL09-119, 30.830s), Every Kid
+Sports Current (AL26-534, 3.591s), and Young Life Not Registered (15.376s).
+The incorrect EarthShare candidate is no longer selected for ELI. This is live
+validation of identity selection, not removal of Alabama's source CAPTCHA.
+Five deployed backend controls retained CO Current, NM Current/no-record,
+and MS/NJ Exempt. IL/GA/TN Summit controls retained Current in 33.192s combined;
+NV Classical 98.1 completed no-record in 54.852s.

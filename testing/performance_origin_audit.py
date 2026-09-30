@@ -73,11 +73,11 @@ def restore_trial_0614(tree):
     """Normalize only the two exact trial-only 0.6.14/0.6.15 compatibility gates."""
     class VersionGate(ast.NodeTransformer):
         def visit_BoolOp(self, node):
-            versions = "{'0.6.4', '0.6.5', '0.6.6', '0.6.7', '0.6.8', '0.6.9', '0.6.10', '0.6.11', '0.6.12', '0.6.13', '0.6.14', '0.6.15', '0.6.16', '0.6.17', '0.6.18'}"
+            versions = "{'0.6.4', '0.6.5', '0.6.6', '0.6.7', '0.6.8', '0.6.9', '0.6.10', '0.6.11', '0.6.12', '0.6.13', '0.6.14', '0.6.15', '0.6.16', '0.6.17', '0.6.18', '0.6.19'}"
             for variable in ("record.get('connector_version')", 'connector_version'):
                 expression = 'trial_identity() and ' + variable + ' in ' + versions
                 if ast.dump(node) == ast.dump(ast.parse(expression, mode='eval').body):
-                    return ast.parse(expression.replace(", '0.6.14'", '').replace(", '0.6.15'", '').replace(", '0.6.16'", '').replace(", '0.6.17'", '').replace(", '0.6.18'", ''), mode='eval').body
+                    return ast.parse(expression.replace(", '0.6.14'", '').replace(", '0.6.15'", '').replace(", '0.6.16'", '').replace(", '0.6.17'", '').replace(", '0.6.18'", '').replace(", '0.6.19'", ''), mode='eval').body
             return self.generic_visit(node)
     return VersionGate().visit(tree)
 

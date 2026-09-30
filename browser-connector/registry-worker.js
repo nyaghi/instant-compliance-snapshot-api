@@ -9,14 +9,15 @@ async function registryMessage(job, message) {
     return chrome.tabs.sendMessage(job.tab, message, {frameId:0});
   };
   if (job.registryState!=='NV' || !Number.isFinite(message.budgetMs)) return send();
-  // The page's observer timeout cannot bound an unanswered Chrome message.
-  // Enforce the same allowance in the worker; failure closes this job's tab,
-  // so a late response cannot be consumed by the following organization.
+  // Keep the overall job deadline as the transport bound. A second timer at
+  // exactly the page's allowance races its normal timeout reply and prevents
+  // the existing bounded fresh-form recovery from running. Page observers
+  // retain their own allowances; a hung message cannot outlive this job.
   let timer;
   try {
     return await Promise.race([send(),new Promise((_,reject)=>{
       timer=setTimeout(()=>reject(new Error('NY_CONNECTOR_REGISTRY_NV_COMMAND_TIMEOUT')),
-        Math.max(1,Math.min(message.budgetMs,job.activeExpiresAt-Date.now())));
+        Math.max(1,job.activeExpiresAt-Date.now()));
     })]);
   } finally {clearTimeout(timer);}
 }
@@ -82,7 +83,8 @@ async function registryNorthCarolinaVisibility(job) {
 }
 async function registryNavigate(job, url, budgetMs = 45000, freshNvRecovery = false) {
   if (new URL(url).origin !== registryOrigin(job.registryState)) throw new Error("NY_CONNECTOR_INCOMPLETE");
-  if (freshNvRecovery && (job.registryState!=='NV' || url!==registryStart('NV') || !job.nvReturnRecoveryUsed)) throw new Error('NY_CONNECTOR_INVALID_SEQUENCE');
+  if (freshNvRecovery && (job.registryState!=='NV' || url!==registryStart('NV')
+      || !(job.nvReturnRecoveryUsed || job.nvReservationDetail))) throw new Error('NY_CONNECTOR_INVALID_SEQUENCE');
   let previous;
   if (job.tab !== null) {
     try { previous=(await registryMessage(job,{action:"registry-ready"})).documentId; } catch {}
@@ -160,6 +162,24 @@ async function performRegistryQuery(job, query) {
   }
   if (query.state === "NC") return registryNorthCarolinaQuery(job,query);
   if (["NV", "TN"].includes(query.state)) {
+    if (query.state==='NV' && job.nvReservationDetail) {
+      // ORION reservation Back leads to ExistingBusinessFilings and sign-in,
+      // not public search. Reopen the known public form, within this job's
+      // deadline. A second detail must first re-observe the entire same result
+      // set; it cannot reuse detached links or changed registration evidence.
+      const prior=job.nvLastSearch;
+      await registryNavigate(job,registryStart('NV'),Math.min(45000,job.activeExpiresAt-Date.now()),true);
+      job.nvReservationDetail=false;job.finalFourReusableForm=true;
+      if (query.operation==='detail') {
+        if (!prior?.evidence?.complete) throw new Error('NY_CONNECTOR_INVALID_SEQUENCE');
+        const restored=await registryMessage(job,{action:'registry-nv',query:prior.query,
+          budgetMs:Math.max(1,Math.min(110000,job.activeExpiresAt-Date.now()))});
+        if (!restored?.ok || restored.evidence?.complete!==true || !P.sameQuery(restored.evidence.query,prior.query)
+            || restored.evidence.total!==prior.evidence.total
+            || JSON.stringify(restored.evidence.rows)!==JSON.stringify(prior.evidence.rows))
+          throw new Error('NY_CONNECTOR_REGISTRY_NV_RESTORED_RESULTS_CHANGED');
+      }
+    }
     if (query.operation === "search") {
       if (query.state==='NV' && job.tab!==null && !job.finalFourReusableForm) {
         const returned=await registryMessage(job,{action:'registry-nv-return',budgetMs:Math.max(1,Math.min(10000,job.activeExpiresAt-Date.now()))});
@@ -179,6 +199,10 @@ async function performRegistryQuery(job, query) {
     const allowance=query.state==='NV'&&query.operation==='search'?110000:45000;
     const response = await registryMessage(job,{action:`registry-${query.state.toLowerCase()}`,query,budgetMs:Math.max(1,Math.min(allowance,job.activeExpiresAt-Date.now()))});
     if (query.operation === "search") job.finalFourSearchComplete = response?.ok === true;
+    if (query.state==='NV' && response?.ok===true) {
+      if (query.operation==='search') job.nvLastSearch={query,evidence:response.evidence};
+      job.nvReservationDetail=query.operation==='detail' && /^(?:NR|C)\d{8}-\d+$/.test(query.identifier);
+    }
     // TN keeps its result grid behind the detail dialog. NV navigates to a
     // detail route, so its next name search uses the public Return To Search.
     job.finalFourReusableForm = response?.ok === true && (query.state === "TN" || query.operation === "search");

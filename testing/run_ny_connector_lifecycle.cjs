@@ -52,13 +52,13 @@ test('readiness advertises the installed manifest version',async()=>{
   await tick();assert.equal(response.ok,true);assert.equal(response.version,h.chrome.runtime.getManifest().version);
 });
 
-test('NV unanswered content message ends at its command allowance without extending the job',async()=>{
+test('NV unanswered content message cannot outlive the original job deadline',async()=>{
  const h=harness();h.tabs.set(3,{id:3,url:'https://orion.nv.gov/portal/public/'});
  let release;h.chrome.tabs.sendMessage=()=>new Promise(resolve=>{release=resolve;});
  const job={tab:3,registryState:'NV',activeExpiresAt:310000,closed:false};
  const promise=h.context.registryMessage(job,{action:'registry-nv',budgetMs:110000});
  const rejected=assert.rejects(promise,/NV_COMMAND_TIMEOUT/);await tick();
- await h.advance(110000);await rejected;
+ await h.advance(300000);await rejected;
  assert.equal(job.activeExpiresAt,310000);
  release({ok:true});await tick();
 });
@@ -66,7 +66,45 @@ test('NV unanswered content message ends at its command allowance without extend
 test('NV completed content response clears its worker deadline',async()=>{
  const h=harness();h.tabs.set(3,{id:3,url:'https://orion.nv.gov/portal/public/'});
  const result=await h.context.registryMessage({tab:3,registryState:'NV',activeExpiresAt:310000,closed:false},{action:'registry-nv',budgetMs:45000});
- assert.equal(result.ok,true);assert.ok(h.timers.filter(t=>t.ms===45000).every(t=>t.cleared));
+ assert.equal(result.ok,true);assert.ok(h.timers.filter(t=>t.ms===300000).every(t=>t.cleared));
+});
+
+test('NV page timeout reply can trigger return recovery without a competing transport timer',async()=>{
+ const h=harness();h.tabs.set(3,{id:3,url:'https://orion.nv.gov/portal/public/'});
+ let release;h.chrome.tabs.sendMessage=()=>new Promise(resolve=>{release=resolve;});
+ const promise=h.context.registryMessage({tab:3,registryState:'NV',activeExpiresAt:310000,closed:false},
+   {action:'registry-nv-return',budgetMs:10000});await tick();
+ await h.advance(10100);
+ release({ok:false,reason:'NY_CONNECTOR_REGISTRY_NV_RETURN_READY_TIMEOUT'});
+ assert.equal((await promise).reason,'NY_CONNECTOR_REGISTRY_NV_RETURN_READY_TIMEOUT');
+ assert.ok(h.timers.filter(t=>t.ms===300000).every(t=>t.cleared));
+});
+
+for(const next of ['search','detail','changed-detail'])test(`NV reservation return uses public form and preserves identity: ${next}`,async()=>{
+ const trialOrigin='https://fixture-final-four.onrender.com',h=harness({trialOrigin});
+ const start=vm.runInContext("registryStart('NV')",h.context),reservation='https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=NameReservationDetails&id=fixture';
+ h.tabs.set(1,{id:1,windowId:10,url:trialOrigin});h.tabs.set(3,{id:3,windowId:10,url:reservation});
+ let generation=1,reloads=0;const actions=[];
+ const prior={query:{state:'NV',operation:'search',name:'Example'},evidence:{query:{state:'NV',operation:'search',name:'Example'},complete:true,total:1,rows:[{identifier:'NV12345',name:'Example'}]}};
+ h.chrome.tabs.reload=async()=>{generation++;reloads++;};
+ h.chrome.tabs.sendMessage=async(tab,m)=>{
+  actions.push(m);
+  if(m.action==='registry-ready')return {ready:true,documentId:String(generation),url:h.tabs.get(tab).url};
+  if(m.action==='registry-nv-return')throw Error('Reservation Back would leave public search');
+  if(m.query.operation==='search')return {ok:true,evidence:{...prior.evidence,query:m.query,
+    rows:next==='changed-detail'?[{identifier:'NV12345',name:'Other Organization'}]:prior.evidence.rows}};
+  return {ok:true,evidence:{query:m.query,complete:true,fields:{'NV Business ID':'NV12345'}}};
+ };
+ const job={tab:3,registryState:'NV',activeExpiresAt:310000,closed:false,finalFourSearchComplete:true,
+   nvReservationDetail:true,nvLastSearch:prior,sender:{url:trialOrigin,tab:{id:1}}};
+ const query=next==='search'?{state:'NV',operation:'search',name:'Next Alias'}:{state:'NV',operation:'detail',identifier:'NV12345'};
+ const promise=h.context.performRegistryQuery(job,query);
+ if(next==='changed-detail')await assert.rejects(promise,/NV_RESTORED_RESULTS_CHANGED/);
+ else assert.equal((await promise).ok,true);
+ assert.equal(reloads,1);assert.equal(h.tabs.get(3).url,start);assert.equal(job.activeExpiresAt,310000);
+ const searches=actions.filter(m=>m.query?.operation==='search');assert.equal(searches.length,1);
+ assert.equal(searches[0].query.name,next==='search'?'Next Alias':'Example');
+ if(next==='changed-detail')assert.equal(actions.some(m=>m.query?.operation==='detail'),false);
 });
 
 test('one owned tab serves EIN and name; finish closes only that tab',async()=>{
