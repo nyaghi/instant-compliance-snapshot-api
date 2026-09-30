@@ -868,3 +868,36 @@ allowances are unchanged. Added controls cover a delayed navigation acknowledgem
 an old detail that falsely reports ready, and timeout without budget extension.
 200 connector checks pass. Activation and the original-alias live CCA control
 are still required; no claim of a clean run or full resolution is made.
+
+### 0.6.20 live confirmation
+
+Connector activation was confirmed on the isolated validation page. All four
+original-alias NV controls passed against deployed commit 88fa698:
+
+| Organization | Result | Seconds |
+| --- | --- | ---: |
+| Colorectal Cancer Alliance | Not Registered | 49.568 |
+| Man in the Mirror | Delinquent | 92.627 |
+| Classical 98.1 | Not Registered | 62.936 |
+| Outward Bound | Upcoming Filing | 42.208 |
+
+CCA completed 15 search commands and one reservation detail command, including
+every required discovered name and the generated fallbacks. The explicitly
+unlinked C20190204-2019 reservation and unrelated commercial entities were
+excluded. The original alias arrays, deadlines and spreadsheet expectations
+were preserved. This resolves the observed Nevada navigation failure.
+
+Five deployed backend controls retained CO Current, NM Current/no-record and
+MS/NJ Exempt. 200 connector checks and 46 backend/isolation checks passed; the
+packaged-bridge 11-test subset also passed. The earlier broad shared suite has
+one WV test with four failing subcases, reproduced on the pre-change baseline.
+
+Saved evidence: browser-037-nv-controls-0620.json and candidate-0620-backend-results.json
+in the final-four trial output directory. The updated 30-by-38 workbook records
+1,135 latest conclusive results and five source/identity/application reviews,
+1,090 matches from 1,113 comparable expectations, and 27 blank expectations.
+Initial failures are retained. Reported conclusiveness is not verified accuracy.
+The remaining reviews are Outward Bound/DC, Young Life/GA, Human Trafficking
+Legal Center/NM, RMHC/NV and FGCU Foundation/NC. Do not promote while these and
+the remaining spreadsheet differences await review. Protected services were
+rechecked unchanged; no production or staging 29.1 changes were made.
