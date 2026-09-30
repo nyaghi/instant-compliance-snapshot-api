@@ -21,7 +21,9 @@ async function registryMessage(job, message) {
     })]);
   } finally {clearTimeout(timer);}
 }
-async function registryReady(job, oldDocument = null, path = null, budgetMs = 45000, ncSubmittedQuery = null) {
+async function registryReady(job, oldDocument = null, path = null, budgetMs = 45000, ncSubmittedQuery = null, nvRouteOnly = false) {
+  if (nvRouteOnly && (job.registryState!=='NV' || oldDocument!==null
+      || path!==new URL(registryStart('NV')).pathname)) throw new Error('NY_CONNECTOR_INVALID_SEQUENCE');
   const started = Date.now();
   const deadline = Math.min(Date.now()+Math.max(1,Math.min(45000,budgetMs)), job.activeExpiresAt);
   let verificationPending=false, visibilityAttempted=false, previousVisible=null, submissionRetried=false;
@@ -29,7 +31,8 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
     try {
       const value=await registryMessage(job,{action:"registry-ready"});
       verificationPending=job.registryState==='NC'&&value?.verification_pending===true;
-        if (value?.ready && value.documentId !== oldDocument && (!path || new URL(value.url).pathname===path)
+        const observedRoute=nvRouteOnly&&typeof value?.documentId==='string'&&value.documentId.length>0;
+        if ((value?.ready || observedRoute) && value.documentId !== oldDocument && (!path || new URL(value.url).pathname===path)
             && (job.registryState!=='NV' || new URL(value.url).hash===new URL(registryStart('NV')).hash)) return value;
       // An acknowledged NC Search can leave the same ordinary, enabled form
       // without navigating. Retry once only after observing that exact form;
@@ -98,9 +101,13 @@ async function registryNavigate(job, url, budgetMs = 45000, freshNvRecovery = fa
           await chrome.tabs.update(job.tab,{url});
           // A tabs.update acknowledgement is not navigation completion. Wait
           // for the public route before reloading, or Chrome can reload the
-          // old reservation document. Both waits share the original allowance.
-          const target=await registryReady(job,null,new URL(url).pathname,deadline-Date.now());
+          // old reservation document. The old form need not become usable:
+          // recovering that form is why this refresh is required. Only after
+          // reload must the fresh document and complete form be ready. Both
+          // waits share the original allowance.
+          const target=await registryReady(job,null,new URL(url).pathname,deadline-Date.now(),null,true);
           previous=target.documentId;
+          diagnostic('nv-navigation',job,'public route reached; refreshing form');
         }
       await chrome.tabs.reload(job.tab);
     } else if (current.url === url) await chrome.tabs.reload(job.tab);

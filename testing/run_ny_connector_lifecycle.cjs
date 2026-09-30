@@ -25,7 +25,8 @@ function harness(initial={}) {
   const recovery={clearForTab:async(tabId,owned,close)=>{repairs.push({tabId,owned});await close();}};
   const context=vm.createContext({URL,Date:Clock,chrome,CCNYRecovery:recovery,importScripts:()=>{},setTimeout:(fn,ms)=>{const t={fn,ms,due:now+ms,cleared:false};timers.push(t);return t;},clearTimeout:t=>{if(t)t.cleared=true;}});
   for(const file of ['protocol.js','registry-worker.js','worker.js']) {
-    let source=fs.readFileSync(path.join(root,file),'utf8');
+    const sourceRoot=file==='registry-worker.js'&&process.env.CC_TEST_TRIAL_DIR?process.env.CC_TEST_TRIAL_DIR:root;
+    let source=fs.readFileSync(path.join(sourceRoot,file),'utf8');
     if(file==='protocol.js' && initial.trialOrigin) source=source.replace('const TRIAL_ORIGIN = "";',`const TRIAL_ORIGIN = ${JSON.stringify(initial.trialOrigin)};`);
     if(file==='protocol.js' && initial.trialOrigin && initial.trialOnly) source=source.replace('function registryAllowed(state, origin) {','function registryAllowed(state, origin) { if (origin !== TRIAL_ORIGIN || state === "NY") return false;');
     vm.runInContext(source,context);
@@ -106,6 +107,45 @@ test('NV wrong-route readiness cannot consume more than the original navigation 
  const job={tab:3,registryState:'NV',activeExpiresAt:310000,closed:false,nvReservationDetail:true};
  const pending=assert.rejects(h.context.registryNavigate(job,start,45000,true));await tick();await h.advance(45000);
  await pending;assert.equal(reloads,0);assert.equal(job.activeExpiresAt,310000);
+});
+
+test('NV fresh return reloads the committed public route even when its old form never becomes ready',async()=>{
+ const h=harness({trialOrigin:'https://fixture-final-four.onrender.com'});
+ const start=vm.runInContext("registryStart('NV')",h.context);
+ h.tabs.set(3,{id:3,url:'https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=NameReservationDetails&id=fixture'});
+ let generation=1,reloads=0;
+ h.chrome.tabs.update=async(id,options)=>{
+  h.context.setTimeout(()=>Object.assign(h.tabs.get(id),options),400);return h.tabs.get(id);
+ };
+ h.chrome.tabs.reload=async(id)=>{assert.equal(h.tabs.get(id).url,start);generation++;reloads++;};
+ h.chrome.tabs.sendMessage=async(id)=>({ready:generation>1,documentId:String(generation),url:h.tabs.get(id).url});
+ const job={tab:3,registryState:'NV',activeExpiresAt:310000,closed:false,nvReservationDetail:true};
+ const pending=h.context.registryNavigate(job,start,45000,true);await tick();
+ assert.equal(reloads,0);await h.advance(600);
+ assert.equal(reloads,1,'The planned refresh must not depend on the stale form becoming usable');
+ assert.equal((await pending).ready,true);assert.equal(job.activeExpiresAt,310000);
+});
+
+for(const failed of ['form','document'])test(`NV fresh return still requires a new ready document after reload: ${failed}`,async()=>{
+ const h=harness({trialOrigin:'https://fixture-final-four.onrender.com'});
+ const start=vm.runInContext("registryStart('NV')",h.context);
+ h.tabs.set(3,{id:3,url:'https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=NameReservationDetails&id=fixture'});
+ let generation=1,reloads=0;
+ h.chrome.tabs.reload=async()=>{reloads++;if(failed!=='document')generation++;};
+ h.chrome.tabs.sendMessage=async(id)=>({ready:failed!=='form',documentId:String(generation),url:h.tabs.get(id).url});
+ const job={tab:3,registryState:'NV',activeExpiresAt:310000,closed:false,nvReservationDetail:true};
+ const pending=assert.rejects(h.context.registryNavigate(job,start,45000,true),/TAB_READY_TIMEOUT/);
+ await tick();await h.advance(45000);await pending;
+ assert.equal(reloads,1);assert.equal(job.activeExpiresAt,310000);assert.equal(h.queries.length,0);
+});
+
+test('NV navigation-only readiness cannot weaken another state or a results-document wait',async()=>{
+ const h=harness({trialOrigin:'https://fixture-final-four.onrender.com'});
+ for(const [state,oldDocument,path] of [['TN',null,'/portal/registered-charities-search'],['NC',null,'/online_services/search/by_title/search_charities'],['NV','old','/portal/public/'],['NV',null,'/other']]){
+  const job={tab:3,registryState:state,activeExpiresAt:310000,closed:false};
+  await assert.rejects(h.context.registryReady(job,oldDocument,path,45000,null,true),/INVALID_SEQUENCE/);
+ }
+ assert.equal(h.queries.length,0);
 });
 
 for(const next of ['search','detail','changed-detail'])test(`NV reservation return uses public form and preserves identity: ${next}`,async()=>{
