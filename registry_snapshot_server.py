@@ -26180,6 +26180,53 @@ def ms_wait_for_search_results(page):
         return None, False, f"Mississippi search results remained incomplete within the bounded readiness wait ({type(exc).__name__})."
 
 
+def ms_detail_identity_fields(detail_text, matched_name):
+    """Read only the selected detail's name and organization address sections."""
+    text = str(detail_text or "").replace("\xa0", " ")
+    registered = re.findall(r"(?im)^Registered Name\s*:\s*([^\r\n]+)", text)
+    if len(registered) != 1 or normalized_match_name(registered[0]) != normalized_match_name(matched_name):
+        return {}
+    blocks = re.findall(r"(?ims)^Address\s*\n(.+?)\nContact Information\s*$", text)
+    if len(blocks) != 1:
+        return {}
+    lines = [line.strip() for line in blocks[0].splitlines() if line.strip()]
+    if len(lines) != 2 or not re.fullmatch(r".+?,\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?", lines[-1]):
+        return {}
+    return {"name": registered[0].strip(), "street": lines[0], "location": lines[-1]}
+
+
+def ms_legal_description_identity(org, external_result, deadline):
+    """MS appends entity descriptions to names; a full name AND office must agree.
+
+    This is a source-field interpretation, not a general relaxed name matcher.
+    The full source label remains the displayed name. Chapter/geographic words
+    in the name before the comma are never removed.
+    """
+    fields = getattr(external_result, "ms_detail_identity", {}) or {}
+    raw_name = getattr(external_result, "matched_registry_name", "") or ""
+    if fields.get("name") != raw_name or time.perf_counter() >= deadline:
+        return {}
+    descriptor = re.fullmatch(
+        r"(.+?),\s+an?\s+[A-Za-z ]{2,30}\s+(?:nonprofit|non-profit|not-for-profit)"
+        r"(?:\s+(?:religious|public benefit|mutual benefit))?\s+corporation\.?", raw_name, re.I)
+    if not descriptor:
+        return {}
+    base_name = descriptor[1].strip()
+    targets = [org.organization_name, *known_names_for_ein(org.ein)]
+    if not any(normalized_match_name(base_name) == normalized_match_name(target) for target in targets):
+        return {}
+    row = {**fields, "name": base_name, "ein": getattr(external_result, "verified_registry_ein", "")}
+    # Existing master identity checks retain EIN disagreement and office conflict
+    # rejection. Unknown address evidence cannot confirm this expanded label.
+    remaining = max(0.0, deadline - time.perf_counter())
+    decision = licensed_charity_identity(org, row, "MS", time.monotonic() + min(remaining, 8.0))
+    if (time.perf_counter() >= deadline or decision != "accepted"
+            or row.get("address_evidence", {}).get("decision") != "corroborated"):
+        return {}
+    return {"name": row.get("match", {}), "address": row["address_evidence"],
+            "source_name": raw_name, "parsed_legal_name": base_name}
+
+
 def search_ms_fast(page, org, navigate: bool = True):
     """Master-level Mississippi path with bounded waits around the embedded checker logic."""
     modules = state_batch_modules(["MS"])
@@ -26323,6 +26370,7 @@ def search_ms_fast(page, org, navigate: bool = True):
         else:
             result.source_attempts = [*(getattr(result, "source_attempts", []) or []), "Mississippi matched row did not expose a usable detail link."]
 
+        result.ms_detail_identity = ms_detail_identity_fields(detail_text, row_registry_name)
         filing_status = module.extract_labeled_value_from_text(detail_text, ["Filing Status"])
         expiration_raw = module.extract_labeled_value_from_text(detail_text, ["Expiration Date"])
         expiration_date = module.parse_mmddyyyy_date(expiration_raw)
@@ -26446,8 +26494,7 @@ def search_batch_browser_state(page, org, state: str):
                 completed_identity_queries.append(variant_name)
                 continue
             matched_name = getattr(external_result, "matched_registry_name", "") or getattr(external_result, "organization_name", "")
-            if matched_name and not ms_registry_name_is_safe(matched_name, org.organization_name, org.ein):
-                continue
+            name_safe = bool(matched_name and ms_registry_name_is_safe(matched_name, org.organization_name, org.ein))
             # A broad search phrase may locate a related entity. It is not proof
             # that the candidate is the requested organization or reviewed alias.
             candidate = {
@@ -26457,6 +26504,20 @@ def search_batch_browser_state(page, org, state: str):
             decision = max((score_candidate(target, org.ein, candidate)
                             for target in [org.organization_name, *known_names_for_ein(org.ein)]),
                            key=lambda item: item["score"])
+            if not name_safe:
+                # Do not leave the preselected positive result in best_external
+                # after the existing name guard rejects it.
+                decision = {"decision": "rejected", "score": 0, "reason": "MS_NAME_GUARD_REJECTED"}
+            if decision["decision"] != "accepted":
+                identity = ms_legal_description_identity(org, external_result, ms_deadline)
+                if identity:
+                    decision = identity["name"]
+                    external_result.identity_confidence = identity
+                    external_result.source_note = " ".join(filter(None, [
+                        getattr(external_result, "source_note", ""),
+                        "The registry's appended legal-entity description was separated from the complete name; "
+                        "the organization address was corroborated against EIN-linked public records.",
+                        identity["address"].get("basis", "")]))
             if decision["decision"] != "accepted":
                 external_result.status = "Needs Review"
                 external_result.success = False

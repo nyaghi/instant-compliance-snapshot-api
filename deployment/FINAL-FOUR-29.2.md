@@ -599,3 +599,8 @@ all other master functions (including discovery, shared matching, NM, status
 rules, and queue settings) to match commit 887ccc7. No paid-resource, worker,
 environment or protected deployment change is part of this patch. Live
 targeted checks and a control sample are required before recommendation.
+# September 30 Mississippi follow-up
+
+The official MS detail for an affected case appends a jurisdiction/legal-form description to its full name. The existing identity guard left it unconfirmed despite a matching office. The follow-up reads the selected detail's Registered Name and Address sections, retains the complete source label, and allows that narrow legal-form interpretation only when the full underlying name and EIN-linked organization address pass the existing master identity checks. Different EINs, unknown/conflicting offices, chapter suffixes, incomplete or duplicate details remain unconfirmed. This is an MS source-field interpretation; shared name matching and other states are unchanged.
+
+An added negative control also exposed an existing MS fall-through: when the earlier name guard rejected the first candidate, its positive result could remain selected. Rejections now enter the existing identity-review path. Mississippi's query budget, discovery settings, worker capacity, and overall workflow deadlines are unchanged. Exact-AST scope controls and 40 recorded MS controls accompany live positive, negative and unrelated-state follow-ups. No further connector version is needed for this backend-only change.

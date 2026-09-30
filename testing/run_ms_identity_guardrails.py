@@ -83,15 +83,17 @@ class Tests(unittest.TestCase):
     self.assertEqual(c.public_status(r),source['status'])
     self.assertEqual(r.matched_registry_name,source['matched_registry_name'])
  def test_runtime_scope_and_budgets(self):
-  old=ast.parse(subprocess.check_output(['git','show','19c6083:registry_snapshot_server.py'],cwd=ROOT).decode('utf-8'))
+  # Rebase this scope-only control on the deployed trial before the MS patch.
+  # The historical 19c6083 PA shape predates approved Pennsylvania fixes.
+  old=ast.parse(subprocess.check_output(['git','show','bc56e10:registry_snapshot_server.py'],cwd=ROOT).decode('utf-8'))
   new=ast.parse((ROOT/'registry_snapshot_server.py').read_text(encoding='utf-8'))
-  from testing.capacity_lab.test_fl_source_independence import restore_source_gate
-  restore_source_gate(new,old)
+  from testing.performance_origin_audit import restore_ms_0613
+  new.body=[restored for node in new.body if (restored := restore_ms_0613(node) if isinstance(node,ast.FunctionDef) else node) is not None]
   oldmap={n.name:n for n in old.body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
   newmap={n.name:n for n in new.body if isinstance(n,(ast.FunctionDef,ast.ClassDef))}
   changed={k for k in oldmap if ast.dump(oldmap[k])!=ast.dump(newmap[k])}
-  self.assertEqual(changed,{'search_batch_browser_state','comments_for_result_base','search_ar_serialized','run_single_state_lookup_reliably'})
-  self.assertEqual(set(newmap)-set(oldmap),{'lab_sales_ar_access_block_is_terminal'})
+  self.assertEqual(changed,set())
+  self.assertEqual(set(newmap)-set(oldmap),set())
   self.assertEqual(set(oldmap)-set(newmap),set())
   def budgets(node):
    return [ast.dump(n) for n in ast.walk(node) if isinstance(n,ast.Assign) and any(isinstance(x,ast.Name) and x.id=='ms_deadline' for x in n.targets)]
