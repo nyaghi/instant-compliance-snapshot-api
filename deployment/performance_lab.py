@@ -141,6 +141,18 @@ def final_four_asset(name, text):
                 '() => onProgress?.(`${label}: waiting to resume this check.`), registryState, recoverySignal')
         replace('const searchSignal = recoveryUsed ?', 'const searchSignal = (recoveryUsed || finalFour) ?')
         replace('if (!recoveryUsed) throw error;', 'if (!recoveryUsed && !finalFour) throw error;')
+        # Trial-only, public-stage diagnostics. Never emit credentials, signed
+        # continuations, source pages, or verification challenge material.
+        replace('    async function api(fields, cleanup = false) {', '''    const trace = (stage, query = null, detail = {}) => {
+      if (!finalFour) return;
+      const publicQuery = query ? Object.fromEntries(Object.entries(query).filter(([key]) => ["state","operation","name","identifier"].includes(key))) : null;
+      onProgress?.(`${label}: ${stage}.`, {state:registryState,stage,query:publicQuery,...detail});
+    };
+    async function api(fields, cleanup = false) {
+      if (!cleanup) trace("master request", null, {action:fields.action});''')
+        replace('      const payload = await response.json();', '      const payload = await response.json();\n      if (!cleanup) trace("master response", null, {action:fields.action,http_status:response.status,phase:payload.phase});')
+        replace('        let completed;', '        let completed;\n        trace("browser query started", state.query);')
+        replace('        state = completed.ok', '        trace("browser query returned", state.query, {ok:completed.ok,reason:completed.reason||""});\n        state = completed.ok')
     return text
 
 

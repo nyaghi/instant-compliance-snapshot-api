@@ -8,12 +8,12 @@ const source = fs.readFileSync(process.env.CC_TEST_CONNECTOR_SOURCE || path.join
 const capabilities = ['lookup-tab-v1','verification-retry-v1','search-verification-retry-v1','search-schema-errors-v1','nullable-ein-v1','queue-v1','connection-recovery-v1','recovery-causes-v1','cleanup-ack-v1','timeout-recovery-v1','resume-v1','verified-detail-v1','detail-navigation-v1','il-ga-public-dom-v1','il-ga-complete-search-v2','il-session-reuse-v1','il-large-pages-v1','ga-exempt-record-v1','ga-legacy-rows-v1'];
 
 async function exercise({state='GA',commands=42,elapsedPerCommand=100,stopStatus='Delinquent',missedPings=0,incompatible=false,oldIllinois=false}={}) {
-  const actions=[];let advance=0,clock=0,listener,pings=0;
+  const actions=[],stages=[];let advance=0,clock=0,listener,pings=0;
   const window={addEventListener:(kind,fn)=>{if(kind==='message')listener=fn;},postMessage(message){
     actions.push(message.action);
     if(message.action==='ping' && ++pings<=missedPings)return;
     queueMicrotask(()=>listener({source:window,origin:'https://staging.compliance-express.com',data:{
-      ...message,direction:'response',ok:true,version:oldIllinois?'0.5.8':'0.5.9',capabilities:incompatible?[]:[...capabilities,...(oldIllinois?[]:['il-dom-events-v1'])],evidence:{complete:true,rows:[]}
+      ...message,direction:'response',ok:true,version:oldIllinois?'0.5.8':'0.5.9',capabilities:incompatible?[]:[...capabilities,'final-four-public-v1',...(oldIllinois?[]:['il-dom-events-v1'])],evidence:{complete:true,rows:[]}
     }}));
   }};
   const context=vm.createContext({window,location:{origin:'https://staging.compliance-express.com'},
@@ -26,16 +26,27 @@ async function exercise({state='GA',commands=42,elapsedPerCommand=100,stopStatus
       else {
         if(request.action==='advance'){advance++;clock+=elapsedPerCommand;}
         payload=advance>=commands?{phase:'complete',result:{state,status:stopStatus}}:
-          {phase:'search',check_token:'test-only-token',query_id:'query-'+advance,query:{state,orgName:'Variant '+advance}};
+          {phase:'search',check_token:'test-only-token',query_id:'query-'+advance,query:{state,orgName:'Variant '+advance,name:'Public name',operation:'search',private_field:'MUST-NOT-EXPORT'}};
       }
       return {ok:true,json:async()=>payload};
     }});
   vm.runInContext(source,context);
   let result,error;
-  try {result=await window.CCNYConnector.lookup({state,organization_name:'Example Foundation',ein:'12-3456789',email:'test@example.invalid',admin_passcode:'test-only',device_id:'test-only'});}
+  try {result=await window.CCNYConnector.lookup({state,organization_name:'Example Foundation',ein:'12-3456789',email:'test@example.invalid',admin_passcode:'test-only',device_id:'test-only',onProgress:(_message,stage)=>{if(stage)stages.push(stage);}});}
   catch(e){error=e;}
-  return {result,error,advance,actions};
+  return {result,error,advance,actions,stages};
 }
+
+test('trial stage diagnostics preserve results and export public fields only',{skip:!process.env.CC_TEST_CONNECTOR_SOURCE},async()=>{
+  const run=await exercise({state:'NV',commands:2});assert.ifError(run.error);
+  assert.equal(run.result.status,'Delinquent');assert.equal(run.advance,2);
+  assert.equal(run.stages.filter(s=>s.stage==='browser query started').length,2);
+  assert.equal(run.stages.filter(s=>s.stage==='browser query returned').length,2);
+  assert.equal(run.stages.filter(s=>s.stage==='master response'&&s.action==='advance').length,2);
+  const exported=JSON.stringify(run.stages);
+  for(const secret of ['MUST-NOT-EXPORT','test-only','test@example.invalid','check_token','private_field'])assert.ok(!exported.includes(secret),secret);
+  assert.equal((await exercise({state:'GA',commands:1})).stages.length,0);
+});
 test('GA full reviewed-name search completes beyond both former command caps',async()=>{
   const run=await exercise();assert.ifError(run.error);assert.equal(run.advance,42);assert.equal(run.result.status,'Delinquent');assert.ok(run.actions.includes('finish'));
 });

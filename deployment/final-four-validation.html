@@ -62,7 +62,7 @@ setup.addEventListener('submit',async event=>{
  const credentials={email:document.getElementById('email').value.trim(),admin_passcode:document.getElementById('passcode').value,device_id:crypto.randomUUID()};
  setup.hidden=true;document.getElementById('passcode').value='';const completed=[];
  for(const row of cases){
-  let aliases=row.alternate_names||[],discovery=null,discoverySeconds=null;const started=Date.now();
+  let aliases=row.alternate_names||[],discovery=null,discoverySeconds=null;const started=Date.now(),connectorProgress=[];
   progress.textContent=`${completed.length+1}/${cases.length}: ${row.organization_name}`;
   try{
    if(row.discover!==false){
@@ -79,14 +79,15 @@ setup.addEventListener('submit',async event=>{
     await window.CCOptimized.run({apiBase:API,name:row.organization_name,ein:row.ein,states:row.states,aliases,mode,credentials,signal:controller.signal,
      onResult:result=>{results.set(result.state,result);progress.textContent=`${completed.length+1}/${cases.length}: ${row.organization_name} — ${results.size}/${row.states.length} states`;},
      externalLookup:(state,names)=>window.CCNYConnector.lookup({...credentials,organization_name:row.organization_name,ein:row.ein,state,mode,
-      alternate_names:names,signal:controller.signal,onProgress:message=>{progress.textContent=message;}})});
+      alternate_names:names,signal:controller.signal,onProgress:(message,stage)=>{progress.textContent=message;
+       if(stage&&connectorProgress.length<1000)connectorProgress.push({seconds:(Date.now()-checkStart)/1000,...stage});}})});
    }catch(error){if(!controller.signal.aborted)throw error;}finally{clearTimeout(timeout);}
    for(const state of row.states)if(!results.has(state))results.set(state,{state,ein:row.ein,organization_name:row.organization_name,status:'Unable to Confirm',success:false,
     comments:'The state did not complete within this validation run.',status_reason:mode==='sales'?'SALES_TIME_LIMIT':'WORKFLOW_INCOMPLETE'});
    const values=Array.from(results.values());
    for(const result of values)if(result.app_version&&(result.app_version!==VERSION||String(result.ein).replace(/\D/g,'')!==row.ein))throw Error('Result release or identity mismatch');
    completed.push({organization_name:row.organization_name,ein:row.ein,mode,states:row.states,started_epoch:started/1000,
-    discovery_seconds:discoverySeconds,discovery,alternate_names:aliases,check_seconds:(Date.now()-checkStart)/1000,results:values});
+    discovery_seconds:discoverySeconds,discovery,alternate_names:aliases,connector_progress:connectorProgress,check_seconds:(Date.now()-checkStart)/1000,results:values});
    output.textContent=JSON.stringify(completed,null,2);
    if(row.stop_on_inconclusive!==false&&values.some(r=>!r.success||/Unable|Review|Reachable|Unknown/.test(r.status))){progress.textContent=`Paused for investigation after ${completed.length}/${cases.length}.`;return;}
   }catch(error){completed.push({organization_name:row.organization_name,ein:row.ein,started_epoch:started/1000,error:error.message,discovery_seconds:discoverySeconds});
