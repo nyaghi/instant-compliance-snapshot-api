@@ -873,6 +873,26 @@
       throw new Error('REGISTRY_PAGINATION_INCOMPLETE');
     return {table,rows,headers,from,to,total,page,pages,selector};
   }
+  async function alExpandPage(page, deadline) {
+    // Use the registry's public page-size control, not a separate request or
+    // a larger time budget. Its published grid supports up to 100 rows.
+    const size=page.table.querySelector('tfoot input[aria-label="Page size"][fltr="pageSize"]');
+    if (page.pages===1 || !size || !visible(size) || size.disabled) return page;
+    const wanted=page.total>50?100:50;
+    if (Number(size.value)>=wanted) return page;
+    const oldNodes=[...page.table.querySelectorAll('tbody tr.grid_tr')];
+    return wait(()=>{
+      const table=document.querySelector('table.table.table-responsive.table-bordered');
+      const nodes=table?[...table.querySelectorAll('tbody tr.grid_tr')]:[];
+      if (!nodes.length || nodes.length===oldNodes.length && nodes.every((r,i)=>r===oldNodes[i])) return null;
+      const next=alPage(),fresh=next?.table.querySelector('tfoot input[aria-label="Page size"][fltr="pageSize"]');
+      if (!next || !fresh || Number(fresh.value)!==wanted) return null;
+      if (next.total!==page.total) throw new Error('REGISTRY_TOTAL_CHANGED');
+      if (next.page!==1 || next.from!==1 || next.pages!==Math.ceil(page.total/wanted)
+          || next.rows.length!==Math.min(wanted,page.total)) return null;
+      return next;
+    },Math.max(1,deadline-Date.now()),{action:()=>set(size,String(wanted))});
+  }
   async function alSearch(query, deadline) {
     if (location.pathname !== '/online/Lookups/Business.aspx') throw new Error('REGISTRY_WRONG_ORIGIN');
     const input = id=>document.getElementById('ctl00_cntbdy_'+id);
@@ -892,7 +912,7 @@
     if (!button || !visible(button) || button.disabled) throw new Error('REGISTRY_FORM_CHANGED');
     const oldTable=document.querySelector('table.table.table-responsive.table-bordered');
     const oldRows=oldTable?[...oldTable.querySelectorAll('tbody tr.grid_tr')]:[];
-    const page=await wait(()=>{
+    let page=await wait(()=>{
       if (input('txt_businessname')?.value!==query.name || input('txt_linum')?.value || input('txtcity')?.value
           || input('ddl_county')?.value!=='-1' || input('ddl_lictype')?.value!=='-1') throw new Error('REGISTRY_FILTER_CHANGED');
       const alert=document.querySelector('#altdialog');
@@ -908,6 +928,7 @@
       return alPage();
     },Math.max(1,deadline-Date.now()),{action:()=>button.click(),settle:150});
     if (!page.total) return {state:'AL',query,complete:true,verification_pending:false,headers:alHeaders,rows:[],total:0};
+    page=await alExpandPage(page,deadline);
     const rows=[...page.rows]; let current=page;
     while (current.page < current.pages) {
       if (Date.now()>=deadline) throw new Error('REGISTRY_RESPONSE_INCOMPLETE');

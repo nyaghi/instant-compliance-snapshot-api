@@ -677,3 +677,25 @@ without an extra settling timer on every page. This avoids background timer
 amplification for broad aliases such as ELI (267 records on 54 pages), while
 preserving the same 45-second allowance and complete-result requirements.
 These two Alabama cases require an unassisted repeat on the activated package.
+
+
+### 0.6.15 Alabama complete-search page sizing
+
+The activated 0.6.14 ELI control still collected only 75 of 267 rows before
+its unchanged 45-second command budget. The public Page size input accepts
+100 rows: a manual ordinary-control check changed 1-50 of 267 / six pages to
+1-100 of 267 / three pages. The collector now uses that public change event
+before pagination. It requires fresh row nodes, the unchanged source total,
+page one, the exact expanded row count and the exact remaining page count.
+An ignored resize, incomplete response or changed total cannot establish a
+negative result. Small searches and pages without that control retain the
+previous path. No verification handling, matching, alias list, state budget,
+Sales cutoff, worker capacity or discovery behavior changes.
+
+Tests cover 267 rows with a partial final page, a smaller single expanded
+page, ignored resizing, total drift, stale grids, final-page update races and
+explicit no-record responses. Existing state connector suites remain controls.
+Live activation and the affected four-case Alabama repeat are required before
+this is called resolved. Nevada form-settling and NC navigation failures in the
+0.6.14 repeat remain separate investigations; this patch makes no claim about
+them and does not change their transport.
