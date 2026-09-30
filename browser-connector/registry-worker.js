@@ -167,7 +167,8 @@ async function performRegistryQuery(job, query) {
     else await registryReady(job,null,'/online/Lookups/Business.aspx');
     // Reuse only the connector-owned verified page. Each command must observe
     // a fresh result; no verification code or previous result is shared.
-    return registryMessage(job,{action:'registry-al',query,budgetMs:Math.max(1,Math.min(45000,job.activeExpiresAt-Date.now()))});
+    return registryMessage(job,{action:'registry-al',query,automaticVerification:!!P.TRIAL_ORIGIN,
+      budgetMs:Math.max(1,Math.min(45000,job.activeExpiresAt-Date.now()))});
   }
   if (query.state === "NC") return registryNorthCarolinaQuery(job,query);
   if (["NV", "TN"].includes(query.state)) {

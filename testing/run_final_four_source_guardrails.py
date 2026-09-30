@@ -813,11 +813,11 @@ class LookupControls(unittest.TestCase):
         import ast
         from pathlib import Path
         import subprocess
-        from testing.performance_origin_audit import restore_nv_business_scope_0613, restore_trial_0614, restore_nv_reservation_0614
+        from testing.performance_origin_audit import restore_nv_business_scope_0613, restore_trial_0614, restore_nv_reservation_0614, restore_al_0622
         root = Path(__file__).resolve().parents[1]
         before = ast.parse(subprocess.check_output(
             ['git', 'show', '9a7ea66:registry_snapshot_server.py'], cwd=root).decode('utf-8'))
-        after = ast.parse((root / 'registry_snapshot_server.py').read_text(encoding='utf-8'))
+        after = restore_al_0622(ast.parse((root / 'registry_snapshot_server.py').read_text(encoding='utf-8')))
         # The independently tested retry fix adds only this signed-input copy
         # to final-four failures. Keep the whole-master comparison strict for
         # every other statement, function and setting.

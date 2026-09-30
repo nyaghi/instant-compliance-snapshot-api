@@ -18,7 +18,13 @@
   function validQuery(value) {
     if (["AL", "NC", "NV", "TN"].includes(value?.state)) {
       const keys = Object.keys(value).sort().join(",");
-      if (value.operation === "search") return keys === "name,operation,state" && typeof value.name === "string" && value.name.trim().length > 0 && value.name.length <= 500;
+      if (value.operation === "search") {
+        const ordinary = keys === "name,operation,state";
+        const verification = !!TRIAL_ORIGIN && value.state === "AL" && keys === "name,operation,state,verification"
+          && value.verification && Object.keys(value.verification).sort().join(',') === 'code,id'
+          && /^[A-Z0-9]{6}$/.test(value.verification.code) && validId(value.verification.id);
+        return (ordinary || verification) && typeof value.name === "string" && value.name.trim().length > 0 && value.name.length <= 500;
+      }
       if (value.state === "AL") return false;
       if (value.state === "NC") return value.operation === "detail" && keys === "identifier,operation,state,url"
         && typeof value.identifier === "string" && /^(SL|EX)\d+$/.test(value.identifier) && typeof value.url === "string"
@@ -43,7 +49,8 @@
   }
   function sameQuery(actual, expected) {
     return validQuery(expected) && actual && Object.keys(actual).length === Object.keys(expected).length &&
-      Object.entries(expected).every(([key, value]) => actual[key] === value);
+      Object.entries(expected).every(([key, value]) => key === 'verification'
+        ? actual[key]?.id === value.id && actual[key]?.code === value.code : actual[key] === value);
   }
   function publicRequest(raw) {
     let url;

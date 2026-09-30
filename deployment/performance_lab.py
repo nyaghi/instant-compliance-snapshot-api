@@ -18,7 +18,7 @@ from urllib.parse import unquote, urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from deployment.lab_identity import configured_lab_origin, trial_identity
+from deployment.lab_identity import configured_lab_origin, trial_identity, TRIAL_RELEASE_LABEL
 
 LAB_ORIGIN = configured_lab_origin()
 LAB_SERVICE_ID = 'srv-d8u0hsu7r5hc73aqfsg0'
@@ -116,12 +116,12 @@ def final_four_asset(name, text):
         replace('alternate_names: alternateNames, signal,', 'alternate_names: alternateNames, signal, mode,')
         replace('          result.status_reason = "NY_CONNECTOR_UNAVAILABLE";', '''          result.status_reason = "NY_CONNECTOR_UNAVAILABLE";
           result.reviewed_alternate_names = [...alternateNames];''')
-        replace('v2026.09.29.1 &middot; Staging', 'v2026.09.29.2 &middot; Isolated Trial')
+        replace('v2026.09.29.1 &middot; Staging', 'v2026.09.'+TRIAL_RELEASE_LABEL+' &middot; Isolated Trial')
     elif name == 'optimized-workflows.js':
         replace("states.filter(s=>s==='IL'||s==='GA')", "states.filter(s=>['IL','GA','AL','NC','NV','TN'].includes(s))")
         replace("headers:{'Content-Type':'application/json'}", "headers:{'Content-Type':'application/json','Authorization':'Bearer '+credentials.admin_passcode}")
     elif name == 'sales-mode.js':
-        replace("const VERSION = '2026.09.29.1-sales';", "const VERSION = '2026.09.29.2-sales-trial';")
+        replace("const VERSION = '2026.09.29.1-sales';", "const VERSION = '2026.09."+TRIAL_RELEASE_LABEL+"-sales-trial';")
         replace('const NAMES = {', 'const NAMES = {"AL":"Alabama","NC":"North Carolina","NV":"Nevada","TN":"Tennessee",')
         replace('Choose any or all 34 states.', 'Choose any or all ${STATES.length} states.')
         replace('Select all 34</button>', 'Select all ${STATES.length}</button>')

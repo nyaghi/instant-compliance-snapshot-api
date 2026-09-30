@@ -12,7 +12,7 @@ import html
 import io
 import json
 import os
-from deployment.lab_identity import performance_origin_enabled, trial_identity
+from deployment.lab_identity import performance_origin_enabled, trial_identity, TRIAL_APP_VERSION
 import re
 import secrets
 import smtplib
@@ -136,6 +136,10 @@ PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
 APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.29.1-staging").strip() or "2026.09.29.1-staging"
+# The resource identity/expiry stays immutable; the deployed build has its own
+# visible revision. No staging or production version is changed by this label.
+if trial_identity():
+    APP_VERSION = TRIAL_APP_VERSION
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
@@ -5988,7 +5992,7 @@ def il_verification_recovery(record, payload, now):
     if (record.get("state") != "IL" or record.get("purpose") != "registration"
             or record.get("recovery_protocol") != "il-fresh-page-v1"
             or (record.get("connector_version") != "0.5.10"
-                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21"}))
+                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22"}))
             or payload.get("reason") != "NY_CONNECTOR_IL_VERIFICATION_PENDING"
             or record.get("il_verification_recovery")
             or now + 120 >= record["issued"] + NY_CONNECTOR_TTL_SECONDS):
@@ -6856,6 +6860,88 @@ def final_four_connector_advance(record):
     return {"phase": "complete", "result": response_data_for_lookup(result, "", org, org.organization_name, org.ein, record["state"], started)}
 
 
+_AL_VERIFICATION_OCR = None
+_AL_VERIFICATION_OCR_LOCK = threading.Lock()
+
+
+def al_read_verification_image(data_url, deadline):
+    """Read a bounded public image using the existing local OCR dependency.
+
+    No registry request, external AI service, file persistence or source-status
+    decision occurs here. Only the state's subsequent Search can verify it.
+    """
+    global _AL_VERIFICATION_OCR
+    if (not isinstance(data_url, str) or len(data_url) > 180000
+            or not data_url.startswith('data:image/png;base64,')):
+        raise ValueError('Invalid Alabama verification image')
+    raw = base64.b64decode(data_url.split(',', 1)[1], validate=True)
+    with Image.open(io.BytesIO(raw)) as source:
+        if source.format != 'PNG' or not 20 <= source.width <= 600 or not 10 <= source.height <= 300:
+            raise ValueError('Invalid Alabama verification dimensions')
+        picture = source.convert('RGB')
+    remaining = deadline - time.monotonic()
+    if remaining <= 0 or not _AL_VERIFICATION_OCR_LOCK.acquire(timeout=min(1.0, remaining)):
+        raise TimeoutError('Alabama verification reader busy')
+    try:
+        from rapidocr_onnxruntime import RapidOCR
+        if _AL_VERIFICATION_OCR is None:
+            _AL_VERIFICATION_OCR = RapidOCR(intra_op_num_threads=1, inter_op_num_threads=1)
+        gray = picture.convert('L')
+        bounds = gray.point(lambda p: 255 if p < 210 else 0).getbbox()
+        if not bounds:
+            raise ValueError('Blank Alabama verification image')
+        crop = picture.crop((max(0, bounds[0]-4), max(0, bounds[1]-4),
+                             min(picture.width, bounds[2]+4), min(picture.height, bounds[3]+4)))
+        candidates = []
+        for height_scale in (2, 4):
+            if time.monotonic() >= deadline:
+                raise TimeoutError('Alabama verification image deadline')
+            image = crop.resize((min(1200, crop.width*3), min(600, crop.height*height_scale)), Image.Resampling.LANCZOS)
+            # The observed public control contains one line. Detection can split
+            # its short, spaced characters into fragments; recognize that line
+            # directly instead of running document layout detection.
+            rows, _ = _AL_VERIFICATION_OCR(image, use_det=False, use_cls=False)
+            if not rows or len(rows) != 1:
+                continue
+            value = re.sub(r'\s+', '', str(rows[0][0])).upper()
+            if re.fullmatch(r'[A-Z0-9]{6}', value) and float(rows[0][1]) >= .85:
+                candidates.append(value)
+        if time.monotonic() >= deadline:
+            raise TimeoutError('Alabama verification image deadline')
+        if len(candidates) != 2 or len(set(candidates)) != 1:
+            raise ValueError('Alabama verification image is uncertain')
+        return candidates[0]
+    finally:
+        _AL_VERIFICATION_OCR_LOCK.release()
+
+
+def al_verification_continuation(record, evidence):
+    """Verification is incomplete evidence, never a result or a new budget."""
+    pending = record.get('pending') or {}
+    if (record.get('state') != 'AL' or not trial_identity()
+            or not isinstance(evidence, dict)
+            or set(evidence) != {'state', 'query', 'complete', 'verification_pending', 'verification_image', 'verification_id'}
+            or evidence.get('state') != 'AL' or evidence.get('query') != pending.get('query')
+            or evidence.get('complete') is not False or evidence.get('verification_pending') is not True
+            or not isinstance(evidence.get('verification_id'), str)
+            or not re.fullmatch(r'[a-zA-Z0-9_-]{16,80}', evidence['verification_id'])
+            or record.get('al_verification_attempts', 0) >= 2):
+        raise ValueError('Invalid Alabama verification continuation')
+    remaining = record['expires'] - time.time()
+    if remaining <= 3:
+        raise TimeoutError('Alabama check expired before verification')
+    code = al_read_verification_image(evidence['verification_image'], time.monotonic()+min(15, remaining))
+    record['al_verification_attempts'] = record.get('al_verification_attempts', 0)+1
+    pending['query_id'] = secrets.token_urlsafe(18)
+    # Code and image are intentionally absent from the signed token, completed
+    # evidence, logs and final result. The browser binds the answer to its image.
+    return {'phase': 'search', 'query_id': pending['query_id'],
+            'query': {**pending['query'], 'verification': {'id': evidence['verification_id'], 'code': code}},
+            'check_token': ny_connector_pack(record),
+            'lookup_remaining_ms': max(0, int((record['expires']-time.time())*1000)),
+            'expires_in': max(0, int(record['expires']-time.time()))}
+
+
 def final_four_connector_request(payload, origin):
     """Isolated trial route; the approved NY/IL/GA continuation is unchanged."""
     identity = trial_identity()
@@ -6926,6 +7012,14 @@ def final_four_connector_request(payload, origin):
         pending = record["pending"]
         if not pending or payload.get("query_id") != pending["query_id"]:
             return 409, {"error": "The response is stale or belongs to another registry query."}
+        raw_evidence = payload.get('evidence')
+        if isinstance(raw_evidence, dict) and raw_evidence.get('verification_pending') is True:
+            try:
+                return 200, al_verification_continuation(record, raw_evidence)
+            except Exception:
+                # OCR/native-runtime failures cannot become an HTTP failure or
+                # a negative registry result. Never log image/code material.
+                return 200, {'phase': 'complete', 'result': final_four_connector_failure(record, 'NY_CONNECTOR_AL_VERIFICATION_REQUIRED')}
         try:
             evidence = final_four_clean_evidence(payload.get("evidence"), pending["query"])
         except (ValueError, TypeError, KeyError):
@@ -23502,7 +23596,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21"})):
+        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22"})):
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()

@@ -913,11 +913,48 @@
       return next;
     },Math.max(1,deadline-Date.now()),{action:()=>set(size,String(wanted))});
   }
+  let alVerificationImage = null;
+  function alImagePixels() {
+    const image=document.getElementById('imgcap');
+    if (!image || image.tagName!=='IMG' || image.getAttribute('alt')!=='Captcha' || !image.complete
+        || image.naturalWidth<20 || image.naturalHeight<10 || image.naturalWidth>600 || image.naturalHeight>300
+        || new URL(image.currentSrc || image.src,location.href).origin!==location.origin)
+      throw new Error('NY_CONNECTOR_AL_VERIFICATION_REQUIRED');
+    const canvas=document.createElement('canvas');canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;
+    canvas.getContext('2d').drawImage(image,0,0);
+    const pixels=canvas.toDataURL('image/png');
+    if(pixels.length>180000)throw new Error('NY_CONNECTOR_AL_VERIFICATION_REQUIRED');
+    return pixels;
+  }
+  function alVerificationRequest(query) {
+    // Only the currently displayed public image is sent to the signed master
+    // continuation. Never fetch another image, or forward cookies/form state.
+    const alert=document.querySelector('#altdialog');
+    if(visible(alert)) {
+      if(!/verif|captcha|code/i.test(text(alert)))throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+      const ok=[...document.querySelectorAll('.ui-dialog button')].find(b=>visible(b)&&text(b)==='Ok');
+      if(!ok)throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+      ok.click();
+      if(visible(alert))throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+    }
+    const pixels=alImagePixels();
+    alVerificationImage={id:crypto.randomUUID(),pixels,name:query.name,created:Date.now()};
+    return {state:'AL',query,complete:false,verification_pending:true,
+      verification_image:pixels,verification_id:alVerificationImage.id};
+  }
+  function alApplyVerification(query) {
+    const answer=query.verification, pending=alVerificationImage;
+    if(!answer || !pending || answer.id!==pending.id || pending.name!==query.name
+        || Date.now()-pending.created>45000 || !/^[A-Z0-9]{6}$/.test(answer.code)
+        || alImagePixels()!==pending.pixels)throw new Error('NY_CONNECTOR_AL_VERIFICATION_REQUIRED');
+    // Consume once. The ordinary Search response still decides acceptance.
+    alVerificationImage=null;
+    set(document.getElementById('ctl00_cntbdy_txt_verify'),answer.code);
+  }
   async function alSearch(query, deadline) {
     if (location.pathname !== '/online/Lookups/Business.aspx') throw new Error('REGISTRY_WRONG_ORIGIN');
     const input = id=>document.getElementById('ctl00_cntbdy_'+id);
-    // The connector never reads a challenge image, solves it, supplies a code,
-    // or forwards verification material. A user must verify the public page.
+    // Verification preparation is separate from source-result acceptance.
     if (!input('txt_verify')?.value.trim()) throw new Error('NY_CONNECTOR_AL_VERIFICATION_REQUIRED');
     const oldAlert = document.querySelector('#altdialog');
     if (visible(oldAlert)) {
@@ -1023,7 +1060,14 @@
   async function handle(m) {
     if (AL && m.action==='registry-al') {
       if (m.query?.state!=='AL' || m.query.operation!=='search') throw new Error('REGISTRY_COMMAND_INVALID');
-      return {ok:true,evidence:await alSearch(m.query,Date.now()+Math.min(45000,Number.isFinite(m.budgetMs)&&m.budgetMs>0?m.budgetMs:45000))};
+      const query={state:'AL',operation:'search',name:m.query.name};
+      try {
+        if(m.query.verification)alApplyVerification(m.query);
+        return {ok:true,evidence:await alSearch(query,Date.now()+Math.min(45000,Number.isFinite(m.budgetMs)&&m.budgetMs>0?m.budgetMs:45000))};
+      } catch(error) {
+        if(error.message!=='NY_CONNECTOR_AL_VERIFICATION_REQUIRED' || !m.automaticVerification)throw error;
+        return {ok:true,evidence:alVerificationRequest(query)};
+      }
     }
     if (m.action === "registry-ready") return {ready:registryDocumentReady(), url:location.href, documentId,
       ...(NC ? {verification_pending:/^Just a moment/i.test(document.title||'')

@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from deployment import lab_identity as identity
-from testing.performance_origin_audit import RestoreApprovedOrigin
+from testing.performance_origin_audit import RestoreApprovedOrigin, restore_al_0622
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -154,7 +154,7 @@ class IsolationControls(unittest.TestCase):
         for name in ('registry_snapshot_server.py', 'deployment/durable_queue.py'):
             previous = subprocess.check_output(['git', 'show', 'approved-2026.09.29.1:'+name], cwd=ROOT).decode('utf-8')
             current = (ROOT/name).read_text(encoding='utf-8')
-            self.assertEqual(ast.dump(ast.parse(previous)), ast.dump(Restore().visit(ast.parse(current))), name)
+            self.assertEqual(ast.dump(ast.parse(previous)), ast.dump(Restore().visit(restore_al_0622(ast.parse(current)))), name)
 
 
 if __name__ == '__main__':

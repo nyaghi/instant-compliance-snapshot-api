@@ -61,3 +61,12 @@ test('invalid admitted trial NV commands fail promptly without sending a registr
   assert.equal(h.replies.at(-1).reason,'NY_CONNECTOR_INVALID_SEQUENCE');
  }
 });
+
+test('trial bridge transports the AL image-bound answer without changing its query',()=>{
+ const h=bridge(true),acquire='acquire-command-1234',id='verify-command-12345';
+ h.send({action:'acquire',id:acquire,intent:'AL'});h.ports[0].onMessage.emit({id:acquire,ok:true});
+ const query={state:'AL',operation:'search',name:'Fixture Charity',verification:{id:'fixture-image-12345678',code:'ABC123'}};
+ h.send({action:'search',id,query});assert.deepEqual(h.ports[0].sent.at(-1).query,query);
+ h.ports[0].onMessage.emit({id,ok:true,evidence:{query:{state:'AL',operation:'search',name:'Fixture Charity'},complete:true}});
+ assert.equal(h.replies.at(-1).ok,true);
+});

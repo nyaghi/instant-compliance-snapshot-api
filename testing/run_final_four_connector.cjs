@@ -35,6 +35,26 @@ function fixture(enabled=true){
   };
   return Object.assign(h,{calls,reloads});
 }
+
+test('AL worker carries fresh verification through a second command in the same owned session',async()=>{
+ const h=fixture(),p=connect(h,'AL');await tick();
+ const original=h.chrome.tabs.sendMessage;let calls=0;
+ h.chrome.tabs.sendMessage=async(tab,m)=>{
+  if(m.action!=='registry-al')return original(tab,m);
+  calls++;assert.equal(m.automaticVerification,true);
+  const query={state:'AL',operation:'search',name:m.query.name};
+  return {ok:true,evidence:calls===1?{query,complete:false,verification_pending:true,
+   verification_image:'data:image/png;base64,fixture',verification_id:'fixture-image-12345678'}:
+   {query,complete:true,verification_pending:false,total:0,rows:[]}};
+ };
+ const query={state:'AL',operation:'search',name:'Fixture Charity'};
+ const first=await h.query(p,21,query);assert.equal(first.ok,true);assert.equal(first.evidence.complete,false);
+ const ownedTab=h.created[0];
+ const second=await h.query(p,22,{...query,verification:{id:'fixture-image-12345678',code:'ABC123'}});
+ assert.equal(second.ok,true);assert.equal(second.evidence.complete,true);
+ assert.equal(h.created.length,1);assert.equal(h.created[0],ownedTab);assert.equal(h.reloads.length,0);
+ assert.ok(!JSON.stringify(h.data).includes('ABC123'));assert.ok(!JSON.stringify(h.data).includes('base64,fixture'));
+});
 test('NV search margin never extends the job deadline or another state allowance',async()=>{
  for(const state of ['NV','TN'])for(const remaining of [300000,60000,30000]) {
   const h=fixture(),query={state,operation:'search',name:'Reviewed Alias'};
