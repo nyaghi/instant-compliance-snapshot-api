@@ -241,8 +241,12 @@
     const missingId = businessId === '' && /^E\d{7,14}-\d$/.test(entity_number) && !!entity_type;
     const identifier = missingId ? entity_number : businessId;
     const identified = /^NV\d+$/.test(businessId) && !!entity_type
-      || /^NR\d{8}-\d+$/.test(businessId) && entity_type === '' || missingId;
-    if (!name || !identified || !raw_status) throw new Error('REGISTRY_NV_RESULTS_INCOMPLETE');
+      || /^(?:NR|C)\d{8}-\d+$/.test(businessId) && entity_number === businessId && entity_type === '' || missingId;
+    // A completed ORION row can have an explicitly blank Status cell. An
+    // issued NV identity and entity type still let the master reject an
+    // unrelated company or inspect a matching detail; the blank is no status.
+    if (!name || !identified || !raw_status && !(/^NV\d+$/.test(businessId) && !!entity_type))
+      throw new Error('REGISTRY_NV_RESULTS_INCOMPLETE');
     return {name,identifier,entity_type,raw_status,
       ...(missingId ? {entity_number,business_identifier_missing:true} : {})};
   }
@@ -325,6 +329,45 @@
     }
     throw new Error("REGISTRY_NV_PAGINATION_INCOMPLETE");
   }
+  async function nvExpandSearchPage(page, deadline) {
+    if (page.pages <= 1) return page;
+    const selector = 'kendo-datapager [role="combobox"][aria-label="items per page"]';
+    const combo = page.table.querySelector(selector);
+    if (!combo || !visible(combo)) return page;
+    const size = Number(text(combo.querySelector('.k-input-value-text')));
+    const wanted = page.total <= 50 ? 50 : 100;
+    if (![25,50,100].includes(size)) throw new Error('REGISTRY_NV_PAGE_SIZE_INCOMPLETE');
+    if (size >= wanted) return page;
+    // ORION's 25-row pager has returned fewer final-page rows than its total.
+    // Use its ordinary larger-page control, then still require every reported
+    // row. Never reinterpret a short page as a complete negative search.
+    const option = await wait(() => {
+      const listId = combo.getAttribute('aria-controls');
+      const list = listId && document.getElementById(listId);
+      if (!list || !visible(list) || list.getAttribute('role') !== 'listbox') return false;
+      const matches = [...list.querySelectorAll('[role="option"]')].filter(el => text(el) === String(wanted) && visible(el));
+      return matches.length === 1 && matches[0];
+    },Math.max(1,Math.min(3000,deadline-Date.now())),{action:()=>combo.click()});
+    return nvChanged(()=>option.click(),()=>{
+      const fresh=nvPage('Search Results',nvSearchHeaders), current=fresh.table.querySelector(selector);
+      if (!current || Number(text(current.querySelector('.k-input-value-text'))) !== wanted
+          || fresh.total !== page.total || fresh.page !== 1 || fresh.pages !== Math.ceil(page.total/wanted)
+          || fresh.values.length !== Math.min(wanted,page.total)) return false;
+      return fresh;
+    },deadline,{previous:JSON.stringify(page.values)});
+  }
+  async function nvReturnSearch(deadline) {
+    const onSearch=()=>location.hash.includes('screen=external-GenericFilingsSearch&tabRoute=business');
+    if (!onSearch()) {
+      if (!location.hash.includes('screen=Manage-Business&')) throw new Error('REGISTRY_WRONG_ORIGIN');
+      const buttons=[...document.querySelectorAll('button')].filter(el=>text(el)==='Return To Search'&&visible(el)&&!el.disabled);
+      if (buttons.length!==1) throw new Error('REGISTRY_NV_RETURN_SEARCH_MISSING');
+      // Follow the public app's own reset/navigation action. Assigning a hash
+      // alone can retain a partially restored search form after a detail.
+      await wait(()=>onSearch()&&registryDocumentReady(),Math.max(1,deadline-Date.now()),{action:()=>buttons[0].click()});
+    } else await wait(()=>registryDocumentReady(),Math.max(1,deadline-Date.now()));
+    return {ok:true};
+  }
   async function nvSearch(query, deadline) {
     if (query?.state !== 'NV' || query.operation !== 'search' || typeof query.name !== 'string' || !query.name.trim() || query.name.length > 500
         || Object.keys(query).sort().join(',') !== 'name,operation,state') throw new Error("REGISTRY_COMMAND_INVALID");
@@ -352,7 +395,7 @@
     nvObserved.clear(); nvLastSearch = null;
     // The initial blank grid and old rows remain visible while ORION searches.
     // A completed loading cycle is mandatory, including for an empty response.
-    const first = await nvChanged(() => search.click(), () => nvPage('Search Results', nvSearchHeaders), deadline, {
+    let first = await nvChanged(() => search.click(), () => nvPage('Search Results', nvSearchHeaders), deadline, {
       requireLoading:true, retryNotStarted:()=>{
         // Re-read the current visible controls. A changed query must not be
         // submitted or allowed to inherit the original query's evidence.
@@ -363,6 +406,7 @@
             && buttons.length===1) buttons[0].click();
       }
     });
+    first = await nvExpandSearchPage(first,deadline);
     const collected = await nvPages('Search Results', nvSearchHeaders, deadline, first);
     const rows = collected.map(({cells,node,page}) => {
       // Keep every completed public row for master identity filtering. An
@@ -844,6 +888,8 @@
       if(m.action==='registry-nc-filings')return ncFilings(m.query);
       throw new Error('REGISTRY_COMMAND_INVALID');
     }
+    if (NV && m.action==='registry-nv-return')
+      return nvReturnSearch(Date.now()+Math.min(45000,Number.isFinite(m.budgetMs)&&m.budgetMs>0?m.budgetMs:45000));
     if (TN && m.action === 'registry-tn') {
       const deadline=Date.now()+Math.min(45000,Number.isFinite(m.budgetMs)&&m.budgetMs>0?m.budgetMs:45000);
       return {ok:true,evidence:m.query?.operation==='search'?await tnSearch(m.query,deadline):await tnDetail(m.query,deadline)};

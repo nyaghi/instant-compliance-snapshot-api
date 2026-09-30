@@ -9,16 +9,51 @@ async function registryMessage(job, message) {
 }
 async function registryReady(job, oldDocument = null, path = null, budgetMs = 45000) {
   const deadline = Math.min(Date.now()+Math.max(1,Math.min(45000,budgetMs)), job.activeExpiresAt);
-  let verificationPending=false;
-  while (!job.closed && Date.now()<deadline) {
+  let verificationPending=false, visibilityAttempted=false, previousVisible=null;
+  try { while (!job.closed && Date.now()<deadline) {
     try {
       const value=await registryMessage(job,{action:"registry-ready"});
       verificationPending=job.registryState==='NC'&&value?.verification_pending===true;
       if (value?.ready && value.documentId !== oldDocument && (!path || new URL(value.url).pathname===path)) return value;
-    } catch { /* Navigation or the normal public verification page is loading. */ }
+    } catch {
+      // The public challenge can precede content-script readiness. Its visible
+      // tab title is sufficient to describe a pending verification, not a result.
+      if (job.registryState==='NC') try {
+        const tab=await chrome.tabs.get(job.tab);
+        verificationPending= new URL(tab.url).origin===registryOrigin('NC') && /^Just a moment/i.test(tab.title||'');
+      } catch {}
+    }
+    if (verificationPending && !visibilityAttempted && Date.now()<deadline) {
+      visibilityAttempted=true;
+      previousVisible=await registryNorthCarolinaVisibility(job);
+    }
     await nap(200);
   }
   throw new Error(verificationPending ? "NY_CONNECTOR_NC_VERIFICATION_PENDING" : "NY_CONNECTOR_TAB_READY_TIMEOUT");
+  } finally {
+    if (previousVisible) try {
+      const tab=await chrome.tabs.get(job.tab), prior=await chrome.tabs.get(previousVisible.id);
+      if (owned.has(job.tab) && tab.active && tab.windowId===previousVisible.windowId && prior.windowId===tab.windowId
+          && new URL(tab.url).origin===registryOrigin('NC') && (!path || new URL(tab.url).pathname===path))
+        await chrome.tabs.update(prior.id,{active:true});
+    } catch { /* Preserve user navigation or closure during verification. */ }
+  }
+}
+async function registryNorthCarolinaVisibility(job) {
+  // Same-document visibility recovery, as used for Illinois. The state's own
+  // scripts may finish a passive verification; no checkbox, challenge, token,
+  // cookie, reload, additional request, or budget extension is performed here.
+  if (job.registryState!=='NC' || job.closed || !owned.has(job.tab)) return null;
+  try {
+    const tab=await chrome.tabs.get(job.tab), source=await chrome.tabs.get(job.sender.tab.id);
+    if (tab.active || tab.windowId!==source.windowId || new URL(tab.url).origin!==registryOrigin('NC')
+        || !new URL(tab.url).pathname.startsWith('/online_services/search/')) return null;
+    const prior=(await chrome.tabs.query({active:true,windowId:tab.windowId}))[0];
+    if (!prior || prior.id===tab.id || job.closed || !owned.has(job.tab)) return null;
+    diagnostic('nc-verification',job,'same-document visibility recovery');
+    await chrome.tabs.update(tab.id,{active:true});
+    return {id:prior.id,windowId:prior.windowId};
+  } catch { return null; }
 }
 async function registryNavigate(job, url, budgetMs = 45000) {
   if (new URL(url).origin !== registryOrigin(job.registryState)) throw new Error("NY_CONNECTOR_INCOMPLETE");
@@ -93,7 +128,11 @@ async function performRegistryQuery(job, query) {
   if (query.state === "NC") return registryNorthCarolinaQuery(job,query);
   if (["NV", "TN"].includes(query.state)) {
     if (query.operation === "search") {
-      if (job.tab === null || !job.finalFourReusableForm) await registryNavigate(job,registryStart(query.state));
+      if (query.state==='NV' && job.tab!==null && !job.finalFourReusableForm) {
+        const returned=await registryMessage(job,{action:'registry-nv-return',budgetMs:Math.max(1,Math.min(45000,job.activeExpiresAt-Date.now()))});
+        if (!returned?.ok) throw new Error(returned?.reason||'NY_CONNECTOR_INCOMPLETE');
+        await registryReady(job,null,new URL(registryStart('NV')).pathname);
+      } else if (job.tab === null || !job.finalFourReusableForm) await registryNavigate(job,registryStart(query.state));
       else await registryReady(job,null,new URL(registryStart(query.state)).pathname);
     } else if (job.tab === null || !job.finalFourSearchComplete) {
       throw new Error("NY_CONNECTOR_INVALID_SEQUENCE");
@@ -102,7 +141,7 @@ async function performRegistryQuery(job, query) {
     const response = await registryMessage(job,{action:`registry-${query.state.toLowerCase()}`,query,budgetMs:Math.max(1,Math.min(45000,job.activeExpiresAt-Date.now()))});
     if (query.operation === "search") job.finalFourSearchComplete = response?.ok === true;
     // TN keeps its result grid behind the detail dialog. NV navigates to a
-    // detail route, so its next name search needs a fresh ordinary search form.
+    // detail route, so its next name search uses the public Return To Search.
     job.finalFourReusableForm = response?.ok === true && (query.state === "TN" || query.operation === "search");
     return response;
   }

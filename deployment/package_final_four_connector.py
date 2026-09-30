@@ -48,7 +48,7 @@ def build(origin, destination):
         data=text.encode('utf-8');(destination/name).write_bytes(data)
         hashes[name]=hashlib.sha256(data).hexdigest()
     manifest={
-        'manifest_version':3,'name':'CharityClarity — Isolated 29.2 Trial Connector','version':'0.6.9','minimum_chrome_version':'132',
+        'manifest_version':3,'name':'CharityClarity — Isolated 29.2 Trial Connector','version':'0.6.10','minimum_chrome_version':'132',
         'description':'Public registry access for the isolated CharityClarity 29.2 trial.',
         'permissions':['storage'],'host_permissions':[origin+'/*',*MATCHES],
         'incognito':'not_allowed','background':{'service_worker':'worker.js'},
@@ -59,13 +59,13 @@ def build(origin, destination):
         ],
     }
     (destination/'manifest.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
-    (destination/'build-evidence.json').write_text(json.dumps({'origin':origin,'version':'0.6.9','files':hashes,
+    (destination/'build-evidence.json').write_text(json.dumps({'origin':origin,'version':'0.6.10','files':hashes,
         'installed_connector_untouched':True,'ny_uses_lab_backend':True},indent=2),encoding='utf-8')
     archive=destination.parent/(destination.name+'.zip')
     if archive.exists():raise ValueError('Refusing to overwrite an existing trial archive')
     with zipfile.ZipFile(archive,'x',zipfile.ZIP_DEFLATED) as package:
         for file in destination.iterdir():package.write(file,file.name)
-    return {'directory':str(destination),'zip':str(archive),'origin':origin,'version':'0.6.9'}
+    return {'directory':str(destination),'zip':str(archive),'origin':origin,'version':'0.6.10'}
 
 
 if __name__=='__main__':

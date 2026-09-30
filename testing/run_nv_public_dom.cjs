@@ -3,7 +3,7 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const original=fs.readFileSync(path.join(__dirname,'../browser-connector/registry-content.js'),'utf8');
-const source=original.replace('  async function handle(m) {','  globalThis.testNV = {nvPage,nvFields,nvChanged,nvSearch,nvDetail,registryDocumentReady};\n  async function handle(m) {');
+const source=original.replace('  async function handle(m) {','  globalThis.testNV = {nvPage,nvFields,nvChanged,nvSearch,nvDetail,nvReturnSearch,registryDocumentReady};\n  async function handle(m) {');
 const headers=['Entity Name','NV Business Id #','Entity No.','Entity Type','Registered Agent Name','Formation Date','Status'];
 const observed=[
  ['MAKE-A-WISH FOUNDATION OF AMERICA','NV19931054903','C6989-1993','Foreign Non-Profit Corporation (80)','C T CORPORATION SYSTEM**','06/16/1993 12:00 AM','Permanently Revoked'],
@@ -41,15 +41,16 @@ test('Nevada visible inputs and search type are not ready while the initial load
  assert.equal(h.api.registryDocumentReady(),false);
  h.context.document.querySelectorAll=read;assert.equal(h.api.registryDocumentReady(),true);
 });
-function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,truncate=false,duplicate=false,oldPageDelay=80,detailId=null,returnFormDelay=600,returnName=null,returnRows=null,repeatSearchActivity=true,replaceSearchOnInput=false,returnGridDelay=0,unrelatedMutations=false,ignoredSearches=0,changedQueryBeforeRetry=false}={}) {
+function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,truncate=false,duplicate=false,oldPageDelay=80,detailId=null,returnFormDelay=600,returnName=null,returnRows=null,repeatSearchActivity=true,replaceSearchOnInput=false,returnGridDelay=0,unrelatedMutations=false,ignoredSearches=0,changedQueryBeforeRetry=false,pageSizeControl=false,initialPageSize=2,pagingMissing=0,resizeIgnored=false,resizeTotalDrift=false}={}) {
  let clock=1000,serial=0,listener,loading=false,rendered=[],page=1,detail=false,searchClicks=0,opened=[],formReady=true;
+ let pageSize=initialPageSize,sizeMenu=false,resizeClicks=0;
  const tasks=new Map(),observers=new Set(),root={};
  const schedule=(fn,ms)=>{let id=++serial;tasks.set(id,{at:clock+ms,fn});return id;};
  const node=selector=>({nodeType:1,matches:s=>s.split(',').map(x=>x.trim()).includes(selector),querySelector:()=>null,closest:s=>s.includes(selector)?{}:null});
  const gridTarget=node('casex-data-table'),loader=node('.circle-loader');
  const mutate=(target=gridTarget,addedNodes=[],removedNodes=[])=>{for(const o of [...observers])o.fn([{type:'childList',target,addedNodes,removedNodes}]);};
  if(unrelatedMutations)for(let ms=50;ms<=4000;ms+=50)schedule(()=>mutate(root),ms);
- const render=()=>{rendered=rows.slice((page-1)*2,page*2);if(duplicate&&page===2)rendered=rows.slice(0,2);loading=false;mutate(gridTarget,[],[loader]);};
+ const render=()=>{rendered=rows.slice((page-1)*pageSize,page*pageSize);if(duplicate&&page===2)rendered=rows.slice(0,pageSize);if(pagingMissing&&page>1)rendered=rendered.slice(0,-pagingMissing);loading=false;mutate(gridTarget,[],[loader]);};
  const begin=()=>{if(!activity)return;loading=true;mutate(root,[loader]);schedule(render,responseDelay);};
  let buttonCurrent=true,staleClicks=0;
  class Input {get value(){return this.v||'';}set value(v){this.v=v;}dispatchEvent(){if(replaceSearchOnInput){buttonCurrent=false;schedule(()=>{buttonCurrent=true;mutate();},100);}}}
@@ -66,6 +67,7 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
   if(returnGridDelay){rendered=[];schedule(render,returnGridDelay);}
   schedule(()=>{formReady=true;if(returnName!==null)inputs.entityName.value=returnName;if(returnRows)rendered=returnRows;mutate();},returnFormDelay);
  }};
+ const returnSearchButton={...backButton,innerText:'Return To Search'};
  const fieldValues={'Entity Name':observed[1][0],'NV Business ID':detailId||observed[1][1],'Entity Status':'Active','Entity Type':observed[1][3],FEIN:'-',
   'Solicits Charitable Contribution?':'No','IRS Registered Name':'-','Campaign Name':'-','Formation Date in Nevada':'12/10/2012',
   'Annual Renewal Due Date/Expiration Date':'12/31/2026'};
@@ -85,22 +87,29 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
    });
    throw Error('Unexpected grid selector '+q);
   }};
- const pager={getAttribute:k=>k==='aria-label'?`Page ${page} of ${Math.max(1,Math.ceil(rows.length/2))}`:null};
+ const pager={getAttribute:k=>k==='aria-label'?`Page ${page} of ${Math.max(1,Math.ceil(rows.length/pageSize))}`:null};
+ const sizeCombo={getClientRects:()=>[{}],querySelector:q=>q==='.k-input-value-text'?textEl(String(pageSize)):null,
+  getAttribute:k=>k==='aria-controls'&&sizeMenu?'page-sizes':null,click:()=>{sizeMenu=true;mutate();}};
+ const sizeOptions={getClientRects:()=>sizeMenu?[{}]:[],getAttribute:k=>k==='role'?'listbox':null,
+  querySelectorAll:q=>q==='[role="option"]'?[25,50,100].map(n=>({innerText:String(n),getClientRects:()=>[{}],click:()=>{
+   resizeClicks++;sizeMenu=false;if(resizeIgnored)return;page=1;pageSize=n;schedule(render,responseDelay);
+  }})):[]};
  const table={querySelectorAll:q=>q==='h4'?[textEl('Search Results')]:[],querySelector:q=>{
   if(q==='[role="grid"]')return grid;
   if(q==='kendo-datapager')return rendered.length?pager:null;
-  if(q==='kendo-datapager-info')return textEl(`${(page-1)*2+1} - ${Math.min(page*2,rows.length)} of ${rows.length} items`);
+  if(q==='kendo-datapager-info')return textEl(`${(page-1)*pageSize+1} - ${(page-1)*pageSize+rendered.length} of ${rows.length+(resizeTotalDrift&&resizeClicks?1:0)} items`);
+  if(q==='kendo-datapager [role="combobox"][aria-label="items per page"]')return pageSizeControl?sizeCombo:null;
   if(q==='button[aria-label="Go to the next page"]')return {disabled:truncate,getAttribute:()=>truncate?'true':'false',click:()=>{
-   page++;mutate();schedule(()=>{rendered=rows.slice((page-1)*2,page*2);if(duplicate)rendered=rows.slice(0,2);mutate();},oldPageDelay);
+   page++;mutate();schedule(render,oldPageDelay);
   }};
   if(q==='button[aria-label="Go to the previous page"]')return {disabled:false,click:()=>{page--;schedule(render,oldPageDelay);}};
   return null;
  }};
- const doc={documentElement:root,readyState:'complete',querySelectorAll:q=>{
+ const doc={documentElement:root,readyState:'complete',getElementById:id=>id==='page-sizes'&&sizeMenu?sizeOptions:null,querySelectorAll:q=>{
   if(q==='casex-data-table')return detail?[]:[table];
   if(q==='[role="tab"]')return [{innerText:'Business',getAttribute:()=> 'true'}];
   if(q==='[role="combobox"]')return !detail&&formReady?[textEl('Starts With')]:[textEl('STARTS_WITH')];
-  if(q==='button')return detail?[backButton]:[buttonCurrent?searchButton:staleButton];
+  if(q==='button')return detail?[backButton,returnSearchButton]:[buttonCurrent?searchButton:staleButton];
   if(q==='.app-loader-pane .circle-loader')return loading?[{getClientRects:()=>[{}]}]:[];
   if(q==='[role="form"]')return detail?[form]:[];
   throw Error('Unexpected document selector '+q);
@@ -121,10 +130,51 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
   }
   assert.ok(done);assert.equal(observers.size,0);if(error)throw error;return value;
  }
- return {context,drive,api:context.testNV,get opened(){return opened;},get clicks(){return searchClicks;},get staleClicks(){return staleClicks;},get time(){return clock;},
+ return {context,drive,api:context.testNV,get opened(){return opened;},get clicks(){return searchClicks;},get resizeClicks(){return resizeClicks;},get pageSize(){return pageSize;},get staleClicks(){return staleClicks;},get time(){return clock;},
   search:()=>drive(context.testNV.nvSearch({state:'NV',operation:'search',name:'MAKE-A-WISH'},clock+45000)),
   detail:()=>{detail=true;context.location.hash='screen=Manage-Business&id=fixture';return context.testNV.nvFields('NV20121738342');},fieldValues,grid};
 }
+
+function manyPublicRows(n){return Array.from({length:n},(_,i)=>['Example Chapter '+i,'NV'+String(20000000+i),'E123456789-0','Foreign Non-Profit Corporation (80)','','01/01/2020','Active']);}
+
+test('Nevada larger public page recovers a 38-result search whose 25-row final page omits two rows',async()=>{
+ const rows=manyPublicRows(38);
+ await assert.rejects(fixture({rows,initialPageSize:25,pagingMissing:2}).search(),/PAGINATION_INCOMPLETE/);
+ const h=fixture({rows,initialPageSize:25,pagingMissing:2,pageSizeControl:true}),r=await h.search();
+ assert.equal(r.total,38);assert.equal(r.rows.length,38);assert.equal(h.pageSize,50);assert.equal(h.resizeClicks,1);assert.equal(h.clicks,1);
+ assert.equal(new Set(r.rows.map(x=>x.identifier)).size,38);
+});
+
+test('Nevada 100-row control retains complete bounded pagination for larger lists',async()=>{
+ const h=fixture({rows:manyPublicRows(138),initialPageSize:25,pageSizeControl:true}),r=await h.search();
+ assert.equal(r.total,138);assert.equal(h.pageSize,100);assert.equal(h.resizeClicks,1);
+});
+
+test('Nevada never accepts a changed total or unacknowledged page-size selection',async()=>{
+ for(const options of [{resizeIgnored:true},{resizeTotalDrift:true}]){
+  const h=fixture({rows:manyPublicRows(38),initialPageSize:25,pageSizeControl:true,...options});
+  await assert.rejects(h.search(),/INCOMPLETE/);assert.equal(h.resizeClicks,1);assert.equal(h.clicks,1);assert.ok(h.time<=46000);
+ }
+});
+
+test('Nevada single-page searches do not touch the page-size control',async()=>{
+ const h=fixture({rows:observed,initialPageSize:25,pageSizeControl:true}),r=await h.search();
+ assert.equal(r.total,4);assert.equal(h.resizeClicks,0);
+});
+
+test('Nevada native Return To Search waits for the hydrated public form',async()=>{
+ const h=fixture({returnFormDelay:900});h.detail();
+ const r=await h.drive(h.api.nvReturnSearch(h.time+45000));
+ assert.equal(r.ok,true);assert.equal(h.api.registryDocumentReady(),true);assert.ok(h.time>=1900);assert.equal(h.clicks,0);
+});
+
+test('Nevada missing or incomplete native return cannot be accepted as a completed search',async()=>{
+ const h=fixture();h.detail();const read=h.context.document.querySelectorAll;
+ h.context.document.querySelectorAll=q=>q==='button'?[]:read(q);
+ await assert.rejects(h.drive(h.api.nvReturnSearch(h.time+45000)),/RETURN_SEARCH_MISSING/);
+ const delayed=fixture({returnFormDelay:46000});delayed.detail();
+ await assert.rejects(delayed.drive(delayed.api.nvReturnSearch(delayed.time+45000)),/RESPONSE_INCOMPLETE/);
+});
 
 test('Nevada collects both national records and local chapters without choosing one',async()=>{
  const f=fixture();const r=await f.search();assert.equal(r.total,4);assert.deepEqual(Array.from(r.rows,x=>x.identifier),observed.map(x=>x[1]));
@@ -176,6 +226,15 @@ test('Nevada retains observed NR rows without treating them as issued business i
  }
 });
 
+test('Nevada dated C rows without an entity type are retained only as unclassified identities',async()=>{
+ const row=['MIRROR MAGIC FOTO BOOTH','C20180913-0530','C20180913-0530','','','','Expired'];
+ const h=fixture({rows:[observed[1],row]}),r=await h.search();
+ assert.equal(r.total,2);assert.equal(r.rows[1].identifier,row[1]);assert.equal(r.rows[1].entity_type,'');
+ await assert.rejects(h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:row[1]},45000)),/COMMAND_INVALID/);
+ for(const changed of [[...row.slice(0,2),'C20180914-0530',...row.slice(3)], [...row.slice(0,3),'Foreign Non-Profit Corporation (80)',...row.slice(4)], [...row.slice(0,6),'']])
+  await assert.rejects(fixture({rows:[changed]}).search(),/RESULTS_INCOMPLETE/);
+});
+
 test('Nevada preserves a blank business ID with its observed entity number for master filtering',async()=>{
  const pending=['Ronald McDonald House Charities of Northeast Indiana','','E38494562024-0','Foreign Entities Not Required to Register In Nevada','','12/19/2023 12:00 AM','Expired'];
  const f=fixture({rows:[observed[1],pending]}),r=await f.search();
@@ -188,6 +247,17 @@ test('Nevada preserves a blank business ID with its observed entity number for m
   await assert.rejects(fixture({rows:[row]}).search(),/RESULTS_INCOMPLETE/);
  }
  await assert.rejects(fixture({rows:[pending,pending]}).search(),/RESULTS_INCOMPLETE/);
+});
+
+test('Nevada retains an issued row with a visibly blank status without inventing status',async()=>{
+ const row=['Something Local, LLC','NV20201884142','E8938352020-2','Domestic Limited Liability Company (86)','','08/26/2020 12:00 AM',''];
+ const result=await fixture({rows:[observed[1],row]}).search();
+ assert.equal(result.total,2);assert.equal(result.rows[1].raw_status,'');
+ assert.equal(result.rows[1].identifier,row[1]);
+ for(const changes of [{1:''},{3:''}]){
+  const changed=[...row];for(const [i,v] of Object.entries(changes))changed[i]=v;
+  await assert.rejects(fixture({rows:[changed]}).search(),/RESULTS_INCOMPLETE/);
+ }
 });
 
 test('Nevada restores all row identities including a blank-business-ID row between two details',async()=>{

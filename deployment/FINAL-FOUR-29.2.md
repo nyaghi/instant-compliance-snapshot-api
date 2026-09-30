@@ -427,3 +427,55 @@ approved 29.1 isolation comparison passes outside the exact audited additions.
 The six connector 0.6.9 Nevada controls returned four conclusive results and two
 return-to-search timeouts. Those initial results are preserved; deployment alone
 is not a claim that the remaining live navigation/verification failures pass.
+
+### September 29 evening: native navigation, paging and passive verification
+
+The 0.6.9 post-backend controls completed ten state checks: seven were conclusive.
+ELI and RMEF returned Upcoming Filing in both NC and TN, CHLA returned Current in
+NV, and PHA and Classical 98.1 returned Upcoming Filing in NC. Initial failed
+attempts remain in the random-30 report. Give Something Back and Operation
+Homefront remain incomplete on NC verification/readiness, and RMHC remains
+incomplete on NV pagination. The broader Nevada continuation is separate.
+
+Two direct public-page observations inform candidate connector 0.6.10:
+
+* NV reported 38 RMHC-prefix results at 25 per page, but its second page began
+  after two missing rows and ended at 36 of 38. Selecting its public 50-row
+  option exposed all 38 rows, including those two chapter records. The candidate
+  selects 50 or 100 through the public pager, keeps the original total, checks
+  the selected page size and row count, and still requires complete unique rows.
+  It never treats a shortened page as a completed negative.
+* Native Return To Search restored NV's working form in manual controls. An Aeon
+  0.6.9 repeat still timed out after a complete detail when starting its next
+  alias. The candidate follows the native button and waits for the hydrated
+  Business form. It does not guess a URL or accept a partially restored form.
+
+The Man in the Mirror continuation also reached an unrelated complete public
+row with identifier C20180913-0530, the same Entity Number, an Expired status,
+and an explicitly blank entity type. This dated C identifier now follows the
+existing NR unclassified-row path. An unrelated row can be rejected by master
+matching; a matching row remains review-only and cannot open a business detail.
+No corporation, charity license, or compliance status is inferred from it.
+
+Colorectal Cancer Alliance's CCA alias exposed the same dated C row shape.
+Give Something Back's Something fallback exposed an unrelated issued NV LLC
+with an explicitly blank Status cell in a complete 89-row result. Issued NV
+identities with a populated entity type now retain that blank for master
+filtering. A matching record still requires its complete detail; a blank search
+status never becomes a compliance classification. Unclassified and missing-ID
+rows retain their stricter requirements.
+
+NC's public page visibly showed Performing security verification in a failed
+background check. A subsequent interactive search returned the Give Something
+Back record immediately. The candidate applies Illinois's bounded visibility
+pattern only to the connector-owned NC page when verification is observed. It
+allows the state's own passive check to finish without a reload or additional
+request, stays inside the original readiness deadline, and restores the prior
+tab unless the user has switched or navigated. It does not solve a CAPTCHA,
+click a verification checkbox, manipulate verification tokens/cookies, or
+guarantee that a persistent challenge will clear. That hypothesis requires a
+live post-activation test.
+
+The changes are trial-only and do not alter matching thresholds, status rules,
+discovery concurrency, worker capacity or approved 29.1 deployment targets.
+Candidate activation and live validation remain required; do not promote.

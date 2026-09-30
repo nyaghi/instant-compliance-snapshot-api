@@ -635,14 +635,15 @@ class LookupControls(unittest.TestCase):
         self.assertTrue(all(q['operation'] == 'search' for q in self.calls))
 
     def test_nv_nr_identity_is_filtered_without_inventing_a_corporation(self):
-        for name, expected in [(self.nvrow['name'], 'Unable to Confirm'), ('The Junior Swim League LLC', 'Not Registered')]:
-            def nr(query):
-                self.assertEqual(query['operation'], 'search')
-                row = {'name':name, 'identifier':'NR20230725-22746', 'entity_type':'', 'raw_status':'Expired'}
-                return {'state':'NV', 'query':query, 'complete':True, 'verification_pending':False, 'total':1, 'rows':[row]}
-            result = cc.final_four_browser_lookup(self.orgs['NV'], 'NV', nr)
-            self.assertEqual(result.status, expected)
-            self.assertFalse(result.matched_registry_identifier)
+        for identifier in ['NR20230725-22746', 'C20180913-0530']:
+            for name, expected in [(self.nvrow['name'], 'Unable to Confirm'), ('The Junior Swim League LLC', 'Not Registered')]:
+                def nr(query):
+                    self.assertEqual(query['operation'], 'search')
+                    row = {'name':name, 'identifier':identifier, 'entity_type':'', 'raw_status':'Expired'}
+                    return {'state':'NV', 'query':query, 'complete':True, 'verification_pending':False, 'total':1, 'rows':[row]}
+                result = cc.final_four_browser_lookup(self.orgs['NV'], 'NV', nr)
+                self.assertEqual(result.status, expected)
+                self.assertFalse(result.matched_registry_identifier)
 
     def test_nc_unrelated_unissued_application_does_not_block_a_completed_negative(self):
         for name, expected in [("America's Charities", 'Needs Review'), ('Unrelated Junior League', 'Not Registered')]:
@@ -654,6 +655,30 @@ class LookupControls(unittest.TestCase):
             result = cc.final_four_browser_lookup(self.orgs['NC'], 'NC', pending)
             self.assertEqual(result.status, expected)
             self.assertFalse(result.matched_registry_identifier)
+
+    def test_nv_blank_search_status_does_not_classify_a_matching_record(self):
+        self.nvrow['raw_status'] = ''
+        result = cc.final_four_browser_lookup(self.orgs['NV'], 'NV', self.provider)
+        self.assertEqual(result.status, 'Upcoming Filing')
+        self.assertTrue(any(q['operation'] == 'detail' for q in self.calls))
+        self.calls.clear()
+        def incomplete_detail(q):
+            payload = self.provider(q)
+            if q['operation'] == 'detail':
+                payload['fields'] = {**payload['fields'], 'Entity Status': ''}
+            return payload
+        with self.assertRaises(ValueError):
+            cc.final_four_browser_lookup(self.orgs['NV'], 'NV', incomplete_detail)
+
+    def test_nv_completed_unrelated_blank_status_row_can_be_rejected(self):
+        def unrelated(q):
+            self.assertEqual(q['operation'], 'search')
+            row = {'name':'Something Local, LLC', 'identifier':'NV20201884142',
+                   'entity_type':'Domestic Limited Liability Company (86)', 'raw_status':''}
+            return {'state':'NV', 'query':q, 'complete':True, 'verification_pending':False, 'total':1, 'rows':[row]}
+        result = cc.final_four_browser_lookup(self.orgs['NV'], 'NV', unrelated)
+        self.assertEqual(result.status, 'Not Registered')
+        self.assertFalse(result.matched_registry_identifier)
 
     def test_nv_blank_business_id_is_filtered_but_never_opened_or_classified(self):
         for name, expected in [(self.nvrow['name'], 'Unable to Confirm'), ('Unrelated Regional Charity', 'Not Registered')]:
