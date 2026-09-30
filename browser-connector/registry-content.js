@@ -1043,7 +1043,7 @@
       return {ok:true,evidence:m.query?.operation==='search'?await tnSearch(m.query,deadline):await tnDetail(m.query,deadline)};
     }
     if (NV && m.action === 'registry-nv') {
-      const maximum=m.query?.operation==='search'?110000:45000;
+      const maximum=m.query?.operation==='search'?150000:45000;
       const deadline = Date.now() + Math.min(maximum, Number.isFinite(m.budgetMs) && m.budgetMs > 0 ? m.budgetMs : 45000);
       const evidence = m.query?.operation === 'search' ? await nvSearch(m.query,deadline) : await nvDetail(m.query,deadline);
       return {ok:true,evidence};

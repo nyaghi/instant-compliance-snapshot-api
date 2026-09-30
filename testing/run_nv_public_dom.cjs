@@ -3,7 +3,7 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const original=fs.readFileSync(path.join(__dirname,'../browser-connector/registry-content.js'),'utf8');
-const source=original.replace('  async function handle(m) {','  globalThis.testNV = {nvPage,nvFields,nvReservationFields,nvChanged,nvSearch,nvDetail,nvReturnSearch,registryDocumentReady};\n  async function handle(m) {');
+const source=original.replace('  async function handle(m) {','  globalThis.testNV = {nvPage,nvFields,nvReservationFields,nvChanged,nvSearch,nvDetail,nvReturnSearch,registryDocumentReady,handle};\n  async function handle(m) {');
 
 test('Nevada detail and transitional routes are not ready public search forms',()=>{
  const h=fixture();
@@ -239,6 +239,19 @@ test('Nevada slow large alias can finish within 110 seconds while the old 75-sec
  await assert.rejects(fixture(options).search(75000),/INCOMPLETE/);
  const h=fixture(options),r=await h.search(110000);
  assert.equal(r.total,5463);assert.equal(r.rows.length,5463);assert.ok(h.time<=111000);
+});
+
+test('Nevada large alias gets source-latency margin through the real content command',async()=>{
+ const options={rows:manyPublicRows(5463),initialPageSize:25,pageSizeControl:true,oldPageDelay:2300};
+ await assert.rejects(fixture(options).search(110000),/INCOMPLETE/);
+ const h=fixture(options),r=await h.drive(h.api.handle({action:'registry-nv',
+  query:{state:'NV',operation:'search',name:'Example'},budgetMs:150000}));
+ assert.equal(r.ok,true);assert.equal(r.evidence.total,5463);assert.equal(r.evidence.rows.length,5463);
+ assert.ok(h.time>111000&&h.time<=151000);
+ const limited=fixture(options);
+ await assert.rejects(limited.drive(limited.api.handle({action:'registry-nv',
+  query:{state:'NV',operation:'search',name:'Example'},budgetMs:60000})),/INCOMPLETE/);
+ assert.ok(limited.time<=61000);
 });
 test('Nevada still refuses over-limit, missing, duplicate and slow large result pages',async()=>{
  for(const options of [{rows:manyPublicRows(10001)},{rows:manyPublicRows(1322),truncate:true},

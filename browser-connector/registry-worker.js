@@ -182,7 +182,7 @@ async function performRegistryQuery(job, query) {
       if (query.operation==='detail') {
         if (!prior?.evidence?.complete) throw new Error('NY_CONNECTOR_INVALID_SEQUENCE');
         const restored=await registryMessage(job,{action:'registry-nv',query:prior.query,
-          budgetMs:Math.max(1,Math.min(110000,job.activeExpiresAt-Date.now()))});
+          budgetMs:Math.max(1,Math.min(150000,job.activeExpiresAt-Date.now()))});
         if (!restored?.ok || restored.evidence?.complete!==true || !P.sameQuery(restored.evidence.query,prior.query)
             || restored.evidence.total!==prior.evidence.total
             || JSON.stringify(restored.evidence.rows)!==JSON.stringify(prior.evidence.rows))
@@ -205,7 +205,10 @@ async function performRegistryQuery(job, query) {
       throw new Error("NY_CONNECTOR_INVALID_SEQUENCE");
     }
     job.finalFourReusableForm = false;
-    const allowance=query.state==='NV'&&query.operation==='search'?110000:45000;
+    // A short reviewed alias can legitimately return thousands of entities.
+    // Give that complete paged search margin inside this job's existing
+    // deadline; never borrow another state's time or reset Sales' one minute.
+    const allowance=query.state==='NV'&&query.operation==='search'?150000:45000;
     const response = await registryMessage(job,{action:`registry-${query.state.toLowerCase()}`,query,budgetMs:Math.max(1,Math.min(allowance,job.activeExpiresAt-Date.now()))});
     if (query.operation === "search") job.finalFourSearchComplete = response?.ok === true;
     if (query.state==='NV' && response?.ok===true) {

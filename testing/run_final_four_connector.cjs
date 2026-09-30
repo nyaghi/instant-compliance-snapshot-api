@@ -35,6 +35,18 @@ function fixture(enabled=true){
   };
   return Object.assign(h,{calls,reloads});
 }
+test('NV search margin never extends the job deadline or another state allowance',async()=>{
+ for(const state of ['NV','TN'])for(const remaining of [300000,60000,30000]) {
+  const h=fixture(),query={state,operation:'search',name:'Reviewed Alias'};
+  const deadline=10000+remaining;
+  h.tabs.set(3,{id:3,windowId:10,url:vm.runInContext(`registryStart('${state}')`,h.context)});
+  const job={tab:3,sender:{url:TRIAL,tab:{id:1}},registryState:state,activeExpiresAt:deadline,closed:false,finalFourReusableForm:true};
+  assert.equal((await h.context.performRegistryQuery(job,query)).ok,true);
+  const request=h.calls.find(m=>m.query);
+  assert.equal(request.budgetMs,Math.min(state==='NV'?150000:45000,remaining));
+  assert.equal(job.activeExpiresAt,deadline);
+ }
+});
 for(const state of ['NV','TN']) {
   const search={state,operation:'search',name:'Example National Foundation'};
   const detail={state,operation:'detail',identifier:state==='NV'?'NV123456':'CO1234'};
@@ -54,7 +66,7 @@ for(const state of ['NV','TN']) {
     const h=fixture(),p=connect(h,state);
     assert.equal((await h.query(p,2,search)).ok,true);assert.equal((await h.query(p,3,detail)).ok,true);
     assert.equal(h.created.length,1);assert.equal(h.calls[0].action,`registry-${state.toLowerCase()}`);
-    assert.equal(h.calls.every(c=>c.budgetMs>0&&c.budgetMs<=(state==='NV'&&c.query?.operation==='search'?110000:45000)),true);
+    assert.equal(h.calls.every(c=>c.budgetMs>0&&c.budgetMs<=(state==='NV'&&c.query?.operation==='search'?150000:45000)),true);
     assert.equal(h.tabs.get(h.created[0]).active,false);
     p.onMessage.emit({action:'finish',id:id(4)});await tick();assert.deepEqual(h.removed,h.created);assert.ok(h.tabs.has(2));
   });
