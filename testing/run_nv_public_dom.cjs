@@ -75,7 +75,8 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
  const searchCombo={get innerText(){return searchMode==='EXACT_MATCH'?'Exact Match':'Starts With';},
   querySelector:q=>q==='select[name="data[searchType]"]'?{}:null,
   click:()=>{modeMenu=true;mutate();},querySelectorAll:q=>q==='[role="option"]'?['STARTS_WITH','EXACT_MATCH'].map(mode=>({
-    getAttribute:k=>k==='data-value'?mode:null,getClientRects:()=>modeMenu?[{}]:[],click:()=>{},
+    textContent:mode==='EXACT_MATCH'?'Exact Match':'Starts With',
+    getAttribute:k=>k==='data-value'?mode:null,getClientRects:()=>modeMenu?[{}]:[],click:()=>{modeMenu=!modeMenu;mutate();},
     dispatchEvent:event=>{
       if(event.type!=='mousedown'||!event.bubbles||event.button!==0)return;
       modeClicks++;modeMenu=false;if(!ignoreModeChange)searchMode=mode;mutate();
@@ -153,7 +154,7 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
   }
   assert.ok(done);assert.equal(observers.size,0);if(error)throw error;return value;
  }
- return {context,drive,api:context.testNV,get opened(){return opened;},get clicks(){return searchClicks;},get modeClicks(){return modeClicks;},get pagingClicks(){return pagingClicks;},get mode(){return searchMode;},get resizeClicks(){return resizeClicks;},get pageSize(){return pageSize;},get staleClicks(){return staleClicks;},get time(){return clock;},
+ return {context,drive,api:context.testNV,get opened(){return opened;},get clicks(){return searchClicks;},get modeClicks(){return modeClicks;},get modeMenuOpen(){return modeMenu;},get pagingClicks(){return pagingClicks;},get mode(){return searchMode;},get resizeClicks(){return resizeClicks;},get pageSize(){return pageSize;},get staleClicks(){return staleClicks;},get time(){return clock;},
   search:(budget=45000)=>drive(context.testNV.nvSearch({state:'NV',operation:'search',name:'MAKE-A-WISH'},clock+budget)),
   detail:()=>{detail=true;context.location.hash='screen=Manage-Business&id=fixture';return context.testNV.nvFields('NV20121738342');},fieldValues,reservationFields,grid};
 }
@@ -185,6 +186,25 @@ test('master-authorized broad Nevada query switches to Exact Match before paging
  assert.equal(result.total,5);assert.equal(result.broad_total,5463);assert.equal(result.search_mode,'EXACT_MATCH');
  assert.deepEqual(JSON.parse(JSON.stringify(result.query)),adaptiveQuery);assert.equal(h.clicks,2);assert.equal(h.modeClicks,1);assert.equal(h.pagingClicks,0);
  assert.equal(h.api.registryDocumentReady(),true);
+});
+test('Nevada changes the public mode without opening or reopening the animated menu',async()=>{
+ const h=fixture({rows:manyPublicRows(21),exactRows:[],initialPageSize:25});
+ const combo=h.context.document.querySelectorAll('[role="combobox"]')[0];
+ combo.click=()=>{throw Error('Opening the menu is unnecessary');};
+ await h.drive(h.api.nvSearch(adaptiveQuery,h.time+45000));
+ assert.equal(h.mode,'EXACT_MATCH');assert.equal(h.modeMenuOpen,false);
+ await h.search();assert.equal(h.mode,'STARTS_WITH');assert.equal(h.modeMenuOpen,false);
+});
+test('Nevada refuses a mode option with a changed public label or disabled state',async()=>{
+ for(const changed of ['label','disabled']){
+  const h=fixture({rows:manyPublicRows(21),exactRows:[],initialPageSize:25});
+  const combo=h.context.document.querySelectorAll('[role="combobox"]')[0],read=combo.querySelectorAll;
+  combo.querySelectorAll=q=>read(q).map(option=>option.getAttribute('data-value')!=='EXACT_MATCH'?option:{...option,
+   textContent:changed==='label'?'Different mode':option.textContent,
+   getAttribute:k=>changed==='disabled'&&k==='aria-disabled'?'true':option.getAttribute(k)});
+  await assert.rejects(h.drive(h.api.nvSearch(adaptiveQuery,h.time+45000)),/MODE_MENU_INCOMPLETE/);
+  assert.equal(h.mode,'STARTS_WITH');assert.equal(h.clicks,1);
+ }
 });
 test('Nevada small result set stays Starts With and an ordinary command is never narrowed',async()=>{
  for(const size of [0,5,20]){

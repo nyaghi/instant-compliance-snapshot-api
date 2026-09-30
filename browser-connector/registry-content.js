@@ -247,19 +247,21 @@
     if (combos.length!==1) throw new Error('REGISTRY_NV_FORM_CHANGED');
     const combo=combos[0];
     const option=await wait(()=>{
-      const options=[...combo.querySelectorAll('[role="option"]')].filter(el=>el.getAttribute('data-value')===mode&&visible(el));
+      const label=mode==='EXACT_MATCH'?'Exact Match':'Starts With';
+      const options=[...combo.querySelectorAll('[role="option"]')].filter(el=>el.getAttribute('data-value')===mode
+        && (el.textContent||'').replace(/\s+/g,' ').trim()===label && el.getAttribute('aria-disabled')!=='true');
       return options.length===1&&options[0];
-    },Math.max(1,Math.min(3000,deadline-Date.now())),{action:()=>combo.click()}).catch(error=>{
+    },Math.max(1,Math.min(3000,deadline-Date.now()))).catch(error=>{
       if(error.message==='REGISTRY_RESPONSE_INCOMPLETE')throw new Error('REGISTRY_NV_MODE_MENU_INCOMPLETE');
       throw error;
     });
-    nvTrace('mode-menu-opened',{mode});
-    // ORION's public Choices widget selects on mousedown. HTMLElement.click()
-    // alone does not perform that interaction. Use the ordinary mouse sequence
-    // on the observed visible choice, then verify the selected public value.
+    // The ordinary public choice is present in the collapsed dropdown's DOM.
+    // Choices selects on mousedown; opening its animated menu is unnecessary.
+    // A subsequent click can reopen that menu after selection and race the
+    // next search. Select the labelled option once and verify the rendered
+    // value. No Choices instance, application state or private API is used.
     await wait(()=>nvSearchModeSelected(mode),Math.max(1,Math.min(3000,deadline-Date.now())),{action:()=>{
-      for(const type of ['mousedown','mouseup'])option.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,button:0,view:window}));
-      option.click();
+      option.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,button:0,view:window}));
     },settle:200,sameCandidate:(prior,current)=>prior===current}).catch(error=>{
       if(error.message==='REGISTRY_RESPONSE_INCOMPLETE')throw new Error('REGISTRY_NV_MODE_NOT_SELECTED');
       throw error;
