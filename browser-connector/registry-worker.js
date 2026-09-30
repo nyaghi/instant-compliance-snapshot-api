@@ -7,14 +7,26 @@ async function registryMessage(job, message) {
   if (new URL(tab.url).origin !== registryOrigin(job.registryState)) throw new Error("NY_CONNECTOR_INCOMPLETE");
   return chrome.tabs.sendMessage(job.tab, message, {frameId:0});
 }
-async function registryReady(job, oldDocument = null, path = null, budgetMs = 45000) {
+async function registryReady(job, oldDocument = null, path = null, budgetMs = 45000, ncSubmittedQuery = null) {
+  const started = Date.now();
   const deadline = Math.min(Date.now()+Math.max(1,Math.min(45000,budgetMs)), job.activeExpiresAt);
-  let verificationPending=false, visibilityAttempted=false, previousVisible=null;
+  let verificationPending=false, visibilityAttempted=false, previousVisible=null, submissionRetried=false;
   try { while (!job.closed && Date.now()<deadline) {
     try {
       const value=await registryMessage(job,{action:"registry-ready"});
       verificationPending=job.registryState==='NC'&&value?.verification_pending===true;
       if (value?.ready && value.documentId !== oldDocument && (!path || new URL(value.url).pathname===path)) return value;
+      // An acknowledged NC Search can leave the same ordinary, enabled form
+      // without navigating. Retry once only after observing that exact form;
+      // disabled Processing and verification pages are never resubmitted.
+      // The original deadline and expected results document stay unchanged.
+      if (ncSubmittedQuery && job.registryState==='NC' && !submissionRetried && !verificationPending
+          && Date.now()-started>=3000 && Date.now()<deadline && value?.ready && value.documentId===oldDocument
+          && new URL(value.url).pathname==='/online_services/search/by_title/search_charities') {
+        submissionRetried=true;
+        const retried=await registryMessage(job,{action:'registry-nc-retry',query:ncSubmittedQuery});
+        diagnostic('nc-submit-recovery',job,retried?.phase==='submitted'?'same-query resubmitted':'form changed; no resubmission');
+      }
     } catch {
       // The public challenge can precede content-script readiness. Its visible
       // tab title is sufficient to describe a pending verification, not a result.
@@ -205,7 +217,7 @@ async function registryNorthCarolinaQuery(job,query) {
     const prior=await registryNavigate(job,registryStart('NC'));
     const submitted=await registryMessage(job,{action:'registry-nc-form',query});
     if(!submitted?.ok||submitted.phase!=='submitted')throw new Error('NY_CONNECTOR_INCOMPLETE');
-    await registryReady(job,prior.documentId,'/online_services/search/Charities_Results');
+    await registryReady(job,prior.documentId,'/online_services/search/Charities_Results',45000,query);
     const result=await registryMessage(job,{action:'registry-nc-rows',query,budgetMs:Math.max(1,Math.min(45000,job.activeExpiresAt-Date.now()))});
     if(result?.ok && result.evidence?.complete===true) {
       job.ncProfiles ||= Object.create(null);

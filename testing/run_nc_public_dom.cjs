@@ -2,7 +2,7 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const source=fs.readFileSync(path.join(__dirname,'../browser-connector/registry-content.js'),'utf8')
- .replace('  async function handle(m) {','  globalThis.testNC={ncLabeled,ncForm,ncRows,ncProfile,ncFilings,registryDocumentReady,handle};\n  async function handle(m) {');
+ .replace('  async function handle(m) {','  globalThis.testNC={ncLabeled,ncForm,ncRetry,ncRows,ncProfile,ncFilings,registryDocumentReady,handle};\n  async function handle(m) {');
 const origin='https://www.sosnc.gov',profile=origin+'/online_services/search/charities_profile/5700751';
 const active={'CSL Legal Name':"America's Charities",'CSL Type':'Charitable Organization',Status:'Current Active – Filing Extension Granted',License:'SL000448','Expiration Date':'5/15/2026','Extension End Date':'11/15/2026'};
 const exempt={'CSL Legal Name':'YWCA of the U.S.A.','CSL Type':'CSL Exempt Organization',Status:'CSL Exempt',License:'EX003050'};
@@ -23,7 +23,7 @@ function harness({cards=[active],total=cards.length,query="America's Charities",
  class Select extends Input{};
  Object.defineProperty(Select.prototype,'value',Object.getOwnPropertyDescriptor(Input.prototype,'value'));
  const input=new Input(),words=new Select();words.options=[{innerText:'Starting With',value:'0'}];
- const print={checked:true,click:()=>{print.checked=false;}},button={disabled:false,getClientRects:()=>[{}],click:()=>formClicks++};
+ const print={checked:true,click:()=>{print.checked=false;}},button={innerText:'Search',disabled:false,getClientRects:()=>[{}],click:()=>formClicks++};
  const win={};win.top=win;
  const context=vm.createContext({window:win,URL,location:{origin,pathname:new URL(url).pathname,href:url},crypto:{randomUUID:()=> 'fixture'},
   document:{readyState:'complete',documentElement:{},getElementById:id=>panels.get(id),
@@ -128,6 +128,25 @@ test('NC query dispatch does not depend on a background-tab timer',()=>{
  h.context.setTimeout=()=>{throw Error('Background timer is suspended');};
  assert.equal(h.api.ncForm({state:'NC',operation:'search',name:'Reviewed Alternate Name'}).phase,'submitted');
  assert.equal(h.formClicks(),1);
+});
+test('NC retains an already selected mode without firing its source change handler',()=>{
+ const h=harness({url:origin+'/online_services/search/by_title/search_charities'});
+ h.words.value='0';h.words.dispatchEvent=()=>{throw Error('Unnecessary search-type change');};
+ assert.equal(h.api.ncForm({state:'NC',operation:'search',name:'Reviewed Alias'}).phase,'submitted');
+ assert.equal(h.formClicks(),1);
+});
+test('NC recovery resubmits only the identical enabled ordinary form',()=>{
+ const h=harness({url:origin+'/online_services/search/by_title/search_charities'}),q={state:'NC',operation:'search',name:'Reviewed Alias'};
+ h.api.ncForm(q);assert.equal(h.api.ncRetry(q).phase,'submitted');assert.equal(h.formClicks(),2);
+ for(const change of [()=>h.button.disabled=true,()=>{h.button.disabled=false;h.button.innerText='Processing';},()=>{h.button.innerText='Search';h.input.value='Different Name';},()=>{h.input.value=q.name;h.words.value='exact';},()=>{h.words.value='0';h.print.checked=true;}]){
+  change();assert.notEqual(h.api.ncRetry(q).phase,'submitted');assert.equal(h.formClicks(),2);
+ }
+});
+test('NC recovery never operates a verification or another document',()=>{
+ const q={state:'NC',operation:'search',name:'Reviewed Alias'},h=harness({url:origin+'/online_services/search/by_title/search_charities'});
+ h.context.document.querySelector=()=>null;assert.equal(h.api.ncRetry(q).phase,'pending');assert.equal(h.formClicks(),0);
+ assert.equal(harness().api.ncRetry(q).phase,'pending');
+ assert.throws(()=>h.api.ncRetry({...q,state:'NV'}),/QUERY_INVALID/);
 });
 test('NC document completion does not mistake a verification interstitial for its search form',()=>{
  const h=harness({url:origin+'/online_services/search/by_title/search_charities'}),read=h.context.document.querySelector;

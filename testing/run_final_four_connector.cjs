@@ -146,6 +146,36 @@ test('NC missing optional filing history preserves the complete profile with inc
  const {h,search,detail}=ncFixture({history:false}),p=connect(h,'NC');await h.query(p,2,search);
  const r=await h.query(p,3,detail);assert.equal(r.ok,true);assert.equal(r.evidence.complete,true);assert.equal(r.evidence.filings.complete,false);
 });
+function ncStalledSubmission({recover=true,processing=false}={}) {
+ const f=ncFixture(),{h}=f,send=h.chrome.tabs.sendMessage;let submitted=false,retries=0;
+ h.chrome.tabs.sendMessage=async(id,m)=>{
+  if(m.action==='registry-nc-form'){submitted=true;return {ok:true,phase:'submitted'};}
+  if(m.action==='registry-nc-retry'){
+   retries++;if(recover)h.tabs.get(id).url='https://www.sosnc.gov/online_services/search/Charities_Results';
+   return {ok:true,phase:'submitted'};
+  }
+  const r=await send(id,m);if(m.action==='registry-ready'&&submitted&&processing&&h.tabs.get(id).url.endsWith('/search_charities'))r.ready=false;
+  return r;
+ };
+ return {...f,retries:()=>retries};
+}
+test('NC retries one acknowledged search only on its same enabled form',async()=>{
+ const {h,search,retries}=ncStalledSubmission(),p=connect(h,'NC');
+ assert.equal(await h.query(p,2,search),undefined);await h.advance(2900);assert.equal(retries(),0);
+ await h.advance(300);assert.equal(retries(),1);await h.advance(250);
+ assert.equal(p.messages.find(m=>m.id===id(2)&&!m.progress)?.ok,true);assert.equal(h.reloads.length,0);
+});
+test('NC a failed resubmission neither loops nor extends the original deadline',async()=>{
+ const {h,search,retries}=ncStalledSubmission({recover:false}),p=connect(h,'NC');
+ await h.query(p,2,search);await h.advance(3100);assert.equal(retries(),1);
+ await h.advance(42001);assert.equal(retries(),1);
+ assert.equal(p.messages.find(m=>m.id===id(2)&&!m.progress)?.reason,'NY_CONNECTOR_TAB_READY_TIMEOUT');assert.equal(h.reloads.length,0);
+});
+test('NC a visible Processing state is not resubmitted',async()=>{
+ const {h,search,retries}=ncStalledSubmission({processing:true}),p=connect(h,'NC');
+ await h.query(p,2,search);await h.advance(45001);assert.equal(retries(),0);
+ assert.equal(p.messages.find(m=>m.id===id(2)&&!m.progress)?.reason,'NY_CONNECTOR_TAB_READY_TIMEOUT');
+});
 test('NC persistent visible verification is identified separately from a registry timeout',async()=>{
  const {h,search}=ncFixture(),send=h.chrome.tabs.sendMessage;
  h.chrome.tabs.sendMessage=async(id,m)=>m.action==='registry-ready'

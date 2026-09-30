@@ -173,7 +173,7 @@ test('Nevada missing or incomplete native return cannot be accepted as a complet
  h.context.document.querySelectorAll=q=>q==='button'?[]:read(q);
  await assert.rejects(h.drive(h.api.nvReturnSearch(h.time+45000)),/RETURN_SEARCH_MISSING/);
  const delayed=fixture({returnFormDelay:46000});delayed.detail();
- await assert.rejects(delayed.drive(delayed.api.nvReturnSearch(delayed.time+45000)),/RESPONSE_INCOMPLETE/);
+ await assert.rejects(delayed.drive(delayed.api.nvReturnSearch(delayed.time+45000)),/REGISTRY_NV_RETURN_READY_TIMEOUT/);
 });
 
 test('Nevada collects both national records and local chapters without choosing one',async()=>{

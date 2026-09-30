@@ -55,7 +55,7 @@ class RestoreApprovedOrigin(ast.NodeTransformer):
         return self.generic_visit(node)
 
     def visit_BoolOp(self, node):
-        current = "record.get('connector_version') != '0.5.10' and not (trial_identity() and record.get('connector_version') in {'0.6.4', '0.6.5', '0.6.6', '0.6.7', '0.6.8', '0.6.9', '0.6.10'})"
+        current = "record.get('connector_version') != '0.5.10' and not (trial_identity() and record.get('connector_version') in {'0.6.4', '0.6.5', '0.6.6', '0.6.7', '0.6.8', '0.6.9', '0.6.10', '0.6.11'})"
         if ast.dump(node) == ast.dump(ast.parse(current, mode='eval').body):
             return ast.parse("record.get('connector_version') != '0.5.10'", mode='eval').body
         if ast.dump(node)==ast.dump(ast.parse('APP_VERSION.endswith("-staging") or trial_identity()',mode='eval').body):

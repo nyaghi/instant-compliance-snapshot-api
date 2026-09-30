@@ -347,7 +347,10 @@
       if (!list || !visible(list) || list.getAttribute('role') !== 'listbox') return false;
       const matches = [...list.querySelectorAll('[role="option"]')].filter(el => text(el) === String(wanted) && visible(el));
       return matches.length === 1 && matches[0];
-    },Math.max(1,Math.min(3000,deadline-Date.now())),{action:()=>combo.click()});
+    },Math.max(1,Math.min(3000,deadline-Date.now())),{action:()=>combo.click()}).catch(error=>{
+      if(error.message==='REGISTRY_RESPONSE_INCOMPLETE')throw new Error('REGISTRY_NV_PAGE_SIZE_MENU_INCOMPLETE');
+      throw error;
+    });
     return nvChanged(()=>option.click(),()=>{
       const fresh=nvPage('Search Results',nvSearchHeaders), current=fresh.table.querySelector(selector);
       if (!current || Number(text(current.querySelector('.k-input-value-text'))) !== wanted
@@ -364,8 +367,14 @@
       if (buttons.length!==1) throw new Error('REGISTRY_NV_RETURN_SEARCH_MISSING');
       // Follow the public app's own reset/navigation action. Assigning a hash
       // alone can retain a partially restored search form after a detail.
-      await wait(()=>onSearch()&&registryDocumentReady(),Math.max(1,deadline-Date.now()),{action:()=>buttons[0].click()});
-    } else await wait(()=>registryDocumentReady(),Math.max(1,deadline-Date.now()));
+      await wait(()=>onSearch()&&registryDocumentReady(),Math.max(1,deadline-Date.now()),{action:()=>buttons[0].click()}).catch(error=>{
+        if(error.message==='REGISTRY_RESPONSE_INCOMPLETE')throw new Error('REGISTRY_NV_RETURN_READY_TIMEOUT');
+        throw error;
+      });
+    } else await wait(()=>registryDocumentReady(),Math.max(1,deadline-Date.now())).catch(error=>{
+      if(error.message==='REGISTRY_RESPONSE_INCOMPLETE')throw new Error('REGISTRY_NV_RETURN_READY_TIMEOUT');
+      throw error;
+    });
     return {ok:true};
   }
   async function nvSearch(query, deadline) {
@@ -391,7 +400,10 @@
       return buttons.length === 1 && buttons[0];
     }, Math.max(1,Math.min(3000,deadline-Date.now())), {settle:200,sameCandidate:(prior,current)=>prior===current,action:()=>{
       if(number.value!=='')set(number,'');if(id.value!=='')set(id,'');if(name.value!==query.name)set(name,query.name);
-    }});
+    }}).catch(error=>{
+      if(error.message==='REGISTRY_RESPONSE_INCOMPLETE')throw new Error('REGISTRY_NV_FORM_NOT_SETTLED');
+      throw error;
+    });
     nvObserved.clear(); nvLastSearch = null;
     // The initial blank grid and old rows remain visible while ORION searches.
     // A completed loading cycle is mandatory, including for an empty response.
@@ -673,11 +685,27 @@
     const input=document.querySelector('#SearchCriteria'),words=document.querySelector('#Words'),button=document.querySelector('#SubmitButton'),print=document.querySelector('#Print');
     const starts=words&&[...words.options].find(o=>text(o)==='Starting With');
     if(!input||!starts||!visible(button)||button.disabled||!print)throw new Error('REGISTRY_NC_FORM_CHANGED');
-    set(words,starts.value);set(input,query.name);if(print.checked)print.click();
+    // NC wires SearchTypeChanged() to change. Do not dispatch it again when
+    // the requested Starting With mode is already selected.
+    if(words.value!==starts.value)set(words,starts.value);
+    set(input,query.name);if(print.checked)print.click();
     // Dispatch the ordinary form action before acknowledging it. A deferred
     // timer in a background tab can be throttled after the worker has already
     // started waiting for the results document. NC's action starts an async
     // request, so the message reply is sent before the resulting navigation.
+    button.click();return {ok:true,phase:'submitted'};
+  }
+  function ncRetry(query) {
+    if(query?.state!=='NC'||query.operation!=='search'||typeof query.name!=='string'||!query.name.trim()||query.name.length>500)
+      throw new Error('REGISTRY_NC_QUERY_INVALID');
+    if(location.pathname!=='/online_services/search/by_title/search_charities'||!registryDocumentReady())
+      return {ok:false,phase:'pending'};
+    const input=document.querySelector('#SearchCriteria'),words=document.querySelector('#Words'),button=document.querySelector('#SubmitButton'),print=document.querySelector('#Print');
+    const starts=words&&[...words.options].find(o=>text(o)==='Starting With');
+    if(!input||input.value!==query.name||!starts||words.value!==starts.value||!print||print.checked
+        ||!visible(button)||button.disabled||text(button)!=='Search')return {ok:false,phase:'changed'};
+    // Ordinary public action only: no reload, challenge action, private
+    // request, query rewrite or timer that outlives the worker's deadline.
     button.click();return {ok:true,phase:'submitted'};
   }
   async function ncRows(query,budgetMs=45000) {
@@ -883,6 +911,7 @@
         && /Performing security verification|verifies you are not a bot/i.test(text(document.body))} : {})};
     if (NC) {
       if(m.action==='registry-nc-form')return ncForm(m.query);
+      if(m.action==='registry-nc-retry')return ncRetry(m.query);
       if(m.action==='registry-nc-rows')return ncRows(m.query,m.budgetMs);
       if(m.action==='registry-nc-profile')return ncProfile(m.query);
       if(m.action==='registry-nc-filings')return ncFilings(m.query);

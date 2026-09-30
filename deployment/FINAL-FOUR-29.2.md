@@ -479,3 +479,39 @@ live post-activation test.
 The changes are trial-only and do not alter matching thresholds, status rules,
 discovery concurrency, worker capacity or approved 29.1 deployment targets.
 Candidate activation and live validation remain required; do not promote.
+
+### 0.6.10 live outcome and 0.6.11 submission recovery
+
+The 13-organization, 18-check activation control finished with 11 conclusive
+results and seven reviews/incomplete results. PCJF and Federation of Jewish
+Communities completed the previously failing NV return-navigation path and
+returned Delinquent. Give Something Back completed all NV aliases and returned
+Not Registered. Summit's IL and GA controls both remained Current. Aeon, Man in
+the Mirror and CCA now complete collection but retain unclassified-entity
+reviews; resolving collection does not establish their identity or status.
+
+NC still timed out after acknowledging ordinary Search actions. In a same-input
+repeat, the observed page showed the submitted query with an enabled Search
+button, no visible verification, and no results navigation. The failing alias
+changed between repeats. Candidate 0.6.11 removes an unnecessary search-type
+change event and allows one same-query public resubmission after three seconds,
+only while the same document is a complete, enabled ordinary search form.
+The content handler rechecks the exact query, Starting With and printable-view
+controls. Processing, changed queries, other documents and verification pages
+cannot trigger this action. It keeps the original 45-second readiness deadline
+and the enclosing job deadline. No extra capacity or broader permissions.
+
+The remaining ELI NV failure has a separate cause: the public Starts With alias
+query returns 5,463 records (219 pages), exceeding the 500-record bound. Exact
+Match returns five candidates in manual diagnosis, but that narrower search has
+not been adopted or substituted for application evidence. RMHC's subsequent
+alias continuation remains under investigation. No negative is inferred from
+either incomplete lookup. Alabama's displayed verification remains pending.
+
+This candidate does not change any state's identity thresholds, compliance
+classification, discovery plan, concurrency or timeout allocation. Activation
+and live post-validation are required before calling the NC recovery verified.
+NV incomplete responses now identify whether the return form, input settling,
+or page-size menu failed. These diagnostic distinctions do not relax source
+completion or cause an additional request; the remaining RMHC failure must be
+observed at its actual failing phase before another navigation change is made.
