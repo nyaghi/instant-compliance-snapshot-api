@@ -137,6 +137,29 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
 
 function manyPublicRows(n){return Array.from({length:n},(_,i)=>['Example Chapter '+i,'NV'+String(20000000+i),'E123456789-0','Foreign Non-Profit Corporation (80)','','01/01/2020','Active']);}
 
+test('Nevada coalesces an identical source row repeated across otherwise distinct completed pages',async()=>{
+ const rows=manyPublicRows(1322);
+ const repeated=['Ronald Johnson','NV20121265330','','NT7 Business License Sole Proprietor','','04/26/2012 09:19 AM','Expired'];
+ rows[598]=[...repeated];rows[601]=[...repeated];
+ const h=fixture({rows,initialPageSize:100}),r=await h.search();
+ assert.equal(r.complete,true);assert.equal(r.total,1321);assert.equal(r.rows.length,1321);
+ assert.equal(r.rows.filter(x=>x.identifier==='NV20121265330').length,1);
+});
+
+test('Nevada conflicting cross-page duplicates remain incomplete',async()=>{
+ for(const field of [0,3,4,5,6]){
+  const rows=manyPublicRows(4);rows[2]=[...rows[0]];rows[2][field]+=' changed';
+  await assert.rejects(fixture({rows}).search(),/RESULTS_INCOMPLETE/);
+ }
+});
+
+test('Nevada identical rows within the same page do not silently establish completeness',async()=>{
+ const rows=manyPublicRows(4);rows[1]=[...rows[0]];
+ await assert.rejects(fixture({rows}).search(),/RESULTS_INCOMPLETE/);
+ const later=manyPublicRows(6);later[2]=[...later[0]];later[3]=[...later[0]];
+ await assert.rejects(fixture({rows:later}).search(),/RESULTS_INCOMPLETE/);
+});
+
 test('Nevada larger public page recovers a 38-result search whose 25-row final page omits two rows',async()=>{
  const rows=manyPublicRows(38);
  await assert.rejects(fixture({rows,initialPageSize:25,pagingMissing:2}).search(),/PAGINATION_INCOMPLETE/);
@@ -161,6 +184,13 @@ test('Nevada completes a 5463-row alias with background timer clamping inside it
  const r=await h.search(75000);
  assert.equal(r.total,5463);assert.equal(r.rows.length,5463);
  assert.equal(new Set(r.rows.map(x=>x.identifier)).size,5463);assert.ok(h.time<=75000);
+});
+
+test('Nevada slow large alias can finish within 110 seconds while the old 75-second command ends incomplete',async()=>{
+ const options={rows:manyPublicRows(5463),initialPageSize:25,pageSizeControl:true,oldPageDelay:1700};
+ await assert.rejects(fixture(options).search(75000),/INCOMPLETE/);
+ const h=fixture(options),r=await h.search(110000);
+ assert.equal(r.total,5463);assert.equal(r.rows.length,5463);assert.ok(h.time<=111000);
 });
 test('Nevada still refuses over-limit, missing, duplicate and slow large result pages',async()=>{
  for(const options of [{rows:manyPublicRows(10001)},{rows:manyPublicRows(1322),truncate:true},
@@ -325,6 +355,16 @@ test('Nevada reuses a verified restored result set without requiring another loa
 
 test('Nevada restores all pages and locates the second identity after returning from a detail',async()=>{
  const f=fixture({repeatSearchActivity:false});await f.search();
+ await f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:observed[0][1]},45000));
+ const result=await f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:observed[1][1]},45000));
+ assert.equal(result.fields['NV Business ID'],observed[1][1]);assert.equal(f.clicks,1);
+ assert.deepEqual(f.opened,[observed[0][1],observed[1][1]]);
+});
+
+test('Nevada source duplicates remain safely coalesced when returning between two details',async()=>{
+ const rows=[...observed.map(r=>[...r]),[...observed[0]],[...observed[1]]];
+ const f=fixture({rows,repeatSearchActivity:false});const search=await f.search();
+ assert.equal(search.total,4);
  await f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:observed[0][1]},45000));
  const result=await f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:observed[1][1]},45000));
  assert.equal(result.fields['NV Business ID'],observed[1][1]);assert.equal(f.clicks,1);

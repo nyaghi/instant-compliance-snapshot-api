@@ -432,11 +432,22 @@
       // explicit blank business ID uses its visible entity number only as a
       // row key; nvDetail still refuses anything except an observed NV ID.
       const row = nvPublicRow(cells), identifier = row.identifier;
-      if (nvObserved.has(identifier))
-        throw new Error("REGISTRY_NV_RESULTS_INCOMPLETE");
-      nvObserved.set(identifier,{...row,node,page});
+      const prior = nvObserved.get(identifier), signature = JSON.stringify(cells);
+      if (prior) {
+        // ORION can repeat an identical public record across distinct pages.
+        // nvPages has already checked every raw row against the source total,
+        // advancing page numbers and non-repeated whole pages. Coalesce only
+        // byte-identical cells across pages, never conflicting identities,
+        // statuses or same-page repetitions. Preserve the first detail link.
+        if (prior.lastPage === page || prior.signature !== signature)
+          throw new Error("REGISTRY_NV_RESULTS_INCOMPLETE");
+        prior.occurrences += 1;
+        prior.lastPage = page;
+        return null;
+      }
+      nvObserved.set(identifier,{...row,node,page,lastPage:page,signature,occurrences:1});
       return row;
-    });
+    }).filter(Boolean);
     nvLastSearch = {...query};
     return {query,state:'NV',complete:true,verification_pending:false,total:rows.length,rows};
   }
@@ -478,9 +489,10 @@
       const field = suffix => document.querySelector(`input[id$="-${suffix}"]`);
       if (field('entityName')?.value !== sourceQuery.name || field('entityNumber')?.value !== '' || field('nvBusinessId')?.value !== '')
         throw new Error('REGISTRY_NV_RESTORED_QUERY_CHANGED');
+      const sourceTotal = [...nvObserved.values()].reduce((total,row)=>total+row.occurrences,0);
       let restored = await wait(() => {
         if ([...document.querySelectorAll('.app-loader-pane .circle-loader')].some(visible)) return false;
-        try { const page=nvPage('Search Results',nvSearchHeaders);return page.total===nvObserved.size && page; }
+        try { const page=nvPage('Search Results',nvSearchHeaders);return page.total===sourceTotal && page; }
         catch { return false; }
       },Math.max(1,Math.min(5000,deadline-Date.now())));
       while (restored.page > 1) {
@@ -488,20 +500,25 @@
         if (!previous || previous.disabled) throw new Error('REGISTRY_NV_PAGINATION_INCOMPLETE');
         restored = await nvChanged(()=>previous.click(),()=>nvPage('Search Results',nvSearchHeaders),deadline,{previous:JSON.stringify(restored.values)});
       }
-      const rows = await nvPages('Search Results',nvSearchHeaders,deadline,restored), restoredIds = new Set();
-      if (rows.length !== nvObserved.size) throw new Error('REGISTRY_NV_RESTORED_RESULTS_CHANGED');
-      for (const {cells} of rows) {
+      const rows = await nvPages('Search Results',nvSearchHeaders,deadline,restored), restoredIds = new Map();
+      if (rows.length !== sourceTotal) throw new Error('REGISTRY_NV_RESTORED_RESULTS_CHANGED');
+      for (const {cells,page} of rows) {
         let row;
         try { row=nvPublicRow(cells); }
         catch { throw new Error('REGISTRY_NV_RESTORED_RESULTS_CHANGED'); }
         const prior = nvObserved.get(row.identifier);
-        if (!prior || restoredIds.has(row.identifier) || prior.name !== row.name || prior.entity_type !== row.entity_type || prior.raw_status !== row.raw_status
-            || !!prior.business_identifier_missing !== !!row.business_identifier_missing)
+        const occurrence = restoredIds.get(row.identifier);
+        if (!prior || prior.signature !== JSON.stringify(cells) || occurrence?.page === page)
           throw new Error('REGISTRY_NV_RESTORED_RESULTS_CHANGED');
-        restoredIds.add(row.identifier);
+        restoredIds.set(row.identifier,{page,count:(occurrence?.count||0)+1});
       }
+      if (restoredIds.size !== nvObserved.size || [...restoredIds].some(([id,value])=>value.count!==nvObserved.get(id).occurrences))
+        throw new Error('REGISTRY_NV_RESTORED_RESULTS_CHANGED');
+      const updated = new Set();
       for (const {cells,node,page} of rows) {
         const identifier=nvPublicRow(cells).identifier;
+        if(updated.has(identifier))continue;
+        updated.add(identifier);
         nvObserved.set(identifier,{...nvObserved.get(identifier),node,page});
       }
     }
@@ -931,7 +948,7 @@
       return {ok:true,evidence:m.query?.operation==='search'?await tnSearch(m.query,deadline):await tnDetail(m.query,deadline)};
     }
     if (NV && m.action === 'registry-nv') {
-      const maximum=m.query?.operation==='search'?75000:45000;
+      const maximum=m.query?.operation==='search'?110000:45000;
       const deadline = Date.now() + Math.min(maximum, Number.isFinite(m.budgetMs) && m.budgetMs > 0 ? m.budgetMs : 45000);
       const evidence = m.query?.operation === 'search' ? await nvSearch(m.query,deadline) : await nvDetail(m.query,deadline);
       return {ok:true,evidence};

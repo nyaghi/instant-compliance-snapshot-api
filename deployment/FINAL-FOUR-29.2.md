@@ -624,3 +624,26 @@ normalizing only the reviewed function hash. Shared matching, other states,
 discovery, capacity and deadlines remain unchanged. This backend-only change
 requires deployment to the isolated trial and live affected/control retests.
 The separate broad-alias paging and NC navigation failures remain open.
+
+### 0.6.14 Nevada public pagination follow-up
+
+A manual complete review of the 1,322-row Starts With search for Ronald found
+the same seven-cell public record at positions 599 and 602, across pages 6 and
+7. The collector rejected this exact duplicate as incomplete. It now coalesces
+identical rows across distinct pages only after validating all raw rows and
+source totals. Conflicting fields, same-page duplicates, repeated whole pages,
+missing rows and changed totals still fail. Restoring results between details
+also verifies the original raw total, exact cells and occurrence counts.
+
+The 5,463-row ELI alias advanced past 4,100 results but exhausted its 75-second
+command allowance. Only Nevada search commands may now use up to 110 seconds,
+capped by the unchanged job deadline. Detail commands and other state commands
+retain their existing allowances. Standard's five-minute state deadline and
+Sales' one-minute workflow cutoff are unchanged. No aliases are dropped and no
+search filter is narrowed to make the control pass.
+
+Validation includes a slow 5,463-row fixture that fails at the old allowance
+and completes inside 110 seconds, duplicate conflict controls, restored-detail
+controls, and existing IL/GA/NC/TN/AL/NY connector tests. 308 JavaScript and 169
+Python checks passed before packaging. Live results require activation of this
+new connector; unit tests are not a claim that live registry timing is fixed.

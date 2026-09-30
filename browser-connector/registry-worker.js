@@ -163,7 +163,7 @@ async function performRegistryQuery(job, query) {
       throw new Error("NY_CONNECTOR_INVALID_SEQUENCE");
     }
     job.finalFourReusableForm = false;
-    const allowance=query.state==='NV'&&query.operation==='search'?75000:45000;
+    const allowance=query.state==='NV'&&query.operation==='search'?110000:45000;
     const response = await registryMessage(job,{action:`registry-${query.state.toLowerCase()}`,query,budgetMs:Math.max(1,Math.min(allowance,job.activeExpiresAt-Date.now()))});
     if (query.operation === "search") job.finalFourSearchComplete = response?.ok === true;
     // TN keeps its result grid behind the detail dialog. NV navigates to a

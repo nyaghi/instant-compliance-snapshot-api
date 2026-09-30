@@ -5,6 +5,18 @@ surrounding state parsing, matching, timing and classification ASTs remain exact
 """
 import ast
 
+def restore_trial_0614(tree):
+    """Normalize only the two exact trial-only 0.6.14 compatibility gates."""
+    class VersionGate(ast.NodeTransformer):
+        def visit_BoolOp(self, node):
+            versions = "{'0.6.4', '0.6.5', '0.6.6', '0.6.7', '0.6.8', '0.6.9', '0.6.10', '0.6.11', '0.6.12', '0.6.13', '0.6.14'}"
+            for variable in ("record.get('connector_version')", 'connector_version'):
+                expression = 'trial_identity() and ' + variable + ' in ' + versions
+                if ast.dump(node) == ast.dump(ast.parse(expression, mode='eval').body):
+                    return ast.parse(expression.replace(", '0.6.14'", ''), mode='eval').body
+            return self.generic_visit(node)
+    return VersionGate().visit(tree)
+
 def restore_nv_business_scope_0613(node):
     """Restore only the exact reviewed Nevada category exclusion for old audits."""
     import hashlib
@@ -107,6 +119,7 @@ class RestoreApprovedOrigin(ast.NodeTransformer):
         return self.generic_visit(node)
 
     def visit_BoolOp(self, node):
+        node = restore_trial_0614(node)
         current = "record.get('connector_version') != '0.5.10' and not (trial_identity() and record.get('connector_version') in {'0.6.4', '0.6.5', '0.6.6', '0.6.7', '0.6.8', '0.6.9', '0.6.10', '0.6.11', '0.6.12', '0.6.13'})"
         if ast.dump(node) == ast.dump(ast.parse(current, mode='eval').body):
             return ast.parse("record.get('connector_version') != '0.5.10'", mode='eval').body
