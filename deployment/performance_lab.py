@@ -238,6 +238,7 @@ def build_handler(master, key, capacity=None, durable=None):
                     'durable_workflows_enabled': durable is not None,
                     'sales_queue_policy': getattr(durable, 'sales_policy', None),
                     'downloadable_data': {s: master.downloadable_data_info(s) for s in ('KS','KY','LA','NH','OR')}}
+            if trial_identity(): data['trial_release'] = TRIAL_RELEASE_LABEL
             body = json.dumps(data).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')

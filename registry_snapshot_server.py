@@ -12,7 +12,7 @@ import html
 import io
 import json
 import os
-from deployment.lab_identity import performance_origin_enabled, trial_identity, TRIAL_APP_VERSION
+from deployment.lab_identity import performance_origin_enabled, trial_identity
 import re
 import secrets
 import smtplib
@@ -136,10 +136,6 @@ PORT = int(os.environ.get("PORT", "8765"))
 HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.0.0.1")
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
 APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.29.1-staging").strip() or "2026.09.29.1-staging"
-# The resource identity/expiry stays immutable; the deployed build has its own
-# visible revision. No staging or production version is changed by this label.
-if trial_identity():
-    APP_VERSION = TRIAL_APP_VERSION
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
 
 

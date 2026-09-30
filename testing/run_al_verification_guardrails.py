@@ -89,15 +89,19 @@ class AlabamaVerificationControls(ContinuationControls):
     def test_visible_revision_does_not_change_protected_version_or_trial_identity(self):
         import ast
         from pathlib import Path
-        from deployment.lab_identity import TRIAL_VERSION,TRIAL_APP_VERSION
+        from deployment.lab_identity import TRIAL_VERSION,TRIAL_RELEASE_LABEL
         tree=ast.parse(Path(cc.__file__).read_text(encoding='utf-8'))
-        statement=next(n for n in tree.body if isinstance(n,ast.If) and ast.unparse(n.test)=='trial_identity()')
-        for enabled in [False,True]:
-            scope={'trial_identity':lambda:enabled,'APP_VERSION':'approved-baseline','TRIAL_APP_VERSION':TRIAL_APP_VERSION}
-            exec(compile(ast.Module(body=[statement],type_ignores=[]),'version-control','exec'),scope)
-            self.assertEqual(scope['APP_VERSION'],TRIAL_APP_VERSION if enabled else 'approved-baseline')
+        assignments=[n for n in ast.walk(tree) if isinstance(n,ast.Assign)
+                     and any(isinstance(t,ast.Name) and t.id=='APP_VERSION' for t in n.targets)]
+        self.assertEqual(len(assignments),1)
+        for value in ['approved-baseline',TRIAL_VERSION]:
+            scope={'os':types.SimpleNamespace(environ={'CE_APP_VERSION':value})}
+            exec(compile(ast.Module(body=assignments,type_ignores=[]),'version-control','exec'),scope)
+            self.assertEqual(scope['APP_VERSION'],value)
+        validation=(Path(cc.__file__).parent/'deployment/final-four-validation.html').read_text(encoding='utf-8')
+        self.assertIn("const VERSION='"+TRIAL_VERSION+"'",validation)
         self.assertEqual(TRIAL_VERSION,'2026.09.29.2-performance-lab')
-        self.assertEqual(TRIAL_APP_VERSION,'2026.09.29.2A-performance-lab')
+        self.assertEqual(TRIAL_RELEASE_LABEL,'29.2A')
 
 
 if __name__=='__main__':unittest.main()

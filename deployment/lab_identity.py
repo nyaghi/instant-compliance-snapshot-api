@@ -27,7 +27,6 @@ PROTECTED_ORIGINS = frozenset({
 })
 TRIAL_VERSION = '2026.09.29.2-performance-lab'
 TRIAL_RELEASE_LABEL = '29.2A'
-TRIAL_APP_VERSION = '2026.09.29.2A-performance-lab'
 TRIAL_DATABASE_NAME = 'cc_final_four_29_2'
 MANIFEST = Path(__file__).with_name('final-four-resources.json')
 
