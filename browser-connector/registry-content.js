@@ -954,7 +954,12 @@
       },Math.max(1,deadline-Date.now()),{action:()=>set(current.selector,String(target))});
       rows.push(...current.rows);
     }
-    if (rows.length!==page.total || new Set(rows.map(r=>r[1])).size!==rows.length) throw new Error('REGISTRY_TOTAL_CHANGED');
+    // Some public Private Foundation rows have no license number. Preserve
+    // those rows for master identity review; blank numbers are not duplicate
+    // licenses. Repeated numbered credentials or identical rows still fail.
+    const numbered=rows.filter(r=>r[1]).map(r=>r[1]);
+    if (rows.length!==page.total || new Set(numbered).size!==numbered.length
+        || new Set(rows.map(r=>JSON.stringify(r))).size!==rows.length) throw new Error('REGISTRY_TOTAL_CHANGED');
     return {state:'AL',query,complete:true,verification_pending:false,headers:page.headers,rows,total:page.total};
   }
   function registryDocumentReady() {

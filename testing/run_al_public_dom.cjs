@@ -91,3 +91,12 @@ test('AL unchanged rows or a changed total after resizing never establish a comp
   await assert.rejects(h.api.alSearch(q,Date.now()+300),/REGISTRY_/);
  }
 });
+test('AL unnumbered public foundation rows are preserved without accepting repeated rows or licenses',async()=>{
+ const foundations=['Adelia Russell Charitable Foundation','Elizabeth Anne Owens Foundation'].map(name=>[name,'','Active','Private Foundation','','','Office','City','AL','35010','']);
+ const rows=[row,...foundations],valid=harness({rows});
+ const result=await valid.api.alSearch(q,Date.now()+1000);
+ assert.equal(result.total,3);assert.equal(result.rows.filter(r=>!r[1]).length,2);
+ for(const bad of [[...rows,foundations[0]],[row,[...row.slice(0,2),'Inactive',...row.slice(3)]]]){
+  await assert.rejects(harness({rows:bad}).api.alSearch(q,Date.now()+1000),/REGISTRY_TOTAL_CHANGED/);
+ }
+});

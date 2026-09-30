@@ -495,6 +495,60 @@ class LookupControls(unittest.TestCase):
                 self.assertEqual(cc.true_status_from_body(result, unrelated_body), cc.public_status(result))
                 self.assertEqual(cc.comments_for_result_base(result, unrelated_body, cc.public_status(result)), result.source_note)
 
+    def test_al_unrelated_unnumbered_foundations_do_not_invalidate_complete_results(self):
+        def source(q):
+            data = self.provider(q)
+            for name in ['Adelia Russell Charitable Foundation', 'Elizabeth Anne Owens Foundation']:
+                data['rows'].append([name, '', 'Active', 'Private Foundation', '', '', 'Office', 'City', 'AL', '35010', ''])
+            data['total'] = len(data['rows'])
+            return data
+        result = cc.final_four_browser_lookup(self.orgs['AL'], 'AL', source)
+        self.assertTrue(result.success)
+        self.assertEqual(result.matched_registry_identifier, 'AL97-431')
+
+    def test_al_matching_unnumbered_foundation_requires_review_even_beside_positive_license(self):
+        def source(q):
+            data = self.provider(q)
+            data['rows'].append([self.orgs['AL'].organization_name, '', 'Active', 'Private Foundation', '', '', 'Office', 'City', 'AL', '35010', ''])
+            data['total'] = len(data['rows'])
+            return data
+        result = cc.final_four_browser_lookup(self.orgs['AL'], 'AL', source)
+        self.assertEqual(result.status, 'Needs Review')
+        self.assertFalse(result.success)
+        self.assertIn('without a public registration number', result.source_note)
+        self.assertNotIn('ALROW-', result.source_note)
+
+    def test_al_missing_charity_license_and_repeated_unnumbered_row_stay_incomplete(self):
+        missing = copy.deepcopy(AL_ROWS[0]); missing[1] = ''
+        for rows in [[missing], [missing[:3] + ['Private Foundation'] + missing[4:]] * 2]:
+            data = {'headers': AL_HEADERS, 'rows': rows, 'total':len(rows), 'complete':True, 'verification_pending':False}
+            with self.assertRaises(ValueError): cc.al_charity_search_evidence(data)
+
+    def test_past_state_deadline_is_delinquent_never_inferred_failed_to_renew(self):
+        for state in ['AL', 'NC', 'NV', 'TN']:
+            self.assertEqual(cc.licensed_charity_status('Active', date(2026, 9, 1)), 'Delinquent', state)
+        data = self.provider({'state':'AL','operation':'search','name':'YWCA'})
+        data['rows'][1][5] = '09/01/2026'
+        self.assertEqual(cc.al_charity_search_evidence(data)[1]['status'], 'Delinquent')
+
+    def test_nc_only_generated_literal_prefixes_with_complete_coverage_are_skipped(self):
+        required = ['Example', 'Example Reviewed']
+        generated = ['Example Generated', 'example lower', 'Example-Changed', 'Other', 'Other Name']
+        calls = []
+        def empty(q):
+            calls.append(q['name'])
+            return {'state':'NC','query':q,'complete':True,'verification_pending':False,'rows':[],'total':0}
+        with patch.object(cc, 'licensed_charity_names', return_value=(required, generated)):
+            result = cc.final_four_browser_lookup(self.orgs['NC'], 'NC', empty)
+        self.assertEqual(result.status, 'Not Registered')
+        self.assertEqual(calls, ['Example', 'Example Reviewed', 'example lower', 'Other'])
+
+    def test_nc_incomplete_prefix_never_covers_a_later_search(self):
+        for changed in [{'complete':False}, {'total':1}, {'verification_pending':True}]:
+            with patch.object(cc, 'licensed_charity_names', return_value=(['Example'],['Example Foundation'])):
+                with self.assertRaises(ValueError):
+                    cc.final_four_browser_lookup(self.orgs['NC'],'NC',lambda q:{'state':'NC','query':q,'complete':True,'verification_pending':False,'rows':[],'total':0,**changed})
+
     def test_complete_primary_positive_does_not_require_a_later_broken_alias(self):
         cc.REVIEWED_NAME_CONTEXT.set({'131624103': ['YWCA USA, Inc.']})
         def primary_only(q):

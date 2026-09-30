@@ -699,3 +699,31 @@ Live activation and the affected four-case Alabama repeat are required before
 this is called resolved. Nevada form-settling and NC navigation failures in the
 0.6.14 repeat remain separate investigations; this patch makes no claim about
 them and does not change their transport.
+
+### 0.6.16 unnumbered Alabama rows and redundant NC queries
+
+The activated 0.6.15 session reused verification across five controls. Every
+Kid Sports was Current, Young Life and Human Trafficking Legal Center were
+Not Registered, and Man in the Mirror was Exempt. ELI remained incomplete.
+Manual collection of its complete 267-row public result established 13
+different private foundations with blank registration numbers. The collector
+and master had incorrectly treated those unrelated blanks as duplicate IDs.
+
+The collector preserves distinct unnumbered rows while still rejecting
+duplicate numbered licenses or duplicate complete rows. The master permits
+this observed shape only for Private Foundation rows, uses a private row key
+for deduplication, and applies normal name rejection. A potentially matching
+unnumbered foundation requires Needs Review, even beside a current license.
+No internal row key is described as an issued registration number.
+
+NC omits a generated Starting With query only when an earlier, complete,
+literal prefix search already covers it. Every reviewed name remains;
+different case and punctuation before the prefix remain separate queries.
+Incomplete/blocked/truncated responses never provide coverage. This reduces
+redundant exposure to the intermittent late-search navigation failure; it
+does not claim to fix every source navigation or verification failure.
+
+Controls explicitly verify past deadlines produce Delinquent, not an inferred
+Failed to Renew. No deadline, name acceptance, discovery, concurrency, worker
+capacity, mature state transport or status rule is changed. The live AL/NC
+repeat is required before calling the two acquisition repairs resolved.

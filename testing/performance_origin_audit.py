@@ -5,6 +5,25 @@ surrounding state parsing, matching, timing and classification ASTs remain exact
 """
 import ast
 
+def restore_trial_0616(tree):
+    """Restore only the exact separately tested AL/NC acquisition changes."""
+    import hashlib
+    import subprocess
+    from pathlib import Path
+    hashes = {'al_charity_search_evidence': 'ecd5b3a28d12745dba5589483ef37991ea366039b795a8628c4bb2705fe40ddd', 'final_four_browser_lookup': '3c18f2007981a2429c16fa609d2c6ca68a5e1d860f43bf1e3379425fdd1e5431'}
+    baseline = None
+    class Acquisition(ast.NodeTransformer):
+        def visit_FunctionDef(self, node):
+            nonlocal baseline
+            if hashlib.sha256(ast.dump(node).encode()).hexdigest() != hashes.get(node.name):
+                return node
+            if baseline is None:
+                baseline = ast.parse(subprocess.check_output(
+                    ['git', 'show', '8c70929:registry_snapshot_server.py'],
+                    cwd=Path(__file__).resolve().parents[1]).decode('utf-8'))
+            return next(n for n in baseline.body if isinstance(n, ast.FunctionDef) and n.name == node.name)
+    return Acquisition().visit(tree)
+
 def restore_nv_reservation_0614(tree):
     """Normalize only the exact, separately tested reservation acquisition patch."""
     import hashlib
@@ -24,17 +43,17 @@ def restore_nv_reservation_0614(tree):
                     ['git', 'show', '16fc599:registry_snapshot_server.py'],
                     cwd=Path(__file__).resolve().parents[1]).decode('utf-8'))
             return next((n for n in baseline.body if isinstance(n, ast.FunctionDef) and n.name == node.name), None)
-    return Reservation().visit(tree)
+    return Reservation().visit(restore_trial_0616(tree))
 
 def restore_trial_0614(tree):
     """Normalize only the two exact trial-only 0.6.14/0.6.15 compatibility gates."""
     class VersionGate(ast.NodeTransformer):
         def visit_BoolOp(self, node):
-            versions = "{'0.6.4', '0.6.5', '0.6.6', '0.6.7', '0.6.8', '0.6.9', '0.6.10', '0.6.11', '0.6.12', '0.6.13', '0.6.14', '0.6.15'}"
+            versions = "{'0.6.4', '0.6.5', '0.6.6', '0.6.7', '0.6.8', '0.6.9', '0.6.10', '0.6.11', '0.6.12', '0.6.13', '0.6.14', '0.6.15', '0.6.16'}"
             for variable in ("record.get('connector_version')", 'connector_version'):
                 expression = 'trial_identity() and ' + variable + ' in ' + versions
                 if ast.dump(node) == ast.dump(ast.parse(expression, mode='eval').body):
-                    return ast.parse(expression.replace(", '0.6.14'", '').replace(", '0.6.15'", ''), mode='eval').body
+                    return ast.parse(expression.replace(", '0.6.14'", '').replace(", '0.6.15'", '').replace(", '0.6.16'", ''), mode='eval').body
             return self.generic_visit(node)
     return VersionGate().visit(tree)
 

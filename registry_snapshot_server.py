@@ -5988,7 +5988,7 @@ def il_verification_recovery(record, payload, now):
     if (record.get("state") != "IL" or record.get("purpose") != "registration"
             or record.get("recovery_protocol") != "il-fresh-page-v1"
             or (record.get("connector_version") != "0.5.10"
-                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15"}))
+                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16"}))
             or payload.get("reason") != "NY_CONNECTOR_IL_VERIFICATION_PENDING"
             or record.get("il_verification_recovery")
             or now + 120 >= record["issued"] + NY_CONNECTOR_TTL_SECONDS):
@@ -6042,6 +6042,12 @@ def al_charity_search_evidence(payload):
             raise ValueError("Alabama result columns are incomplete")
         fields = dict(zip(headers, (re.sub(r"\s+", " ", v).strip() for v in cells)))
         identifier, name = fields["License/Registration#"], fields["Name"]
+        unnumbered = not identifier and fields["Registration Type"] == "Private Foundation"
+        # A public unnumbered foundation is real source evidence, but it is
+        # not an issued license. Use an internal row key only for deduplication;
+        # the master must withhold classification if its name could match.
+        if unnumbered:
+            identifier = "ALROW-" + hashlib.sha256(json.dumps(cells, ensure_ascii=False).encode()).hexdigest()
         if not name or not identifier or identifier in seen or not fields["Status"]:
             raise ValueError("Alabama result identity is missing or duplicated across pages")
         seen.add(identifier)
@@ -6058,6 +6064,7 @@ def al_charity_search_evidence(payload):
         records.append(dict(name=name, identifier=identifier, ein="", aliases=[], raw_status=fields["Status"],
                             status=status, expiration=expiration, initial=None, renewal=None,
                             source_issued=issued, source_issued_label="Issued Date", license_category=category,
+                            registration_identifier_missing=unnumbered,
                             street=fields["Address"], region=fields["State"], postal_code=fields["Zip"],
                             location=", ".join(v for v in [fields["City"], fields["State"]] if v),
                             url="https://ago.igovsolution.net/online/Lookups/Business.aspx"))
@@ -6519,10 +6526,18 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
         if time.monotonic() >= deadline:
             raise TimeoutError(f"{state} response arrived after its lookup deadline")
         return result
+    completed_searches = []
     for index, name in enumerate(required + generated):
+        # NC's collector explicitly uses Starting With. A completed literal
+        # prefix search already includes every result of a longer generated
+        # prefix. Keep every reviewed name and all case/punctuation changes;
+        # failed or truncated source responses can never establish coverage.
+        if state == "NC" and index >= len(required) and any(name.startswith(prior) for prior in completed_searches):
+            continue
         query = {"state": state, "operation": "search", "name": name}
         payload = collect(query)
         rows = final_four_search_evidence(payload, state, query)
+        completed_searches.append(name)
         for row in rows:
             if row["identifier"] in seen:
                 continue
@@ -6548,6 +6563,12 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                 unreviewed_scope = True
                 scope_reviews.append({"name": row["name"], "identifier": row["identifier"],
                                       "category": "In-Process", "source_url": row["url"]})
+                seen.add(row["identifier"])
+                continue
+            if state == "AL" and row.get("registration_identifier_missing"):
+                unreviewed_scope = True
+                scope_reviews.append({"name": row["name"], "identifier": "No public registration number",
+                                      "category": row["license_category"], "source_url": row["url"]})
                 seen.add(row["identifier"])
                 continue
             if state == "AL":
@@ -6645,9 +6666,11 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
         result.rejected_candidates = [{**row, "reason": "Confirmed record outside the approved Nevada nonprofit/charity scope"}
                                       for row in excluded_nv_entities[:20]]
         result.source_note += " Same-name records confirmed to be outside the nonprofit/charity scope were excluded."
-    if unreviewed_scope and result.status not in {"Current", "Upcoming Filing", "Exempt"}:
-        result.status = "Needs Review" if state == "NC" else "Unable to Confirm"; result.success = False
-        result.source_note = ("North Carolina returned an in-process charity application with a matching name but no issued license number. Review its identity and application status; this does not establish non-registration."
+    if unreviewed_scope and (state == "AL" or result.status not in {"Current", "Upcoming Filing", "Exempt"}):
+        result.status = "Needs Review" if state in {"AL", "NC"} else "Unable to Confirm"; result.success = False
+        result.source_note = ("Alabama returned a potentially matching private foundation without a public registration number. Review its identity and registration scope; this does not establish current registration, delinquency or non-registration."
+                              if state == "AL" else
+                              "North Carolina returned an in-process charity application with a matching name but no issued license number. Review its identity and application status; this does not establish non-registration."
                               if state == "NC" else
                               "Nevada returned a matching name with an entity number but a blank NV Business ID. The record's identity and detail could not be confirmed; review it directly with the registry. This does not establish non-registration or an inactive registration."
                               if missing_nv_business_id else
@@ -23437,7 +23460,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15"})):
+        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16"})):
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()
