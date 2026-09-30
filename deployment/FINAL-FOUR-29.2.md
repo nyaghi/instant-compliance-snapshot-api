@@ -727,3 +727,27 @@ Controls explicitly verify past deadlines produce Delinquent, not an inferred
 Failed to Renew. No deadline, name acceptance, discovery, concurrency, worker
 capacity, mature state transport or status rule is changed. The live AL/NC
 repeat is required before calling the two acquisition repairs resolved.
+
+
+### 0.6.16 backend follow-up: alias identity and literal prefix coverage
+
+The full ELI Alabama search exposed a separate false positive: EarthShare was
+present in the EIN-linked PA Other Name list and its current Alabama record
+was accepted because its city agreed with ELI. ELI identifies EarthShare as a
+workplace-giving federation, and EarthShare's own Form 990 has a different EIN.
+No organization-specific exclusion is installed.
+
+For the four trial states only, an otherwise unrelated reviewed alias without
+an observed EIN now requires the existing full EIN-linked street/state/ZIP
+check. The existing Colorado helper can also exclude a record only when its
+complete name and full office agree with a different EIN; its exact-name mode
+supports single-word legal names without widening the mature DC query. City
+alone cannot promote an alias; unresolved alias identity yields Needs Review.
+Confirmed legal-name/punctuation matches, full-office aliases and exact EINs
+remain controls. Name discovery itself is unchanged, including the saved names.
+
+NC and NV generated Starting With queries covered by a shorter literal prefix
+in the same bounded plan are omitted. Every reviewed alias remains. The covering
+query must complete; failures/truncation still prevent a negative. No additional
+time, worker, queue, concurrent-state or Sales-budget changes are introduced.
+The connector remains 0.6.16: this is a backend-only follow-up requiring no reload.

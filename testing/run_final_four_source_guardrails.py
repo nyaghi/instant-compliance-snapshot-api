@@ -531,6 +531,53 @@ class LookupControls(unittest.TestCase):
         data['rows'][1][5] = '09/01/2026'
         self.assertEqual(cc.al_charity_search_evidence(data)[1]['status'], 'Delinquent')
 
+    def test_campaign_alias_same_city_cannot_displace_legal_registration(self):
+        org = cc.checker.Organization('Environmental Law Institute', '52-0901863')
+        cc.REVIEWED_NAME_CONTEXT.set({'520901863':['EARTHSHARE']})
+        primary = {**cc.al_charity_search_evidence({'headers':AL_HEADERS,'rows':[AL_ROWS[1]],'total':1,'complete':True,'verification_pending':False})[0],
+                   'name':org.organization_name,'status':'Delinquent','raw_status':'Expired'}
+        alias = {**primary,'name':'EarthShare','identifier':'AL00-195','status':'Current','raw_status':'Active'}
+        with patch.object(cc,'reconciled_registry_address',return_value={'decision':'corroborated'}), \
+             patch.object(cc,'licensed_charity_foreign_ein',return_value={}), \
+             patch.object(cc,'licensed_charity_street_evidence',return_value={}):
+            for state in ['AL','NC','NV','TN']:
+                selected,review=cc.select_licensed_charity(org,copy.deepcopy([primary,alias]),state,time.monotonic()+10)
+                self.assertIsNone(selected,state)
+                self.assertIn('matching city alone',review)
+            for state in ['DC','RI','IL','GA']:
+                selected,review=cc.select_licensed_charity(org,copy.deepcopy([primary,alias]),state,time.monotonic()+10)
+                self.assertEqual(selected['identifier'],'AL00-195',state)
+                self.assertFalse(review)
+
+    def test_alias_different_ein_is_excluded_but_exact_office_alias_is_preserved(self):
+        org=cc.checker.Organization('Environmental Law Institute','52-0901863')
+        cc.REVIEWED_NAME_CONTEXT.set({'520901863':['EARTHSHARE']})
+        row={**cc.al_charity_search_evidence({'headers':AL_HEADERS,'rows':[AL_ROWS[1]],'total':1,'complete':True,'verification_pending':False})[0],
+             'name':'EarthShare','identifier':'AL00-195'}
+        for state in ['AL','NC','NV','TN']:
+            with patch.object(cc,'licensed_charity_foreign_ein',return_value={'decision':'different_ein','ein':'521601960'}):
+                r=copy.deepcopy(row)
+                self.assertEqual(cc.licensed_charity_identity(org,r,state,time.monotonic()+10),'rejected')
+                self.assertEqual(r['match']['reason'],'DIFFERENT_EIN_CORROBORATED')
+            with patch.object(cc,'licensed_charity_foreign_ein',return_value={}), \
+                 patch.object(cc,'licensed_charity_street_evidence',return_value={'decision':'corroborated','basis':'Exact EIN-linked office'}):
+                self.assertEqual(cc.licensed_charity_identity(org,copy.deepcopy(row),state,time.monotonic()+10),'accepted')
+
+    def test_exact_single_word_foreign_lookup_requires_full_office_and_unique_ein(self):
+        org=cc.checker.Organization('Environmental Law Institute','52-0901863')
+        row={'name':'EarthShare','street':'1717 K Street NW Suite 900','region':'DC','postal_code':'20006'}
+        record={'name':'EARTHSHARE','fein':'52-1601960','principaladdress':'1717 K ST NW STE 900',
+                'principalstate':'DC','principalzipcode':'20006'}
+        with patch.object(cc,'identity_fetch',return_value=cc.json.dumps([record])) as fetch:
+            self.assertFalse(cc.licensed_charity_foreign_ein(org,row,time.monotonic()+10))
+            fetch.assert_not_called()
+            self.assertEqual(cc.licensed_charity_foreign_ein(org,row,time.monotonic()+10,exact_name=True)['decision'],'different_ein')
+            self.assertIn("upper(name) = 'EARTHSHARE'",cc.unquote(fetch.call_args.args[0]).replace('+',' '))
+        for records in [[{**record,'principaladdress':'999 Other Street'}], [{**record,'fein':'52-0901863'}],
+                        [record,{**record,'fein':'99-1234567'}]]:
+            with patch.object(cc,'identity_fetch',return_value=cc.json.dumps(records)):
+                self.assertFalse(cc.licensed_charity_foreign_ein(org,row,time.monotonic()+10,exact_name=True))
+
     def test_nc_only_generated_literal_prefixes_with_complete_coverage_are_skipped(self):
         required = ['Example', 'Example Reviewed']
         generated = ['Example Generated', 'example lower', 'Example-Changed', 'Other', 'Other Name']
@@ -548,6 +595,21 @@ class LookupControls(unittest.TestCase):
             with patch.object(cc, 'licensed_charity_names', return_value=(['Example'],['Example Foundation'])):
                 with self.assertRaises(ValueError):
                     cc.final_four_browser_lookup(self.orgs['NC'],'NC',lambda q:{'state':'NC','query':q,'complete':True,'verification_pending':False,'rows':[],'total':0,**changed})
+
+    def test_nc_nv_later_covering_prefix_must_complete_and_preserve_every_alias(self):
+        for state in ['NC','NV']:
+            calls=[]
+            def source(q):
+                calls.append(q['name'])
+                return {'state':state,'query':q,'complete':True,'verification_pending':False,'rows':[],'total':0}
+            with patch.object(cc,'licensed_charity_names',return_value=(['Legal Name','Reviewed Alias'],['OTHER LONG','OTHER','other lower','Reviewed Alias Longer'])):
+                result=cc.final_four_browser_lookup(self.orgs[state],state,source)
+            self.assertEqual(result.status,'Not Registered')
+            self.assertEqual(calls,['Legal Name','Reviewed Alias','OTHER','other lower'])
+            def incomplete(q):
+                return {**source(q),'complete':q['name']!='OTHER'}
+            with patch.object(cc,'licensed_charity_names',return_value=(['Legal Name'],['OTHER LONG','OTHER'])):
+                with self.assertRaises(ValueError):cc.final_four_browser_lookup(self.orgs[state],state,incomplete)
 
     def test_complete_primary_positive_does_not_require_a_later_broken_alias(self):
         cc.REVIEWED_NAME_CONTEXT.set({'131624103': ['YWCA USA, Inc.']})
@@ -585,7 +647,8 @@ class LookupControls(unittest.TestCase):
         org = cc.checker.Organization('National Example Charity', '13-1624103')
         names = ['YWCA of the USA National Board', 'YWCA USA, Inc.']
         cc.REVIEWED_NAME_CONTEXT.set({'131624103': names})
-        cc.final_four_browser_lookup(org, 'AL', self.provider)
+        with patch.object(cc,'licensed_charity_foreign_ein',return_value={}), patch.object(cc,'licensed_charity_street_evidence',return_value={'decision':'corroborated'}):
+            cc.final_four_browser_lookup(org, 'AL', self.provider)
         self.assertEqual([q['name'] for q in self.calls], [org.organization_name, *names])
 
     def test_short_primary_positive_still_checks_reviewed_names(self):
@@ -661,7 +724,12 @@ class LookupControls(unittest.TestCase):
             result = cc.final_four_browser_lookup(org, state, empty)
             self.assertEqual(result.status, 'Not Registered', state)
             required, generated = cc.licensed_charity_names(org)
-            self.assertEqual([q['name'] for q in calls], required + generated)
+            searched = [q['name'] for q in calls]
+            self.assertEqual(searched[:len(required)], required)
+            for name in generated:
+                self.assertTrue(any(name.startswith(query) for query in searched), name)
+            if state not in {'NC','NV'}:
+                self.assertEqual(searched, required + generated)
 
     def test_tn_completed_directory_does_not_infer_statutory_exemption(self):
         result = cc.final_four_browser_lookup(self.orgs['TN'], 'TN', lambda q: {**self.provider(q), 'rows': [], 'total': 0})

@@ -6514,6 +6514,15 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
     required, generated = licensed_charity_names(org)
     if not required:
         raise ValueError("A reviewed organization name is required for this registry")
+    if state in {"NC", "NV"}:
+        # Both collectors explicitly select Starting With. Keep every reviewed
+        # name, but a longer generated prefix adds nothing to a shorter literal
+        # prefix already in this bounded plan. The covering query must still
+        # complete before a negative/adverse result; an incomplete response
+        # raises rather than establishing absence. Case/punctuation stay exact.
+        planned = required + generated
+        generated = [name for name in generated if not any(
+            other != name and name.startswith(other) for other in planned)]
     records, seen = [], set()
     unreviewed_scope = False
     missing_nv_business_id = False
@@ -7112,7 +7121,7 @@ def licensed_charity_street_evidence(org, row, deadline):
     return {}
 
 
-def licensed_charity_foreign_ein(org, row, deadline):
+def licensed_charity_foreign_ein(org, row, deadline, *, exact_name=False):
     """Reject a related entity only with full name + office + a different EIN.
 
     Colorado's existing official charity feed supplies historical legal names.
@@ -7123,10 +7132,13 @@ def licensed_charity_foreign_ein(org, row, deadline):
     words = re.findall(r"[A-Z0-9]+", key.upper())
     street = registry_street_key(row.get("street"))
     postal, region = str(row.get("postal_code") or "")[:5], row.get("region", "").upper()
-    if len(distinctive_match_tokens(key)) < 2 or len(words) < 3 or not re.match(r"^\d+\s", street) or not re.fullmatch(r"\d{5}", postal) or len(region) != 2:
+    if (not words or (not exact_name and (len(distinctive_match_tokens(key)) < 2 or len(words) < 3))
+            or not re.match(r"^\d+\s", street) or not re.fullmatch(r"\d{5}", postal) or len(region) != 2):
         return {}
+    where = ("upper(name) = '" + str(row["name"]).upper().replace("'", "''") + "'" if exact_name else
+             "upper(name) like '%" + "%".join(words) + "%'")
     url = "https://data.colorado.gov/resource/37wu-kn3g.json?" + urlencode({"$limit": "100",
-        "$where": "upper(name) like '%" + "%".join(words) + "%'", "$order": "registrationapproveddate DESC"})
+        "$where": where, "$order": "registrationapproveddate DESC"})
     try:
         records = json.loads(identity_fetch(url, min(deadline, time.monotonic()+6)))
         if not isinstance(records, list) or len(records) >= 100: return {}
@@ -7196,6 +7208,30 @@ def licensed_charity_identity(org, row, state, deadline):
         row["match"] = decision
     if decision["decision"] == "rejected":
         return "rejected"
+    if (state in {"AL", "NC", "NV", "TN"} and not row.get("ein")
+            and decision["reason"] == "MATCH_REVIEWED_ALTERNATE_NAME"
+            and not set(distinctive_match_tokens(org.organization_name)).intersection(distinctive_match_tokens(matched_name))
+            and not any(score_candidate(org.organization_name, "", {"name": name})["decision"] == "accepted"
+                        for name in names if name)):
+        # A registry's Other Name/DBA can describe a workplace-giving campaign
+        # or federation, not a replacement legal identity. City agreement is
+        # insufficient for an otherwise unrelated alias. Retain the search,
+        # but bind this source record to a full EIN-linked office or reject it
+        # only on a full name + office match to a different EIN.
+        proof = row.get("_full_alias_identity")
+        if proof is None:
+            proof = (licensed_charity_foreign_ein(org, row, deadline, exact_name=True)
+                     or licensed_charity_street_evidence(org, row, deadline) or {})
+            row["_full_alias_identity"] = proof
+        row["address_evidence"] = proof or {"decision": "unavailable", "basis":
+            "The alternate name could not be bound to this organization's EIN and full office address. City agreement alone is insufficient."}
+        if proof.get("decision") == "different_ein":
+            row["match"] = {"decision": "rejected", "score": 0, "reason": "DIFFERENT_EIN_CORROBORATED"}
+            return "rejected"
+        if proof.get("decision") != "corroborated":
+            row["match"] = {"decision": "possible", "score": 55, "reason": "ALIAS_IDENTITY_UNCONFIRMED"}
+            return "possible"
+        return "accepted"
     if state == "IL" and canonical_ein_digits(row.get("ein", "")) == canonical_ein_digits(org.ein):
         # Illinois often displays compliance agents' addresses. An exact EIN
         # from the selected official detail establishes identity independently.
@@ -7305,6 +7341,8 @@ def select_licensed_charity(org, rows, state, deadline):
         if possible:
             return None, f"{state} returned a similar name, {possible[0]['name']}, but the complete name and available identity evidence do not confirm this organization."
         return None, ""
+    if state in {"AL", "NC", "NV", "TN"} and any(r.get("match", {}).get("reason") == "ALIAS_IDENTITY_UNCONFIRMED" for r in possible):
+        return None, f"{state} returned an alternate-name record that could not be tied to the requested organization's EIN and full office address. Review the identity before using its status; a matching city alone does not establish that it is the same organization."
     current = [r for r in accepted if r["status"] in {"Current", "Upcoming Filing", "Exempt", "Pending"}]
     if current:
         latest_current = max(r.get("expiration") or date.min for r in current)
