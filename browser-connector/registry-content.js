@@ -916,9 +916,14 @@
   let alVerificationImage = null;
   function alImagePixels() {
     const image=document.getElementById('imgcap');
-    if (!image || image.tagName!=='IMG' || image.getAttribute('alt')!=='Captcha' || !image.complete
-        || image.naturalWidth<20 || image.naturalHeight<10 || image.naturalWidth>600 || image.naturalHeight>300
-        || new URL(image.currentSrc || image.src,location.href).origin!==location.origin)
+    if (!image || image.tagName!=='IMG' || !image.complete
+        || image.naturalWidth<20 || image.naturalHeight<10 || image.naturalWidth>600 || image.naturalHeight>300)
+      throw new Error('NY_CONNECTOR_AL_VERIFICATION_REQUIRED');
+    // The live image's alt text is "Verification Code image"; its accessible
+    // name is "Captcha". Bind to the actual state image endpoint, not either
+    // presentation label, while retaining same-origin and dimension checks.
+    const source=new URL(image.currentSrc || image.src,location.href);
+    if (source.origin!==location.origin || source.pathname!=='/online/Captcha.aspx')
       throw new Error('NY_CONNECTOR_AL_VERIFICATION_REQUIRED');
     const canvas=document.createElement('canvas');canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;
     canvas.getContext('2d').drawImage(image,0,0);

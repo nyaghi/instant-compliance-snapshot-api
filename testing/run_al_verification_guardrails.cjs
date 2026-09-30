@@ -2,15 +2,16 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const root=path.join(__dirname,'..');
-const content=fs.readFileSync(path.join(root,'browser-connector/registry-content.js'),'utf8')
- .replace('  async function handle(m) {','  globalThis.alTest={alImagePixels,alVerificationRequest,alApplyVerification};\n  async function handle(m) {');
+const content=fs.readFileSync(path.join(process.env.CC_TEST_TRIAL_DIR||path.join(root,'browser-connector'),'registry-content.js'),'utf8')
+ .replace('  async function handle(m) {','  globalThis.alTest={alImagePixels,alVerificationRequest,alApplyVerification,handle};\n  async function handle(m) {');
 function harness(){
  let pixels='data:image/png;base64,fixture',clock=1000,draws=0;
  class Input{get value(){return this.v||'';}set value(v){this.v=v;}dispatchEvent(){}}
  const input=new Input(),image={tagName:'IMG',complete:true,naturalWidth:125,naturalHeight:80,
-  src:'https://ago.igovsolution.net/online/Captcha.aspx',getAttribute:n=>n==='alt'?'Captcha':null};
+  src:'https://ago.igovsolution.net/online/Captcha.aspx',
+  getAttribute:n=>n==='alt'?'Verification Code image':n==='aria-label'?'Captcha':null};
  const win={};win.top=win;
- const context=vm.createContext({window:win,location:{origin:'https://ago.igovsolution.net',href:'https://ago.igovsolution.net/online/Lookups/Business.aspx'},
+ const context=vm.createContext({window:win,location:{origin:'https://ago.igovsolution.net',pathname:'/online/Lookups/Business.aspx',href:'https://ago.igovsolution.net/online/Lookups/Business.aspx'},
   URL,Date:{now:()=>clock},crypto:{randomUUID:()=> 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'},
   HTMLInputElement:Input,HTMLSelectElement:class{},Event:class{},
   document:{getElementById:id=>id==='imgcap'?image:id==='ctl00_cntbdy_txt_verify'?input:null,
@@ -41,8 +42,25 @@ test('changed image, name, expired answer and wrong identifier cannot submit',()
   assert.throws(()=>h.api.alApplyVerification(request),/VERIFICATION_REQUIRED/);assert.equal(h.input.value,'');
  }
 });
-test('image must be loaded, small and same origin',()=>{
- for(const change of [{complete:false},{naturalWidth:601},{naturalHeight:301},{src:'https://example.com/image.png'}]){
+test('live image alt text and accessible name are not interchangeable identity fields',()=>{
+ for(const label of ['Verification Code image','Captcha','']){
+  const h=harness();h.image.getAttribute=n=>n==='alt'?label:null;
+  assert.equal(h.api.alVerificationRequest(q).verification_pending,true);
+ }
+});
+
+test('actual AL content handler captures the observed fresh form instead of terminating verification',async()=>{
+ const h=harness(),r=await h.api.handle({action:'registry-al',query:q,automaticVerification:true});
+ assert.equal(r.ok,true);assert.equal(r.evidence.verification_pending,true);
+ assert.equal(r.evidence.complete,false);assert.equal(h.input.value,'');
+ await assert.rejects(h.api.handle({action:'registry-al',query:q,automaticVerification:false}),/VERIFICATION_REQUIRED/);
+});
+
+test('image must be loaded, small and from the exact same-origin verification endpoint',()=>{
+ for(const change of [{complete:false},{naturalWidth:601},{naturalHeight:301},{src:'https://example.com/image.png'},
+  {src:'https://ago.igovsolution.net/online/logo.png'},
+  {currentSrc:'https://example.com/Captcha.aspx'},
+  {currentSrc:'https://ago.igovsolution.net/online/logo.png'}]){
   const h=harness();Object.assign(h.image,change);assert.throws(()=>h.api.alVerificationRequest(q));
  }
  const h=harness();h.setPixels('data:image/png;base64,'+'a'.repeat(180001));assert.throws(()=>h.api.alVerificationRequest(q));
