@@ -50,14 +50,16 @@ class AlabamaVerificationControls(ContinuationControls):
     def test_foreign_state_mismatched_query_and_wrong_device_do_not_enter_ocr(self):
         for state in ['NC','NV','TN']:
             _, response=self.start(state)
-            with patch.object(cc,'al_read_verification_image',side_effect=AssertionError('Must not read')):
+            with patch.object(cc,'al_read_verification_image',side_effect=AssertionError('Must not read')) as reader:
                 _, result=self.advance(response,self.evidence(response))
+                reader.assert_not_called()
             self.assertEqual(result['phase'],'complete')
             self.assertNotEqual(result['result']['status'],'Not Registered')
         _, response=self.start('AL');evidence=self.evidence(response);evidence['query']={**response['query'],'name':'Wrong'}
-        with patch.object(cc,'al_read_verification_image',side_effect=AssertionError('Must not read')):
+        with patch.object(cc,'al_read_verification_image',side_effect=AssertionError('Must not read')) as reader:
             self.assertEqual(self.advance(response,evidence)[1]['phase'],'complete')
             self.assertEqual(self.advance(response,self.evidence(response),device_id='wrong-device')[0],410)
+            reader.assert_not_called()
 
     def test_image_loader_refuses_url_oversize_and_blank_without_calling_ocr(self):
         for value in ['https://example.com/image.png','data:image/png;base64,'+'a'*180001,'data:image/png;base64,!']:

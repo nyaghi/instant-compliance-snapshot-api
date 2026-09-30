@@ -7009,7 +7009,7 @@ def final_four_connector_request(payload, origin):
         if not pending or payload.get("query_id") != pending["query_id"]:
             return 409, {"error": "The response is stale or belongs to another registry query."}
         raw_evidence = payload.get('evidence')
-        if isinstance(raw_evidence, dict) and raw_evidence.get('verification_pending') is True:
+        if record['state'] == 'AL' and isinstance(raw_evidence, dict) and raw_evidence.get('verification_pending') is True:
             try:
                 return 200, al_verification_continuation(record, raw_evidence)
             except Exception:

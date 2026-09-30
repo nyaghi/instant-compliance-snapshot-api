@@ -18,7 +18,7 @@ def restore_al_0622(tree):
     hashes = {
         'al_read_verification_image': 'a62a89c2eeb62e1544dfa564f346500f172d6f9ccb76256d7ccbebf66fa7af8e',
         'al_verification_continuation': '25a90adcfcff14af645949f0dfc8d43ecf94b4c5ca2c5ac3a88c314acc2b090c',
-        'final_four_connector_request': '5f969751d77febb6d472150326c280c3dd23ee702f8a5e79ad445adf130405c0',
+        'final_four_connector_request': '6587d94034339a39e81bf380e690cf6f5b26597fec1a1d3649f380d01cd543a3',
     }
     baseline = None
     class RestoreAl(ast.NodeTransformer):
