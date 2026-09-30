@@ -181,6 +181,68 @@ class ContinuationControls(unittest.TestCase):
         with self.assertRaises(ValueError):
             cc.final_four_clean_evidence({**payload, 'filings': {'rows': [{'type': 'Renewal', 'date': '1/1/2025', 'contact': 'private'}]}}, query)
 
+    def test_nv_large_complete_grid_is_compacted_only_after_master_matching(self):
+        _, first=self.start('NV',alternate_names=['Example Alternate Charity'])
+        payload=self.provider(first['query'])
+        target=payload['rows'][0]
+        unrelated=[{'name':'Unrelated Plumbing Business '+str(i),'identifier':'NV'+str(90000000+i),
+                    'entity_type':'Domestic Limited Liability Company (86)','raw_status':'Active'} for i in range(1500)]
+        alias={**target,'name':'Example Alternate Charity','identifier':'NV8888888'}
+        unsupported={**target,'identifier':'NR20260930-1000','entity_type':'','raw_status':'Active'}
+        payload.update(rows=unrelated+[target,alias,unsupported],total=len(unrelated)+3)
+        _, continued=self.advance(first,payload)
+        self.assertEqual(continued['phase'],'search')
+        record=cc.ny_connector_unpack(continued['check_token'],self.auth['email'],self.auth['device_id'])
+        saved=record['completed'][0]['evidence']
+        self.assertEqual(saved['rows'],[target,alias,unsupported])
+        self.assertEqual(saved['master_search_audit'],{'source_total':1503,'rejected':1500})
+        self.assertLess(len(continued['check_token']),15000)
+        self.assertEqual(cc.REVIEWED_NAME_CONTEXT.get(),{})
+        # A client cannot claim that it filtered a complete grid itself.
+        with self.assertRaises(ValueError): cc.final_four_clean_evidence(saved,first['query'])
+
+    def test_nv_larger_bound_never_accepts_truncated_duplicate_or_oversized_grids(self):
+        _, first=self.start('NV')
+        payload=self.provider(first['query'])
+        for change in [{'total':6000},{'rows':payload['rows']*6000,'total':6000},
+                       {'rows':payload['rows']*10001,'total':10001},
+                       {'complete':False},{'verification_pending':True}]:
+            with self.subTest(change=list(change)),self.assertRaises(ValueError):
+                cc.final_four_clean_evidence({**payload,**change},first['query'])
+
+    def test_compaction_preserves_all_possible_and_conflicting_nv_candidates(self):
+        record={'state':'NV','organization_name':'Example National Charity','ein':'123456789','alternate_names':[]}
+        rows=[{'name':name,'identifier':'NV'+str(i),'entity_type':'Foreign Non-Profit Corporation (80)'}
+              for i,name in enumerate(['Exact','Possible','Conflicting','Rejected'])]
+        decisions=iter(['accepted','possible','conflict','rejected'])
+        payload={'query':{'state':'NV','operation':'search','name':'Example'},'rows':rows,'total':4}
+        with patch.object(cc,'score_candidate',side_effect=lambda *a,**kw:{'decision':next(decisions)}):
+            compact=cc.final_four_compact_search_evidence(record,payload)
+        self.assertEqual(compact['rows'],rows[:3])
+        for state in ['AL','NC','TN']:
+            self.assertIs(cc.final_four_compact_search_evidence({**record,'state':state},payload),payload)
+
+    def test_nv_compacted_replay_preserves_positive_adverse_and_no_match_outcomes(self):
+        org=self.orgs['NV']
+        record={'state':'NV','organization_name':org.organization_name,'ein':org.ein,'alternate_names':[]}
+        unrelated=[{'name':'Unrelated Plumbing Business','identifier':'NV90000001',
+                    'entity_type':'Domestic Limited Liability Company (86)','raw_status':'Active'}]
+        for raw_status, keep_target in [('Active',True),('Permanently Revoked',True),('Active',False)]:
+            with self.subTest(raw_status=raw_status, keep_target=keep_target):
+                def provider(query):
+                    evidence=copy.deepcopy(self.provider(query))
+                    if query['operation']=='search':
+                        evidence['rows']=(evidence['rows'] if keep_target else [])+unrelated
+                        evidence['total']=len(evidence['rows'])
+                    else: evidence['fields']['Entity Status']=raw_status
+                    return evidence
+                original=cc.final_four_browser_lookup(org,'NV',provider)
+                def compact_provider(query):
+                    return cc.final_four_compact_search_evidence(record,provider(query))
+                compact=cc.final_four_browser_lookup(org,'NV',compact_provider)
+                for key in ['status','matched_registry_name','matched_registry_identifier','success']:
+                    self.assertEqual(getattr(original,key,None),getattr(compact,key,None))
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

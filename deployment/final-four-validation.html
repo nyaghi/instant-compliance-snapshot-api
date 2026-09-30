@@ -28,7 +28,7 @@ function checkConnector(){
   const id=crypto.randomUUID().replaceAll('-','');let timer;
   const finish=response=>{clearTimeout(timer);window.removeEventListener('message',receive);
    status.textContent=response?.ok&&typeof response.version==='string'
-    ?`Active trial connector: ${response.version}. Required for this validation: 0.6.11.`
+    ?`Active trial connector: ${response.version}. Required for this validation: 0.6.12.`
     :'The trial connector did not respond. Activate the installed trial connector, then check again.';
    resolve(response);
   };

@@ -542,3 +542,31 @@ The 0.6.11 live Give Something Back control found and read SL012308, then a late
 The trial master may authorize one fresh browser transport only for a pending NC search with TAB_READY_TIMEOUT, a matching signed query ID, and more than 60 seconds left. Completed evidence, aliases, issue/expiry times, and the pending query survive; the query ID rotates to reject late replies. Verification, detail failures, other states, canceled/expired checks and repeat failures remain inconclusive. The trial frontend reuses the approved Illinois cleanup/reacquisition sequence. Approved web-staging assets and installed connector remain unchanged.
 
 Validation: 315 Python regression controls passed, including 17 frontend scenarios executed against the assembled trial NC client. Live validation remains required.
+
+### 0.6.12 Nevada complete large-grid collection
+
+Two incomplete alias searches were reproduced in the public registry: ELI
+returned 5,463 rows and Ronald returned 1,322. The collector's 500-row ceiling,
+not a negative registration result, stopped both searches. This trial change
+raises only Nevada search-grid collection to 10,000 rows and 400 pages while
+keeping the same 45-second command deadline and original job expiry. Filing
+history and other-state collection bounds remain unchanged. Every page must be
+read and row totals and unique identifiers must agree before collection is
+accepted. Oversized, duplicate, truncated, slow or verification responses stay
+inconclusive. No alias is dropped or replaced by a narrower query.
+
+The master validates the full evidence first, then uses its existing candidate
+matcher to remove only rejected identities from the signed continuation. All
+accepted, possible, conflicting and unsupported-category candidates remain.
+Source totals and the rejection count are recorded internally; a browser cannot
+assert that compaction occurred. The signed token size limit stays unchanged.
+Only the trial final-four evidence route accepts the larger bounded payload.
+
+Validation: 393 JavaScript checks and 318 Python regression checks passed. A
+subsequent 18-test continuation suite also passed, including direct equality of
+original versus compacted positive, adverse and no-match classifications. The
+tests include 1,322, 5,463 and 10,000 rows, identity conflicts and incomplete
+pages. This is prepared for live validation, not evidence of live success.
+Activation of the new trial connector and the two failing alias controls are
+required before calling the correction verified. Staging 29.1, production,
+shared matching thresholds, state deadlines and discovery remain unchanged.

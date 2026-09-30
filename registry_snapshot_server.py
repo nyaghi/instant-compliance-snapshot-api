@@ -5988,7 +5988,7 @@ def il_verification_recovery(record, payload, now):
     if (record.get("state") != "IL" or record.get("purpose") != "registration"
             or record.get("recovery_protocol") != "il-fresh-page-v1"
             or (record.get("connector_version") != "0.5.10"
-                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11"}))
+                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12"}))
             or payload.get("reason") != "NY_CONNECTOR_IL_VERIFICATION_PENDING"
             or record.get("il_verification_recovery")
             or now + 120 >= record["issued"] + NY_CONNECTOR_TTL_SECONDS):
@@ -6610,7 +6610,7 @@ def final_four_clean_evidence(payload, query):
     if (state not in {"AL", "NC", "NV", "TN"} or not isinstance(payload, dict)
             or payload.get("query") != query or payload.get("complete") is not True):
         raise ValueError("Incomplete or mismatched final-four evidence")
-    def bounded(value, depth=0):
+    def bounded(value, depth=0, field=""):
         if depth > 6:
             raise ValueError("Registry evidence nesting exceeded its bound")
         if value is None or isinstance(value, bool):
@@ -6619,15 +6619,17 @@ def final_four_clean_evidence(payload, query):
             return
         if isinstance(value, str) and len(value) <= 1500:
             return
-        if isinstance(value, list) and len(value) <= 500:
+        maximum = 10000 if state == "NV" and query.get("operation") == "search" and field == "rows" and depth == 1 else 500
+        if isinstance(value, list) and len(value) <= maximum:
             for item in value: bounded(item, depth+1)
             return
         if isinstance(value, dict) and len(value) <= 25 and all(isinstance(k, str) and len(k) <= 100 for k in value):
-            for item in value.values(): bounded(item, depth+1)
+            for key, item in value.items(): bounded(item, depth+1, key)
             return
         raise ValueError("Registry evidence exceeded its field bound")
     bounded(payload)
-    if len(json.dumps(payload).encode("utf-8")) > 180000:
+    maximum_bytes = 4000000 if state == "NV" and query.get("operation") == "search" else 180000
+    if len(json.dumps(payload).encode("utf-8")) > maximum_bytes:
         raise ValueError("Registry evidence exceeded its message bound")
     if query.get("operation") == "search":
         if set(payload) - {"state", "query", "complete", "verification_pending", "total", "rows", "headers"}:
@@ -6658,6 +6660,30 @@ def final_four_clean_evidence(payload, query):
     else:
         raise ValueError("Unsupported final-four query")
     return json.loads(json.dumps(payload))
+
+
+def final_four_compact_search_evidence(record, evidence):
+    """Master-only compaction after validating every row of a complete NV grid.
+
+    Keep all accepted/possible candidates, including unsupported categories.
+    Only rows the existing matcher rejects can leave the signed continuation.
+    Browser-supplied evidence cannot supply this internal completion metadata.
+    """
+    query = evidence.get("query", {})
+    if record["state"] != "NV" or query.get("operation") != "search":
+        return evidence
+    token = REVIEWED_NAME_CONTEXT.set({canonical_ein_digits(record["ein"]): tuple(record["alternate_names"])})
+    try:
+        retained = []
+        for row in evidence["rows"]:
+            candidates = [score_candidate(record["organization_name"], record["ein"], {"name": name, "ein": row.get("ein", "")})
+                          for name in [row["name"], *row.get("aliases", [])] if name]
+            if not candidates or any(candidate["decision"] != "rejected" for candidate in candidates):
+                retained.append(row)
+    finally:
+        REVIEWED_NAME_CONTEXT.reset(token)
+    return {**evidence, "rows": retained, "total": len(retained),
+            "master_search_audit": {"source_total": evidence["total"], "rejected": evidence["total"]-len(retained)}}
 
 
 def final_four_connector_failure(record, reason=""):
@@ -6796,6 +6822,7 @@ def final_four_connector_request(payload, origin):
             evidence = final_four_clean_evidence(payload.get("evidence"), pending["query"])
         except (ValueError, TypeError, KeyError):
             return 200, {"phase": "complete", "result": final_four_connector_failure(record)}
+        evidence = final_four_compact_search_evidence(record, evidence)
         record["completed"].append({"query": pending["query"], "evidence": evidence})
         record["pending"] = None
     names = {canonical_ein_digits(record["ein"]): tuple(record["alternate_names"])}
@@ -23276,7 +23303,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11"})):
+        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12"})):
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()
@@ -31684,8 +31711,8 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
     def _send_final_four_connector(self):
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            if not 0 < length <= 524288:
-                self._send_json(413, {"error": "Connector input must be between 1 byte and 512 KB."})
+            if not 0 < length <= 4500000:
+                self._send_json(413, {"error": "Trial registry evidence exceeds the bounded request size."})
                 return
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
             code, response = final_four_connector_request(payload, self.headers.get("Origin", ""))

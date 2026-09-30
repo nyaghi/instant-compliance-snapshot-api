@@ -275,7 +275,8 @@
     const info = text(table.querySelector('kendo-datapager-info')).match(/^(\d+)\s*-\s*(\d+) of (\d+) items$/);
     const pager = table.querySelector('kendo-datapager');
     const pages = pager?.getAttribute('aria-label')?.match(/^Page (\d+) of (\d+)$/);
-    if (!info || !pages || Number(info[2])-Number(info[1])+1 !== rows.length || Number(info[3]) < rows.length || Number(info[3]) > 500)
+    const maximum = title === 'Search Results' ? 10000 : 500;
+    if (!info || !pages || Number(info[2])-Number(info[1])+1 !== rows.length || Number(info[3]) < rows.length || Number(info[3]) > maximum)
       throw new Error("REGISTRY_NV_PAGINATION_INCOMPLETE");
     return {table, rows, values, total:Number(info[3]), page:Number(pages[1]), pages:Number(pages[2])};
   }
@@ -318,7 +319,8 @@
     let page = first || nvPage(title, headers);
     if (page.page !== 1) throw new Error("REGISTRY_NV_PAGINATION_INCOMPLETE");
     const total = page.total, collected = [];
-    for (let expected=1; expected<=20; expected++) {
+    const maximumPages = title === 'Search Results' ? 400 : 20;
+    for (let expected=1; expected<=maximumPages; expected++) {
       if (Date.now() >= deadline || page.total !== total || page.page !== expected) throw new Error("REGISTRY_NV_PAGINATION_INCOMPLETE");
       for (let i=0;i<page.values.length;i++) collected.push({cells:page.values[i], node:page.rows[i], page:expected});
       if (collected.length === total && page.page === page.pages) return collected;

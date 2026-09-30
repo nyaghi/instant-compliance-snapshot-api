@@ -150,6 +150,19 @@ test('Nevada 100-row control retains complete bounded pagination for larger list
  assert.equal(r.total,138);assert.equal(h.pageSize,100);assert.equal(h.resizeClicks,1);
 });
 
+for(const count of [501,1322,5463,10000])test(`Nevada completes all ${count} rows without truncating a broad reviewed name`,async()=>{
+ const h=fixture({rows:manyPublicRows(count),initialPageSize:25,pageSizeControl:true}),r=await h.search();
+ assert.equal(r.total,count);assert.equal(r.rows.length,count);assert.equal(new Set(r.rows.map(x=>x.identifier)).size,count);
+ assert.equal(h.pageSize,100);assert.equal(h.clicks,1);assert.ok(h.time<=46000);
+});
+test('Nevada still refuses over-limit, missing, duplicate and slow large result pages',async()=>{
+ for(const options of [{rows:manyPublicRows(10001)},{rows:manyPublicRows(1322),truncate:true},
+     {rows:manyPublicRows(1322),duplicate:true},{rows:manyPublicRows(1322),oldPageDelay:5000}]){
+  const h=fixture({initialPageSize:25,pageSizeControl:true,...options});
+  await assert.rejects(h.search(),/INCOMPLETE/);assert.ok(h.time<=46000);
+ }
+});
+
 test('Nevada never accepts a changed total or unacknowledged page-size selection',async()=>{
  for(const options of [{resizeIgnored:true},{resizeTotalDrift:true}]){
   const h=fixture({rows:manyPublicRows(38),initialPageSize:25,pageSizeControl:true,...options});
