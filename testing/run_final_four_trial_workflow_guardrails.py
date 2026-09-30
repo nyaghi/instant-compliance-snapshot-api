@@ -19,6 +19,34 @@ TRIAL = {'origin': 'https://fixture-final-four.onrender.com'}
 
 
 class TrialWorkflowControls(unittest.TestCase):
+    def test_real_ui_failure_preserves_aliases_for_retry(self):
+        with patch.object(lab,'trial_identity',return_value=TRIAL):
+            source=lab.final_four_asset('index.html',(ROOT/'web-staging/index.html').read_text(encoding='utf-8'))
+        start=source.index('    async function requestSingleState(')
+        end=source.index('    function stateLaneBases(',start)
+        # Execute the ordinary UI's error path, including a bridge that fails
+        # before the master can return a signed continuation/result.
+        program='''const vm=require('node:vm'), assert=require('node:assert/strict');
+const source=SOURCE;
+(async()=>{for(const state of ['AL','NC','NV','TN']) {
+ const aliases=['Reviewed Former Name','Distinct Acronym'];
+ const context={window:{location:{origin:'https://staging.compliance-express.com'},
+   CCNYConnector:{lookup:async()=>{throw Error('bridge unavailable');}}},
+   internalUnlocked:true,runAlternateNames:[],adminPasscode:{value:'fixture'},
+   getDeviceId:()=> 'fixture-device',fallbackResult:(state,ein,comment,name)=>({state,ein,comment,name})};
+ vm.createContext(context);vm.runInContext(source,context);
+ const failed=await context.requestSingleState('fixture','123456789','test@example.org',state,'Example Charity',false,aliases);
+ assert.equal(failed.status,'Unable to Confirm');
+ assert.deepEqual(Array.from(failed.reviewed_alternate_names),aliases);
+ assert.notEqual(failed.reviewed_alternate_names,aliases);
+ let received;
+ context.window.CCNYConnector.lookup=async input=>{received=input;return {status:'fixture'};};
+ await context.requestSingleState('fixture','123456789','test@example.org',state,'Example Charity',true,failed.reviewed_alternate_names);
+ assert.deepEqual(Array.from(received.alternate_names),aliases);
+}})().catch(e=>{console.error(e);process.exitCode=1;});'''.replace('SOURCE',json.dumps(source[start:end]))
+        result=subprocess.run([str(NODE),'-e',program],capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stdout+'\n'+result.stderr)
+
     def test_trial_frontend_nc_recovery_runs_existing_cleanup_and_deadline_controls(self):
         with patch.object(lab,'trial_identity',return_value=TRIAL), tempfile.TemporaryDirectory() as tmp:
             source=lab.final_four_asset('ny-connector.js',(ROOT/'web-staging/ny-connector.js').read_text(encoding='utf-8'))

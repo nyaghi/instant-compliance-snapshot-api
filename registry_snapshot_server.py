@@ -6817,6 +6817,10 @@ def final_four_connector_failure(record, reason=""):
     result.source_note = f"{why} CharityClarity reports Unable to Confirm. This incomplete lookup does not establish non-registration or delinquency."
     started = time.perf_counter() - max(0, time.time() - record["issued"])
     data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, state, started)
+    # Explicit failure requests return before the continuation's name context
+    # is installed. Preserve the signed, reviewed inputs so a UI retry cannot
+    # silently perform a narrower search after a timeout or verification stop.
+    data["reviewed_alternate_names"] = list(record.get("alternate_names", []))
     # NY transport codes are shared internally; their generic comment fallback
     # must not erase the actual verification/timeout cause for these sources.
     data["comments"] = result.source_note

@@ -818,6 +818,14 @@ class LookupControls(unittest.TestCase):
         before = ast.parse(subprocess.check_output(
             ['git', 'show', '9a7ea66:registry_snapshot_server.py'], cwd=root).decode('utf-8'))
         after = ast.parse((root / 'registry_snapshot_server.py').read_text(encoding='utf-8'))
+        # The independently tested retry fix adds only this signed-input copy
+        # to final-four failures. Keep the whole-master comparison strict for
+        # every other statement, function and setting.
+        retry_copy = ast.parse('data["reviewed_alternate_names"] = list(record.get("alternate_names", []))').body[0]
+        failure = next(n for n in after.body if isinstance(n, ast.FunctionDef) and n.name == 'final_four_connector_failure')
+        copies = [n for n in failure.body if ast.dump(n) == ast.dump(retry_copy)]
+        self.assertEqual(len(copies), 1)
+        failure.body.remove(copies[0])
         after = restore_trial_0614(restore_nv_reservation_0614(after))
         after.body = [restore_nv_business_scope_0613(n) if isinstance(n, ast.FunctionDef) else n
                       for n in after.body]

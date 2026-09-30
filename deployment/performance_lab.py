@@ -114,6 +114,8 @@ def final_four_asset(name, text):
         replace('["NY", "IL", "GA"].includes(state)', '["NY", "IL", "GA", "AL", "NC", "NV", "TN"].includes(state)')
         replace('alternateNames = runAlternateNames, {signal} = {}', 'alternateNames = runAlternateNames, {signal,mode="standard"} = {}')
         replace('alternate_names: alternateNames, signal,', 'alternate_names: alternateNames, signal, mode,')
+        replace('          result.status_reason = "NY_CONNECTOR_UNAVAILABLE";', '''          result.status_reason = "NY_CONNECTOR_UNAVAILABLE";
+          result.reviewed_alternate_names = [...alternateNames];''')
         replace('v2026.09.29.1 &middot; Staging', 'v2026.09.29.2 &middot; Isolated Trial')
     elif name == 'optimized-workflows.js':
         replace("states.filter(s=>s==='IL'||s==='GA')", "states.filter(s=>['IL','GA','AL','NC','NV','TN'].includes(s))")

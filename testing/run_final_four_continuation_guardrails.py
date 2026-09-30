@@ -118,6 +118,27 @@ class ContinuationControls(unittest.TestCase):
         for secret in [self.auth['email'], self.auth['device_id'], second['check_token'], 'profile_url', 'evidence']:
             self.assertNotIn(secret, rendered)
 
+    def test_failure_and_ui_retry_preserve_every_reviewed_alias(self):
+        for state in self.orgs:
+            with self.subTest(state=state):
+                aliases = ['Verified Former Name', 'Distinct Reviewed Acronym']
+                _, first = self.start(state, alternate_names=aliases)
+                _, failed = self.request({'action': 'fail', 'check_token': first['check_token'],
+                                          'reason': 'NY_CONNECTOR_TIMEOUT'})
+                result = failed['result']
+                self.assertEqual(result['reviewed_alternate_names'], aliases)
+                # This is the normal results-page Retry input, including its
+                # historical empty-array fallback that caused the regression.
+                _, retry = self.start(state, alternate_names=result.get('reviewed_alternate_names', []))
+                record = cc.ny_connector_unpack(retry['check_token'], self.auth['email'], self.auth['device_id'])
+                self.assertEqual(record['alternate_names'], aliases)
+                self.assertEqual(cc.REVIEWED_NAME_CONTEXT.get(), {})
+
+    def test_invalid_evidence_failure_also_preserves_names(self):
+        _, first = self.start('NV', alternate_names=['Reviewed Former Name'])
+        _, failed = self.advance(first, evidence={'complete': False})
+        self.assertEqual(failed['result']['reviewed_alternate_names'], ['Reviewed Former Name'])
+
     def test_search_cleaner_rejects_payload_and_nesting_limits(self):
         query = {'state': 'AL', 'operation': 'search', 'name': 'YWCA'}
         payload = {'state': 'AL', 'query': query, 'complete': True, 'verification_pending': False,
