@@ -75,7 +75,9 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
  const searchCombo={get innerText(){return searchMode==='EXACT_MATCH'?'Exact Match':'Starts With';},
   querySelector:q=>q==='select[name="data[searchType]"]'?{}:null,
   click:()=>{modeMenu=true;mutate();},querySelectorAll:q=>q==='[role="option"]'?['STARTS_WITH','EXACT_MATCH'].map(mode=>({
-    getAttribute:k=>k==='data-value'?mode:null,getClientRects:()=>modeMenu?[{}]:[],click:()=>{
+    getAttribute:k=>k==='data-value'?mode:null,getClientRects:()=>modeMenu?[{}]:[],click:()=>{},
+    dispatchEvent:event=>{
+      if(event.type!=='mousedown'||!event.bubbles||event.button!==0)return;
       modeClicks++;modeMenu=false;if(!ignoreModeChange)searchMode=mode;mutate();
     }})):[]};
  const backButton={innerText:'Return To Results',getClientRects:()=>[{}],click:()=>{
@@ -137,6 +139,7 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
  const win={};win.top=win;
  const context={window:win,document:doc,location:{origin:'https://orion.nv.gov',hash:'screen=external-GenericFilingsSearch&tabRoute=business',href:'https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=Manage-Business&id=d1b62c76-d5af-4ff3-b07d-038b7fa8d854'},
   Date:{now:()=>clock},crypto:{randomUUID:()=> 'fixture'},HTMLInputElement:Input,HTMLSelectElement:class{},Event:class{},
+  MouseEvent:class{constructor(type,options){this.type=type;Object.assign(this,options);}},
   MutationObserver:class{constructor(fn){this.fn=fn;}observe(){observers.add(this);}disconnect(){observers.delete(this);}},
   setTimeout:(fn,ms)=>schedule(fn,Math.max(ms,timerClamp)),clearTimeout:id=>tasks.delete(id),
   chrome:{runtime:{id:'test-extension',onMessage:{addListener:fn=>listener=fn}}}};
@@ -199,7 +202,7 @@ test('a second Nevada search explicitly resets Exact Match to Starts With before
 test('ignored Exact Match selection or absent fresh response is incomplete, never an empty successful result',async()=>{
  for(const opts of [{ignoreModeChange:true},{repeatSearchActivity:false}]){
   const h=fixture({rows:manyPublicRows(21),exactRows:[],initialPageSize:25,...opts});
-  await assert.rejects(h.drive(h.api.nvSearch(adaptiveQuery,h.time+10000)),/INCOMPLETE|NOT_STARTED/);
+  await assert.rejects(h.drive(h.api.nvSearch(adaptiveQuery,h.time+10000)),opts.ignoreModeChange?/MODE_NOT_SELECTED/:/NOT_STARTED/);
  }
 });
 test('exact-match detail navigation preserves the selected mode and only opens observed record identities',async()=>{
