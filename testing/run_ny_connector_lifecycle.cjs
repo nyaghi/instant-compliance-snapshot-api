@@ -80,6 +80,34 @@ test('NV page timeout reply can trigger return recovery without a competing tran
  assert.ok(h.timers.filter(t=>t.ms===300000).every(t=>t.cleared));
 });
 
+test('NV fresh navigation waits for the search route before reload and ignores ready old detail',async()=>{
+ const trialOrigin='https://fixture-final-four.onrender.com',h=harness({trialOrigin});
+ const start=vm.runInContext("registryStart('NV')",h.context);
+ const reservation='https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=NameReservationDetails&id=fixture';
+ h.tabs.set(3,{id:3,windowId:10,url:reservation});let generation=1,reloads=0;
+ h.chrome.tabs.update=async(id,options)=>{
+  h.context.setTimeout(()=>Object.assign(h.tabs.get(id),options),400);
+  return h.tabs.get(id);
+ };
+ h.chrome.tabs.reload=async(id)=>{assert.equal(h.tabs.get(id).url,start);generation++;reloads++;};
+ h.chrome.tabs.sendMessage=async(id)=>({ready:true,documentId:String(generation),url:h.tabs.get(id).url});
+ const job={tab:3,registryState:'NV',activeExpiresAt:310000,closed:false,nvReservationDetail:true};
+ const pending=h.context.registryNavigate(job,start,45000,true);await tick();
+ assert.equal(reloads,0);await h.advance(600);
+ assert.equal((await pending).url,start);assert.equal(reloads,1);assert.equal(job.activeExpiresAt,310000);
+});
+
+test('NV wrong-route readiness cannot consume more than the original navigation allowance',async()=>{
+ const h=harness({trialOrigin:'https://fixture-final-four.onrender.com'});
+ const start=vm.runInContext("registryStart('NV')",h.context);
+ h.tabs.set(3,{id:3,url:'https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=NameReservationDetails&id=fixture'});
+ let reloads=0;h.chrome.tabs.update=async(id)=>h.tabs.get(id);h.chrome.tabs.reload=async()=>{reloads++;};
+ h.chrome.tabs.sendMessage=async(id)=>({ready:true,documentId:'old',url:h.tabs.get(id).url});
+ const job={tab:3,registryState:'NV',activeExpiresAt:310000,closed:false,nvReservationDetail:true};
+ const pending=assert.rejects(h.context.registryNavigate(job,start,45000,true));await tick();await h.advance(45000);
+ await pending;assert.equal(reloads,0);assert.equal(job.activeExpiresAt,310000);
+});
+
 for(const next of ['search','detail','changed-detail'])test(`NV reservation return uses public form and preserves identity: ${next}`,async()=>{
  const trialOrigin='https://fixture-final-four.onrender.com',h=harness({trialOrigin});
  const start=vm.runInContext("registryStart('NV')",h.context),reservation='https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=NameReservationDetails&id=fixture';

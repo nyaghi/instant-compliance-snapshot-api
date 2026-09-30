@@ -845,3 +845,26 @@ validation of identity selection, not removal of Alabama's source CAPTCHA.
 Five deployed backend controls retained CO Current, NM Current/no-record,
 and MS/NJ Exempt. IL/GA/TN Summit controls retained Current in 33.192s combined;
 NV Classical 98.1 completed no-record in 54.852s.
+
+### 0.6.19 live controls and 0.6.20 Nevada route readiness
+
+The four original-alias NV controls completed on c854e09: Man in the Mirror
+Delinquent (87.657s), Classical 98.1 Not Registered (61.919s), Outward Bound
+Upcoming Filing (38.111s), and CCA Unable to Confirm (48.647s). This validates
+the watchdog repair, but not the reservation-return repair.
+
+CCA's reservation detail was collected successfully; its next alias failed
+WRONG_ORIGIN. The NV readiness predicate returned true for any loaded
+non-search screen, and the worker checked pathname only. Reservation, business
+detail and search share that pathname. The fresh-return path also reloaded
+immediately after tabs.update acknowledged the navigation request, without
+waiting for its completion. The new public-form test reproduces the incorrect
+ready value on the reservation route before the fix.
+
+0.6.20 requires the exact public search hash and rendered Business form. Fresh
+NV recovery waits for that route before reload; the two waits share the existing
+45-second navigation allowance and original job expiry. Other state navigation
+allowances are unchanged. Added controls cover a delayed navigation acknowledgement,
+an old detail that falsely reports ready, and timeout without budget extension.
+200 connector checks pass. Activation and the original-alias live CCA control
+are still required; no claim of a clean run or full resolution is made.

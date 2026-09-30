@@ -29,7 +29,8 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
     try {
       const value=await registryMessage(job,{action:"registry-ready"});
       verificationPending=job.registryState==='NC'&&value?.verification_pending===true;
-      if (value?.ready && value.documentId !== oldDocument && (!path || new URL(value.url).pathname===path)) return value;
+        if (value?.ready && value.documentId !== oldDocument && (!path || new URL(value.url).pathname===path)
+            && (job.registryState!=='NV' || new URL(value.url).hash===new URL(registryStart('NV')).hash)) return value;
       // An acknowledged NC Search can leave the same ordinary, enabled form
       // without navigating. Retry once only after observing that exact form;
       // disabled Processing and verification pages are never resubmitted.
@@ -85,14 +86,22 @@ async function registryNavigate(job, url, budgetMs = 45000, freshNvRecovery = fa
   if (new URL(url).origin !== registryOrigin(job.registryState)) throw new Error("NY_CONNECTOR_INCOMPLETE");
   if (freshNvRecovery && (job.registryState!=='NV' || url!==registryStart('NV')
       || !(job.nvReturnRecoveryUsed || job.nvReservationDetail))) throw new Error('NY_CONNECTOR_INVALID_SEQUENCE');
-  let previous;
+    const deadline=Math.min(job.activeExpiresAt,Date.now()+Math.max(1,Math.min(45000,budgetMs)));
+    let previous;
   if (job.tab !== null) {
     try { previous=(await registryMessage(job,{action:"registry-ready"})).documentId; } catch {}
     // Updating a tab to its current URL may leave the same document in place.
     // Explicitly reload so the next search starts with a fresh public form.
     const current = await chrome.tabs.get(job.tab);
     if (freshNvRecovery) {
-      if(current.url!==url)await chrome.tabs.update(job.tab,{url});
+        if(current.url!==url) {
+          await chrome.tabs.update(job.tab,{url});
+          // A tabs.update acknowledgement is not navigation completion. Wait
+          // for the public route before reloading, or Chrome can reload the
+          // old reservation document. Both waits share the original allowance.
+          const target=await registryReady(job,null,new URL(url).pathname,deadline-Date.now());
+          previous=target.documentId;
+        }
       await chrome.tabs.reload(job.tab);
     } else if (current.url === url) await chrome.tabs.reload(job.tab);
     else {
@@ -110,7 +119,7 @@ async function registryNavigate(job, url, budgetMs = 45000, freshNvRecovery = fa
     job.creating=chrome.tabs.create({windowId:origin.windowId,url,active:false});
     const tab=await job.creating; job.creating=null; job.tab=tab.id; owned.add(tab.id); await saveRuntime();
   }
-  return registryReady(job,previous,new URL(url).pathname,budgetMs);
+    return registryReady(job,previous,new URL(url).pathname,freshNvRecovery?Math.max(1,deadline-Date.now()):budgetMs);
 }
 async function registryIllinoisVerification(job, collect) {
   // Preserve the verification document. Reloading here resets Illinois's

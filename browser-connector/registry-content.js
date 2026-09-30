@@ -1007,7 +1007,10 @@
         return document.querySelectorAll('main article section.usa-section--singleEntry > ul').length===1;
       return false;
     }
-    if (NV && location.hash.includes('screen=external-GenericFilingsSearch')) {
+    if (NV) {
+      // Detail and transitional ORION screens share the public search pathname.
+      // A loaded document is not a ready Business search form.
+      if (!location.hash.includes('screen=external-GenericFilingsSearch&tabRoute=business')) return false;
       const tab=[...document.querySelectorAll('[role="tab"]')].find(el=>text(el)==='Business');
       return tab?.getAttribute('aria-selected')==='true'
         && ![...document.querySelectorAll('.app-loader-pane .circle-loader')].some(visible)

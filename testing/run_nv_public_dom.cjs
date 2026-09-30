@@ -4,6 +4,15 @@ const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const original=fs.readFileSync(path.join(__dirname,'../browser-connector/registry-content.js'),'utf8');
 const source=original.replace('  async function handle(m) {','  globalThis.testNV = {nvPage,nvFields,nvReservationFields,nvChanged,nvSearch,nvDetail,nvReturnSearch,registryDocumentReady};\n  async function handle(m) {');
+
+test('Nevada detail and transitional routes are not ready public search forms',()=>{
+ const h=fixture();
+ for(const hash of ['screen=NameReservationDetails&id=fixture','screen=Manage-Business&id=fixture',
+   'screen=ExistingBusinessFilings','screen=external-GenericFilingsSearch&tabRoute=agent','']) {
+  h.context.location.hash=hash;
+  assert.equal(h.api.registryDocumentReady(),false,hash);
+ }
+});
 const headers=['Entity Name','NV Business Id #','Entity No.','Entity Type','Registered Agent Name','Formation Date','Status'];
 const observed=[
  ['MAKE-A-WISH FOUNDATION OF AMERICA','NV19931054903','C6989-1993','Foreign Non-Profit Corporation (80)','C T CORPORATION SYSTEM**','06/16/1993 12:00 AM','Permanently Revoked'],
