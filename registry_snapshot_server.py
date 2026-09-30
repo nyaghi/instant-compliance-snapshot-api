@@ -6716,6 +6716,8 @@ def final_four_connector_advance(record):
         return {"phase": "complete", "result": final_four_connector_failure(record, "NY_CONNECTOR_TIMEOUT" if isinstance(exc, TimeoutError) else "")}
     if time.time() >= record["expires"]:
         return {"phase": "complete", "result": final_four_connector_failure(record, "NY_CONNECTOR_TIMEOUT")}
+    if record.get("nc_search_recovery"):
+        result.source_note = result.source_note.rstrip() + " One stalled North Carolina search completed after a fresh-page retry within the original lookup time limit."
     started = time.perf_counter() - max(0, time.time() - record["issued"])
     return {"phase": "complete", "result": response_data_for_lookup(result, "", org, org.organization_name, org.ein, record["state"], started)}
 
@@ -6755,6 +6757,8 @@ def final_four_connector_request(payload, origin):
                   "issued": now, "expires": now + (60 if mode == "sales" else NY_CONNECTOR_TTL_SECONDS),
                   "version": APP_VERSION, "completed": [], "pending": None,
                   "alternate_names": alternate_names, "protocol": "final-four-public-v1"}
+        if payload.get("recovery_protocol") == "nc-fresh-search-v1":
+            record["recovery_protocol"] = "nc-fresh-search-v1"
     else:
         try:
             record = ny_connector_unpack(payload.get("check_token"), email, device)
@@ -6769,6 +6773,21 @@ def final_four_connector_request(payload, origin):
             return 400, {"error": "Invalid registry connector action."}
         if action == "fail":
             reason = payload.get("reason")
+            pending = record.get("pending")
+            # One failed ordinary NC search may resume in a fresh owned tab.
+            # Preserve the signed evidence and deadline; never restart a
+            # verification challenge, detail lookup, or completed search.
+            if (record["state"] == "NC" and record.get("recovery_protocol") == "nc-fresh-search-v1"
+                    and reason == "NY_CONNECTOR_TAB_READY_TIMEOUT" and not record.get("nc_search_recovery")
+                    and pending and pending["query"].get("operation") == "search"
+                    and payload.get("query_id") == pending["query_id"] and record["expires"] - now > 60):
+                record["nc_search_recovery"] = {"attempt": 1, "reason": reason}
+                pending["query_id"] = secrets.token_urlsafe(18)
+                return 200, {"phase": "search", **pending,
+                             "recovery": {"action": "fresh_browser", "attempt": 1, "reason": reason},
+                             "check_token": ny_connector_pack(record),
+                             "lookup_remaining_ms": max(0, int((record["expires"]-now)*1000)),
+                             "expires_in": max(0, int(record["expires"]-now))}
             return 200, {"phase": "complete", "result": final_four_connector_failure(record, reason if isinstance(reason, str) else "")}
         pending = record["pending"]
         if not pending or payload.get("query_id") != pending["query_id"]:

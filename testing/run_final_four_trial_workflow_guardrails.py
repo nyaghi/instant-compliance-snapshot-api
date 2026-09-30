@@ -1,6 +1,7 @@
 """Isolated UI and queue integration; approved 29.1 defaults are controls."""
 import json
 import io
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -18,6 +19,15 @@ TRIAL = {'origin': 'https://fixture-final-four.onrender.com'}
 
 
 class TrialWorkflowControls(unittest.TestCase):
+    def test_trial_frontend_nc_recovery_runs_existing_cleanup_and_deadline_controls(self):
+        with patch.object(lab,'trial_identity',return_value=TRIAL), tempfile.TemporaryDirectory() as tmp:
+            source=lab.final_four_asset('ny-connector.js',(ROOT/'web-staging/ny-connector.js').read_text(encoding='utf-8'))
+            path=Path(tmp)/'trial-connector.js';path.write_text(source,encoding='utf-8')
+            result=subprocess.run([str(NODE),'--test',str(ROOT/'testing/run_connector_frontend.cjs')],
+                                  env={**os.environ,'CC_TEST_CONNECTOR_SOURCE':str(path),'CC_TEST_RECOVERY_STATE':'NC'},
+                                  capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stdout+'\n'+result.stderr)
+
     def test_packaged_trial_version_starts_both_mature_registry_routes(self):
         # Exercise the actual start endpoint. Testing IL recovery alone missed
         # a second version list that rejected 0.6.11 before any registry call.

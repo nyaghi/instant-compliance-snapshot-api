@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const {webcrypto} = require('node:crypto');
-const source = fs.readFileSync(path.join(__dirname,'../web-staging/ny-connector.js'),'utf8');
+const source = fs.readFileSync(process.env.CC_TEST_CONNECTOR_SOURCE || path.join(__dirname,'../web-staging/ny-connector.js'),'utf8');
 const capabilities = ['lookup-tab-v1','verification-retry-v1','search-verification-retry-v1','search-schema-errors-v1','nullable-ein-v1','queue-v1','connection-recovery-v1','recovery-causes-v1','cleanup-ack-v1','timeout-recovery-v1','resume-v1','verified-detail-v1','detail-navigation-v1','il-ga-public-dom-v1','il-ga-complete-search-v2','il-session-reuse-v1','il-large-pages-v1','ga-exempt-record-v1','ga-legacy-rows-v1'];
 
 async function exercise({state='GA',commands=42,elapsedPerCommand=100,stopStatus='Delinquent',missedPings=0,incompatible=false,oldIllinois=false}={}) {
@@ -74,12 +74,14 @@ test('Illinois requires the event-readiness fix while old NY and GA remain usabl
 });
 
 async function recoveryExercise({persistent=false,finishFails=false,finishInterrupted=false,persistentInterruption=false,acquireFails=false,abortRecovery=false,overBudget=false,repeatDirective=false}={}) {
+  const state=process.env.CC_TEST_RECOVERY_STATE || 'IL';
+  const failureReason=state==='NC'?'NY_CONNECTOR_TAB_READY_TIMEOUT':'NY_CONNECTOR_IL_VERIFICATION_PENDING';
   const actions=[],searches=[],controller=new AbortController();let listener,clock=0,failures=0,admissions=0,finishes=0;
-  const query={state:'IL',ein:'123456789'};
+  const query=state==='NC'?{state,operation:'search',name:'Example Foundation'}:{state,ein:'123456789'};
   const window={addEventListener:(type,fn)=>listener=fn,postMessage(m){
     actions.push({action:m.action,id:m.lookup_id,query:m.query});
     let r={ok:true};
-    if(m.action==='ping')r={ok:true,version:'0.5.10',capabilities:[...capabilities,'il-dom-events-v1']};
+    if(m.action==='ping')r={ok:true,version:'0.5.10',capabilities:[...capabilities,'il-dom-events-v1','final-four-public-v1']};
     if(m.action==='acquire' && ++admissions===2){
       if(abortRecovery){controller.abort(new Error('Canceled by test'));return;}
       if(acquireFails)r={ok:false,reason:'NY_CONNECTOR_QUEUE_TIMEOUT'};
@@ -89,7 +91,7 @@ async function recoveryExercise({persistent=false,finishFails=false,finishInterr
     if(m.action==='finish' && (++finishes===1 && finishInterrupted || persistentInterruption))r={ok:false,reason:'NY_CONNECTOR_INTERRUPTED'};
     if(m.action==='search'){
       searches.push(m);clock+=60000;
-      r=searches.length===1||persistent||repeatDirective?{ok:false,reason:'NY_CONNECTOR_IL_VERIFICATION_PENDING'}:{ok:true,evidence:{query,complete:true,total:0,rows:[]}};
+      r=searches.length===1||persistent||repeatDirective?{ok:false,reason:failureReason}:{ok:true,evidence:{query,complete:true,total:0,rows:[]}};
     }
     queueMicrotask(()=>listener({source:window,origin:'https://staging.compliance-express.com',data:{...m,...r,direction:'response'}}));
   }};
@@ -99,14 +101,14 @@ async function recoveryExercise({persistent=false,finishFails=false,finishInterr
       const p=JSON.parse(options.body);actions.push({action:'api:'+p.action,payload:p});let response;
       if(p.action==='start')response={phase:'search',check_token:'initial',query_id:'original-query',query};
       else if(p.action==='cancel')response={};
-      else if(p.action==='advance')response={phase:'complete',result:{state:'IL',status:'Not Registered / Non-Compliant'}};
-      else if(p.action==='fail' && p.reason==='NY_CONNECTOR_IL_VERIFICATION_PENDING' && (++failures===1||repeatDirective))
+      else if(p.action==='advance')response={phase:'complete',result:{state,status:'Not Registered / Non-Compliant'}};
+      else if(p.action==='fail' && p.reason===failureReason && (++failures===1||repeatDirective))
         response={phase:'search',check_token:'continued',query_id:'retry-query',query,recovery:{action:'fresh_browser',attempt:1}};
-      else response={phase:'complete',result:{state:'IL',status:'Unable to Confirm',reason:p.reason}};
+      else response={phase:'complete',result:{state,status:'Unable to Confirm',reason:p.reason}};
       return {ok:true,json:async()=>response};
     }});
   vm.runInContext(source,context);let result,error;
-  try{result=await window.CCNYConnector.lookup({state:'IL',organization_name:'Example',ein:'123456789',signal:controller.signal});}catch(e){error=e;}
+  try{result=await window.CCNYConnector.lookup({state,organization_name:'Example',ein:'123456789',signal:controller.signal});}catch(e){error=e;}
   return {actions,searches,result,error};
 }
 

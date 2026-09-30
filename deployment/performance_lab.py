@@ -133,6 +133,12 @@ def final_four_asset(name, text):
         replace('API + "/api/ny-connector"', 'API + (finalFour ? "/api/final-four-connector" : "/api/ny-connector")')
         replace('headers: { "Content-Type": "application/json" }', 'headers: { "Content-Type": "application/json", "Authorization": "Bearer " + admin_passcode }')
         replace('action: "start", state: registryState,', 'action: "start", mode, state: registryState,')
+        replace('recovery_protocol: "il-fresh-page-v1"', 'recovery_protocol: registryState === "NC" ? "nc-fresh-search-v1" : "il-fresh-page-v1"')
+        replace('registryState !== "IL" || recoveryUsed', '!["IL", "NC"].includes(registryState) || recoveryUsed')
+        replace('onProgress?.("Illinois: verification stalled. Reopening the state page once and resuming this check.");',
+                'onProgress?.(`${label}: the search stalled. Reopening the state page once and resuming this check.`);')
+        replace('() => onProgress?.("Illinois: waiting to resume after verification recovery."), "IL", recoverySignal',
+                '() => onProgress?.(`${label}: waiting to resume this check.`), registryState, recoverySignal')
         replace('const searchSignal = recoveryUsed ?', 'const searchSignal = (recoveryUsed || finalFour) ?')
         replace('if (!recoveryUsed) throw error;', 'if (!recoveryUsed && !finalFour) throw error;')
     return text

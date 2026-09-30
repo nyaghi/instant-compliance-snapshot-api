@@ -126,6 +126,52 @@ class ContinuationControls(unittest.TestCase):
         for change in [{'rows': [AL_ROWS[0]]*501}, {'rows': [['x'*1501]*11]}, {'rows': [[[[[[['nested']]]]]]]}]:
             with self.assertRaises(ValueError): cc.final_four_clean_evidence({**payload, **change}, query)
 
+    def test_nc_search_recovery_preserves_evidence_deadline_and_rotates_query(self):
+        with patch.object(cc.time, 'time', return_value=1000):
+            _, first = self.start('NC', recovery_protocol='nc-fresh-search-v1', alternate_names=['Example National Charity'])
+            evidence = self.provider(first['query']); evidence.update(rows=[], total=0)
+            _, pending = self.advance(first, evidence)
+        with patch.object(cc.time, 'time', return_value=1060):
+            _, recovered = self.request({'action':'fail', 'check_token':pending['check_token'],
+                                        'query_id':pending['query_id'], 'reason':'NY_CONNECTOR_TAB_READY_TIMEOUT'})
+            self.assertEqual(recovered['phase'], 'search')
+            self.assertEqual(recovered['query'], pending['query'])
+            self.assertNotEqual(recovered['query_id'], pending['query_id'])
+            record = cc.ny_connector_unpack(recovered['check_token'], self.auth['email'], self.auth['device_id'])
+            self.assertEqual(record['issued'],1000); self.assertEqual(record['expires'],1300)
+            self.assertEqual(record['completed'],[{'query':first['query'],'evidence':evidence}])
+            self.assertEqual(recovered['lookup_remaining_ms'],240000)
+            self.assertEqual(self.advance(recovered, query_id=pending['query_id'])[0],409)
+            _, final = self.request({'action':'fail','check_token':recovered['check_token'],
+                                    'query_id':recovered['query_id'],'reason':'NY_CONNECTOR_TAB_READY_TIMEOUT'})
+            self.assertEqual(final['phase'],'complete');self.assertEqual(final['result']['status'],'Unable to Confirm')
+
+    def test_nc_recovery_never_retries_verification_other_states_or_expired_budget(self):
+        for state, protocol, reason, delay, wrong_query in [
+                ('NC','nc-fresh-search-v1','NY_CONNECTOR_NC_VERIFICATION_PENDING',60,False),
+                ('NC','nc-fresh-search-v1','NY_CONNECTOR_TAB_READY_TIMEOUT',250,False),
+                ('NC','nc-fresh-search-v1','NY_CONNECTOR_TAB_READY_TIMEOUT',60,True),
+                ('NC','','NY_CONNECTOR_TAB_READY_TIMEOUT',60,False),
+                ('NV','nc-fresh-search-v1','NY_CONNECTOR_TAB_READY_TIMEOUT',60,False),
+                ('AL','nc-fresh-search-v1','NY_CONNECTOR_TAB_READY_TIMEOUT',60,False),
+                ('TN','nc-fresh-search-v1','NY_CONNECTOR_TAB_READY_TIMEOUT',60,False)]:
+            with self.subTest(state=state, reason=reason, delay=delay, protocol=protocol, wrong_query=wrong_query):
+                with patch.object(cc.time,'time',return_value=1000):
+                    _, response=self.start(state,recovery_protocol=protocol)
+                with patch.object(cc.time,'time',return_value=1000+delay):
+                    _, final=self.request({'action':'fail','check_token':response['check_token'],
+                                          'query_id':'wrong' if wrong_query else response['query_id'],'reason':reason})
+                    self.assertEqual(final['phase'],'complete')
+                    self.assertEqual(final['result']['status'],'Unable to Confirm')
+
+    def test_nc_recovery_never_reopens_an_unconfirmed_detail(self):
+        _, response=self.start('NC',recovery_protocol='nc-fresh-search-v1')
+        _, detail=self.advance(response)
+        self.assertEqual(detail['query']['operation'],'detail')
+        _, final=self.request({'action':'fail','check_token':detail['check_token'],
+                              'query_id':detail['query_id'],'reason':'NY_CONNECTOR_TAB_READY_TIMEOUT'})
+        self.assertEqual(final['phase'],'complete')
+
     def test_detail_identity_contact_and_history_are_bounded(self):
         query = {'state': 'NC', 'operation': 'detail', 'identifier': NC['License'], 'url': NC['profile_url']}
         payload = {'query': query, 'complete': True, 'fields': NC_PROFILE}

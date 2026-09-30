@@ -534,3 +534,11 @@ through both start routes, including rejection outside the trial and rejection
 of unknown versions. The exact origin-gated AST audit is updated to match this
 one allowance. No collector update, installation, status-rule change, additional
 capacity or change to approved staging 29.1 is included in this repair.
+
+### North Carolina transport recovery (trial only)
+
+The 0.6.11 live Give Something Back control found and read SL012308, then a later name search stayed on the ordinary enabled form until its readiness deadline. A separate visible lookup confirmed the record. No status is inferred from that partial attempt.
+
+The trial master may authorize one fresh browser transport only for a pending NC search with TAB_READY_TIMEOUT, a matching signed query ID, and more than 60 seconds left. Completed evidence, aliases, issue/expiry times, and the pending query survive; the query ID rotates to reject late replies. Verification, detail failures, other states, canceled/expired checks and repeat failures remain inconclusive. The trial frontend reuses the approved Illinois cleanup/reacquisition sequence. Approved web-staging assets and installed connector remain unchanged.
+
+Validation: 315 Python regression controls passed, including 17 frontend scenarios executed against the assembled trial NC client. Live validation remains required.
