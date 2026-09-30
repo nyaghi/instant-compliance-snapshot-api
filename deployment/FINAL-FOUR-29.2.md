@@ -515,3 +515,22 @@ NV incomplete responses now identify whether the return form, input settling,
 or page-size menu failed. These diagnostic distinctions do not relax source
 completion or cause an additional request; the remaining RMHC failure must be
 observed at its actual failing phase before another navigation change is made.
+
+### 0.6.11 live controls and mature-route compatibility repair
+
+The live six-check control recovered Operation Homefront NC (Current, 24.367s)
+and retained Environmental Law Institute NC (Upcoming Filing, 5.027s). Give
+Something Back still timed out on a later generated query after collecting its
+expired SL012308 record. No classification was substituted for the failed run.
+RMHC NV completed Return To Search and the Ronald McDonald House query; the
+later generated Ronald query exceeded the 500-record bound. Manual public
+search returned 1,322 rows. ELI's separate 5,463-row prefix remains incomplete.
+
+The same control exposed a release compatibility defect: the IL/GA request
+start allowlist omitted 0.6.11 although IL's recovery allowlist included it.
+Both mature controls were rejected before registry collection. Add the installed
+version to the trial-only start allowlist and test the actual packaged version
+through both start routes, including rejection outside the trial and rejection
+of unknown versions. The exact origin-gated AST audit is updated to match this
+one allowance. No collector update, installation, status-rule change, additional
+capacity or change to approved staging 29.1 is included in this repair.

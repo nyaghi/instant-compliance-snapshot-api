@@ -18,6 +18,33 @@ TRIAL = {'origin': 'https://fixture-final-four.onrender.com'}
 
 
 class TrialWorkflowControls(unittest.TestCase):
+    def test_packaged_trial_version_starts_both_mature_registry_routes(self):
+        # Exercise the actual start endpoint. Testing IL recovery alone missed
+        # a second version list that rejected 0.6.11 before any registry call.
+        with tempfile.TemporaryDirectory() as tmp:
+            version = build(TRIAL['origin'], Path(tmp)/'trial')['version']
+        payload = {'action':'start', 'email':'test@compliance-express.com',
+                   'admin_passcode':'fixture', 'device_id':'fixture-device',
+                   'organization_name':'Example Charity', 'ein':'123456789',
+                   'connector_version':version}
+        with patch.object(cc, 'is_verified_internal_passcode', return_value=True), \
+                patch.object(cc, 'ny_connector_origin_allowed', return_value=True), \
+                patch.object(cc, 'NY_CONNECTOR_SIGNING_KEY', 'fixture-'*8), \
+                patch.object(cc, 'ny_connector_advance', return_value={'phase':'complete','result':{}}) as advance:
+            for state in ['IL', 'GA']:
+                with self.subTest(state=state), patch.object(cc, 'trial_identity', return_value=TRIAL):
+                    code, result = cc.ny_connector_request({**payload, 'state':state}, TRIAL['origin'])
+                    self.assertEqual(code, 200, result)
+                    self.assertEqual(advance.call_args.args[0]['connector_version'], version)
+                    self.assertEqual(advance.call_args.args[0]['state'], state)
+            for version_value in [version, '9.9.9']:
+                with patch.object(cc, 'trial_identity', return_value=None):
+                    code, result = cc.ny_connector_request({**payload, 'state':'IL', 'connector_version':version_value}, cc.NY_CONNECTOR_ORIGIN)
+                    self.assertEqual(code, 400, result)
+            with patch.object(cc, 'trial_identity', return_value=TRIAL):
+                code, result = cc.ny_connector_request({**payload, 'state':'GA', 'connector_version':'9.9.9'}, TRIAL['origin'])
+                self.assertEqual(code, 400, result)
+
     def test_trial_connector_retains_approved_il_recovery_without_resetting_budget(self):
         record={'state':'IL','purpose':'registration','recovery_protocol':'il-fresh-page-v1',
                 'connector_version':'0.6.8','issued':1000,'expires':1360,
