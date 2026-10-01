@@ -1,14 +1,14 @@
 /* Public NC labels observed 2026-09-29; fake DOM only, no live browser. */
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
-const source=fs.readFileSync(path.join(__dirname,'../browser-connector/registry-content.js'),'utf8')
+const source=fs.readFileSync(path.join(process.env.CC_TEST_TRIAL_DIR||path.join(__dirname,'../browser-connector'),'registry-content.js'),'utf8')
  .replace('  async function handle(m) {','  globalThis.testNC={ncLabeled,ncForm,ncRetry,ncRows,ncProfile,ncFilings,registryDocumentReady,handle};\n  async function handle(m) {');
 const origin='https://www.sosnc.gov',profile=origin+'/online_services/search/charities_profile/5700751';
 const active={'CSL Legal Name':"America's Charities",'CSL Type':'Charitable Organization',Status:'Current Active – Filing Extension Granted',License:'SL000448','Expiration Date':'5/15/2026','Extension End Date':'11/15/2026'};
 const exempt={'CSL Legal Name':'YWCA of the U.S.A.','CSL Type':'CSL Exempt Organization',Status:'CSL Exempt',License:'EX003050'};
 const txt=innerText=>({innerText,querySelector:()=>null});
 function labels(values){return Object.entries(values).map(([key,value])=>({innerText:key+':',parentElement:txt(key+': '+value)}));}
-function harness({cards=[active],total=cards.length,query="America's Charities",url=origin+'/online_services/search/Charities_Results',fields=null,periods=null,uploadLink=false,extraLabels=[],displayName=null}={}){
+function harness({cards=[active],total=cards.length,query="America's Charities",url=origin+'/online_services/search/Charities_Results',fields=null,periods=null,uploadLink=false,extraLabels=[],displayName=null,addressCount=1}={}){
  const panels=new Map(),buttons=[];let clicks=0,formClicks=0;
  for(const [i,row] of cards.entries()){
   let expanded=false;
@@ -18,7 +18,7 @@ function harness({cards=[active],total=cards.length,query="America's Charities",
  const addressValues=['14200 Park Meadow Dr Ste 330s','Chantilly','VA','20151-4210'];
  const address={innerText:'Address',parentElement:{querySelectorAll:s=>(s===':scope > .para-small > span'?addressValues:s==='.para-small > span'?['Address',...addressValues]:[]).map(txt)}};
  const main={innerText:`Records Found: ${total} Words: Starting With Organization Name ${query} Search Time 9/29/2026 03:50 PM`,
-  querySelectorAll:s=>s==='#resultsSection .usa-accordion__button'?buttons:s==='.para-small > .boldSpan'?[...labels(fields||{}),address]:s==='a[href]'?[{getAttribute:()=>new URL(profile).pathname.replace('charities_profile','charities_filings')}]:[]};
+  querySelectorAll:s=>s==='#resultsSection .usa-accordion__button'?buttons:s==='.para-small > .boldSpan'?[...labels(fields||{}),...Array(addressCount).fill(address)]:s==='a[href]'?[{getAttribute:()=>new URL(profile).pathname.replace('charities_profile','charities_filings')}]:[]};
  class Input{get value(){return this.v||'';}set value(v){this.v=v;}dispatchEvent(){}}
  class Select extends Input{};
  Object.defineProperty(Select.prototype,'value',Object.getOwnPropertyDescriptor(Input.prototype,'value'));
@@ -163,4 +163,21 @@ test('NC visible form waits for document completion before its inline submit act
 test('NC results readiness requires a rendered count, including an explicit zero',()=>{
  const h=harness({cards:[]});h.main.innerText='Performing security verification';assert.equal(h.api.registryDocumentReady(),false);
  h.main.innerText='Records Found: 0';assert.equal(h.api.registryDocumentReady(),true);
+});
+
+test('NC completed explicit EX exemption can omit its entire address block',()=>{
+ const fields={Name:'College of William & Mary',Status:'CSL Exempt','Registration #':'EX009484','Last Application Date':'8/17/2022'};
+ const q={state:'NC',operation:'detail',identifier:'EX009484',url:profile};
+ const h=harness({url:profile,fields,addressCount:0}),r=h.api.ncProfile(q);
+ assert.equal(r.evidence.complete,true);assert.equal(r.evidence.fields.Name,fields.Name);
+ for(const key of ['Street','City','State','Zip'])assert.equal(r.evidence.fields[key],'');
+ for(const change of [{Status:'Current Active'},{'Registration #':'SL009484'}]) {
+  const changed={...fields,...change};
+  assert.throws(()=>harness({url:profile,fields:changed,addressCount:0}).api.ncProfile({...q,identifier:changed['Registration #']}));
+ }
+ for(const count of [1,2]) {
+  const bad=harness({url:profile,fields,addressCount:count});bad.addressValues.pop();
+  assert.throws(()=>bad.api.ncProfile(q),/ADDRESS_INCOMPLETE/);
+ }
+ assert.throws(()=>h.api.ncProfile({...q,identifier:'EX002017'}),/PROFILE_INCOMPLETE/);
 });

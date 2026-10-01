@@ -923,12 +923,18 @@
       fields['Expiration Date']='';
     }
     const addresses=[...main.querySelectorAll('.para-small > .boldSpan')].filter(el=>text(el)==='Address');
-    if(addresses.length!==1)throw new Error('REGISTRY_NC_ADDRESS_INCOMPLETE');
-    // The address label is also a direct span inside a .para-small container.
-    // Read only the nested address block, never the outer label/contact fields.
-    const spans=[...addresses[0].parentElement.querySelectorAll(':scope > .para-small > span')].map(text);
-    if(spans.length!==4)throw new Error('REGISTRY_NC_ADDRESS_INCOMPLETE');
-    [fields.Street,fields.City,fields.State,fields.Zip]=spans;
+    // A completed EX profile explicitly labeled CSL Exempt can omit its
+    // entire address block (observed EX009484). Preserve the absence; the
+    // master still checks identity and may require a user match decision.
+    if(addresses.length===0&&/^EX\d+$/.test(query.identifier)&&fields.Status==='CSL Exempt') {
+      fields.Street=fields.City=fields.State=fields.Zip='';
+    } else {
+      if(addresses.length!==1)throw new Error('REGISTRY_NC_ADDRESS_INCOMPLETE');
+      // Read only the nested address block, never outer contact fields.
+      const spans=[...addresses[0].parentElement.querySelectorAll(':scope > .para-small > span')].map(text);
+      if(spans.length!==4)throw new Error('REGISTRY_NC_ADDRESS_INCOMPLETE');
+      [fields.Street,fields.City,fields.State,fields.Zip]=spans;
+    }
     fields.profile_url=location.href;
     const links=[...main.querySelectorAll('a[href]')].filter(a=>a.getAttribute('href')===location.pathname.replace('charities_profile','charities_filings'));
     return {ok:true,evidence:{query,complete:true,fields},filings_url:links.length===1?new URL(links[0].getAttribute('href'),location.origin).href:null};
