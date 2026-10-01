@@ -12098,6 +12098,14 @@ def mi_name_fallback_queries(org):
         if key not in keys:
             keys.add(key); distinct.append(value)
     planned = distinct[:4]
+    # Matching equivalence is not retrieval equivalence. Prioritize distinct
+    # aliases, then retain literal article/punctuation/suffix fallbacks in
+    # unused slots; the existing completed-zero rule decides what is redundant.
+    for value in variants:
+        if len(planned) >= 4:
+            break
+        if value not in planned:
+            planned.append(value)
     if lab_mi_query_dominance_enabled():
         # Keep the exact bounded query set. A planned broader All-words query
         # goes first so its completed zero can cover narrower versions.
