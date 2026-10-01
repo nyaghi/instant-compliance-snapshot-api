@@ -6620,6 +6620,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                 continue
             if state == "NV" and row["entity_type"] in {
                     "Domestic Corporation (78)", "Domestic Limited Liability Company (86)",
+                    "Foreign Corporation (80)", "Foreign Limited-Liability Company",
                     "NT7 Business License Sole Proprietor"}:
                 # These explicitly labeled business categories are outside the
                 # approved nonprofit-corporation/charity-registration scope.

@@ -829,12 +829,15 @@ class LookupControls(unittest.TestCase):
                     self.assertEqual(result.rejected_candidates[0]['entity_type'], kind)
 
     def test_nv_only_explicit_business_records_finish_as_no_qualifying_registration(self):
-        self.nvrow['entity_type'] = 'Domestic Corporation (78)'
-        result = cc.final_four_browser_lookup(self.orgs['NV'], 'NV', self.provider)
-        self.assertEqual(result.status, 'Not Registered')
-        self.assertTrue(result.success)
-        self.assertTrue(all(q['operation'] == 'search' for q in self.calls))
-        self.assertIn('outside the nonprofit/charity scope', result.source_note)
+        for kind in ['Domestic Corporation (78)','Domestic Limited Liability Company (86)',
+                     'Foreign Corporation (80)','Foreign Limited-Liability Company']:
+            with self.subTest(kind=kind):
+                self.calls.clear();self.nvrow['entity_type'] = kind
+                result = cc.final_four_browser_lookup(self.orgs['NV'], 'NV', self.provider)
+                self.assertEqual(result.status, 'Not Registered')
+                self.assertTrue(result.success)
+                self.assertTrue(all(q['operation'] == 'search' for q in self.calls))
+                self.assertIn('outside the nonprofit/charity scope', result.source_note)
 
     def test_nv_unknown_category_remains_review_even_with_excluded_business(self):
         def mixed(q):
