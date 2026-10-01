@@ -3,6 +3,56 @@ const assert=require('node:assert/strict');
 const vm=require('node:vm');
 const {harness,tick,id}=require('./run_ny_connector_lifecycle.cjs');
 const TRIAL='https://fixture-final-four.onrender.com';
+function nvVisibilityFixture(){
+ const h=fixture(),update=h.chrome.tabs.update,changes=[];
+ h.tabs.get(1).active=true;
+ h.chrome.tabs.query=async q=>[...h.tabs.values()].filter(t=>t.active&&t.windowId===q.windowId);
+ h.chrome.tabs.update=async(id,options)=>{
+  if(options.active){for(const t of h.tabs.values())if(t.windowId===h.tabs.get(id).windowId)t.active=false;changes.push(id);}
+  return update(id,options);
+ };
+ return {h,changes};
+}
+test('NV commands activate only their owned page and restore the prior tab without extra requests',async()=>{
+ const {h,changes}=nvVisibilityFixture(),send=h.chrome.tabs.sendMessage,p=connect(h,'NV');await tick();
+ h.chrome.tabs.sendMessage=async(tab,m)=>{
+  if(m.action==='registry-nv')assert.equal(h.tabs.get(tab).active,true);
+  return send(tab,m);
+ };
+ const search={state:'NV',operation:'search',name:'Example Foundation'};
+ assert.equal((await h.query(p,21,search)).ok,true);
+ assert.equal((await h.query(p,22,{state:'NV',operation:'detail',identifier:'NV20253341584'})).ok,true);
+ assert.equal((await h.query(p,23,{...search,name:'Reviewed Alternate Name'})).ok,true);
+ assert.deepEqual(changes,[h.created[0],1,h.created[0],1,h.created[0],1]);
+ assert.equal(h.calls.filter(c=>c.action==='registry-nv').length,3);
+ assert.equal(h.reloads.length,0);assert.equal(h.tabs.get(1).active,true);
+});
+test('NV visibility restoration preserves a user switching elsewhere during collection',async()=>{
+ const {h,changes}=nvVisibilityFixture(),send=h.chrome.tabs.sendMessage,p=connect(h,'NV');await tick();
+ h.tabs.set(3,{id:3,windowId:10,url:'https://example.com',active:false});
+ h.chrome.tabs.sendMessage=async(tab,m)=>{
+  if(m.action==='registry-nv')await h.chrome.tabs.update(3,{active:true});
+  return send(tab,m);
+ };
+ assert.equal((await h.query(p,21,{state:'NV',operation:'search',name:'Example Foundation'})).ok,true);
+ assert.deepEqual(changes,[h.created[0],3]);assert.equal(h.tabs.get(3).active,true);
+});
+test('NV visibility cannot restore an owned page navigated away from the public registry',async()=>{
+ const {h,changes}=nvVisibilityFixture(),send=h.chrome.tabs.sendMessage,p=connect(h,'NV');await tick();
+ h.chrome.tabs.sendMessage=async(tab,m)=>{
+  const response=await send(tab,m);
+  if(m.action==='registry-nv')h.tabs.get(tab).url='https://example.com/';
+  return response;
+ };
+ assert.equal((await h.query(p,21,{state:'NV',operation:'search',name:'Example Foundation'})).ok,true);
+ assert.deepEqual(changes,[h.created[0]]);
+});
+test('NV visibility correction leaves Tennessee commands and deadlines unchanged',async()=>{
+ const {h,changes}=nvVisibilityFixture(),p=connect(h,'TN');await tick();
+ const response=await h.query(p,21,{state:'TN',operation:'search',name:'Example Foundation'});
+ assert.equal(response.ok,true);assert.deepEqual(changes,[]);
+ assert.equal(h.calls.find(c=>c.action==='registry-tn').budgetMs,45000);
+});
 function event(){const all=[];return {addListener:f=>all.push(f),emit:(...a)=>all.forEach(f=>f(...a))};}
 function connect(h,state,origin=TRIAL,number=1){
   const p={name:`cc-${state.toLowerCase()}-lookup-v1:`+id(number),sender:{id:h.chrome.runtime.id,frameId:0,url:origin+'/',tab:{id:1}},onMessage:event(),onDisconnect:event(),messages:[],disconnected:false,

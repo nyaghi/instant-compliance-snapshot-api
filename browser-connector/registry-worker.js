@@ -157,6 +157,31 @@ async function registryIllinoisVerification(job, collect) {
     } catch { /* A user may close or move either tab during collection. */ }
   }
 }
+async function registryNevadaVisibility(job) {
+  // ORION's public form restoration stalled in hidden tabs, while identical
+  // complete aliases finished in 39/37 seconds in visible Standard/Sales
+  // controls. Activate only our trial-owned page for this bounded command.
+  if (!P.TRIAL_ORIGIN || job.registryState !== 'NV' || job.closed || !owned.has(job.tab)) return null;
+  try {
+    const tab=await chrome.tabs.get(job.tab), source=await chrome.tabs.get(job.sender.tab.id);
+    if (tab.active || tab.windowId!==source.windowId || new URL(tab.url).origin!==registryOrigin('NV')
+        || new URL(tab.url).pathname!=='/portal/public/') return null;
+    const prior=(await chrome.tabs.query({active:true,windowId:tab.windowId}))[0];
+    if (!prior || prior.id===tab.id || job.closed || !owned.has(job.tab)) return null;
+    await chrome.tabs.update(tab.id,{active:true});
+    diagnostic('nv-visibility',job,'same owned public document during command');
+    return {id:prior.id,windowId:prior.windowId};
+  } catch { return null; }
+}
+async function restoreNevadaVisibility(job, previous) {
+  if (!previous) return;
+  try {
+    const tab=await chrome.tabs.get(job.tab), prior=await chrome.tabs.get(previous.id);
+    if (owned.has(job.tab) && tab.active && tab.windowId===previous.windowId && prior.windowId===tab.windowId
+        && new URL(tab.url).origin===registryOrigin('NV') && new URL(tab.url).pathname==='/portal/public/')
+      await chrome.tabs.update(prior.id,{active:true});
+  } catch { /* Preserve user navigation, tab movement or closure. */ }
+}
 async function performRegistryQuery(job, query) {
   if (!P.validQuery(query) || query.state !== job.registryState || !P.registryAllowed(query.state,new URL(job.sender.url).origin)) throw new Error("NY_CONNECTOR_INVALID_SEQUENCE");
   if(query.state==='NM') {
@@ -203,6 +228,12 @@ async function performRegistryQuery(job, query) {
   }
   if (query.state === "NC") return registryNorthCarolinaQuery(job,query);
   if (["NV", "TN"].includes(query.state)) {
+    if (query.state==='NV' && job.tab===null && query.operation==='search') {
+      await registryNavigate(job,registryStart('NV'));
+      job.finalFourReusableForm=true;
+    }
+    const nvPrevious=query.state==='NV'?await registryNevadaVisibility(job):null;
+    try {
     if (query.state==='NV' && job.nvReservationDetail) {
       // ORION reservation Back leads to ExistingBusinessFilings and sign-in,
       // not public search. Reopen the known public form, within this job's
@@ -251,6 +282,7 @@ async function performRegistryQuery(job, query) {
     // detail route, so its next name search uses the public Return To Search.
     job.finalFourReusableForm = response?.ok === true && (query.state === "TN" || query.operation === "search");
     return response;
+    } finally { await restoreNevadaVisibility(job,nvPrevious); }
   }
   if (query.state === "IL") {
     // Keep one ordinary search form through the same organization's fallbacks.

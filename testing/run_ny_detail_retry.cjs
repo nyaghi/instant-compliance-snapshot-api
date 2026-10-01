@@ -1,5 +1,5 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
-const sandbox=vm.createContext({URL,module:{exports:{}},require:n=>n==='node:test'?{test:()=>{}}:require(n),__dirname,setImmediate});
+const sandbox=vm.createContext({URL,module:{exports:{}},require:n=>n==='node:test'?{test:()=>{}}:require(n),__dirname,setImmediate,process:{env:{CC_TEST_TRIAL_DIR:process.env.CC_TEST_TRIAL_DIR}}});
 vm.runInContext(fs.readFileSync(__dirname+'/run_ny_connector_lifecycle.cjs','utf8'),sandbox);
 const harness=()=>vm.runInContext('harness()',sandbox);
 for (const persistent of [false,true]) test(`detail timeout reloads exact observed page once; persistent=${persistent}`,async()=>{
