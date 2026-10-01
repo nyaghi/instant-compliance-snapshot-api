@@ -238,17 +238,21 @@ const source=SOURCE;
                 child={};cc.attach_identity_review(child,{'records':[row]})
                 self.assertIn('_worker_identity_review',child);self.assertNotIn('identity_review',child)
 
-    def test_separate_connector_package_has_no_production_staging_or_ny_access(self):
+    def test_trial_package_keeps_app_isolation_and_grants_only_the_reviewed_recovery_permissions(self):
         before=(ROOT/'browser-connector/manifest.json').read_bytes()
         with tempfile.TemporaryDirectory() as tmp:
             output=Path(tmp)/'trial'
             result=build(TRIAL['origin'],output)
             manifest=json.loads((output/'manifest.json').read_text(encoding='utf-8'))
-            self.assertEqual(manifest['version'],'0.6.31')
-            self.assertEqual(manifest['permissions'],['storage'])
+            self.assertEqual(manifest['version'],'0.6.32')
+            self.assertEqual(manifest['permissions'],['storage','browsingData','cookies'])
             text=json.dumps(manifest)
-            for banned in ['staging.compliance-express.com','www.compliance-express.com','cookies','browsingData']:
+            for banned in ['staging.compliance-express.com','www.compliance-express.com','<all_urls>']:
                 self.assertNotIn(banned,text)
+            self.assertIn('https://charities-search.ag.ny.gov/RegistrySearch*',manifest['host_permissions'])
+            recovery=(output/'recovery.js').read_text(encoding='utf-8')
+            self.assertIn('origins: [ORIGIN]',recovery)
+            self.assertIn('cookie.hostOnly === true',recovery)
             self.assertEqual(next(c['matches'] for c in manifest['content_scripts'] if 'staging-bridge.js' in c['js']),[TRIAL['origin']+'/*'])
             self.assertTrue(Path(result['zip']).is_file())
             for file in output.glob('*.js'):

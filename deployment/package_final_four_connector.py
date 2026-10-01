@@ -49,9 +49,9 @@ def build(origin, destination):
         data=text.encode('utf-8');(destination/name).write_bytes(data)
         hashes[name]=hashlib.sha256(data).hexdigest()
     manifest={
-        'manifest_version':3,'name':'CharityClarity — Isolated 29.2P Trial Connector','version':'0.6.31','minimum_chrome_version':'132',
-        'description':'Public registry access for the isolated CharityClarity 29.2P trial.',
-        'permissions':['storage'],'host_permissions':[origin+'/*',*MATCHES,'https://charities-search.ag.ny.gov/RegistrySearch*'],
+        'manifest_version':3,'name':'CharityClarity — Isolated 29.2Q Trial Connector','version':'0.6.32','minimum_chrome_version':'132',
+        'description':'Public registry access for the isolated CharityClarity 29.2Q trial.',
+        'permissions':['storage','browsingData','cookies'],'host_permissions':[origin+'/*',*MATCHES,'https://charities-search.ag.ny.gov/RegistrySearch*'],
         'incognito':'not_allowed','background':{'service_worker':'worker.js'},
         'content_scripts':[
             {'matches':['https://charities-search.ag.ny.gov/RegistrySearch*'],'js':['protocol.js','ny-main.js'],'run_at':'document_start','world':'MAIN'},
@@ -62,13 +62,13 @@ def build(origin, destination):
         ],
     }
     (destination/'manifest.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
-    (destination/'build-evidence.json').write_text(json.dumps({'origin':origin,'version':'0.6.31','files':hashes,
+    (destination/'build-evidence.json').write_text(json.dumps({'origin':origin,'version':'0.6.32','files':hashes,
         'installed_connector_untouched':True,'ny_uses_lab_backend':False},indent=2),encoding='utf-8')
     archive=destination.parent/(destination.name+'.zip')
     if archive.exists():raise ValueError('Refusing to overwrite an existing trial archive')
     with zipfile.ZipFile(archive,'x',zipfile.ZIP_DEFLATED) as package:
         for file in destination.iterdir():package.write(file,file.name)
-    return {'directory':str(destination),'zip':str(archive),'origin':origin,'version':'0.6.31'}
+    return {'directory':str(destination),'zip':str(archive),'origin':origin,'version':'0.6.32'}
 
 
 if __name__=='__main__':
