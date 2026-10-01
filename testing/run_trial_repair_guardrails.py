@@ -138,6 +138,31 @@ class Repairs(unittest.TestCase):
         for row in [['','Registration Submitted','11/16/2018'],['201','Charity Added to COROS','11/16/2018'],
                     ['','Charity Added to COROS','not a date']]:
             with self.assertRaises(ValueError):cc.nm_browser_clean_evidence({**data,'history_rows':[row]},q)
+    def test_nm_observed_unassigned_submission_does_not_replace_filing_period(self):
+        fixture=json.loads((Path(__file__).parent/'fixtures/nm-make-wish-20261001.json').read_text())
+        org=cc.checker.Organization('Make-A-Wish Foundation of America','86-0481941')
+        def source(q):
+            if q['operation']=='search':
+                return {'query':q,'complete':True,'rows':[{'name':org.organization_name,'ein':'860481941'}],'total':1}
+            return {'query':q,'complete':True,'name':org.organization_name,'ein':'860481941',
+                    'history_rows':fixture['history_rows'],'financial_periods':fixture['financial_periods']}
+        result=cc.nm_browser_lookup(org,source)
+        module=cc.load_wa_nm_module()
+        year_rows=[(int(y),s,d) for y,s,d in fixture['history_rows'] if y]
+        self.assertEqual(module.nm_latest_submitted(year_rows)[0],2024)
+        baseline=module.SearchResult(org.organization_name,org.ein,'NM',module.STATUS_UNKNOWN,'','','')
+        baseline.matched_registry_name=org.organization_name;baseline.matched_registry_identifier=org.ein
+        baseline=cc.nm_apply_status_history_master(module,baseline,year_rows,fye_text='8/31/2025')
+        self.assertEqual(result.status,cc.copy_external_result(org,'NM',baseline).status)
+        self.assertNotIn(result.status,{'Not Registered','Unknown','Unable to Confirm'})
+        q={'state':'NM','operation':'detail','identifier':'860481941','name':org.organization_name}
+        data=source(q)
+        self.assertEqual(cc.nm_browser_clean_evidence(data,q)['history_rows'],fixture['history_rows'])
+        for label in ['Registration Submitted','Registration Submitted 20244122623260437',
+                      'Registration Submitted 0000412211896704','Extension Granted']:
+            with self.assertRaises(ValueError):
+                cc.nm_browser_clean_evidence({**data,'history_rows':[['',label,'7/8/2021']]},q)
+
     def test_nv_composite_name_is_retained_for_detail_not_accepted(self):
         name='American Public Gardens Association'
         row={'name':name+', American Association of Botanical Gardens and Arboreta',

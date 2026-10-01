@@ -6799,7 +6799,8 @@ def nm_browser_clean_evidence(payload, query):
         for row in rows:
             if (not isinstance(row, list) or len(row) != 3 or not all(public_text(v) for v in row)
                     or not (re.fullmatch(r'20[0-9]{2}', row[0])
-                            or (row[0] == '' and row[1] == 'Charity Added to COROS'))
+                            or (row[0] == '' and (row[1] == 'Charity Added to COROS'
+                                or re.fullmatch(r'Registration Submitted 0000[0-9]{13}', row[1]))))
                     or parse_due_date(row[2]) is None or not row[1].strip()):
                 raise ValueError('Invalid New Mexico history row')
         for period in periods:
@@ -6831,9 +6832,9 @@ def nm_browser_lookup(org, evidence):
         query = {'state': 'NM', 'operation': 'detail', 'identifier': ein, 'name': selected['name']}
         detail = nm_browser_clean_evidence(evidence(query), query)
         module = load_wa_nm_module()
-        # COROS's dated administrative enrollment row has no tax year. Keep it
-        # in validated source evidence, but it cannot establish a filing cycle
-        # or the original legal registration date.
+        # COROS's enrollment row and observed 0000-prefixed unassigned-year
+        # submissions have no tax year. Preserve their dated source evidence;
+        # neither can establish a filing cycle or original registration date.
         rows = [(int(year), status, when) for year, status, when in detail['history_rows'] if year]
         submitted = module.nm_latest_submitted(rows)
         periods = {p['period_end'] for p in detail['financial_periods']

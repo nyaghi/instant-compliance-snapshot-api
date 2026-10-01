@@ -1,0 +1,533 @@
+{
+  "financial_periods": [
+    {
+      "period_end": "8/31/2025",
+      "period_start": "9/1/2024",
+      "tax_year": 2024
+    },
+    {
+      "period_end": "8/31/2024",
+      "period_start": "9/1/2023",
+      "tax_year": 2023
+    },
+    {
+      "period_end": "8/31/2023",
+      "period_start": "9/1/2022",
+      "tax_year": 2022
+    },
+    {
+      "period_end": "8/31/2022",
+      "period_start": "9/1/2021",
+      "tax_year": 2021
+    },
+    {
+      "period_end": "8/31/2021",
+      "period_start": "9/1/2020",
+      "tax_year": 2020
+    },
+    {
+      "period_end": "8/31/2020",
+      "period_start": "9/1/2019",
+      "tax_year": 2019
+    },
+    {
+      "period_end": "8/31/2019",
+      "period_start": "9/1/2018",
+      "tax_year": 2018
+    },
+    {
+      "period_end": "8/31/2018",
+      "period_start": "9/1/2017",
+      "tax_year": 2017
+    },
+    {
+      "period_end": "8/31/2017",
+      "period_start": "9/1/2016",
+      "tax_year": 2016
+    },
+    {
+      "period_end": "8/31/2016",
+      "period_start": "9/1/2015",
+      "tax_year": 2015
+    },
+    {
+      "period_end": "8/31/2015",
+      "period_start": "9/1/2014",
+      "tax_year": 2014
+    },
+    {
+      "period_end": "8/31/2014",
+      "period_start": "9/1/2013",
+      "tax_year": 2013
+    },
+    {
+      "period_end": "8/31/2013",
+      "period_start": "9/1/2012",
+      "tax_year": 2012
+    },
+    {
+      "period_end": "8/31/2012",
+      "period_start": "9/1/2011",
+      "tax_year": 2011
+    },
+    {
+      "period_end": "8/31/2011",
+      "period_start": "9/1/2010",
+      "tax_year": 2010
+    },
+    {
+      "period_end": "8/31/2010",
+      "period_start": "9/1/2009",
+      "tax_year": 2009
+    }
+  ],
+  "heading": "Make-A-Wish Foundation of America (86-0481941)",
+  "history_rows": [
+    [
+      "2025",
+      "Tax Year Registration Open",
+      "9/1/2026"
+    ],
+    [
+      "2024",
+      "Registration Submitted 20244122623260437",
+      "8/20/2026"
+    ],
+    [
+      "2024",
+      "Extension Granted",
+      "10/28/2025"
+    ],
+    [
+      "2024",
+      "Extension Granted",
+      "10/28/2025"
+    ],
+    [
+      "2024",
+      "Extension Requested",
+      "10/27/2025"
+    ],
+    [
+      "2024",
+      "Tax Year Registration Open",
+      "9/1/2025"
+    ],
+    [
+      "2023",
+      "Registration Submitted 20234122518432461",
+      "7/3/2025"
+    ],
+    [
+      "2023",
+      "Extension Granted",
+      "1/15/2025"
+    ],
+    [
+      "2023",
+      "Extension Requested",
+      "1/15/2025"
+    ],
+    [
+      "2023",
+      "Tax Year Registration Open",
+      "9/1/2024"
+    ],
+    [
+      "2022",
+      "Registration Submitted 20224122418438996",
+      "7/2/2024"
+    ],
+    [
+      "2022",
+      "Extension Granted",
+      "1/2/2024"
+    ],
+    [
+      "2022",
+      "Extension Requested",
+      "1/2/2024"
+    ],
+    [
+      "2022",
+      "Tax Year Registration Open",
+      "9/1/2023"
+    ],
+    [
+      "2021",
+      "Registration Submitted 20214122322345333",
+      "8/11/2023"
+    ],
+    [
+      "2021",
+      "Extension Granted",
+      "1/4/2023"
+    ],
+    [
+      "2021",
+      "Extension Requested",
+      "1/4/2023"
+    ],
+    [
+      "2021",
+      "Tax Year Registration Open",
+      "9/1/2022"
+    ],
+    [
+      "2020",
+      "Registration Submitted 20204122221343029",
+      "8/1/2022"
+    ],
+    [
+      "2020",
+      "Extension Granted",
+      "2/1/2022"
+    ],
+    [
+      "2020",
+      "Extension Requested",
+      "2/1/2022"
+    ],
+    [
+      "2020",
+      "Tax Year Registration Open",
+      "9/1/2021"
+    ],
+    [
+      "2019",
+      "Registration Submitted 20194122121856943",
+      "8/6/2021"
+    ],
+    [
+      "2019",
+      "Extension Granted",
+      "2/5/2021"
+    ],
+    [
+      "2019",
+      "Extension Requested",
+      "2/5/2021"
+    ],
+    [
+      "2019",
+      "Tax Year Registration Open",
+      "9/1/2020"
+    ],
+    [
+      "2018",
+      "Registration Submitted 20184122118967051",
+      "7/8/2021"
+    ],
+    [
+      "2018",
+      "Extension Granted",
+      "7/8/2021"
+    ],
+    [
+      "2018",
+      "Extension Requested",
+      "7/8/2021"
+    ],
+    [
+      "2018",
+      "Reinstatement Issued",
+      "7/8/2021"
+    ],
+    [
+      "2018",
+      "Registration Submission Delinquent",
+      "3/1/2020"
+    ],
+    [
+      "2018",
+      "Tax Year Registration Open",
+      "9/1/2019"
+    ],
+    [
+      "2017",
+      "Registration Submitted 20174121925647301",
+      "9/13/2019"
+    ],
+    [
+      "2017",
+      "Extension Granted",
+      "9/13/2019"
+    ],
+    [
+      "2017",
+      "Extension Requested",
+      "9/13/2019"
+    ],
+    [
+      "2017",
+      "Reinstatement Issued",
+      "9/13/2019"
+    ],
+    [
+      "2017",
+      "Registration Submission Delinquent",
+      "3/1/2019"
+    ],
+    [
+      "2017",
+      "Tax Year Registration Open",
+      "9/1/2018"
+    ],
+    [
+      "2016",
+      "Registration Submitted 20164121925647296",
+      "9/13/2019"
+    ],
+    [
+      "2016",
+      "Extension Granted",
+      "9/13/2019"
+    ],
+    [
+      "2016",
+      "Extension Requested",
+      "9/13/2019"
+    ],
+    [
+      "2016",
+      "Reinstatement Issued",
+      "9/13/2019"
+    ],
+    [
+      "2016",
+      "Registration Submission Delinquent",
+      "3/1/2018"
+    ],
+    [
+      "2016",
+      "Tax Year Registration Open",
+      "9/1/2017"
+    ],
+    [
+      "2015",
+      "Registration Submitted 20154121925647290",
+      "9/13/2019"
+    ],
+    [
+      "2015",
+      "Extension Granted",
+      "9/13/2019"
+    ],
+    [
+      "2015",
+      "Extension Requested",
+      "9/13/2019"
+    ],
+    [
+      "2015",
+      "Reinstatement Issued",
+      "9/13/2019"
+    ],
+    [
+      "2015",
+      "Registration Submission Delinquent",
+      "3/1/2017"
+    ],
+    [
+      "2015",
+      "Tax Year Registration Open",
+      "9/1/2016"
+    ],
+    [
+      "2014",
+      "Registration Submitted 20144121609033074",
+      "3/30/2016"
+    ],
+    [
+      "2014",
+      "Extension Granted",
+      "2/4/2016"
+    ],
+    [
+      "2014",
+      "Extension Requested",
+      "2/4/2016"
+    ],
+    [
+      "2014",
+      "Tax Year Registration Open",
+      "9/1/2015"
+    ],
+    [
+      "2013",
+      "Registration Submitted 20134131604832803",
+      "2/17/2016"
+    ],
+    [
+      "2013",
+      "Extension Granted",
+      "2/17/2016"
+    ],
+    [
+      "2013",
+      "Extension Requested",
+      "2/17/2016"
+    ],
+    [
+      "2013",
+      "Reinstatement Issued",
+      "2/17/2016"
+    ],
+    [
+      "2013",
+      "Registration Submission Delinquent",
+      "5/30/2015"
+    ],
+    [
+      "2013",
+      "Extension Granted",
+      "3/3/2015"
+    ],
+    [
+      "2013",
+      "Extension Requested",
+      "3/3/2015"
+    ],
+    [
+      "2013",
+      "Extension Granted",
+      "3/3/2015"
+    ],
+    [
+      "2013",
+      "Extension Requested",
+      "3/3/2015"
+    ],
+    [
+      "2013",
+      "Extension Granted",
+      "2/20/2015"
+    ],
+    [
+      "2013",
+      "Extension Requested",
+      "2/20/2015"
+    ],
+    [
+      "2013",
+      "Tax Year Registration Open",
+      "9/1/2014"
+    ],
+    [
+      "2012",
+      "Registration Submitted 20124131604832834",
+      "2/17/2016"
+    ],
+    [
+      "2012",
+      "Extension Granted",
+      "2/17/2016"
+    ],
+    [
+      "2012",
+      "Extension Requested",
+      "2/17/2016"
+    ],
+    [
+      "2012",
+      "Reinstatement Issued",
+      "2/17/2016"
+    ],
+    [
+      "2012",
+      "Registration Submission Delinquent",
+      "5/30/2014"
+    ],
+    [
+      "2012",
+      "Extension Granted",
+      "2/20/2014"
+    ],
+    [
+      "2012",
+      "Extension Requested",
+      "2/20/2014"
+    ],
+    [
+      "2012",
+      "Tax Year Registration Open",
+      "9/1/2013"
+    ],
+    [
+      "2011",
+      "Registration Submitted 20114131604832855",
+      "2/17/2016"
+    ],
+    [
+      "2011",
+      "Extension Granted",
+      "2/17/2016"
+    ],
+    [
+      "2011",
+      "Extension Requested",
+      "2/17/2016"
+    ],
+    [
+      "2011",
+      "Reinstatement Issued",
+      "2/17/2016"
+    ],
+    [
+      "2011",
+      "Registration Submission Delinquent",
+      "3/1/2013"
+    ],
+    [
+      "2011",
+      "Tax Year Registration Open",
+      "9/1/2012"
+    ],
+    [
+      "2010",
+      "Registration Submitted 20104131604832874",
+      "2/17/2016"
+    ],
+    [
+      "2010",
+      "Extension Granted",
+      "2/17/2016"
+    ],
+    [
+      "2010",
+      "Extension Requested",
+      "2/17/2016"
+    ],
+    [
+      "2010",
+      "Reinstatement Issued",
+      "2/17/2016"
+    ],
+    [
+      "2010",
+      "Registration Submission Delinquent",
+      "3/1/2012"
+    ],
+    [
+      "2010",
+      "Tax Year Registration Open",
+      "10/10/2011"
+    ],
+    [
+      "2009",
+      "Registration Submitted 20094131604832880",
+      "2/17/2016"
+    ],
+    [
+      "",
+      "Registration Submitted 00004122118967042",
+      "7/8/2021"
+    ],
+    [
+      "",
+      "Charity Added to COROS",
+      "10/10/2011"
+    ]
+  ],
+  "source_url": "https://secure.nmdoj.gov/CharitySearch/CharityDetail.aspx?FEIN=86-0481941"
+}
