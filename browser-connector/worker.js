@@ -3,6 +3,11 @@ const P = CCNYProtocol;
 const QUEUE_TTL = 1200000, ACTIVE_TTL = 300000, PACE_MS = 3000;
 const REPAIR_INTERVAL = 1200000;
 let active = null, nextStart = 0, pumpTimer = null;
+// The approved connector retains its single lane. The isolated trial admits
+// one job per registry, so a slow registry cannot strand a different state.
+const activeLanes = new Map(), laneStarts = new Map();
+const allJobs = () => [...(P.TRIAL_ORIGIN ? activeLanes.values() : [active]), ...queue].filter(Boolean);
+const isActive = job => !!job && (P.TRIAL_ORIGIN ? activeLanes.get(job.registryState) === job : active === job);
 const queue = [];
 let repair = {}, saving = Promise.resolve();
 const owned = new Set();
@@ -18,14 +23,14 @@ function armTrialAlIdle() {
 }
 const diagnostics = [];
 function diagnostic(type, job, detail = "") {
-  diagnostics.push({ at: Date.now(), type, id: job?.lookupId || "", phase: job?.pending ? "search" : job === active ? "active" : "queued", detail: String(detail).slice(0, 180) });
+  diagnostics.push({ at: Date.now(), type, id: job?.lookupId || "", phase: job?.pending ? "search" : isActive(job) ? "active" : "queued", detail: String(detail).slice(0, 180) });
   if (diagnostics.length > 80) diagnostics.shift();
 }
 function keepAlive() {
-  if (keepAliveTimer || ![active, ...queue].some(j => j && !j.closed)) return;
+  if (keepAliveTimer || !allJobs().some(j => j && !j.closed)) return;
   keepAliveTimer = setTimeout(async () => {
     keepAliveTimer = null;
-    if (![active, ...queue].some(j => j && !j.closed)) return;
+    if (!allJobs().some(j => j && !j.closed)) return;
     // A bounded active operation must not depend on timers in hidden pages.
     try { await chrome.storage.session.get("ccnyRuntime"); } catch (e) { diagnostic("keepalive-error", active, e.message); }
     keepAlive();
@@ -34,10 +39,10 @@ function keepAlive() {
 const rejected = reason => ["NY_CONNECTOR_VERIFICATION_REJECTED", "NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED"].includes(reason);
 const recoveryFailure = reason => rejected(reason) ? "NY_CONNECTOR_RECOVERY_REJECTED" :
   typeof reason === "string" && /^NY_CONNECTOR_[A-Z_]+$/.test(reason) ? reason : "NY_CONNECTOR_INCOMPLETE";
-const runtimeState = () => ({ schema: 2, nextStart, ownedTabs: [...owned], diagnostics: [...diagnostics], queue: [active, ...queue].filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, expiresAt: j.expiresAt, active: j === active, activeExpiresAt: j.activeExpiresAt, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, detailRetryUsed: j.detailRetryUsed, retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.registryState === "AL" ? null : j.command, lastResponse: j.registryState === "AL" ? null : j.lastResponse, queryRepaired: j.queryRepaired, nvReturnRecoveryUsed: j.nvReturnRecoveryUsed })) });
+const runtimeState = () => ({ schema: 2, nextStart, laneStarts: Object.fromEntries(laneStarts), ownedTabs: [...owned], diagnostics: [...diagnostics], queue: allJobs().filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, expiresAt: j.expiresAt, active: isActive(j), activeExpiresAt: j.activeExpiresAt, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, detailRetryUsed: j.detailRetryUsed, retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.registryState === "AL" ? null : j.command, lastResponse: j.registryState === "AL" ? null : j.lastResponse, queryRepaired: j.queryRepaired, nvReturnRecoveryUsed: j.nvReturnRecoveryUsed })) });
 function saveRuntime() {
   keepAlive();
-  if (!active && !queue.length && keepAliveTimer) { clearTimeout(keepAliveTimer); keepAliveTimer = null; }
+  if (!allJobs().length && keepAliveTimer) { clearTimeout(keepAliveTimer); keepAliveTimer = null; }
   const value = runtimeState();
   if (P.TRIAL_ORIGIN && trialAlIdle) value.trialAlIdle=trialAlIdle;
   saving = saving.catch(() => {}).then(() => chrome.storage.session.set({ ccnyRuntime: value })); return saving;
@@ -78,6 +83,7 @@ const boot = (async () => {
   if (previous?.schema === 2) {
     diagnostics.push(...(previous.diagnostics || []).slice(-70));
     nextStart = Number(previous.nextStart) || 0;
+    for (const [state, start] of Object.entries(previous.laneStarts || {})) if (Number.isFinite(start)) laneStarts.set(state,start);
     for (const saved of previous.queue || []) {
       if (!P.validId(saved.id) || !Number.isInteger(saved.tabId) || !Number.isFinite(saved.expiresAt)) continue;
       let sourceTab;
@@ -88,7 +94,8 @@ const boot = (async () => {
       if (!allowedSender(sourceSender) || !P.registryAllowed(saved.registryState || "NY",new URL(sourceTab.url).origin)) continue;
       const { id, tabId, documentId, active: wasActive, ...state } = saved;
       const job = newJob(sourceSender, id, !!saved.refreshOnly, state);
-      if (wasActive && !active) active = job; else queue.push(job);
+      if (wasActive && P.TRIAL_ORIGIN && !activeLanes.has(job.registryState)) activeLanes.set(job.registryState,job);
+      else if (wasActive && !P.TRIAL_ORIGIN && !active) active=job; else queue.push(job);
       arm(job);
       awaitReconnect(job);
     }
@@ -96,12 +103,12 @@ const boot = (async () => {
   for (const id of previous?.ownedTabs || []) if (Number.isInteger(id)) owned.add(id);
   const idle=previous?.trialAlIdle;
   if (P.TRIAL_ORIGIN && Number.isInteger(idle?.id) && owned.has(idle.id) && Number.isFinite(idle.expiresAt)
-      && Date.now()<idle.expiresAt && idle.expiresAt<=Date.now()+1800000 && ![active,...queue].some(j=>j?.tab===idle.id)) {
+      && Date.now()<idle.expiresAt && idle.expiresAt<=Date.now()+1800000 && !allJobs().some(j=>j?.tab===idle.id)) {
     try {const tab=await chrome.tabs.get(idle.id);if(tab.url===registryStart('AL')) {trialAlIdle=idle;armTrialAlIdle();}} catch {}
   }
-  for (const id of [...owned]) if (![active, ...queue].some(j => j?.tab === id) && trialAlIdle?.id!==id) await removeOwned(id);
+  for (const id of [...owned]) if (!allJobs().some(j => j?.tab === id) && trialAlIdle?.id!==id) await removeOwned(id);
   if (repair.phase === "repairing") await saveRepair({ ...repair, phase: "failed", reason: "NY_CONNECTOR_INTERRUPTED" });
-  diagnostic("worker-start", active, `restored=${[active, ...queue].filter(Boolean).length}`);
+  diagnostic("worker-start", active, `restored=${allJobs().filter(Boolean).length}`);
   await saveRuntime();
 })();
 // A failed initialization must fail requests explicitly, never reset the budget.
@@ -118,25 +125,40 @@ function notifyQueue() {
   });
 }
 function pump() {
-  if (active || pumpTimer || !queue.length) return;
-  const delay = Math.max(0, nextStart - Date.now());
-  if (delay) { pumpTimer = setTimeout(() => { pumpTimer = null; pump(); }, delay); return; }
-  // Preserve FIFO while the old page reconnects; original queue expiry still applies.
-  if (!queue[0].port) return;
-  const job = queue.shift();
-  if (job.closed) { pump(); return; }
-  if (job.registryState === "NY" && !job.refreshOnly && repair.phase === "failed" && repair.nextAllowedAt > Date.now()) {
-    close(job, repair.reason || "NY_CONNECTOR_RECOVERY_REJECTED"); return;
+  if (pumpTimer || !queue.length) return;
+  const running=P.TRIAL_ORIGIN?activeLanes.size:Number(!!active);
+  const cap=P.TRIAL_ORIGIN?8:1;
+  if(running>=cap)return;
+  let earliest=Infinity,index=-1;
+  for(let i=0;i<queue.length;i++) {
+    const job=queue[i];
+    if(job.closed)continue;
+    if(P.TRIAL_ORIGIN && activeLanes.has(job.registryState))continue;
+    // Preserve FIFO within a registry, even while its old page reconnects.
+    if(P.TRIAL_ORIGIN && queue.slice(0,i).some(j=>!j.closed&&j.registryState===job.registryState))continue;
+    if(!job.port)continue;
+    const start=P.TRIAL_ORIGIN?(laneStarts.get(job.registryState)||0):nextStart;
+    if(start<=Date.now()){index=i;break;}
+    earliest=Math.min(earliest,start);
+    if(!P.TRIAL_ORIGIN)break;
   }
-  active = job;
-  diagnostic("admitted",job,`${job.registryState} queue_ms=${Date.now()-job.enqueuedAt}`);
-  job.activeExpiresAt ??= Date.now() + ACTIVE_TTL;
+  if(index<0) {
+    if(Number.isFinite(earliest))pumpTimer=setTimeout(()=>{pumpTimer=null;pump();},Math.max(0,earliest-Date.now()));
+    return;
+  }
+  const job=queue.splice(index,1)[0];
+  if(job.registryState==='NY'&&!job.refreshOnly&&repair.phase==='failed'&&repair.nextAllowedAt>Date.now()){
+    close(job,repair.reason||'NY_CONNECTOR_RECOVERY_REJECTED');return;
+  }
+  if(P.TRIAL_ORIGIN)activeLanes.set(job.registryState,job);else active=job;
+  diagnostic('admitted',job,`${job.registryState} queue_ms=${Date.now()-job.enqueuedAt}`);
+  job.activeExpiresAt ??= Date.now()+ACTIVE_TTL;
   arm(job);
-  saveRuntime().then(() => {
-    if (job.closed) return;
-    if (job.acquireId) post(job, { id: job.acquireId, ok: true });
-    notifyQueue();
-  }).catch(() => close(job, "NY_CONNECTOR_INTERRUPTED"));
+  saveRuntime().then(()=>{
+    if(job.closed)return;
+    if(job.acquireId)post(job,{id:job.acquireId,ok:true});
+    notifyQueue();pump();
+  }).catch(()=>close(job,'NY_CONNECTOR_INTERRUPTED'));
 }
 async function close(job, reason, finishId) {
   if (job.closed) return;
@@ -165,7 +187,10 @@ async function close(job, reason, finishId) {
   try { await Promise.race([cleanup, new Promise(resolve => { cleanupTimer = setTimeout(resolve, 10000); })]); }
   catch { /* Closing a vanished tab must not strand other organizations. */ }
   finally { clearTimeout(cleanupTimer); }
-  if (active === job) { active = null; nextStart = Date.now() + PACE_MS; }
+  if (isActive(job)) {
+    if (P.TRIAL_ORIGIN) {activeLanes.delete(job.registryState);laneStarts.set(job.registryState,Date.now()+PACE_MS);}
+    else {active=null;nextStart=Date.now()+PACE_MS;}
+  }
   if (finishId) post(job, { id: finishId, ok: true });
   try { job.port.disconnect(); } catch {}
   notifyQueue();
@@ -264,7 +289,7 @@ async function performSearch(job, query, id) {
   if (job.command?.id === id && !P.sameQuery(job.command.query, query)) { post(job, { id, ok: false, reason: "NY_CONNECTOR_INVALID_SEQUENCE" }); return; }
   if (job.lastResponse?.id === id && P.sameQuery(job.command?.query, query)) { post(job, job.lastResponse); return; }
   if (job.pending === id && P.sameQuery(job.command?.query, query)) { post(job, { id, progress: true, reconnecting: true }); return; }
-  if (active !== job || job.pending) { post(job, { id, ok: false, reason: "NY_CONNECTOR_INVALID_SEQUENCE" }); return; }
+  if (!isActive(job) || job.pending) { post(job, { id, ok: false, reason: "NY_CONNECTOR_INVALID_SEQUENCE" }); return; }
   if (job.command?.id !== id) { job.queryRepaired = false; job.lastResponse = null; }
   job.command = { id, query };
   job.pending = id;
@@ -366,7 +391,7 @@ async function performRefresh(job, id) {
   if (job.closed) return;
   if (job.refreshOnly && job.lastResponse?.id === id) { post(job, job.lastResponse); return; }
   if (job.refreshOnly && job.pending === id) { post(job, { id, progress: true, reconnecting: true }); return; }
-  if (active !== job || job.pending || !job.refreshOnly) { post(job, { id, ok: false, reason: "NY_CONNECTOR_INVALID_SEQUENCE" }); return; }
+  if (!isActive(job) || job.pending || !job.refreshOnly) { post(job, { id, ok: false, reason: "NY_CONNECTOR_INVALID_SEQUENCE" }); return; }
   job.command = { id, action: "refresh" };
   job.pending = id;
   let response;
@@ -399,7 +424,7 @@ async function performRefresh(job, id) {
 }
 chrome.tabs.onRemoved.addListener(id => {
   if (trialAlIdle?.id===id) {trialAlIdle=null;owned.delete(id);clearTimeout(trialAlIdleTimer);saveRuntime().catch(()=>{});}
-  for (const job of [active, ...queue]) {
+  for (const job of allJobs()) {
     if (job && !job.closed && (job.tab === id || job.sender.tab.id === id)) close(job, "NY_CONNECTOR_BROWSER_CLOSED");
   }
 });
@@ -410,7 +435,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
 });
 chrome.runtime.onConnect.addListener(port => {
   const resume = port.name.startsWith("cc-ny-resume-v1:");
-  const registryState = port.name.startsWith("cc-il-lookup-v1:") ? "IL" : port.name.startsWith("cc-ga-lookup-v1:") ? "GA" : port.name.startsWith("cc-al-lookup-v1:") ? "AL" : port.name.startsWith("cc-nc-lookup-v1:") ? "NC" : port.name.startsWith("cc-nv-lookup-v1:") ? "NV" : port.name.startsWith("cc-tn-lookup-v1:") ? "TN" : "NY";
+  const registryState = port.name.startsWith("cc-il-lookup-v1:") ? "IL" : port.name.startsWith("cc-ga-lookup-v1:") ? "GA" : port.name.startsWith("cc-al-lookup-v1:") ? "AL" : port.name.startsWith("cc-nc-lookup-v1:") ? "NC" : port.name.startsWith("cc-nv-lookup-v1:") ? "NV" : port.name.startsWith("cc-tn-lookup-v1:") ? "TN" : port.name.startsWith("cc-nm-lookup-v1:") ? "NM" : "NY";
   if (!allowedSender(port.sender) || (!resume && !P.registryAllowed(registryState,new URL(port.sender.url).origin))) { port.disconnect(); return; }
   const prefix = registryState !== "NY" ? `cc-${registryState.toLowerCase()}-lookup-v1:` : resume ? "cc-ny-resume-v1:" : port.name.startsWith("cc-ny-refresh-v1:") ? "cc-ny-refresh-v1:" : "cc-ny-lookup-v1:";
   if (!allowedSender(port.sender) || !port.name.startsWith(prefix) || !P.validId(port.name.slice(prefix.length))) { port.disconnect(); return; }
@@ -418,7 +443,7 @@ chrome.runtime.onConnect.addListener(port => {
   const bound = boot.then(async () => {
     if (disconnected) return null;
     const id = port.name.slice(prefix.length);
-    let job = [active, ...queue].find(j => j && !j.closed && j.lookupId === id);
+    let job = allJobs().find(j => j && !j.closed && j.lookupId === id);
     if (resume) {
       if (!job || !P.registryAllowed(job.registryState,new URL(port.sender.url).origin)
           || job.sender.tab.id !== port.sender.tab.id || (job.sender.documentId && job.sender.documentId !== port.sender.documentId)) {
@@ -460,7 +485,7 @@ chrome.runtime.onConnect.addListener(port => {
     if (message?.action === "finish" && P.validId(message.id)) { close(job, null, message.id); return; }
     if (message?.action === "acquire" && P.validId(message.id)) {
       job.acquireId = message.id;
-      if (active === job) saveRuntime().then(() => { if (!job.closed) post(job, { id: message.id, ok: true }); }).catch(() => close(job, "NY_CONNECTOR_INTERRUPTED")); else notifyQueue();
+      if (isActive(job)) saveRuntime().then(() => { if (!job.closed) post(job, { id: message.id, ok: true }); }).catch(() => close(job, "NY_CONNECTOR_INTERRUPTED")); else notifyQueue();
       return;
     }
     if (message?.action === "search" && !job.refreshOnly && P.validId(message.id) && P.validQuery(message.query)) performSearch(job, message.query, message.id);

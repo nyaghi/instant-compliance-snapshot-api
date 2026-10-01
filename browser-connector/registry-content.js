@@ -8,7 +8,8 @@
   const TN = location.origin === "https://tncab.tnsos.gov";
   const NC = location.origin === "https://www.sosnc.gov";
   const AL = location.origin === "https://ago.igovsolution.net";
-  if (!IL && !GA && !NV && !TN && !NC && !AL) return;
+  const NM = location.origin === "https://secure.nmdoj.gov";
+  if (!IL && !GA && !NV && !TN && !NC && !AL && !NM) return;
   const documentId = crypto.randomUUID();
   const text = el => (el?.innerText || "").replace(/\s+/g, " ").trim();
   const visible = el => !!el && el.getClientRects().length > 0;
@@ -453,6 +454,13 @@
     // keep resetting the settle clock for the same button with bound inputs.
     // This stays inside the command deadline and resets on a replaced button.
     const bindSearch = () => wait(() => {
+      // Filter changes can replace all three inputs. Rebind only changed
+      // values to the current nodes before observing the settled button.
+      for (const [suffix,value] of [['entityNumber',''],['nvBusinessId',''],['entityName',query.name]]) {
+        const input=field(suffix);
+        if(!input)return false;
+        if(input.value!==value){set(input,value);return false;}
+      }
       if (field('entityName')?.value !== query.name || field('entityNumber')?.value !== '' || field('nvBusinessId')?.value !== '') return false;
       const buttons = [...document.querySelectorAll('button')].filter(el => text(el) === 'Search' && visible(el) && !el.disabled);
       return buttons.length === 1 && buttons[0];
@@ -806,7 +814,10 @@
     const buttons=[...page.rows[indexes[0].index].querySelectorAll('button')].filter(el=>text(el)==='Details');
     if(buttons.length!==1)throw new Error('REGISTRY_TN_DETAIL_NOT_OBSERVED');
     const fields=await wait(()=>tnFields(selected),Math.max(1,Math.min(25000,deadline-Date.now())),{action:()=>buttons[0].click()});
-    try { Object.assign(fields,tnFinancials(document.querySelector('#KendoWindowLevel1'))); }
+    try { Object.assign(fields,await wait(()=>{
+      try {return tnFinancials(document.querySelector('#KendoWindowLevel1'));}
+      catch(error) {if(error.message==='REGISTRY_TN_FINANCIALS_INCOMPLETE')return null;throw error;}
+    },Math.max(1,Math.min(12000,deadline-Date.now())))); }
     catch { fields.financial_count=-1;fields.financial_periods=[]; }
     return {query,complete:true,fields};
   }
@@ -1095,6 +1106,11 @@
   }
   function registryDocumentReady() {
     if (document.readyState === 'loading') return false;
+    if(NM)return location.pathname.endsWith('/CharityDetail.aspx')
+      ? !!document.querySelector('#MainContent_GridViewStatuses')
+      : !!document.querySelector('#MainContent_TextBoxFEIN') && !!document.querySelector('#MainContent_ButtonSearch');
+    if (TN) return !!document.querySelector('input[id^="Name_"]')
+      && [...document.querySelectorAll('button[id^="Search_"]')].some(el=>visible(el)&&!el.disabled&&text(el)==='Search');
     // A loaded verification/shell document is not a loaded registry form.
     // Observe normal page readiness; do not operate any human challenge.
     if (NC) {
@@ -1128,6 +1144,68 @@
     return true;
   }
   async function handle(m) {
+    if(NM) {
+      if(m.action==='registry-ready')return {ready:registryDocumentReady(),url:location.href,documentId};
+      const q=m.query;
+      if(q?.state!=='NM')throw new Error('REGISTRY_COMMAND_INVALID');
+      if(m.action==='registry-nm-form'&&q.operation==='search') {
+        const size=document.querySelector('#MainContent_DropDownListPageSize');
+        if(!size)throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+        if(size.value!=='1000'){set(size,'1000');return {ok:true,phase:'page-size',documentId};}
+        for(const [id,value] of [['CharityName',q.name],['City',''],['Zip',''],['FEIN',q.name?'':q.ein.slice(0,2)+'-'+q.ein.slice(2)]])
+          set(document.querySelector('#MainContent_TextBox'+id),value);
+        const state=document.querySelector('select[id*="State"]');if(state)state.selectedIndex=0;
+        const button=document.querySelector('#MainContent_ButtonSearch');
+        if(!button||button.disabled)throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+        button.click();return {ok:true,documentId};
+      }
+      if(m.action==='registry-nm-rows'&&q.operation==='search') {
+        // Confirm that this postback belongs to the requested search, rather
+        // than accepting the preceding page's count while ASP.NET navigates.
+        for(const [id,value] of [['CharityName',q.name],['City',''],['Zip',''],['FEIN',q.name?'':q.ein.slice(0,2)+'-'+q.ein.slice(2)]])
+          if(document.querySelector('#MainContent_TextBox'+id)?.value!==value)
+            throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+        if(document.querySelector('#MainContent_DropDownListPageSize')?.value!=='1000')
+          throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+        const count=text(document.querySelector('#MainContent_LabelRecCount')).match(/^Charities Found:\s*(\d+)$/);
+        const grid=document.querySelector('#MainContent_GridView1');
+        if(!count||!grid)throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+        const rows=[...grid.querySelectorAll('a[href*="CharityDetail.aspx?FEIN="]')].map(a=>{
+          const match=text(a).match(/^(.*?)\s*\((\d{2}-\d{7})\)$/);
+          const url=new URL(a.href);
+          if(!match||url.origin!==location.origin||url.pathname!=='/CharitySearch/CharityDetail.aspx'
+              ||url.searchParams.get('FEIN')!==match[2])throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+          return {name:match[1].trim(),ein:match[2].replace('-','')};
+        });
+        if(rows.length!==Number(count[1])||new Set(rows.map(r=>r.ein)).size!==rows.length)
+          throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+        return {ok:true,evidence:{query:q,complete:true,rows,total:Number(count[1])}};
+      }
+      if(m.action==='registry-nm-detail'&&q.operation==='detail') {
+        const heading=text(document.querySelector('#MainContent_FormViewCharityDetail_LabelCharityName'));
+        const match=heading.match(/^(.*?)\s*\((\d{2}-\d{7})\)$/);
+        if(!match||match[2].replace('-','')!==q.identifier||match[1].trim()!==q.name)
+          throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+        const history=document.querySelector('#MainContent_GridViewStatuses');
+        const financials=document.querySelector('#MainContent_GridViewFinancials');
+        if(!history||!financials)throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+        // Only the public status history and fiscal periods are needed. Do
+        // not copy financial amounts, officers, contacts or documents.
+        const historyRows=[...history.rows].slice(1).map(r=>{
+          if(r.cells.length!==3)throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+          return [...r.cells].map(text);
+        });
+        const periods=[...financials.rows].slice(1).map(r=>{
+          const value=text(r.cells[0]);
+          const period=value.match(/^(20\d{2})\s+(\d{1,2}\/\d{1,2}\/\d{4})\s*-\s*(\d{1,2}\/\d{1,2}\/\d{4})\b/);
+          if(!period)throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+          return {tax_year:Number(period[1]),period_start:period[2],period_end:period[3]};
+        });
+        return {ok:true,evidence:{query:q,complete:true,name:match[1].trim(),ein:q.identifier,
+          history_rows:historyRows,financial_periods:periods}};
+      }
+      throw new Error('REGISTRY_COMMAND_INVALID');
+    }
     if (AL && m.action==='registry-al') {
       if (m.query?.state!=='AL' || m.query.operation!=='search') throw new Error('REGISTRY_COMMAND_INVALID');
       const query={state:'AL',operation:'search',name:m.query.name};
@@ -1141,7 +1219,8 @@
     }
     if (m.action === "registry-ready") return {ready:registryDocumentReady(), url:location.href, documentId,
       ...(NC ? {verification_pending:/^Just a moment/i.test(document.title||'')
-        && /Performing security verification|verifies you are not a bot/i.test(text(document.body))} : {})};
+        && /Performing security verification|verifies you are not a bot/i.test(text(document.body))} : {}),
+      ...(TN ? {verification_pending:!!document.querySelector('div[id^="recaptcha_"]') && !registryDocumentReady()} : {})};
     if (NC) {
       if(m.action==='registry-nc-form')return ncForm(m.query);
       if(m.action==='registry-nc-retry')return ncRetry(m.query);

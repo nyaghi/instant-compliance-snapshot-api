@@ -1,6 +1,6 @@
 /* Public-registry transport in the existing connector; no independent runtime. */
-const registryOrigin = state => ({IL:"https://charitable.illinoisattorneygeneral.gov",GA:"https://verify.sos.ga.gov",AL:"https://ago.igovsolution.net",NC:"https://www.sosnc.gov",NV:"https://orion.nv.gov",TN:"https://tncab.tnsos.gov"})[state];
-const registryStart = state => registryOrigin(state) + ({IL:"/search",GA:"/verification/Search.aspx?facility=Y",AL:"/online/Lookups/Business.aspx",NC:"/online_services/search/by_title/search_charities",NV:"/portal/public/#/public/nvsos/en/CaseXscreen?screen=external-GenericFilingsSearch&tabRoute=business",TN:"/portal/registered-charities-search"})[state];
+const registryOrigin = state => ({IL:"https://charitable.illinoisattorneygeneral.gov",GA:"https://verify.sos.ga.gov",AL:"https://ago.igovsolution.net",NC:"https://www.sosnc.gov",NV:"https://orion.nv.gov",TN:"https://tncab.tnsos.gov",NM:"https://secure.nmdoj.gov"})[state];
+const registryStart = state => registryOrigin(state) + ({IL:"/search",GA:"/verification/Search.aspx?facility=Y",AL:"/online/Lookups/Business.aspx",NC:"/online_services/search/by_title/search_charities",NV:"/portal/public/#/public/nvsos/en/CaseXscreen?screen=external-GenericFilingsSearch&tabRoute=business",TN:"/portal/registered-charities-search",NM:"/CharitySearch/"})[state];
 async function registryMessage(job, message) {
   if (job.closed || Date.now() >= job.activeExpiresAt) throw new Error("NY_CONNECTOR_TIMEOUT");
   const send=async()=>{
@@ -30,7 +30,10 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
   try { while (!job.closed && Date.now()<deadline) {
     try {
       const value=await registryMessage(job,{action:"registry-ready"});
-      verificationPending=job.registryState==='NC'&&value?.verification_pending===true;
+      verificationPending=['NC','TN'].includes(job.registryState)&&value?.verification_pending===true;
+      if(job.registryState==='TN'&&!value?.ready&&!visibilityAttempted&&Date.now()-started>=3000) {
+        visibilityAttempted=true;previousVisible=await registryNorthCarolinaVisibility(job);
+      }
         const observedRoute=nvRouteOnly&&typeof value?.documentId==='string'&&value.documentId.length>0;
         if ((value?.ready || observedRoute) && value.documentId !== oldDocument && (!path || new URL(value.url).pathname===path)
             && (job.registryState!=='NV' || new URL(value.url).hash===new URL(registryStart('NV')).hash)) return value;
@@ -59,12 +62,12 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
     }
     await nap(200);
   }
-  throw new Error(verificationPending ? "NY_CONNECTOR_NC_VERIFICATION_PENDING" : "NY_CONNECTOR_TAB_READY_TIMEOUT");
+  throw new Error(verificationPending ? `NY_CONNECTOR_${job.registryState}_VERIFICATION_PENDING` : "NY_CONNECTOR_TAB_READY_TIMEOUT");
   } finally {
     if (previousVisible) try {
       const tab=await chrome.tabs.get(job.tab), prior=await chrome.tabs.get(previousVisible.id);
       if (owned.has(job.tab) && tab.active && tab.windowId===previousVisible.windowId && prior.windowId===tab.windowId
-          && new URL(tab.url).origin===registryOrigin('NC') && (!path || new URL(tab.url).pathname===path))
+          && new URL(tab.url).origin===registryOrigin(job.registryState) && (!path || new URL(tab.url).pathname===path))
         await chrome.tabs.update(prior.id,{active:true});
     } catch { /* Preserve user navigation or closure during verification. */ }
   }
@@ -73,11 +76,11 @@ async function registryNorthCarolinaVisibility(job) {
   // Same-document visibility recovery, as used for Illinois. The state's own
   // scripts may finish a passive verification; no checkbox, challenge, token,
   // cookie, reload, additional request, or budget extension is performed here.
-  if (job.registryState!=='NC' || job.closed || !owned.has(job.tab)) return null;
+  if (!['NC','TN'].includes(job.registryState) || job.closed || !owned.has(job.tab)) return null;
   try {
     const tab=await chrome.tabs.get(job.tab), source=await chrome.tabs.get(job.sender.tab.id);
-    if (tab.active || tab.windowId!==source.windowId || new URL(tab.url).origin!==registryOrigin('NC')
-        || !new URL(tab.url).pathname.startsWith('/online_services/search/')) return null;
+    if (tab.active || tab.windowId!==source.windowId || new URL(tab.url).origin!==registryOrigin(job.registryState)
+        || (job.registryState==='NC' ? !new URL(tab.url).pathname.startsWith('/online_services/search/') : tab.url!==registryStart('TN'))) return null;
     const prior=(await chrome.tabs.query({active:true,windowId:tab.windowId}))[0];
     if (!prior || prior.id===tab.id || job.closed || !owned.has(job.tab)) return null;
     diagnostic('nc-verification',job,'same-document visibility recovery');
@@ -156,6 +159,21 @@ async function registryIllinoisVerification(job, collect) {
 }
 async function performRegistryQuery(job, query) {
   if (!P.validQuery(query) || query.state !== job.registryState || !P.registryAllowed(query.state,new URL(job.sender.url).origin)) throw new Error("NY_CONNECTOR_INVALID_SEQUENCE");
+  if(query.state==='NM') {
+    if(query.operation==='search') {
+      await registryNavigate(job,registryStart('NM'),Math.min(30000,job.activeExpiresAt-Date.now()));
+      for(let attempt=0;attempt<2;attempt++) {
+        const submitted=await registryMessage(job,{action:'registry-nm-form',query});
+        if(!submitted?.ok)throw new Error('NY_CONNECTOR_INCOMPLETE');
+        await registryReady(job,submitted.documentId,'/CharitySearch/',Math.min(30000,job.activeExpiresAt-Date.now()));
+        if(submitted.phase!=='page-size')return registryMessage(job,{action:'registry-nm-rows',query});
+      }
+      throw new Error('NY_CONNECTOR_INCOMPLETE');
+    }
+    const url=registryStart('NM')+'CharityDetail.aspx?FEIN='+query.identifier.slice(0,2)+'-'+query.identifier.slice(2);
+    await registryNavigate(job,url,Math.min(30000,job.activeExpiresAt-Date.now()));
+    return registryMessage(job,{action:'registry-nm-detail',query});
+  }
   if (query.state === "AL") {
     if (job.tab === null && trialAlIdle) {
       const saved=trialAlIdle; trialAlIdle=null;

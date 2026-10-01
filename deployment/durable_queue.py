@@ -12,7 +12,7 @@ import hashlib
 import json
 import math
 import os
-from deployment.lab_identity import performance_origin_enabled
+from deployment.lab_identity import performance_origin_enabled, trial_identity
 from pathlib import Path
 import re
 import uuid
@@ -71,7 +71,7 @@ def normalize_submission(payload, supported):
     if kind not in ('registration', 'discovery') or mode not in ('standard', 'sales'):
         raise ValueError('Invalid workflow kind or mode')
     reserved = payload.get('external_state_slots', 0)
-    if type(reserved) is not int or not 0 <= reserved <= 2 or (kind != 'registration' and reserved):
+    if type(reserved) is not int or not 0 <= reserved <= (8 if trial_identity() else 2) or (kind != 'registration' and reserved):
         raise ValueError('Invalid browser-state reservation')
     states = payload.get('states', [])
     if not isinstance(states, list) or any(not isinstance(s, str) or s not in supported for s in states):

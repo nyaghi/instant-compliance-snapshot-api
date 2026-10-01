@@ -110,15 +110,15 @@ def final_four_asset(name, text):
         additions = ''.join(label[0].replace('value="AK"', 'value="'+state+'"').replace('>Alaska<', '>'+title+'<')
                             for state, title in [('AL','Alabama'),('NC','North Carolina'),('NV','Nevada'),('TN','Tennessee')])
         text = text[:label.end()] + additions + text[label.end():]
-        replace('!["IL", "GA"].includes(state)', '!["IL", "GA", "AL", "NC", "NV", "TN"].includes(state)')
-        replace('["NY", "IL", "GA"].includes(state)', '["NY", "IL", "GA", "AL", "NC", "NV", "TN"].includes(state)')
+        replace('!["IL", "GA"].includes(state)', '!["NY", "IL", "GA", "AL", "NC", "NV", "TN", "NM"].includes(state)')
+        replace('["NY", "IL", "GA"].includes(state)', '["NY", "IL", "GA", "AL", "NC", "NV", "TN", "NM"].includes(state)')
         replace('alternateNames = runAlternateNames, {signal} = {}', 'alternateNames = runAlternateNames, {signal,mode="standard"} = {}')
         replace('alternate_names: alternateNames, signal,', 'alternate_names: alternateNames, signal, mode,')
         replace('          result.status_reason = "NY_CONNECTOR_UNAVAILABLE";', '''          result.status_reason = "NY_CONNECTOR_UNAVAILABLE";
           result.reviewed_alternate_names = [...alternateNames];''')
         replace('v2026.09.29.1 &middot; Staging', 'v2026.09.'+TRIAL_RELEASE_LABEL+' &middot; Isolated Trial')
     elif name == 'optimized-workflows.js':
-        replace("states.filter(s=>s==='IL'||s==='GA')", "states.filter(s=>['IL','GA','AL','NC','NV','TN'].includes(s))")
+        replace("states.filter(s=>s==='IL'||s==='GA')", "states.filter(s=>['NY','IL','GA','AL','NC','NV','TN','NM'].includes(s))")
         replace("headers:{'Content-Type':'application/json'}", "headers:{'Content-Type':'application/json','Authorization':'Bearer '+credentials.admin_passcode}")
     elif name == 'sales-mode.js':
         replace("const VERSION = '2026.09.29.1-sales';", "const VERSION = '2026.09."+TRIAL_RELEASE_LABEL+"-sales-trial';")
@@ -129,9 +129,14 @@ def final_four_asset(name, text):
         replace('{signal:controller.signal}', '{signal:controller.signal,mode:"sales"}', 2)
     elif name == 'ny-connector.js':
         text = text.replace('cc-ny-staging-v1', 'cc-final-four-trial-v1')
+        # The worker owns FIFO within each registry. A page-wide promise tail
+        # would serialize unrelated registries before they reach those lanes.
+        replace('const pending = lookupTail.then(() => performLookup(input));', 'return performLookup(input);')
+        replace('    lookupTail = pending.catch(() => {});', '')
+        replace('    return pending;', '')
         replace('state: registryState = "NY", signal })', 'state: registryState = "NY", signal, mode = "standard" })')
-        replace('{NY:"New York",IL:"Illinois",GA:"Georgia"}', '{NY:"New York",IL:"Illinois",GA:"Georgia",AL:"Alabama",NC:"North Carolina",NV:"Nevada",TN:"Tennessee"}')
-        replace('    const supported = c =>', '    const finalFour = ["AL","NC","NV","TN"].includes(registryState);\n    const supported = c => (!finalFour || c.capabilities?.includes("final-four-public-v1")) &&')
+        replace('{NY:"New York",IL:"Illinois",GA:"Georgia"}', '{NY:"New York",IL:"Illinois",GA:"Georgia",AL:"Alabama",NC:"North Carolina",NV:"Nevada",TN:"Tennessee",NM:"New Mexico"}')
+        replace('    const supported = c =>', '    const finalFour = ["AL","NC","NV","TN","NM"].includes(registryState);\n    const supported = c => (!finalFour || c.capabilities?.includes("final-four-public-v1")) &&')
         replace('API + "/api/ny-connector"', 'API + (finalFour ? "/api/final-four-connector" : "/api/ny-connector")')
         replace('headers: { "Content-Type": "application/json" }', 'headers: { "Content-Type": "application/json", "Authorization": "Bearer " + admin_passcode }')
         replace('action: "start", state: registryState,', 'action: "start", mode, state: registryState,')
@@ -181,7 +186,9 @@ def lab_asset(path):
         if file.name == 'index.html':
             text = text.replace('<title>', '<title>Performance Lab — ', 1)
             text = text.replace('<body', '<body data-performance-lab="true"', 1)
-            ny_note = 'New York uses an isolated backend browser.' if os.environ.get('CE_LAB_NY_BROWSER') == '1' else 'New York browser validation is not enabled.'
+            ny_note = ('New York uses this lab\'s isolated browser connector.' if trial_identity() else
+                       'New York uses an isolated backend browser.' if os.environ.get('CE_LAB_NY_BROWSER') == '1' else
+                       'New York browser validation is not enabled.')
             marker = '<div style="padding:10px;background:#fff3cd;color:#533f03;text-align:center">Isolated performance lab. Capacity is under evaluation. '+ny_note+'</div>'
             import re
             text = re.sub(r'(<body\b[^>]*>)', lambda m: m.group(1) + marker, text, count=1)

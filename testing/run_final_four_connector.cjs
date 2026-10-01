@@ -117,7 +117,7 @@ test('NV uses native Return To Search after a detail; TN retains its result form
     assert.equal(h.created.length,1);
     assert.equal(h.calls.filter(c=>c.query).length,3);
     assert.equal(h.calls.filter(c=>c.action==='registry-nv-return').length,state==='NV'?1:0);
-    assert.equal(vm.runInContext('active.finalFourReusableForm',h.context),true);
+    assert.equal(vm.runInContext(`activeLanes.get('${state}').finalFourReusableForm`,h.context),true);
     if(state==='NV')assert.match(h.tabs.get(h.created[0]).url,/external-GenericFilingsSearch/);
   }
 });

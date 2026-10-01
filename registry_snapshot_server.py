@@ -5988,7 +5988,7 @@ def il_verification_recovery(record, payload, now):
     if (record.get("state") != "IL" or record.get("purpose") != "registration"
             or record.get("recovery_protocol") != "il-fresh-page-v1"
             or (record.get("connector_version") != "0.5.10"
-                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27"}))
+                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28"}))
             or payload.get("reason") != "NY_CONNECTOR_IL_VERIFICATION_PENDING"
             or record.get("il_verification_recovery")
             or now + 120 >= record["issued"] + NY_CONNECTOR_TTL_SECONDS):
@@ -6108,7 +6108,8 @@ def nc_charity_record_evidence(fields):
         if fields["Expiration Date"].strip() or str(fields.get("Extension End Date") or "").strip():
             raise ValueError("North Carolina unissued application has conflicting license dates")
         return dict(name=name, identifier="NCAPP-" + url.path.rsplit("/", 1)[1], ein="", aliases=aliases,
-                    unissued_application=True, raw_status="In-Process", status="Needs Review", url=fields["profile_url"])
+                    unissued_application=True, raw_status="In-Process", status="Pending", url=fields["profile_url"],
+                    expiration=None, initial=None, renewal=None, street="", location="")
     raw = re.sub(r"\s+", " ", fields["Status"]).strip()
     expiration = final_four_source_date(fields["Expiration Date"], "North Carolina expiration")
     extension = final_four_source_date(fields.get("Extension End Date"), "North Carolina extension")
@@ -6172,6 +6173,9 @@ def final_four_license_result(org, state, records, deadline, source):
         raise ValueError("Unsupported final-four license source")
     result = licensed_charity_result(org, state, records, deadline, source)
     selected = getattr(result, "_cc_license_record", {})
+    if state == "NC" and selected.get("unissued_application"):
+        result.source_note = (f"North Carolina lists a confirmed matching application for {selected['name']} as In-Process. "
+                              "CharityClarity reports Pending; this is an application, not an issued charity license.")
     if state == "NC" and selected.get("extension_end"):
         extension = selected["extension_end"].isoformat()
         original = selected.get("base_expiration")
@@ -6242,8 +6246,8 @@ def nv_charity_detail_evidence(fields, expected_business_id):
     status = licensed_charity_status(raw_status, expiration)
     if raw_status.casefold() == "default":
         status = "Delinquent"
-    requires_solicitation_history = entity_type == "Foreign Entities Not Required to Register In Nevada"
-    if requires_solicitation_history:
+    requires_solicitation_history = True
+    if requires_solicitation_history and status in {"Current", "Upcoming Filing"}:
         # This category is not a nonprofit-corporation qualification. The
         # matching public statement history must establish its charity scope.
         status = "Unable to Confirm"
@@ -6298,8 +6302,28 @@ def tn_charity_detail_evidence(fields, expected_identifier, search_row):
     # TNCaB can show solicitation-name templates, not actual organization
     # names, such as a literal 'CHAPTER NAME'. Do not export those as aliases.
     aliases = [n.strip() for n in aliases if n.strip() and not identity_alias_template(n)]
+    status = licensed_charity_status(raw, expiration)
+    date_note = ""
+    if not expiration and status == "Current":
+        if "financial_periods" not in fields:
+            status = "Unable to Confirm"
+            date_note = "Tennessee displays no expiration date and its complete financial history was not obtained; filing currency remains unconfirmed."
+        elif latest_period is None:
+            status = "Delinquent"
+            date_note = "The confirmed Tennessee registration has a complete but empty financial history; no annual filing is on record."
+        else:
+            # The state's annual renewal is due on the last day of the sixth
+            # month after fiscal year end. Explicit expiry/adverse/exempt
+            # evidence above retains priority over this filing-based fallback.
+            month = latest_period.month + 6
+            year = latest_period.year + (month - 1) // 12
+            month = (month - 1) % 12 + 1
+            expiration = date(year, month, calendar.monthrange(year, month)[1])
+            status = status_from_calendar_date(expiration)
+            date_note = (f"Tennessee displays no expiration date. Its complete financial history ends with fiscal period {latest_period.isoformat()}; "
+                         f"the annual-renewal rule gives a controlling deadline of {expiration.isoformat()}.")
     return dict(name=name, identifier=expected_identifier, ein="", aliases=list(dict.fromkeys(aliases)),
-                raw_status=raw, status=licensed_charity_status(raw, expiration), expiration=expiration,
+                raw_status=raw, status=status, expiration=expiration, date_evidence_note=date_note,
                 initial=initial, initial_label="Registration Date", renewal=None,
                 latest_filed_period=latest_period, latest_filed_period_label="Fiscal Year End",
                 street=street, location=location, region=region, postal_code=postal,
@@ -6588,9 +6612,9 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                 seen.add(row["identifier"])
                 continue
             if state == "NC" and row.get("unissued_application"):
-                unreviewed_scope = True
-                scope_reviews.append({"name": row["name"], "identifier": row["identifier"],
-                                      "category": "In-Process", "source_url": row["url"]})
+                # The master still confirms identity; Pending is an application,
+                # never an issued license and never a name-only first-row guess.
+                records.append(row)
                 seen.add(row["identifier"])
                 continue
             if state == "AL" and row.get("registration_identifier_missing"):
@@ -6720,6 +6744,97 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
     return result
 
 
+def nm_browser_clean_evidence(payload, query):
+    """Accept only complete, query-bound public NM identity/history cells."""
+    if (not isinstance(payload, dict) or payload.get('query') != query
+            or payload.get('complete') is not True or query.get('state') != 'NM'):
+        raise ValueError('Incomplete New Mexico evidence')
+    if len(json.dumps(payload).encode('utf-8')) > 180000:
+        raise ValueError('New Mexico evidence exceeded its bound')
+    def public_text(value, limit=500):
+        return isinstance(value, str) and len(value) <= limit and '<' not in value and '>' not in value
+    if query.get('operation') == 'search':
+        if set(payload) != {'query', 'complete', 'rows', 'total'}:
+            raise ValueError('Unexpected New Mexico search fields')
+        rows, total = payload['rows'], payload['total']
+        if (type(total) is not int or not 0 <= total <= 1000 or not isinstance(rows, list)
+                or len(rows) != total):
+            raise ValueError('Incomplete New Mexico result set')
+        seen = set()
+        for row in rows:
+            if (not isinstance(row, dict) or set(row) != {'name', 'ein'}
+                    or not public_text(row['name']) or not row['name'].strip()
+                    or not isinstance(row['ein'], str) or not re.fullmatch(r'[0-9]{9}', row['ein'])
+                    or row['ein'] == '000000000' or row['ein'] in seen):
+                raise ValueError('Invalid New Mexico identity row')
+            seen.add(row['ein'])
+    elif query.get('operation') == 'detail':
+        if (set(payload) != {'query', 'complete', 'name', 'ein', 'history_rows', 'financial_periods'}
+                or payload['ein'] != query.get('identifier') or payload['name'] != query.get('name')):
+            raise ValueError('New Mexico detail identity mismatch')
+        rows, periods = payload['history_rows'], payload['financial_periods']
+        if (not isinstance(rows, list) or not 1 <= len(rows) <= 500
+                or not isinstance(periods, list) or len(periods) > 100):
+            raise ValueError('Incomplete New Mexico history')
+        for row in rows:
+            if (not isinstance(row, list) or len(row) != 3 or not all(public_text(v) for v in row)
+                    or not re.fullmatch(r'20[0-9]{2}', row[0])
+                    or parse_due_date(row[2]) is None or not row[1].strip()):
+                raise ValueError('Invalid New Mexico history row')
+        for period in periods:
+            if (not isinstance(period, dict) or set(period) != {'tax_year', 'period_start', 'period_end'}
+                    or type(period['tax_year']) is not int or not 2000 <= period['tax_year'] <= 2099
+                    or not public_text(period['period_start']) or not public_text(period['period_end'])
+                    or parse_due_date(period['period_start']) is None or parse_due_date(period['period_end']) is None
+                    or parse_due_date(period['period_start']) > parse_due_date(period['period_end'])):
+                raise ValueError('Invalid New Mexico fiscal period')
+    else:
+        raise ValueError('Unsupported New Mexico query')
+    return json.loads(json.dumps(payload))
+
+
+def nm_browser_lookup(org, evidence):
+    """Trial transport fallback; reuse the mature master NM status rules."""
+    ein = canonical_ein_digits(org.ein)
+    required, generated = licensed_charity_names(org)
+    # EIN first, then the reviewed legal/alternate names before generated forms.
+    names = list(dict.fromkeys(['', *required, *generated]))
+    attempts = []
+    for name in names:
+        query = {'state': 'NM', 'operation': 'search', 'ein': ein, 'name': name}
+        data = nm_browser_clean_evidence(evidence(query), query)
+        attempts.append({'query': query, 'completed': True})
+        selected = next((row for row in data['rows'] if row['ein'] == ein), None)
+        if not selected:
+            continue
+        query = {'state': 'NM', 'operation': 'detail', 'identifier': ein, 'name': selected['name']}
+        detail = nm_browser_clean_evidence(evidence(query), query)
+        module = load_wa_nm_module()
+        rows = [(int(year), status, when) for year, status, when in detail['history_rows']]
+        submitted = module.nm_latest_submitted(rows)
+        periods = {p['period_end'] for p in detail['financial_periods']
+                   if submitted and p['tax_year'] == submitted[0]}
+        if len(periods) > 1:
+            raise ValueError('Conflicting New Mexico fiscal periods')
+        source = f'https://secure.nmdoj.gov/CharitySearch/CharityDetail.aspx?FEIN={format_ein(ein)}'
+        result = module.SearchResult(org.organization_name, org.ein, 'NM', module.STATUS_UNKNOWN, '', source, '')
+        result.matched_registry_name = selected['name']
+        result.matched_registry_identifier = format_ein(ein)
+        result = nm_apply_status_history_master(module, result, rows, fye_text=next(iter(periods), ''))
+        result.source_note = ('The public browser search and detail heading both match the requested EIN. '
+                              + getattr(result, 'source_note', ''))
+        copied = copy_external_result(org, 'NM', result)
+        copied.queries_attempted = attempts + [{'query': query, 'completed': True}]
+        return copied
+    result = checker.StateResult(org.organization_name, org.ein, 'NM', 'Not Registered',
+                                 'https://secure.nmdoj.gov/CharitySearch/')
+    result.success = True
+    result.source_note = ('New Mexico completed the public EIN search and all required name searches without '
+                          'a record bearing the requested EIN. A nameless detail shell is not accepted as a registration.')
+    result.queries_attempted = attempts
+    return result
+
+
 def final_four_clean_evidence(payload, query):
     """Bounded public fields for the existing signed connector continuation.
 
@@ -6727,6 +6842,8 @@ def final_four_clean_evidence(payload, query):
     Full source interpretation remains in the master replay, not the browser.
     """
     state = query.get("state")
+    if state == 'NM':
+        return nm_browser_clean_evidence(payload, query)
     if (state not in {"AL", "NC", "NV", "TN"} or not isinstance(payload, dict)
             or payload.get("query") != query or payload.get("complete") is not True):
         raise ValueError("Incomplete or mismatched final-four evidence")
@@ -6818,7 +6935,8 @@ def final_four_connector_failure(record, reason=""):
     sources = {"AL": "https://ago.igovsolution.net/online/Lookups/Business.aspx",
                "NC": "https://www.sosnc.gov/online_services/search/by_title/search_charities",
                "NV": "https://orion.nv.gov/portal/public/",
-               "TN": "https://tncab.tnsos.gov/portal/registered-charities-search"}
+               "TN": "https://tncab.tnsos.gov/portal/registered-charities-search",
+               "NM": "https://secure.nmdoj.gov/CharitySearch/"}
     org = checker.Organization(record["organization_name"], record["ein"])
     result = licensed_charity_failure(org, state, sources[state], ValueError("Browser evidence incomplete"))
     # Public query stages only: never export the signed continuation, device,
@@ -6861,7 +6979,8 @@ def final_four_connector_advance(record):
         raise NYConnectorQueryNeeded(query)
     org = checker.Organization(record["organization_name"], record["ein"])
     try:
-        result = final_four_browser_lookup(org, record["state"], evidence, time.monotonic()+remaining)
+        result = (nm_browser_lookup(org, evidence) if record['state'] == 'NM' else
+                  final_four_browser_lookup(org, record["state"], evidence, time.monotonic()+remaining))
     except NYConnectorQueryNeeded as pending:
         required, generated = licensed_charity_names(org)
         if len(record["completed"]) >= len(required) + len(generated) + 100:
@@ -6981,7 +7100,7 @@ def final_four_connector_request(payload, origin):
     if action == "start":
         state, name, ein = payload.get("state"), payload.get("organization_name"), payload.get("ein")
         mode = payload.get("mode", "standard")
-        if (state not in {"AL", "NC", "NV", "TN"} or mode not in {"sales", "standard"}
+        if (state not in {"AL", "NC", "NV", "TN", "NM"} or mode not in {"sales", "standard"}
                 or payload.get("purpose", "registration") != "registration"
                 or not isinstance(name, str) or not 1 <= len(name.strip()) <= 500
                 or not isinstance(ein, str) or not re.fullmatch(r"[0-9]{2}-?[0-9]{7}", ein)
@@ -7002,7 +7121,7 @@ def final_four_connector_request(payload, origin):
         try:
             record = ny_connector_unpack(payload.get("check_token"), email, device)
             if (record.get("origin") != origin or record.get("protocol") != "final-four-public-v1"
-                    or record.get("state") not in {"AL", "NC", "NV", "TN"}):
+                    or record.get("state") not in {"AL", "NC", "NV", "TN", "NM"}):
                 raise ValueError("Wrong continuation scope")
         except (ValueError, TypeError, KeyError, UnicodeError):
             return 410, {"error": "This registry check expired or changed. Run the state check again."}
@@ -11970,7 +12089,15 @@ def mi_name_fallback_queries(org):
     variants = sorted(variants, key=lambda value: (
         value.strip().casefold() != portal_query(org.organization_name).strip().casefold(), mi_variant_priority(value)))
 
-    planned = variants[:4]
+    distinct = []
+    keys = set()
+    for value in variants:
+        # Case/article/suffix spellings must not consume the bounded plan
+        # before a materially different legal or reviewed alternate name.
+        key = normalized_match_name(value)
+        if key not in keys:
+            keys.add(key); distinct.append(value)
+    planned = distinct[:4]
     if lab_mi_query_dominance_enabled():
         # Keep the exact bounded query set. A planned broader All-words query
         # goes first so its completed zero can cover narrower versions.
@@ -23620,7 +23747,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27"})):
+        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28"})):
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()
@@ -27525,7 +27652,12 @@ def search_ok_precise(page, org, module):
         ),
     )
     try:
-        page.goto(module.OK_SEARCH_URL, wait_until="domcontentloaded", timeout=ok_action_timeout(org, 12000))
+        try:
+            page.goto(module.OK_SEARCH_URL, wait_until="domcontentloaded", timeout=ok_action_timeout(org, 12000))
+        except checker.PlaywrightTimeoutError:
+            # Retry only this failed navigation, inside the original state's
+            # allowance. No completed search/result is discarded or reused.
+            page.goto(module.OK_SEARCH_URL, wait_until="domcontentloaded", timeout=ok_action_timeout(org, 12000))
 
         try:
             page.locator("#ctl00_DefaultContent_CharityNameSearch1_RadioButtonList1_0").click(timeout=ok_action_timeout(org, 8000))
@@ -30628,6 +30760,13 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                         progress["completed_empty_ein_result"] = mi_probe_result
                 if mi_probe_result is not None:
                     result = mi_probe_result
+                    if trial_identity() and public_status(result) == "Not Registered":
+                        # An optimized HTTP zero is not the final negative in
+                        # this trial. Confirm the actual EIN form in the same
+                        # original state budget before bounded name fallbacks.
+                        page._cc_mi_lookup_deadline = mi_deadline
+                        result = search_bundled_extension_state(page, org, "MI")
+                        mi_probe_result = None
                     mi_elapsed = time.perf_counter() - mi_started
                     mi_incomplete_frame = public_status(result) == "Unable to Verify"
                 else:

@@ -9,7 +9,7 @@ function bridge(trial=false){
  for(const f of ['protocol.js','staging-bridge.js']){
   let source=fs.readFileSync(path.join(packaged||path.join(__dirname,'../browser-connector'),f),'utf8');
   if(trial&&f==='protocol.js')source=source.replace('const TRIAL_ORIGIN = "";',`const TRIAL_ORIGIN = ${JSON.stringify(origin)};`)
-   .replace('function registryAllowed(state, origin) {','function registryAllowed(state, origin) { if (origin !== TRIAL_ORIGIN || state === "NY") return false;');
+   .replace('function registryAllowed(state, origin) {','function registryAllowed(state, origin) { if (origin !== TRIAL_ORIGIN) return false;');
   vm.runInNewContext(source,ctx);
  }
  return {ports,replies,runtime,send:m=>requests[0]({source:window,origin,data:{channel:packaged?'cc-final-four-trial-v1':'cc-ny-staging-v1',direction:'request',lookup_id:'original-lookup-1234',...m}}),advance:ms=>{now+=ms;for(const t of [...timers])if(!t.clear&&t.due<=now){t.clear=true;t.fn();}}};
@@ -24,15 +24,31 @@ test('bridge reconnect does not retransmit an acknowledged query',()=>{
  const h=bridge(),id='original-command-1234';h.send({action:'acquire',id});h.ports[0].onMessage.emit({id,ok:true});h.ports[0].disconnect();h.ports[1].onMessage.emit({action:'resumed'});
  assert.equal(h.ports[1].sent.length,1);h.send({action:'finish',id:'final-command-1234'});h.ports[1].disconnect();
 });
+
+test('trial page admits independent NY, TN and NM jobs and finishing one preserves the others',()=>{
+ const h=bridge(true),states=['NY','TN','NM'];
+ for(const [i,state] of states.entries())h.send({action:'acquire',id:'acquire-command-1234'+i,lookup_id:'independent-lookup-1234'+i,intent:state});
+ assert.equal(h.ports.length,3);
+ for(const [i,p] of h.ports.entries())p.onMessage.emit({id:'acquire-command-1234'+i,ok:true});
+ const query={state:'NM',operation:'search',ein:'123456789',name:''};
+ h.send({action:'search',id:'search-command-12345',lookup_id:'independent-lookup-12342',query});
+ assert.deepEqual(h.ports[2].sent.at(-1).query,query);
+ h.send({action:'finish',id:'finish-command-12345',lookup_id:'independent-lookup-12340'});
+ h.ports[0].onMessage.emit({id:'finish-command-12345',ok:true});
+ h.ports[2].onMessage.emit({id:'search-command-12345',ok:true,evidence:{query,complete:true,rows:[],total:0}});
+ assert.equal(h.replies.at(-1).id,'search-command-12345');assert.equal(h.replies.at(-1).ok,true);
+ h.ports[1].disconnect();h.ports[3].onMessage.emit({action:'resumed'});
+ assert.equal(h.ports[3].name,'cc-ny-resume-v1:independent-lookup-12341');
+});
 test('missing restart handshake terminates after three reconnect attempts',()=>{
  const h=bridge(),id='original-command-1234';h.send({action:'acquire',id});h.ports[0].disconnect();
  h.advance(10000);h.advance(2000);h.advance(10000);h.advance(3000);h.advance(10000);
  assert.equal(h.ports.length,4);assert.ok(h.replies.some(r=>r.id===id&&r.reason==='NY_CONNECTOR_INTERRUPTED'));
 });
-for(const state of ['IL','GA','AL','NC','NV','TN'])test(`trial bridge retains ${state} after admission and refuses registry switching`,()=>{
+for(const state of ['IL','GA','AL','NC','NV','TN','NM'])test(`trial bridge retains ${state} after admission and refuses registry switching`,()=>{
  const h=bridge(true),acquire='acquire-command-1234',search='search-command-12345';
  h.send({action:'acquire',id:acquire,intent:state});h.ports[0].onMessage.emit({id:acquire,ok:true});
- const query=['IL','GA'].includes(state)?{state,orgName:'Example Foundation'}:{state,operation:'search',name:'Example Foundation'};
+ const query=['IL','GA'].includes(state)?{state,orgName:'Example Foundation'}:{state,operation:'search',name:'Example Foundation',...(state==='NM'?{ein:'123456789'}:{})};
  h.send({action:'search',id:search,query});assert.equal(h.ports[0].sent.at(-1).id,search);
  assert.equal(h.replies.some(r=>r.id===search&&!r.ok),false);
  h.send({action:'search',id:'crossed-command-1234',intent:state==='NC'?'NV':'NC',query});

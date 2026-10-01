@@ -244,12 +244,12 @@ const source=SOURCE;
             output=Path(tmp)/'trial'
             result=build(TRIAL['origin'],output)
             manifest=json.loads((output/'manifest.json').read_text(encoding='utf-8'))
-            self.assertEqual(manifest['version'],'0.6.27')
+            self.assertEqual(manifest['version'],'0.6.28')
             self.assertEqual(manifest['permissions'],['storage'])
             text=json.dumps(manifest)
-            for banned in ['staging.compliance-express.com','www.compliance-express.com','charities-search.ag.ny.gov','cookies','browsingData']:
+            for banned in ['staging.compliance-express.com','www.compliance-express.com','cookies','browsingData']:
                 self.assertNotIn(banned,text)
-            self.assertEqual(manifest['content_scripts'][0]['matches'],[TRIAL['origin']+'/*'])
+            self.assertEqual(next(c['matches'] for c in manifest['content_scripts'] if 'staging-bridge.js' in c['js']),[TRIAL['origin']+'/*'])
             self.assertTrue(Path(result['zip']).is_file())
             for file in output.glob('*.js'):
                 r=subprocess.run([str(NODE),'--check',str(file)],capture_output=True,text=True)

@@ -175,8 +175,8 @@ def handle(master, handler, *, trial_queue=None):
         if action == 'start':
             if payload.get('consent') is not True: raise ValueError('Consent is required')
             data = prepare(master, payload, owner, transport=transport,
-                           external_states={'IL', 'GA', 'AL', 'NC', 'NV', 'TN'} if trial else None,
-                           external_slots=1 if trial else None)
+                           external_states={'NY', 'IL', 'GA', 'AL', 'NC', 'NV', 'TN', 'NM'} if trial else None,
+                           external_slots=8 if trial else None)
         else:
             record = unpack(master, payload.get('token'), owner)
             path = '/api/lab/workflows/' + record['id']

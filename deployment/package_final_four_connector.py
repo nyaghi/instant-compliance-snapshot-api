@@ -13,8 +13,9 @@ import zipfile
 from deployment.lab_identity import PROTECTED_ORIGINS
 
 ROOT = Path(__file__).resolve().parents[1]
-FILES = ('protocol.js','worker.js','registry-worker.js','registry-content.js','registry-ga-main.js','staging-bridge.js','recovery.js')
+FILES = ('protocol.js','worker.js','registry-worker.js','registry-content.js','registry-ga-main.js','staging-bridge.js','recovery.js','ny-main.js','ny-content.js')
 MATCHES = [
+    'https://secure.nmdoj.gov/CharitySearch/*',
     'https://ago.igovsolution.net/online/Lookups/Business.aspx*',
     'https://www.sosnc.gov/online_services/search/*',
     'https://orion.nv.gov/portal/public/*',
@@ -41,31 +42,33 @@ def build(origin, destination):
             assert text.count(old)==1
             text=text.replace(old,'const APP_ORIGINS = Object.freeze([TRIAL_ORIGIN]);')
             text=text.replace('function registryAllowed(state, origin) {',
-                              'function registryAllowed(state, origin) {\n    if (origin !== TRIAL_ORIGIN || state === "NY") return false;')
+                              'function registryAllowed(state, origin) {\n    if (origin !== TRIAL_ORIGIN) return false;')
         # Namespace DOM messages so the installed 29.1 connector cannot also
-        # react to a trial pager or page request. NY stays on the lab backend.
-        text=text.replace('cc-ny-staging-v1','cc-final-four-trial-v1').replace('cc-ga-public-pager-v1','cc-final-four-ga-pager-v1')
+        # react to a trial pager or page request. NY uses the mature public browser transport.
+        text=text.replace('cc-ny-staging-v1','cc-final-four-trial-v1').replace('cc-ga-public-pager-v1','cc-final-four-ga-pager-v1').replace('cc-ny-page-v1','cc-final-four-ny-page-v1')
         data=text.encode('utf-8');(destination/name).write_bytes(data)
         hashes[name]=hashlib.sha256(data).hexdigest()
     manifest={
-        'manifest_version':3,'name':'CharityClarity — Isolated 29.2F Trial Connector','version':'0.6.27','minimum_chrome_version':'132',
-        'description':'Public registry access for the isolated CharityClarity 29.2F trial.',
-        'permissions':['storage'],'host_permissions':[origin+'/*',*MATCHES],
+        'manifest_version':3,'name':'CharityClarity — Isolated 29.2G Trial Connector','version':'0.6.28','minimum_chrome_version':'132',
+        'description':'Public registry access for the isolated CharityClarity 29.2G trial.',
+        'permissions':['storage'],'host_permissions':[origin+'/*',*MATCHES,'https://charities-search.ag.ny.gov/RegistrySearch*'],
         'incognito':'not_allowed','background':{'service_worker':'worker.js'},
         'content_scripts':[
+            {'matches':['https://charities-search.ag.ny.gov/RegistrySearch*'],'js':['protocol.js','ny-main.js'],'run_at':'document_start','world':'MAIN'},
+            {'matches':['https://charities-search.ag.ny.gov/RegistrySearch*'],'js':['ny-content.js'],'run_at':'document_start'},
             {'matches':[origin+'/*'],'js':['protocol.js','staging-bridge.js'],'run_at':'document_start'},
             {'matches':['https://verify.sos.ga.gov/verification/SearchResults.aspx*'],'js':['registry-ga-main.js'],'run_at':'document_start','world':'MAIN'},
             {'matches':MATCHES,'js':['registry-content.js'],'run_at':'document_idle'},
         ],
     }
     (destination/'manifest.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
-    (destination/'build-evidence.json').write_text(json.dumps({'origin':origin,'version':'0.6.27','files':hashes,
-        'installed_connector_untouched':True,'ny_uses_lab_backend':True},indent=2),encoding='utf-8')
+    (destination/'build-evidence.json').write_text(json.dumps({'origin':origin,'version':'0.6.28','files':hashes,
+        'installed_connector_untouched':True,'ny_uses_lab_backend':False},indent=2),encoding='utf-8')
     archive=destination.parent/(destination.name+'.zip')
     if archive.exists():raise ValueError('Refusing to overwrite an existing trial archive')
     with zipfile.ZipFile(archive,'x',zipfile.ZIP_DEFLATED) as package:
         for file in destination.iterdir():package.write(file,file.name)
-    return {'directory':str(destination),'zip':str(archive),'origin':origin,'version':'0.6.27'}
+    return {'directory':str(destination),'zip':str(archive),'origin':origin,'version':'0.6.28'}
 
 
 if __name__=='__main__':

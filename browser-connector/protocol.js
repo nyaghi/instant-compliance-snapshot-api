@@ -8,7 +8,7 @@
   const APP_ORIGINS = Object.freeze([STAGING, "https://www.compliance-express.com", "https://compliance-express.com", ...(TRIAL_ORIGIN ? [TRIAL_ORIGIN] : [])]);
   function allowedOrigin(origin) { return APP_ORIGINS.includes(origin); }
   function registryAllowed(state, origin) {
-    if (["AL", "NC", "NV", "TN"].includes(state)) return !!TRIAL_ORIGIN && origin === TRIAL_ORIGIN;
+    if (["AL", "NC", "NV", "TN", "NM"].includes(state)) return !!TRIAL_ORIGIN && origin === TRIAL_ORIGIN;
     if (["IL", "GA"].includes(state)) return origin === STAGING || (!!TRIAL_ORIGIN && origin === TRIAL_ORIGIN);
     return state === "NY" && allowedOrigin(origin);
   }
@@ -16,6 +16,14 @@
   const FIELDS = ["ein", "orgName", "orgID", "regtype", "city", "state"];
   function validId(value) { return typeof value === "string" && /^[a-zA-Z0-9_-]{16,80}$/.test(value); }
   function validQuery(value) {
+    if(value?.state==='NM') {
+      if(!TRIAL_ORIGIN)return false;
+      const keys=Object.keys(value).sort().join(',');
+      return value.operation==='search'&&keys==='ein,name,operation,state'&&/^[0-9]{9}$/.test(value.ein)
+        && value.ein!=='000000000'&&typeof value.name==='string'&&value.name.length<=500
+        || value.operation==='detail'&&keys==='identifier,name,operation,state'&&/^[0-9]{9}$/.test(value.identifier)
+        &&value.identifier!=='000000000'&&typeof value.name==='string'&&value.name.trim().length>0&&value.name.length<=500;
+    }
     if (["AL", "NC", "NV", "TN"].includes(value?.state)) {
       const keys = Object.keys(value).sort().join(",");
       if (value.operation === "search") {
