@@ -41,6 +41,16 @@ test('all eight trial browser registries can be admitted independently',async()=
  for(const [i,p] of ports.entries())assert.ok(p.messages.some(m=>m.id===id(20+i)&&m.ok));
 });
 
+test('NM cleanup closes only an owned public registry tab and preserves the user tab',async()=>{
+ for(const pathname of ['/CharitySearch/','/CharitySearch/CharityDetail.aspx?FEIN=12-3456789']){
+  const h=harness({trialOrigin:origin});await tick();
+  h.tabs.set(3,{id:3,windowId:10,url:'https://secure.nmdoj.gov'+pathname});
+  h.tabs.set(4,{id:4,windowId:10,url:'https://secure.nmdoj.gov'+pathname});
+  vm.runInContext('owned.add(3)',h.context);await h.context.removeOwned(3);
+  assert.equal(h.tabs.has(3),false);assert.equal(h.tabs.has(4),true);
+ }
+});
+
 function nmContent(){
  const table=cells=>({rows:cells.map(row=>({cells:row.map(innerText=>({innerText}))}))});
  const fields=new Map();
