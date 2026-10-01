@@ -6799,7 +6799,7 @@ def nm_browser_clean_evidence(payload, query):
         for row in rows:
             if (not isinstance(row, list) or len(row) != 3 or not all(public_text(v) for v in row)
                     or not (re.fullmatch(r'20[0-9]{2}', row[0])
-                            or (row[0] == '' and (row[1] == 'Charity Added to COROS'
+                            or (row[0] == '' and (row[1] in {'Charity Added to COROS', 'Inactive Registration'}
                                 or re.fullmatch(r'Registration Submitted 0000[0-9]{13}', row[1]))))
                     or parse_due_date(row[2]) is None or not row[1].strip()):
                 raise ValueError('Invalid New Mexico history row')
@@ -6835,7 +6835,9 @@ def nm_browser_lookup(org, evidence):
         # COROS's enrollment row and observed 0000-prefixed unassigned-year
         # submissions have no tax year. Preserve their dated source evidence;
         # neither can establish a filing cycle or original registration date.
-        rows = [(int(year), status, when) for year, status, when in detail['history_rows'] if year]
+        # Inactive lifecycle rows use an internal zero marker, never a tax year.
+        rows = [(int(year) if year else 0, status, when) for year, status, when in detail['history_rows']
+                if year or status == 'Inactive Registration']
         submitted = module.nm_latest_submitted(rows)
         periods = {p['period_end'] for p in detail['financial_periods']
                    if submitted and p['tax_year'] == submitted[0]}
@@ -29928,6 +29930,28 @@ def nm_completed_clean_no_match_result(org, module, *attempt_results):
 
 def nm_apply_status_history_master(module, result, rows, fye_text="", context=None):
     """Use completed filings and the actual cycle dates before inherited year-label rules."""
+    # An explicit inactive lifecycle entry is not an annual filing period.
+    # Honor the user's NM Inactive -> Closed rule only when its observed date
+    # is later than submitted filings and approved extensions. A tax-year
+    # opening or extension request cannot reactivate a registration.
+    inactive_dates = [parse_due_date(when) for _, detail, when in rows
+                      if detail == "Inactive Registration" and parse_due_date(when)
+                      and parse_due_date(when) <= date.today()]
+    active_dates = [parse_due_date(when) for _, detail, when in rows
+                    if re.match(r"^(?:Registration Submitted\b|Extension Granted\b)", detail)
+                    and parse_due_date(when)]
+    if inactive_dates and max(inactive_dates) >= max(active_dates, default=date.min):
+        inactive = max(inactive_dates)
+        ambiguous = inactive in active_dates
+        result.status = "Needs Review" if ambiguous else module.STATUS_CLOSED
+        result.raw_status_text = f"Inactive Registration | {inactive.isoformat()}"
+        result.source_note = (
+            f"New Mexico explicitly lists Inactive Registration dated {inactive.isoformat()}. "
+            + ("A submitted filing or approved extension has the same date; their order cannot be determined from the public history."
+               if ambiguous else "This is later than the submitted filings and approved extensions. CharityClarity reports Closed / Withdrawn / Canceled; an administrative tax-year opening does not override this inactive status.")
+        )
+        result.success = not ambiguous
+        return result
     evidence_rows = [
         row for row in rows
         if re.match(r"^(?:Registration Submitted\b|Extension Granted\b|Registration Submission Delinquent\b)", row[1], re.I)

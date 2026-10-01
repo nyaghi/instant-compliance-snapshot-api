@@ -869,6 +869,15 @@ class LookupControls(unittest.TestCase):
                  'search_ok_precise','run_state_lookup','ny_connector_request','ny_connector_advance','il_verification_recovery',
                  'nm_browser_clean_evidence','nm_browser_lookup','final_four_clean_evidence','final_four_compact_search_evidence','final_four_search_candidate_scores',
                  'final_four_connector_advance','final_four_connector_request','final_four_connector_failure'}
+        # Only the documented NM inactive-lifecycle prefix is new. Compare
+        # the entire previous fiscal-cycle implementation without alteration.
+        nm=next(n for n in after.body if isinstance(n,ast.FunctionDef) and n.name=='nm_apply_status_history_master')
+        boundary=next(i for i,n in enumerate(nm.body) if isinstance(n,ast.Assign)
+                      and any(isinstance(t,ast.Name) and t.id=='evidence_rows' for t in n.targets))
+        self.assertEqual(boundary,4)  # docstring, dated lists, bounded lifecycle branch
+        self.assertEqual([n.targets[0].id for n in nm.body[1:3]],['inactive_dates','active_dates'])
+        self.assertIsInstance(nm.body[3],ast.If)
+        nm.body=[nm.body[0],*nm.body[boundary:]]
         # Version allowlists belong to signed input handlers; all other master
         # statements/functions must stay byte-equivalent as parsed syntax.
         for tree in (before,after):

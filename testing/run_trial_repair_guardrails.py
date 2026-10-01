@@ -163,6 +163,47 @@ class Repairs(unittest.TestCase):
             with self.assertRaises(ValueError):
                 cc.nm_browser_clean_evidence({**data,'history_rows':[['',label,'7/8/2021']]},q)
 
+    def test_shared_inactive_rule_and_later_qualifying_record_across_states(self):
+        org=cc.checker.Organization('Example National Foundation','12-3456789')
+        for state in ['AL','NC','NV','TN','IL','GA','DC','RI']:
+            with self.subTest(state=state):
+                closed=cc.licensed_charity_status('Inactive',date(2099,1,1))
+                self.assertEqual(closed,'Closed / Withdrawn / Canceled')
+                old=dict(name=org.organization_name,ein=org.ein,identifier='old',
+                         raw_status='Inactive',status=closed,expiration=date(2020,1,1),location='',url='')
+                current=dict(name=org.organization_name,ein=org.ein,identifier='new',
+                             raw_status='Current',status='Current',expiration=date(2027,12,31),location='',url='')
+                result,review=cc.select_licensed_charity(org,[old],state,cc.time.monotonic()+10)
+                self.assertFalse(review);self.assertEqual(result['status'],closed)
+                result,review=cc.select_licensed_charity(org,[old,current],state,cc.time.monotonic()+10)
+                self.assertFalse(review);self.assertEqual(result['identifier'],'new')
+
+    def test_nm_observed_inactive_lifecycle_has_no_invented_fiscal_year(self):
+        fixture=json.loads((Path(__file__).parent/'fixtures/nm-public-gardens-20261001.json').read_text())
+        org=cc.checker.Organization('American Public Gardens Association','23-7110058')
+        def source(q):
+            if q['operation']=='search':return {'query':q,'complete':True,'rows':[{'name':org.organization_name,'ein':'237110058'}],'total':1}
+            return {'query':q,'complete':True,'name':org.organization_name,'ein':'237110058',
+                    'history_rows':fixture['history_rows'],'financial_periods':fixture['financial_periods']}
+        result=cc.nm_browser_lookup(org,source)
+        self.assertEqual(result.status,'Closed / Withdrawn / Canceled')
+        self.assertIn('2025-09-30',result.source_note)
+        self.assertNotEqual(result.status,'Not Registered')
+        module=cc.load_wa_nm_module()
+        # Existing mature input must use the same source-status rule.
+        def classify(rows):
+            baseline=module.SearchResult(org.organization_name,org.ein,'NM',module.STATUS_UNKNOWN,'','','')
+            return cc.nm_apply_status_history_master(module,baseline,rows,fye_text='12/31/2024')
+        rows=[(int(y) if y else 0,label,when) for y,label,when in fixture['history_rows'] if y or label=='Inactive Registration']
+        self.assertEqual(classify(rows).status,module.STATUS_CLOSED)
+        later=[*rows,(2025,'Registration Submitted 20250000000000000','10/1/2025')]
+        self.assertNotEqual(classify(later).status,module.STATUS_CLOSED)
+        same=[*rows,(2025,'Extension Granted','9/30/2025')]
+        self.assertEqual(classify(same).status,'Needs Review')
+        self.assertFalse(classify(same).success)
+        future=[(0,'Inactive Registration','10/2/2026'),(2024,'Registration Submitted 20240000000000000','8/5/2025')]
+        self.assertNotEqual(classify(future).status,module.STATUS_CLOSED)
+
     def test_nv_composite_name_is_retained_for_detail_not_accepted(self):
         name='American Public Gardens Association'
         row={'name':name+', American Association of Botanical Gardens and Arboreta',

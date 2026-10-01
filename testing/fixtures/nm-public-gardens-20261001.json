@@ -1,0 +1,77 @@
+{
+  "financial_periods": [
+    {
+      "period_end": "12/31/2024",
+      "period_start": "3/1/2024",
+      "tax_year": 2024
+    },
+    {
+      "period_end": "2/29/2024",
+      "period_start": "3/1/2023",
+      "tax_year": 2023
+    },
+    {
+      "period_end": "2/28/2023",
+      "period_start": "3/1/2022",
+      "tax_year": 2022
+    }
+  ],
+  "history_rows": [
+    [
+      "2025",
+      "Tax Year Registration Open",
+      "10/1/2025"
+    ],
+    [
+      "2024",
+      "Registration Submitted 20242722521742358",
+      "8/5/2025"
+    ],
+    [
+      "2024",
+      "Extension Granted",
+      "7/23/2025"
+    ],
+    [
+      "2024",
+      "Extension Requested",
+      "7/23/2025"
+    ],
+    [
+      "2024",
+      "Tax Year Registration Open",
+      "1/1/2025"
+    ],
+    [
+      "2023",
+      "Registration Submitted 20232722419842631",
+      "7/16/2024"
+    ],
+    [
+      "2023",
+      "Tax Year Registration Open",
+      "5/22/2024"
+    ],
+    [
+      "2022",
+      "Registration Submitted 20222722414343094",
+      "5/22/2024"
+    ],
+    [
+      "",
+      "Inactive Registration",
+      "9/30/2025"
+    ],
+    [
+      "",
+      "Registration Submitted 00002722414946849",
+      "5/28/2024"
+    ],
+    [
+      "",
+      "Charity Added to COROS",
+      "5/22/2024"
+    ]
+  ],
+  "source_url": "https://secure.nmdoj.gov/CharitySearch/CharityDetail.aspx?FEIN=23-7110058"
+}
