@@ -87,6 +87,32 @@ class Repairs(unittest.TestCase):
         self.assertEqual(result.status,'Not Registered')
         self.assertEqual([q['name'] for q in seen],['','Legal Name','Reviewed Alias','Generated Name'])
 
+    def test_nm_validated_broad_searches_stay_within_signed_evidence_bound(self):
+        record={'state':'NM','ein':'46-1349584','completed':[]}
+        for i in range(12):
+            query={'state':'NM','operation':'search','ein':'461349584','name':'Alias '+str(i)}
+            rows=[{'name':'Other registered organization '+str(j),'ein':str(100000000+j)} for j in range(685)]
+            raw={'query':query,'complete':True,'rows':rows,'total':len(rows)}
+            cleaned=cc.nm_browser_clean_evidence(raw,query)
+            compact=cc.final_four_compact_search_evidence(record,cleaned)
+            record['completed'].append({'query':query,'evidence':compact})
+            self.assertEqual(compact['rows'],[])
+        with patch.object(cc,'NY_CONNECTOR_SIGNING_KEY','test-key'*8):
+            self.assertLess(len(cc.ny_connector_pack(record)),10000)
+        self.assertEqual([a['source_total'] for a in record['nm_search_audits']],[685]*12)
+        self.assertEqual(len(rows),685)  # Original validated evidence remains intact.
+
+    def test_nm_compaction_preserves_exact_ein_and_rejects_client_audit_fields(self):
+        query={'state':'NM','operation':'search','ein':'461349584','name':'Reviewed Alias'}
+        match={'name':'Source legal name','ein':'461349584'}
+        raw={'query':query,'complete':True,'rows':[{'name':'Unrelated','ein':'123456789'},match],'total':2}
+        record={'state':'NM','ein':'46-1349584'}
+        compact=cc.final_four_compact_search_evidence(record,cc.nm_browser_clean_evidence(raw,query))
+        self.assertEqual(compact['rows'],[match]);self.assertEqual(compact['total'],1)
+        self.assertEqual(record['nm_search_audits'][0]['source_total'],2)
+        with self.assertRaises(ValueError):
+            cc.nm_browser_clean_evidence({**raw,'nm_search_audits':[{'completed':True}]},query)
+
     def test_nm_browser_history_matches_mature_master_classification(self):
         org=cc.checker.Organization('NATCA Charitable Foundation','75-2556496')
         rows=[['2025','Extension Granted','6/10/2026'],['2024','Registration Submitted 20244922536459055','12/30/2025']]

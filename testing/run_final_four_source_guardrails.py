@@ -867,7 +867,7 @@ class LookupControls(unittest.TestCase):
         allowed={'nc_charity_record_evidence','final_four_license_result','nv_charity_detail_evidence',
                  'tn_charity_detail_evidence','final_four_browser_lookup','mi_name_fallback_queries',
                  'search_ok_precise','run_state_lookup','ny_connector_request','ny_connector_advance','il_verification_recovery',
-                 'nm_browser_clean_evidence','nm_browser_lookup','final_four_clean_evidence',
+                 'nm_browser_clean_evidence','nm_browser_lookup','final_four_clean_evidence','final_four_compact_search_evidence',
                  'final_four_connector_advance','final_four_connector_request','final_four_connector_failure'}
         # Version allowlists belong to signed input handlers; all other master
         # statements/functions must stay byte-equivalent as parsed syntax.

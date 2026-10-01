@@ -6911,13 +6911,24 @@ def final_four_clean_evidence(payload, query):
 
 
 def final_four_compact_search_evidence(record, evidence):
-    """Master-only compaction after validating every row of a complete NV grid.
+    """Master-only compaction after validating every row of a complete grid.
 
     Keep all accepted/possible candidates, including unsupported categories.
     Only rows the existing matcher rejects can leave the signed continuation.
     Browser-supplied evidence cannot supply this internal completion metadata.
     """
     query = evidence.get("query", {})
+    if record["state"] == "NM" and query.get("operation") == "search":
+        # NM identity is always the exact EIN, including name fallbacks. The
+        # full public result count/rows were validated before this call. Keeping
+        # hundreds of unrelated identities for every spelling exceeds the
+        # signed continuation bound without adding matching evidence.
+        retained = [row for row in evidence["rows"]
+                    if row["ein"] == canonical_ein_digits(record["ein"])]
+        record.setdefault("nm_search_audits", []).append({
+            "query": query, "source_total": evidence["total"],
+            "retained": len(retained), "completed": True})
+        return {**evidence, "rows": retained, "total": len(retained)}
     if record["state"] != "NV" or query.get("operation") != "search":
         return evidence
     token = REVIEWED_NAME_CONTEXT.set({canonical_ein_digits(record["ein"]): tuple(record["alternate_names"])})
@@ -6998,6 +7009,10 @@ def final_four_connector_advance(record):
         return {"phase": "complete", "result": final_four_connector_failure(record, "NY_CONNECTOR_TIMEOUT")}
     if record.get("nc_search_recovery"):
         result.source_note = result.source_note.rstrip() + " One stalled North Carolina search completed after a fresh-page retry within the original lookup time limit."
+    if record["state"] == "NM":
+        result.queries_attempted = record.get("nm_search_audits", []) + [
+            item for item in getattr(result, "queries_attempted", [])
+            if item.get("query", {}).get("operation") != "search"]
     started = time.perf_counter() - max(0, time.time() - record["issued"])
     return {"phase": "complete", "result": response_data_for_lookup(result, "", org, org.organization_name, org.ein, record["state"], started)}
 
