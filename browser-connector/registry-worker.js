@@ -161,7 +161,13 @@ async function performRegistryQuery(job, query) {
   if (!P.validQuery(query) || query.state !== job.registryState || !P.registryAllowed(query.state,new URL(job.sender.url).origin)) throw new Error("NY_CONNECTOR_INVALID_SEQUENCE");
   if(query.state==='NM') {
     if(query.operation==='search') {
-      await registryNavigate(job,registryStart('NM'),Math.min(30000,job.activeExpiresAt-Date.now()));
+      // ASP.NET preserves the submitted filters when this URL is reloaded.
+      // Reuse the ready owned search form for the next fallback. The Search
+      // postback still must produce a new document and query-bound row count.
+      const current=job.tab===null?null:await chrome.tabs.get(job.tab);
+      if(current?.url===registryStart('NM'))
+        await registryReady(job,null,'/CharitySearch/',Math.min(30000,job.activeExpiresAt-Date.now()));
+      else await registryNavigate(job,registryStart('NM'),Math.min(30000,job.activeExpiresAt-Date.now()));
       for(let attempt=0;attempt<2;attempt++) {
         const submitted=await registryMessage(job,{action:'registry-nm-form',query});
         if(!submitted?.ok)throw new Error('NY_CONNECTOR_INCOMPLETE');

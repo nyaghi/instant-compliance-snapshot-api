@@ -9,6 +9,24 @@ from testing.run_final_four_source_guardrails import AsOf, TN, TN_ROW, NV, NV_FI
 class Repairs(unittest.TestCase):
     def setUp(self):
         p=patch.object(cc,'date',AsOf);p.start();self.addCleanup(p.stop)
+    def test_signed_current_trial_ny_search_continues_to_browser_detail(self):
+        from testing import run_ny_connector_guardrails as base
+        legacy=base.ConnectorTests();legacy.setUp();self.addCleanup(legacy.doCleanups)
+        with patch.object(cc,'trial_identity',return_value={'origin':'isolated'}):
+            code,state=legacy.request(action='start',organization_name=base.ROW['orgName'],
+                                      ein=base.ROW['ein'],connector_version='0.6.29')
+            self.assertEqual(code,200)
+            code,state=legacy.submit(state)
+            self.assertEqual(code,200);self.assertEqual(state['phase'],'search')
+            self.assertEqual(state['query'],{'orgID':base.ROW['orgID']})
+            code,state=legacy.submit(state,detail=base.DETAIL)
+            self.assertEqual(code,200);self.assertEqual(state['result']['status'],'Current')
+            self.assertEqual(state['result']['connector_version'],'0.6.29')
+            legacy.session.get.assert_not_called()
+        with patch.object(cc,'trial_identity',return_value=None):
+            code,_=legacy.request(action='start',organization_name=base.ROW['orgName'],
+                                   ein=base.ROW['ein'],connector_version='0.6.29')
+            self.assertEqual(code,400)
     def test_tn_stale_complete_history_without_expiration_is_delinquent(self):
         for period in ['09/30/2015','09/30/2017']:
             r=cc.tn_charity_detail_evidence({**TN,'Expiration Date':'','financial_periods':[period],'financial_count':1},'CO3674',TN_ROW)

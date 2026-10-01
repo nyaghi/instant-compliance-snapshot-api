@@ -5988,7 +5988,7 @@ def il_verification_recovery(record, payload, now):
     if (record.get("state") != "IL" or record.get("purpose") != "registration"
             or record.get("recovery_protocol") != "il-fresh-page-v1"
             or (record.get("connector_version") != "0.5.10"
-                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28"}))
+                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29"}))
             or payload.get("reason") != "NY_CONNECTOR_IL_VERIFICATION_PENDING"
             or record.get("il_verification_recovery")
             or now + 120 >= record["issued"] + NY_CONNECTOR_TTL_SECONDS):
@@ -6173,6 +6173,10 @@ def final_four_license_result(org, state, records, deadline, source):
         raise ValueError("Unsupported final-four license source")
     result = licensed_charity_result(org, state, records, deadline, source)
     selected = getattr(result, "_cc_license_record", {})
+    if state == "TN" and selected.get("expiration") and selected.get("date_evidence_note", "").startswith("Tennessee displays no expiration date."):
+        result.source_note = result.source_note.replace(
+            f"The displayed license expiration date is {selected['expiration'].isoformat()}. ",
+            f"The controlling renewal deadline calculated from the latest filed fiscal period is {selected['expiration'].isoformat()}. ", 1)
     if state == "NC" and selected.get("unissued_application"):
         result.source_note = (f"North Carolina lists a confirmed matching application for {selected['name']} as In-Process. "
                               "CharityClarity reports Pending; this is an application, not an issued charity license.")
@@ -7154,9 +7158,15 @@ def final_four_connector_request(payload, origin):
         if record['state'] == 'AL' and isinstance(raw_evidence, dict) and raw_evidence.get('verification_pending') is True:
             try:
                 return 200, al_verification_continuation(record, raw_evidence)
-            except Exception:
+            except Exception as exc:
                 # OCR/native-runtime failures cannot become an HTTP failure or
                 # a negative registry result. Never log image/code material.
+                safe_reason = str(exc) if str(exc) in {
+                    'Invalid Alabama verification continuation', 'Alabama check expired before verification',
+                    'Invalid Alabama verification image', 'Invalid Alabama verification dimensions',
+                    'Alabama verification reader busy', 'Blank Alabama verification image',
+                    'Alabama verification image deadline', 'Alabama verification image is uncertain'} else type(exc).__name__
+                log_event('AL verification reader incomplete: ' + safe_reason)
                 return 200, {'phase': 'complete', 'result': final_four_connector_failure(record, 'NY_CONNECTOR_AL_VERIFICATION_REQUIRED')}
         try:
             evidence = final_four_clean_evidence(payload.get("evidence"), pending["query"])
@@ -23706,6 +23716,8 @@ def ny_connector_advance(record):
         raise NYConnectorQueryNeeded(params)
     org = checker.Organization(record["organization_name"], record["ein"])
     started = time.perf_counter()
+    supports_browser_detail = (record.get("connector_version") in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"}
+                               or bool(trial_identity() and record.get("connector_version") in {"0.6.28", "0.6.29"}))
     try:
         if record.get("purpose") == "identity":
             ein = canonical_ein_digits(record["ein"])
@@ -23714,7 +23726,7 @@ def ny_connector_advance(record):
             return {"phase": "complete", "result": {"state": "NY", "source": "NY", "identity": identity,
                     "ein": format_ein(ein), "checked_at_epoch": time.time(), "app_version": APP_VERSION}}
         result = search_ny_direct(org, registry_search_provider=search_response,
-                                  registry_detail_provider=search_response if record.get("connector_version") in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} else None)
+                                  registry_detail_provider=search_response if supports_browser_detail else None)
     except NYConnectorQueryNeeded as pending:
         limit = 5
         is_detail = "orgID" in pending.params
@@ -23722,7 +23734,7 @@ def ny_connector_advance(record):
             return {"phase": "complete", "result": ny_connector_failure(record, "NY_CONNECTOR_INCOMPLETE")}
         record["pending"] = {"query_id": secrets.token_urlsafe(18), "query": pending.params}
         return {"phase": "search", **record["pending"]}
-    if record.get("connector_version") not in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and "401" in (getattr(result, "source_note", "") or ""):
+    if not supports_browser_detail and "401" in (getattr(result, "source_note", "") or ""):
         return {"phase": "complete", "result": ny_connector_failure(record, "NY_CONNECTOR_UPDATE_REQUIRED")}
     data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, "NY", started)
     data["connector_version"] = record.get("connector_version", "0.2.1")
@@ -23755,7 +23767,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28"})):
+        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29"})):
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()

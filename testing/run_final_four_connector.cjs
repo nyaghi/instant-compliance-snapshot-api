@@ -55,6 +55,24 @@ test('AL worker carries fresh verification through a second command in the same 
  assert.equal(h.created.length,1);assert.equal(h.created[0],ownedTab);assert.equal(h.reloads.length,0);
  assert.ok(!JSON.stringify(h.data).includes('ABC123'));assert.ok(!JSON.stringify(h.data).includes('base64,fixture'));
 });
+
+test('NM name fallback reuses the owned form but requires a new query postback',async()=>{
+ const h=fixture(),p=connect(h,'NM');let document=0;const submitted=[];
+ const original=h.chrome.tabs.sendMessage;
+ h.chrome.tabs.sendMessage=async(tab,m)=>{
+  if(m.action==='registry-ready')return {ready:true,documentId:String(document),url:h.tabs.get(tab).url};
+  if(m.action==='registry-nm-form'){const prior=String(document);document++;submitted.push(m.query);
+   return {ok:true,documentId:prior};}
+  if(m.action==='registry-nm-rows')return {ok:true,evidence:{query:m.query,complete:true,total:0,rows:[]}};
+  return original(tab,m);
+ };
+ for(const [i,name] of ['', 'Human Trafficking Legal Center'].entries()){
+  const result=await h.query(p,30+i,{state:'NM',operation:'search',ein:'461349584',name});
+  assert.equal(result.ok,true);assert.equal(result.evidence.complete,true);
+ }
+ assert.equal(h.created.length,1);assert.equal(h.reloads.length,0);
+ assert.deepEqual(submitted.map(q=>q.name),['','Human Trafficking Legal Center']);
+});
 test('NV search margin never extends the job deadline or another state allowance',async()=>{
  for(const state of ['NV','TN'])for(const remaining of [300000,60000,30000]) {
   const h=fixture(),query={state,operation:'search',name:'Reviewed Alias'};
