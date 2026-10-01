@@ -16,6 +16,7 @@ function fixture() {
   let active = 0, peak = 0;
   const calls = [], pending = new Map(), completions = [];
   const context = vm.createContext({
+    window: {}, // The approved Aurora page checks for its optimized transport.
     progressCount: {textContent: ''}, progressBar: {style: {}},
     stateLaneBases: (selected, ein, state) => [selected.length === 1 && state === 'CT' ? 'secondary' : 'primary'],
     checkSingleState: (lanes, ein, email, state, identity) => {
@@ -95,8 +96,10 @@ test('two organization workflows and a subsequent run retain separate inputs and
   assert.equal(a.calls.at(-1).name,'Gamma');
 });
 
-test('the 09.24.5 scheduler and existing NY page collectors remain unchanged', () => {
-  const prior=file=>cp.execFileSync('git',['show','35e61ae:'+file],{cwd:root,maxBuffer:30*1024*1024}).toString().replaceAll('\r\n','\n');
+test('the approved predecessor scheduler and existing NY page collectors remain unchanged', () => {
+  // Freeze the deployed 29.2F predecessor; the pre-Aurora September 24 source
+  // does not include the separately approved optimized-workflow entry point.
+  const prior=file=>cp.execFileSync('git',['show','e2e6da7a3bd259c78734ef704b3ae7ce91e8c4d6:'+file],{cwd:root,maxBuffer:30*1024*1024}).toString().replaceAll('\r\n','\n');
   const current=file=>fs.readFileSync(path.join(root,file),'utf8').replaceAll('\r\n','\n');
   const scheduler=s=>s.slice(s.indexOf('    async function runStateChecks('),s.indexOf('\n    stateCheckboxes.forEach',s.indexOf('    async function runStateChecks(')));
   assert.equal(scheduler(current('web-staging/index.html')),scheduler(prior('web-staging/index.html')));
