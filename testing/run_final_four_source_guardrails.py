@@ -878,6 +878,19 @@ class LookupControls(unittest.TestCase):
         self.assertEqual([n.targets[0].id for n in nm.body[1:3]],['inactive_dates','active_dates'])
         self.assertIsInstance(nm.body[3],ast.If)
         nm.body=[nm.body[0],*nm.body[boundary:]]
+        # Audit the final-four-only signed-status additions while preserving
+        # every existing mature-state identity-review branch verbatim.
+        review=next(n for n in after.body if isinstance(n,ast.FunctionDef) and n.name=='attach_identity_review')
+        loop=next(n for n in review.body if isinstance(n,ast.For))
+        addition=next(n for n in loop.body if isinstance(n,ast.If)
+                      and isinstance(n.test,ast.Compare) and isinstance(n.test.left,ast.Subscript)
+                      and isinstance(n.test.comparators[0],ast.Set))
+        self.assertEqual({n.value for n in addition.test.comparators[0].elts},{'AL','NC','NV','TN'})
+        self.assertEqual(addition.body[0].targets[0].slice.value,'interpreted_status')
+        loop.body.remove(addition)
+        status=next(n for n in after.body if isinstance(n,ast.FunctionDef) and n.name=='identity_review_state_status')
+        self.assertEqual({n.value for n in status.body[0].test.comparators[0].elts},{'AL','NC','NV','TN'})
+        status.body=status.body[1:]
         # Version allowlists belong to signed input handlers; all other master
         # statements/functions must stay byte-equivalent as parsed syntax.
         for tree in (before,after):

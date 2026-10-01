@@ -40,7 +40,7 @@ class DecisionTests(unittest.TestCase):
     def test_nevada_review_accept_reject_and_undo_keep_identity_separate_from_status(self):
         row=dict(name='Example National Charity of Northern County',identifier='NV123456789',location='',ein='',
                  url='https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=Manage-Business&id=12345678-1234-1234-1234-123456789abc',
-                 raw_status='Active',expiration=date.today()+timedelta(days=200),_identity_outcome='possible')
+                 raw_status='Active',status='Current',expiration=date.today()+timedelta(days=200),_identity_outcome='possible')
         initial=self.result('NV',rows=[row])
         accepted=self.decide(initial,'accept',status='Exempt')
         self.assertEqual(accepted['status'],'Current')
@@ -54,6 +54,34 @@ class DecisionTests(unittest.TestCase):
         r['identity_review']=c.identity_review_view(token)
         r=self.decide(r,'reject');self.assertEqual(r['status'],'Needs Review')
         r=self.decide(r,'accept',1);self.assertEqual(r['status'],'Current');self.assertEqual(r['matched_registry_identifier'],'REG456')
+    def test_final_four_acceptance_preserves_signed_master_interpretation(self):
+        for state,status in [('TN','Delinquent'),('NC','Exempt'),('NC','Pending'),
+                             ('AL','Closed / Withdrawn / Canceled'),('NV','Delinquent'),
+                             ('NV','Unable to Confirm'),('TN','Current')]:
+            row=dict(name='Example National Charity',identifier='REG123',location='',
+                     url='https://registry.example/public/REG123',raw_status='Active',
+                     expiration='',status=status,_identity_outcome='possible')
+            with self.subTest(state=state,status=status):
+                r=self.result(state,rows=[row])
+                signed=c.identity_review_unpack(r['identity_review']['token'],self.email,self.device)
+                self.assertEqual(signed['records'][0]['interpreted_status'],status)
+                accepted=self.decide(r,status='Current',interpreted_status='Current')
+                self.assertEqual(accepted['status'],status)
+                self.assertEqual(accepted['success'],status!='Unable to Confirm')
+    def test_final_four_old_or_invalid_snapshot_cannot_invent_current(self):
+        for state in ['AL','NC','NV','TN']:
+            for value in [None,'Not Registered','made-up']:
+                row=dict(name='Example National Charity',identifier='REG123',location='',
+                         url='https://registry.example/public/REG123',raw_status='Active',
+                         expiration='2099-01-01',status=value,_identity_outcome='possible')
+                with self.subTest(state=state,value=value):
+                    r=self.result(state,rows=[row])
+                    self.assertEqual(self.decide(r)['status'],'Unable to Confirm')
+    def test_final_four_explicit_different_ein_has_no_identity_acceptance(self):
+        for state in ['AL','NC','NV','TN']:
+            r=self.result(state,rows=[dict(name='Example National Charity',identifier='X',
+                ein='999999999',status='Current',_identity_outcome='possible')])
+            self.assertNotIn('identity_review',r)
     def test_undo_restores_unresolved_match(self):
         r=self.decide(self.decide(self.result()),'clear')
         self.assertEqual(r['status'],'Needs Review');self.assertEqual(r['identity_review']['candidates'][0]['decision'],'')

@@ -32063,6 +32063,11 @@ def attach_identity_review(data, context):
             continue
         clean = {key: row.get(key, "") for key in
                  ("name", "identifier", "ein", "location", "url", "raw_status", "expiration", "license_category", "initial")}
+        if data["state"] in {"AL", "NC", "NV", "TN"}:
+            # Keep the master interpretation of complete state evidence in the
+            # signed snapshot. Identity acceptance cannot substitute a generic
+            # Active label for a filing-history or charity-scope decision.
+            clean["interpreted_status"] = row.get("status", "Unable to Confirm")
         for key in ("expiration", "initial"):
             if isinstance(clean[key], date): clean[key] = clean[key].isoformat()
             elif clean[key] is None: clean[key] = ""
@@ -32104,6 +32109,11 @@ def identity_review_wi_status(row):
 
 
 def identity_review_state_status(state, row):
+    if state in {"AL", "NC", "NV", "TN"}:
+        status = row.get("interpreted_status")
+        return status if status in {"Current", "Upcoming Filing", "Delinquent", "Exempt",
+            "Pending", "Suspended", "Revoked", "Failed to Renew", "Closed / Withdrawn / Canceled",
+            "Unable to Confirm", "Needs Review"} else "Unable to Confirm"
     if state == "WI":
         return identity_review_wi_status(row)
     expiry = parse_due_date(row.get("expiration", ""))
