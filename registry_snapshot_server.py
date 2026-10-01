@@ -6531,6 +6531,23 @@ def nv_name_reservation_evidence(fields, identifier, source_url):
     return fields['Linked Entity Information'] == 'This name reservation has not been linked to a business'
 
 
+def final_four_search_candidate_scores(name, ein, state, row):
+    """Shortlist source identities without changing master acceptance rules."""
+    names = [row["name"], *row.get("aliases", [])]
+    candidates = [score_candidate(name, ein, {"name": n, "ein": row.get("ein", "")}) for n in names if n]
+    if state == "NV" and candidates and all(c["decision"] == "rejected" for c in candidates):
+        # ORION can combine a legal name and former name in one Entity Name.
+        # A strong exact first component warrants reading the detail; it does
+        # not become an alias or establish identity. The unchanged selector
+        # still requires the detail FEIN or independently displayed IRS name.
+        first, separator, remainder = row["name"].partition(",")
+        if (separator and remainder.strip() and len(distinctive_match_tokens(first)) >= 2
+                and not row.get("ein")
+                and score_candidate(name, ein, {"name": first})["decision"] == "accepted"):
+            candidates.append({"score": 55, "decision": "possible", "reason": "REVIEW_NV_COMPOSITE_NAME"})
+    return candidates
+
+
 def final_four_browser_lookup(org, state, evidence, deadline=None):
     """Master-owned name plan and identity selection for the four new sources.
 
@@ -6597,8 +6614,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
         for row in rows:
             if row["identifier"] in seen:
                 continue
-            names = [row["name"], *row.get("aliases", [])]
-            candidates = [score_candidate(org.organization_name, org.ein, {"name": n, "ein": row.get("ein", "")}) for n in names if n]
+            candidates = final_four_search_candidate_scores(org.organization_name, org.ein, state, row)
             if not candidates or all(c["decision"] == "rejected" for c in candidates):
                 seen.add(row["identifier"])
                 continue
@@ -6782,7 +6798,8 @@ def nm_browser_clean_evidence(payload, query):
             raise ValueError('Incomplete New Mexico history')
         for row in rows:
             if (not isinstance(row, list) or len(row) != 3 or not all(public_text(v) for v in row)
-                    or not re.fullmatch(r'20[0-9]{2}', row[0])
+                    or not (re.fullmatch(r'20[0-9]{2}', row[0])
+                            or (row[0] == '' and row[1] == 'Charity Added to COROS'))
                     or parse_due_date(row[2]) is None or not row[1].strip()):
                 raise ValueError('Invalid New Mexico history row')
         for period in periods:
@@ -6814,7 +6831,10 @@ def nm_browser_lookup(org, evidence):
         query = {'state': 'NM', 'operation': 'detail', 'identifier': ein, 'name': selected['name']}
         detail = nm_browser_clean_evidence(evidence(query), query)
         module = load_wa_nm_module()
-        rows = [(int(year), status, when) for year, status, when in detail['history_rows']]
+        # COROS's dated administrative enrollment row has no tax year. Keep it
+        # in validated source evidence, but it cannot establish a filing cycle
+        # or the original legal registration date.
+        rows = [(int(year), status, when) for year, status, when in detail['history_rows'] if year]
         submitted = module.nm_latest_submitted(rows)
         periods = {p['period_end'] for p in detail['financial_periods']
                    if submitted and p['tax_year'] == submitted[0]}
@@ -6935,8 +6955,7 @@ def final_four_compact_search_evidence(record, evidence):
     try:
         retained = []
         for row in evidence["rows"]:
-            candidates = [score_candidate(record["organization_name"], record["ein"], {"name": name, "ein": row.get("ein", "")})
-                          for name in [row["name"], *row.get("aliases", [])] if name]
+            candidates = final_four_search_candidate_scores(record["organization_name"], record["ein"], "NV", row)
             if not candidates or any(candidate["decision"] != "rejected" for candidate in candidates):
                 retained.append(row)
     finally:

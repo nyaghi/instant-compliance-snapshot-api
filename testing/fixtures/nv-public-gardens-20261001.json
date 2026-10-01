@@ -1,0 +1,50 @@
+{
+  "fields": {
+    "Annual Renewal Due Date/Expiration Date": "05/31/2027",
+    "Campaign Name": "-",
+    "Entity Name": "American Public Gardens Association, American Association of Botanical Gardens and Arboreta",
+    "Entity Status": "Withdrawn",
+    "Entity Type": "Foreign Entities Not Required to Register In Nevada",
+    "FEIN": "-",
+    "Formation Date in Nevada": "05/22/2024",
+    "IRS Registered Name": "American Public Gardens Association",
+    "NV Business ID": "NV20243137331",
+    "Solicits Charitable Contribution?": "Yes"
+  },
+  "headers": [
+    "Filed Date",
+    "Effective Date",
+    "Filing Number",
+    "Filing Type",
+    "Source",
+    "No. of Pages"
+  ],
+  "rows": [
+    [
+      "10/02/2025",
+      "10/02/2025",
+      "20255238689",
+      "Charitable Solicitation Registration Statement",
+      "Mail",
+      "1"
+    ],
+    [
+      "06/16/2025",
+      "06/16/2025",
+      "20254975717",
+      "Charitable Solicitation Registration Statement",
+      "Mail",
+      "3"
+    ],
+    [
+      "05/22/2024",
+      "05/22/2024",
+      "20244114645",
+      "Charitable Solicitation Registration Statement",
+      "Email",
+      "3"
+    ]
+  ],
+  "source_url": "https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=Manage-Business&id=3e1113c1-95c4-408b-a9b2-be2db6bd6e96",
+  "total": "1 - 3 of 3 items"
+}

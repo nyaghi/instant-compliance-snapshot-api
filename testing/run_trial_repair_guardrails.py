@@ -1,5 +1,7 @@
 """Controls for the approved October 1 trial repairs, including failure cases."""
 import copy
+import json
+from pathlib import Path
 from datetime import date
 import unittest
 from unittest.mock import patch
@@ -115,7 +117,8 @@ class Repairs(unittest.TestCase):
 
     def test_nm_browser_history_matches_mature_master_classification(self):
         org=cc.checker.Organization('NATCA Charitable Foundation','75-2556496')
-        rows=[['2025','Extension Granted','6/10/2026'],['2024','Registration Submitted 20244922536459055','12/30/2025']]
+        rows=[['2025','Extension Granted','6/10/2026'],['2024','Registration Submitted 20244922536459055','12/30/2025'],
+              ['', 'Charity Added to COROS', '11/16/2018']]
         def source(q):
             if q['operation']=='search':return {'query':q,'complete':True,'rows':[{'name':org.organization_name,'ein':'752556496'}],'total':1}
             return {'query':q,'complete':True,'name':org.organization_name,'ein':'752556496',
@@ -124,7 +127,47 @@ class Repairs(unittest.TestCase):
         module=cc.load_wa_nm_module()
         baseline=module.SearchResult(org.organization_name,org.ein,'NM',module.STATUS_UNKNOWN,'','','')
         baseline.matched_registry_name=org.organization_name;baseline.matched_registry_identifier=org.ein
-        baseline=cc.nm_apply_status_history_master(module,baseline,[(int(y),s,d) for y,s,d in rows],fye_text='12/31/2024')
+        baseline=cc.nm_apply_status_history_master(module,baseline,[(int(y),s,d) for y,s,d in rows if y],fye_text='12/31/2024')
         self.assertEqual(result.status,cc.copy_external_result(org,'NM',baseline).status)
         self.assertNotEqual(result.status,'Not Registered')
+    def test_nm_only_exact_administrative_row_can_omit_tax_year(self):
+        q={'state':'NM','operation':'detail','identifier':'752556496','name':'NATCA Charitable Foundation'}
+        data={'query':q,'complete':True,'name':q['name'],'ein':q['identifier'],
+              'history_rows':[['','Charity Added to COROS','11/16/2018']], 'financial_periods':[]}
+        self.assertEqual(cc.nm_browser_clean_evidence(data,q),data)
+        for row in [['','Registration Submitted','11/16/2018'],['201','Charity Added to COROS','11/16/2018'],
+                    ['','Charity Added to COROS','not a date']]:
+            with self.assertRaises(ValueError):cc.nm_browser_clean_evidence({**data,'history_rows':[row]},q)
+    def test_nv_composite_name_is_retained_for_detail_not_accepted(self):
+        name='American Public Gardens Association'
+        row={'name':name+', American Association of Botanical Gardens and Arboreta',
+             'identifier':'NV20243137331','entity_type':'Foreign Entities Not Required to Register In Nevada'}
+        scores=cc.final_four_search_candidate_scores(name,'237110058','NV',row)
+        self.assertEqual(scores[-1]['decision'],'possible')
+        self.assertFalse(any(c['decision']=='accepted' for c in scores))
+        record={'state':'NV','organization_name':name,'ein':'237110058','alternate_names':[]}
+        evidence={'query':{'state':'NV','operation':'search','name':name},'rows':[row],'total':1}
+        self.assertEqual(cc.final_four_compact_search_evidence(record,evidence)['rows'],[row])
+        for state,changes in [('NC',{}),('NV',{'ein':'123456789'}),('NV',{'name':'Different Foundation, '+name})]:
+            changed={**row,**changes}
+            self.assertEqual(cc.final_four_search_candidate_scores(name,'237110058',state,changed),
+                             [cc.score_candidate(name,'237110058',{'name':changed['name'],'ein':changed.get('ein','')})])
+    def test_nv_observed_composite_record_requires_independent_detail_identity(self):
+        fixture=json.loads((Path(__file__).parent/'fixtures/nv-public-gardens-20261001.json').read_text())
+        org=cc.checker.Organization('American Public Gardens Association','23-7110058')
+        fields=fixture['fields'];identifier=fields['NV Business ID'];seen=[]
+        def source(query):
+            seen.append(query)
+            if query['operation']=='search':
+                return {'state':'NV','query':query,'complete':True,'verification_pending':False,'total':1,
+                        'rows':[{'name':fields['Entity Name'],'identifier':identifier,'entity_type':fields['Entity Type']}]}
+            return {'query':query,'complete':True,'fields':fields,'source_url':fixture['source_url'],
+                    'filings':{'identifier':identifier,'name':fields['Entity Name'],'complete':True,'total':3,
+                               'headers':fixture['headers'],'rows':fixture['rows']}}
+        with patch.object(cc,'licensed_charity_names',return_value=([org.organization_name],[])), \
+                patch.object(cc,'reconciled_registry_address',return_value={'decision':'unavailable'}):
+            result=cc.final_four_browser_lookup(org,'NV',source)
+        self.assertEqual([q['operation'] for q in seen],['search','detail'])
+        self.assertEqual(result.status,'Closed / Withdrawn / Canceled')
+        self.assertEqual(result.matched_registry_identifier,identifier)
 if __name__=='__main__':unittest.main()
