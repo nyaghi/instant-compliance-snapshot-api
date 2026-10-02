@@ -304,6 +304,8 @@
       if (cells.length !== headers.length) throw new Error("REGISTRY_NV_ROW_CHANGED");
       return cells.map(cell => text(cell.querySelector('.casex-grid-responsive-data') || cell).replace(/^:\s*/, ''));
     });
+    if (title === 'Filing History Details' && values.some(cells => !cells[0] || !cells[2] || !cells[3]))
+      throw new Error('REGISTRY_NV_FILINGS_INCOMPLETE');
     if (!rows.length) {
       if (!grid.querySelector('.k-grid-norecords') || grid.getAttribute('aria-rowcount') !== '1' || table.querySelector('kendo-datapager'))
         throw new Error("REGISTRY_NV_EMPTY_INCOMPLETE");
@@ -383,6 +385,15 @@
         const value=nvPage(title,headers);
         if(value.page!==expected+1 || value.total!==total)throw new Error('REGISTRY_NV_PAGINATION_INCOMPLETE');
         if(title==='Search Results')value.values.forEach(nvPublicRow);
+        if(title==='Filing History Details') {
+          // ORION updates the pager before replacing all filing rows. An old
+          // row on the next page must keep waiting, rather than produce a
+          // repeated filing that the master correctly rejects as incomplete.
+          const seen=new Set(collected.map(row=>row.cells[2]));
+          const nextIds=value.values.map(cells=>cells[2]);
+          if(nextIds.some(id=>seen.has(id)) || new Set(nextIds).size!==nextIds.length)
+            throw new Error('REGISTRY_NV_FILINGS_INCOMPLETE');
+        }
         return value;
       }, deadline, {previous:JSON.stringify(page.values),settle:0});
     }
@@ -687,9 +698,9 @@
       const filings = await nvPages('Filing History Details',nvFilingHeaders,deadline,first);
       evidence.filings = {identifier:query.identifier,name:fields['Entity Name'],complete:true,total:filings.length,
         headers:nvFilingHeaders,rows:filings.map(row=>row.cells)};
-    } catch {
+    } catch (error) {
       // Optional history failure cannot erase a fully loaded corporate status.
-      evidence.filings = {complete:false};
+      evidence.filings = {complete:false,failure_code:/^REGISTRY_[A-Z_]+$/.test(error.message)?error.message:'REGISTRY_NV_FILINGS_INCOMPLETE'};
     }
     return evidence;
   }

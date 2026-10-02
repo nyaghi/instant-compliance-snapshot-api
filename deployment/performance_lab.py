@@ -159,7 +159,7 @@ def final_four_asset(name, text):
       if (!cleanup) trace("master request", null, {action:fields.action});''')
         replace('      const payload = await response.json();', '      const payload = await response.json();\n      if (!cleanup) trace("master response", null, {action:fields.action,http_status:response.status,phase:payload.phase});')
         replace('        let completed;', '        let completed;\n        trace("browser query started", state.query);')
-        replace('        state = completed.ok', '        trace("browser query returned", state.query, {ok:completed.ok,reason:completed.reason||"",...(completed.nv_readiness ? {nv_readiness:completed.nv_readiness} : {})});\n        state = completed.ok')
+        replace('        state = completed.ok', '        trace("browser query returned", state.query, {ok:completed.ok,reason:completed.reason||"",...(completed.nv_readiness ? {nv_readiness:completed.nv_readiness} : {}),...(registryState === "NV" && completed.evidence?.filings ? {nv_filings:{complete:completed.evidence.filings.complete===true,total:completed.evidence.filings.total??null,failure_code:completed.evidence.filings.failure_code||""}} : {})});\n        state = completed.ok')
     return text
 
 

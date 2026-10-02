@@ -3,7 +3,7 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const original=fs.readFileSync(process.env.CC_TEST_TRIAL_DIR?path.join(process.env.CC_TEST_TRIAL_DIR,'registry-content.js'):path.join(__dirname,'../browser-connector/registry-content.js'),'utf8');
-const source=original.replace('  async function handle(m) {','  globalThis.testNV = {nvPage,nvFields,nvReservationFields,nvChanged,nvSearch,nvDetail,nvReturnSearch,registryDocumentReady,handle};\n  async function handle(m) {');
+const source=original.replace('  async function handle(m) {','  globalThis.testNV = {nvPage,nvPages,nvFields,nvReservationFields,nvChanged,nvSearch,nvDetail,nvReturnSearch,registryDocumentReady,handle};\n  async function handle(m) {');
 
 test('Nevada detail and transitional routes are not ready public search forms',()=>{
  const h=fixture();
@@ -526,6 +526,40 @@ test('Nevada waits for a delayed complete filing grid after entity fields load',
  const result=await h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:'NV20121738342'},h.time+45000));
  assert.equal(result.filings.complete,true);assert.equal(result.filings.total,1);
  assert.equal(result.filings.rows[0][3],'Charitable Solicitation Registration Statement');
+});
+
+test('Nevada filing pagination waits for old rows to be replaced after the pager advances',async()=>{
+ const h=fixture(),headers=['Filed Date','Effective Date','Filing Number','Filing Type','Source','No. of Pages'];
+ const filing=id=>['06/02/2026','06/02/2026',String(id),'Charitable Solicitation Registration Statement','Online','1'];
+ let page=1,rows=[filing(1),filing(2)],notify;
+ const grid={querySelector:()=>null,querySelectorAll:q=>q==='[role="columnheader"]'
+  ?headers.map(label=>({getAttribute:()=>label})):q==='tbody > tr[role="row"]'
+  ?rows.map(cells=>({querySelector:()=>({}),querySelectorAll:()=>cells.map(innerText=>({innerText,querySelector:()=>null}))})):[]};
+ const target={nodeType:1,closest:()=>({})};
+ const table={querySelectorAll:()=>[{innerText:'Filing History Details'}],querySelector:q=>q==='[role="grid"]'?grid:
+  q==='kendo-datapager'?{getAttribute:()=>`Page ${page} of 2`}:q==='kendo-datapager-info'
+  ?{innerText:page===1?'1 - 2 of 4 items':'3 - 4 of 4 items'}:q==='button[aria-label="Go to the next page"]'
+  ?{disabled:false,getAttribute:()=>null,click:()=>{
+    page=2;rows=[filing(3),filing(2)];
+    notify?.([{target,addedNodes:[],removedNodes:[]}]);
+    h.context.setTimeout(()=>{rows=[filing(3),filing(4)];notify?.([{target,addedNodes:[],removedNodes:[]}]);},800);
+  }}:null};
+ h.context.document.querySelectorAll=q=>q==='casex-data-table'?[table]:q==='.app-loader-pane .circle-loader'?[]:[];
+ const Observer=h.context.MutationObserver;
+ h.context.MutationObserver=class extends Observer {constructor(fn){super(fn);notify=fn;}};
+ const collected=await h.drive(h.api.nvPages('Filing History Details',headers,h.time+45000));
+ assert.deepEqual(Array.from(collected,row=>row.cells[2]),['1','2','3','4']);
+ assert.ok(h.time>=1800,'the old filing row is not accepted with the new pager');
+});
+
+test('Nevada filing placeholders never count as a completed filing page',()=>{
+ const h=fixture(),headers=['Filed Date','Effective Date','Filing Number','Filing Type','Source','No. of Pages'];
+ const grid={querySelectorAll:q=>q==='[role="columnheader"]'?headers.map(label=>({getAttribute:()=>label})):
+  q==='tbody > tr[role="row"]'?[{querySelector:()=>({}),querySelectorAll:()=>headers.map(()=>({innerText:'',querySelector:()=>null}))}]:[]};
+ const table={querySelectorAll:()=>[{innerText:'Filing History Details'}],querySelector:q=>q==='[role="grid"]'?grid:
+  q==='kendo-datapager'?{getAttribute:()=> 'Page 1 of 1'}:q==='kendo-datapager-info'?{innerText:'1 - 1 of 1 items'}:null};
+ h.context.document.querySelectorAll=()=>[table];
+ assert.throws(()=>h.api.nvPage('Filing History Details',headers),/FILINGS_INCOMPLETE/);
 });
 
 test('detail opens the requested business ID after returning to its result page',async()=>{
