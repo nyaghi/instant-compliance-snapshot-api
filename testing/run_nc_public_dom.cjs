@@ -8,11 +8,11 @@ const active={'CSL Legal Name':"America's Charities",'CSL Type':'Charitable Orga
 const exempt={'CSL Legal Name':'YWCA of the U.S.A.','CSL Type':'CSL Exempt Organization',Status:'CSL Exempt',License:'EX003050'};
 const txt=innerText=>({innerText,querySelector:()=>null});
 function labels(values){return Object.entries(values).map(([key,value])=>({innerText:key+':',parentElement:txt(key+': '+value)}));}
-function harness({cards=[active],total=cards.length,query="America's Charities",url=origin+'/online_services/search/Charities_Results',fields=null,periods=null,uploadLink=false,extraLabels=[],displayName=null,addressCount=1}={}){
+function harness({cards=[active],total=cards.length,query="America's Charities",url=origin+'/online_services/search/Charities_Results',fields=null,periods=null,uploadLink=false,extraLabels=[],displayName=null,addressCount=1,profileIds=null}={}){
  const panels=new Map(),buttons=[];let clicks=0,formClicks=0;
  for(const [i,row] of cards.entries()){
   let expanded=false;
-  const panel={getClientRects:()=>expanded?[{}]:[],querySelectorAll:s=>s==='.para-small > .boldSpan'?[...labels(row),...extraLabels.flatMap(labels)]:s==='a[href]'?[{getAttribute:()=>new URL(profile).pathname}]:[]};
+  const panel={getClientRects:()=>expanded?[{}]:[],querySelectorAll:s=>s==='.para-small > .boldSpan'?[...labels(row),...extraLabels.flatMap(labels)]:s==='a[href]'?[{getAttribute:()=>new URL(profile).pathname.replace(/\d+$/,profileIds?.[i]||'5700751')}]:[]};
   panels.set('a'+i,panel);buttons.push({querySelector:s=>s==='.searchHeader'?txt(row['CSL Type']==='In-Process'&&!row.License?(displayName||row['CSL Legal Name']):`${displayName||row['CSL Legal Name']} • (${row.License})`):null,getAttribute:k=>k==='aria-controls'?'a'+i:expanded?'true':'false',click:()=>{clicks++;expanded=true;}});
  }
  const addressValues=['14200 Park Meadow Dr Ste 330s','Chantilly','VA','20151-4210'];
@@ -180,4 +180,18 @@ test('NC completed explicit EX exemption can omit its entire address block',()=>
   assert.throws(()=>bad.api.ncProfile(q),/ADDRESS_INCOMPLETE/);
  }
  assert.throws(()=>h.api.ncProfile({...q,identifier:'EX002017'}),/PROFILE_INCOMPLETE/);
+});
+
+
+test('NC grouped pending count retains every distinct pending application without dropping a card',async()=>{
+ const pending={'CSL Legal Name':'Example Pending Chapter','CSL Type':'In-Process',Status:'In-Process'};
+ const h=harness({cards:[active,pending,pending],total:2,profileIds:['5700751','15114421','20537566']});
+ const r=await h.api.ncRows({state:'NC',operation:'search',name:"America's Charities"});
+ assert.equal(r.evidence.total,3);assert.equal(r.evidence.rows.length,3);
+ assert.equal(new Set(r.evidence.rows.map(row=>row.profile_url)).size,3);
+ assert.equal(r.diagnostics[0].displayed,2);assert.equal(r.diagnostics[0].cards,3);
+ for(const opts of [{total:1},{total:4},{total:2,profileIds:['5700751','15114421','15114421']},
+   {total:2,cards:[active,pending,{...pending,'CSL Legal Name':'Different Pending Chapter'}]}]){
+  await assert.rejects(harness({cards:[active,pending,pending],total:2,profileIds:['5700751','15114421','20537566'],...opts}).api.ncRows({state:'NC',operation:'search',name:"America's Charities"}));
+ }
 });

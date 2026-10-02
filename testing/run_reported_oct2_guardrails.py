@@ -99,6 +99,34 @@ class ReportedNames(unittest.TestCase):
             cc.REVIEWED_NAME_CONTEXT.reset(token)
 
 
+class ReportedStateInterpretation(unittest.TestCase):
+    def test_nc_denied_existing_license_uses_past_extension_not_application_date(self):
+        from testing.run_final_four_source_guardrails import NC
+        fields = {**NC, 'CSL Legal Name': 'The NHP Foundation', 'Status': 'Denied',
+                  'License': 'SL013037', 'Expiration Date': '5/15/2020', 'Extension End Date': '7/15/2020'}
+        row = cc.nc_charity_record_evidence(fields)
+        self.assertEqual(row['status'], 'Delinquent')
+        self.assertEqual(row['expiration'], date(2020, 7, 15))
+        for changes in ({'Expiration Date': '', 'Extension End Date': ''},
+                        {'Expiration Date': '5/15/2099', 'Extension End Date': '7/15/2099'},
+                        {'License': 'EX013037', 'CSL Type': 'CSL Exempt Organization'}):
+            with self.subTest(changes=changes):
+                self.assertEqual(cc.nc_charity_record_evidence({**fields, **changes})['status'], 'Unable to Confirm')
+
+    def test_nv_nonprofit_and_foreign_unqualified_categories_preserve_different_scopes(self):
+        from testing.run_final_four_source_guardrails import NV, NV_FILINGS, NV_SOLICITATION
+        fields = {**NV, 'Annual Renewal Due Date/Expiration Date': '7/31/2027'}
+        row = cc.nv_charity_detail_evidence(fields, fields['NV Business ID'])
+        self.assertEqual(row['status'], 'Current')
+        self.assertFalse(row['requires_solicitation_history'])
+        self.assertEqual(cc.nv_charity_filings_evidence(row, NV_FILINGS)['status'], 'Current')
+        other = cc.nv_charity_detail_evidence(NV_SOLICITATION, NV_SOLICITATION['NV Business ID'])
+        self.assertTrue(other['requires_solicitation_history'])
+        self.assertEqual(other['status'], 'Unable to Confirm')
+        with self.assertRaises(ValueError):
+            cc.nv_charity_filings_evidence(other, {**NV_FILINGS, 'identifier': other['identifier'], 'name': other['name']})
+
+
 class ReportedPublicRows(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

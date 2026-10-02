@@ -123,7 +123,8 @@ class IsolationControls(unittest.TestCase):
             'pa_name_search_plan','final_four_connector_failure','final_four_browser_lookup',
             'structured_registry_name','ar_result_rows','search_ar_precise','ok_choose_safe_result_row_on_page',
             'ok_open_latest_equivalent_detail','search_ok_precise','licensed_compound_retrieval_names',
-            'irs_index_object_ids','identity_irs_historical_names','irs_period_for_label','ms_name_search_plan','ny_connector_failure'},
+            'irs_index_object_ids','identity_irs_historical_names','irs_period_for_label','ms_name_search_plan','ny_connector_failure',
+            'nc_charity_record_evidence','nv_charity_detail_evidence','nv_charity_filings_evidence'},
             'deployment/durable_queue.py':{'order_pending'}}
         for name,allowed in audited.items():
             previous=subprocess.check_output(['git','show','c8e6a0af19177f31951aacad60e783a369343aa5:'+name],cwd=ROOT).decode('utf-8')
@@ -134,7 +135,7 @@ class IsolationControls(unittest.TestCase):
                 handlers=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in {'ny_connector_request','ny_connector_advance','il_verification_recovery'}]
                 for handler in handlers:
                     for n in ast.walk(handler):
-                        if isinstance(n,ast.Set):n.elts=[v for v in n.elts if not(isinstance(v,ast.Constant) and v.value in {'0.6.46','0.6.47','0.6.48','0.6.49','0.6.50'})]
+                        if isinstance(n,ast.Set):n.elts=[v for v in n.elts if not(isinstance(v,ast.Constant) and v.value in {'0.6.46','0.6.47','0.6.48','0.6.49','0.6.50','0.6.51'})]
                 tree.body=[n for n in tree.body if not(isinstance(n,ast.FunctionDef) and n.name in allowed)]
             self.assertEqual(ast.dump(trees[0]),ast.dump(trees[1]),name)
 

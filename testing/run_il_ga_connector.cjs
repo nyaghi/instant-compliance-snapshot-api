@@ -63,7 +63,7 @@ test('Illinois verification recovery activates the same owned document and resto
   h.chrome.tabs.sendMessage=async(tab,m)=>{
     if(m.action==='registry-il'){
       attempts++;
-      if(attempts===1){assert.equal(m.formWaitMs,12000);return {ok:false,reason:'NY_CONNECTOR_IL_VERIFICATION_PENDING'};}
+      if(attempts===1){assert.equal(m.formWaitMs,0);return {ok:false,reason:'NY_CONNECTOR_IL_VERIFICATION_PENDING'};}
       assert.equal(m.formWaitMs,45000);assert.equal(h.tabs.get(tab).active,true);
     }
     return original(tab,m);

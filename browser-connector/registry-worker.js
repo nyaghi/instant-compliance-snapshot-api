@@ -381,7 +381,7 @@ async function performRegistryQuery(job, query) {
       diagnostic("il-command",job,`${query.identifier ? "detail" : query.ein ? "ein" : "name"} ms=${Date.now()-started} ${result?.ok ? "complete" : /^NY_CONNECTOR_[A-Z_]+$/.test(result?.reason) ? result.reason : "incomplete"}`);
       return result;
     };
-    let result = await collect(12000);
+    let result = await collect(0);
     if (result?.reason === "NY_CONNECTOR_IL_VERIFICATION_PENDING") {
       result = await registryIllinoisVerification(job, collect);
       job.ilReusableForm = result?.ok === true && !Object.hasOwn(query,"identifier");
@@ -424,6 +424,10 @@ async function registryNorthCarolinaQuery(job,query) {
     await registryReady(job,prior.documentId,'/online_services/search/Charities_Results',45000,query);
     const result=await registryMessage(job,{action:'registry-nc-rows',query,budgetMs:Math.max(1,Math.min(45000,job.activeExpiresAt-Date.now()))});
     if(result?.ok && result.evidence?.complete===true) {
+      for(const entry of Array.isArray(result.diagnostics)?result.diagnostics.slice(0,1):[]) {
+        if(entry?.phase==='pending-count' && [entry.displayed,entry.cards,entry.groups].every(n=>Number.isInteger(n)&&n>=0&&n<=100))
+          diagnostic('nc-count',job,`Pending application cards retained: displayed=${entry.displayed}; cards=${entry.cards}; groups=${entry.groups}`);
+      }
       job.ncProfiles ||= Object.create(null);
       for(const row of result.evidence.rows||[])job.ncProfiles[row.License]=row.profile_url;
     }

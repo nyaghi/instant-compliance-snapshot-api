@@ -119,8 +119,16 @@
       && !!document.querySelector('div[id^="recaptcha_"]');
     let button;
     try {
-      button = await wait(() => { const b=searchButton(); return b && !b.disabled && b; },
-        verificationPending() ? formWaitMs : 45000, {trace:phase("form")});
+      button = await wait(() => {
+        const b=searchButton();
+        if (b && !b.disabled) return b;
+        // Hand the actual hidden verification form to the owned-tab visibility
+        // recovery immediately. The widget can arrive after the first DOM
+        // inspection; do not spend most of Sales waiting in a hidden tab.
+        if (formWaitMs === 0 && verificationPending())
+          throw new Error("NY_CONNECTOR_IL_VERIFICATION_PENDING");
+        return false;
+      }, formWaitMs === 0 ? 45000 : verificationPending() ? formWaitMs : 45000, {trace:phase("form")});
     } catch {
       // Illinois deliberately hides all Kendo buttons until its own
       // verification callback succeeds. Observe only public DOM presence;
@@ -967,8 +975,8 @@
     const total=Number(count[1]),buttons=[...main.querySelectorAll('#resultsSection .usa-accordion__button')];
     // A larger paginated result is incomplete until every displayed record can
     // be collected. Never infer zero from an absent or partially loaded card.
-    if(total>100)throw new Error('REGISTRY_NC_PAGINATION_INCOMPLETE');
-    if(buttons.length!==total)throw new Error('REGISTRY_NC_RESULT_COUNT_MISMATCH');
+    if(total>100||buttons.length>100)throw new Error('REGISTRY_NC_PAGINATION_INCOMPLETE');
+    if(buttons.length<total)throw new Error('REGISTRY_NC_RESULT_COUNT_MISMATCH');
     const rows=[],seen=new Set();
     for(const button of buttons) {
       if(Date.now()>=deadline)throw new Error('REGISTRY_NC_RESPONSE_TIMEOUT');
@@ -1009,7 +1017,15 @@
       fields.profile_url=new URL(links[0].getAttribute('href'),location.origin).href;
       seen.add(identity);rows.push(fields);
     }
-    return {ok:true,evidence:{state:'NC',query,complete:true,verification_pending:false,total,rows}};
+    // NC's displayed count can group repeated pending applications by legal
+    // name while rendering their distinct profile IDs as separate cards.
+    // Retain every fully read card. Accept only this exact grouped-count
+    // reconciliation; missing cards, repeated licenses/profiles and arbitrary
+    // count changes still fail. No pending application is silently discarded.
+    const grouped=new Set(rows.map(row=>row.License||'pending:'+row['CSL Legal Name']));
+    if(rows.length!==total&&grouped.size!==total)throw new Error('REGISTRY_NC_RESULT_COUNT_MISMATCH');
+    return {ok:true,evidence:{state:'NC',query,complete:true,verification_pending:false,total:rows.length,rows},
+      diagnostics:rows.length===total?[]:[{phase:'pending-count',displayed:total,cards:rows.length,groups:grouped.size}]};
   }
   function ncProfile(query) {
     if(location.href!==query.url||!/^\/online_services\/search\/charities_profile\/\d+$/.test(location.pathname))throw new Error('REGISTRY_NC_PROFILE_CHANGED');
@@ -1356,7 +1372,7 @@
     }
     if (m.action === "registry-il" && IL) {
       const diagnostics = [];
-      try { return {ok:true, evidence:await illinois(m.query, entry => { if (diagnostics.length < 32) diagnostics.push(entry); }, m.formWaitMs === 12000 ? 12000 : 45000), diagnostics}; }
+      try { return {ok:true, evidence:await illinois(m.query, entry => { if (diagnostics.length < 32) diagnostics.push(entry); }, [0,12000].includes(m.formWaitMs) ? m.formWaitMs : 45000), diagnostics}; }
       catch (error) { error.diagnostics = diagnostics; throw error; }
     }
     if (!GA) throw new Error("REGISTRY_WRONG_ORIGIN");

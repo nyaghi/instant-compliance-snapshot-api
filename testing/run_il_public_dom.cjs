@@ -1,8 +1,8 @@
 /* Actual content handler with independently scheduled DOM and timer events. */
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const vm=require('node:vm'),fs=require('node:fs'),path=require('node:path');
-const source=fs.readFileSync(path.join(__dirname,'../browser-connector/registry-content.js'),'utf8');
-async function run({total=0,activity=true,truncated=false,ready=true,disabled=false,readyAt=null,largePages=false,resizeTotalChange=false,timerClamp=0,responseDelay=100,lateMutation=false,unrelatedMutation=false,detail=null,detailDelay=100,verification=false,formWaitMs=45000}={}) {
+const source=fs.readFileSync(process.env.CC_TEST_TRIAL_DIR ? path.join(process.env.CC_TEST_TRIAL_DIR,'registry-content.js') : path.join(__dirname,'../browser-connector/registry-content.js'),'utf8');
+async function run({total=0,activity=true,truncated=false,ready=true,disabled=false,readyAt=null,largePages=false,resizeTotalChange=false,timerClamp=0,responseDelay=100,lateMutation=false,unrelatedMutation=false,detail=null,detailDelay=100,verification=false,verificationAt=null,formWaitMs=45000}={}) {
  let clock=1000,listener,loading=false,page=0,size=10,menu=false,nextClicks=0,searchClicks=0,formReady=ready&&readyAt===null,serial=0,dialog=null,result,done=false;
  const tasks=new Map(),observers=new Set(),root={};
  const schedule=(fn,ms)=>{const id=++serial;tasks.set(id,{at:clock+ms,fn});return id;};
@@ -56,6 +56,7 @@ async function run({total=0,activity=true,truncated=false,ready=true,disabled=fa
   chrome:{runtime:{id:'test-extension',onMessage:{addListener:fn=>listener=fn}}}
  });
  if(readyAt!==null)schedule(()=>{formReady=true;button.disabled=false;mutate('attributes',styleTarget);},readyAt);
+ if(verificationAt!==null)schedule(()=>{verification=true;mutate('childList',styleTarget);},verificationAt);
  listener({action:'registry-il',formWaitMs,query:detail?{state:'IL',identifier:'10000000'}:{state:'IL',orgName:'Veterans'}},{id:'test-extension'},value=>{result=value;done=true;});
  for(let n=0;!done&&n<3000;n++){
   for(let i=0;i<12;i++)await Promise.resolve();
@@ -71,6 +72,24 @@ test('hidden verification control is reported before any search or negative evid
  const r=await run({ready:false,verification:true,formWaitMs:12000});
  assert.equal(r.reason,'NY_CONNECTOR_IL_VERIFICATION_PENDING');assert.equal(r.elapsed,12000);
  assert.equal(r.searchClicks,0);assert.equal(r.evidence,undefined);
+});
+test('visibility recovery starts immediately for an actual hidden verification control',async()=>{
+ const r=await run({ready:false,verification:true,formWaitMs:0});
+ assert.equal(r.reason,'NY_CONNECTOR_IL_VERIFICATION_PENDING');assert.equal(r.elapsed,0);
+ assert.equal(r.searchClicks,0);assert.equal(r.evidence,undefined);
+});
+test('verification appearing after the first inspection triggers immediate recovery',async()=>{
+ const r=await run({ready:false,verificationAt:300,formWaitMs:0});
+ assert.equal(r.reason,'NY_CONNECTOR_IL_VERIFICATION_PENDING');assert.equal(r.elapsed,300);
+ assert.equal(r.searchClicks,0);assert.equal(r.evidence,undefined);
+});
+test('early verification detection preserves normal readiness without a widget',async()=>{
+ const r=await run({readyAt:25000,formWaitMs:0});
+ assert.equal(r.ok,true);assert.equal(r.searchClicks,1);
+});
+test('enabled visible Search remains usable when a verification container is present',async()=>{
+ const r=await run({verification:true,formWaitMs:0});
+ assert.equal(r.ok,true);assert.equal(r.searchClicks,1);
 });
 test('normal state verification may enable Search without a reload',async()=>{
  const r=await run({verification:true,readyAt:8000,formWaitMs:12000});

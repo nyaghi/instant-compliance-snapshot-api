@@ -94,8 +94,36 @@
   const button = name => Array.from(document.querySelectorAll("button")).find(b => b.textContent.trim() === name);
   async function until(check, ms, reason = "NY_CONNECTOR_FORM_TIMEOUT") {
     const deadline = Date.now() + ms;
-    while (Date.now() < deadline) { const value = check(); if (value) return value; await pause(100); }
-    throw new Error(reason);
+    return new Promise((resolve, reject) => {
+      let done = false, poll, watchdog, observer;
+      const finish = (value, error) => {
+        if (done) return;
+        done = true; clearTimeout(poll); clearTimeout(watchdog); observer?.disconnect();
+        document.removeEventListener?.("input", inspect, true);
+        document.removeEventListener?.("change", inspect, true);
+        error ? reject(error) : resolve(value);
+      };
+      const inspect = () => {
+        if (done) return;
+        if (Date.now() >= deadline) return finish(null, new Error(reason));
+        try { const value=check(); if (value) finish(value); }
+        catch (error) { finish(null, error); }
+      };
+      // Chrome throttles polling timers in background registry tabs. Observe
+      // the state's normal render/input events before a delayed timer can
+      // incorrectly label an already cleared or enabled form as timed out.
+      // Evidence first observed after the original deadline is still rejected.
+      if (typeof MutationObserver !== "undefined") {
+        observer = new MutationObserver(inspect);
+        observer.observe(document.documentElement, {childList:true, subtree:true,
+          attributes:true, characterData:true});
+      }
+      document.addEventListener?.("input", inspect, true);
+      document.addEventListener?.("change", inspect, true);
+      const pollAgain = () => { inspect(); if (!done) poll=setTimeout(pollAgain,100); };
+      watchdog=setTimeout(() => finish(null,new Error(reason)),ms);
+      pollAgain();
+    });
   }
   function waitResponse(kind, ms) {
     return new Promise((resolve, reject) => {

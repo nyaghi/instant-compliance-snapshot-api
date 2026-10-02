@@ -117,11 +117,15 @@ class SourceControls(unittest.TestCase):
 
     def test_nv_withdrawal_exception_requires_matching_status_type_and_complete_history(self):
         fields, history = NV_WITHDRAWAL['fields'], NV_WITHDRAWAL['filings']
-        variants = [({'Entity Status': 'Active'}, {}), ({'Entity Status': 'Default'}, {}),
-                    ({'Solicits Charitable Contribution?': 'Yes'}, {}),
-                    ({'Entity Type': 'Foreign Entities Not Required to Register In Nevada'}, {}),
-                    ({}, {'complete': False}), ({}, {'name': 'Another Organization'}),
-                    ({}, {'rows': history['rows'][1:], 'total': 3})]
+        for changed_fields, changed_history in [({'Entity Status': 'Active'}, {}),
+                    ({'Entity Status': 'Default'}, {}), ({'Solicits Charitable Contribution?': 'Yes'}, {}),
+                    ({}, {'rows': history['rows'][1:], 'total': 3})]:
+            row = cc.nv_charity_detail_evidence({**fields, **changed_fields}, fields['NV Business ID'])
+            parsed = cc.nv_charity_filings_evidence(row, {**history, **changed_history})
+            self.assertNotIn('non_charity_withdrawal_history', parsed)
+            self.assertEqual(parsed['status'], row['status'])
+        variants = [({'Entity Type': 'Foreign Entities Not Required to Register In Nevada'}, {}),
+                    ({}, {'complete': False}), ({}, {'name': 'Another Organization'})]
         for changed_fields, changed_history in variants:
             row = cc.nv_charity_detail_evidence({**fields, **changed_fields}, fields['NV Business ID'])
             with self.subTest(fields=changed_fields, history=changed_history), self.assertRaises(ValueError):
@@ -335,14 +339,14 @@ class SourceControls(unittest.TestCase):
 
     def test_nv_matched_nonprofit_uses_displayed_annual_due(self):
         r = cc.nv_charity_detail_evidence(NV, 'NV20121738342')
-        self.assertEqual(r['status'], 'Unable to Confirm')
+        self.assertEqual(r['status'], 'Upcoming Filing')
         self.assertEqual(r['expiration'], date(2026, 12, 31)); self.assertIsNone(r['initial'])
         self.assertIsNone(r['renewal'])
         self.assertEqual(r['entity_expiration'], date(2026, 12, 31))
 
     def test_nv_separate_solicitation_flag_does_not_replace_entity_rule(self):
         r = cc.nv_charity_detail_evidence({**NV, 'Solicits Charitable Contribution?': 'Yes'}, 'NV20121738342')
-        self.assertEqual(r['status'], 'Unable to Confirm')
+        self.assertEqual(r['status'], 'Upcoming Filing')
         self.assertTrue(r['solicitation_declared'])
 
     def test_nv_registered_agent_and_other_entity_types_not_accepted(self):
@@ -1076,11 +1080,12 @@ class LookupControls(unittest.TestCase):
         changed = {'nm_browser_courtesy_names','nm_browser_lookup','pa_name_search_plan','final_four_connector_failure','final_four_browser_lookup'}
         changed.update({'structured_registry_name','ar_result_rows','search_ar_precise','ok_choose_safe_result_row_on_page',
                         'ok_open_latest_equivalent_detail','search_ok_precise','licensed_compound_retrieval_names','irs_index_object_ids',
-                        'identity_irs_historical_names','irs_period_for_label','ms_name_search_plan','ny_connector_failure'})
+                        'identity_irs_historical_names','irs_period_for_label','ms_name_search_plan','ny_connector_failure',
+                        'nc_charity_record_evidence','nv_charity_detail_evidence','nv_charity_filings_evidence'})
         for tree in (before, after):
             for handler in [n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in {'ny_connector_request','ny_connector_advance','il_verification_recovery'}]:
                 for n in ast.walk(handler):
-                    if isinstance(n,ast.Set):n.elts=[v for v in n.elts if not(isinstance(v,ast.Constant) and v.value in {'0.6.46','0.6.47','0.6.48','0.6.49','0.6.50'})]
+                    if isinstance(n,ast.Set):n.elts=[v for v in n.elts if not(isinstance(v,ast.Constant) and v.value in {'0.6.46','0.6.47','0.6.48','0.6.49','0.6.50','0.6.51'})]
             tree.body = [node for node in tree.body if not (isinstance(node, ast.FunctionDef) and node.name in changed)]
         self.assertEqual(ast.dump(before), ast.dump(after))
         for file in ['web-staging/index.html', 'web-staging/optimized-workflows.js', 'web-staging/sales-mode.js',
@@ -1377,8 +1382,6 @@ class LookupControls(unittest.TestCase):
                 return data
             with self.subTest(state=state):
                 result = cc.final_four_browser_lookup(self.orgs[state], state, broken)
-                if state=='NV':
-                    self.assertEqual(result.status,'Unable to Confirm');self.assertFalse(result.success);continue
                 self.assertTrue(result.success)
                 self.assertIn(result.status, ['Current', 'Upcoming Filing'])
                 dates = cc.registration_date_metadata(result, result.status)

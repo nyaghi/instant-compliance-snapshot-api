@@ -29,7 +29,7 @@ class ArkansasCompletionTests(unittest.TestCase):
         def body(p):
             if '?' not in p.url:return 'Name Search'
             return overrides.get(query[0],{}).get('body','Back to Search Form No Results Found')
-        def rows(p):return overrides.get(query[0],{}).get('rows',[])
+        def rows(p, org=None):return overrides.get(query[0],{}).get('rows',[])
         clock=patch.object(c.time,'perf_counter',side_effect=lambda:elapsed[0]) if seconds_per_query else nullcontext()
         with clock,patch.object(c,'ar_wait_for_search_form',return_value=True),patch.object(c,'registry_page_body',side_effect=body),patch.object(c,'ar_result_rows',side_effect=rows),patch.object(c,'safe_wait_for_network_idle'):
             result=c.search_ar_precise(page,c.checker.Organization(name or NAME,EIN))
