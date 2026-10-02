@@ -39,7 +39,7 @@ function keepAlive() {
 const rejected = reason => ["NY_CONNECTOR_VERIFICATION_REJECTED", "NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED"].includes(reason);
 const recoveryFailure = reason => rejected(reason) ? "NY_CONNECTOR_RECOVERY_REJECTED" :
   typeof reason === "string" && /^NY_CONNECTOR_[A-Z_]+$/.test(reason) ? reason : "NY_CONNECTOR_INCOMPLETE";
-const runtimeState = () => ({ schema: 2, nextStart, laneStarts: Object.fromEntries(laneStarts), ownedTabs: [...owned], diagnostics: [...diagnostics], queue: allJobs().filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, expiresAt: j.expiresAt, active: isActive(j), activeExpiresAt: j.activeExpiresAt, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, detailRetryUsed: j.detailRetryUsed, retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.registryState === "AL" ? null : j.command, lastResponse: j.registryState === "AL" ? null : j.lastResponse, queryRepaired: j.queryRepaired, nvReturnRecoveryUsed: j.nvReturnRecoveryUsed })) });
+const runtimeState = () => ({ schema: 2, nextStart, laneStarts: Object.fromEntries(laneStarts), ownedTabs: [...owned], diagnostics: [...diagnostics], queue: allJobs().filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, expiresAt: j.expiresAt, active: isActive(j), activeExpiresAt: j.activeExpiresAt, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, detailRetryUsed: j.detailRetryUsed, retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.registryState === "AL" ? null : j.command, lastResponse: j.registryState === "AL" ? null : j.lastResponse, queryRepaired: j.queryRepaired, nyFreshPageRecoveryOnly: j.nyFreshPageRecoveryOnly, nvReturnRecoveryUsed: j.nvReturnRecoveryUsed })) });
 function saveRuntime() {
   keepAlive();
   if (!allJobs().length && keepAliveTimer) { clearTimeout(keepAliveTimer); keepAliveTimer = null; }
@@ -237,7 +237,20 @@ async function repairConnection(job, id) {
     if (job.closed) throw new Error("NY_CONNECTOR_INTERRUPTED");
     await lookupTab(job);
   } catch (error) {
-    if (error.message === "NY_CONNECTOR_RECOVERY_PAGE_OPEN") await saveRepair(previous);
+    if (error.message === "NY_CONNECTOR_RECOVERY_PAGE_OPEN") {
+      await saveRepair(previous);
+      // An open user registry page forbids origin cleanup. In the isolated
+      // trial, retry once using a fresh owned form without changing cookies,
+      // storage, the user's page, or the original lookup deadline.
+      if (P.TRIAL_ORIGIN && !job.refreshOnly && !job.closed) {
+        const tabId = job.tab; job.tab = null; job.generation++;
+        await removeOwned(tabId);
+        if (job.closed) throw new Error("NY_CONNECTOR_INTERRUPTED");
+        job.nyFreshPageRecoveryOnly = true;
+        await lookupTab(job);
+        return;
+      }
+    }
     else await saveRepair({ ...repair, phase: "failed", reason: "NY_CONNECTOR_RECOVERY_FAILED" });
     throw error;
   }
@@ -335,7 +348,7 @@ async function performSearch(job, query, id) {
           job.queryRepaired = true; await saveRuntime();
           await repairConnection(job, id); repaired = true; continue;
         }
-        if (repaired) {
+        if (repaired && !job.nyFreshPageRecoveryOnly) {
           await recordRecovery(response);
           if (!response.ok && rejected(response.reason)) response.reason = "NY_CONNECTOR_RECOVERY_REJECTED";
         }

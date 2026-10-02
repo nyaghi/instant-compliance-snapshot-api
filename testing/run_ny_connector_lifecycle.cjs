@@ -25,7 +25,7 @@ function harness(initial={}) {
   const recovery={clearForTab:async(tabId,owned,close)=>{repairs.push({tabId,owned});await close();}};
   const context=vm.createContext({URL,Date:Clock,chrome,CCNYRecovery:recovery,importScripts:()=>{},setTimeout:(fn,ms)=>{const t={fn,ms,due:now+ms,cleared:false};timers.push(t);return t;},clearTimeout:t=>{if(t)t.cleared=true;}});
   for(const file of ['protocol.js','registry-worker.js','worker.js']) {
-    const sourceRoot=file==='registry-worker.js'&&process.env.CC_TEST_TRIAL_DIR?process.env.CC_TEST_TRIAL_DIR:root;
+    const sourceRoot=['registry-worker.js','worker.js'].includes(file)&&process.env.CC_TEST_TRIAL_DIR?process.env.CC_TEST_TRIAL_DIR:root;
     let source=fs.readFileSync(path.join(sourceRoot,file),'utf8');
     if(file==='protocol.js' && initial.trialOrigin) source=source.replace('const TRIAL_ORIGIN = "";',`const TRIAL_ORIGIN = ${JSON.stringify(initial.trialOrigin)};`);
     if(file==='protocol.js' && initial.trialOrigin && initial.trialOnly) source=source.replace('function registryAllowed(state, origin) {','function registryAllowed(state, origin) { if (origin !== TRIAL_ORIGIN || state === "NY") return false;');
@@ -47,6 +47,51 @@ function harness(initial={}) {
   }
   return {chrome,tabs,timers,created,removed,queries,repairs,recovery,data,context,connect,query,advance,deferCreate:p=>{deferred=p;}};
 }
+
+for(const succeeds of [true,false])test(`trial NY open-page recovery preserves user state and retries only once: ${succeeds}`,async()=>{
+ const trialOrigin='https://fixture-final-four.onrender.com';
+ const h=harness({trialOrigin,tabs:[[1,{id:1,windowId:10,url:trialOrigin}],[2,{id:2,windowId:99,url:'https://charities-search.ag.ny.gov/RegistrySearch/16-40-81'}]]});
+ h.recovery.clearForTab=async()=>{throw Error('NY_CONNECTOR_RECOVERY_PAGE_OPEN');};
+ let calls=0;const attempts=[];
+ h.chrome.tabs.sendMessage=async(tab,m)=>{
+  if(m.action==='ready')return {ready:true,url:h.tabs.get(tab).url};
+  calls++;attempts.push({tab,retryUsed:m.verificationRetryUsed});
+  return calls===2&&succeeds?{ok:true,evidence:{query:m.query,rows:[]}}:
+    {ok:false,reason:'NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED',verificationRetryUsed:true};
+ };
+ const p=h.connect();const result=await h.query(p,11);
+ assert.equal(result.ok,succeeds);if(!succeeds)assert.equal(result.reason,'NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED');
+ assert.equal(calls,2);assert.deepEqual(h.created,[100,101]);
+ assert.deepEqual(attempts,[{tab:100,retryUsed:false},{tab:101,retryUsed:true}]);
+ assert.equal(h.tabs.get(2).url,'https://charities-search.ag.ny.gov/RegistrySearch/16-40-81');
+ assert.ok(h.removed.every(n=>n>=100));assert.deepEqual(h.data.local.ccnyRepair,{});
+ assert.equal(h.data.session.ccnyRuntime.queue[0]?.activeExpiresAt ?? 310000,310000);
+ if(succeeds)assert.equal(h.data.session.ccnyRuntime.queue[0].nyFreshPageRecoveryOnly,true);
+});
+
+test('mature NY and explicit refresh retain the open-page cleanup guard',async()=>{
+ for(const trialOrigin of [null,'https://fixture-final-four.onrender.com']){
+  const h=harness({trialOrigin});
+  h.recovery.clearForTab=async()=>{throw Error('NY_CONNECTOR_RECOVERY_PAGE_OPEN');};
+  h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='ready'?{ready:true,url:h.tabs.get(tab).url}:
+    {ok:false,reason:'NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED'};
+  const p=h.connect(1,undefined,!!trialOrigin);let result;
+  if(trialOrigin){p.onMessage.emit({action:'refresh',id:id(11)});await tick();result=p.messages.find(m=>m.id===id(11)&&!m.progress);}
+  else result=await h.query(p,11);
+  assert.equal(result.reason,'NY_CONNECTOR_RECOVERY_PAGE_OPEN');assert.deepEqual(h.created,[100]);
+  assert.ok(h.tabs.has(2));assert.deepEqual(h.data.local.ccnyRepair,{});
+ }
+});
+
+test('trial NY cancellation during cleanup cannot open another retry tab',async()=>{
+ const h=harness({trialOrigin:'https://fixture-final-four.onrender.com'});let release;
+ h.recovery.clearForTab=async()=>{await new Promise(resolve=>{release=resolve;});throw Error('NY_CONNECTOR_RECOVERY_PAGE_OPEN');};
+ h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='ready'?{ready:true,url:h.tabs.get(tab).url}:
+   {ok:false,reason:'NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED'};
+ const p=h.connect();await h.query(p,11);p.onMessage.emit({action:'finish',id:id(12)});await tick();release();await tick();
+ assert.deepEqual(h.created,[100]);assert.deepEqual(h.removed,[100]);assert.ok(h.tabs.has(2));
+ assert.equal(p.messages.some(m=>m.id===id(11)&&m.ok),false);
+});
 test('readiness advertises the installed manifest version',async()=>{
   const h=harness();let response;
   h.chrome.runtime.onMessage.emit({action:'ping',id:id(99)}, {id:h.chrome.runtime.id,frameId:0,url:'https://staging.compliance-express.com/',tab:{id:1}}, value=>{response=value;});

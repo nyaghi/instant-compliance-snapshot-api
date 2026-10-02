@@ -244,7 +244,7 @@ const source=SOURCE;
             output=Path(tmp)/'trial'
             result=build(TRIAL['origin'],output)
             manifest=json.loads((output/'manifest.json').read_text(encoding='utf-8'))
-            self.assertEqual(manifest['version'],'0.6.35')
+            self.assertEqual(manifest['version'],'0.6.36')
             self.assertEqual(manifest['permissions'],['storage','browsingData','cookies'])
             text=json.dumps(manifest)
             for banned in ['staging.compliance-express.com','www.compliance-express.com','<all_urls>']:
