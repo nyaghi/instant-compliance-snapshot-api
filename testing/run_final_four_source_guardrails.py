@@ -796,9 +796,12 @@ class LookupControls(unittest.TestCase):
             with patch.object(cc,'licensed_charity_names',return_value=(['Legal Name','Reviewed Alias'],['OTHER LONG','OTHER','other lower','Reviewed Alias Longer'])):
                 result=cc.final_four_browser_lookup(self.orgs[state],state,source)
             self.assertEqual(result.status,'Not Registered')
-            self.assertEqual(calls,['Legal Name','Reviewed Alias','OTHER','other lower'])
+            # NV now omits generated single-word grids when every reviewed
+            # identity has multiple signals; the longer fallback must complete.
+            prefix = 'OTHER LONG' if state == 'NV' else 'OTHER'
+            self.assertEqual(calls,['Legal Name','Reviewed Alias',prefix,'other lower'])
             def incomplete(q):
-                return {**source(q),'complete':q['name']!='OTHER'}
+                return {**source(q),'complete':q['name']!=prefix}
             with patch.object(cc,'licensed_charity_names',return_value=(['Legal Name'],['OTHER LONG','OTHER'])):
                 with self.assertRaises(ValueError):cc.final_four_browser_lookup(self.orgs[state],state,incomplete)
 

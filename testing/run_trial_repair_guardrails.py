@@ -282,6 +282,24 @@ class OctoberTwoSpeedControls(unittest.TestCase):
     def test_short_reviewed_identity_is_not_removed(self):
         org=cc.checker.Organization('Ceres','22-3053747')
         self.assertIn('Ceres',cc.pa_name_search_plan(org))
+    def test_nv_keeps_all_reviewed_aliases_but_skips_generated_fitness_grid(self):
+        org=cc.checker.Organization('Life Time Foundation','03-0533192');seen=[]
+        required=[org.organization_name,'LIFE TIME FITNESS FOUNDATION']
+        def evidence(q):
+            seen.append(q)
+            return {'state':'NV','query':q,'complete':True,'verification_pending':False,'total':0,'rows':[]}
+        with patch.object(cc,'licensed_charity_names',return_value=(required,['Fitness','Life Time'])):
+            result=cc.final_four_browser_lookup(org,'NV',evidence)
+        self.assertEqual([q['name'] for q in seen],[*required,'Life Time'])
+        self.assertEqual(result.status,'Not Registered')
+    def test_nv_reviewed_single_word_and_incomplete_search_still_require_evidence(self):
+        org=cc.checker.Organization('Ceres','22-3053747');seen=[]
+        def evidence(q):
+            seen.append(q)
+            return {'state':'NV','query':q,'complete':False,'verification_pending':False,'total':0,'rows':[]}
+        with patch.object(cc,'licensed_charity_names',return_value=(['Ceres'],['Ceres'])):
+            with self.assertRaises(ValueError):cc.final_four_browser_lookup(org,'NV',evidence)
+        self.assertEqual(seen[0]['name'],'Ceres')
     def test_nm_courtesy_preserves_aliases_and_ein_is_still_primary(self):
         required=["First Choice Women's Resource Centers, Inc.",'Independent Reviewed Alias']
         names=cc.nm_browser_courtesy_names(required,[])
