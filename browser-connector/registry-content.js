@@ -690,11 +690,19 @@
       // rendered. Reading the table immediately can discard the solicitation
       // statement even though it appears a moment later. Observe the first
       // complete page within the existing detail deadline before paging it.
-      const first = await wait(() => {
-        if (!nvFields(query.identifier) || [...document.querySelectorAll('.app-loader-pane .circle-loader')].some(visible)) return false;
+      let firstFailure = 'REGISTRY_NV_FILINGS_NOT_LOADED';
+      let first;
+      try { first = await wait(() => {
+        if (!nvFields(query.identifier)) { firstFailure='REGISTRY_NV_DETAIL_NOT_READY'; return false; }
+        if ([...document.querySelectorAll('.app-loader-pane .circle-loader')].some(visible)) {
+          firstFailure='REGISTRY_NV_FILINGS_RESPONSE_PENDING'; return false;
+        }
         try { return nvPage('Filing History Details',nvFilingHeaders); }
-        catch { return false; }
-      },Math.max(1,Math.min(35000,deadline-Date.now())));
+        catch (error) { firstFailure=error.message; return false; }
+      },Math.max(1,Math.min(35000,deadline-Date.now()))); }
+      catch (error) {
+        throw new Error(error.message==='REGISTRY_RESPONSE_INCOMPLETE'?firstFailure:error.message);
+      }
       const filings = await nvPages('Filing History Details',nvFilingHeaders,deadline,first);
       evidence.filings = {identifier:query.identifier,name:fields['Entity Name'],complete:true,total:filings.length,
         headers:nvFilingHeaders,rows:filings.map(row=>row.cells)};

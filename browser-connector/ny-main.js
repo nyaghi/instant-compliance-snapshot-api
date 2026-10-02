@@ -16,12 +16,17 @@
     if (["search", "detail"].includes(evidence.kind) && !P.sameQuery(evidence.query, job.query)) return;
     const waiter = job.waiter; job.waiter = null; clearTimeout(waiter.timer); waiter.resolve(evidence);
   };
+  const detailFailure = status => !P.TRIAL_ORIGIN ? "NY_CONNECTOR_DETAIL_INCOMPLETE"
+    : status === 401 ? "NY_CONNECTOR_DETAIL_UNAUTHORIZED"
+    : status === 403 ? "NY_CONNECTOR_DETAIL_FORBIDDEN"
+    : status >= 500 && status <= 599 ? "NY_CONNECTOR_DETAIL_SERVER_ERROR"
+    : status !== 200 ? "NY_CONNECTOR_DETAIL_HTTP_ERROR" : "NY_CONNECTOR_DETAIL_SCHEMA_INVALID";
   const observe = (request, status, payload, jobId) => {
     // A normal detail link loads a new document. Its response can finish
     // before the worker reconnects; retain only that document's public fields.
     if (request.kind === "detail" && location.pathname === "/RegistrySearch/" + request.query.orgID) {
       try { documentDetail = { evidence: P.publicResponse(request, status, payload) }; }
-      catch { documentDetail = { reason: status === 429 ? "NY_CONNECTOR_RATE_LIMITED" : "NY_CONNECTOR_DETAIL_INCOMPLETE" }; }
+      catch { documentDetail = { reason: status === 429 ? "NY_CONNECTOR_RATE_LIMITED" : detailFailure(status) }; }
       if (active?.waiter?.kind === "detail" && P.sameQuery(active.query, request.query)) {
         if (documentDetail.evidence) publish(documentDetail.evidence);
         else rejectRequest(request, active.id, documentDetail.reason);
@@ -38,7 +43,7 @@
     try { publish(P.publicResponse(request, status, payload)); }
     catch (error) {
       const reason = /^NY_CONNECTOR_SEARCH_(HTTP_ERROR|UNSUCCESSFUL|ROWS_INVALID|IDENTITY_INVALID|EIN_MISSING|EIN_NULL|EIN_TYPE|EIN_FORMAT)$/.test(error.message)
-        ? error.message : request.kind === "detail" ? "NY_CONNECTOR_DETAIL_INCOMPLETE" : "NY_CONNECTOR_INCOMPLETE";
+        ? error.message : request.kind === "detail" ? detailFailure(status) : "NY_CONNECTOR_INCOMPLETE";
       rejectRequest(request, jobId, reason);
     }
   };

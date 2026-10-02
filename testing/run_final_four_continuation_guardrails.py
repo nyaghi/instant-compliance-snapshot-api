@@ -202,6 +202,27 @@ class ContinuationControls(unittest.TestCase):
         with self.assertRaises(ValueError):
             cc.final_four_clean_evidence({**payload, 'filings': {'rows': [{'type': 'Renewal', 'date': '1/1/2025', 'contact': 'private'}]}}, query)
 
+    def test_nv_optional_filing_failure_diagnostic_survives_signed_replay(self):
+        _, response = self.start('NV')
+        _, detail = self.advance(response)
+        payload = self.provider(detail['query'])
+        payload['filings'] = {'complete': False, 'failure_code': 'REGISTRY_RESPONSE_INCOMPLETE'}
+        self.assertEqual(cc.final_four_clean_evidence(payload, detail['query']), payload)
+        _, continued = self.advance(detail, payload)
+        # Scope remains unconfirmed, but valid core identity survives and the
+        # master can finish its remaining names instead of failing this bridge.
+        if continued['phase'] == 'search':
+            saved = cc.ny_connector_unpack(continued['check_token'], self.auth['email'], self.auth['device_id'])
+            self.assertEqual(saved['completed'][-1]['evidence']['filings'], payload['filings'])
+        else:
+            self.assertEqual(continued['result']['status'], 'Unable to Confirm')
+            self.assertTrue(any(x['completed'] for x in __import__('json').loads(continued['result']['debug_trace'])['queries_attempted']))
+        for bad in [{'complete': True, 'failure_code': 'REGISTRY_RESPONSE_INCOMPLETE'},
+                    {'complete': False, 'failure_code': 'contact@example.com'},
+                    {'complete': False, 'failure_code': 'REGISTRY_RESPONSE_INCOMPLETE', 'secret': 'private'}]:
+            with self.assertRaises(ValueError):
+                cc.final_four_clean_evidence({**payload, 'filings': bad}, detail['query'])
+
     def test_nv_large_complete_grid_is_compacted_only_after_master_matching(self):
         _, first=self.start('NV',alternate_names=['Example Alternate Charity'])
         payload=self.provider(first['query'])
