@@ -694,7 +694,7 @@
         if (!nvFields(query.identifier) || [...document.querySelectorAll('.app-loader-pane .circle-loader')].some(visible)) return false;
         try { return nvPage('Filing History Details',nvFilingHeaders); }
         catch { return false; }
-      },Math.max(1,Math.min(5000,deadline-Date.now())));
+      },Math.max(1,Math.min(35000,deadline-Date.now())));
       const filings = await nvPages('Filing History Details',nvFilingHeaders,deadline,first);
       evidence.filings = {identifier:query.identifier,name:fields['Entity Name'],complete:true,total:filings.length,
         headers:nvFilingHeaders,rows:filings.map(row=>row.cells)};

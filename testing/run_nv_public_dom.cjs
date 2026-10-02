@@ -522,7 +522,7 @@ test('Nevada waits for a delayed complete filing grid after entity fields load',
  // fixture's scheduled detail mutation, rather than exposing application state.
  const Observer=h.context.MutationObserver;let notify;
  h.context.MutationObserver=class extends Observer {constructor(fn){super(fn);notify=fn;}};
- h.context.setTimeout(()=>{gridReady=true;notify?.([{target:h.context.document.documentElement,addedNodes:[],removedNodes:[]}]);},800);
+ h.context.setTimeout(()=>{gridReady=true;notify?.([{target:h.context.document.documentElement,addedNodes:[],removedNodes:[]}]);},12000);
  const result=await h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:'NV20121738342'},h.time+45000));
  assert.equal(result.filings.complete,true);assert.equal(result.filings.total,1);
  assert.equal(result.filings.rows[0][3],'Charitable Solicitation Registration Statement');
