@@ -60,7 +60,11 @@
         inspect();
       });
       observer.observe(root, {childList:true, subtree:true, attributes:true, characterData:true,
-        attributeFilter:["style", "class", "aria-busy", "disabled", "aria-disabled", "hidden"]});
+        // ORION can finish restoring its Business tab/search choice using
+        // only attributes. Those are inputs to registryDocumentReady; missing
+        // their mutation leaves a complete form waiting until the watchdog.
+        attributeFilter:["style", "class", "aria-busy", "disabled", "aria-disabled", "hidden",
+          ...(NV ? ["aria-selected", "data-value"] : [])]});
       timer = setTimeout(() => candidateAt === null ? incomplete() : settleCandidate(), ms);
       try { action?.(); inspect(); } catch (error) { finish(null, error); }
     });

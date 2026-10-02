@@ -50,7 +50,7 @@ test('Nevada visible inputs and search type are not ready while the initial load
  assert.equal(h.api.registryDocumentReady(),false);
  h.context.document.querySelectorAll=read;assert.equal(h.api.registryDocumentReady(),true);
 });
-function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,truncate=false,duplicate=false,oldPageDelay=80,detailId=null,returnFormDelay=600,returnName=null,returnRows=null,repeatSearchActivity=true,replaceSearchOnInput=false,returnGridDelay=0,unrelatedMutations=false,ignoredSearches=0,changedQueryBeforeRetry=false,pageSizeControl=false,initialPageSize=2,pagingMissing=0,resizeIgnored=false,resizeTotalDrift=false,reservation=false,exactRows=null,ignoreModeChange=false}={}) {
+function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,truncate=false,duplicate=false,oldPageDelay=80,detailId=null,returnFormDelay=600,returnName=null,returnRows=null,returnAttribute=null,repeatSearchActivity=true,replaceSearchOnInput=false,returnGridDelay=0,unrelatedMutations=false,ignoredSearches=0,changedQueryBeforeRetry=false,pageSizeControl=false,initialPageSize=2,pagingMissing=0,resizeIgnored=false,resizeTotalDrift=false,reservation=false,exactRows=null,ignoreModeChange=false}={}) {
  let clock=1000,serial=0,listener,loading=false,rendered=[],page=1,detail=false,searchClicks=0,opened=[],formReady=true;
  let pageSize=initialPageSize,sizeMenu=false,resizeClicks=0;
  const broadRows=rows;let searchMode='STARTS_WITH',modeMenu=false,modeClicks=0,pagingClicks=0;
@@ -84,7 +84,9 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
  const backButton={innerText:'Return To Results',getClientRects:()=>[{}],click:()=>{
   detail=false;formReady=false;context.location.hash='screen=external-GenericFilingsSearch&tabRoute=business';mutate();
   if(returnGridDelay){rendered=[];schedule(render,returnGridDelay);}
-  schedule(()=>{formReady=true;if(returnName!==null)inputs.entityName.value=returnName;if(returnRows)rendered=returnRows;mutate();},returnFormDelay);
+  schedule(()=>{formReady=true;if(returnName!==null)inputs.entityName.value=returnName;if(returnRows)rendered=returnRows;
+   if(returnAttribute){for(const o of [...observers])if(o.options.attributes&&(!o.options.attributeFilter||o.options.attributeFilter.includes(returnAttribute)))o.fn([{type:'attributes',attributeName:returnAttribute,target:root}]);}
+   else mutate();},returnFormDelay);
  }};
  const returnSearchButton={...backButton,innerText:'Return To Search'};
  const fieldValues={'Entity Name':observed[1][0],'NV Business ID':detailId||observed[1][1],'Entity Status':'Active','Entity Type':observed[1][3],FEIN:'-',
@@ -141,7 +143,7 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
  const context={window:win,document:doc,location:{origin:'https://orion.nv.gov',hash:'screen=external-GenericFilingsSearch&tabRoute=business',href:'https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=Manage-Business&id=d1b62c76-d5af-4ff3-b07d-038b7fa8d854'},
   Date:{now:()=>clock},crypto:{randomUUID:()=> 'fixture'},HTMLInputElement:Input,HTMLSelectElement:class{},Event:class{},
   MouseEvent:class{constructor(type,options){this.type=type;Object.assign(this,options);}},
-  MutationObserver:class{constructor(fn){this.fn=fn;}observe(){observers.add(this);}disconnect(){observers.delete(this);}},
+  MutationObserver:class{constructor(fn){this.fn=fn;}observe(root,options){this.options=options;observers.add(this);}disconnect(){observers.delete(this);}},
   setTimeout:(fn,ms)=>schedule(fn,Math.max(ms,timerClamp)),clearTimeout:id=>tasks.delete(id),
   chrome:{runtime:{id:'test-extension',onMessage:{addListener:fn=>listener=fn}}}};
  vm.createContext(context);vm.runInContext(source,context);
@@ -347,6 +349,15 @@ test('Nevada native Return To Search waits for the hydrated public form',async()
  const h=fixture({returnFormDelay:900});h.detail();
  const r=await h.drive(h.api.nvReturnSearch(h.time+45000));
  assert.equal(r.ok,true);assert.equal(h.api.registryDocumentReady(),true);assert.ok(h.time>=1900);assert.equal(h.clicks,0);
+});
+
+test('Nevada return observes selection-only hydration without waiting for the watchdog',async()=>{
+ for(const returnAttribute of ['aria-selected','data-value']){
+  const h=fixture({returnFormDelay:900,returnAttribute});h.detail();
+  const r=await h.drive(h.api.nvReturnSearch(h.time+10000));
+  assert.equal(r.ok,true);assert.equal(h.api.registryDocumentReady(),true);
+  assert.equal(h.time,1900);assert.equal(h.clicks,0);
+ }
 });
 
 test('Nevada missing or incomplete native return cannot be accepted as a completed search',async()=>{
