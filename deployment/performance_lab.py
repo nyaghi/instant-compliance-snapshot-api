@@ -118,6 +118,8 @@ def final_four_asset(name, text):
           result.reviewed_alternate_names = [...alternateNames];''')
         replace('v2026.09.29.1 &middot; Staging', 'v2026.09.'+TRIAL_RELEASE_LABEL+' &middot; Isolated Trial')
     elif name == 'optimized-workflows.js':
+        replace('signal, onResult=()=>{}, externalLookup} = options;', 'signal, onResult=()=>{}, externalLookup, sales_cutoff_seconds} = options;')
+        replace('mode,consent:true,request_id:', 'mode,...(sales_cutoff_seconds!==undefined?{sales_cutoff_seconds}:{}),consent:true,request_id:')
         replace("states.filter(s=>s==='IL'||s==='GA')", "states.filter(s=>['NY','IL','GA','AL','NC','NV','TN','NM'].includes(s))")
         replace("headers:{'Content-Type':'application/json'}", "headers:{'Content-Type':'application/json','Authorization':'Bearer '+credentials.admin_passcode}")
     elif name == 'sales-mode.js':
@@ -134,12 +136,12 @@ def final_four_asset(name, text):
         replace('const pending = lookupTail.then(() => performLookup(input));', 'return performLookup(input);')
         replace('    lookupTail = pending.catch(() => {});', '')
         replace('    return pending;', '')
-        replace('state: registryState = "NY", signal })', 'state: registryState = "NY", signal, mode = "standard" })')
+        replace('state: registryState = "NY", signal })', 'state: registryState = "NY", signal, mode = "standard", sales_cutoff_seconds })')
         replace('{NY:"New York",IL:"Illinois",GA:"Georgia"}', '{NY:"New York",IL:"Illinois",GA:"Georgia",AL:"Alabama",NC:"North Carolina",NV:"Nevada",TN:"Tennessee",NM:"New Mexico"}')
         replace('    const supported = c =>', '    const finalFour = ["AL","NC","NV","TN","NM"].includes(registryState);\n    const supported = c => (!finalFour || c.capabilities?.includes("final-four-public-v1")) &&')
         replace('API + "/api/ny-connector"', 'API + (finalFour ? "/api/final-four-connector" : "/api/ny-connector")')
         replace('headers: { "Content-Type": "application/json" }', 'headers: { "Content-Type": "application/json", "Authorization": "Bearer " + admin_passcode }')
-        replace('action: "start", state: registryState,', 'action: "start", mode, state: registryState,')
+        replace('action: "start", state: registryState,', 'action: "start", mode, ...(finalFour && sales_cutoff_seconds!==undefined ? {sales_cutoff_seconds}:{}), state: registryState,')
         replace('recovery_protocol: "il-fresh-page-v1"', 'recovery_protocol: registryState === "NC" ? "nc-fresh-search-v1" : "il-fresh-page-v1"')
         replace('registryState !== "IL" || recoveryUsed', '!["IL", "NC"].includes(registryState) || recoveryUsed')
         replace('onProgress?.("Illinois: verification stalled. Reopening the state page once and resuming this check.");',

@@ -12,7 +12,7 @@ import hashlib
 import json
 import math
 import os
-from deployment.lab_identity import performance_origin_enabled, trial_identity
+from deployment.lab_identity import performance_origin_enabled, trial_identity, trial_sales_cutoff
 from pathlib import Path
 import re
 import uuid
@@ -56,7 +56,7 @@ def digest(value):
 
 def normalize_submission(payload, supported):
     """Validate immutable scheduling input. Master retains alias normalization."""
-    allowed = {'organization_name', 'ein', 'alternate_names', 'states', 'mode', 'kind', 'state_concurrency', 'external_state_slots'}
+    allowed = {'organization_name', 'ein', 'alternate_names', 'states', 'mode', 'kind', 'state_concurrency', 'external_state_slots', 'sales_cutoff_seconds'}
     if not isinstance(payload, dict) or set(payload) - allowed:
         raise ValueError('Unexpected workflow fields')
     name, ein = payload.get('organization_name'), payload.get('ein')
@@ -89,6 +89,9 @@ def normalize_submission(payload, supported):
         raise ValueError('State concurrency applies only to registration')
     normalized = {'organization_name': name.strip(), 'ein': ein.replace('-', ''),
                   'alternate_names': aliases, 'states': sorted(set(states)), 'mode': mode, 'kind': kind}
+    cutoff = trial_sales_cutoff(payload, trial_identity())
+    if cutoff != 60:
+        normalized['sales_cutoff_seconds'] = cutoff
     # Keep default submissions and their idempotency fingerprints unchanged.
     if concurrency != 15:
         normalized['state_concurrency'] = concurrency
@@ -453,7 +456,7 @@ class Queue:
                 count = c.execute('SELECT count(*) AS n FROM cc_lab_workflows WHERE finished IS NULL').fetchone()['n']
                 if count >= config['backlog_limit']: raise QueueFull('Lab backlog is full; no work was accepted')
                 ident, created = str(uuid.uuid4()), True
-                seconds = DISCOVERY_QUEUE_SECONDS if payload['kind'] == 'discovery' else (60 if payload['mode'] == 'sales' else 900)
+                seconds = DISCOVERY_QUEUE_SECONDS if payload['kind'] == 'discovery' else (trial_sales_cutoff(payload, trial_identity()) if payload['mode'] == 'sales' else 900)
                 c.execute('INSERT INTO cc_lab_workflows(id,scope,ein,fingerprint,payload,kind,mode,source_version,phase,submitted,deadline) '
                           "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'queued',%s,%s)",
                           (ident, scope, payload['ein'], fingerprint, Jsonb(payload), payload['kind'], payload['mode'], version, now, now+seconds))

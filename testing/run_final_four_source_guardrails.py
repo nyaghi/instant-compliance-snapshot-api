@@ -1065,7 +1065,7 @@ class LookupControls(unittest.TestCase):
         baseline = 'e5b8653033b08e4d648e742686c855731c82dce4'
         before = ast.parse(subprocess.check_output(['git', 'show', baseline + ':registry_snapshot_server.py'], cwd=root).decode('utf-8'))
         after = ast.parse((root / 'registry_snapshot_server.py').read_text(encoding='utf-8'))
-        changed = {'nv_charity_filings_evidence', 'final_four_browser_lookup'}
+        changed = {'nv_charity_filings_evidence', 'final_four_browser_lookup', 'final_four_connector_request'}
         for tree in (before, after):
             tree.body = [node for node in tree.body if not (isinstance(node, ast.FunctionDef) and node.name in changed)]
         self.assertEqual(ast.dump(before), ast.dump(after))

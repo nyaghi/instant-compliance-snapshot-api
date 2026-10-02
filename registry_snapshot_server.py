@@ -7207,9 +7207,14 @@ def final_four_connector_request(payload, origin):
             alternate_names = normalize_reviewed_names(payload.get("alternate_names", []))
         except ValueError as exc:
             return 400, {"error": str(exc)}
+        from deployment.lab_identity import trial_sales_cutoff
+        try:
+            cutoff = trial_sales_cutoff(payload, identity)
+        except ValueError as exc:
+            return 400, {"error": str(exc)}
         record = {"email": email, "device": device, "state": state, "organization_name": name.strip(),
                   "ein": format_ein(ein), "origin": origin, "purpose": "registration", "mode": mode,
-                  "issued": now, "expires": now + (60 if mode == "sales" else NY_CONNECTOR_TTL_SECONDS),
+                  "issued": now, "expires": now + (cutoff if mode == "sales" else NY_CONNECTOR_TTL_SECONDS),
                   "version": APP_VERSION, "completed": [], "pending": None,
                   "alternate_names": alternate_names, "protocol": "final-four-public-v1"}
         if payload.get("recovery_protocol") == "nc-fresh-search-v1":

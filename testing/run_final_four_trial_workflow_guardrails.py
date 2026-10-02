@@ -148,7 +148,8 @@ const source=SOURCE;
         import re
         text=(ROOT/'deployment/final-four-validation.html').read_text()
         self.assertIn('window.CCOptimized.run',text);self.assertIn('window.CCNYConnector.lookup',text)
-        self.assertIn("mode==='sales'?60000:900000",text)
+        self.assertIn("mode==='sales'?cutoff*1000:900000",text)
+        self.assertIn("row.sales_cutoff_seconds??60",text)
         self.assertNotIn('value="fixture',text)
         with tempfile.TemporaryDirectory() as tmp:
             p=Path(tmp)/'validation.js';p.write_text('\n'.join(re.findall(r'<script(?:\s[^>]*)?>(.*?)</script>',text,re.S)))

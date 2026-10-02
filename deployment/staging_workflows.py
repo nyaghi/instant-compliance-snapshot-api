@@ -61,7 +61,7 @@ def unpack(master, token, owner):
     return record
 
 
-def prepare(master, payload, owner, *, transport=None, external_states=None, external_slots=None):
+def prepare(master, payload, owner, *, transport=None, external_states=None, external_slots=None, sales_cutoff_seconds=None):
     name, ein = payload.get('organization_name'), payload.get('ein')
     aliases = payload.get('alternate_names', [])
     if not isinstance(name, str) or not 1 <= len(name.strip()) <= 300: raise ValueError('Organization name required')
@@ -84,6 +84,8 @@ def prepare(master, payload, owner, *, transport=None, external_states=None, ext
         'states': internal, 'mode': mode, 'kind': 'registration',
         'state_concurrency': 20 if mode == 'sales' else 15,
         'external_state_slots': len(external) if external_slots is None else min(len(external), external_slots)}
+    if sales_cutoff_seconds is not None:
+        request['sales_cutoff_seconds'] = sales_cutoff_seconds
     idempotency = hashlib.sha256(json.dumps([owner, nonce]).encode()).hexdigest()
     accepted = (call if transport is None else transport)('/api/lab/workflows', request, idempotency)
     now = int(time.time())
@@ -174,9 +176,12 @@ def handle(master, handler, *, trial_queue=None):
         action = payload.get('action')
         if action == 'start':
             if payload.get('consent') is not True: raise ValueError('Consent is required')
+            from deployment.lab_identity import trial_sales_cutoff
+            cutoff = trial_sales_cutoff(payload, trial)
             data = prepare(master, payload, owner, transport=transport,
                            external_states={'NY', 'IL', 'GA', 'AL', 'NC', 'NV', 'TN', 'NM'} if trial else None,
-                           external_slots=8 if trial else None)
+                           external_slots=8 if trial else None,
+                           sales_cutoff_seconds=cutoff if 'sales_cutoff_seconds' in payload else None)
         else:
             record = unpack(master, payload.get('token'), owner)
             path = '/api/lab/workflows/' + record['id']
