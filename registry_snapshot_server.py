@@ -2396,6 +2396,19 @@ def irs_historical_filer_names(source: str, ein: str, url: str) -> list[dict]:
     return [candidate] if candidate else []
 
 
+def irs_index_object_ids(index: str, ein: str) -> list[str]:
+    """Read this organization's observed links, including unpadded EIN URLs.
+
+    ProPublica canonicalizes a leading-zero EIN in its filing links. The
+    returned header must still independently verify the complete nine digits.
+    No unrelated organization's link can supply a name or filing period.
+    """
+    expected = canonical_ein_digits(ein)
+    return list(dict.fromkeys(object_id for linked_ein, object_id in
+        re.findall(r"/organizations/(\d{1,9})/(\d{18})/full\b", index)
+        if linked_ein.zfill(9) == expected))
+
+
 def identity_irs_historical_names(ein: str, latest_object_id: str, deadline: float) -> dict:
     # The organization-specific index supplies filing IDs. Inspect at most three
     # oldest electronic returns within the existing discovery deadline.
@@ -2407,7 +2420,7 @@ def identity_irs_historical_names(ein: str, latest_object_id: str, deadline: flo
         ids = list(cached_index[1])
     else:
         index = identity_fetch(f"https://projects.propublica.org/nonprofits/organizations/{ein}", deadline).decode("utf-8", "replace")
-        ids = sorted(set(re.findall(r"/organizations/" + ein + r"/(\d{18})/full\b", index)) - {latest_object_id})[:3]
+        ids = sorted(set(irs_index_object_ids(index, ein)) - {latest_object_id})[:3]
         # Do not cache a possibly blocked/incomplete index as an empty history.
         if not ids and latest_object_id not in index:
             raise ValueError("IRS filing index did not expose the requested filing history")
@@ -3211,7 +3224,7 @@ def irs_period_for_label(ein: str, label: int, deadline: float) -> dict:
         begin, end = parse_due_date(latest.get("period_begin", "")), parse_due_date(latest.get("period_end", ""))
         if latest.get("tax_year_label", label) >= label and (latest.get("tax_year_label") != label or not begin or not end or (end - begin).days < 350):
             source = identity_fetch(f"https://projects.propublica.org/nonprofits/organizations/{ein}", deadline).decode("utf-8", "replace")
-            object_ids = list(dict.fromkeys(re.findall(r"/organizations/" + ein + r"/(\d{18})/full", source)))[:3]
+            object_ids = irs_index_object_ids(source, ein)[:3]
             for object_id in object_ids:
                 if time.monotonic() >= deadline: break
                 try:
@@ -5988,7 +6001,7 @@ def il_verification_recovery(record, payload, now):
     if (record.get("state") != "IL" or record.get("purpose") != "registration"
             or record.get("recovery_protocol") != "il-fresh-page-v1"
             or (record.get("connector_version") != "0.5.10"
-                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49"}))
+                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50"}))
             or payload.get("reason") != "NY_CONNECTOR_IL_VERIFICATION_PENDING"
             or record.get("il_verification_recovery")
             or now + 120 >= record["issued"] + NY_CONNECTOR_TTL_SECONDS):
@@ -6582,6 +6595,14 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
     required, generated = licensed_charity_names(org)
     if not required:
         raise ValueError("A reviewed organization name is required for this registry")
+    if state in {"NC", "NV"} and trial_identity():
+        # Display labels can join separately searchable names with a dash or
+        # slash. These are retrieval probes, not newly accepted identities.
+        # Both sides must complete; the original master targets still select
+        # every returned row. Ordinary word hyphens remain intact.
+        required = list(dict.fromkeys(part for name in required
+            for part in (licensed_compound_retrieval_names(name) or [name])))
+        generated = [name for name in generated if not licensed_compound_retrieval_names(name)]
     if state == "NC":
         # NC explicitly selects Starting With. Keep every reviewed
         # name, but a longer generated prefix adds nothing to a shorter literal
@@ -7367,6 +7388,15 @@ def licensed_charity_status(raw, expiration):
     if text in {"active", "current", "issued", "approved"}:
         return status_from_calendar_date(expiration) if expiration else "Current"
     return "Unable to Confirm"
+
+
+def licensed_compound_retrieval_names(name):
+    """Split explicit display-name separators, preserving legal word compounds."""
+    literal = canonical_name_punctuation(name)
+    parts = [part.strip(" ,;") for part in re.split(r"\s+[-\u2013\u2014]+\s+|\s*/\s*", literal)]
+    if len(parts) < 2 or len(parts) > 3 or any(not distinctive_match_tokens(part) for part in parts):
+        return []
+    return list(dict.fromkeys(parts))
 
 
 def licensed_dash_retrieval_forms(name):
@@ -13181,7 +13211,7 @@ def structured_registry_name(value: str, original: str, ein: str = "") -> str:
     if name:
         return name
     short = clean_registry_name(value)
-    if (re.fullmatch(r"[A-Za-z]{2,3}", short or "")
+    if (re.fullmatch(r"(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{2,4}", short or "")
             and short.casefold() not in {"dba", "aka", "ein", "inc", "llc", "ltd"}
             and any(complete_name_identity_key(short) == complete_name_identity_key(target)
                     for target in [original, *known_names_for_ein(ein)])):
@@ -23778,6 +23808,10 @@ def ny_connector_failure(record, code):
     }
     if trial_identity():
         comments.update({
+            "NY_CONNECTOR_RETURN_FORM_TIMEOUT": "New York did not return to its search form in time.",
+            "NY_CONNECTOR_CLEAR_BUTTON_TIMEOUT": "New York did not display its Clear fields control in time.",
+            "NY_CONNECTOR_CLEAR_FIELDS_TIMEOUT": "New York did not finish clearing its previous search fields.",
+            "NY_CONNECTOR_INPUT_BINDING_TIMEOUT": "New York did not retain the requested search value in its form.",
             "NY_CONNECTOR_DETAIL_UNAUTHORIZED": "New York rejected the selected organization's detail request (HTTP 401). Registration status remains unconfirmed.",
             "NY_CONNECTOR_DETAIL_FORBIDDEN": "New York denied access to the selected organization's detail request (HTTP 403). Registration status remains unconfirmed.",
             "NY_CONNECTOR_DETAIL_SERVER_ERROR": "New York returned a server error for the selected organization's detail request. Registration status remains unconfirmed.",
@@ -23870,7 +23904,7 @@ def ny_connector_advance(record):
     org = checker.Organization(record["organization_name"], record["ein"])
     started = time.perf_counter()
     supports_browser_detail = (record.get("connector_version") in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"}
-                               or bool(trial_identity() and record.get("connector_version") in {"0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49"}))
+                               or bool(trial_identity() and record.get("connector_version") in {"0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50"}))
     try:
         if record.get("purpose") == "identity":
             ein = canonical_ein_digits(record["ein"])
@@ -23920,7 +23954,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49"})):
+        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50"})):
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()
@@ -27340,6 +27374,7 @@ def ok_choose_safe_result_row_on_page(page, org, module):
     best = None
     best_score = -10000
     best_rank = (-10000, -1)
+    equivalent_records = []
     try:
         rows = page.locator("tr")
         row_count = rows.count()
@@ -27386,7 +27421,8 @@ def ok_choose_safe_result_row_on_page(page, org, module):
                 filing_link = link
                 filing_number = link_text
             elif not registry_name:
-                registry_name = useful_registry_name(link_text)
+                registry_name = structured_registry_name(link_text,
+                    getattr(org, "original_organization_name", org.organization_name), getattr(org, "ein", ""))
 
         if not filing_link:
             continue
@@ -27398,7 +27434,8 @@ def ok_choose_safe_result_row_on_page(page, org, module):
                 cell_count = 0
             for cell_index in range(cell_count):
                 try:
-                    cell_text = useful_registry_name(cells.nth(cell_index).inner_text(timeout=ok_action_timeout(org, 750)))
+                    cell_text = structured_registry_name(cells.nth(cell_index).inner_text(timeout=ok_action_timeout(org, 750)),
+                        getattr(org, "original_organization_name", org.organization_name), getattr(org, "ein", ""))
                 except Exception:
                     continue
                 if cell_text and not re.fullmatch(r"\d+", cell_text):
@@ -27416,6 +27453,8 @@ def ok_choose_safe_result_row_on_page(page, org, module):
                 getattr(org, "original_organization_name", org.organization_name), registry_name):
             score = 450
         rank = (score, registry_exact_active_tiebreak(registry_name, safe_targets, registry_candidate_fields(row).get("status", "")))
+        if score >= 450:
+            equivalent_records.append((registry_name, filing_number))
         if rank > best_rank:
             best_rank = rank
             best_score = score
@@ -27425,6 +27464,8 @@ def ok_choose_safe_result_row_on_page(page, org, module):
         return None
     if not registry_name_is_safe_for_org(best[2], getattr(org, "original_organization_name", getattr(org, "organization_name", "")), getattr(org, "ein", "")):
         return None
+    org.ok_equivalent_records = [record for record in equivalent_records
+        if complete_name_identity_key(record[0]) == complete_name_identity_key(best[2])]
     return best
 
 
@@ -27812,6 +27853,57 @@ def ok_open_selected_detail(page, link, org, module, filing_number):
         raise ValueError("Oklahoma detail navigation left the selected record")
 
 
+def ok_open_latest_equivalent_detail(page, org, module, selected):
+    """Compare only full-identity-equal rows from this completed first page.
+
+    Filing number and row order do not establish renewal recency. Read each
+    matching public history inside the existing state deadline; incomplete
+    duplicate evidence must not make the older record a definitive adverse.
+    """
+    candidates = list(dict.fromkeys(getattr(org, "ok_equivalent_records", ())))
+    if len(candidates) < 2 or not trial_identity():
+        ok_open_selected_detail(page, selected[1], org, module, selected[3])
+        return selected[2], selected[3]
+    if len(candidates) > 5:
+        raise TimeoutError("Oklahoma equivalent record set exceeds bounded detail comparison")
+    collected = []
+    for name, identifier in candidates:
+        if not re.fullmatch(r"[0-9]+", identifier):
+            raise ValueError("Oklahoma duplicate filing number is invalid")
+        target = "https://www.sos.ok.gov/corp/charityDetail.aspx?id=" + identifier
+        response = page.goto(target, wait_until="domcontentloaded", timeout=ok_action_timeout(org, 12000))
+        if response is None or response.status != 200 or page.url != target:
+            raise TimeoutError("Oklahoma equivalent detail did not complete")
+        text = module.body_text(page, timeout=ok_action_timeout(org, 4000))
+        displayed = module.extract_labeled_value_from_text(text, ["Entity Name"])
+        if (complete_name_identity_key(displayed) != complete_name_identity_key(name)
+                or not module.extract_labeled_value_from_text(text, ["Status"])):
+            raise ValueError("Oklahoma equivalent detail identity is incomplete")
+        history = re.split(r"FILING HISTORY\s*:", text, flags=re.I)
+        if len(history) != 2:
+            raise TimeoutError("Oklahoma equivalent filing history is incomplete")
+        lines = [re.sub(r"\s+", " ", line).strip() for line in history[1].splitlines() if line.strip()]
+        # The public table places cells on separate lines; use its actual rows.
+        rows = page.locator("tr")
+        for index in range(min(rows.count(), 200)):
+            line = re.sub(r"\s+", " ", rows.nth(index).inner_text(timeout=ok_action_timeout(org, 1000))).strip()
+            if re.match(r"^\d+\s+", line):
+                lines.append(line)
+        latest = ok_latest_filing_from_candidates(lines, module)
+        filed = module.parse_ok_filing_date(latest)
+        if filed is None or filed > date.today():
+            raise TimeoutError("Oklahoma equivalent renewal date is incomplete")
+        collected.append((filed, name, identifier, target))
+    _, name, identifier, target = max(collected, key=lambda item: item[0])
+    if page.url != target:
+        response = page.goto(target, wait_until="domcontentloaded", timeout=ok_action_timeout(org, 12000))
+        if response is None or response.status != 200 or page.url != target:
+            raise TimeoutError("Oklahoma selected newest detail did not complete")
+    org.ok_compared_records = [{"name": n, "identifier": i, "latest_registration_filed": d.isoformat()}
+                               for d, n, i, _ in collected]
+    return name, identifier
+
+
 def search_ok_precise(page, org, module):
     result = module.SearchResult(
         organization_name=org.organization_name,
@@ -27905,8 +27997,7 @@ def search_ok_precise(page, org, module):
             )
             return result
 
-        _, selected_filing_link, matched_name, filing_number = selected
-        ok_open_selected_detail(page, selected_filing_link, org, module, filing_number)
+        matched_name, filing_number = ok_open_latest_equivalent_detail(page, org, module, selected)
 
         detail_text = module.body_text(page, timeout=15000)
         status_text = module.extract_labeled_value_from_text(detail_text, ["Status"])
@@ -28065,7 +28156,7 @@ def ar_registration_date_ordinal(value: str) -> int:
     return parsed.toordinal() if parsed else 0
 
 
-def ar_result_rows(page) -> list[dict]:
+def ar_result_rows(page, org=None) -> list[dict]:
     rows = []
     try:
         locator = page.locator("table tbody tr")
@@ -28083,7 +28174,8 @@ def ar_result_rows(page) -> list[dict]:
                 continue
             if row_values and not re.search(r"\bNo\s+Results\s+Found\b", " ".join(row_values), re.I):
                 rows.append({
-                    "name": useful_registry_name(row_values[0]),
+                    "name": structured_registry_name(row_values[0],
+                        getattr(org, "organization_name", ""), getattr(org, "ein", "")),
                     "type": row_values[1],
                     "status": row_values[2],
                     "registration_date": row_values[3],
@@ -28371,7 +28463,7 @@ def search_ar_precise(page, org):
                 reached = True
             if explicit_no_results:
                 explicit_no_results_seen = True
-            parsed_rows = ar_result_rows(page)
+            parsed_rows = ar_result_rows(page, org)
             if parsed_rows or explicit_no_results:
                 completed_variants.append(variant)
             # A prefix can cover its associated full identity only on this
@@ -28824,6 +28916,12 @@ def ms_name_search_plan(name: str, ein: str = "") -> list[str]:
     # former names without adding identity evidence.
     name = ascii_dash_search_name(name)
     priority = [name, distinctive_acronym_core_probe(name), *literal_name_retrieval_forms(name)]
+    # The literal public filter can require the registry's article-free legal
+    # spelling. Reach that same identity before dozens of reviewed program
+    # aliases, while retaining every alias if no qualifying record is found.
+    without_article = re.sub(r"^the\s+", "", name, flags=re.I)
+    if without_article != name and len(distinctive_match_tokens(without_article)) >= 2:
+        priority.extend(literal_name_retrieval_forms(without_article))
     priority = [value for value in priority if value and not ms_search_variant_too_broad(value)]
     generated = list(dict.fromkeys([*priority, *ms_preferred_search_variants(name, ein)]))
     planned = reviewed_queries_first(name, ein, generated, limit=6, transform=ascii_dash_search_name)

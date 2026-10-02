@@ -1018,6 +1018,9 @@ class LookupControls(unittest.TestCase):
                  'search_ok_precise','run_state_lookup','ny_connector_request','ny_connector_advance','il_verification_recovery',
                  'nm_browser_clean_evidence','nm_browser_lookup','final_four_clean_evidence','final_four_compact_search_evidence','final_four_search_candidate_scores',
                  'final_four_connector_advance','final_four_connector_request','final_four_connector_failure'}
+        allowed.update({'structured_registry_name','ar_result_rows','search_ar_precise','ok_choose_safe_result_row_on_page',
+                        'ok_open_latest_equivalent_detail','licensed_compound_retrieval_names','irs_index_object_ids',
+                        'identity_irs_historical_names','irs_period_for_label','ms_name_search_plan'})
         # Only the documented NM inactive-lifecycle prefix is new. Compare
         # the entire previous fiscal-cycle implementation without alteration.
         nm=next(n for n in after.body if isinstance(n,ast.FunctionDef) and n.name=='nm_apply_status_history_master')
@@ -1053,8 +1056,10 @@ class LookupControls(unittest.TestCase):
         self.assertEqual({key.value for key in call.args[0].keys},{
             'NY_CONNECTOR_DETAIL_UNAUTHORIZED','NY_CONNECTOR_DETAIL_FORBIDDEN',
             'NY_CONNECTOR_DETAIL_SERVER_ERROR','NY_CONNECTOR_DETAIL_HTTP_ERROR',
-            'NY_CONNECTOR_DETAIL_SCHEMA_INVALID'})
-        self.assertTrue(all('remains unconfirmed' in value.value for value in call.args[0].values))
+            'NY_CONNECTOR_DETAIL_SCHEMA_INVALID','NY_CONNECTOR_RETURN_FORM_TIMEOUT','NY_CONNECTOR_CLEAR_BUTTON_TIMEOUT',
+            'NY_CONNECTOR_CLEAR_FIELDS_TIMEOUT','NY_CONNECTOR_INPUT_BINDING_TIMEOUT'})
+        self.assertTrue(all('remains unconfirmed' in value.value for key,value in zip(call.args[0].keys,call.args[0].values)
+                            if key.value.startswith('NY_CONNECTOR_DETAIL_')))
         failure.body.remove(diagnostic)
         # Version allowlists belong to signed input handlers; all other master
         # statements/functions must stay byte-equivalent as parsed syntax.
@@ -1069,10 +1074,13 @@ class LookupControls(unittest.TestCase):
         before = ast.parse(subprocess.check_output(['git', 'show', baseline + ':registry_snapshot_server.py'], cwd=root).decode('utf-8'))
         after = ast.parse((root / 'registry_snapshot_server.py').read_text(encoding='utf-8'))
         changed = {'nm_browser_courtesy_names','nm_browser_lookup','pa_name_search_plan','final_four_connector_failure','final_four_browser_lookup'}
+        changed.update({'structured_registry_name','ar_result_rows','search_ar_precise','ok_choose_safe_result_row_on_page',
+                        'ok_open_latest_equivalent_detail','search_ok_precise','licensed_compound_retrieval_names','irs_index_object_ids',
+                        'identity_irs_historical_names','irs_period_for_label','ms_name_search_plan','ny_connector_failure'})
         for tree in (before, after):
             for handler in [n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in {'ny_connector_request','ny_connector_advance','il_verification_recovery'}]:
                 for n in ast.walk(handler):
-                    if isinstance(n,ast.Set):n.elts=[v for v in n.elts if not(isinstance(v,ast.Constant) and v.value in {'0.6.46','0.6.47','0.6.48','0.6.49'})]
+                    if isinstance(n,ast.Set):n.elts=[v for v in n.elts if not(isinstance(v,ast.Constant) and v.value in {'0.6.46','0.6.47','0.6.48','0.6.49','0.6.50'})]
             tree.body = [node for node in tree.body if not (isinstance(node, ast.FunctionDef) and node.name in changed)]
         self.assertEqual(ast.dump(before), ast.dump(after))
         for file in ['web-staging/index.html', 'web-staging/optimized-workflows.js', 'web-staging/sales-mode.js',

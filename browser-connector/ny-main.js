@@ -131,7 +131,7 @@
     if (/^\/RegistrySearch\/[0-9]{2}-[0-9]{2}-[0-9]{2}\/?$/.test(location.pathname)) {
       // The state retains the verified result list in browser history.
       window.history.back();
-      await until(() => /^\/RegistrySearch\/?$/.test(location.pathname) && document.getElementById("ein"), 10000);
+      await until(() => /^\/RegistrySearch\/?$/.test(location.pathname) && document.getElementById("ein"), 10000, "NY_CONNECTOR_RETURN_FORM_TIMEOUT");
     }
   }
   async function runDetail(query) {
@@ -145,15 +145,15 @@
   async function run(query, forceVerification = false) {
     if (Object.hasOwn(query, "orgID")) return runDetail(query);
     await returnToResults();
-    const clear = await until(() => button("Clear fields"), 10000);
+    const clear = await until(() => button("Clear fields"), 10000, "NY_CONNECTOR_CLEAR_BUTTON_TIMEOUT");
     clear.click();
-    await until(() => ["ein", "orgName", "orgID", "city"].every(id => document.getElementById(id)?.value === ""), 3000);
+    await until(() => ["ein", "orgName", "orgID", "city"].every(id => document.getElementById(id)?.value === ""), 3000, "NY_CONNECTOR_CLEAR_FIELDS_TIMEOUT");
     const [key, value] = Object.entries(query)[0];
     const input = document.getElementById(key);
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, value);
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
-    await until(() => key === "ein" ? input.value.replace("-", "") === value : input.value === value, 2000);
+    await until(() => key === "ein" ? input.value.replace("-", "") === value : input.value === value, 2000, "NY_CONNECTOR_INPUT_BINDING_TIMEOUT");
     await verifySearch(forceVerification);
     // A successful public verification response can precede the portal's
     // rendered button update. Wait for the real enabled control, still bounded.
