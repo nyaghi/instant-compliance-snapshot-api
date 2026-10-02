@@ -6343,7 +6343,7 @@ def nv_charity_filings_evidence(record, payload):
             or not isinstance(payload.get("rows"), list) or type(payload.get("total")) is not int
             or payload["total"] < 0 or len(payload["rows"]) != payload["total"]):
         raise ValueError("Nevada filing history is incomplete or belongs to another entity")
-    dates, qualifications, solicitation_dates, seen = [], [], [], set()
+    dates, qualifications, solicitation_dates, withdrawals, seen = [], [], [], [], set()
     for cells in payload["rows"]:
         if not isinstance(cells, list) or len(cells) != len(headers) or not all(isinstance(v, str) for v in cells):
             raise ValueError("Nevada filing-history row is incomplete")
@@ -6367,6 +6367,13 @@ def nv_charity_filings_evidence(record, payload):
             if filed is None or filed > date.today():
                 raise ValueError("Nevada charitable solicitation filing date is invalid")
             solicitation_dates.append(filed)
+        elif (record.get("entity_type") == "Foreign Non-Profit Corporation (80)"
+              and fields["Filing Type"] == "Withdrawal of Foreign Non-Profit Corporation (80)"):
+            filed = final_four_source_date(fields["Filed Date"], "Nevada withdrawal filed")
+            effective = final_four_source_date(fields["Effective Date"], "Nevada withdrawal effective")
+            if filed is None or effective is None or max(filed, effective) > date.today():
+                raise ValueError("Nevada withdrawal filing date is invalid")
+            withdrawals.append(filed)
     result = {**record, "annual_list_filed": max(dates) if dates else None}
     # Expose only an explicitly filed Foreign Qualification that agrees with
     # this entity's Nevada formation date. Formation alone is not registration
@@ -6375,6 +6382,16 @@ def nv_charity_filings_evidence(record, payload):
         result.update(initial=qualifications[0], initial_label="Foreign Qualification — Filed Date",
                       initial_type="initial_registration_filing_date")
     if record.get("requires_solicitation_history"):
+        # Explicit withdrawal of the confirmed nonprofit corporation is
+        # closure evidence, even when the complete history contains no CSR.
+        # It establishes neither active charity registration nor exemption.
+        # Master selection still checks other records and aliases for a newer
+        # qualifying registration before returning the adverse result.
+        if withdrawals and record.get("raw_status", "").casefold() == "withdrawn":
+            result.update(status="Closed / Withdrawn / Canceled", withdrawal_filed=max(withdrawals),
+                          date_evidence_note=(f"The complete filing history includes an explicit withdrawal of the nonprofit corporation filed {max(withdrawals).isoformat()}. "
+                                              "This confirms the corporate record's withdrawal; it does not establish a current charitable-solicitation registration."))
+            return result
         if not solicitation_dates or not record.get("expiration"):
             raise ValueError("Nevada charitable solicitation scope or renewal deadline is unconfirmed")
         raw = record["raw_status"]
@@ -6590,17 +6607,27 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
         return result
     completed_searches = []
     narrowed_searches = []
+    covered_reviewed_names = []
     if state == "NV":
         # Try covering generated prefixes first. Only a completed Starts With
         # query can cover a longer fallback; Exact Match cannot omit it.
+        # Keep the entered name first, then shorter reviewed aliases. A fully
+        # collected literal prefix also contains every row of its longer
+        # reviewed composite name; this does not relax matching or omit a
+        # punctuation/case variant. Exact/failed searches provide no coverage.
+        required = required[:1] + sorted(required[1:], key=len)
         generated = sorted(generated, key=lambda name: len(name))
     for index, name in enumerate(required + generated):
-        # A collector's completed Starts With query is a literal
-        # prefix search already includes every result of a longer generated
-        # prefix. Keep every reviewed name and all case/punctuation changes;
-        # failed or truncated source responses can never establish coverage.
-        if state in {"NC", "NV"} and index >= len(required) and any(name.startswith(prior) for prior in completed_searches):
-            continue
+        # Complete literal Starts With results contain every row of a longer
+        # prefix. NV can reuse this evidence for reviewed composites too;
+        # NC reuse remains limited to generated fallbacks. Different case or
+        # punctuation, failed responses and Exact Match do not cover aliases.
+        if state in {"NC", "NV"} and (state == "NV" or index >= len(required)):
+            covering = next((prior for prior in completed_searches if name.startswith(prior)), None)
+            if covering is not None:
+                if state == "NV" and index < len(required):
+                    covered_reviewed_names.append({"name": name, "completed_starts_with": covering})
+                continue
         if state == "TN" and index >= len(required) and any(
                 prior.casefold() in name.casefold() for prior in completed_searches):
             # The observed Tennessee Charity Name filter is case-insensitive
@@ -6721,7 +6748,8 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                             record = nv_charity_filings_evidence(record, detail["filings"])
                         except ValueError:
                             record["date_evidence_note"] = "Nevada's annual-list filing history was incomplete; the last-filed date remains blank."
-                    if record.get("requires_solicitation_history") and not record.get("solicitation_statement_filed"):
+                    if (record.get("requires_solicitation_history")
+                            and not record.get("solicitation_statement_filed") and not record.get("withdrawal_filed")):
                         unreviewed_scope = True
                         scope_reviews.append({"name": record["name"], "identifier": record["identifier"],
                                               "category": "Unconfirmed charitable-solicitation filing history", "source_url": record["url"]})
@@ -6743,6 +6771,9 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                         org, selected, records, unreviewed_scope=unreviewed_scope):
                     break
     result = final_four_license_result(org, state, records, deadline, sources[state])
+    if covered_reviewed_names:
+        result.source_attempts = list(getattr(result, "source_attempts", [])) + [
+            {"reviewed_name_coverage": item} for item in covered_reviewed_names]
     if narrowed_searches:
         result.source_note += " Broad Nevada name searches were narrowed using the registry's Exact Match option; reviewed aliases and applicable spelling variants remained in the search plan."
     if excluded_nv_entities:

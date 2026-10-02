@@ -1,0 +1,29 @@
+{
+  "observed_date": "2026-10-02",
+  "source_url": "https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=Manage-Business&id=4dcc3b63-bd76-402e-9e07-418ce170fab4",
+  "fields": {
+    "Entity Name": "CONSUMER CREDIT OF DES MOINES",
+    "NV Business ID": "NV20141416556",
+    "Entity Status": "Withdrawn",
+    "Entity Type": "Foreign Non-Profit Corporation (80)",
+    "FEIN": "-",
+    "Solicits Charitable Contribution?": "No",
+    "IRS Registered Name": "-",
+    "Campaign Name": "-",
+    "Formation Date in Nevada": "06/23/2014",
+    "Annual Renewal Due Date/Expiration Date": "06/30/2016"
+  },
+  "filings": {
+    "identifier": "NV20141416556",
+    "name": "CONSUMER CREDIT OF DES MOINES",
+    "complete": true,
+    "total": 4,
+    "headers": ["Filed Date", "Effective Date", "Filing Number", "Filing Type", "Source", "No. of Pages"],
+    "rows": [
+      ["11/02/2015", "11/02/2015", "20150483181-33", "Withdrawal of Foreign Non-Profit Corporation (80)", "Walk-in", "1"],
+      ["04/21/2015", "04/21/2015", "20150178862-00", "Annual List", "Walk-in", "1"],
+      ["10/14/2014", "10/14/2014", "20140713886-20", "Initial List", "Walk-in", "2"],
+      ["06/23/2014", "06/23/2014", "20140454175-23", "Foreign Qualification", "Walk-in", "2"]
+    ]
+  }
+}

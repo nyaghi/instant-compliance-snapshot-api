@@ -4,6 +4,8 @@ Fixtures transcribe public pages inspected on 2026-09-29. Mutated fixtures test
 failure boundaries. Organization examples are tests only, never runtime rules.
 """
 import copy
+import json
+from pathlib import Path
 from datetime import date
 import time
 import unittest
@@ -63,6 +65,7 @@ NV_SOLICITATION_FILINGS = {**NV_FILINGS, 'identifier': NV_SOLICITATION['NV Busin
 NV_QUALIFIED_FILINGS = copy.deepcopy(NV_FILINGS)
 NV_QUALIFIED_FILINGS['rows'].append(['10/29/2025','10/29/2025','synthetic-csr-control','Charitable Solicitation Registration Statement','Fixture','2'])
 NV_QUALIFIED_FILINGS['total'] += 1
+NV_WITHDRAWAL = json.loads((Path(__file__).parent / 'fixtures' / 'nv-consumer-withdrawal-20261002.json').read_text())
 
 TN = {'Name': 'ROCKY MOUNTAIN ELK FOUNDATION, INC.', 'CO Number': 'CO3674', 'Status': 'Active',
       'Registration Date': '09/13/1999', 'Expiration Date': '11/27/2026',
@@ -101,6 +104,31 @@ class SourceControls(unittest.TestCase):
             for cells in history['rows']: cells[3]=kind
             with self.subTest(kind=kind), self.assertRaises(ValueError):
                 cc.nv_charity_filings_evidence(row, history)
+
+    def test_nv_explicit_withdrawal_history_confirms_closure_without_claiming_charity_currency(self):
+        fields, history = NV_WITHDRAWAL['fields'], NV_WITHDRAWAL['filings']
+        row = cc.nv_charity_detail_evidence(fields, fields['NV Business ID'])
+        parsed = cc.nv_charity_filings_evidence(row, history)
+        self.assertEqual(parsed['status'], 'Closed / Withdrawn / Canceled')
+        self.assertEqual(parsed['withdrawal_filed'], date(2015, 11, 2))
+        self.assertNotIn('solicitation_statement_filed', parsed)
+        self.assertIn('nonprofit corporation', parsed['date_evidence_note'])
+
+    def test_nv_withdrawal_exception_requires_matching_status_type_and_complete_history(self):
+        fields, history = NV_WITHDRAWAL['fields'], NV_WITHDRAWAL['filings']
+        variants = [({'Entity Status': 'Active'}, {}), ({'Entity Status': 'Default'}, {}),
+                    ({'Entity Type': 'Foreign Entities Not Required to Register In Nevada'}, {}),
+                    ({}, {'complete': False}), ({}, {'name': 'Another Organization'}),
+                    ({}, {'rows': history['rows'][1:], 'total': 3})]
+        for changed_fields, changed_history in variants:
+            row = cc.nv_charity_detail_evidence({**fields, **changed_fields}, fields['NV Business ID'])
+            with self.subTest(fields=changed_fields, history=changed_history), self.assertRaises(ValueError):
+                cc.nv_charity_filings_evidence(row, {**history, **changed_history})
+        for column, value in [(0, '11/02/2099'), (1, '11/02/2099'), (1, '-')]:
+            changed = copy.deepcopy(history); changed['rows'][0][column] = value
+            row = cc.nv_charity_detail_evidence(fields, fields['NV Business ID'])
+            with self.subTest(column=column), self.assertRaises(ValueError):
+                cc.nv_charity_filings_evidence(row, changed)
 
     def test_nv_solicitation_status_and_expiration_keep_adverse_precedence(self):
         for raw, due, expected in [('Registered','05/31/2026','Delinquent'),
@@ -695,6 +723,42 @@ class LookupControls(unittest.TestCase):
         self.assertIn('Exact Match',result.source_note)
         self.assertIn('reviewed aliases',result.source_note)
 
+    def test_nv_complete_literal_prefix_covers_reviewed_composite_alias(self):
+        calls=[]
+        required=['Legal Charity', 'FORMER CHARITY WHICH WILL DO BUSINESS IN CALIFORNIA AS LEGAL CHARITY', 'FORMER CHARITY']
+        def source(q):
+            calls.append(q['name'])
+            return {'state':'NV','query':q,'complete':True,'verification_pending':False,'rows':[],'total':0,
+                    'search_mode':'STARTS_WITH','broad_total':None}
+        with patch.object(cc,'licensed_charity_names',return_value=(required,[])):
+            result=cc.final_four_browser_lookup(self.orgs['NV'],'NV',source)
+        self.assertEqual(result.status,'Not Registered')
+        self.assertEqual(calls,['Legal Charity','FORMER CHARITY'])
+        self.assertIn(required[1],str(result.source_attempts))
+
+    def test_nv_reviewed_prefix_coverage_keeps_case_punctuation_and_exact_variants(self):
+        for exact in [False,True]:
+            calls=[]
+            def source(q):
+                calls.append(q['name'])
+                narrowed=exact and q['name']=='FORMER CHARITY'
+                return {'state':'NV','query':q,'complete':True,'verification_pending':False,'rows':[],'total':0,
+                        'search_mode':'EXACT_MATCH' if narrowed else 'STARTS_WITH','broad_total':99 if narrowed else None}
+            names=['Legal Charity','FORMER CHARITY LONG','FORMER CHARITY','Former Charity','FORMER-CHARITY']
+            with patch.object(cc,'licensed_charity_names',return_value=(names,[])):
+                result=cc.final_four_browser_lookup(self.orgs['NV'],'NV',source)
+            self.assertEqual(result.status,'Not Registered')
+            self.assertIn('Former Charity',calls);self.assertIn('FORMER-CHARITY',calls)
+            self.assertEqual('FORMER CHARITY LONG' in calls,exact)
+
+    def test_nv_failed_reviewed_prefix_never_covers_an_alias(self):
+        for changed in [{'complete':False},{'total':1},{'verification_pending':True}]:
+            with patch.object(cc,'licensed_charity_names',return_value=(['Legal Charity','FORMER CHARITY LONG','FORMER CHARITY'],[])):
+                def source(q):
+                    return {'state':'NV','query':q,'complete':True,'verification_pending':False,'rows':[],'total':0,
+                            **(changed if q['name']=='FORMER CHARITY' else {})}
+                with self.assertRaises(ValueError):cc.final_four_browser_lookup(self.orgs['NV'],'NV',source)
+
     def test_nv_narrowed_evidence_requires_valid_mode_count_and_complete_rows(self):
         q={'state':'NV','operation':'search','name':'Example','exact_above':20}
         data={'state':'NV','query':q,'complete':True,'verification_pending':False,'total':0,'rows':[],
@@ -944,7 +1008,7 @@ class LookupControls(unittest.TestCase):
         root=Path(__file__).resolve().parents[1]
         before=ast.parse(subprocess.check_output(['git','show','e2e6da7a3bd259c78734ef704b3ae7ce91e8c4d6:registry_snapshot_server.py'],cwd=root).decode('utf-8'))
         after=ast.parse((root/'registry_snapshot_server.py').read_text(encoding='utf-8'))
-        allowed={'nc_charity_record_evidence','final_four_license_result','nv_charity_detail_evidence',
+        allowed={'nc_charity_record_evidence','final_four_license_result','nv_charity_detail_evidence','nv_charity_filings_evidence',
                  'tn_charity_detail_evidence','tn_browser_generated_queries','final_four_browser_lookup','mi_name_fallback_queries',
                  'search_ok_precise','run_state_lookup','ny_connector_request','ny_connector_advance','il_verification_recovery',
                  'nm_browser_clean_evidence','nm_browser_lookup','final_four_clean_evidence','final_four_compact_search_evidence','final_four_search_candidate_scores',
@@ -992,6 +1056,22 @@ class LookupControls(unittest.TestCase):
         for tree in (before,after):
             tree.body=[n for n in tree.body if not(isinstance(n,ast.FunctionDef) and n.name in allowed)]
         self.assertEqual(ast.dump(after),ast.dump(before))
+
+    def test_ag_delta_preserves_all_other_master_functions_and_approved_frontend(self):
+        import ast, subprocess
+        root = Path(__file__).resolve().parents[1]
+        baseline = 'e5b8653033b08e4d648e742686c855731c82dce4'
+        before = ast.parse(subprocess.check_output(['git', 'show', baseline + ':registry_snapshot_server.py'], cwd=root).decode('utf-8'))
+        after = ast.parse((root / 'registry_snapshot_server.py').read_text(encoding='utf-8'))
+        changed = {'nv_charity_filings_evidence', 'final_four_browser_lookup'}
+        for tree in (before, after):
+            tree.body = [node for node in tree.body if not (isinstance(node, ast.FunctionDef) and node.name in changed)]
+        self.assertEqual(ast.dump(before), ast.dump(after))
+        for file in ['web-staging/index.html', 'web-staging/optimized-workflows.js', 'web-staging/sales-mode.js',
+                     'browser-connector/registry-content.js', 'browser-connector/registry-worker.js']:
+            with self.subTest(file=file):
+                original = subprocess.check_output(['git', 'show', baseline + ':' + file], cwd=root)
+                self.assertEqual(original.replace(b'\r\n', b'\n'), (root / file).read_bytes().replace(b'\r\n', b'\n'))
 
     def test_nv_nr_identity_is_filtered_without_inventing_a_corporation(self):
         for identifier in ['NR20230725-22746', 'C20180913-0530']:
@@ -1146,6 +1226,43 @@ class LookupControls(unittest.TestCase):
         self.assertIn('Charitable Solicitation',dates['registration_date_source_label'])
         self.assertEqual(filed['renewal_filing_value'],'2026-05-05')
         self.assertEqual(filed['renewal_filing_label'],'Solicitation statement filed')
+
+    def test_nv_withdrawn_corporation_full_lookup_and_newer_charity_record(self):
+        source = NV_WITHDRAWAL
+        name = source['fields']['Entity Name']
+        org = cc.checker.Organization(name, '42-1301505')
+        cc.REVIEWED_NAME_CONTEXT.set({'NV': [name, name + ' INC']})
+        for newer in [False, True]:
+            calls = []
+            def provider(q):
+                calls.append(q)
+                if q['operation'] == 'search':
+                    rows = [{'name': name, 'identifier': source['fields']['NV Business ID'],
+                             'entity_type': source['fields']['Entity Type'], 'raw_status': 'Withdrawn'}]
+                    if newer:
+                        rows.append({'name': name, 'identifier': NV_SOLICITATION['NV Business ID'],
+                                     'entity_type': NV_SOLICITATION['Entity Type'], 'raw_status': 'Registered'})
+                    return {'state': 'NV', 'query': q, 'complete': True, 'verification_pending': False,
+                            'rows': rows, 'total': len(rows)}
+                if q['identifier'] == source['fields']['NV Business ID']:
+                    fields, filings = copy.deepcopy(source['fields']), copy.deepcopy(source['filings'])
+                else:
+                    fields, filings = copy.deepcopy(NV_SOLICITATION), copy.deepcopy(NV_SOLICITATION_FILINGS)
+                    fields['Entity Name'] = name; fields['IRS Registered Name'] = name
+                    filings['name'] = name
+                return {'query': q, 'complete': True, 'fields': fields, 'filings': filings,
+                        'source_url': source['source_url']}
+            with self.subTest(newer=newer):
+                result = cc.final_four_browser_lookup(org, 'NV', provider)
+                self.assertTrue(result.success)
+                self.assertEqual(result.status, 'Current' if newer else 'Closed / Withdrawn / Canceled')
+                self.assertEqual(result.matched_registry_identifier,
+                                 NV_SOLICITATION['NV Business ID'] if newer else source['fields']['NV Business ID'])
+                if not newer:
+                    self.assertIn('explicit withdrawal', result.source_note)
+                    self.assertIn('does not establish a current charitable', result.source_note)
+                    # Closure does not trigger the positive-record shortcut.
+                    self.assertGreater(len([q for q in calls if q['operation'] == 'search']), 1)
 
     def test_nv_wrong_or_offsite_detail_link_is_rejected(self):
         original = self.nvurl
