@@ -1114,6 +1114,18 @@
         || new Set(rows.map(r=>JSON.stringify(r))).size!==rows.length) throw new Error('REGISTRY_TOTAL_CHANGED');
     return {state:'AL',query,complete:true,verification_pending:false,headers:page.headers,rows,total:page.total};
   }
+  function nvReadiness() {
+    const tab=[...document.querySelectorAll('[role="tab"]')].find(el=>text(el)==='Business');
+    return {
+      document_loaded:document.readyState!=='loading',
+      search_route:location.hash.includes('screen=external-GenericFilingsSearch&tabRoute=business'),
+      business_selected:tab?.getAttribute('aria-selected')==='true',
+      loader_clear:![...document.querySelectorAll('.app-loader-pane .circle-loader')].some(visible),
+      inputs_present:['entityName','entityNumber','nvBusinessId'].every(s=>document.querySelector(`input[id$="-${s}"]`)),
+      search_mode_selected:nvStartsWithSelected()||nvSearchModeSelected('EXACT_MATCH'),
+      search_enabled:[...document.querySelectorAll('button')].some(el=>text(el)==='Search'&&visible(el)&&!el.disabled)
+    };
+  }
   function registryDocumentReady() {
     if (document.readyState === 'loading') return false;
     if(NM)return location.pathname.endsWith('/CharityDetail.aspx')
@@ -1143,13 +1155,7 @@
     if (NV) {
       // Detail and transitional ORION screens share the public search pathname.
       // A loaded document is not a ready Business search form.
-      if (!location.hash.includes('screen=external-GenericFilingsSearch&tabRoute=business')) return false;
-      const tab=[...document.querySelectorAll('[role="tab"]')].find(el=>text(el)==='Business');
-      return tab?.getAttribute('aria-selected')==='true'
-        && ![...document.querySelectorAll('.app-loader-pane .circle-loader')].some(visible)
-        && ['entityName','entityNumber','nvBusinessId'].every(s=>document.querySelector(`input[id$="-${s}"]`))
-        && (nvStartsWithSelected()||nvSearchModeSelected('EXACT_MATCH'))
-        && [...document.querySelectorAll('button')].some(el=>text(el)==='Search' && visible(el) && !el.disabled);
+      return Object.values(nvReadiness()).every(value=>value===true);
     }
     return true;
   }
@@ -1228,6 +1234,7 @@
       }
     }
     if (m.action === "registry-ready") return {ready:registryDocumentReady(), url:location.href, documentId,
+      ...(NV ? {nv_readiness:nvReadiness()} : {}),
       ...(NC ? {verification_pending:/^Just a moment/i.test(document.title||'')
         && /Performing security verification|verifies you are not a bot/i.test(text(document.body))} : {}),
       ...(TN ? {verification_pending:!!document.querySelector('div[id^="recaptcha_"]') && !registryDocumentReady()} : {})};
@@ -1318,6 +1325,7 @@
         ? 'NY_CONNECTOR_'+code : null;
       const ilReasons={REGISTRY_RESPONSE_INCOMPLETE:'NY_CONNECTOR_IL_RESPONSE_TIMEOUT',REGISTRY_RESULTS_INCOMPLETE:'NY_CONNECTOR_IL_RESULTS_INCOMPLETE',REGISTRY_TOTAL_CHANGED:'NY_CONNECTOR_IL_TOTAL_CHANGED',REGISTRY_RESULT_LIMIT:'NY_CONNECTOR_IL_RESULT_LIMIT',REGISTRY_PAGINATION_INCOMPLETE:'NY_CONNECTOR_IL_PAGINATION_INCOMPLETE'};
       reply({ok:false,reason:trialReason || (AL && code==='NY_CONNECTOR_AL_VERIFICATION_REQUIRED' ? code : TN && code==='NY_CONNECTOR_TN_VERIFICATION_OR_FORM_PENDING' ? code : /^NY_CONNECTOR_IL_(?:VERIFICATION_PENDING|FORM_READY_TIMEOUT|FORM_DISABLED|FORM_MISSING|DETAIL_(?:NOT_OPENED|BLANK|IDENTITY_INCOMPLETE|RESPONSE_TIMEOUT))$/.test(code) ? code : IL && ilReasons[code] || 'NY_CONNECTOR_INCOMPLETE'),
+        ...(NV ? {nv_readiness:nvReadiness()} : {}),
         ...(IL && error.diagnostics ? {diagnostics:error.diagnostics} : {})});
     });
     return true;

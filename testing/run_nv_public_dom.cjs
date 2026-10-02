@@ -360,6 +360,16 @@ test('Nevada return observes selection-only hydration without waiting for the wa
  }
 });
 
+test('Nevada readiness diagnostics distinguish a detail route using only public booleans',async()=>{
+ const h=fixture();h.detail();
+ const result=await h.api.handle({action:'registry-ready'});
+ assert.equal(result.ready,false);
+ assert.equal(result.nv_readiness.search_route,false);
+ assert.equal(result.nv_readiness.inputs_present,false);
+ assert.deepEqual(Object.keys(result.nv_readiness).sort(),['business_selected','document_loaded','inputs_present','loader_clear','search_enabled','search_mode_selected','search_route']);
+ assert.ok(Object.values(result.nv_readiness).every(value=>typeof value==='boolean'));
+});
+
 test('Nevada missing or incomplete native return cannot be accepted as a completed search',async()=>{
  const h=fixture();h.detail();const read=h.context.document.querySelectorAll;
  h.context.document.querySelectorAll=q=>q==='button'?[]:read(q);

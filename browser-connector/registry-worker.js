@@ -30,6 +30,7 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
   try { while (!job.closed && Date.now()<deadline) {
     try {
       const value=await registryMessage(job,{action:"registry-ready"});
+      if(job.registryState==='NV'&&value?.nv_readiness)job.nvReadiness=value.nv_readiness;
       verificationPending=['NC','TN'].includes(job.registryState)&&value?.verification_pending===true;
       if(job.registryState==='TN'&&!value?.ready&&!visibilityAttempted&&Date.now()-started>=3000) {
         visibilityAttempted=true;previousVisible=await registryNorthCarolinaVisibility(job);
@@ -224,6 +225,7 @@ async function performRegistryQuery(job, query) {
     if (query.operation === "search") {
       if (query.state==='NV' && job.tab!==null && !job.finalFourReusableForm) {
         const returned=await registryMessage(job,{action:'registry-nv-return',budgetMs:Math.max(1,Math.min(10000,job.activeExpiresAt-Date.now()))});
+        if(returned?.nv_readiness)job.nvReadiness=returned.nv_readiness;
         if (!returned?.ok) {
           if (returned?.reason!=='NY_CONNECTOR_REGISTRY_NV_RETURN_READY_TIMEOUT' || job.nvReturnRecoveryUsed
               || job.activeExpiresAt-Date.now()<5000) throw new Error(returned?.reason||'NY_CONNECTOR_INCOMPLETE');
