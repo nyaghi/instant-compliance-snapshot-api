@@ -3,7 +3,7 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const original=fs.readFileSync(process.env.CC_TEST_TRIAL_DIR?path.join(process.env.CC_TEST_TRIAL_DIR,'registry-content.js'):path.join(__dirname,'../browser-connector/registry-content.js'),'utf8');
-const source=original.replace('  async function handle(m) {','  globalThis.testNV = {nvPage,nvPages,nvFields,nvReservationFields,nvChanged,nvSearch,nvDetail,nvReturnSearch,registryDocumentReady,handle};\n  async function handle(m) {');
+const source=original.replace('  async function handle(m) {','  globalThis.testNV = {nvPage,nvPages,nvExpandSearchPage,nvFields,nvReservationFields,nvChanged,nvSearch,nvDetail,nvReturnSearch,registryDocumentReady,handle};\n  async function handle(m) {');
 
 test('Nevada detail and transitional routes are not ready public search forms',()=>{
  const h=fixture();
@@ -642,6 +642,36 @@ test('Nevada filing pagination waits for old rows to be replaced after the pager
  const collected=await h.drive(h.api.nvPages('Filing History Details',headers,h.time+45000));
  assert.deepEqual(Array.from(collected,row=>row.cells[2]),['1','2','3','4']);
  assert.ok(h.time>=1800,'the old filing row is not accepted with the new pager');
+});
+
+test('Nevada public larger filing view avoids ten-row boundary overlap without relaxing totals',async()=>{
+ const h=fixture(),headers=['Filed Date','Effective Date','Filing Number','Filing Type','Source','No. of Pages'];
+ const filings=Array.from({length:30},(_,i)=>['04/01/2022','04/01/2022',String(20222264500+i),'Charitable Solicitation Registration Statement','Email','']);
+ let size=10,menu=false,values=filings.slice(0,10),notify,clicks=0;
+ const Observer=h.context.MutationObserver;
+ h.context.MutationObserver=class extends Observer{constructor(fn){super(fn);notify=fn;}};
+ const combo={getClientRects:()=>[{}],getAttribute:k=>k==='aria-controls'?'filing-sizes':null,
+  querySelector:()=>({innerText:String(size)}),click:()=>{menu=true;}};
+ const option={innerText:'50',getClientRects:()=>[{}],click:()=>{
+  clicks++;menu=false;size=50;
+  h.context.setTimeout(()=>{values=filings;notify?.([{target:{nodeType:1,closest:()=>({})},addedNodes:[],removedNodes:[]}]);},800);
+ }};
+ const grid={querySelector:()=>null,querySelectorAll:q=>q==='[role="columnheader"]'?headers.map(label=>({getAttribute:()=>label})):
+  q==='tbody > tr[role="row"]'?values.map(cells=>({querySelector:()=>({}),querySelectorAll:()=>cells.map(innerText=>({innerText,querySelector:()=>null}))})):[]};
+ const table={querySelectorAll:()=>[{innerText:'Filing History Details'}],querySelector:q=>q==='[role="grid"]'?grid:
+  q==='kendo-datapager'?{getAttribute:()=>`Page 1 of ${Math.ceil(30/size)}`}:
+  q==='kendo-datapager-info'?{innerText:`1 - ${values.length} of 30 items`}:
+  q==='kendo-datapager [role="combobox"][aria-label="items per page"]'?combo:null};
+ const read=h.context.document.querySelectorAll,get=h.context.document.getElementById;
+ h.context.document.querySelectorAll=q=>q==='casex-data-table'?[table]:read(q);
+ h.context.document.getElementById=id=>id==='filing-sizes'?{getClientRects:()=>menu?[{}]:[],getAttribute:()=> 'listbox',querySelectorAll:()=>[option]}:get(id);
+ const start=h.time,first=h.api.nvPage('Filing History Details',headers);
+ const expanded=await h.drive(h.api.nvExpandSearchPage(first,h.time+45000,'Filing History Details',headers));
+ assert.equal(expanded.values.length,30);assert.equal(expanded.total,30);assert.equal(expanded.page,1);assert.equal(expanded.pages,1);
+ assert.equal(clicks,1);assert.ok(h.time-start<3000,'same deadline, no history retry wait');
+ assert.equal(new Set(expanded.values.map(c=>c[2])).size,30);
+ const collected=await h.drive(h.api.nvPages('Filing History Details',headers,h.time+45000,expanded));
+ assert.equal(collected.length,30);assert.equal(collected[9].cells[2],'20222264509');
 });
 
 test('Nevada filing placeholders never count as a completed filing page',()=>{

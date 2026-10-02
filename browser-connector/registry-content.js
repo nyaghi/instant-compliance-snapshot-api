@@ -407,14 +407,14 @@
     }
     throw new Error("REGISTRY_NV_PAGINATION_INCOMPLETE");
   }
-  async function nvExpandSearchPage(page, deadline) {
+  async function nvExpandSearchPage(page, deadline, title='Search Results', headers=nvSearchHeaders) {
     if (page.pages <= 1) return page;
     const selector = 'kendo-datapager [role="combobox"][aria-label="items per page"]';
     const combo = page.table.querySelector(selector);
     if (!combo || !visible(combo)) return page;
     const size = Number(text(combo.querySelector('.k-input-value-text')));
     const wanted = page.total <= 50 ? 50 : 100;
-    if (![25,50,100].includes(size)) throw new Error('REGISTRY_NV_PAGE_SIZE_INCOMPLETE');
+    if (!(title==='Filing History Details' ? [10,25,50,100] : [25,50,100]).includes(size)) throw new Error('REGISTRY_NV_PAGE_SIZE_INCOMPLETE');
     if (size >= wanted) return page;
     // ORION's 25-row pager has returned fewer final-page rows than its total.
     // Use its ordinary larger-page control, then still require every reported
@@ -430,7 +430,7 @@
       throw error;
     });
     return nvChanged(()=>option.click(),()=>{
-      const fresh=nvPage('Search Results',nvSearchHeaders), current=fresh.table.querySelector(selector);
+      const fresh=nvPage(title,headers), current=fresh.table.querySelector(selector);
       if (!current || Number(text(current.querySelector('.k-input-value-text'))) !== wanted
           || fresh.total !== page.total || fresh.page !== 1 || fresh.pages !== Math.ceil(page.total/wanted)
           || fresh.values.length !== Math.min(wanted,page.total)) return false;
@@ -764,6 +764,11 @@
       catch (error) {
         throw new Error(error.message==='REGISTRY_RESPONSE_INCOMPLETE'?firstFailure:error.message);
       }
+      // ORION's ten-row history pager can repeat the boundary row and omit
+      // another filing with the same date. Use its public 50/100-row choice,
+      // as for search results, before paging. Preserve total/identity/unique-
+      // filing checks; never accept duplicates or extend the detail deadline.
+      first = await nvExpandSearchPage(first,deadline,'Filing History Details',nvFilingHeaders);
       const filings = await nvPages('Filing History Details',nvFilingHeaders,deadline,first);
       evidence.filings = {identifier:query.identifier,name:fields['Entity Name'],complete:true,total:filings.length,
         headers:nvFilingHeaders,rows:filings.map(row=>row.cells)};
