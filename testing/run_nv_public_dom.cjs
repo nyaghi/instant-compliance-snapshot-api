@@ -506,6 +506,28 @@ test('wrong column schema is incomplete',async()=>{const f=fixture();const prior
 test('Nevada extracts corporation fields and stops before registered-agent duplicates',()=>{const f=fixture();const fields=f.detail();assert.equal(fields['NV Business ID'],'NV20121738342');assert.equal(fields['Entity Status'],'Active');assert.equal(fields['Annual Renewal Due Date/Expiration Date'],'12/31/2026');assert.ok(!('Street Address' in fields));});
 test('wrong detail business ID cannot be accepted',()=>{assert.equal(fixture({detailId:'NV19931054903'}).detail(),null);});
 test('unobserved business ID cannot trigger a guessed navigation',async()=>{const f=fixture();await assert.rejects(f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:'NV999'},45000)),/NOT_OBSERVED/);assert.equal(f.opened.length,0);});
+test('Nevada waits for a delayed complete filing grid after entity fields load',async()=>{
+ const h=fixture(),read=h.context.document.querySelectorAll;let gridReady=false;
+ const filingHeaders=['Filed Date','Effective Date','Filing Number','Filing Type','Source','No. of Pages'];
+ const cells=['06/18/2025','06/18/2025','20254979739','Charitable Solicitation Registration Statement','Email','5'];
+ const grid={getAttribute:()=> '2',querySelector:()=>null,querySelectorAll:q=>q==='[role="columnheader"]'
+  ?filingHeaders.map(label=>({getAttribute:()=>label})):q==='tbody > tr[role="row"]'
+  ?[{querySelector:()=>({}),querySelectorAll:()=>cells.map(innerText=>({innerText,querySelector:()=>null}))}]:[]};
+ const table={querySelectorAll:()=>[{innerText:'Filing History Details'}],querySelector:q=>q==='[role="grid"]'?grid:
+  q==='kendo-datapager'?{getAttribute:()=> 'Page 1 of 1'}:q==='kendo-datapager-info'?{innerText:'1 - 1 of 1 items'}:null};
+ h.context.document.querySelectorAll=q=>q==='casex-data-table'&&h.context.location.hash.includes('Manage-Business')
+  ?gridReady?[table]:[]:read(q);
+ await h.search();
+ // The real render mutates the DOM. Feed that observation through the normal
+ // fixture's scheduled detail mutation, rather than exposing application state.
+ const Observer=h.context.MutationObserver;let notify;
+ h.context.MutationObserver=class extends Observer {constructor(fn){super(fn);notify=fn;}};
+ h.context.setTimeout(()=>{gridReady=true;notify?.([{target:h.context.document.documentElement,addedNodes:[],removedNodes:[]}]);},800);
+ const result=await h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:'NV20121738342'},h.time+45000));
+ assert.equal(result.filings.complete,true);assert.equal(result.filings.total,1);
+ assert.equal(result.filings.rows[0][3],'Charitable Solicitation Registration Statement');
+});
+
 test('detail opens the requested business ID after returning to its result page',async()=>{
  const f=fixture();await f.search();const r=await f.drive(f.api.nvDetail({state:'NV',operation:'detail',identifier:'NV20121738342'},45000));
  assert.deepEqual(f.opened,['NV20121738342']);assert.equal(r.fields['Entity Status'],'Active');assert.equal(r.complete,true);

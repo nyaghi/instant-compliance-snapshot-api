@@ -675,7 +675,16 @@
     }
     const evidence = {query,complete:true,source_url:location.href,fields};
     try {
-      const filings = await nvPages('Filing History Details',nvFilingHeaders,deadline);
+      // ORION mounts the entity fields before its filing-history request has
+      // rendered. Reading the table immediately can discard the solicitation
+      // statement even though it appears a moment later. Observe the first
+      // complete page within the existing detail deadline before paging it.
+      const first = await wait(() => {
+        if (!nvFields(query.identifier) || [...document.querySelectorAll('.app-loader-pane .circle-loader')].some(visible)) return false;
+        try { return nvPage('Filing History Details',nvFilingHeaders); }
+        catch { return false; }
+      },Math.max(1,Math.min(5000,deadline-Date.now())));
+      const filings = await nvPages('Filing History Details',nvFilingHeaders,deadline,first);
       evidence.filings = {identifier:query.identifier,name:fields['Entity Name'],complete:true,total:filings.length,
         headers:nvFilingHeaders,rows:filings.map(row=>row.cells)};
     } catch {
