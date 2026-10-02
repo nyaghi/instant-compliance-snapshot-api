@@ -339,9 +339,10 @@ async function performRegistryQuery(job, query) {
     const allowance=query.state==='NV'&&query.operation==='search'?150000:45000;
     let response = await registryMessage(job,{action:`registry-${query.state.toLowerCase()}`,query,budgetMs:Math.max(1,Math.min(allowance,job.activeExpiresAt-Date.now()))});
     if (P.TRIAL_ORIGIN && query.state==='NV' && query.operation==='search'
-        && response?.reason==='NY_CONNECTOR_REGISTRY_NV_MODE_NOT_SELECTED'
+        && ['NY_CONNECTOR_REGISTRY_NV_MODE_NOT_SELECTED','NY_CONNECTOR_REGISTRY_NV_FORM_NOT_SETTLED'].includes(response?.reason)
         && !job.nvModeRecoveryUsed && job.activeExpiresAt-Date.now()>8000) {
-      // An unsettled public dropdown is not a completed search. Reopen only
+      // An unsettled public dropdown or bound filter form is not a completed
+      // search. Reopen only
       // our public form once, retry the identical signed query and retain the
       // original deadline. Never retry or invent detail/history evidence.
       job.nvModeRecoveryUsed=true;

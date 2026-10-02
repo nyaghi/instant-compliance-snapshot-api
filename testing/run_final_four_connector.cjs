@@ -44,7 +44,8 @@ test('NM public error aborts readiness immediately rather than consuming thirty 
  assert.equal(checks,1);assert.equal(job.activeExpiresAt,70000);
 });
 
-test('NV unsettled mode reopens only its owned form once within the original deadline',async()=>{
+test('NV unsettled mode or bound filters reopen only its owned form once within the original deadline',async()=>{
+ for(const reason of ['NY_CONNECTOR_REGISTRY_NV_MODE_NOT_SELECTED','NY_CONNECTOR_REGISTRY_NV_FORM_NOT_SETTLED']){
  for(const remaining of [60000,7000]){
   const h=fixture(),query={state:'NV',operation:'search',name:'Reviewed Alias'};await tick();
   h.tabs.set(3,{id:3,windowId:10,url:vm.runInContext("registryStart('NV')",h.context)});
@@ -52,12 +53,30 @@ test('NV unsettled mode reopens only its owned form once within the original dea
   const job={tab:3,sender:{url:TRIAL,tab:{id:1}},registryState:'NV',activeExpiresAt:10000+remaining,closed:false,finalFourReusableForm:true};
   const send=h.chrome.tabs.sendMessage;let attempts=0;
   h.chrome.tabs.sendMessage=async(tab,m)=>{
-   if(m.action==='registry-nv'){attempts++;assert.deepEqual(m.query,query);return {ok:false,reason:'NY_CONNECTOR_REGISTRY_NV_MODE_NOT_SELECTED'};}
+   if(m.action==='registry-nv'){attempts++;assert.deepEqual(m.query,query);return {ok:false,reason};}
    return send(tab,m);
   };
   assert.equal((await h.context.performRegistryQuery(job,query)).ok,false);
   assert.equal(attempts,remaining>8000?2:1);assert.equal(h.reloads.length,remaining>8000?1:0);
   assert.equal(job.activeExpiresAt,10000+remaining);assert.equal(job.finalFourSearchComplete,false);
+ }
+ }
+});
+
+test('NV completed searches and unrelated incomplete evidence do not trigger form recovery',async()=>{
+ for(const reason of ['', 'NY_CONNECTOR_REGISTRY_RESPONSE_INCOMPLETE','NY_CONNECTOR_REGISTRY_NV_FORM_CHANGED']){
+  const h=fixture(),query={state:'NV',operation:'search',name:'Reviewed Alias'};await tick();
+  h.tabs.set(3,{id:3,windowId:10,url:vm.runInContext("registryStart('NV')",h.context)});
+  vm.runInContext('owned.add(3)',h.context);
+  const job={tab:3,sender:{url:TRIAL,tab:{id:1}},registryState:'NV',activeExpiresAt:70000,closed:false,finalFourReusableForm:true};
+  const send=h.chrome.tabs.sendMessage;let attempts=0;
+  h.chrome.tabs.sendMessage=async(tab,m)=>{
+   if(m.action==='registry-nv'){attempts++;return reason?{ok:false,reason}:{ok:true,evidence:{query,complete:true}};}
+   return send(tab,m);
+  };
+  const response=await h.context.performRegistryQuery(job,query);
+  assert.equal(response.ok,!reason);assert.equal(attempts,1);assert.equal(h.reloads.length,0);
+  assert.equal(job.activeExpiresAt,70000);
  }
 });
 
