@@ -298,6 +298,23 @@ test('NC a failed resubmission neither loops nor extends the original deadline',
  await h.advance(42001);assert.equal(retries(),1);
  assert.equal(p.messages.find(m=>m.id===id(2)&&!m.progress)?.reason,'NY_CONNECTOR_TAB_READY_TIMEOUT');assert.equal(h.reloads.length,0);
 });
+test('NC stalled acknowledged form becomes visible only for its one exact-query retry',async()=>{
+ const {h,search,retries}=ncStalledSubmission(),update=h.chrome.tabs.update,changes=[];
+ h.tabs.get(1).active=true;
+ h.chrome.tabs.query=async q=>[...h.tabs.values()].filter(t=>t.active&&t.windowId===q.windowId);
+ h.chrome.tabs.update=async(id,options)=>{
+  if(options.active){for(const t of h.tabs.values())if(t.windowId===h.tabs.get(id).windowId)t.active=false;changes.push(id);}
+  return update(id,options);
+ };
+ const send=h.chrome.tabs.sendMessage;
+ h.chrome.tabs.sendMessage=async(id,m)=>{
+  if(m.action==='registry-nc-retry'){assert.equal(h.tabs.get(id).active,true);assert.deepEqual(m.query,search);}
+  return send(id,m);
+ };
+ const p=connect(h,'NC');await h.query(p,2,search);await h.advance(2900);assert.deepEqual(changes,[]);
+ await h.advance(550);assert.equal(retries(),1);assert.equal(p.messages.find(m=>m.id===id(2)&&!m.progress)?.ok,true);
+ assert.deepEqual(changes,[h.created[0],1]);assert.equal(h.reloads.length,0);
+});
 test('NC a visible Processing state is not resubmitted',async()=>{
  const {h,search,retries}=ncStalledSubmission({processing:true}),p=connect(h,'NC');
  await h.query(p,2,search);await h.advance(45001);assert.equal(retries(),0);

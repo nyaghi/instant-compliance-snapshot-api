@@ -111,6 +111,13 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
           && Date.now()-started>=3000 && Date.now()<deadline && value?.ready && value.documentId===oldDocument
           && new URL(value.url).pathname==='/online_services/search/by_title/search_charities') {
         submissionRetried=true;
+        // A background form can acknowledge Search without its public async
+        // action navigating. Reuse the existing owned-tab visibility recovery
+        // before the single exact-query retry. No new query or time allowance.
+        if (P.TRIAL_ORIGIN && !visibilityAttempted) {
+          visibilityAttempted=true;
+          previousVisible=await registryNorthCarolinaVisibility(job);
+        }
         const retried=await registryMessage(job,{action:'registry-nc-retry',query:ncSubmittedQuery});
         diagnostic('nc-submit-recovery',job,retried?.phase==='submitted'?'same-query resubmitted':'form changed; no resubmission');
       }
