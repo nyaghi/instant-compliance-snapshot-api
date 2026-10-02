@@ -1,6 +1,32 @@
 /* Public-registry transport in the existing connector; no independent runtime. */
 const registryOrigin = state => ({IL:"https://charitable.illinoisattorneygeneral.gov",GA:"https://verify.sos.ga.gov",AL:"https://ago.igovsolution.net",NC:"https://www.sosnc.gov",NV:"https://orion.nv.gov",TN:"https://tncab.tnsos.gov",NM:"https://secure.nmdoj.gov"})[state];
 const registryStart = state => registryOrigin(state) + ({IL:"/search",GA:"/verification/Search.aspx?facility=Y",AL:"/online/Lookups/Business.aspx",NC:"/online_services/search/by_title/search_charities",NV:"/portal/public/#/public/nvsos/en/CaseXscreen?screen=external-GenericFilingsSearch&tabRoute=business",TN:"/portal/registered-charities-search",NM:"/CharitySearch/"})[state];
+async function registryNevadaVisibleSnapshot(job) {
+  if (!P.TRIAL_ORIGIN || job.registryState!=='NV' || job.nvVisibilityAttempted || !owned.has(job.tab)) return null;
+  try {
+    const tab=await chrome.tabs.get(job.tab), source=await chrome.tabs.get(job.sender.tab.id);
+    if (!tab.active && tab.windowId===source.windowId && new URL(source.url).origin===P.TRIAL_ORIGIN)
+      return (await chrome.tabs.query({active:true,windowId:tab.windowId}))[0]||null;
+  } catch {}
+  return null;
+}
+async function registryNevadaMakeVisible(job, initialVisible) {
+  if (!P.TRIAL_ORIGIN || job.registryState!=='NV' || !initialVisible || job.closed || job.nvVisibilityAttempted
+      || Date.now()>=job.activeExpiresAt || !owned.has(job.tab)) return null;
+  try {
+    const tab=await chrome.tabs.get(job.tab), source=await chrome.tabs.get(job.sender.tab.id);
+    const active=(await chrome.tabs.query({active:true,windowId:tab.windowId}))[0];
+    if (tab.active || tab.windowId!==initialVisible.windowId || tab.windowId!==source.windowId
+        || active?.id!==initialVisible.id || new URL(source.url).origin!==P.TRIAL_ORIGIN
+        || new URL(tab.url).origin!==registryOrigin('NV')
+        || !new URL(tab.url).pathname.startsWith('/portal/public/')) return null;
+    const previous={id:initialVisible.id,windowId:initialVisible.windowId};
+    job.nvVisibilityAttempted=true;job.nvPreviousVisible=previous;
+    diagnostic('nv-visibility',job,'same-document visibility recovery');
+    await chrome.tabs.update(tab.id,{active:true});await saveRuntime();
+    return previous;
+  } catch { return null; }
+}
 async function registryMessage(job, message) {
   if (job.closed || Date.now() >= job.activeExpiresAt) throw new Error("NY_CONNECTOR_TIMEOUT");
   const send=async()=>{
@@ -18,29 +44,11 @@ async function registryMessage(job, message) {
   // ORION's detail hydration can stall in a background tab. Keep the same
   // in-flight command and document; expose only our owned trial tab once.
   // Capture the active tab first so a later user switch is never overridden.
-  let initialVisible=null;
-  if (P.TRIAL_ORIGIN && !job.nvVisibilityAttempted && owned.has(job.tab)) try {
-    const tab=await chrome.tabs.get(job.tab), source=await chrome.tabs.get(job.sender.tab.id);
-    if (!tab.active && tab.windowId===source.windowId && new URL(source.url).origin===P.TRIAL_ORIGIN)
-      initialVisible=(await chrome.tabs.query({active:true,windowId:tab.windowId}))[0]||null;
-  } catch {}
+  const initialVisible=await registryNevadaVisibleSnapshot(job);
   if (initialVisible) visibilityTimer=setTimeout(()=>{
     visibilityPending=(async()=>{
       if (settled || job.closed || Date.now()>=job.activeExpiresAt || !owned.has(job.tab)) return;
-      try {
-        const tab=await chrome.tabs.get(job.tab), source=await chrome.tabs.get(job.sender.tab.id);
-        const active=(await chrome.tabs.query({active:true,windowId:tab.windowId}))[0];
-        if (settled || job.closed || Date.now()>=job.activeExpiresAt || !owned.has(job.tab)
-            || tab.active || tab.windowId!==initialVisible.windowId || tab.windowId!==source.windowId
-            || active?.id!==initialVisible.id || new URL(source.url).origin!==P.TRIAL_ORIGIN
-            || new URL(tab.url).origin!==registryOrigin('NV')
-            || !new URL(tab.url).pathname.startsWith('/portal/public/')) return;
-        previousVisible={id:initialVisible.id,windowId:initialVisible.windowId};
-        job.nvVisibilityAttempted=true;job.nvPreviousVisible=previousVisible;
-        diagnostic('nv-visibility',job,'same-document visibility recovery');
-        await chrome.tabs.update(tab.id,{active:true});
-        await saveRuntime();
-      } catch { /* Source navigation or closure cancels visibility recovery. */ }
+      previousVisible=await registryNevadaMakeVisible(job,initialVisible);
     })();
   },Math.min(3000,Math.max(1,job.activeExpiresAt-Date.now())));
   try {
@@ -76,12 +84,18 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
   const started = Date.now();
   const deadline = Math.min(Date.now()+Math.max(1,Math.min(45000,budgetMs)), job.activeExpiresAt);
   let verificationPending=false, visibilityAttempted=false, previousVisible=null, submissionRetried=false;
+  const nvInitialVisible=await registryNevadaVisibleSnapshot(job);
   try { while (!job.closed && Date.now()<deadline) {
     try {
       const value=await registryMessage(job,{action:"registry-ready"});
       if(job.registryState==='NM' && value?.source_failure==='REGISTRY_NM_SOURCE_ERROR')
         throw new Error('NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR');
       if(job.registryState==='NV'&&value?.nv_readiness)job.nvReadiness=value.nv_readiness;
+      // Fast readiness polls never leave registryMessage's visibility timer
+      // pending long enough to fire. Recover a stalled initial form using the
+      // same owned-tab lease as detail commands, without a request or reload.
+      if(job.registryState==='NV'&&!value?.ready&&Date.now()-started>=3000)
+        await registryNevadaMakeVisible(job,nvInitialVisible);
       verificationPending=['NC','TN'].includes(job.registryState)&&value?.verification_pending===true;
       if(job.registryState==='TN'&&!value?.ready&&!visibilityAttempted&&Date.now()-started>=3000) {
         visibilityAttempted=true;previousVisible=await registryNorthCarolinaVisibility(job);

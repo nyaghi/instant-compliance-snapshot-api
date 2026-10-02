@@ -148,6 +148,31 @@ test('NV fast responses do not activate any tab',async()=>{
  await h.advance(4000);assert.deepEqual(changes,[]);
 });
 
+test('NV stalled initial form recovers visibility despite fast readiness replies',async()=>{
+ const {h,job,changes}=await nvVisibilityFixture();const calls=[];
+ h.tabs.get(3).url=vm.runInContext("registryStart('NV')",h.context);
+ h.chrome.tabs.sendMessage=async(id,m)=>{
+  calls.push(m.action);return {ready:h.tabs.get(id).active,documentId:'same-public-document',url:h.tabs.get(id).url};
+ };
+ const ready=h.context.registryReady(job);await tick();await h.advance(3000);await h.advance(200);
+ assert.equal((await ready).documentId,'same-public-document');
+ assert.deepEqual(changes,[3]);assert.ok(calls.every(x=>x==='registry-ready'));
+ assert.equal(job.activeExpiresAt,70000);
+ await h.context.registryRestoreNevadaVisibility(job);assert.deepEqual(changes,[3,1]);
+});
+
+test('NV form readiness cannot override a user switch or take unowned or moved tabs',async()=>{
+ for(const reason of ['unowned','wrongWindow','userSwitch']){
+  const {h,job,changes}=await nvVisibilityFixture({unowned:reason==='unowned',wrongWindow:reason==='wrongWindow'});
+  h.tabs.get(3).url=vm.runInContext("registryStart('NV')",h.context);
+  let complete=false;
+  h.chrome.tabs.sendMessage=async id=>({ready:complete,documentId:'same',url:h.tabs.get(id).url});
+  const ready=h.context.registryReady(job);await tick();
+  if(reason==='userSwitch'){h.tabs.get(1).active=false;h.tabs.set(4,{id:4,windowId:10,active:true,url:'https://example.com/'});}
+  await h.advance(3000);assert.deepEqual(changes,[]);complete=true;await h.advance(200);await ready;
+ }
+});
+
 test('NV continuation retains one visibility lease and finish restores then closes only its owned tab',async()=>{
  const {h,job,changes}=await nvVisibilityFixture();let release,calls=0;
  h.chrome.tabs.sendMessage=()=>{calls++;return calls===1?new Promise(r=>{release=r;}):Promise.resolve({ok:true});};
