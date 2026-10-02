@@ -294,7 +294,7 @@ async function performRegistryQuery(job, query) {
         // original job deadline. A ten-second sub-budget rejected a still
         // loading public form despite remaining lookup time. Sales supplies
         // its own one-minute cancellation; this never extends that limit.
-        const returned=await registryMessage(job,{action:'registry-nv-return',budgetMs:Math.max(1,Math.min(45000,job.activeExpiresAt-Date.now()))});
+        const returned=await registryMessage(job,{action:'registry-nv-return',budgetMs:Math.max(1,Math.min(P.TRIAL_ORIGIN?8000:45000,job.activeExpiresAt-Date.now()))});
         if(returned?.nv_readiness)job.nvReadiness=returned.nv_readiness;
         if (!returned?.ok) {
           if (returned?.reason!=='NY_CONNECTOR_REGISTRY_NV_RETURN_READY_TIMEOUT' || job.nvReturnRecoveryUsed

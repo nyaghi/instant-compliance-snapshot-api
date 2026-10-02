@@ -1072,7 +1072,7 @@ class LookupControls(unittest.TestCase):
         for tree in (before, after):
             for handler in [n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in {'ny_connector_request','ny_connector_advance','il_verification_recovery'}]:
                 for n in ast.walk(handler):
-                    if isinstance(n,ast.Set):n.elts=[v for v in n.elts if not(isinstance(v,ast.Constant) and v.value=='0.6.46')]
+                    if isinstance(n,ast.Set):n.elts=[v for v in n.elts if not(isinstance(v,ast.Constant) and v.value in {'0.6.46','0.6.47'})]
             tree.body = [node for node in tree.body if not (isinstance(node, ast.FunctionDef) and node.name in changed)]
         self.assertEqual(ast.dump(before), ast.dump(after))
         for file in ['web-staging/index.html', 'web-staging/optimized-workflows.js', 'web-staging/sales-mode.js',
