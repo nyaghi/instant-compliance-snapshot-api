@@ -253,6 +253,20 @@ async function performRegistryQuery(job, query) {
   }
   if (query.state === "NC") return registryNorthCarolinaQuery(job,query);
   if (["NV", "TN"].includes(query.state)) {
+    if (P.TRIAL_ORIGIN && query.state==='TN' && query.operation==='search' && job.tab===null && trialTnIdle) {
+      const saved=trialTnIdle;trialTnIdle=null;clearTimeout(trialTnIdleTimer);
+      try {
+        const tab=await chrome.tabs.get(saved.id),source=await chrome.tabs.get(job.sender.tab.id);
+        if(owned.has(saved.id) && saved.expiresAt>Date.now() && tab.url===registryStart('TN')
+            && tab.windowId===saved.windowId && tab.windowId===source.windowId && new URL(source.url).origin===P.TRIAL_ORIGIN) {
+          job.tab=saved.id;job.finalFourReusableForm=true;
+          // Reuse page initialization only. tnSearch closes any old dialog,
+          // clears observed rows and submits every new query afresh.
+          diagnostic('tn-session-reuse',job,'initialized owned page; fresh query required');
+        } else await removeOwned(saved.id);
+      } catch {await removeOwned(saved.id);}
+      await saveRuntime();
+    }
     if (query.state==='NV' && job.nvReservationDetail) {
       // ORION reservation Back leads to ExistingBusinessFilings and sign-in,
       // not public search. Reopen the known public form, within this job's

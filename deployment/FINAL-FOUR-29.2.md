@@ -992,3 +992,28 @@ This is a backend-only revision. The installed, verified 0.6.44 connector
 remains compatible; no new extension reload or permission is required. New York
 live verification and intermittent Tennessee verification remain separate from
 the query-plan correction, and are not claimed resolved by this revision.
+
+### 29.2AF: retain initialized Tennessee trial pages for consecutive workflows
+
+The 29.2AE paired repeat returned all three Standard Tennessee results correctly
+in 27.109, 10.974 and 14.220 seconds, but all three immediately following Sales
+pages remained uninitialized for their 45-second navigation allowance. The
+observed collector had the public name field and a hidden Search button; its
+verification container had no iframe or rendered challenge. A separate RMHC
+Sales run completed with the same Delinquent result in 27.021 seconds. This
+distinguishes page initialization on rapid fresh sessions from mode/status
+interpretation. It does not establish why the state's script occasionally
+fails to initialize, or claim that arbitrary state challenges are resolved.
+
+The isolated connector retains only a successfully completed, owned Tennessee
+page for five minutes. The next authorized caller in the same window must
+revalidate the original source URL and ordinary form readiness. Every new
+query still closes the prior detail, clears observed rows, submits Search and
+collects fresh query-bound results. No response, identity decision, verification
+code or token is transferred into a new workflow. Failed, canceled, moved,
+navigated and expired pages are not reused. Source closure retires the owned
+page; trusted session restart revalidates ownership, source origin and expiry.
+Mature connectors, other state lanes, queue pacing and original deadlines are
+unchanged. The retention counterexample fails before this patch; six controls
+cover fresh-query binding, invalid prior-detail use, cancellation, navigation,
+expiry, restart and source closure. Live paired verification remains required.

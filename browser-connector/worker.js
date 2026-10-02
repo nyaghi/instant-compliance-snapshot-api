@@ -13,6 +13,15 @@ let repair = {}, saving = Promise.resolve();
 const owned = new Set();
 let keepAliveTimer = null;
 let trialAlIdle = null, trialAlIdleTimer = null;
+let trialTnIdle = null, trialTnIdleTimer = null;
+function armTrialTnIdle() {
+  clearTimeout(trialTnIdleTimer);
+  if (!P.TRIAL_ORIGIN || !trialTnIdle) return;
+  const saved=trialTnIdle;
+  trialTnIdleTimer=setTimeout(()=>{
+    if (trialTnIdle===saved) {trialTnIdle=null;removeOwned(saved.id).catch(()=>{});}
+  },Math.max(0,saved.expiresAt-Date.now()));
+}
 function armTrialAlIdle() {
   clearTimeout(trialAlIdleTimer);
   if (!P.TRIAL_ORIGIN || !trialAlIdle) return;
@@ -45,6 +54,7 @@ function saveRuntime() {
   if (!allJobs().length && keepAliveTimer) { clearTimeout(keepAliveTimer); keepAliveTimer = null; }
   const value = runtimeState();
   if (P.TRIAL_ORIGIN && trialAlIdle) value.trialAlIdle=trialAlIdle;
+  if (P.TRIAL_ORIGIN && trialTnIdle) value.trialTnIdle=trialTnIdle;
   saving = saving.catch(() => {}).then(() => chrome.storage.session.set({ ccnyRuntime: value })); return saving;
 }
 function newJob(sender, id, refreshOnly, saved = {}) {
@@ -107,7 +117,16 @@ const boot = (async () => {
       && Date.now()<idle.expiresAt && idle.expiresAt<=Date.now()+1800000 && !allJobs().some(j=>j?.tab===idle.id)) {
     try {const tab=await chrome.tabs.get(idle.id);if(tab.url===registryStart('AL')) {trialAlIdle=idle;armTrialAlIdle();}} catch {}
   }
-  for (const id of [...owned]) if (!allJobs().some(j => j?.tab === id) && trialAlIdle?.id!==id) await removeOwned(id);
+  const tnIdle=previous?.trialTnIdle;
+  if (P.TRIAL_ORIGIN && Number.isInteger(tnIdle?.id) && owned.has(tnIdle.id) && Number.isFinite(tnIdle.expiresAt)
+      && Date.now()<tnIdle.expiresAt && tnIdle.expiresAt<=Date.now()+300000 && !allJobs().some(j=>j?.tab===tnIdle.id)) {
+    try {
+      const tab=await chrome.tabs.get(tnIdle.id),source=await chrome.tabs.get(tnIdle.sourceTabId);
+      if(tab.url===registryStart('TN') && tab.windowId===tnIdle.windowId && source.windowId===tab.windowId
+          && new URL(source.url).origin===P.TRIAL_ORIGIN) {trialTnIdle=tnIdle;armTrialTnIdle();}
+    } catch {}
+  }
+  for (const id of [...owned]) if (!allJobs().some(j => j?.tab === id) && trialAlIdle?.id!==id && trialTnIdle?.id!==id) await removeOwned(id);
   if (repair.phase === "repairing") await saveRepair({ ...repair, phase: "failed", reason: "NY_CONNECTOR_INTERRUPTED" });
   diagnostic("worker-start", active, `restored=${allJobs().filter(Boolean).length}`);
   await saveRuntime();
@@ -184,6 +203,14 @@ async function close(job, reason, finishId) {
         const tab=await chrome.tabs.get(tabId),source=await chrome.tabs.get(job.sender.tab.id);
         if (tab.url===registryStart('AL') && new URL(source.url).origin===P.TRIAL_ORIGIN) {
           trialAlIdle={id:tabId,expiresAt:Date.now()+1800000};armTrialAlIdle();
+        } else await removeOwned(tabId);
+      } catch {await removeOwned(tabId);}
+    } else if (tabId !== null && P.TRIAL_ORIGIN && job.registryState==='TN' && finishId && !reason
+        && job.lastResponse?.ok===true && job.finalFourReusableForm && owned.has(tabId)) {
+      try {
+        const tab=await chrome.tabs.get(tabId),source=await chrome.tabs.get(job.sender.tab.id);
+        if(tab.url===registryStart('TN') && tab.windowId===source.windowId && new URL(source.url).origin===P.TRIAL_ORIGIN) {
+          trialTnIdle={id:tabId,sourceTabId:source.id,windowId:tab.windowId,expiresAt:Date.now()+300000};armTrialTnIdle();
         } else await removeOwned(tabId);
       } catch {await removeOwned(tabId);}
     } else if (tabId !== null) await removeOwned(tabId);
@@ -449,6 +476,11 @@ async function performRefresh(job, id) {
   if (!response.ok) close(job);
 }
 chrome.tabs.onRemoved.addListener(id => {
+  if (trialTnIdle?.id===id || trialTnIdle?.sourceTabId===id) {
+    const saved=trialTnIdle;trialTnIdle=null;clearTimeout(trialTnIdleTimer);
+    if(saved?.id!==id)removeOwned(saved.id).catch(()=>{});else owned.delete(id);
+    saveRuntime().catch(()=>{});
+  }
   if (trialAlIdle?.id===id) {trialAlIdle=null;owned.delete(id);clearTimeout(trialAlIdleTimer);saveRuntime().catch(()=>{});}
   for (const job of allJobs()) {
     if (job && !job.closed && (job.tab === id || job.sender.tab.id === id)) close(job, "NY_CONNECTOR_BROWSER_CLOSED");

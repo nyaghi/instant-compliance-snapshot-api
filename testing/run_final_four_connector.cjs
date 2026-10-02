@@ -108,7 +108,9 @@ for(const state of ['NV','TN']) {
     assert.equal(h.created.length,1);assert.equal(h.calls[0].action,`registry-${state.toLowerCase()}`);
     assert.equal(h.calls.every(c=>c.budgetMs>0&&c.budgetMs<=(state==='NV'&&c.query?.operation==='search'?150000:45000)),true);
     assert.equal(h.tabs.get(h.created[0]).active,false);
-    p.onMessage.emit({action:'finish',id:id(4)});await tick();assert.deepEqual(h.removed,h.created);assert.ok(h.tabs.has(2));
+    p.onMessage.emit({action:'finish',id:id(4)});await tick();
+    if(state==='TN')await h.advance(300001);
+    assert.deepEqual(h.removed,h.created);assert.ok(h.tabs.has(2));
   });
   test(`${state} cannot open a detail without a completed search`,async()=>{
     const h=fixture(),p=connect(h,state);const r=await h.query(p,2,detail);
@@ -332,6 +334,70 @@ test('AL ordinary searches reuse only the trial-owned verified page, not another
  assert.equal(h.created.length,1);assert.equal(h.calls.length,2);assert.equal(h.reloads.length,0);
  p2.onMessage.emit({action:'finish',id:id(5)});await tick();await h.advance(1800001);
  assert.deepEqual(h.removed,h.created);assert.ok(h.tabs.has(2));
+});
+
+test('TN consecutive workflows reuse an initialized owned page with fresh query evidence',async()=>{
+ const h=fixture(),p=connect(h,'TN'),query={state:'TN',operation:'search',name:'First Charity'};
+ assert.equal((await h.query(p,2,query)).ok,true);
+ p.onMessage.emit({action:'finish',id:id(3)});await tick();
+ assert.equal(h.removed.length,0);
+ const p2=connect(h,'TN',TRIAL,2);await h.advance(3000);
+ const next={...query,name:'Different Charity'};
+ assert.deepEqual((await h.query(p2,4,next)).evidence.query,next);
+ assert.equal(h.created.length,1);assert.equal(h.calls.length,2);assert.equal(h.reloads.length,0);
+ p2.onMessage.emit({action:'finish',id:id(5)});await tick();await h.advance(300001);
+ assert.deepEqual(h.removed,h.created);assert.ok(h.tabs.has(2));
+});
+
+test('TN idle reuse never carries prior search completion into a new workflow detail',async()=>{
+ const h=fixture(),p=connect(h,'TN'),q={state:'TN',operation:'search',name:'First Charity'};
+ await h.query(p,2,q);p.onMessage.emit({action:'finish',id:id(3)});await tick();
+ const p2=connect(h,'TN',TRIAL,2);await h.advance(3000);
+ const r=await h.query(p2,4,{state:'TN',operation:'detail',identifier:'CO1234'});
+ assert.equal(r.ok,false);assert.equal(r.reason,'NY_CONNECTOR_INVALID_SEQUENCE');
+ assert.equal(h.calls.length,1);
+});
+
+test('TN failed readiness and canceled workflows do not retain a reusable page',async()=>{
+ for(const failed of [true,false]) {
+  const h=fixture(),p=connect(h,'TN'),send=h.chrome.tabs.sendMessage;
+  h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='registry-tn'&&failed?{ok:false,reason:'NY_CONNECTOR_TN_VERIFICATION_OR_FORM_PENDING'}:send(tab,m);
+  await h.query(p,2,{state:'TN',operation:'search',name:'First Charity'});
+  if(!failed) await vm.runInContext("close(activeLanes.get('TN'),'NY_CONNECTOR_INTERRUPTED')",h.context);
+  await tick();assert.deepEqual(h.removed,h.created);assert.equal(h.data.session.ccnyRuntime.trialTnIdle,undefined);
+ }
+});
+
+test('TN idle reuse preserves user navigation and rejects a moved window',async()=>{
+ for(const move of [true,false]) {
+  const h=fixture(),p=connect(h,'TN'),q={state:'TN',operation:'search',name:'First Charity'};
+  await h.query(p,2,q);p.onMessage.emit({action:'finish',id:id(3)});await tick();const old=h.created[0];
+  if(move)h.tabs.get(1).windowId=44;else h.tabs.get(old).url='https://example.com/';
+  const p2=connect(h,'TN',TRIAL,2);await h.advance(3000);
+  assert.equal((await h.query(p2,4,{...q,name:'Different Charity'})).ok,true);
+  assert.equal(h.created.length,2);if(!move)assert.ok(h.tabs.has(old));assert.ok(h.tabs.has(2));
+ }
+});
+
+test('TN initialized idle state survives restart only with live ownership, origin and expiry',async()=>{
+ for(const change of ['none','expired','source-origin','window']) {
+  const idle={id:3,sourceTabId:1,windowId:10,expiresAt:change==='expired'?9999:310000};
+  const h=harness({trialOrigin:TRIAL,trialOnly:true,
+   session:{ccnyRuntime:{schema:2,ownedTabs:[3],queue:[],trialTnIdle:idle}},
+   tabs:[[1,{id:1,windowId:change==='window'?99:10,url:change==='source-origin'?'https://example.com/':TRIAL+'/'}],
+    [3,{id:3,windowId:10,url:'https://tncab.tnsos.gov/portal/registered-charities-search'}]]});
+  await tick();
+  assert.equal(h.data.session.ccnyRuntime.trialTnIdle?.id,change==='none'?3:undefined);
+  if(change==='none') {assert.equal(h.removed.length,0);await h.advance(300001);assert.deepEqual(h.removed,[3]);}
+  else assert.deepEqual(h.removed,[3]);
+ }
+});
+
+test('TN source closure retires only its own initialized idle page',async()=>{
+ const h=fixture(),p=connect(h,'TN');await h.query(p,2,{state:'TN',operation:'search',name:'First Charity'});
+ p.onMessage.emit({action:'finish',id:id(3)});await tick();
+ h.chrome.tabs.onRemoved.emit(1);await tick();
+ assert.deepEqual(h.removed,h.created);assert.equal(h.data.session.ccnyRuntime.trialTnIdle,undefined);assert.ok(h.tabs.has(2));
 });
 
 test('AL retained verification survives an authorized caller moving to another window',async()=>{
