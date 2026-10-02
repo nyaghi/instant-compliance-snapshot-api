@@ -48,7 +48,7 @@ function keepAlive() {
 const rejected = reason => ["NY_CONNECTOR_VERIFICATION_REJECTED", "NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED"].includes(reason);
 const recoveryFailure = reason => rejected(reason) ? "NY_CONNECTOR_RECOVERY_REJECTED" :
   typeof reason === "string" && /^NY_CONNECTOR_[A-Z_]+$/.test(reason) ? reason : "NY_CONNECTOR_INCOMPLETE";
-const runtimeState = () => ({ schema: 2, nextStart, laneStarts: Object.fromEntries(laneStarts), ownedTabs: [...owned], diagnostics: [...diagnostics], queue: allJobs().filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, expiresAt: j.expiresAt, active: isActive(j), activeExpiresAt: j.activeExpiresAt, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, detailRetryUsed: j.detailRetryUsed, retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.registryState === "AL" ? null : j.command, lastResponse: j.registryState === "AL" ? null : j.lastResponse, queryRepaired: j.queryRepaired, nyFreshPageRecoveryOnly: j.nyFreshPageRecoveryOnly, nvReturnRecoveryUsed: j.nvReturnRecoveryUsed, ...(P.TRIAL_ORIGIN && j.registryState === "NV" ? {nvVisibilityAttempted:j.nvVisibilityAttempted,nvPreviousVisible:j.nvPreviousVisible} : {}) })) });
+const runtimeState = () => ({ schema: 2, nextStart, laneStarts: Object.fromEntries(laneStarts), ownedTabs: [...owned], diagnostics: [...diagnostics], queue: allJobs().filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, expiresAt: j.expiresAt, active: isActive(j), activeExpiresAt: j.activeExpiresAt, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, detailRetryUsed: j.detailRetryUsed, detailAuthRetryUsed: j.detailAuthRetryUsed, retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.registryState === "AL" ? null : j.command, lastResponse: j.registryState === "AL" ? null : j.lastResponse, queryRepaired: j.queryRepaired, nyFreshPageRecoveryOnly: j.nyFreshPageRecoveryOnly, nvReturnRecoveryUsed: j.nvReturnRecoveryUsed, ...(P.TRIAL_ORIGIN && j.registryState === "NV" ? {nvVisibilityAttempted:j.nvVisibilityAttempted,nvPreviousVisible:j.nvPreviousVisible} : {}) })) });
 function saveRuntime() {
   keepAlive();
   if (!allJobs().length && keepAliveTimer) { clearTimeout(keepAliveTimer); keepAliveTimer = null; }
@@ -58,7 +58,7 @@ function saveRuntime() {
   saving = saving.catch(() => {}).then(() => chrome.storage.session.set({ ccnyRuntime: value })); return saving;
 }
 function newJob(sender, id, refreshOnly, saved = {}) {
-  return { port: null, sender, lookupId: id, refreshOnly, registryState: "NY", enqueuedAt: Date.now(), expiresAt: Date.now() + QUEUE_TTL, activeExpiresAt: null, generation: 0, tab: null, creating: null, pending: null, acquireId: null, closed: false, timer: null, reconnectTimer: null, rateRetries: 0, timeoutRetries: 0, retryNotBefore: 0, verificationRetryUsed: false, command: null, lastResponse: null, queryRepaired: false, ...saved };
+  return { port: null, sender, lookupId: id, refreshOnly, registryState: "NY", enqueuedAt: Date.now(), expiresAt: Date.now() + QUEUE_TTL, activeExpiresAt: null, generation: 0, tab: null, creating: null, pending: null, acquireId: null, closed: false, timer: null, reconnectTimer: null, rateRetries: 0, timeoutRetries: 0, detailAuthRetryUsed: false, retryNotBefore: 0, verificationRetryUsed: false, command: null, lastResponse: null, queryRepaired: false, ...saved };
 }
 function arm(job) {
   clearTimeout(job.timer);
@@ -372,6 +372,28 @@ async function performSearch(job, query, id) {
         if (["NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT", "NY_CONNECTOR_SEARCH_RESPONSE_TIMEOUT", "NY_CONNECTOR_DETAIL_RESPONSE_TIMEOUT"].includes(response?.reason)) throw new Error(response.reason);
         if (response?.reason === "NY_CONNECTOR_RATE_LIMITED") throw new Error(response.reason);
         if (!response?.ok || !P.sameQuery(response.evidence?.query, query)) response = { ok: false, reason: response?.reason || "NY_CONNECTOR_INCOMPLETE" };
+        if (P.TRIAL_ORIGIN && response?.reason === "NY_CONNECTOR_DETAIL_UNAUTHORIZED"
+            && Object.hasOwn(query, "orgID") && !job.detailAuthRetryUsed && !job.verificationRetryUsed
+            && job.activeExpiresAt - Date.now() > 15000) {
+          // A successful search can be followed by an expired detail session.
+          // Return to its observed result list, click normal Verify once, and
+          // reopen the same public ID link. Never erase cookies/user pages,
+          // reset the shared verification budget, or retry another rejection.
+          job.detailAuthRetryUsed = true; job.verificationRetryUsed = true;
+          await saveRuntime();
+          const returned = await chrome.tabs.sendMessage(job.tab, {action:"back-to-results"}, {frameId:0});
+          if (!returned?.ok) break;
+          await waitForRegistryDocument(job, "/RegistrySearch");
+          if (job.closed || Date.now() >= job.activeExpiresAt) return;
+          const verified = await chrome.tabs.sendMessage(job.tab, {action:"verify", id,
+            attempt:`${attempt}:detail-auth`, verificationRetryUsed:true}, {frameId:0});
+          if (job.closed || generation !== job.generation) return;
+          if (!verified?.ok || verified.evidence?.verified !== true) {
+            response = {ok:false, reason:verified?.reason || "NY_CONNECTOR_VERIFICATION_REQUIRED"}; break;
+          }
+          diagnostic("ny-detail-session", job, "normal verification renewed; same observed ID reopened");
+          continue;
+        }
         if (rejected(response.reason) && !repaired) {
           if (repair.nextAllowedAt > Date.now()) {
             await saveRepair({ ...repair, phase: "failed", reason: "NY_CONNECTOR_RECOVERY_REJECTED" });

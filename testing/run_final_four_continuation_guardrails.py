@@ -209,17 +209,14 @@ class ContinuationControls(unittest.TestCase):
         payload['filings'] = {'complete': False, 'failure_code': 'REGISTRY_RESPONSE_INCOMPLETE'}
         self.assertEqual(cc.final_four_clean_evidence(payload, detail['query']), payload)
         _, continued = self.advance(detail, payload)
-        # A matched nonprofit corporation keeps its approved core standing;
-        # incomplete optional history cannot invent filing dates. The separate
-        # nonqualified charity category still requires completed CSR history.
+        # Scope remains unconfirmed, but valid core identity survives and the
+        # master can finish its remaining names instead of failing this bridge.
         if continued['phase'] == 'search':
             saved = cc.ny_connector_unpack(continued['check_token'], self.auth['email'], self.auth['device_id'])
             self.assertEqual(saved['completed'][-1]['evidence']['filings'], payload['filings'])
         else:
-            self.assertEqual(continued['result']['status'], 'Upcoming Filing')
-            self.assertTrue(continued['result']['success'])
-            self.assertFalse(continued['result'].get('renewal_filing_value'))
-            self.assertIn('remains blank', continued['result']['source_note'])
+            self.assertEqual(continued['result']['status'], 'Unable to Confirm')
+            self.assertTrue(any(x['completed'] for x in __import__('json').loads(continued['result']['debug_trace'])['queries_attempted']))
         for bad in [{'complete': True, 'failure_code': 'REGISTRY_RESPONSE_INCOMPLETE'},
                     {'complete': False, 'failure_code': 'contact@example.com'},
                     {'complete': False, 'failure_code': 'REGISTRY_RESPONSE_INCOMPLETE', 'secret': 'private'}]:

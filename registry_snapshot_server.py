@@ -6001,7 +6001,7 @@ def il_verification_recovery(record, payload, now):
     if (record.get("state") != "IL" or record.get("purpose") != "registration"
             or record.get("recovery_protocol") != "il-fresh-page-v1"
             or (record.get("connector_version") != "0.5.10"
-                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51"}))
+                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52"}))
             or payload.get("reason") != "NY_CONNECTOR_IL_VERIFICATION_PENDING"
             or record.get("il_verification_recovery")
             or now + 120 >= record["issued"] + NY_CONNECTOR_TTL_SECONDS):
@@ -6235,7 +6235,7 @@ def final_four_license_result(org, state, records, deadline, source):
 
 
 def nv_charity_detail_evidence(fields, expected_business_id):
-    """User-approved NV rule: matched nonprofit entity status and renewal due.
+    """Confirmed NV charity scope plus matched entity status and renewal due.
 
     Keep corporate and charity-specific evidence labeled accurately. Never use
     registered-agent standing/address, or a formation date as a renewal date.
@@ -6269,10 +6269,10 @@ def nv_charity_detail_evidence(fields, expected_business_id):
     status = licensed_charity_status(raw_status, expiration)
     if raw_status.casefold() == "default":
         status = "Delinquent"
-    requires_solicitation_history = entity_type == "Foreign Entities Not Required to Register In Nevada"
+    requires_solicitation_history = True
     if requires_solicitation_history and status in {"Current", "Upcoming Filing"}:
-        # This category is not a nonprofit-corporation qualification. The
-        # matching public statement history must establish its charity scope.
+        # Neither supported entity category establishes charity registration alone.
+        # The matching public statement history must establish its charity scope.
         status = "Unable to Confirm"
     return dict(name=name, identifier=expected_business_id, ein=ein, aliases=list(dict.fromkeys(aliases)),
                 raw_status=raw_status, status=status, expiration=expiration,
@@ -6400,27 +6400,28 @@ def nv_charity_filings_evidence(record, payload):
     if len(qualifications) == 1 and qualifications[0] == record.get("entity_formation"):
         result.update(initial=qualifications[0], initial_label="Foreign Qualification — Filed Date",
                       initial_type="initial_registration_filing_date")
-    # Keep the approved withdrawn corporate-only exclusion even when an
-    # ordinary nonprofit corporation does not need charity-statement scope.
-    # Missing history or an affirmative solicitation flag cannot exclude it.
-    if (withdrawals and not solicitation_dates and record.get("solicitation_declared") is False
-            and record.get("raw_status", "").casefold() == "withdrawn"):
-        result.update(status="Unable to Confirm", non_charity_withdrawal_history=True,
-                      corporate_withdrawal_filed=max(withdrawals))
-        return result
     if record.get("requires_solicitation_history"):
-        if not solicitation_dates or not record.get("expiration"):
-            raise ValueError("Nevada charitable solicitation scope or renewal deadline is unconfirmed")
+        # Corporate withdrawal is not withdrawal of a charity license. Only
+        # this completed, non-soliciting corporate history with no CSR can
+        # exclude the corporate record. Missing history, a solicitation flag,
+        # active corporate standing or a Registered charity category cannot.
+        # The lookup still completes its aliases for a qualifying charity.
+        if (withdrawals and not solicitation_dates and record.get("solicitation_declared") is False
+                and record.get("raw_status", "").casefold() == "withdrawn"):
+            result.update(status="Unable to Confirm", non_charity_withdrawal_history=True,
+                          corporate_withdrawal_filed=max(withdrawals))
+            return result
+        if not solicitation_dates:
+            raise ValueError("Nevada charitable solicitation scope is unconfirmed")
         raw = record["raw_status"]
         status = licensed_charity_status("Active" if raw.casefold() == "registered" else raw, record["expiration"])
         if raw.casefold() == "default":
             status = "Delinquent"
-        result.update(status=status)
-    if solicitation_dates:
-        # A completed statement remains real filing evidence for either
-        # category. Corporate standing does not invent a statement, and a
-        # statement must not replace an explicitly adverse corporate status.
-        result.update(solicitation_statement_filed=max(solicitation_dates))
+        # Completed same-entity charity history and an explicit adverse state
+        # status need no invented deadline. Active without a date remains UTC.
+        if not record.get("expiration") and status in {"Current", "Upcoming Filing", "Unable to Confirm"}:
+            raise ValueError("Nevada charitable solicitation renewal deadline is unconfirmed")
+        result.update(status=status, solicitation_statement_filed=max(solicitation_dates))
         if min(solicitation_dates) == record.get("entity_formation"):
             result.update(initial=min(solicitation_dates), initial_type="initial_registration_filing_date",
                           initial_label="Charitable Solicitation Registration Statement — Filed Date")
@@ -12312,7 +12313,7 @@ def mi_name_fallback_queries(org):
 def lab_mi_query_dominance_enabled() -> bool:
     return (APP_VERSION.endswith("-performance-lab")
             and performance_origin_enabled()
-            and os.environ.get("CE_LAB_MI_QUERY_DOMINANCE") == "1"
+            and (bool(trial_identity()) or os.environ.get("CE_LAB_MI_QUERY_DOMINANCE") == "1")
             and LAB_LOOKUP_MODE_CONTEXT.get() == "sales")
 
 
@@ -23913,7 +23914,7 @@ def ny_connector_advance(record):
     org = checker.Organization(record["organization_name"], record["ein"])
     started = time.perf_counter()
     supports_browser_detail = (record.get("connector_version") in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"}
-                               or bool(trial_identity() and record.get("connector_version") in {"0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51"}))
+                               or bool(trial_identity() and record.get("connector_version") in {"0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52"}))
     try:
         if record.get("purpose") == "identity":
             ein = canonical_ein_digits(record["ein"])
@@ -23963,7 +23964,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51"})):
+        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52"})):
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()

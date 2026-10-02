@@ -619,3 +619,27 @@ test('verified detail navigation closes only owned detail tabs and releases queu
 });
 
 module.exports={harness,tick,id};
+
+for(const scenario of ['success','rejected-again','verify-fails','late','mature'])test(`NY detail authorization recovery remains bounded: ${scenario}`,async()=>{
+ const trialOrigin=scenario==='mature'?null:'https://fixture-final-four.onrender.com';
+ const h=harness({trialOrigin});if(trialOrigin)h.tabs.get(1).url=trialOrigin;
+ let searches=0,verifications=0,backs=0,opens=0;const deadlines=[];
+ h.chrome.tabs.sendMessage=async(tab,m)=>{
+  if(m.action==='ready')return {ready:true,url:h.tabs.get(tab).url,documentId:String(opens)+String(backs)};
+  if(m.action==='back-to-results'){backs++;h.tabs.get(tab).url='https://charities-search.ag.ny.gov/RegistrySearch';return {ok:true};}
+  if(m.action==='open-detail'){opens++;h.tabs.get(tab).url='https://charities-search.ag.ny.gov/RegistrySearch/'+m.query.orgID;return {ok:true};}
+  if(m.action==='verify'){verifications++;assert.equal(m.verificationRetryUsed,true);return scenario==='verify-fails'?{ok:false,reason:'NY_CONNECTOR_VERIFICATION_REJECTED'}:{ok:true,evidence:{verified:true}};}
+  searches++;deadlines.push(h.data.session.ccnyRuntime.queue[0].activeExpiresAt);
+  return searches===2&&scenario==='success'?{ok:true,evidence:{query:m.query}}:{ok:false,reason:'NY_CONNECTOR_DETAIL_UNAUTHORIZED'};
+ };
+ const p=h.connect();await tick();if(scenario==='late')await h.advance(286000);
+ let result=await h.query(p,11,{orgID:'12-34-56'});await tick();
+ result=p.messages.find(m=>m.id===id(11)&&!m.progress);
+ assert.equal(result?.ok,scenario==='success');
+ assert.equal(verifications,['mature','late'].includes(scenario)?0:1);
+ assert.equal(searches,scenario==='success'||scenario==='rejected-again'?2:1);
+ assert.equal(h.repairs.length,0);assert.ok(h.tabs.has(2));
+ if(scenario==='verify-fails')assert.equal(result.reason,'NY_CONNECTOR_VERIFICATION_REJECTED');
+ else if(scenario!=='success')assert.equal(result.reason,'NY_CONNECTOR_DETAIL_UNAUTHORIZED');
+ assert.ok(deadlines.length);assert.ok(deadlines.every(value=>value===310000));
+});

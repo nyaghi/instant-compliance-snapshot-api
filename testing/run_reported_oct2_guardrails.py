@@ -100,6 +100,19 @@ class ReportedNames(unittest.TestCase):
 
 
 class ReportedStateInterpretation(unittest.TestCase):
+    def test_isolated_trial_enables_existing_mi_sales_zero_coverage_without_changing_standard(self):
+        import os
+        with patch.object(cc, 'APP_VERSION', 'test-performance-lab'), patch.object(cc, 'performance_origin_enabled', return_value=True), \
+             patch.object(cc, 'trial_identity', return_value={'origin': 'fixture'}), patch.dict(os.environ, {'CE_LAB_MI_QUERY_DOMINANCE': '0'}):
+            for mode, enabled in [('sales', True), ('standard', False)]:
+                token = cc.LAB_LOOKUP_MODE_CONTEXT.set(mode)
+                try:
+                    self.assertEqual(cc.lab_mi_query_dominance_enabled(), enabled)
+                    self.assertEqual(cc.mi_completed_query_covers('Legal Services Corporation', 'Legal Services Corporation, Inc.'), enabled)
+                    self.assertFalse(cc.mi_completed_query_covers('Legal Services Corporation', 'Local Services Corporation'))
+                finally:
+                    cc.LAB_LOOKUP_MODE_CONTEXT.reset(token)
+
     def test_nc_denied_existing_license_uses_past_extension_not_application_date(self):
         from testing.run_final_four_source_guardrails import NC
         fields = {**NC, 'CSL Legal Name': 'The NHP Foundation', 'Status': 'Denied',
@@ -113,18 +126,32 @@ class ReportedStateInterpretation(unittest.TestCase):
             with self.subTest(changes=changes):
                 self.assertEqual(cc.nc_charity_record_evidence({**fields, **changes})['status'], 'Unable to Confirm')
 
-    def test_nv_nonprofit_and_foreign_unqualified_categories_preserve_different_scopes(self):
+    def test_nv_neither_entity_type_substitutes_corporate_standing_for_charity_scope(self):
         from testing.run_final_four_source_guardrails import NV, NV_FILINGS, NV_SOLICITATION
         fields = {**NV, 'Annual Renewal Due Date/Expiration Date': '7/31/2027'}
         row = cc.nv_charity_detail_evidence(fields, fields['NV Business ID'])
-        self.assertEqual(row['status'], 'Current')
-        self.assertFalse(row['requires_solicitation_history'])
-        self.assertEqual(cc.nv_charity_filings_evidence(row, NV_FILINGS)['status'], 'Current')
+        self.assertEqual(row['status'], 'Unable to Confirm')
+        self.assertTrue(row['requires_solicitation_history'])
+        with self.assertRaises(ValueError):
+            cc.nv_charity_filings_evidence(row, NV_FILINGS)
         other = cc.nv_charity_detail_evidence(NV_SOLICITATION, NV_SOLICITATION['NV Business ID'])
         self.assertTrue(other['requires_solicitation_history'])
         self.assertEqual(other['status'], 'Unable to Confirm')
         with self.assertRaises(ValueError):
             cc.nv_charity_filings_evidence(other, {**NV_FILINGS, 'identifier': other['identifier'], 'name': other['name']})
+
+    def test_nv_explicit_expired_charity_does_not_need_an_invented_due_date(self):
+        from testing.run_final_four_source_guardrails import NV, NV_QUALIFIED_FILINGS
+        for raw, expected in [('Expired', 'Delinquent'), ('Revoked', 'Revoked'), ('Withdrawn', 'Closed / Withdrawn / Canceled')]:
+            row = cc.nv_charity_detail_evidence({**NV, 'Entity Status': raw,
+                'Annual Renewal Due Date/Expiration Date': ''}, NV['NV Business ID'])
+            with self.subTest(raw=raw):
+                parsed = cc.nv_charity_filings_evidence(row, NV_QUALIFIED_FILINGS)
+                self.assertEqual(parsed['status'], expected)
+                self.assertIsNone(parsed['expiration'])
+        row = cc.nv_charity_detail_evidence({**NV, 'Annual Renewal Due Date/Expiration Date': ''}, NV['NV Business ID'])
+        with self.assertRaises(ValueError):
+            cc.nv_charity_filings_evidence(row, NV_QUALIFIED_FILINGS)
 
 
 class ReportedPublicRows(unittest.TestCase):

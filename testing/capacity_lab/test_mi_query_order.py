@@ -59,11 +59,19 @@ class QueryOrder(unittest.TestCase):
                     self.assertFalse(m.mi_completed_query_covers('Example Relief','Example Relief, Inc.'))
             finally:m.LAB_LOOKUP_MODE_CONTEXT.reset(token)
 
-    def test_all_other_master_behavior_is_unchanged(self):
-        from testing.capacity_lab.mi_query_scope import strip_mi_query_order
+    def test_trial_activation_changes_only_the_existing_sales_gate(self):
         root=Path(m.__file__).parent
-        old=ast.parse(subprocess.check_output(['git','show','1453dce:registry_snapshot_server.py'],cwd=root).decode())
-        new=ast.parse(Path(m.__file__).read_text(encoding='utf-8'));strip_mi_query_order(new)
-        self.assertEqual(ast.dump(old),ast.dump(new))
+        old=ast.parse(subprocess.check_output(['git','show','42e6756:registry_snapshot_server.py'],cwd=root).decode())
+        new=ast.parse(Path(m.__file__).read_text(encoding='utf-8'))
+        names={'lab_mi_query_dominance_enabled','mi_name_fallback_queries','mi_completed_query_covers','mi_name_http_empty_queries'}
+        before={n.name:n for n in old.body if isinstance(n,ast.FunctionDef) and n.name in names}
+        after={n.name:n for n in new.body if isinstance(n,ast.FunctionDef) and n.name in names}
+        self.assertEqual(set(before),names);self.assertEqual(set(after),names)
+        for name in names-{'lab_mi_query_dominance_enabled'}:
+            self.assertEqual(ast.dump(before[name]),ast.dump(after[name]),name)
+        gate=after['lab_mi_query_dominance_enabled']
+        self.assertEqual(ast.unparse(gate.body[0].value.values[-1]),"LAB_LOOKUP_MODE_CONTEXT.get() == 'sales'")
+        self.assertEqual(ast.unparse(gate.body[0].value.values[0]),"APP_VERSION.endswith('-performance-lab')")
+        self.assertEqual(ast.unparse(gate.body[0].value.values[1]),'performance_origin_enabled()')
 
 if __name__=='__main__':unittest.main()

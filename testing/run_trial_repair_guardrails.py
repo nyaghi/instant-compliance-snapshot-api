@@ -57,11 +57,10 @@ class Repairs(unittest.TestCase):
         for raw,expiry,status in [('Exempt','','Exempt'),('Revoked','','Revoked'),('Active','11/27/2026','Upcoming Filing')]:
             r=cc.tn_charity_detail_evidence({**TN,'Status':raw,'Expiration Date':expiry,'financial_periods':['09/30/2015'],'financial_count':1},'CO3674',TN_ROW)
             self.assertEqual(r['status'],status)
-    def test_nv_nonprofit_currency_uses_approved_corporate_registration_scope(self):
+    def test_nv_corporate_currency_without_charity_filing_is_unconfirmed(self):
         r=cc.nv_charity_detail_evidence(NV,NV['NV Business ID'])
-        self.assertEqual(r['status'],'Upcoming Filing')
-        self.assertFalse(r['requires_solicitation_history'])
-        self.assertEqual(cc.nv_charity_filings_evidence(r,NV_FILINGS)['status'],'Upcoming Filing')
+        self.assertEqual(r['status'],'Unable to Confirm')
+        with self.assertRaises(ValueError):cc.nv_charity_filings_evidence(r,NV_FILINGS)
     def test_mi_distinct_reviewed_alias_survives_equivalent_spellings(self):
         org=cc.checker.Organization('Human Trafficking Legal Center','46-1349584')
         names=['Human Trafficking Legal Center','HUMAN TRAFFICKING LEGAL CENTER','Human Trafficking Legal Center, Inc.',
