@@ -192,17 +192,23 @@ test('NV refuses a new alias when the native Return To Search action fails',asyn
  assert.equal(h.calls.filter(c=>c.query).length,2);assert.equal(h.reloads.length,0);
 });
 
-test('NV recovers one stalled return within the original lookup deadline',async()=>{
+test('NV recovers one stalled return then uses a fresh form for remaining signed aliases',async()=>{
  const h=fixture(),p=connect(h,'NV'),q={state:'NV',operation:'search',name:'Example National Foundation'};
  await h.query(p,2,q);await h.query(p,3,{state:'NV',operation:'detail',identifier:'NV1234'});
- const send=h.chrome.tabs.sendMessage;
- h.chrome.tabs.sendMessage=async(id,m)=>m.action==='registry-nv-return'?{ok:false,reason:'NY_CONNECTOR_REGISTRY_NV_RETURN_READY_TIMEOUT'}:send(id,m);
+ const send=h.chrome.tabs.sendMessage;let returns=0;
+ h.chrome.tabs.sendMessage=async(id,m)=>{
+  if(m.action==='registry-nv-return'){returns++;return {ok:false,reason:'NY_CONNECTOR_REGISTRY_NV_RETURN_READY_TIMEOUT'};}
+  return send(id,m);
+ };
  assert.equal((await h.query(p,4,{...q,name:'Reviewed Former Name'})).ok,true);
  assert.equal(h.data.session.ccnyRuntime.queue.find(j=>j.active).nvReturnRecoveryUsed,true);
  assert.equal(h.reloads.length,1);
  await h.query(p,5,{state:'NV',operation:'detail',identifier:'NV1234'});
  const r=await h.query(p,6,{...q,name:'Another Reviewed Name'});
- assert.equal(r.ok,false);assert.equal(r.reason,'NY_CONNECTOR_REGISTRY_NV_RETURN_READY_TIMEOUT');
+ assert.equal(r.ok,true);
+ assert.equal(returns,1);
+ assert.equal(h.reloads.length,2);
+ assert.equal(h.calls.filter(c=>c.query).at(-1).query.name,'Another Reviewed Name');
  assert.equal(h.created.length,1);
 });
 

@@ -290,6 +290,15 @@ async function performRegistryQuery(job, query) {
     }
     if (query.operation === "search") {
       if (query.state==='NV' && job.tab!==null && !job.finalFourReusableForm) {
+        if (P.TRIAL_ORIGIN && job.nvReturnRecoveryUsed) {
+          // This organization's native return has already stalled. Open the
+          // public form for each remaining signed search instead of spending
+          // another return allowance or failing after reading its records.
+          // No query is skipped, and the original active deadline still owns
+          // every navigation and response.
+          diagnostic('nv-return-known-stall',job,'fresh public form within original deadline');
+          await registryNavigate(job,registryStart('NV'),Math.min(45000,job.activeExpiresAt-Date.now()),true);
+        } else {
         // Form hydration shares the normal navigation allowance and the
         // original job deadline. A ten-second sub-budget rejected a still
         // loading public form despite remaining lookup time. Sales supplies
@@ -303,6 +312,7 @@ async function performRegistryQuery(job, query) {
           diagnostic('nv-return-recovery',job,'fresh public form within original deadline');
           await registryNavigate(job,registryStart('NV'),Math.min(45000,job.activeExpiresAt-Date.now()),true);
         } else await registryReady(job,null,new URL(registryStart('NV')).pathname);
+        }
       } else if (job.tab === null || !job.finalFourReusableForm) await registryNavigate(job,registryStart(query.state));
       else await registryReady(job,null,new URL(registryStart(query.state)).pathname);
     } else if (job.tab === null || !job.finalFourSearchComplete) {
