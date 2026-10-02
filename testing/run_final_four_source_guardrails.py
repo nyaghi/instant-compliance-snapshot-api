@@ -1067,6 +1067,9 @@ class LookupControls(unittest.TestCase):
         after = ast.parse((root / 'registry_snapshot_server.py').read_text(encoding='utf-8'))
         changed = {'nm_browser_courtesy_names','nm_browser_lookup','pa_name_search_plan','final_four_connector_failure','final_four_browser_lookup'}
         for tree in (before, after):
+            for handler in [n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in {'ny_connector_request','ny_connector_advance','il_verification_recovery'}]:
+                for n in ast.walk(handler):
+                    if isinstance(n,ast.Set):n.elts=[v for v in n.elts if not(isinstance(v,ast.Constant) and v.value=='0.6.46')]
             tree.body = [node for node in tree.body if not (isinstance(node, ast.FunctionDef) and node.name in changed)]
         self.assertEqual(ast.dump(before), ast.dump(after))
         for file in ['web-staging/index.html', 'web-staging/optimized-workflows.js', 'web-staging/sales-mode.js',

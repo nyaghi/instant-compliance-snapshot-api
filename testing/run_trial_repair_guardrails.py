@@ -252,6 +252,26 @@ class Repairs(unittest.TestCase):
         self.assertEqual(result.status,'Closed / Withdrawn / Canceled')
         self.assertEqual(result.matched_registry_identifier,identifier)
 class OctoberTwoSpeedControls(unittest.TestCase):
+    def test_actual_packaged_connector_version_is_accepted_by_all_mature_handlers(self):
+        import tempfile
+        from deployment.package_final_four_connector import build
+        origin='https://fixture-final-four.onrender.com'
+        with tempfile.TemporaryDirectory() as folder:
+            packaged=build(origin,Path(folder)/'connector')
+            version=json.loads((Path(packaged['directory'])/'manifest.json').read_text())['version']
+        auth={'email':'fixture@compliance-express.com','admin_passcode':'fixture','device_id':'fixture-device-id'}
+        for state in ['NY','IL','GA']:
+            with patch.object(cc,'ny_connector_origin_allowed',return_value=True), \
+                 patch.object(cc,'is_verified_internal_passcode',return_value=True), \
+                 patch.object(cc,'NY_CONNECTOR_SIGNING_KEY','s'*64), \
+                 patch.object(cc,'trial_identity',return_value={'origin':origin}), \
+                 patch.object(cc,'ny_connector_advance',return_value={'phase':'complete','result':{'state':state}}) as advance:
+                payload={**auth,'action':'start','state':state,'organization_name':'Fixture Charity','ein':'123456789','connector_version':version}
+                self.assertEqual(cc.ny_connector_request(payload,origin)[0],200)
+                self.assertEqual(advance.call_args.args[0]['connector_version'],version)
+                self.assertEqual(cc.ny_connector_request({**payload,'connector_version':'0.6.999'},origin)[0],400)
+                with patch.object(cc,'trial_identity',return_value=None):
+                    self.assertEqual(cc.ny_connector_request(payload,origin)[0],400)
     def test_education_plans_keep_reviewed_names_without_generic_single_word(self):
         org=cc.checker.Organization('Education Forward DC','81-1823628')
         names=cc.pa_name_search_plan(org)
