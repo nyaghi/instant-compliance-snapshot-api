@@ -963,6 +963,15 @@
     // request, so the message reply is sent before the resulting navigation.
     button.click();return {ok:true,phase:'submitted'};
   }
+  function ncIdleSearch(query) {
+    if(query?.state!=='NC'||query.operation!=='search'||typeof query.name!=='string'||!query.name.trim()||query.name.length>500)
+      return false;
+    if(location.pathname!=='/online_services/search/by_title/search_charities'||!registryDocumentReady())return false;
+    const input=document.querySelector('#SearchCriteria'),words=document.querySelector('#Words'),button=document.querySelector('#SubmitButton'),print=document.querySelector('#Print');
+    const starts=words&&[...words.options].find(o=>text(o)==='Starting With');
+    return !!(input&&input.value===query.name&&starts&&words.value===starts.value&&print&&!print.checked
+      &&visible(button)&&!button.disabled&&text(button)==='Search');
+  }
   function ncRetry(query) {
     if(query?.state!=='NC'||query.operation!=='search'||typeof query.name!=='string'||!query.name.trim()||query.name.length>500)
       throw new Error('REGISTRY_NC_QUERY_INVALID');
@@ -1358,7 +1367,8 @@
     if (m.action === "registry-ready") return {ready:registryDocumentReady(), url:location.href, documentId,
       ...(NV ? {nv_readiness:nvReadiness()} : {}),
       ...(NC ? {verification_pending:/^Just a moment/i.test(document.title||'')
-        && /Performing security verification|verifies you are not a bot/i.test(text(document.body))} : {}),
+        && /Performing security verification|verifies you are not a bot/i.test(text(document.body)),
+        ...(m.query ? {nc_search_idle:ncIdleSearch(m.query)} : {})} : {}),
       ...(TN ? {verification_pending:!!document.querySelector('div[id^="recaptcha_"]') && !registryDocumentReady()} : {})};
     if (NC) {
       if(m.action==='registry-nc-form')return ncForm(m.query);

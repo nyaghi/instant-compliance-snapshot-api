@@ -130,12 +130,22 @@ class IsolationControls(unittest.TestCase):
             previous=subprocess.check_output(['git','show','c8e6a0af19177f31951aacad60e783a369343aa5:'+name],cwd=ROOT).decode('utf-8')
             trees=[ast.parse(previous),ast.parse((ROOT/name).read_text(encoding='utf-8'))]
             for tree in trees:
+                for handler in [n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='final_four_connector_request']:
+                    for n in ast.walk(handler):
+                        if isinstance(n,ast.Compare) and ast.unparse(n.left)=='reason' and len(n.comparators)==1 and isinstance(n.comparators[0],ast.Set):
+                            self.assertEqual({v.value for v in n.comparators[0].elts},{'NY_CONNECTOR_TAB_READY_TIMEOUT','NY_CONNECTOR_NC_SEARCH_NOT_STARTED'})
+                            n.ops=[ast.Eq()];n.comparators=[ast.Constant('NY_CONNECTOR_TAB_READY_TIMEOUT')]
+                        if isinstance(n,ast.Compare) and len(n.comparators)==1 and isinstance(n.comparators[0],ast.IfExp):
+                            expected=ast.parse('15 if record.get("mode") == "sales" and reason == "NY_CONNECTOR_NC_SEARCH_NOT_STARTED" else 60',mode='eval').body
+                            self.assertEqual(ast.dump(n.comparators[0]),ast.dump(expected))
+                            self.assertEqual(ast.unparse(n.left),"record['expires'] - now")
+                            n.comparators=[ast.Constant(60)]
                 # The sole NY/IL/GA handler change is accepting this exact
                 # packaged trial version. Restore it before whole-file parity.
                 handlers=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in {'ny_connector_request','ny_connector_advance','il_verification_recovery'}]
                 for handler in handlers:
                     for n in ast.walk(handler):
-                        if isinstance(n,ast.Set):n.elts=[v for v in n.elts if not(isinstance(v,ast.Constant) and v.value in {'0.6.46','0.6.47','0.6.48','0.6.49','0.6.50','0.6.51','0.6.52','0.6.53','0.6.54','0.6.55'})]
+                        if isinstance(n,ast.Set):n.elts=[v for v in n.elts if not(isinstance(v,ast.Constant) and v.value in {'0.6.46','0.6.47','0.6.48','0.6.49','0.6.50','0.6.51','0.6.52','0.6.53','0.6.54','0.6.55','0.6.56'})]
                 tree.body=[n for n in tree.body if not(isinstance(n,ast.FunctionDef) and n.name in allowed)]
             self.assertEqual(ast.dump(trees[0]),ast.dump(trees[1]),name)
 

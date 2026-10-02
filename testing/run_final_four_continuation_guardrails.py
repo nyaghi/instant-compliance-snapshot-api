@@ -193,6 +193,31 @@ class ContinuationControls(unittest.TestCase):
                               'query_id':detail['query_id'],'reason':'NY_CONNECTOR_TAB_READY_TIMEOUT'})
         self.assertEqual(final['phase'],'complete')
 
+    def test_nc_sales_recovers_proven_idle_search_once_with_original_cutoff(self):
+        with patch.object(cc.time,'time',return_value=1000):
+            _, first=self.start('NC',mode='sales',recovery_protocol='nc-fresh-search-v1')
+        with patch.object(cc.time,'time',return_value=1010):
+            _, recovered=self.request({'action':'fail','check_token':first['check_token'],
+                'query_id':first['query_id'],'reason':'NY_CONNECTOR_NC_SEARCH_NOT_STARTED'})
+            self.assertEqual(recovered['phase'],'search')
+            record=cc.ny_connector_unpack(recovered['check_token'],self.auth['email'],self.auth['device_id'])
+            self.assertEqual(record['expires'],1060);self.assertEqual(record['issued'],1000)
+            self.assertEqual(recovered['lookup_remaining_ms'],50000)
+            self.assertEqual(recovered['query'],first['query'])
+            _, final=self.request({'action':'fail','check_token':recovered['check_token'],
+                'query_id':recovered['query_id'],'reason':'NY_CONNECTOR_NC_SEARCH_NOT_STARTED'})
+            self.assertEqual(final['phase'],'complete');self.assertEqual(final['result']['status'],'Unable to Confirm')
+
+    def test_nc_sales_does_not_recover_generic_timeout_verification_or_short_budget(self):
+        for delay,reason in [(10,'NY_CONNECTOR_TAB_READY_TIMEOUT'),(10,'NY_CONNECTOR_NC_VERIFICATION_PENDING'),(45,'NY_CONNECTOR_NC_SEARCH_NOT_STARTED')]:
+            with self.subTest(delay=delay,reason=reason):
+                with patch.object(cc.time,'time',return_value=1000):
+                    _, first=self.start('NC',mode='sales',recovery_protocol='nc-fresh-search-v1')
+                with patch.object(cc.time,'time',return_value=1000+delay):
+                    _, final=self.request({'action':'fail','check_token':first['check_token'],
+                        'query_id':first['query_id'],'reason':reason})
+                    self.assertEqual(final['phase'],'complete');self.assertEqual(final['result']['status'],'Unable to Confirm')
+
     def test_detail_identity_contact_and_history_are_bounded(self):
         query = {'state': 'NC', 'operation': 'detail', 'identifier': NC['License'], 'url': NC['profile_url']}
         payload = {'query': query, 'complete': True, 'fields': NC_PROFILE}

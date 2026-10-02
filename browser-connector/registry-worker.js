@@ -83,11 +83,11 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
       || path!==new URL(registryStart('NV')).pathname)) throw new Error('NY_CONNECTOR_INVALID_SEQUENCE');
   const started = Date.now();
   const deadline = Math.min(Date.now()+Math.max(1,Math.min(45000,budgetMs)), job.activeExpiresAt);
-  let verificationPending=false, visibilityAttempted=false, previousVisible=null, submissionRetried=false;
+  let verificationPending=false, visibilityAttempted=false, previousVisible=null, submissionRetried=false, resubmissionAcknowledged=false;
   const nvInitialVisible=await registryNevadaVisibleSnapshot(job);
   try { while (!job.closed && Date.now()<deadline) {
     try {
-      const value=await registryMessage(job,{action:"registry-ready"});
+      const value=await registryMessage(job,{action:"registry-ready",...(ncSubmittedQuery ? {query:ncSubmittedQuery} : {})});
       if(job.registryState==='NM' && value?.source_failure==='REGISTRY_NM_SOURCE_ERROR')
         throw new Error('NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR');
       if(job.registryState==='NV'&&value?.nv_readiness)job.nvReadiness=value.nv_readiness;
@@ -119,10 +119,18 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
           previousVisible=await registryNorthCarolinaVisibility(job);
         }
         const retried=await registryMessage(job,{action:'registry-nc-retry',query:ncSubmittedQuery});
+        resubmissionAcknowledged=retried?.ok===true&&retried.phase==='submitted';
         diagnostic('nc-submit-recovery',job,retried?.phase==='submitted'?'same-query resubmitted':'form changed; no resubmission');
       }
+      // Only a proven identical idle form can fail early. A disabled Processing
+      // action, verification, changed query or document retains normal waits.
+      // The master may recover once in a fresh page within the original expiry.
+      if (P.TRIAL_ORIGIN && job.registryState==='NC' && ncSubmittedQuery && resubmissionAcknowledged
+          && !verificationPending && Date.now()-started>=8000 && value?.ready && value.nc_search_idle===true
+          && value.documentId===oldDocument && new URL(value.url).pathname==='/online_services/search/by_title/search_charities')
+        throw new Error('NY_CONNECTOR_NC_SEARCH_NOT_STARTED');
     } catch(error) {
-      if(error?.message==='NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR')throw error;
+      if(['NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR','NY_CONNECTOR_NC_SEARCH_NOT_STARTED'].includes(error?.message))throw error;
       // The public challenge can precede content-script readiness. Its visible
       // tab title is sufficient to describe a pending verification, not a result.
       if (job.registryState==='NC') try {

@@ -148,6 +148,17 @@ test('NC recovery never operates a verification or another document',()=>{
  assert.equal(harness().api.ncRetry(q).phase,'pending');
  assert.throws(()=>h.api.ncRetry({...q,state:'NV'}),/QUERY_INVALID/);
 });
+
+test('NC idle-form readiness is read-only and requires the exact query and enabled search controls',async()=>{
+ const h=harness({url:origin+'/online_services/search/by_title/search_charities'}),q={state:'NC',operation:'search',name:'Reviewed Alias'};
+ h.api.ncForm(q);const before=h.formClicks();
+ assert.equal((await h.api.handle({action:'registry-ready',query:q})).nc_search_idle,true);
+ assert.equal(h.formClicks(),before);
+ for(const change of [()=>h.button.disabled=true,()=>{h.button.disabled=false;h.button.innerText='Processing';},()=>{h.button.innerText='Search';h.input.value='Other';},()=>{h.input.value=q.name;h.words.value='exact';},()=>{h.words.value='0';h.print.checked=true;}]){
+  change();assert.equal((await h.api.handle({action:'registry-ready',query:q})).nc_search_idle,false);
+ }
+ assert.equal(h.formClicks(),before);
+});
 test('NC document completion does not mistake a verification interstitial for its search form',()=>{
  const h=harness({url:origin+'/online_services/search/by_title/search_charities'}),read=h.context.document.querySelector;
  h.context.document.querySelector=()=>null;assert.equal(h.api.registryDocumentReady(),false);
