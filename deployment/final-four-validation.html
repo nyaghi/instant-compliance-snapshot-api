@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>CharityClarity 29.2S — Isolated validation</title>
+<html lang="en"><head><meta charset="utf-8"><title>CharityClarity 29.2T — Isolated validation</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>body{font:16px system-ui;color:#0b2a5b;background:#f8fafc;max-width:1000px;margin:2rem auto;padding:1rem}label{display:block;margin:1rem 0}input,textarea{display:block;width:100%;padding:.65rem;box-sizing:border-box}button{padding:.8rem;background:#c62828;color:white;border:0;border-radius:5px;margin:.4rem}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:white;padding:1rem}small{color:#52667f}</style>
 <script src="/ny-connector.js" defer></script><script src="/optimized-workflows.js" defer></script></head>
-<body><h1>CharityClarity 29.2S — Isolated validation</h1>
+<body><h1>CharityClarity 29.2T — Isolated validation</h1>
 <p>Uses the master name discovery, workflow and browser connector. Staging 29.1 is separate.</p>
 <p id="connectorStatus">Checking the trial connector…</p><button id="checkConnector" type="button">Check trial connector</button>
 <form id="setup"><label>Compliance Express email<input id="email" type="email" required autocomplete="off"></label>
@@ -28,7 +28,7 @@ function checkConnector(){
   const id=crypto.randomUUID().replaceAll('-','');let timer;
   const finish=response=>{clearTimeout(timer);window.removeEventListener('message',receive);
    status.textContent=response?.ok&&typeof response.version==='string'
-    ?`Active trial connector: ${response.version}. Required for this validation: 0.6.34.`
+    ?`Active trial connector: ${response.version}. Required for this validation: 0.6.35.`
     :'The trial connector did not respond. Activate the installed trial connector, then check again.';
    resolve(response);
   };
@@ -86,7 +86,7 @@ setup.addEventListener('submit',async event=>{
     comments:'The state did not complete within this validation run.',status_reason:mode==='sales'?'SALES_TIME_LIMIT':'WORKFLOW_INCOMPLETE'});
    const values=Array.from(results.values());
    for(const result of values)if(result.app_version&&(result.app_version!==VERSION||String(result.ein).replace(/\D/g,'')!==row.ein))throw Error('Result release or identity mismatch');
-   completed.push({trial_release:'29.2S',organization_name:row.organization_name,ein:row.ein,mode,states:row.states,started_epoch:started/1000,
+   completed.push({trial_release:'29.2T',organization_name:row.organization_name,ein:row.ein,mode,states:row.states,started_epoch:started/1000,
     discovery_seconds:discoverySeconds,discovery,alternate_names:aliases,connector_progress:connectorProgress,check_seconds:(Date.now()-checkStart)/1000,results:values});
    output.textContent=JSON.stringify(completed,null,2);
    if(row.stop_on_inconclusive!==false&&values.some(r=>!r.success||/Unable|Review|Reachable|Unknown/.test(r.status))){progress.textContent=`Paused for investigation after ${completed.length}/${cases.length}.`;return;}

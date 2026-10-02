@@ -51,7 +51,7 @@ test('Nevada visible inputs and search type are not ready while the initial load
  h.context.document.querySelectorAll=read;assert.equal(h.api.registryDocumentReady(),true);
 });
 function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,truncate=false,duplicate=false,oldPageDelay=80,detailId=null,returnFormDelay=600,returnName=null,returnRows=null,returnAttribute=null,repeatSearchActivity=true,replaceSearchOnInput=false,returnGridDelay=0,unrelatedMutations=false,ignoredSearches=0,changedQueryBeforeRetry=false,pageSizeControl=false,initialPageSize=2,pagingMissing=0,resizeIgnored=false,resizeTotalDrift=false,reservation=false,exactRows=null,ignoreModeChange=false}={}) {
- let clock=1000,serial=0,listener,loading=false,rendered=[],page=1,detail=false,searchClicks=0,opened=[],formReady=true;
+ let clock=1000,serial=0,listener,loading=false,rendered=[],page=1,detail=false,searchClicks=0,opened=[],formReady=true,returnResultsClicks=0,returnSearchClicks=0;
  let pageSize=initialPageSize,sizeMenu=false,resizeClicks=0;
  const broadRows=rows;let searchMode='STARTS_WITH',modeMenu=false,modeClicks=0,pagingClicks=0;
  const tasks=new Map(),observers=new Set(),root={};
@@ -88,7 +88,8 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
    if(returnAttribute){for(const o of [...observers])if(o.options.attributes&&(!o.options.attributeFilter||o.options.attributeFilter.includes(returnAttribute)))o.fn([{type:'attributes',attributeName:returnAttribute,target:root}]);}
    else mutate();},returnFormDelay);
  }};
- const returnSearchButton={...backButton,innerText:'Return To Search'};
+ const returnSearchButton={...backButton,innerText:'Return To Search',click:()=>{returnSearchClicks++;backButton.click();}};
+ const originalBackClick=backButton.click;backButton.click=()=>{returnResultsClicks++;originalBackClick();};
  const fieldValues={'Entity Name':observed[1][0],'NV Business ID':detailId||observed[1][1],'Entity Status':'Active','Entity Type':observed[1][3],FEIN:'-',
   'Solicits Charitable Contribution?':'No','IRS Registered Name':'-','Campaign Name':'-','Formation Date in Nevada':'12/10/2012',
   'Annual Renewal Due Date/Expiration Date':'12/31/2026'};
@@ -156,7 +157,7 @@ function fixture({rows=observed,activity=true,responseDelay=100,timerClamp=0,tru
   }
   assert.ok(done);assert.equal(observers.size,0);if(error)throw error;return value;
  }
- return {context,drive,api:context.testNV,get opened(){return opened;},get clicks(){return searchClicks;},get modeClicks(){return modeClicks;},get modeMenuOpen(){return modeMenu;},get pagingClicks(){return pagingClicks;},get mode(){return searchMode;},get resizeClicks(){return resizeClicks;},get pageSize(){return pageSize;},get staleClicks(){return staleClicks;},get time(){return clock;},
+ return {context,drive,api:context.testNV,get opened(){return opened;},get clicks(){return searchClicks;},get returnResultsClicks(){return returnResultsClicks;},get returnSearchClicks(){return returnSearchClicks;},get modeClicks(){return modeClicks;},get modeMenuOpen(){return modeMenu;},get pagingClicks(){return pagingClicks;},get mode(){return searchMode;},get resizeClicks(){return resizeClicks;},get pageSize(){return pageSize;},get staleClicks(){return staleClicks;},get time(){return clock;},
   search:(budget=45000)=>drive(context.testNV.nvSearch({state:'NV',operation:'search',name:'MAKE-A-WISH'},clock+budget)),
   detail:()=>{detail=true;context.location.hash='screen=Manage-Business&id=fixture';return context.testNV.nvFields('NV20121738342');},fieldValues,reservationFields,grid};
 }
@@ -349,6 +350,13 @@ test('Nevada native Return To Search waits for the hydrated public form',async()
  const h=fixture({returnFormDelay:900});h.detail();
  const r=await h.drive(h.api.nvReturnSearch(h.time+45000));
  assert.equal(r.ok,true);assert.equal(h.api.registryDocumentReady(),true);assert.ok(h.time>=1900);assert.equal(h.clicks,0);
+ assert.equal(h.returnResultsClicks,1);assert.equal(h.returnSearchClicks,0);
+});
+
+test('Nevada reuses the ordinary results form after a slow hydration within its original allowance',async()=>{
+ const h=fixture({returnFormDelay:12000});h.detail();
+ const r=await h.drive(h.api.nvReturnSearch(h.time+45000));
+ assert.equal(r.ok,true);assert.equal(h.time,13000);assert.equal(h.returnResultsClicks,1);assert.equal(h.returnSearchClicks,0);
 });
 
 test('Nevada return observes selection-only hydration without waiting for the watchdog',async()=>{

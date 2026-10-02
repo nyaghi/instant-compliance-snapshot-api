@@ -423,7 +423,14 @@
     if (!onSearch()) {
       const reservation=location.hash.includes('screen=NameReservationDetails&');
       if (!reservation&&!location.hash.includes('screen=Manage-Business&')) throw new Error('REGISTRY_WRONG_ORIGIN');
-      const buttons=[...document.querySelectorAll('button')].filter(el=>text(el)===(reservation?'Back':'Return To Search')&&visible(el)&&!el.disabled);
+      // The ordinary results return preserves the mounted Business form.
+      // Return To Search resets ORION's whole search screen, including its
+      // loader and asynchronous search-type hydration, for every new alias.
+      // A fresh query below still clears all filters and requires its own
+      // completed response; restored rows cannot establish a new result.
+      const available=[...document.querySelectorAll('button')].filter(el=>visible(el)&&!el.disabled);
+      const restored=reservation?[]:available.filter(el=>text(el)==='Return To Results');
+      const buttons=restored.length?restored:available.filter(el=>text(el)===(reservation?'Back':'Return To Search'));
       if (buttons.length!==1) throw new Error('REGISTRY_NV_RETURN_SEARCH_MISSING');
       // Follow the public app's own reset/navigation action. Assigning a hash
       // alone can retain a partially restored search form after a detail.

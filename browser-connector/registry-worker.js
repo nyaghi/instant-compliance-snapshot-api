@@ -224,7 +224,11 @@ async function performRegistryQuery(job, query) {
     }
     if (query.operation === "search") {
       if (query.state==='NV' && job.tab!==null && !job.finalFourReusableForm) {
-        const returned=await registryMessage(job,{action:'registry-nv-return',budgetMs:Math.max(1,Math.min(10000,job.activeExpiresAt-Date.now()))});
+        // Form hydration shares the normal navigation allowance and the
+        // original job deadline. A ten-second sub-budget rejected a still
+        // loading public form despite remaining lookup time. Sales supplies
+        // its own one-minute cancellation; this never extends that limit.
+        const returned=await registryMessage(job,{action:'registry-nv-return',budgetMs:Math.max(1,Math.min(45000,job.activeExpiresAt-Date.now()))});
         if(returned?.nv_readiness)job.nvReadiness=returned.nv_readiness;
         if (!returned?.ok) {
           if (returned?.reason!=='NY_CONNECTOR_REGISTRY_NV_RETURN_READY_TIMEOUT' || job.nvReturnRecoveryUsed
