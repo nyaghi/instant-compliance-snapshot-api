@@ -677,6 +677,12 @@
     const link = matches[0].node.querySelector('[role="gridcell"] a');
     if (!link || text(link) !== target.name) throw new Error("REGISTRY_NV_DETAIL_NOT_OBSERVED");
     const reservation=/^(?:NR|C)\d{8}-\d+$/.test(query.identifier)&&target.entity_type==='';
+    // Keep DOM identities, not values: two organizations can have identical
+    // filing dates. A prior detail's table must not qualify the new record.
+    const priorFilingTables=new Set([...document.querySelectorAll('casex-data-table')].filter(el=>
+      [...el.querySelectorAll('h4')].some(h=>text(h)==='Filing History Details')));
+    const priorFilingRows=new Set([...priorFilingTables].flatMap(el=>
+      [...(el.querySelector('[role="grid"]')?.querySelectorAll('tbody > tr[role="row"]')||[])]));
     nvTrace('detail-row-confirmed',{identifier:query.identifier,page:page.page});
     let detailRetry, detailStarted=false;
     const loading=()=>[...document.querySelectorAll('.app-loader-pane .circle-loader')].some(visible);
@@ -728,10 +734,16 @@
       let first;
       try { first = await wait(() => {
         if (!nvFields(query.identifier)) { firstFailure='REGISTRY_NV_DETAIL_NOT_READY'; return false; }
-        if ([...document.querySelectorAll('.app-loader-pane .circle-loader')].some(visible)) {
-          firstFailure='REGISTRY_NV_FILINGS_RESPONSE_PENDING'; return false;
+        try {
+          const page=nvPage('Filing History Details',nvFilingHeaders);
+          if (priorFilingTables.has(page.table) || page.rows.some(row=>priorFilingRows.has(row))) {
+            firstFailure='REGISTRY_NV_FILINGS_NOT_REFRESHED'; return false;
+          }
+          // ORION's global spinner also covers unrelated detail requests.
+          // A new, complete history table bound to the confirmed business ID
+          // is usable while that spinner remains. Partial/old grids still wait.
+          return page;
         }
-        try { return nvPage('Filing History Details',nvFilingHeaders); }
         catch (error) { firstFailure=error.message; return false; }
       },Math.max(1,Math.min(35000,deadline-Date.now()))); }
       catch (error) {
