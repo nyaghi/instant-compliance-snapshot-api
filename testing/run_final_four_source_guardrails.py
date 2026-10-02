@@ -105,18 +105,20 @@ class SourceControls(unittest.TestCase):
             with self.subTest(kind=kind), self.assertRaises(ValueError):
                 cc.nv_charity_filings_evidence(row, history)
 
-    def test_nv_explicit_withdrawal_history_confirms_closure_without_claiming_charity_currency(self):
+    def test_nv_complete_noncharity_withdrawal_does_not_become_a_closed_charity_registration(self):
         fields, history = NV_WITHDRAWAL['fields'], NV_WITHDRAWAL['filings']
         row = cc.nv_charity_detail_evidence(fields, fields['NV Business ID'])
         parsed = cc.nv_charity_filings_evidence(row, history)
-        self.assertEqual(parsed['status'], 'Closed / Withdrawn / Canceled')
-        self.assertEqual(parsed['withdrawal_filed'], date(2015, 11, 2))
+        self.assertEqual(parsed['status'], 'Unable to Confirm')
+        self.assertEqual(parsed['corporate_withdrawal_filed'], date(2015, 11, 2))
+        self.assertTrue(parsed['non_charity_withdrawal_history'])
         self.assertNotIn('solicitation_statement_filed', parsed)
-        self.assertIn('nonprofit corporation', parsed['date_evidence_note'])
+        self.assertNotIn('withdrawal_filed', parsed)
 
     def test_nv_withdrawal_exception_requires_matching_status_type_and_complete_history(self):
         fields, history = NV_WITHDRAWAL['fields'], NV_WITHDRAWAL['filings']
         variants = [({'Entity Status': 'Active'}, {}), ({'Entity Status': 'Default'}, {}),
+                    ({'Solicits Charitable Contribution?': 'Yes'}, {}),
                     ({'Entity Type': 'Foreign Entities Not Required to Register In Nevada'}, {}),
                     ({}, {'complete': False}), ({}, {'name': 'Another Organization'}),
                     ({}, {'rows': history['rows'][1:], 'total': 3})]
@@ -1255,12 +1257,12 @@ class LookupControls(unittest.TestCase):
             with self.subTest(newer=newer):
                 result = cc.final_four_browser_lookup(org, 'NV', provider)
                 self.assertTrue(result.success)
-                self.assertEqual(result.status, 'Current' if newer else 'Closed / Withdrawn / Canceled')
-                self.assertEqual(result.matched_registry_identifier,
-                                 NV_SOLICITATION['NV Business ID'] if newer else source['fields']['NV Business ID'])
+                self.assertEqual(result.status, 'Current' if newer else 'Not Registered')
+                self.assertEqual(getattr(result,'matched_registry_identifier',''),
+                                 NV_SOLICITATION['NV Business ID'] if newer else '')
                 if not newer:
-                    self.assertIn('explicit withdrawal', result.source_note)
-                    self.assertIn('does not establish a current charitable', result.source_note)
+                    self.assertIn('corporate withdrawal is not classified', result.source_note)
+                    self.assertTrue(any(r.get('identifier')==source['fields']['NV Business ID'] for r in result.rejected_candidates))
                     # Closure does not trigger the positive-record shortcut.
                     self.assertGreater(len([q for q in calls if q['operation'] == 'search']), 1)
 

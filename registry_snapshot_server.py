@@ -6382,15 +6382,15 @@ def nv_charity_filings_evidence(record, payload):
         result.update(initial=qualifications[0], initial_label="Foreign Qualification — Filed Date",
                       initial_type="initial_registration_filing_date")
     if record.get("requires_solicitation_history"):
-        # Explicit withdrawal of the confirmed nonprofit corporation is
-        # closure evidence, even when the complete history contains no CSR.
-        # It establishes neither active charity registration nor exemption.
-        # Master selection still checks other records and aliases for a newer
-        # qualifying registration before returning the adverse result.
-        if withdrawals and record.get("raw_status", "").casefold() == "withdrawn":
-            result.update(status="Closed / Withdrawn / Canceled", withdrawal_filed=max(withdrawals),
-                          date_evidence_note=(f"The complete filing history includes an explicit withdrawal of the nonprofit corporation filed {max(withdrawals).isoformat()}. "
-                                              "This confirms the corporate record's withdrawal; it does not establish a current charitable-solicitation registration."))
+        # Corporate withdrawal is not withdrawal of a charity license. Only
+        # this completed, non-soliciting corporate history with no CSR can
+        # exclude the corporate record. Missing history, a solicitation flag,
+        # active corporate standing or a Registered charity category cannot.
+        # The lookup still completes its aliases for a qualifying charity.
+        if (withdrawals and not solicitation_dates and record.get("solicitation_declared") is False
+                and record.get("raw_status", "").casefold() == "withdrawn"):
+            result.update(status="Unable to Confirm", non_charity_withdrawal_history=True,
+                          corporate_withdrawal_filed=max(withdrawals))
             return result
         if not solicitation_dates or not record.get("expiration"):
             raise ValueError("Nevada charitable solicitation scope or renewal deadline is unconfirmed")
@@ -6748,8 +6748,14 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                             record = nv_charity_filings_evidence(record, detail["filings"])
                         except ValueError:
                             record["date_evidence_note"] = "Nevada's annual-list filing history was incomplete; the last-filed date remains blank."
+                    if record.get("non_charity_withdrawal_history"):
+                        excluded_nv_entities.append({"name": record["name"], "identifier": record["identifier"],
+                            "entity_type": record["entity_type"],
+                            "basis": "Complete corporate withdrawal history, Solicits Charitable Contribution: No, and no charitable-solicitation registration statement"})
+                        seen.add(row["identifier"])
+                        continue
                     if (record.get("requires_solicitation_history")
-                            and not record.get("solicitation_statement_filed") and not record.get("withdrawal_filed")):
+                            and not record.get("solicitation_statement_filed")):
                         unreviewed_scope = True
                         scope_reviews.append({"name": record["name"], "identifier": record["identifier"],
                                               "category": "Unconfirmed charitable-solicitation filing history", "source_url": record["url"]})
@@ -6780,6 +6786,8 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
         result.rejected_candidates = [{**row, "reason": "Confirmed record outside the approved Nevada nonprofit/charity scope"}
                                       for row in excluded_nv_entities[:20]]
         result.source_note += " Same-name records confirmed to be outside the nonprofit/charity scope were excluded."
+        if any(row.get("basis") for row in excluded_nv_entities):
+            result.source_note += " A withdrawn nonprofit corporation with a complete non-soliciting history and no charitable-solicitation statement was excluded; corporate withdrawal is not classified as a withdrawn charity registration."
     if unreviewed_scope and (state == "AL" or result.status not in {"Current", "Upcoming Filing", "Exempt"}):
         result.status = "Needs Review" if state in {"AL", "NC"} else "Unable to Confirm"; result.success = False
         result.source_note = ("Alabama returned a potentially matching private foundation without a public registration number. Review its identity and registration scope; this does not establish current registration, delinquency or non-registration."
