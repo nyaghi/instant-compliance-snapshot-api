@@ -925,3 +925,18 @@ user switches, ownership/origin/window changes, cancellation and expiry.
 The existing identity-review Undo control had an outdated label assertion;
 its assertion now uses the existing UI label, Undo match. Product UI and
 identity decisions are unchanged.
+
+
+### 29.2AC: retain the Nevada visibility lease until workflow cleanup
+
+29.2AB returned Canary Delinquent in both Standard (43.707 seconds) and
+Sales (43.037 seconds), but Make-A-Wish Standard took 67.415 seconds and
+Sales reached its cutoff. Per-command restoration repeatedly returned ORION
+to background hydration. 0.6.43 retains the single owned-tab visibility
+recovery through the state's continuation, restoring the caller during
+normal completion, cancellation or timeout. A user switch disables further
+automatic activation for that workflow. Session persistence carries only
+the prior public tab/window IDs and recovery flag, preserving restart
+cleanup. State evidence, matching, queries and original deadlines remain
+unchanged. Two additional controls cover continuation and real worker
+cleanup, including a user switch during the retained lease.

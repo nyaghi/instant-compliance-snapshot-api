@@ -137,7 +137,8 @@ test('NV pending detail recovers visibility without resubmission or changing its
  await tick();await h.advance(2999);assert.deepEqual(changes,[]);
  await h.advance(1);assert.deepEqual(changes,[3]);assert.equal(h.tabs.get(3).active,true);
  release({ok:true,evidence:{complete:true,identifier:'NV20121738342'}});
- assert.equal((await pending).ok,true);assert.deepEqual(changes,[3,1]);assert.equal(calls,1);
+ assert.equal((await pending).ok,true);assert.deepEqual(changes,[3]);assert.equal(calls,1);
+ await h.context.registryRestoreNevadaVisibility(job);assert.deepEqual(changes,[3,1]);
  assert.equal(job.activeExpiresAt,70000);assert.ok(h.timers.filter(t=>t.ms===60000).every(t=>t.cleared));
 });
 
@@ -145,6 +146,28 @@ test('NV fast responses do not activate any tab',async()=>{
  const {h,job,changes}=await nvVisibilityFixture();h.chrome.tabs.sendMessage=async()=>({ok:true});
  assert.equal((await h.context.registryMessage(job,{action:'registry-nv',budgetMs:45000})).ok,true);
  await h.advance(4000);assert.deepEqual(changes,[]);
+});
+
+test('NV continuation retains one visibility lease and finish restores then closes only its owned tab',async()=>{
+ const {h,job,changes}=await nvVisibilityFixture();let release,calls=0;
+ h.chrome.tabs.sendMessage=()=>{calls++;return calls===1?new Promise(r=>{release=r;}):Promise.resolve({ok:true});};
+ const first=h.context.registryMessage(job,{action:'registry-nv',budgetMs:45000});await tick();await h.advance(3000);
+ release({ok:true});await first;
+ assert.equal((await h.context.registryMessage(job,{action:'registry-nv',budgetMs:45000})).ok,true);
+ await h.advance(3000);assert.deepEqual(changes,[3]);assert.equal(calls,2);
+ await h.context.close(job);assert.deepEqual(changes,[3,1]);assert.deepEqual(h.removed,[3]);
+ assert.equal(h.tabs.get(1).active,true);assert.ok(h.tabs.has(2));
+});
+
+test('NV a user switch after one recovery is respected through later continuation commands',async()=>{
+ const {h,job,changes}=await nvVisibilityFixture();let release;
+ h.chrome.tabs.sendMessage=()=>new Promise(r=>{release=r;});
+ const first=h.context.registryMessage(job,{action:'registry-nv',budgetMs:45000});await tick();await h.advance(3000);
+ release({ok:true});await first;h.tabs.get(3).active=false;
+ h.tabs.set(4,{id:4,windowId:10,active:true,url:'https://example.com/'});
+ const second=h.context.registryMessage(job,{action:'registry-nv',budgetMs:45000});await tick();await h.advance(3000);
+ release({ok:true});await second;await h.context.close(job);
+ assert.deepEqual(changes,[3]);assert.equal(h.tabs.get(4).active,true);
 });
 
 test('NV visibility recovery preserves user switches before and after activation',async()=>{
@@ -156,7 +179,7 @@ test('NV visibility recovery preserves user switches before and after activation
   for(const tab of h.tabs.values())if(tab.windowId===10)tab.active=false;
   h.tabs.set(4,{id:4,windowId:10,active:true,url:'https://example.com/'});
   if(before)await h.advance(3000);
-  release({ok:true});await pending;
+  release({ok:true});await pending;await h.context.registryRestoreNevadaVisibility(job);
   assert.deepEqual(changes,before?[]:[3]);assert.equal(h.tabs.get(4).active,true);
  }
 });

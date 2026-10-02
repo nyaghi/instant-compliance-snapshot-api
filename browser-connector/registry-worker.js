@@ -19,7 +19,7 @@ async function registryMessage(job, message) {
   // in-flight command and document; expose only our owned trial tab once.
   // Capture the active tab first so a later user switch is never overridden.
   let initialVisible=null;
-  if (P.TRIAL_ORIGIN && owned.has(job.tab)) try {
+  if (P.TRIAL_ORIGIN && !job.nvVisibilityAttempted && owned.has(job.tab)) try {
     const tab=await chrome.tabs.get(job.tab), source=await chrome.tabs.get(job.sender.tab.id);
     if (!tab.active && tab.windowId===source.windowId && new URL(source.url).origin===P.TRIAL_ORIGIN)
       initialVisible=(await chrome.tabs.query({active:true,windowId:tab.windowId}))[0]||null;
@@ -36,8 +36,10 @@ async function registryMessage(job, message) {
             || new URL(tab.url).origin!==registryOrigin('NV')
             || !new URL(tab.url).pathname.startsWith('/portal/public/')) return;
         previousVisible={id:initialVisible.id,windowId:initialVisible.windowId};
+        job.nvVisibilityAttempted=true;job.nvPreviousVisible=previousVisible;
         diagnostic('nv-visibility',job,'same-document visibility recovery');
         await chrome.tabs.update(tab.id,{active:true});
+        await saveRuntime();
       } catch { /* Source navigation or closure cancels visibility recovery. */ }
     })();
   },Math.min(3000,Math.max(1,job.activeExpiresAt-Date.now())));
@@ -49,14 +51,24 @@ async function registryMessage(job, message) {
   } finally {
     settled=true;clearTimeout(timer);clearTimeout(visibilityTimer);
     if (visibilityPending) await visibilityPending;
-    if (previousVisible) try {
-      const tab=await chrome.tabs.get(job.tab), prior=await chrome.tabs.get(previousVisible.id);
-      if (owned.has(job.tab) && tab.active && tab.windowId===previousVisible.windowId
-          && prior.windowId===tab.windowId && new URL(tab.url).origin===registryOrigin('NV')
-          && new URL(tab.url).pathname.startsWith('/portal/public/'))
-        await chrome.tabs.update(prior.id,{active:true});
-    } catch { /* Preserve a user switch, moved tab, or closure. */ }
+    // Keep hydration visible through this state's continuation. Restoring
+    // after every command reintroduced hidden-page stalls and paid the same
+    // recovery delay repeatedly. Completion/cancellation restores the caller;
+    // a user switch is never reversed or followed by another activation.
+    if (job.closed || Date.now()>=job.activeExpiresAt) await registryRestoreNevadaVisibility(job);
   }
+}
+async function registryRestoreNevadaVisibility(job) {
+  const previous=job.nvPreviousVisible;job.nvPreviousVisible=null;
+  if (!P.TRIAL_ORIGIN || job.registryState!=='NV' || !previous || !owned.has(job.tab)) return;
+  try {
+    const tab=await chrome.tabs.get(job.tab),prior=await chrome.tabs.get(previous.id);
+    const source=await chrome.tabs.get(job.sender.tab.id);
+    if (tab.active && tab.windowId===previous.windowId && prior.windowId===tab.windowId
+        && source.windowId===tab.windowId && new URL(source.url).origin===P.TRIAL_ORIGIN
+        && new URL(tab.url).origin===registryOrigin('NV') && new URL(tab.url).pathname.startsWith('/portal/public/'))
+      await chrome.tabs.update(prior.id,{active:true});
+  } catch { /* Preserve a user switch, moved tab, or closure. */ }
 }
 async function registryReady(job, oldDocument = null, path = null, budgetMs = 45000, ncSubmittedQuery = null, nvRouteOnly = false) {
   if (nvRouteOnly && (job.registryState!=='NV' || oldDocument!==null

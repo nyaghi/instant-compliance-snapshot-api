@@ -80,7 +80,7 @@ test('AL image and answer are omitted from saved worker command and result state
  const worker=fs.readFileSync(path.join(root,'browser-connector/worker.js'),'utf8');
  const expression=worker.match(/const runtimeState = \(\) => ([^\n]+);/)[1];
  const active={lookupId:'fixture',registryState:'AL',sender:{tab:{id:1}},command:{query:{verification:{code:'PRIVATE'}}},lastResponse:{verification_image:'PRIVATE'}};
- const result=vm.runInNewContext(expression,{nextStart:0,laneStarts:new Map(),owned:new Set(),diagnostics:[],allJobs:()=>[active],isActive:j=>j===active});
+ const result=vm.runInNewContext(expression,{P:{TRIAL_ORIGIN:'https://fixture.onrender.com'},nextStart:0,laneStarts:new Map(),owned:new Set(),diagnostics:[],allJobs:()=>[active],isActive:j=>j===active});
  assert.equal(result.queue[0].command,null);assert.equal(result.queue[0].lastResponse,null);
  assert.ok(!JSON.stringify(result).includes('PRIVATE'));
 });
