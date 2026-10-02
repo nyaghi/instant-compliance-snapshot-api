@@ -12368,7 +12368,89 @@ def lab_mi_patient_transport_enabled() -> bool:
             and LAB_LOOKUP_MODE_CONTEXT.get() == "sales")
 
 
-def mi_name_http_empty_queries(session, org, headers, lookup_deadline):
+def mi_http_complete_unmatched_grid(source, org, count):
+    """Reuse exhaustive public rows only when every legal/alias name fails the master matcher."""
+    from html.parser import HTMLParser
+    if not isinstance(count, int) or not 0 < count <= 100:
+        return False
+    class Grid(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.depth=0; self.grids=0; self.row=None; self.rows=[]; self.bad=False
+            self.capture=None; self.header=False; self.headers=[]
+        def handle_starttag(self, tag, attrs):
+            a=dict(attrs)
+            if tag=='table':
+                if a.get('id')=='ctl00_MainContent_GridView1':
+                    self.grids+=1
+                    if self.depth: self.bad=True
+                    self.depth=1
+                elif self.depth: self.depth+=1
+            if not self.depth: return
+            if tag in {'script','iframe'}: self.bad=True
+            if tag=='tr' and self.depth==1:
+                if self.row is not None: self.bad=True
+                if a.get('class') in {'RowStyle','AlternatingRowStyle'}:
+                    self.row={'names':[], 'anchors':[], 'files':[], 'alias_tables':0, 'alias_rows':0, 'alias_cells':0, 'alias_headers':[]}
+                elif a.get('class')!='HeaderStyle': self.bad=True
+            if tag=='th' and self.depth==1:
+                self.header=True;self.capture=['header',[]]
+            if tag=='br' and self.capture: self.capture[1].append(' ')
+            if self.row is None: return
+            if tag=='table' and self.depth==2:
+                self.row['alias_tables']+=1
+                if not re.fullmatch(r'ctl00_MainContent_GridView1_ctl\d+_gvNames',a.get('id','')): self.bad=True
+            if self.depth>2: self.bad=True
+            if tag=='tr' and self.depth==2: self.row['alias_rows']+=1
+            if tag=='th' and self.depth==2: self.capture=['alias_header',[]]
+            if tag=='a' and re.fullmatch(r'ctl00_MainContent_GridView1_ctl\d+_btnOrgName',a.get('id','')):
+                if not re.fullmatch(r"javascript:__doPostBack\('ctl00\$MainContent\$GridView1\$ctl\d+\$btnOrgName',''\)",a.get('href','')):
+                    self.bad=True
+                self.row['anchors'].append(a['id']); self.capture=['name',[]]
+            elif tag=='td' and self.depth==2 and a.get('class')=='name':
+                self.row['alias_cells']+=1;self.capture=['alias',[]]
+            elif tag=='span' and self.depth==1 and re.fullmatch(r'ctl00_MainContent_GridView1_ctl\d+_lblFileNo',a.get('id','')):
+                self.capture=['file',[]]
+        def handle_data(self, data):
+            if self.capture: self.capture[1].append(data)
+        def handle_endtag(self, tag):
+            if not self.depth: return
+            if self.capture and ((self.capture[0] in {'header','alias_header'} and tag=='th') or (self.capture[0]=='name' and tag=='a')
+                    or (self.capture[0]=='alias' and tag=='td') or (self.capture[0]=='file' and tag=='span')):
+                kind,parts=self.capture;value=re.sub(r'\s+',' ',''.join(parts)).strip();self.capture=None
+                if not value and kind!='alias_header': self.bad=True
+                if kind=='header': self.headers.append(value)
+                elif self.row is None: self.bad=True
+                elif kind=='alias_header': self.row['alias_headers'].append(value)
+                elif kind=='file': self.row['files'].append(value)
+                else: self.row['names'].append(value)
+            if tag=='tr' and self.depth==1 and self.row is not None:
+                self.rows.append(self.row);self.row=None
+            if tag=='table': self.depth-=1
+    try:
+        grid=Grid();grid.feed(source);grid.close()
+        if (grid.bad or grid.depth or grid.row is not None or grid.capture or grid.grids!=1
+                or grid.headers!=['AG File#','Legal Name / Address','License / Registration Expiration']
+                or len(grid.rows)!=count): return False
+        targets=organization_match_target_variants(org.organization_name,org.ein)
+        seen=set()
+        for row in grid.rows:
+            if (len(row['anchors'])!=1 or len(row['files'])!=1 or not row['files'][0].isdigit() or not row['names']
+                    or row['alias_tables']!=1 or row['alias_headers']!=['','Name','Type']
+                    or row['alias_cells']<1 or row['alias_cells']!=row['alias_rows']-1):
+                return False
+            if row['files'][0] in seen: return False
+            seen.add(row['files'][0])
+            # Alias tables can hold the requested former/DBA name even when
+            # the displayed legal name differs. Never discard that record.
+            if any(mi_name_fallback_candidate_is_safe(name,org.organization_name,org.ein,targets) for name in row['names']):
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def mi_name_http_empty_queries(session, org, headers, lookup_deadline, *, unmatched_queries=None):
     """Complete the same name queries in this already accepted public session.
 
     Only a full, exact-query-echoed zero result is reused. Any positive,
@@ -12426,17 +12508,25 @@ def mi_name_http_empty_queries(session, org, headers, lookup_deadline):
                 "ctl00$MainContent$txtEIN":"", "ctl00$MainContent$txtCity":"",
                 "ctl00$MainContent$txtCounty":"", "ctl00$MainContent$txtState":"",
                 "ctl00$MainContent$btnTextSearch":"Search", "ctl00$MainContent$txtFileNo":""})
-            body=sc_html_to_text(read("POST", fields))
+            source=read("POST", fields)
+            body=sc_html_to_text(source)
             compact=re.sub(r"\s+", " ", body).strip()
             echoes=re.findall(r"Name Includes:\s*(.*?)\s*\(All words\);", compact, re.I)
             normalize=lambda value:re.sub(r"\s+", " ", value).strip().casefold()
             counts=re.findall(r"\b(\d+)\s+record\(s\)\s+found\b",compact,re.I)
             if (echoes != [query] and [normalize(v) for v in echoes] != [normalize(query)]):
                 break
-            if (counts != ["0"] or "No records found for your search criteria" not in compact
-                    or "Results for the following input:" not in compact
+            if (len(counts)!=1 or "Results for the following input:" not in compact
                     or "Organization Type: Charity or Public Safety Organization" not in compact
                     or re.search(r"(?:Federal\s+EIN|FEIN|EIN)\s*:|verify you are human|captcha|access denied|maintenance|too many requests",compact,re.I)):
+                break
+            if counts!=["0"]:
+                if (unmatched_queries is not None and trial_identity()
+                        and mi_http_complete_unmatched_grid(source, org, int(counts[0]))):
+                    unmatched_queries.append(query)
+                    continue
+                break
+            if "No records found for your search criteria" not in compact:
                 break
             completed.append(query)
     except Exception:
@@ -12473,10 +12563,14 @@ def search_mi_name_fallback(page, org):
     if not isinstance(progress, dict) or progress.get("identity") != identity:
         progress = {}
     completed_empty_queries = list(progress.get("completed_empty_name_queries", []))
+    completed_unmatched_queries = set(progress.get("http_completed_unmatched_name_queries", [])) if trial_identity() else set()
     result.source_attempts.extend(f"Completed Michigan name query via the same-session public form: {query}"
                                  for query in progress.get("http_completed_empty_name_queries", []))
     opened_session = False
     for variant in variants[:4]:
+        if variant in completed_unmatched_queries:
+            result.source_attempts.append(f"Reused complete Michigan name query: {variant}; every legal and alias name was checked with no qualifying candidate")
+            continue
         query_tokens = set(variant.casefold().split())
         covered = next((query for query in completed_empty_queries
                         if set(query.casefold().split()).issubset(query_tokens)
@@ -12728,7 +12822,12 @@ def search_mi_http_completion_probe(org, lookup_deadline=None):
             submitted_text = sc_html_to_text(submitted.text or "")
             if (mi_http_names_enabled(org) and lookup_deadline is not None
                     and re.search(r"\b0\s+record\(s\)\s+found\b|\bno\s+records?\s+found\b|\bno\s+results?\s+found\b", submitted_text, re.I)):
-                result._cc_mi_completed_empty_names = mi_name_http_empty_queries(session, org, headers, lookup_deadline)
+                if trial_identity():
+                    unmatched=[]
+                    result._cc_mi_completed_empty_names = mi_name_http_empty_queries(session, org, headers, lookup_deadline, unmatched_queries=unmatched)
+                    result._cc_mi_completed_unmatched_names = unmatched
+                else:
+                    result._cc_mi_completed_empty_names = mi_name_http_empty_queries(session, org, headers, lookup_deadline)
             break
         except Exception as exc:
             last_exception = exc
@@ -31116,6 +31215,10 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                         progress["http_completed_empty_name_queries"] = list(completed_names)
                         progress["completed_empty_name_queries"] = list(dict.fromkeys([
                             *progress.get("completed_empty_name_queries", []), *completed_names]))
+                    completed_unmatched = getattr(mi_probe_result, "_cc_mi_completed_unmatched_names", [])
+                    if trial_identity() and completed_unmatched:
+                        progress["identity"] = (org.organization_name, canonical_ein_digits(org.ein))
+                        progress["http_completed_unmatched_name_queries"] = list(completed_unmatched)
                     page._cc_mi_search_progress = progress
                     result = search_mi_name_fallback(page, org)
                 if (

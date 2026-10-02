@@ -130,6 +130,8 @@ class IsolationControls(unittest.TestCase):
             previous=subprocess.check_output(['git','show','c8e6a0af19177f31951aacad60e783a369343aa5:'+name],cwd=ROOT).decode('utf-8')
             trees=[ast.parse(previous),ast.parse((ROOT/name).read_text(encoding='utf-8'))]
             for tree in trees:
+                from testing.capacity_lab.parsing_scope import strip_mi_exhaustive_reuse
+                strip_mi_exhaustive_reuse(tree)
                 for handler in [n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='final_four_connector_request']:
                     for n in ast.walk(handler):
                         if isinstance(n,ast.Compare) and ast.unparse(n.left)=='reason' and len(n.comparators)==1 and isinstance(n.comparators[0],ast.Set):

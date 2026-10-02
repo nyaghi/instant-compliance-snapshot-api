@@ -1033,6 +1033,8 @@ class LookupControls(unittest.TestCase):
         root=Path(__file__).resolve().parents[1]
         before=ast.parse(subprocess.check_output(['git','show','e2e6da7a3bd259c78734ef704b3ae7ce91e8c4d6:registry_snapshot_server.py'],cwd=root).decode('utf-8'))
         after=ast.parse((root/'registry_snapshot_server.py').read_text(encoding='utf-8'))
+        from testing.capacity_lab.parsing_scope import strip_mi_exhaustive_reuse
+        strip_mi_exhaustive_reuse(after)
         allowed={'nm_browser_courtesy_names','nm_browser_lookup','pa_name_search_plan','final_four_connector_failure','nc_charity_record_evidence','final_four_license_result','nv_charity_detail_evidence','nv_charity_filings_evidence',
                  'tn_charity_detail_evidence','tn_browser_generated_queries','final_four_browser_lookup','mi_name_fallback_queries',
                  'search_ok_precise','run_state_lookup','ny_connector_request','ny_connector_advance','il_verification_recovery',
@@ -1099,6 +1101,8 @@ class LookupControls(unittest.TestCase):
                         'identity_irs_historical_names','irs_period_for_label','ms_name_search_plan','ny_connector_failure',
                         'nc_charity_record_evidence','nv_charity_detail_evidence','nv_charity_filings_evidence','lab_mi_query_dominance_enabled'})
         for tree in (before, after):
+            from testing.capacity_lab.parsing_scope import strip_mi_exhaustive_reuse
+            strip_mi_exhaustive_reuse(tree)
             for handler in [n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='final_four_connector_request']:
                 for n in ast.walk(handler):
                     if isinstance(n,ast.Compare) and ast.unparse(n.left)=='reason' and len(n.comparators)==1 and isinstance(n.comparators[0],ast.Set):

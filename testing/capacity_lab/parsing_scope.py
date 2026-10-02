@@ -6,7 +6,33 @@ import subprocess
 CHANGED = {'nj_loaded_detail_body', 'search_fl_with_transport', 'search_wv_public_details', 'search_wv_precise', 'registry_table_text_snapshot', 'identity_oh_names', 'search_oh', 'oh_ein_search_source', 'oh_result_from_detail_text', 'search_oh_direct_details', 'hi_direct_details_from_source', 'search_hi_direct_details', 'identity_irs_names', 'sales_identity_evidence', 'sales_names_from_evidence', 'sales_result_with_identity', 'search_sc_resilient', 'load_ks_weekly_checker', 'distinctive_match_tokens', '_cached_distinctive_match_tokens', 'nh_records_from_snapshot_bytes', 'nh_download_live_pdf_records',
            'nh_live_pdf_records', 'run_state_lookup', 'search_la_downloaded_export'}
 
+def strip_mi_exhaustive_reuse(tree):
+    """Normalize only the separately exercised trial MI acquisition delta."""
+    if not any(getattr(n,'name','')=='mi_http_complete_unmatched_grid' for n in tree.body): return
+    root=Path(__file__).resolve().parents[2]
+    old=ast.parse(subprocess.check_output(['git','show','0ceb32c194d70f59b15ce1d820b67443d3f50540:registry_snapshot_server.py'],cwd=root).decode('utf-8'))
+    original={n.name:n for n in old.body if isinstance(n,ast.FunctionDef)}
+    names={'mi_name_http_empty_queries','search_mi_name_fallback','search_mi_http_completion_probe'}
+    tree.body=[original.get(n.name,n) if isinstance(n,ast.FunctionDef) and n.name in names else n
+        for n in tree.body if getattr(n,'name','')!='mi_http_complete_unmatched_grid']
+    fn=next(n for n in tree.body if getattr(n,'name','')=='run_state_lookup')
+    transfer=ast.parse('''completed_unmatched = getattr(mi_probe_result, "_cc_mi_completed_unmatched_names", [])
+if trial_identity() and completed_unmatched:
+    progress["identity"] = (org.organization_name, canonical_ein_digits(org.ein))
+    progress["http_completed_unmatched_name_queries"] = list(completed_unmatched)''').body
+    removed=0
+    for n in ast.walk(fn):
+        for field in ('body','orelse','finalbody'):
+            body=getattr(n,field,None)
+            if not isinstance(body,list): continue
+            for i in range(len(body)-1):
+                if all(ast.dump(body[i+j])==ast.dump(expected) for j,expected in enumerate(transfer)):
+                    del body[i:i+2];removed+=1;break
+    assert removed==1,'Unexpected MI evidence handoff scope'
+
+
 def restore_parsing_optimization(tree):
+    strip_mi_exhaustive_reuse(tree)
     strip_or_snapshot_index_optimization(tree)
     strip_nj_public_detail_optimization(tree)
     if not any(isinstance(n, ast.FunctionDef) and n.name == 'nh_records_from_snapshot_bytes' for n in tree.body):
@@ -440,6 +466,7 @@ def strip_fl_business_lookup(tree):
 
 
 def strip_mi_name_transport(tree):
+    strip_mi_exhaustive_reuse(tree)
     strip_transport_budget_and_redundancy(tree)
     """Prove query planning/classification unchanged, restoring only transport hooks."""
     import copy

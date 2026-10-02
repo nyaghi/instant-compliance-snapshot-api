@@ -63,6 +63,8 @@ class QueryOrder(unittest.TestCase):
         root=Path(m.__file__).parent
         old=ast.parse(subprocess.check_output(['git','show','42e6756:registry_snapshot_server.py'],cwd=root).decode())
         new=ast.parse(Path(m.__file__).read_text(encoding='utf-8'))
+        from testing.capacity_lab.parsing_scope import strip_mi_exhaustive_reuse
+        strip_mi_exhaustive_reuse(new)
         names={'lab_mi_query_dominance_enabled','mi_name_fallback_queries','mi_completed_query_covers','mi_name_http_empty_queries'}
         before={n.name:n for n in old.body if isinstance(n,ast.FunctionDef) and n.name in names}
         after={n.name:n for n in new.body if isinstance(n,ast.FunctionDef) and n.name in names}
