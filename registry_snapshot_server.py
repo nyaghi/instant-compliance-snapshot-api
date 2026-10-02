@@ -6574,6 +6574,8 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
         planned = required + generated
         generated = [name for name in generated if not any(
             other != name and name.startswith(other) for other in planned)]
+    if state == "TN":
+        generated = tn_browser_generated_queries(required, generated)
     records, seen = [], set()
     unreviewed_scope = False
     missing_nv_business_id = False
@@ -6598,6 +6600,12 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
         # prefix. Keep every reviewed name and all case/punctuation changes;
         # failed or truncated source responses can never establish coverage.
         if state in {"NC", "NV"} and index >= len(required) and any(name.startswith(prior) for prior in completed_searches):
+            continue
+        if state == "TN" and index >= len(required) and any(
+                prior.casefold() in name.casefold() for prior in completed_searches):
+            # The observed Tennessee Charity Name filter is case-insensitive
+            # literal Contains. Only a fully collected prior result set covers
+            # a generated longer spelling; all reviewed names remain required.
             continue
         query = {"state": state, "operation": "search", "name": name}
         if state == "NV":
@@ -7363,6 +7371,22 @@ def licensed_primary_positive_complete(org, selected, records, *, unreviewed_sco
             and len(distinctive_match_tokens(org.organization_name)) >= 2
             and selected.get("match", {}).get("decision") == "accepted"
             and selected.get("address_evidence", {}).get("decision") not in {"conflict", "different_ein"})
+
+
+def tn_browser_generated_queries(required, generated):
+    """Bound speculative TN fallbacks, retaining every reviewed name.
+
+    October 2 public controls: McDonald includes ATLANTA RONALD MCDONALD...
+    and mcdonald charities returns no rows, confirming literal Contains rather
+    than separate-word matching. Short covering probes run before redundant
+    longer probes, but the caller requires complete pagination before reuse.
+    A multi-signal legal name must not expand into an unrelated single word
+    such as Family. Reviewed single-word aliases and the punctuation/suffix
+    fallbacks of short legal names are preserved; identity/status are unchanged.
+    """
+    short_reviewed = any(len(distinctive_match_tokens(name)) < 2 for name in required)
+    return sorted((name for name in generated
+                   if short_reviewed or len(distinctive_match_tokens(name)) >= 2), key=len)
 
 
 def il_browser_name_queries(required, generated):

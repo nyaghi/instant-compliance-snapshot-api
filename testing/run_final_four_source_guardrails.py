@@ -604,6 +604,82 @@ class LookupControls(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     cc.final_four_browser_lookup(self.orgs['NC'],'NC',lambda q:{'state':'NC','query':q,'complete':True,'verification_pending':False,'rows':[],'total':0,**changed})
 
+    def test_tn_completed_contains_coverage_preserves_reviewed_names(self):
+        calls=[]
+        def empty(q):
+            calls.append(q['name'])
+            return {'state':'TN','query':q,'complete':True,'verification_pending':False,'rows':[],'total':0}
+        with patch.object(cc,'licensed_charity_names',return_value=(
+                ['Reviewed Legal Name','RMHC','Reviewed Alias'],
+                ['RONALD MCDONALD HOUSE','Ronald','MCDONALD, RONALD HOUSE','Unrelated Two Words'])):
+            result=cc.final_four_browser_lookup(self.orgs['TN'],'TN',empty)
+        self.assertEqual(result.status,'Not Registered')
+        self.assertEqual(calls,['Reviewed Legal Name','RMHC','Reviewed Alias','Ronald','Unrelated Two Words'])
+
+    def test_tn_speculative_single_word_does_not_break_confirmed_adverse_record(self):
+        org=cc.checker.Organization('Focus on the Family','95-3188150')
+        row={**TN_ROW,'name':org.organization_name,'identifier':'CO3734'}
+        fields={**TN,'Name':org.organization_name,'CO Number':'CO3734','Status':'Active',
+                'Expiration Date':'','financial_periods':['12/31/2015'],'financial_count':1}
+        calls=[]
+        def source(q):
+            if q['operation']=='detail':return {'query':q,'complete':True,'fields':fields}
+            calls.append(q['name'])
+            if q['name']=='Family':raise ValueError('Broad Family response exceeded pagination bound')
+            return {'state':'TN','query':q,'complete':True,'verification_pending':False,
+                    'rows':[row] if q['name']==org.organization_name else [],
+                    'total':1 if q['name']==org.organization_name else 0}
+        with patch.object(cc,'licensed_charity_names',return_value=(
+                [org.organization_name],['FOCUS-ON THE FAMILY','focus family','Family'])), \
+             patch.object(cc,'licensed_charity_identity',return_value='accepted'):
+            result=cc.final_four_browser_lookup(org,'TN',source)
+        self.assertEqual(result.status,'Delinquent');self.assertTrue(result.success)
+        self.assertEqual(result.matched_registry_identifier,'CO3734')
+        self.assertNotIn('Family',calls)
+
+    def test_tn_reviewed_single_word_and_short_legal_fallback_remain_required(self):
+        for required,generated in [(['Reviewed Legal Name','Family'],['Other Name']),
+                                   (['ELI'],['E L I','Institute'])]:
+            calls=[]
+            def source(q):
+                calls.append(q['name'])
+                return {'state':'TN','query':q,'complete':True,'verification_pending':False,'rows':[],'total':0}
+            with patch.object(cc,'licensed_charity_names',return_value=(required,generated)):
+                cc.final_four_browser_lookup(self.orgs['TN'],'TN',source)
+            self.assertEqual(set(calls),set(required+generated))
+
+    def test_tn_failed_covering_search_never_establishes_absence(self):
+        for changed in [{'complete':False},{'total':1},{'verification_pending':True}]:
+            with patch.object(cc,'licensed_charity_names',return_value=(['RMHC'],['Ronald House','Ronald'])):
+                def source(q):
+                    return {'state':'TN','query':q,'complete':True,'verification_pending':False,'rows':[],'total':0,
+                            **(changed if q['name']=='Ronald' else {})}
+                with self.assertRaises(ValueError):cc.final_four_browser_lookup(self.orgs['TN'],'TN',source)
+
+    def test_tn_adverse_primary_still_checks_newer_reviewed_alias(self):
+        org=cc.checker.Organization('Earlier Charity Name','81-0421425')
+        cc.REVIEWED_NAME_CONTEXT.set({'810421425':['New Charity Name']})
+        calls=[]
+        def source(q):
+            if q['operation']=='search':
+                calls.append(q['name'])
+                identifier='CO100' if q['name']==org.organization_name else 'CO101'
+                return {'state':'TN','query':q,'complete':True,'verification_pending':False,'total':1,
+                        'rows':[{**TN_ROW,'name':q['name'],'identifier':identifier,'aliases':[org.organization_name]}]}
+            old=q['identifier']=='CO100'
+            return {'query':q,'complete':True,'fields':{**TN,'Name':org.organization_name if old else 'New Charity Name',
+                    'CO Number':q['identifier'],'Status':'Expired' if old else 'Active',
+                    'Expiration Date':'06/30/2025' if old else '11/27/2026'}}
+        def confirmed(org,row,state,deadline):
+            row['address_evidence']={'decision':'corroborated','basis':'Test fixture exact EIN-linked full office'}
+            return 'accepted'
+        with patch.object(cc,'licensed_charity_names',return_value=([org.organization_name,'New Charity Name'],[])), \
+             patch.object(cc,'licensed_charity_identity',side_effect=confirmed):
+            result=cc.final_four_browser_lookup(org,'TN',source)
+        self.assertEqual(calls,[org.organization_name,'New Charity Name'])
+        self.assertEqual(result.matched_registry_identifier,'CO101')
+        self.assertIn(result.status,['Current','Upcoming Filing'])
+
     def test_nv_exact_match_never_covers_a_longer_alias_or_suffix_variant(self):
         calls=[]
         def source(q):
@@ -775,9 +851,10 @@ class LookupControls(unittest.TestCase):
             required, generated = cc.licensed_charity_names(org)
             searched = [q['name'] for q in calls]
             self.assertEqual(searched[:len(required)], required)
-            for name in generated:
-                self.assertTrue(any(name.startswith(query) for query in searched), name)
-            if state not in {'NC','NV'}:
+            for name in cc.tn_browser_generated_queries(required,generated) if state=='TN' else generated:
+                self.assertTrue(any(query.casefold() in name.casefold() if state=='TN' else name.startswith(query)
+                                    for query in searched), name)
+            if state not in {'NC','NV','TN'}:
                 self.assertEqual(searched, required + generated)
 
     def test_tn_completed_directory_does_not_infer_statutory_exemption(self):
@@ -868,7 +945,7 @@ class LookupControls(unittest.TestCase):
         before=ast.parse(subprocess.check_output(['git','show','e2e6da7a3bd259c78734ef704b3ae7ce91e8c4d6:registry_snapshot_server.py'],cwd=root).decode('utf-8'))
         after=ast.parse((root/'registry_snapshot_server.py').read_text(encoding='utf-8'))
         allowed={'nc_charity_record_evidence','final_four_license_result','nv_charity_detail_evidence',
-                 'tn_charity_detail_evidence','final_four_browser_lookup','mi_name_fallback_queries',
+                 'tn_charity_detail_evidence','tn_browser_generated_queries','final_four_browser_lookup','mi_name_fallback_queries',
                  'search_ok_precise','run_state_lookup','ny_connector_request','ny_connector_advance','il_verification_recovery',
                  'nm_browser_clean_evidence','nm_browser_lookup','final_four_clean_evidence','final_four_compact_search_evidence','final_four_search_candidate_scores',
                  'final_four_connector_advance','final_four_connector_request','final_four_connector_failure'}

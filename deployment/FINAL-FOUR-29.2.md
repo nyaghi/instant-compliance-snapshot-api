@@ -965,3 +965,30 @@ filing history; complete nonempty history still bypasses unrelated loading.
 The original command and Sales deadlines, identity binding and stale-table
 rejection remain unchanged. Both counterexamples fail before the patch and
 pass after it. This fixes collection, without changing status interpretation.
+
+### 29.2AE: bounded Tennessee query coverage
+
+The 29.2AD Focus on the Family Standard trace obtained its profile, then spent
+45 seconds on speculative `Family` pagination and returned inconclusive.
+RMHC's profile was obtained early, but repeated generated spellings exhausted
+the Sales deadline. On October 2 the public Charity Name search for `McDonald`
+returned mixed-case, non-prefix records such as ATLANTA RONALD MCDONALD HOUSE
+CHARITIES (43 results); `mcdonald charities` returned a completed empty grid.
+These controls establish the case-insensitive literal Contains behavior used
+here. The site's generic business-search help was not used as charity evidence.
+
+The master backend retains every reviewed legal name and alias, orders bounded
+generated queries shortest first, and skips a generated query only after a
+fully paginated literal-containing query has already covered it. Failed or
+truncated responses never establish coverage. Multi-signal reviewed names no
+longer expand into speculative single-word fallbacks such as `Family`; short
+reviewed legal names/aliases and their fallbacks remain in the plan. Identity
+acceptance, selected-record status rules, later reviewed records, date evidence,
+and the 60-second Sales deadline are unchanged. Two counterexamples fail before
+the patch; controls also preserve reviewed single-word aliases, incomplete
+coverage, and a newer qualifying record after an adverse primary record.
+
+This is a backend-only revision. The installed, verified 0.6.44 connector
+remains compatible; no new extension reload or permission is required. New York
+live verification and intermittent Tennessee verification remain separate from
+the query-plan correction, and are not claimed resolved by this revision.
