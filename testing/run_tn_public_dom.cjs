@@ -1,7 +1,7 @@
 /* Tennessee collector: public table and modal fixtures, no browser/network. */
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
-const source=fs.readFileSync(path.join(__dirname,'../browser-connector/registry-content.js'),'utf8')
+const source=fs.readFileSync(process.env.CC_TEST_TRIAL_DIR?path.join(process.env.CC_TEST_TRIAL_DIR,'registry-content.js'):path.join(__dirname,'../browser-connector/registry-content.js'),'utf8')
  .replace('  async function handle(m) {','  globalThis.testTN={tnPage,tnFields,tnFinancials,tnSearch,tnDetail};\n  async function handle(m) {');
 const columns=[null,'Id','Id','FileNumber','DisplayName','OtherNames','Status','City','StateName','StateCode','RegistrationDate'];
 const national=['Details','unused summary','2162','CO2559','YWCA USA, INC.',"YOUNG WOMEN'S CHRISTIAN ASSOCIATION OF THE UNITED STATES OF AMERICA, INC.\nYWCA OF THE U.S.A.",'Active','WASHINGTON','DC','DC','5/12/1995'];
@@ -53,7 +53,8 @@ test('completed zero results require the count, zero page, and explicit empty ma
 test('verification/form readiness failure is distinct from no records',async()=>{const f=fixture({ready:false});await assert.rejects(f.search(),/VERIFICATION_OR_FORM_PENDING/);});
 test('late response is not accepted',async()=>{const f=fixture({responseDelay:40000});await assert.rejects(f.search(),/RESPONSE_PENDING/);});
 test('the next alias waits for the prior detail modal to finish closing',async()=>{const f=fixture({closedInitially:false,closeDelay:350});assert.equal((await f.search()).total,2);});
-test('a modal that never closes cannot submit or accept a new search',async()=>{const f=fixture({closedInitially:false,closeDelay:5000});await assert.rejects(f.search(),/RESPONSE_INCOMPLETE/);});
+test('a normal delayed modal close can complete inside the original command budget',async()=>{const f=fixture({closedInitially:false,closeDelay:5000});assert.equal((await f.search()).total,2);});
+test('a modal that never closes cannot submit or accept a new search',async()=>{const f=fixture({closedInitially:false,closeDelay:50000});await assert.rejects(f.search(),/DETAIL_CLOSE_PENDING/);});
 test('duplicate CO identifiers make the result set incomplete',async()=>{const f=fixture({rows:[national,national]});await assert.rejects(f.search(),/PAGINATION_INCOMPLETE/);});
 test('detail selects the requested national CO record, not the first local chapter',async()=>{const f=fixture();await f.search();const r=await f.detail();assert.deepEqual(f.opened,['CO2559']);assert.equal(r.fields.Address,'1400 I STREET NW, SUITE 540 WASHINGTON DC 20005');assert.equal(r.fields['Expiration Date'],'12/31/2026');assert.equal(r.fields.financial_count,2);assert.equal(r.fields.financial_periods[1],'06/30/2025');assert.ok(!JSON.stringify(r).includes('ERIC ROSENBERG'));assert.ok(!JSON.stringify(r).includes('$12,345'));});
 test('wrong CO detail is not completed evidence',async()=>{const f=fixture({detailId:'CO999'});await f.search();await assert.rejects(f.detail(),/RESPONSE_INCOMPLETE/);});

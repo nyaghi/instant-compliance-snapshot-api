@@ -60,7 +60,7 @@ for(const succeeds of [true,false])test(`trial NY open-page recovery preserves u
     {ok:false,reason:'NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED',verificationRetryUsed:true};
  };
  const p=h.connect();const result=await h.query(p,11);
- assert.equal(result.ok,succeeds);if(!succeeds)assert.equal(result.reason,'NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED');
+ assert.equal(result.ok,succeeds);if(!succeeds)assert.equal(result.reason,'NY_CONNECTOR_RECOVERY_PAGE_OPEN');
  assert.equal(calls,2);assert.deepEqual(h.created,[100,101]);
  assert.deepEqual(attempts,[{tab:100,retryUsed:false},{tab:101,retryUsed:true}]);
  assert.equal(h.tabs.get(2).url,'https://charities-search.ag.ny.gov/RegistrySearch/16-40-81');

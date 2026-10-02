@@ -678,7 +678,41 @@
     if (!link || text(link) !== target.name) throw new Error("REGISTRY_NV_DETAIL_NOT_OBSERVED");
     const reservation=/^(?:NR|C)\d{8}-\d+$/.test(query.identifier)&&target.entity_type==='';
     nvTrace('detail-row-confirmed',{identifier:query.identifier,page:page.page});
-    const fields = await wait(()=>reservation?nvReservationFields(query.identifier):nvFields(query.identifier),Math.max(1,deadline-Date.now()),{action:()=>{link.click();nvTrace('detail-clicked',{identifier:query.identifier});}});
+    let detailRetry, detailStarted=false;
+    const loading=()=>[...document.querySelectorAll('.app-loader-pane .circle-loader')].some(visible);
+    const detailRoute=()=>!location.hash.includes('screen=external-GenericFilingsSearch&tabRoute=business');
+    const readDetail=()=>{
+      detailStarted ||= loading() || detailRoute();
+      return reservation?nvReservationFields(query.identifier):nvFields(query.identifier);
+    };
+    let fields;
+    try {
+      fields=await wait(readDetail,Math.max(1,deadline-Date.now()),{action:()=>{
+        link.click();nvTrace('detail-clicked',{identifier:query.identifier});
+        // A result row can render before ORION binds its navigation handler.
+        // Retry once only while the original, fully confirmed search remains
+        // unchanged and no detail navigation/loading has started.
+        detailRetry=setTimeout(()=>{
+          if(Date.now()>=deadline || detailStarted || loading() || detailRoute())return;
+          try {
+            const field=s=>document.querySelector(`input[id$="-${s}"]`);
+            if(field('entityName')?.value!==sourceQuery.name || field('entityNumber')?.value!==''
+                || field('nvBusinessId')?.value!=='' || !nvSearchModeSelected(nvLastSearchMode))return;
+            const fresh=nvPage('Search Results',nvSearchHeaders);
+            const exact=fresh.values.map((cells,i)=>({cells,node:fresh.rows[i]}))
+              .filter(row=>row.cells[1]===query.identifier && JSON.stringify(row.cells)===target.signature);
+            if(fresh.page!==target.page || exact.length!==1)return;
+            const retry=exact[0].node.querySelector('[role="gridcell"] a');
+            if(!retry || text(retry)!==target.name)return;
+            retry.click();nvTrace('detail-click-retried',{identifier:query.identifier});
+          } catch { /* Changed/incomplete search cannot authorize another click. */ }
+        },Math.min(3000,Math.max(1,deadline-Date.now())));
+      }});
+    } catch(error) {
+      if(error.message!=='REGISTRY_RESPONSE_INCOMPLETE')throw error;
+      throw new Error(loading()?'REGISTRY_NV_DETAIL_RESPONSE_PENDING'
+        : detailRoute()?'REGISTRY_NV_DETAIL_FIELDS_INCOMPLETE':'REGISTRY_NV_DETAIL_NAVIGATION_NOT_STARTED');
+    } finally { clearTimeout(detailRetry); }
     nvTrace('detail-returned',{identifier:query.identifier});
     if(reservation) {
       if(fields['Reserved Name']!==target.name)throw new Error('REGISTRY_NV_DETAIL_CHANGED');
@@ -770,7 +804,12 @@
       if (!close) throw new Error('REGISTRY_TN_DETAIL_CHANGED');
       // Kendo closes asynchronously. Do not submit the next alias while its
       // modal is still intercepting the search controls.
-      await wait(()=>!visible(dialog),Math.max(1,Math.min(3000,deadline-Date.now())),{action:()=>close.click()});
+      try {
+        await wait(()=>!visible(dialog),Math.max(1,deadline-Date.now()),{action:()=>close.click()});
+      } catch(error) {
+        if(error.message!=='REGISTRY_RESPONSE_INCOMPLETE')throw error;
+        throw new Error('REGISTRY_TN_DETAIL_CLOSE_PENDING');
+      }
     }
   }
   async function tnSearch(query,deadline) {

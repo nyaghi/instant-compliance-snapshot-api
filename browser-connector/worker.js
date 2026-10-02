@@ -352,6 +352,12 @@ async function performSearch(job, query, id) {
           await recordRecovery(response);
           if (!response.ok && rejected(response.reason)) response.reason = "NY_CONNECTOR_RECOVERY_REJECTED";
         }
+        if (repaired && job.nyFreshPageRecoveryOnly && !response.ok && rejected(response.reason)) {
+          // The fresh owned form did not resolve the rejection, and another
+          // NY page still prevents the origin-scoped refresh. Preserve that
+          // actionable cause instead of hiding it behind a generic 401.
+          response.reason = "NY_CONNECTOR_RECOVERY_PAGE_OPEN";
+        }
         break;
       } catch (error) {
         if (error.message === "NY_CONNECTOR_DETAIL_RESPONSE_TIMEOUT" && Object.hasOwn(query, "orgID") && !job.detailRetryUsed && job.activeExpiresAt - Date.now() > 45000) {
