@@ -45,7 +45,14 @@ test('trial stage diagnostics preserve results and export public fields only',{s
   assert.equal(run.stages.filter(s=>s.stage==='master response'&&s.action==='advance').length,2);
   const exported=JSON.stringify(run.stages);
   for(const secret of ['MUST-NOT-EXPORT','test-only','test@example.invalid','check_token','private_field'])assert.ok(!exported.includes(secret),secret);
-  assert.equal((await exercise({state:'GA',commands:1})).stages.length,0);
+  for(const state of ['NY','IL','GA']){
+    const mature=await exercise({state,commands:1});assert.ifError(mature.error);
+    assert.equal(mature.result.status,'Delinquent');assert.equal(mature.advance,1);
+    assert.equal(mature.stages.filter(s=>s.stage==='browser query returned').length,1);
+    const publicStages=JSON.stringify(mature.stages);
+    for(const secret of ['MUST-NOT-EXPORT','test-only','test@example.invalid','check_token','private_field'])assert.ok(!publicStages.includes(secret),state+': '+secret);
+    assert.equal(mature.stages.find(s=>s.stage==='browser query started').query.orgName,'Variant 0');
+  }
 });
 test('GA full reviewed-name search completes beyond both former command caps',async()=>{
   const run=await exercise();assert.ifError(run.error);assert.equal(run.advance,42);assert.equal(run.result.status,'Delinquent');assert.ok(run.actions.includes('finish'));

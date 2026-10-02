@@ -11,6 +11,21 @@ from testing.run_final_four_source_guardrails import AsOf, TN, TN_ROW, NV, NV_FI
 class Repairs(unittest.TestCase):
     def setUp(self):
         p=patch.object(cc,'date',AsOf);p.start();self.addCleanup(p.stop)
+    def test_trial_ny_detail_failures_keep_the_actual_step_and_reason(self):
+        record={'organization_name':'Example Charity','ein':'12-3456789','state':'NY','connector_version':'0.6.41'}
+        for code in ('NY_CONNECTOR_DETAIL_UNAUTHORIZED','NY_CONNECTOR_DETAIL_FORBIDDEN',
+                     'NY_CONNECTOR_DETAIL_SERVER_ERROR','NY_CONNECTOR_DETAIL_HTTP_ERROR',
+                     'NY_CONNECTOR_DETAIL_SCHEMA_INVALID'):
+            with patch.object(cc,'trial_identity',return_value={'origin':'isolated'}):
+                result=cc.ny_connector_failure(record,code)
+            self.assertEqual(result['status_reason'],code)
+            self.assertEqual(result['status'],'Unable to Confirm')
+            self.assertFalse(result['success'])
+            self.assertIn('detail',result['comments'])
+            with patch.object(cc,'trial_identity',return_value=None):
+                self.assertEqual(cc.ny_connector_failure(record,code)['status_reason'],'NY_CONNECTOR_INCOMPLETE')
+        with patch.object(cc,'trial_identity',return_value={'origin':'isolated'}):
+            self.assertEqual(cc.ny_connector_failure(record,'untrusted arbitrary text')['status_reason'],'NY_CONNECTOR_INCOMPLETE')
     def test_signed_current_trial_ny_search_continues_to_browser_detail(self):
         from testing import run_ny_connector_guardrails as base
         legacy=base.ConnectorTests();legacy.setUp();self.addCleanup(legacy.doCleanups)

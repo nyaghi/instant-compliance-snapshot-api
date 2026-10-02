@@ -151,8 +151,7 @@ def final_four_asset(name, text):
         # Trial-only, public-stage diagnostics. Never emit credentials, signed
         # continuations, source pages, or verification challenge material.
         replace('    async function api(fields, cleanup = false) {', '''    const trace = (stage, query = null, detail = {}) => {
-      if (!finalFour) return;
-      const publicQuery = query ? Object.fromEntries(Object.entries(query).filter(([key]) => ["state","operation","name","identifier"].includes(key))) : null;
+      const publicQuery = query ? Object.fromEntries(Object.entries(query).filter(([key]) => ["state","operation","name","identifier","ein","orgName","orgID","city"].includes(key))) : null;
       onProgress?.(`${label}: ${stage}.`, {state:registryState,stage,query:publicQuery,...detail});
     };
     async function api(fields, cleanup = false) {

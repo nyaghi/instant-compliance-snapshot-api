@@ -23677,6 +23677,14 @@ def ny_connector_failure(record, code):
         "NY_CONNECTOR_DETAIL_LINK_MISSING": "The selected New York record was not available in the completed browser search results. No registration conclusion was drawn.",
         "NY_CONNECTOR_INCOMPLETE": "New York did not provide a complete response for the requested search. Registration status could not be confirmed.",
     }
+    if trial_identity():
+        comments.update({
+            "NY_CONNECTOR_DETAIL_UNAUTHORIZED": "New York rejected the selected organization's detail request (HTTP 401). Registration status remains unconfirmed.",
+            "NY_CONNECTOR_DETAIL_FORBIDDEN": "New York denied access to the selected organization's detail request (HTTP 403). Registration status remains unconfirmed.",
+            "NY_CONNECTOR_DETAIL_SERVER_ERROR": "New York returned a server error for the selected organization's detail request. Registration status remains unconfirmed.",
+            "NY_CONNECTOR_DETAIL_HTTP_ERROR": "New York returned an error response for the selected organization's detail request. Registration status remains unconfirmed.",
+            "NY_CONNECTOR_DETAIL_SCHEMA_INVALID": "New York returned the selected organization's detail, but the public identity or filing fields could not be validated. Registration status remains unconfirmed.",
+        })
     code = code if isinstance(code, str) and code in comments else "NY_CONNECTOR_INCOMPLETE"
     org = checker.Organization(record["organization_name"], record["ein"])
     result = checker.StateResult(org.organization_name, org.ein, "NY", "Unable to Confirm", "https://charities-search.ag.ny.gov/RegistrySearch")

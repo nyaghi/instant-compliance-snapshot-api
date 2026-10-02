@@ -894,6 +894,22 @@ class LookupControls(unittest.TestCase):
         status=next(n for n in after.body if isinstance(n,ast.FunctionDef) and n.name=='identity_review_state_status')
         self.assertEqual({n.value for n in status.body[0].test.comparators[0].elts},{'AL','NC','NV','TN'})
         status.body=status.body[1:]
+        # Trial-only NY diagnostic comments must preserve the mature failure
+        # classifier verbatim; do not exempt this whole shared function.
+        failure=next(n for n in after.body if isinstance(n,ast.FunctionDef) and n.name=='ny_connector_failure')
+        diagnostic=next(n for n in failure.body if isinstance(n,ast.If)
+                        and isinstance(n.test,ast.Call) and isinstance(n.test.func,ast.Name)
+                        and n.test.func.id=='trial_identity')
+        self.assertFalse(diagnostic.orelse)
+        self.assertEqual(len(diagnostic.body),1)
+        call=diagnostic.body[0].value
+        self.assertEqual(ast.unparse(call.func),'comments.update')
+        self.assertEqual({key.value for key in call.args[0].keys},{
+            'NY_CONNECTOR_DETAIL_UNAUTHORIZED','NY_CONNECTOR_DETAIL_FORBIDDEN',
+            'NY_CONNECTOR_DETAIL_SERVER_ERROR','NY_CONNECTOR_DETAIL_HTTP_ERROR',
+            'NY_CONNECTOR_DETAIL_SCHEMA_INVALID'})
+        self.assertTrue(all('remains unconfirmed' in value.value for value in call.args[0].values))
+        failure.body.remove(diagnostic)
         # Version allowlists belong to signed input handlers; all other master
         # statements/functions must stay byte-equivalent as parsed syntax.
         for tree in (before,after):
