@@ -115,6 +115,72 @@ test('NV completed content response clears its worker deadline',async()=>{
  assert.equal(result.ok,true);assert.ok(h.timers.filter(t=>t.ms===300000).every(t=>t.cleared));
 });
 
+async function nvVisibilityFixture({wrongWindow=false,unowned=false}={}) {
+ const origin='https://fixture-final-four.onrender.com',h=harness({trialOrigin:origin});await tick();
+ h.tabs.get(1).url=origin+'/';h.tabs.get(1).active=true;
+ h.tabs.set(3,{id:3,windowId:wrongWindow?99:10,active:false,url:'https://orion.nv.gov/portal/public/#/public/nvsos/en/CaseXscreen?screen=Manage-Business&id=fixture'});
+ if(!unowned)vm.runInContext('owned.add(3)',h.context);
+ h.chrome.tabs.query=async options=>[...h.tabs.values()].filter(t=>t.windowId===options.windowId&&t.active===options.active);
+ const changes=[];
+ h.chrome.tabs.update=async(id,options)=>{
+  changes.push(id);if(options.active)for(const t of h.tabs.values())if(t.windowId===h.tabs.get(id).windowId)t.active=false;
+  return Object.assign(h.tabs.get(id),options);
+ };
+ const job={tab:3,sender:{url:origin,tab:{id:1}},registryState:'NV',activeExpiresAt:70000,closed:false};
+ return {h,job,changes};
+}
+
+test('NV pending detail recovers visibility without resubmission or changing its deadline',async()=>{
+ const {h,job,changes}=await nvVisibilityFixture();let release,calls=0;
+ h.chrome.tabs.sendMessage=async(id,m)=>{calls++;assert.equal(m.query.identifier,'NV20121738342');return new Promise(r=>{release=r;});};
+ const pending=h.context.registryMessage(job,{action:'registry-nv',query:{state:'NV',operation:'detail',identifier:'NV20121738342'},budgetMs:45000});
+ await tick();await h.advance(2999);assert.deepEqual(changes,[]);
+ await h.advance(1);assert.deepEqual(changes,[3]);assert.equal(h.tabs.get(3).active,true);
+ release({ok:true,evidence:{complete:true,identifier:'NV20121738342'}});
+ assert.equal((await pending).ok,true);assert.deepEqual(changes,[3,1]);assert.equal(calls,1);
+ assert.equal(job.activeExpiresAt,70000);assert.ok(h.timers.filter(t=>t.ms===60000).every(t=>t.cleared));
+});
+
+test('NV fast responses do not activate any tab',async()=>{
+ const {h,job,changes}=await nvVisibilityFixture();h.chrome.tabs.sendMessage=async()=>({ok:true});
+ assert.equal((await h.context.registryMessage(job,{action:'registry-nv',budgetMs:45000})).ok,true);
+ await h.advance(4000);assert.deepEqual(changes,[]);
+});
+
+test('NV visibility recovery preserves user switches before and after activation',async()=>{
+ for(const before of [true,false]) {
+  const {h,job,changes}=await nvVisibilityFixture();let release;
+  h.chrome.tabs.sendMessage=()=>new Promise(r=>{release=r;});
+  const pending=h.context.registryMessage(job,{action:'registry-nv',budgetMs:45000});await tick();
+  if(!before)await h.advance(3000);
+  for(const tab of h.tabs.values())if(tab.windowId===10)tab.active=false;
+  h.tabs.set(4,{id:4,windowId:10,active:true,url:'https://example.com/'});
+  if(before)await h.advance(3000);
+  release({ok:true});await pending;
+  assert.deepEqual(changes,before?[]:[3]);assert.equal(h.tabs.get(4).active,true);
+ }
+});
+
+test('NV visibility recovery cannot take unowned or moved tabs or navigate outside its source',async()=>{
+ for(const reason of ['unowned','wrongWindow','sourceChanged','sourceLeft','closed']) {
+  const {h,job,changes}=await nvVisibilityFixture({unowned:reason==='unowned',wrongWindow:reason==='wrongWindow'});let release;
+  h.chrome.tabs.sendMessage=()=>new Promise(r=>{release=r;});
+  const pending=h.context.registryMessage(job,{action:'registry-nv',budgetMs:45000});await tick();
+  if(reason==='sourceChanged')h.tabs.get(3).url='https://example.com/';
+  if(reason==='sourceLeft')h.tabs.get(1).url='https://example.com/';
+  if(reason==='closed')job.closed=true;
+  await h.advance(3000);release({ok:false});await pending;assert.deepEqual(changes,[],reason);
+ }
+});
+
+test('NV unresolved visible command still stops at its original deadline and restores its caller',async()=>{
+ const {h,job,changes}=await nvVisibilityFixture();let release;
+ h.chrome.tabs.sendMessage=()=>new Promise(r=>{release=r;});
+ const pending=assert.rejects(h.context.registryMessage(job,{action:'registry-nv',budgetMs:45000}),/NV_COMMAND_TIMEOUT/);
+ await tick();await h.advance(60000);await pending;
+ assert.deepEqual(changes,[3,1]);assert.equal(job.activeExpiresAt,70000);release({ok:true});await tick();
+});
+
 test('NV page timeout reply can trigger return recovery without a competing transport timer',async()=>{
  const h=harness();h.tabs.set(3,{id:3,url:'https://orion.nv.gov/portal/public/'});
  let release;h.chrome.tabs.sendMessage=()=>new Promise(resolve=>{release=resolve;});

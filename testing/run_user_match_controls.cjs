@@ -32,7 +32,7 @@ test('incomplete registry access offers retry, never an identity acceptance with
 });
 test('undo stays available after a completed identity decision',()=>{
  const els=setup({...result,status:'Exempt',identity_review:{candidates:[{...candidate,decision:'accept'}]}});
- assert.ok(els.some(e=>e.textContent==='Undo decision'));
+ assert.ok(els.some(e=>e.textContent==='Undo match'));
 });
 test('script URLs are not rendered as source links',()=>{
  assert.ok(!setup({...result,identity_review:{candidates:[{...candidate,source_url:'javascript:alert(1)'}]}}).some(e=>e.tag==='a'));

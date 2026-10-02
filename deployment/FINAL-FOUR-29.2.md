@@ -901,3 +901,27 @@ The remaining reviews are Outward Bound/DC, Young Life/GA, Human Trafficking
 Legal Center/NM, RMHC/NV and FGCU Foundation/NC. Do not promote while these and
 the remaining spreadsheet differences await review. Protected services were
 rechecked unchanged; no production or staging 29.1 changes were made.
+
+
+### 29.2AB: owned Nevada visibility recovery (October 2)
+
+The unchanged 0.6.41 Make-A-Wish NV+CT control completed in 41.286 seconds
+with its collector visible, including both Nevada records and all observed
+filing history. Its immediately repeated background control took 86.666
+seconds and failed while reading the active record; Connecticut remained
+Current in both. Earlier background repeats also failed. Evidence is retained
+in 29.2AA-nv-visible-live.json and 29.2AA-nv-background-live.json.
+
+0.6.42 keeps each in-flight Nevada command unchanged. After three seconds of
+pending work it can activate only its owned public Nevada tab in the caller's
+window, provided the originally active tab has not changed. It restores that
+prior tab only if the collector is still active and has not moved or left the
+public registry. It never resubmits, reloads, changes matching/status rules,
+or extends the command or Sales deadline. It applies only to the disposable
+trial package. Live unattended validation remains required before promotion.
+
+Five additional worker controls cover pending completion, fast completion,
+user switches, ownership/origin/window changes, cancellation and expiry.
+The existing identity-review Undo control had an outdated label assertion;
+its assertion now uses the existing UI label, Undo match. Product UI and
+identity decisions are unchanged.
