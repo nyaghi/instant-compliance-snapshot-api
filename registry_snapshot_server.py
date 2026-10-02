@@ -6593,6 +6593,11 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
             other != name and name.startswith(other) for other in planned)]
     if state == "TN":
         generated = tn_browser_generated_queries(required, generated)
+    if state == "AL" and all(len(distinctive_match_tokens(name)) >= 2 for name in required):
+        # Keep every reviewed name and punctuation form. A generated generic
+        # single word (e.g. Education) produces an unrelated, truncated grid;
+        # it is not another reviewed identity that the master must search.
+        generated = [name for name in generated if len(distinctive_match_tokens(name)) >= 2]
     records, seen = [], set()
     unreviewed_scope = False
     missing_nv_business_id = False
@@ -6863,12 +6868,32 @@ def nm_browser_clean_evidence(payload, query):
     return json.loads(json.dumps(payload))
 
 
+def nm_browser_courtesy_names(required, generated):
+    """Bound NM's word-union courtesy search, retaining every reviewed name.
+
+    The public search unions individual words rather than searching an exact
+    phrase. Long legal names therefore expand into unrelated generic records
+    and can produce its unexpected-error page. Three leading substantive words
+    still retrieve the legal name; the requested EIN remains the sole selector.
+    This transport plan does not rewrite identity names or acceptance rules.
+    """
+    names = []
+    for name in required + generated:
+        spelling = canonical_name_punctuation(name).replace("'", "")
+        words = distinctive_core_words(spelling)
+        literal = {word.casefold(): word for word in re.findall(r"[A-Za-z0-9]+", spelling)}
+        query = " ".join(literal.get(word.casefold(), word) for word in words[:3])
+        if query and query.casefold() not in {n.casefold() for n in names}:
+            names.append(query)
+    return names
+
+
 def nm_browser_lookup(org, evidence):
     """Trial transport fallback; reuse the mature master NM status rules."""
     ein = canonical_ein_digits(org.ein)
     required, generated = licensed_charity_names(org)
     # EIN first, then the reviewed legal/alternate names before generated forms.
-    names = list(dict.fromkeys(['', *required, *generated]))
+    names = ['', *nm_browser_courtesy_names(required, generated)]
     attempts = []
     for name in names:
         query = {'state': 'NM', 'operation': 'search', 'ein': ein, 'name': name}
@@ -7043,6 +7068,7 @@ def final_four_connector_failure(record, reason=""):
     if re.fullmatch(r"NY_CONNECTOR_[A-Z_]{1,60}", reason or ""):
         result.status_reason = reason
     why = ("The registry lookup reached its time limit before all required records were confirmed." if reason == "NY_CONNECTOR_TIMEOUT" else
+           "New Mexico returned its public unexpected-error page for the submitted search." if state == 'NM' and reason == 'NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR' else
            "North Carolina's displayed result count does not agree with its result cards, so the search's completeness could not be confirmed." if state == "NC" and reason == "NY_CONNECTOR_REGISTRY_NC_RESULT_COUNT_MISMATCH" else
            "The registry requires browser verification before its search can complete." if "VERIFICATION" in reason else
            "The browser connector could not preserve this registry's search sequence." if reason == "NY_CONNECTOR_INVALID_SEQUENCE" else
@@ -22542,6 +22568,11 @@ def pa_name_search_plan(org):
     # names are added separately so a short token cannot remove them up front.
     derived = list(dict.fromkeys(re.sub(r"\s+", " ", value).strip()
         for value in [*priorities, *high_signal_search_phrases(org.organization_name), *variants] if value))[:10]
+    reviewed = [org.organization_name, *known_names_for_ein(org.ein)]
+    if all(len(distinctive_match_tokens(name)) >= 2 for name in reviewed):
+        # Do this before containment pruning: otherwise a speculative generic
+        # word removes the useful two-word phrase and hits PA's result cap.
+        derived = [name for name in derived if len(distinctive_match_tokens(name)) >= 2]
     derived = [name for name in derived if not any(other.casefold() != name.casefold()
         and other.casefold() in name.casefold() for other in derived)]
     names, seen = [], set()

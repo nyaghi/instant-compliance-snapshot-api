@@ -26,13 +26,13 @@ PROTECTED_ORIGINS = frozenset({
     'https://instant-compliance-snapshot-api-staging.onrender.com',
 })
 TRIAL_VERSION = '2026.09.29.2-performance-lab'
-TRIAL_RELEASE_LABEL = '29.2AI'
+TRIAL_RELEASE_LABEL = '29.2AJ'
 TRIAL_DATABASE_NAME = 'cc_final_four_29_2'
 MANIFEST = Path(__file__).with_name('final-four-resources.json')
 
 
 def trial_sales_cutoff(payload, identity):
-    """An explicit 60/90-second study override in the disposable lab only.
+    """An explicit bounded cutoff study in the disposable lab only.
 
     Ordinary Sales retains 60 seconds, including the approved performance
     pool. This does not change matching, state budgets or source evidence.
@@ -42,8 +42,8 @@ def trial_sales_cutoff(payload, identity):
     value = payload['sales_cutoff_seconds']
     if (not identity or payload.get('mode') != 'sales'
             or payload.get('kind', 'registration') != 'registration'
-            or type(value) is not int or value not in (60, 90)):
-        raise ValueError('Cutoff studies require isolated lab Sales and 60 or 90 seconds')
+            or type(value) is not int or value not in (60, 70, 80, 90)):
+        raise ValueError('Cutoff studies require isolated lab Sales and 60, 70, 80 or 90 seconds')
     return value
 
 

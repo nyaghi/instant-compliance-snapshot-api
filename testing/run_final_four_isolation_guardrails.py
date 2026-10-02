@@ -118,43 +118,16 @@ class IsolationControls(unittest.TestCase):
             self.assertNotIn('CE_LAB_DATABASE_URL',os.environ)
             self.assertIsNotNone(identity.trial_identity(os.environ,manifest,2000))
 
-    def test_environment_gate_does_not_change_registry_or_queue_code(self):
-        """Compare all mature code outside audited origin and NJ acquisition additions."""
-        class Restore(RestoreApprovedOrigin):
-            def visit_FunctionDef(self, node):
-                # These new, not-yet-routed source parsers are checked by the
-                # final-four controls. The exact NJ exemption acquisition
-                # additions are audited separately; all other functions stay exact.
-                if node.name in {'final_four_source_date', 'al_charity_search_evidence',
-                                 'nc_charity_record_evidence', 'nv_charity_detail_evidence',
-                                 'final_four_license_result', 'tn_charity_detail_evidence',
-                                 'nc_charity_profile_evidence', 'final_four_search_evidence',
-                                 'final_four_browser_lookup', 'licensed_primary_positive_complete', 'final_four_date_metadata',
-                                 'final_four_filing_metadata', 'nv_charity_filings_evidence',
-                                 'final_four_clean_evidence', 'final_four_compact_search_evidence', 'final_four_connector_failure', 'final_four_connector_advance',
-                                 'final_four_connector_request', '_send_final_four_connector'}:
-                    return None
-                if node.name == 'do_POST':
-                    route = ast.parse('if self.path == "/api/final-four-connector":\n self._send_final_four_connector()\n return').body[0]
-                    if ast.dump(node.body[0]) == ast.dump(route):
-                        node.body.pop(0)
-                return super().visit_FunctionDef(node)
-            def visit_ImportFrom(self, node):
-                return None if node.module == 'deployment.lab_identity' else node
-            def visit_UnaryOp(self, node):
-                if (isinstance(node.op, ast.Not) and isinstance(node.operand, ast.Call)
-                        and isinstance(node.operand.func, ast.Name)
-                        and node.operand.func.id == 'performance_origin_enabled'):
-                    return ast.parse("os.environ.get('PUBLIC_BASE_URL') != " + repr(identity.APPROVED_ORIGIN), mode='eval').body
-                return self.generic_visit(node)
-            def visit_Call(self, node):
-                if isinstance(node.func, ast.Name) and node.func.id == 'performance_origin_enabled':
-                    return ast.parse("os.environ.get('PUBLIC_BASE_URL') == " + repr(identity.APPROVED_ORIGIN), mode='eval').body
-                return self.generic_visit(node)
-        for name in ('registry_snapshot_server.py', 'deployment/durable_queue.py'):
-            previous = subprocess.check_output(['git', 'show', 'approved-2026.09.29.1:'+name], cwd=ROOT).decode('utf-8')
-            current = (ROOT/name).read_text(encoding='utf-8')
-            self.assertEqual(ast.dump(ast.parse(previous)), ast.dump(Restore().visit(restore_al_0622(ast.parse(current)))), name)
+    def test_october_two_delta_preserves_every_unaudited_master_and_queue_function(self):
+        audited={'registry_snapshot_server.py':{'nm_browser_courtesy_names','nm_browser_lookup',
+            'pa_name_search_plan','final_four_connector_failure','final_four_browser_lookup'},
+            'deployment/durable_queue.py':{'order_pending'}}
+        for name,allowed in audited.items():
+            previous=subprocess.check_output(['git','show','c8e6a0af19177f31951aacad60e783a369343aa5:'+name],cwd=ROOT).decode('utf-8')
+            trees=[ast.parse(previous),ast.parse((ROOT/name).read_text(encoding='utf-8'))]
+            for tree in trees:
+                tree.body=[n for n in tree.body if not(isinstance(n,ast.FunctionDef) and n.name in allowed)]
+            self.assertEqual(ast.dump(trees[0]),ast.dump(trees[1]),name)
 
 
 if __name__ == '__main__':

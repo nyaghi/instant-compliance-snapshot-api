@@ -79,6 +79,8 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
   try { while (!job.closed && Date.now()<deadline) {
     try {
       const value=await registryMessage(job,{action:"registry-ready"});
+      if(job.registryState==='NM' && value?.source_failure==='REGISTRY_NM_SOURCE_ERROR')
+        throw new Error('NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR');
       if(job.registryState==='NV'&&value?.nv_readiness)job.nvReadiness=value.nv_readiness;
       verificationPending=['NC','TN'].includes(job.registryState)&&value?.verification_pending===true;
       if(job.registryState==='TN'&&!value?.ready&&!visibilityAttempted&&Date.now()-started>=3000) {
@@ -98,7 +100,8 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
         const retried=await registryMessage(job,{action:'registry-nc-retry',query:ncSubmittedQuery});
         diagnostic('nc-submit-recovery',job,retried?.phase==='submitted'?'same-query resubmitted':'form changed; no resubmission');
       }
-    } catch {
+    } catch(error) {
+      if(error?.message==='NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR')throw error;
       // The public challenge can precede content-script readiness. Its visible
       // tab title is sufficient to describe a pending verification, not a result.
       if (job.registryState==='NC') try {
@@ -141,7 +144,7 @@ async function registryNorthCarolinaVisibility(job) {
 async function registryNavigate(job, url, budgetMs = 45000, freshNvRecovery = false) {
   if (new URL(url).origin !== registryOrigin(job.registryState)) throw new Error("NY_CONNECTOR_INCOMPLETE");
   if (freshNvRecovery && (job.registryState!=='NV' || url!==registryStart('NV')
-      || !(job.nvReturnRecoveryUsed || job.nvReservationDetail))) throw new Error('NY_CONNECTOR_INVALID_SEQUENCE');
+      || !(job.nvReturnRecoveryUsed || job.nvReservationDetail || job.nvModeRecoveryUsed))) throw new Error('NY_CONNECTOR_INVALID_SEQUENCE');
     const deadline=Math.min(job.activeExpiresAt,Date.now()+Math.max(1,Math.min(45000,budgetMs)));
     let previous;
   if (job.tab !== null) {
@@ -310,7 +313,19 @@ async function performRegistryQuery(job, query) {
     // Give that complete paged search margin inside this job's existing
     // deadline; never borrow another state's time or reset Sales' one minute.
     const allowance=query.state==='NV'&&query.operation==='search'?150000:45000;
-    const response = await registryMessage(job,{action:`registry-${query.state.toLowerCase()}`,query,budgetMs:Math.max(1,Math.min(allowance,job.activeExpiresAt-Date.now()))});
+    let response = await registryMessage(job,{action:`registry-${query.state.toLowerCase()}`,query,budgetMs:Math.max(1,Math.min(allowance,job.activeExpiresAt-Date.now()))});
+    if (P.TRIAL_ORIGIN && query.state==='NV' && query.operation==='search'
+        && response?.reason==='NY_CONNECTOR_REGISTRY_NV_MODE_NOT_SELECTED'
+        && !job.nvModeRecoveryUsed && job.activeExpiresAt-Date.now()>8000) {
+      // An unsettled public dropdown is not a completed search. Reopen only
+      // our public form once, retry the identical signed query and retain the
+      // original deadline. Never retry or invent detail/history evidence.
+      job.nvModeRecoveryUsed=true;
+      diagnostic('nv-mode-recovery',job,'fresh public form; same signed query');
+      await registryNavigate(job,registryStart('NV'),Math.min(45000,job.activeExpiresAt-Date.now()),true);
+      response=await registryMessage(job,{action:'registry-nv',query,
+        budgetMs:Math.max(1,Math.min(allowance,job.activeExpiresAt-Date.now()))});
+    }
     if (query.operation === "search") job.finalFourSearchComplete = response?.ok === true;
     if (query.state==='NV' && response?.ok===true) {
       if (query.operation==='search') job.nvLastSearch={query,evidence:response.evidence};

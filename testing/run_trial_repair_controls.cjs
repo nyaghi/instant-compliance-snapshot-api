@@ -76,6 +76,16 @@ test('NM collector refuses a stale filter and incomplete pagination before repor
  h.fields.get('#MainContent_LabelRecCount').innerText='Charities Found: 1001';
  await assert.rejects(h.api.handle({action:'registry-nm-rows',query}),/INCOMPLETE/);
 });
+
+test('NM error-page readiness distinguishes an explicit source error from an unsettled form',async()=>{
+ const h=nmContent();
+ h.fields.set('h1',{innerText:'New Mexico Charity Search'});
+ h.fields.set('p',{innerText:'We apologize. An unexpected error has occurred. Please try your request again.'});
+ const failed=await h.api.handle({action:'registry-ready'});
+ assert.equal(failed.source_failure,'REGISTRY_NM_SOURCE_ERROR');assert.equal(failed.ready,false);
+ h.fields.delete('p');
+ assert.equal((await h.api.handle({action:'registry-ready'})).source_failure,undefined);
+});
 test('NM collector exports only EIN-bound history and fiscal periods, excluding financial amounts',async()=>{
  const h=nmContent(),query={state:'NM',operation:'detail',identifier:'752556496',name:'Fixture Foundation'};
  h.fields.set('#MainContent_FormViewCharityDetail_LabelCharityName',{innerText:'Fixture Foundation (75-2556496)'});

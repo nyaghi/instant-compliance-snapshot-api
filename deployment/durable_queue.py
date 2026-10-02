@@ -202,6 +202,14 @@ def order_pending(workflow, jobs, estimates, tail_scores, now):
             # Work unlikely to fit must not displace feasible completions.
             return (state != '@sales_identity', seconds > workflow['deadline']-now,
                     -tail_scores.get(state, 0), seconds, state, job['id'])
+        if (workflow['mode'] == 'sales'
+                and workflow.get('source_version') == '2026.09.29.2-performance-lab'):
+            # The four-instance disposable trial has enough lanes for its
+            # individual workflow. Start its measured slow EIN sources before
+            # subsecond downloads; all admission/identity/deadline guards below
+            # still apply. Approved staging/production scheduling is unchanged.
+            return (state != '@sales_identity', state not in {'MI', 'NJ'},
+                    -seconds if state in {'MI', 'NJ'} else seconds, state, job['id'])
         direction = 1 if workflow['mode'] == 'sales' else -1
         return (state != '@sales_identity', direction*seconds, state, job['id'])
     jobs.sort(key=key)

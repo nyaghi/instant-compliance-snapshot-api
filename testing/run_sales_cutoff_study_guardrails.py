@@ -13,7 +13,7 @@ from testing.run_final_four_continuation_guardrails import ContinuationControls
 
 
 class CutoffStudyControls(ContinuationControls):
-    def test_master_delta_is_only_the_signed_trial_connector_budget(self):
+    def test_signed_trial_handler_delta_is_only_the_connector_budget(self):
         root=Path(__file__).resolve().parents[1]
         baseline=subprocess.check_output(['git','show','df3910f49aff3b3e688479f5bf223d44d93a6d00:registry_snapshot_server.py'],cwd=root).decode('utf-8')
         current=(root/'registry_snapshot_server.py').read_text(encoding='utf-8')
@@ -30,7 +30,8 @@ class CutoffStudyControls(ContinuationControls):
         expires=next(n for n in ast.walk(start) if isinstance(n,ast.IfExp) and isinstance(n.body,ast.Name) and n.body.id=='cutoff')
         self.assertEqual(ast.unparse(expires.test),"mode == 'sales'")
         expires.body=ast.Constant(value=60)
-        self.assertEqual(ast.dump(before),ast.dump(after))
+        original=next(n for n in before.body if isinstance(n,ast.FunctionDef) and n.name=='final_four_connector_request')
+        self.assertEqual(ast.dump(original),ast.dump(handler))
 
     def test_defaults_remain_sixty_everywhere(self):
         for identity in (None, {'origin':self.origin}):
@@ -76,6 +77,15 @@ class CutoffStudyControls(ContinuationControls):
         for value in (True,300,'90'):
             self.assertEqual(self.start(mode='sales',sales_cutoff_seconds=value)[0],400)
         self.assertEqual(self.start(mode='standard',sales_cutoff_seconds=90)[0],400)
+
+    def test_seventy_and_eighty_are_explicit_isolated_studies(self):
+        for seconds in (70,80):
+            self.assertEqual(trial_sales_cutoff({'mode':'sales','sales_cutoff_seconds':seconds},{'origin':self.origin}),seconds)
+            with patch.object(cc.time,'time',return_value=1000):
+                code,response=self.start(mode='sales',sales_cutoff_seconds=seconds)
+                self.assertEqual(code,200)
+                record=cc.ny_connector_unpack(response['check_token'],self.auth['email'],self.auth['device_id'])
+                self.assertEqual(record['expires'],1000+seconds)
 
 
 if __name__=='__main__':

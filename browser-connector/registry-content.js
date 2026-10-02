@@ -1254,7 +1254,10 @@
   }
   async function handle(m) {
     if(NM) {
-      if(m.action==='registry-ready')return {ready:registryDocumentReady(),url:location.href,documentId};
+      if(m.action==='registry-ready')return {ready:registryDocumentReady(),url:location.href,documentId,
+        ...(text(document.querySelector('h1'))==='New Mexico Charity Search'
+          && text(document.querySelector('p'))==='We apologize. An unexpected error has occurred. Please try your request again.'
+          ? {source_failure:'REGISTRY_NM_SOURCE_ERROR'} : {})};
       const q=m.query;
       if(q?.state!=='NM')throw new Error('REGISTRY_COMMAND_INVALID');
       if(m.action==='registry-nm-form'&&q.operation==='search') {

@@ -36,6 +36,31 @@ function fixture(enabled=true){
   return Object.assign(h,{calls,reloads});
 }
 
+test('NM public error aborts readiness immediately rather than consuming thirty seconds',async()=>{
+ const h=fixture();h.tabs.set(3,{id:3,windowId:10,url:'https://secure.nmdoj.gov/CharitySearch/'});
+ let checks=0;h.chrome.tabs.sendMessage=async()=>{checks++;return {ready:false,source_failure:'REGISTRY_NM_SOURCE_ERROR'};};
+ const job={tab:3,registryState:'NM',activeExpiresAt:70000,closed:false};
+ await assert.rejects(h.context.registryReady(job),/NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR/);
+ assert.equal(checks,1);assert.equal(job.activeExpiresAt,70000);
+});
+
+test('NV unsettled mode reopens only its owned form once within the original deadline',async()=>{
+ for(const remaining of [60000,7000]){
+  const h=fixture(),query={state:'NV',operation:'search',name:'Reviewed Alias'};await tick();
+  h.tabs.set(3,{id:3,windowId:10,url:vm.runInContext("registryStart('NV')",h.context)});
+  vm.runInContext('owned.add(3)',h.context);
+  const job={tab:3,sender:{url:TRIAL,tab:{id:1}},registryState:'NV',activeExpiresAt:10000+remaining,closed:false,finalFourReusableForm:true};
+  const send=h.chrome.tabs.sendMessage;let attempts=0;
+  h.chrome.tabs.sendMessage=async(tab,m)=>{
+   if(m.action==='registry-nv'){attempts++;assert.deepEqual(m.query,query);return {ok:false,reason:'NY_CONNECTOR_REGISTRY_NV_MODE_NOT_SELECTED'};}
+   return send(tab,m);
+  };
+  assert.equal((await h.context.performRegistryQuery(job,query)).ok,false);
+  assert.equal(attempts,remaining>8000?2:1);assert.equal(h.reloads.length,remaining>8000?1:0);
+  assert.equal(job.activeExpiresAt,10000+remaining);assert.equal(job.finalFourSearchComplete,false);
+ }
+});
+
 test('AL worker carries fresh verification through a second command in the same owned session',async()=>{
  const h=fixture(),p=connect(h,'AL');await tick();
  const original=h.chrome.tabs.sendMessage;let calls=0;

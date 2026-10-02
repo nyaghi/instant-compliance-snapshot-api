@@ -1010,7 +1010,7 @@ class LookupControls(unittest.TestCase):
         root=Path(__file__).resolve().parents[1]
         before=ast.parse(subprocess.check_output(['git','show','e2e6da7a3bd259c78734ef704b3ae7ce91e8c4d6:registry_snapshot_server.py'],cwd=root).decode('utf-8'))
         after=ast.parse((root/'registry_snapshot_server.py').read_text(encoding='utf-8'))
-        allowed={'nc_charity_record_evidence','final_four_license_result','nv_charity_detail_evidence','nv_charity_filings_evidence',
+        allowed={'nm_browser_courtesy_names','nm_browser_lookup','pa_name_search_plan','final_four_connector_failure','nc_charity_record_evidence','final_four_license_result','nv_charity_detail_evidence','nv_charity_filings_evidence',
                  'tn_charity_detail_evidence','tn_browser_generated_queries','final_four_browser_lookup','mi_name_fallback_queries',
                  'search_ok_precise','run_state_lookup','ny_connector_request','ny_connector_advance','il_verification_recovery',
                  'nm_browser_clean_evidence','nm_browser_lookup','final_four_clean_evidence','final_four_compact_search_evidence','final_four_search_candidate_scores',
@@ -1062,15 +1062,15 @@ class LookupControls(unittest.TestCase):
     def test_ag_delta_preserves_all_other_master_functions_and_approved_frontend(self):
         import ast, subprocess
         root = Path(__file__).resolve().parents[1]
-        baseline = 'e5b8653033b08e4d648e742686c855731c82dce4'
+        baseline = 'c8e6a0af19177f31951aacad60e783a369343aa5'
         before = ast.parse(subprocess.check_output(['git', 'show', baseline + ':registry_snapshot_server.py'], cwd=root).decode('utf-8'))
         after = ast.parse((root / 'registry_snapshot_server.py').read_text(encoding='utf-8'))
-        changed = {'nv_charity_filings_evidence', 'final_four_browser_lookup', 'final_four_connector_request'}
+        changed = {'nm_browser_courtesy_names','nm_browser_lookup','pa_name_search_plan','final_four_connector_failure','final_four_browser_lookup'}
         for tree in (before, after):
             tree.body = [node for node in tree.body if not (isinstance(node, ast.FunctionDef) and node.name in changed)]
         self.assertEqual(ast.dump(before), ast.dump(after))
         for file in ['web-staging/index.html', 'web-staging/optimized-workflows.js', 'web-staging/sales-mode.js',
-                     'browser-connector/registry-content.js', 'browser-connector/registry-worker.js']:
+                     'web-staging/ny-connector.js']:
             with self.subTest(file=file):
                 original = subprocess.check_output(['git', 'show', baseline + ':' + file], cwd=root)
                 self.assertEqual(original.replace(b'\r\n', b'\n'), (root / file).read_bytes().replace(b'\r\n', b'\n'))

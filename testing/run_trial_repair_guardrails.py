@@ -251,4 +251,43 @@ class Repairs(unittest.TestCase):
         self.assertEqual([q['operation'] for q in seen],['search','detail'])
         self.assertEqual(result.status,'Closed / Withdrawn / Canceled')
         self.assertEqual(result.matched_registry_identifier,identifier)
+class OctoberTwoSpeedControls(unittest.TestCase):
+    def test_education_plans_keep_reviewed_names_without_generic_single_word(self):
+        org=cc.checker.Organization('Education Forward DC','81-1823628')
+        names=cc.pa_name_search_plan(org)
+        self.assertIn(org.organization_name,names)
+        self.assertNotIn('Education',names)
+        self.assertNotIn('Forward',names)
+        self.assertTrue(all(len(cc.distinctive_match_tokens(n))>=2 for n in names))
+    def test_short_reviewed_identity_is_not_removed(self):
+        org=cc.checker.Organization('Ceres','22-3053747')
+        self.assertIn('Ceres',cc.pa_name_search_plan(org))
+    def test_nm_courtesy_preserves_aliases_and_ein_is_still_primary(self):
+        required=["First Choice Women's Resource Centers, Inc.",'Independent Reviewed Alias']
+        names=cc.nm_browser_courtesy_names(required,[])
+        self.assertEqual(len(names),2)
+        self.assertTrue(all(len(n.split())<=3 for n in names))
+        org=cc.checker.Organization(required[0],'22-2560940');seen=[]
+        def evidence(q):
+            seen.append(q)
+            return {'query':q,'complete':True,'rows':[], 'total':0}
+        with patch.object(cc,'licensed_charity_names',return_value=(required,[])):
+            result=cc.nm_browser_lookup(org,evidence)
+        self.assertEqual(seen[0]['name'],'')
+        self.assertEqual([q['name'] for q in seen[1:]],names)
+        self.assertEqual(result.status,'Not Registered')
+    def test_nm_partial_courtesy_cannot_be_negative(self):
+        org=cc.checker.Organization('Example Reviewed Charity','12-3456789')
+        def evidence(q):
+            return {'query':q,'complete':not bool(q['name']),'rows':[], 'total':0}
+        with self.assertRaises(ValueError):cc.nm_browser_lookup(org,evidence)
+    def test_trial_sales_early_sources_preserve_ordinary_order_and_identity(self):
+        from deployment.durable_queue import order_pending
+        jobs=[{'state':s,'id':i} for i,s in enumerate(['LA','MI','NJ','@sales_identity','FL'])]
+        estimates={'LA':.3,'MI':50,'NJ':55,'@sales_identity':1,'FL':4}
+        order_pending({'mode':'sales','source_version':'2026.09.29.2-performance-lab','deadline':60},jobs,estimates,{},0)
+        self.assertEqual([j['state'] for j in jobs[:3]],['@sales_identity','NJ','MI'])
+        order_pending({'mode':'sales','source_version':'approved','deadline':60},jobs,estimates,{},0)
+        self.assertEqual([j['state'] for j in jobs[:2]],['@sales_identity','LA'])
+
 if __name__=='__main__':unittest.main()
