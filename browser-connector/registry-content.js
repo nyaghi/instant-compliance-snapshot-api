@@ -312,7 +312,12 @@
       if (cells.length !== headers.length) throw new Error("REGISTRY_NV_ROW_CHANGED");
       return cells.map(cell => text(cell.querySelector('.casex-grid-responsive-data') || cell).replace(/^:\s*/, ''));
     });
-    if (title === 'Filing History Details' && values.some(cells => !cells[0] || !cells[2] || !cells[3]))
+    // A settled public history can contain an unlabelled legacy filing (e.g.
+    // a dated, numbered Walk-in filing with a page count). Preserve that row
+    // with its blank type; do not invent a CSR or reject the other explicit
+    // CSR rows. Placeholder rows still lack the required filing identity.
+    if (title === 'Filing History Details' && values.some(cells => !cells[0] || !cells[2]
+        || !cells[3] && (!cells[4] || !/^\d+$/.test(cells[5]))))
       throw new Error('REGISTRY_NV_FILINGS_INCOMPLETE');
     if (!rows.length) {
       if (!grid.querySelector('.k-grid-norecords') || grid.getAttribute('aria-rowcount') !== '1' || table.querySelector('kendo-datapager'))

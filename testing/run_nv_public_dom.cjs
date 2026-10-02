@@ -555,13 +555,13 @@ test('Nevada waits for a delayed complete filing grid after entity fields load',
  assert.equal(result.filings.rows[0][3],'Charitable Solicitation Registration Statement');
 });
 
-function filingHistoryFixture({stale=false,placeholder=false,empty=false,spinner=true,hydrateEmptyAfter=null}={}) {
+function filingHistoryFixture({stale=false,placeholder=false,empty=false,spinner=true,hydrateEmptyAfter=null,unlabelled=false}={}) {
  const h=fixture({rows:[observed[1]]}),read=h.context.document.querySelectorAll;
  let emptyNow=empty,spinnerNow=spinner,hydrationStarted=false,notify;
  const Observer=h.context.MutationObserver;
  h.context.MutationObserver=class extends Observer {constructor(fn){super(fn);notify=fn;}};
  const headers=['Filed Date','Effective Date','Filing Number','Filing Type','Source','No. of Pages'];
- const cells=['04/03/2026','04/03/2026','20265650484','Charitable Solicitation Registration Statement','Mail','3'];
+ const cells=['04/03/2026','04/03/2026','20265650484',unlabelled?'':'Charitable Solicitation Registration Statement','Mail','3'];
  const row={querySelector:()=>({}),querySelectorAll:()=>cells.map(innerText=>({innerText:placeholder?'':innerText,querySelector:()=>null}))};
  const grid={getAttribute:()=>emptyNow?'1':'2',querySelector:q=>q==='.k-grid-norecords'&&emptyNow?{}:null,
   querySelectorAll:q=>q==='[role="columnheader"]'?headers.map(label=>({getAttribute:()=>label})):
@@ -581,6 +581,13 @@ function filingHistoryFixture({stale=false,placeholder=false,empty=false,spinner
  };
  return h;
 }
+test('Nevada keeps a fully identified unlabelled legacy filing without inventing its type',async()=>{
+ const h=filingHistoryFixture({unlabelled:true});await h.search();const start=h.time;
+ const result=await h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:'NV20121738342'},h.time+45000));
+ assert.equal(result.filings.complete,true);assert.equal(result.filings.rows[0][3],'');
+ assert.equal(result.filings.rows[0][2],'20265650484');assert.ok(h.time-start<3000);
+});
+
 test('Nevada accepts a newly mounted complete filing history despite an unrelated global spinner',async()=>{
  const h=filingHistoryFixture();await h.search();const start=h.time;
  const result=await h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:'NV20121738342'},h.time+45000));

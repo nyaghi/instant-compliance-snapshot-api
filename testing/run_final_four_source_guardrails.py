@@ -144,6 +144,26 @@ class SourceControls(unittest.TestCase):
             with self.subTest(raw=raw,due=due):
                 self.assertEqual(cc.nv_charity_filings_evidence(row,NV_SOLICITATION_FILINGS)['status'],expected)
 
+    def test_nv_unlabelled_legacy_row_keeps_explicit_csr_and_adverse_status_without_inference(self):
+        fields = {**NV_SOLICITATION, 'Entity Status':'Withdrawn',
+                  'Annual Renewal Due Date/Expiration Date':'-',
+                  'Entity Type':'Foreign Entities Not Required to Register In Nevada'}
+        record = cc.nv_charity_detail_evidence(fields, fields['NV Business ID'])
+        history = copy.deepcopy(NV_SOLICITATION_FILINGS)
+        unknown = ['04/15/2019','04/15/2019','00011300563-99','','Walk-in','1']
+        history['rows'].append(unknown); history['total'] += 1
+        result = cc.nv_charity_filings_evidence(record, history)
+        self.assertEqual(result['status'],'Closed / Withdrawn / Canceled')
+        self.assertIn('without a filing type', result['date_evidence_note'])
+        self.assertIsNone(result['renewal'])
+        # A numbered but unlabelled filing alone never proves charity scope.
+        with self.assertRaises(ValueError):
+            cc.nv_charity_filings_evidence(record, {**history,'rows':[unknown],'total':1})
+        for column,value in [(0,''),(0,'04/15/2099'),(2,''),(4,''),(5,'')]:
+            changed=copy.deepcopy(history);changed['rows'][-1][column]=value
+            with self.subTest(column=column),self.assertRaises(ValueError):
+                cc.nv_charity_filings_evidence(record,changed)
+
     def test_nv_solicitation_missing_deadline_and_future_filing_remain_unconfirmed(self):
         fields={**NV_SOLICITATION,'Annual Renewal Due Date/Expiration Date':'-'}
         row=cc.nv_charity_detail_evidence(fields,fields['NV Business ID'])
@@ -1081,7 +1101,7 @@ class LookupControls(unittest.TestCase):
         for tree in (before, after):
             for handler in [n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in {'ny_connector_request','ny_connector_advance','il_verification_recovery'}]:
                 for n in ast.walk(handler):
-                    if isinstance(n,ast.Set):n.elts=[v for v in n.elts if not(isinstance(v,ast.Constant) and v.value in {'0.6.46','0.6.47','0.6.48','0.6.49','0.6.50','0.6.51','0.6.52','0.6.53'})]
+                    if isinstance(n,ast.Set):n.elts=[v for v in n.elts if not(isinstance(v,ast.Constant) and v.value in {'0.6.46','0.6.47','0.6.48','0.6.49','0.6.50','0.6.51','0.6.52','0.6.53','0.6.54'})]
             tree.body = [node for node in tree.body if not (isinstance(node, ast.FunctionDef) and node.name in changed)]
         self.assertEqual(ast.dump(before), ast.dump(after))
         for file in ['web-staging/index.html', 'web-staging/optimized-workflows.js', 'web-staging/sales-mode.js',
