@@ -739,6 +739,13 @@
           if (priorFilingTables.has(page.table) || page.rows.some(row=>priorFilingRows.has(row))) {
             firstFailure='REGISTRY_NV_FILINGS_NOT_REFRESHED'; return false;
           }
+          // ORION initially renders the normal empty marker while its history
+          // request is still loading. That is not evidence of no filings.
+          // A complete nonempty table can outlive an unrelated global spinner;
+          // zero rows must wait for loading to finish within this same budget.
+          if (page.total===0 && loading()) {
+            firstFailure='REGISTRY_NV_FILINGS_RESPONSE_PENDING'; return false;
+          }
           // ORION's global spinner also covers unrelated detail requests.
           // A new, complete history table bound to the confirmed business ID
           // is usable while that spinner remains. Partial/old grids still wait.

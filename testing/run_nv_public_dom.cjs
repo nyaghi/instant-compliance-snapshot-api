@@ -555,21 +555,28 @@ test('Nevada waits for a delayed complete filing grid after entity fields load',
  assert.equal(result.filings.rows[0][3],'Charitable Solicitation Registration Statement');
 });
 
-function filingHistoryFixture({stale=false,placeholder=false,empty=false,spinner=true}={}) {
+function filingHistoryFixture({stale=false,placeholder=false,empty=false,spinner=true,hydrateEmptyAfter=null}={}) {
  const h=fixture({rows:[observed[1]]}),read=h.context.document.querySelectorAll;
+ let emptyNow=empty,spinnerNow=spinner,hydrationStarted=false,notify;
+ const Observer=h.context.MutationObserver;
+ h.context.MutationObserver=class extends Observer {constructor(fn){super(fn);notify=fn;}};
  const headers=['Filed Date','Effective Date','Filing Number','Filing Type','Source','No. of Pages'];
  const cells=['04/03/2026','04/03/2026','20265650484','Charitable Solicitation Registration Statement','Mail','3'];
  const row={querySelector:()=>({}),querySelectorAll:()=>cells.map(innerText=>({innerText:placeholder?'':innerText,querySelector:()=>null}))};
- const grid={getAttribute:()=>empty?'1':'2',querySelector:q=>q==='.k-grid-norecords'&&empty?{}:null,
+ const grid={getAttribute:()=>emptyNow?'1':'2',querySelector:q=>q==='.k-grid-norecords'&&emptyNow?{}:null,
   querySelectorAll:q=>q==='[role="columnheader"]'?headers.map(label=>({getAttribute:()=>label})):
-   q==='tbody > tr[role="row"]'?empty?[]:[row]:[]};
+   q==='tbody > tr[role="row"]'?emptyNow?[]:[row]:[]};
  const table={querySelectorAll:q=>q==='h4'?[{innerText:'Filing History Details'}]:[],querySelector:q=>q==='[role="grid"]'?grid:
-  q==='kendo-datapager'&&!empty?{getAttribute:()=> 'Page 1 of 1'}:
-  q==='kendo-datapager-info'&&!empty?{innerText:'1 - 1 of 1 items'}:null};
+  q==='kendo-datapager'&&!emptyNow?{getAttribute:()=> 'Page 1 of 1'}:
+  q==='kendo-datapager-info'&&!emptyNow?{innerText:'1 - 1 of 1 items'}:null};
  h.context.document.querySelectorAll=q=>{
   const detail=h.context.location.hash.includes('Manage-Business');
+  if(detail&&q==='casex-data-table'&&hydrateEmptyAfter!==null&&!hydrationStarted){
+   hydrationStarted=true;h.context.setTimeout(()=>{emptyNow=false;spinnerNow=false;
+    notify?.([{target:{nodeType:1,closest:()=>({})},addedNodes:[],removedNodes:[]}]);},hydrateEmptyAfter);
+  }
   if(q==='casex-data-table')return detail?[table]:stale?[...read(q),table]:read(q);
-  if(q==='.app-loader-pane .circle-loader'&&detail)return spinner?[{getClientRects:()=>[{}]}]:[];
+  if(q==='.app-loader-pane .circle-loader'&&detail)return spinnerNow?[{getClientRects:()=>[{}]}]:[];
   return read(q);
  };
  return h;
@@ -590,13 +597,27 @@ test('Nevada global-spinner optimization does not accept filing placeholders',as
  const result=await h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:'NV20121738342'},h.time+45000));
  assert.equal(result.filings.complete,false);assert.equal(result.filings.failure_code,'REGISTRY_NV_FILINGS_INCOMPLETE');
 });
-test('Nevada accepts a freshly mounted explicit empty filing history but never a stale empty grid',async()=>{
+test('Nevada accepts a freshly mounted settled empty filing history but never a stale empty grid',async()=>{
  for(const stale of [false,true]){
-  const h=filingHistoryFixture({empty:true,stale,spinner:!stale});await h.search();
+  const h=filingHistoryFixture({empty:true,stale,spinner:false});await h.search();
   const result=await h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:'NV20121738342'},h.time+45000));
   assert.equal(result.filings.complete,!stale);
   if(!stale)assert.equal(result.filings.total,0);
  }
+});
+
+test('Nevada loading empty filing placeholder waits for its actual charity filing',async()=>{
+ const h=filingHistoryFixture({empty:true,spinner:true,hydrateEmptyAfter:800});await h.search();const start=h.time;
+ const result=await h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:'NV20121738342'},h.time+45000));
+ assert.equal(result.filings.complete,true);assert.equal(result.filings.total,1);
+ assert.equal(result.filings.rows[0][3],'Charitable Solicitation Registration Statement');
+ assert.ok(h.time-start>=800);assert.ok(h.time-start<2000);
+});
+
+test('Nevada never treats a loading empty filing grid as completed absence',async()=>{
+ const h=filingHistoryFixture({empty:true,spinner:true});await h.search();
+ const result=await h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:'NV20121738342'},h.time+45000));
+ assert.equal(result.filings.complete,false);assert.equal(result.filings.failure_code,'REGISTRY_NV_FILINGS_RESPONSE_PENDING');
 });
 
 test('Nevada filing pagination waits for old rows to be replaced after the pager advances',async()=>{

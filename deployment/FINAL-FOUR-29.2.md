@@ -940,3 +940,28 @@ the prior public tab/window IDs and recovery flag, preserving restart
 cleanup. State evidence, matching, queries and original deadlines remain
 unchanged. Two additional controls cover continuation and real worker
 cleanup, including a user switch during the retained lease.
+
+
+### 29.2AD: separate New York normal lookup admission from reset cooldown
+
+The lab inherited the pump's failed-repair queue rejection in 4cc59379 on
+October 1. When the persisted repair is failed and nextAllowedAt is future,
+normal NY jobs were closed before opening any source page. A recovered NY
+source could therefore remain unqueried for the full 20-minute reset cooldown.
+Two reproductions failed on 29.2AC: both successful and still-rejected normal
+source responses were never requested. The trial-only admission change permits
+one normal fresh lookup with the same original deadline and lane pacing.
+A still-rejected response remains inconclusive, performs no additional origin
+reset, and preserves the existing nextAllowedAt. Mature connector admission,
+manual-reset cooldown, 429 backoff, and verification retry allowances remain
+unchanged. Live verification is still required; this corrects a proven local
+failure cascade, not every possible initial source rejection.
+
+29.2AC's Make-A-Wish Standard trace accepted a complete zero-row history at
+30.961 seconds while Sales read 19 filings for the same business at 35.050
+seconds. Two timed DOM counterexamples reproduced the premature empty
+acceptance. 29.2AD waits for loading to finish before accepting a fresh empty
+filing history; complete nonempty history still bypasses unrelated loading.
+The original command and Sales deadlines, identity binding and stale-table
+rejection remain unchanged. Both counterexamples fail before the patch and
+pass after it. This fixes collection, without changing status interpretation.

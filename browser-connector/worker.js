@@ -148,7 +148,11 @@ function pump() {
     return;
   }
   const job=queue.splice(index,1)[0];
-  if(job.registryState==='NY'&&!job.refreshOnly&&repair.phase==='failed'&&repair.nextAllowedAt>Date.now()){
+  // In the isolated trial, a failed origin reset pauses further resets, not
+  // normal fresh-page lookups. Otherwise one transient rejection makes later
+  // organizations inconclusive without consulting a source that has recovered.
+  // performQuery still enforces this same persisted reset cooldown on rejection.
+  if(!P.TRIAL_ORIGIN&&job.registryState==='NY'&&!job.refreshOnly&&repair.phase==='failed'&&repair.nextAllowedAt>Date.now()){
     close(job,repair.reason||'NY_CONNECTOR_RECOVERY_REJECTED');return;
   }
   if(P.TRIAL_ORIGIN)activeLanes.set(job.registryState,job);else active=job;

@@ -469,6 +469,23 @@ test('recent successful repair does not grant a new reset for every organization
   assert.equal(h.data.local.ccnyRepair.phase,'failed');
 });
 
+for(const recovered of [true,false])test(`trial NY reset cooldown still permits one normal fresh lookup: ${recovered}`,async()=>{
+ const trialOrigin='https://fixture-final-four.onrender.com';
+ const saved={phase:'failed',attemptedAt:5000,nextAllowedAt:999999,reason:'NY_CONNECTOR_RECOVERY_REJECTED'};
+ const h=harness({trialOrigin,local:{ccnyRepair:saved},tabs:[[1,{id:1,windowId:10,url:trialOrigin}]]});
+ let attempts=0;
+ h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='ready'?{ready:true,url:h.tabs.get(tab).url}:
+  (attempts++,recovered?{ok:true,evidence:{query:m.query,rows:[]}}:
+   {ok:false,reason:'NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED',verificationRetryUsed:true});
+ const p=h.connect();const result=await h.query(p,11);
+ assert.equal(result?.ok,recovered);assert.equal(attempts,1);assert.deepEqual(h.created,[100]);
+ assert.equal(h.repairs.length,0);assert.equal(h.data.local.ccnyRepair.nextAllowedAt,999999);
+ if(!recovered)assert.equal(result.reason,'NY_CONNECTOR_RECOVERY_REJECTED');
+ if(recovered)assert.equal(h.data.session.ccnyRuntime.queue[0].activeExpiresAt,310000);
+ else {assert.equal(h.data.session.ccnyRuntime.queue.length,0);assert.deepEqual(h.removed,[100]);}
+ assert.ok(h.timers.some(t=>t.due===310000));
+});
+
 test('ordinary source network/schema failures never trigger cookie cleanup',async()=>{
   for(const reason of ['NY_CONNECTOR_SEARCH_NETWORK_ERROR','NY_CONNECTOR_SEARCH_ROWS_INVALID','NY_CONNECTOR_TIMEOUT']){
     const h=harness(),p=h.connect();h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='ready'?{ready:true}:{ok:false,reason};
