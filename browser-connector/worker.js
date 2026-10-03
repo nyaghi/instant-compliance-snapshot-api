@@ -564,7 +564,8 @@ async function performSearch(job, query, id) {
   if (P.TRIAL_ORIGIN && job.registryState === "NY" && response.ok && !Object.hasOwn(query, "orgID")) {
     job.nyLastSearchQuery = {...query};
   }
-  if(P.TRIAL_ORIGIN&&job.registryState==='NV'&&job.nvReadiness)response.nv_readiness=job.nvReadiness;
+  if(P.TRIAL_ORIGIN&&job.registryState==='NV'&&job.nvReadiness)response.nv_readiness={...job.nvReadiness,
+    visibility_recovery:job.nvVisibilityOutcome||'not_requested',visibility_attempted:job.nvVisibilityAttempted===true};
   if(P.TRIAL_ORIGIN&&job.registryState==='NY'&&['visible','hidden'].includes(job.nyPageVisibility))response.page_visibility=job.nyPageVisibility;
   if(P.TRIAL_ORIGIN&&job.registryState==='NY'&&!response.ok&&rejected(job.nyFailureCause)) {
     response.ny_failure_cause=job.nyFailureCause;

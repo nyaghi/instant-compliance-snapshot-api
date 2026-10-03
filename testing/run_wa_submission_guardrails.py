@@ -20,7 +20,7 @@ class Submission(unittest.TestCase):
                 self.assertEqual(current.count(', "0.6.64"'),3)
                 self.assertEqual(current.count(', "0.6.66"'),3)
                 self.assertEqual(current.count(', "0.6.67"'),3)
-                current=current.replace(', "0.6.63"','').replace(', "0.6.64"','').replace(', "0.6.66"','').replace(', "0.6.67"','').replace(', "0.6.68"','').replace(', "0.6.69"','').replace(', "0.6.70"','')
+                current=current.replace(', "0.6.63"','').replace(', "0.6.64"','').replace(', "0.6.66"','').replace(', "0.6.67"','').replace(', "0.6.68"','').replace(', "0.6.69"','').replace(', "0.6.70"','').replace(', "0.6.71"','')
             new=ast.parse(current)
             allowed={'fill_fein_and_search','search_wa'} if name.startswith('Charity') else {'final_four_browser_lookup'}
             for tree in [old,new]:

@@ -60,6 +60,16 @@ test('NV recovery rechecks foreground after asynchronous geometry reads',async()
  const get=h.chrome.windows.get;h.chrome.windows.get=async id=>{focus(99);return get(id);};
  assert.equal(await h.context.registryNevadaMakeVisible(job,snapshot),null);assert.deepEqual(changes,[]);
 });
+test('NV distinguishes a concurrent owned Tennessee activation from a user tab switch',async()=>{
+ const {h,job,changes}=await setup();const snapshot=await h.context.registryNevadaVisibleSnapshot(job);
+ h.tabs.get(1).active=false;
+ h.tabs.set(6,{id:6,windowId:10,active:true,url:'https://tncab.tnsos.gov/portal/registered-charities-search'});
+ vm.runInContext('owned.add(6)',h.context);
+ assert.ok(await h.context.registryNevadaMakeVisible(job,snapshot));
+ assert.equal(job.nvPreviousVisible.id,6);assert.equal(changes.length,1);
+ await h.context.registryRestoreNevadaVisibility(job);assert.deepEqual(changes.map(x=>x.id),[20,10]);
+ assert.equal(h.tabs.get(6).active,true);
+});
 test('NV never claims an unfocused browser, unrelated tab, or a non-Nevada job',async()=>{
  for(const reason of ['native-app','personal-tab','NY','IL','NC']){
   const {h,job,windows,focus}=await setup();
