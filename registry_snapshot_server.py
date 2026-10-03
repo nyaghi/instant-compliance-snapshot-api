@@ -5824,12 +5824,23 @@ def il_ga_browser_lookup(org, state, evidence, purpose="registration"):
     queries = ([{"state": state, "ein": canonical_ein_digits(org.ein)}] if state == "IL" else [])
     if purpose != "identity":
         names = il_browser_name_queries(required, generated) if state == "IL" else required + generated
+        if state == "IL" and trial_identity():
+            # Put a reviewed, literal covering alias immediately before a
+            # longer name. Never promote generated fragments or single words.
+            names = il_browser_covering_alias_order(required, names)
         queries += [{"state": state, "orgName": name} for name in names]
     records, seen, completed = [], set(), []
     for query_index, query in enumerate(queries):
         # Exact EIN is decisive for IL. Name fallbacks never admit a different EIN.
         if state == "IL" and records:
             break
+        if state == "IL" and trial_identity() and "orgName" in query and any(
+                prior.get("orgName") and prior["orgName"].casefold() in query["orgName"].casefold()
+                for prior in completed):
+            # Each prior entry was a complete, validated IL substring search;
+            # all of its rows and candidate detail EINs have already been read.
+            # A failed or truncated search raises before entering completed.
+            continue
         found = evidence(query)["rows"]
         completed.append(query)
         for row in found:
@@ -7529,6 +7540,23 @@ def il_browser_name_queries(required, generated):
     return required + [name for name in generated if not any(
         other.casefold() != name.casefold() and other.casefold() in name.casefold()
         for other in planned)]
+
+
+def il_browser_covering_alias_order(required, planned):
+    """Reorder only reviewed literal aliases; retain every original query.
+
+    Coverage is checked only after the corresponding complete public search,
+    not by punctuation normalization or an assumed negative search response.
+    """
+    ordered = []
+    for name in planned:
+        covers = [alias for alias in required if alias.casefold() in name.casefold()
+                  and len(re.findall(r"[A-Za-z0-9]+", alias)) >= 2]
+        first = min(covers, key=len) if covers else name
+        for value in (first, name):
+            if value not in ordered:
+                ordered.append(value)
+    return ordered
 
 
 def registry_street_key(value):

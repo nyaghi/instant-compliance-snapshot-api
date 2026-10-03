@@ -40,6 +40,44 @@ class IllinoisCoverage(unittest.TestCase):
             cc.il_ga_browser_lookup(org, 'GA', evidence)
         self.assertEqual(seen, ['Example Charity', 'Example Foundation', 'Example'])
 
+    def test_trial_reuses_completed_literal_alias_coverage_and_retains_different_punctuation(self):
+        required=['Make-A-Wish Foundation of America','Make-A-Wish','Make-A-Wish America',
+                  'MAKE- A- WISH FOUNDATION OF AMERICA','MAWF','MAKE-A-WISH FOUNDATION']
+        seen=[]
+        def evidence(query):
+            seen.append(query);return {'rows':[]}
+        org=cc.checker.Organization(required[0],'860481941')
+        with patch.object(cc,'trial_identity',return_value={'origin':'trial'}), \
+             patch.object(cc,'licensed_charity_names',return_value=(required,['Make A Wish','make wish'])):
+            result=cc.il_ga_browser_lookup(org,'IL',evidence)
+        self.assertEqual(seen[0],{'state':'IL','ein':'860481941'})
+        searched=[q['orgName'] for q in seen if 'orgName' in q]
+        self.assertEqual(searched,['Make-A-Wish','MAKE- A- WISH FOUNDATION OF AMERICA','MAWF','Make A Wish','make wish'])
+        self.assertEqual(result.status,'Not Registered / Non-Compliant')
+        self.assertTrue(all(any(q.casefold() in name.casefold() for q in searched) for name in required))
+
+    def test_failed_covering_alias_never_proves_nonregistration(self):
+        org=cc.checker.Organization('Example Relief Foundation','123456789')
+        def evidence(query):
+            if query.get('orgName')=='Example Relief':raise TimeoutError('Truncated covering search')
+            return {'rows':[]}
+        with patch.object(cc,'trial_identity',return_value={'origin':'trial'}), \
+             patch.object(cc,'licensed_charity_names',return_value=(['Example Relief Foundation','Example Relief'],[])):
+            with self.assertRaises(TimeoutError):cc.il_ga_browser_lookup(org,'IL',evidence)
+
+    def test_trial_order_never_promotes_single_word_or_generated_covering_queries(self):
+        original=['Example Relief Foundation','Example']
+        planned=original+['Relief']
+        self.assertEqual(cc.il_browser_covering_alias_order(original,planned),planned)
+
+    def test_approved_illinois_keeps_original_reviewed_query_order(self):
+        original=['Example Relief Foundation','Example Relief'];seen=[]
+        def evidence(query):seen.append(query);return {'rows':[]}
+        with patch.object(cc,'trial_identity',return_value=None), \
+             patch.object(cc,'licensed_charity_names',return_value=(original,[])):
+            cc.il_ga_browser_lookup(cc.checker.Organization(original[0],'123456789'),'IL',evidence)
+        self.assertEqual([q['orgName'] for q in seen if 'orgName' in q],original)
+
 
 class DeadlineCleanup(unittest.TestCase):
     def setUp(self):
