@@ -75,3 +75,69 @@ test('Sales cutoff during preparation never starts a late connector search',asyn
  externalLookup:async()=>{lookups++;return {state:'GA',status:'Current'};}});
  await new Promise(setImmediate);ctrl.abort();deliver();await pending;assert.equal(lookups,0);
 });
+
+test('negotiated progressive release returns a completed lane while its peer still runs',async()=>{
+ let finishSlow, polls=0;const releases=[],seen=[];
+ const cc=setup(async(u,o)=>{const p=JSON.parse(o.body);
+  if(p.action==='start')return response({token:'signed',progressive_external_release:true});
+  if(p.action==='release-external'){releases.push(p.settled_count);return response({ok:true});}
+  if(++polls===2){assert.deepEqual(releases,[1]);finishSlow({state:'IL',status:'Current'});}
+  return response({finished:polls>=3?1:null,results:polls>=3?[{state:'CO',status:'Current'}]:[]});
+ });
+ const r=await cc.run({...base,states:['CO','GA','IL'],aliases:['Reviewed name'],onResult:x=>seen.push(x.state),
+  externalLookup:state=>state==='GA'?Promise.resolve({state,status:'Exempt'}):new Promise(resolve=>{finishSlow=resolve;})});
+ assert.deepEqual(releases,[1,2]);assert.equal(r.length,3);assert.equal(new Set(seen).size,3);
+});
+
+test('progressive release retries the cumulative count after a lost acknowledgement',async()=>{
+ let polls=0,failed=false,finishSlow;const releases=[];
+ const cc=setup(async(u,o)=>{const p=JSON.parse(o.body);
+  if(p.action==='start')return response({token:'signed',progressive_external_release:true});
+  if(p.action==='release-external'){
+   releases.push(p.settled_count);if(!failed){failed=true;throw Error('ack lost');}return response({ok:true});
+  }
+  if(++polls===2)finishSlow({state:'IL',status:'Current'});
+  return response({finished:polls>=3?1:null,results:polls>=3?[{state:'CO',status:'Current'}]:[]});
+ });
+ await cc.run({...base,states:['CO','GA','IL'],aliases:['Reviewed name'],externalLookup:state=>
+  state==='GA'?Promise.resolve({state,status:'Current'}):new Promise(resolve=>{finishSlow=resolve;})});
+ assert.deepEqual(releases,[1,1,2]);
+});
+
+test('failed connector releases capacity but preserves an inconclusive result',async()=>{
+ const releases=[];let polls=0;
+ const cc=setup(async(u,o)=>{const p=JSON.parse(o.body);
+  if(p.action==='start')return response({token:'signed',progressive_external_release:true});
+  if(p.action==='release-external'){releases.push(p.settled_count);return response({ok:true});}
+  return response({finished:++polls>=2?1:null,results:[{state:'CO',status:'Current'}]});
+ });
+ const r=await cc.run({...base,states:['CO','GA'],aliases:['Reviewed name'],externalLookup:async()=>{throw Error('source unavailable');}});
+ assert.deepEqual(releases,[1]);assert.equal(r[1].status,'Unable to Confirm');assert.equal(r[1].success,false);
+});
+
+test('older server retains the all-settled release protocol',async()=>{
+ let finishSlow,polls=0;const releases=[];
+ const cc=setup(async(u,o)=>{const p=JSON.parse(o.body);
+  if(p.action==='start')return response({token:'signed'});
+  if(p.action==='release-external'){releases.push(p);return response({ok:true});}
+  if(++polls===2){assert.equal(releases.length,0);finishSlow({state:'IL',status:'Current'});}
+  return response({finished:polls>=3?1:null,results:[{state:'CO',status:'Current'}]});
+ });
+ await cc.run({...base,states:['CO','GA','IL'],aliases:['Reviewed name'],externalLookup:state=>
+  state==='GA'?Promise.resolve({state,status:'Current'}):new Promise(resolve=>{finishSlow=resolve;})});
+ assert.equal(releases.length,1);assert(!('settled_count' in releases[0]));
+});
+
+test('canceled workflow cannot return browser reservations as new capacity',async()=>{
+ const ctrl=new AbortController(),releases=[];let complete,deliver;
+ const cc=setup(async(u,o)=>{const p=JSON.parse(o.body);
+  if(p.action==='start')return response({token:'signed',progressive_external_release:true});
+  if(p.action==='cancel')return response({ok:true});
+  if(p.action==='release-external'){releases.push(p);return response({ok:true});}
+  return new Promise(resolve=>{deliver=()=>resolve(response({finished:1,results:[]}));});
+ });
+ const pending=cc.run({...base,states:['CO','GA'],aliases:['Reviewed name'],signal:ctrl.signal,
+  externalLookup:()=>new Promise(resolve=>{complete=resolve;})});
+ await new Promise(setImmediate);ctrl.abort();complete({state:'GA',status:'Current'});deliver();await pending;
+ assert.equal(releases.length,0);
+});

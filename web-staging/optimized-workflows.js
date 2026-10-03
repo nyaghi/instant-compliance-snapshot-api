@@ -8,6 +8,8 @@
     const results=new Map(), external=states.filter(s=>s==='IL'||s==='GA');
     const needsIdentity=mode==='sales'&&external.length>0&&aliases.length===0;
     let token=null, externalDone=false, released=false;
+    const settledExternal=new Set();
+    let progressiveRelease=false, releasedCount=0;
     const requestId=crypto.randomUUID();
     const missing=state=>({state,ein,organization_name:name,status:'Unable to Confirm',success:false,
       comments:'The state check did not provide a complete response. Registration status remains unconfirmed.'});
@@ -37,6 +39,7 @@
             comments:'The Sales name-evidence step was incomplete. A negative name-only search cannot confirm non-registration. Run Standard for a full check.'};
           record(result);
         }catch{if(!signal?.aborted)record(missing(state));}
+        finally{settledExternal.add(state);}
       })).then(()=>{externalDone=true;});
     };
     if(!needsIdentity)startConnector(aliases);
@@ -48,12 +51,17 @@
           signal?.throwIfAborted();accepted=await call('start',payload); // same idempotency key
         }
         token=accepted.token;
+        progressiveRelease=accepted.progressive_external_release===true;
         if(signal?.aborted){cancel();signal.throwIfAborted();}
         let failures=0;
         const deadline=performance.now()+900000;
         while(performance.now()<deadline) {
           signal?.throwIfAborted();
-          if(externalDone&&!released&&external.length){
+          if(progressiveRelease&&settledExternal.size>releasedCount){
+            const settled_count=settledExternal.size;
+            try{await call('release-external',{settled_count});releasedCount=settled_count;}
+            catch{signal?.throwIfAborted();}
+          }else if(!progressiveRelease&&externalDone&&!released&&external.length){
             try{await call('release-external');released=true;}catch{signal?.throwIfAborted();}
           }
           let progress;

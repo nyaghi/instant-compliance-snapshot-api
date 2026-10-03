@@ -160,7 +160,8 @@ def handle(master, handler, *, trial_queue=None):
         if not match: raise ValueError('Invalid trial workflow path')
         ident, action = match.groups()
         if action == 'cancel': return trial_queue.cancel(scope, ident)
-        if action == 'release-external': return trial_queue.release_external_slots(scope, ident)
+        if action == 'release-external':
+            return trial_queue.release_external_slots(scope, ident, (payload or {}).get('settled_count'))
         return trial_queue.status(scope, ident)
     try:
         length = int(handler.headers.get('Content-Length', '0'))
@@ -182,6 +183,8 @@ def handle(master, handler, *, trial_queue=None):
                            external_states={'NY', 'IL', 'GA', 'AL', 'NC', 'NV', 'TN', 'NM'} if trial else None,
                            external_slots=8 if trial else None,
                            sales_cutoff_seconds=cutoff if 'sales_cutoff_seconds' in payload else None)
+            if trial:
+                data['progressive_external_release'] = True
         else:
             record = unpack(master, payload.get('token'), owner)
             path = '/api/lab/workflows/' + record['id']
@@ -195,7 +198,10 @@ def handle(master, handler, *, trial_queue=None):
                 identity = connector_identity(status, record)
                 if identity is not None: data['connector_identity'] = identity
             elif action in ('cancel', 'release-external'):
-                transport(path + '/' + action, {})
+                update = {}
+                if trial and action == 'release-external' and 'settled_count' in payload:
+                    update['settled_count'] = payload['settled_count']
+                transport(path + '/' + action, update)
                 data = {'ok': True}
             else: raise ValueError('Invalid workflow action')
         handler._send_json(200, data, {'Cache-Control': 'no-store'})

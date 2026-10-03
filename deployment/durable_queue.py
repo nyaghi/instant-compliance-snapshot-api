@@ -101,7 +101,7 @@ def normalize_submission(payload, supported):
 
 
 def workflow_state_limit(workflow):
-    """IL/GA run in the existing connector and count against the same ceiling."""
+    """Outstanding browser tasks count against the same workflow ceiling."""
     payload = workflow['payload']
     return max(1, payload.get('state_concurrency', 15) - payload.get('external_state_slots', 0))
 
@@ -787,15 +787,30 @@ class Queue:
                 self.event(c, now, 'cancel_requested', ident)
                 self._settle(c, now)
 
-    def release_external_slots(self, scope, ident):
-        """Idempotent release only after both client connector tasks settled."""
+    def release_external_slots(self, scope, ident, settled_count=None):
+        """Release client-settled reservations, never raise the total ceiling.
+
+        The cumulative count makes retried/out-of-order acknowledgements safe.
+        None preserves the existing all-settled protocol for older clients.
+        As before, the authenticated client owns browser completion; this is
+        scheduling evidence only and cannot establish a registration result.
+        """
         with self.transaction() as (c, now):
             w = c.execute('SELECT * FROM cc_lab_workflows WHERE scope=%s AND id=%s', (scope, ident)).fetchone()
             if not w: raise NotFound('Workflow not found')
-            if w['payload'].get('external_state_slots'):
-                payload = {**w['payload'], 'external_state_slots': 0}
+            remaining = w['payload'].get('external_state_slots', 0)
+            released = w['payload'].get('external_slots_released', 0)
+            total = remaining + released
+            if settled_count is None:
+                settled_count = total
+            if type(settled_count) is not int or not 0 <= settled_count <= total:
+                raise ValueError('Invalid settled browser-state count')
+            if settled_count > released:
+                payload = {**w['payload'], 'external_state_slots': total - settled_count,
+                           'external_slots_released': settled_count}
                 c.execute('UPDATE cc_lab_workflows SET payload=%s WHERE id=%s', (Jsonb(payload), ident))
-                self.event(c, now, 'external_browser_states_settled', ident)
+                self.event(c, now, 'external_browser_states_settled', ident,
+                           settled=settled_count, remaining=total-settled_count)
 
     def confirm_worker_stopped(self, worker, proof):
         """Operator-only recovery, never an HTTP user action or elapsed-time guess.
