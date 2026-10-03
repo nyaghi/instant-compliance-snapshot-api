@@ -62,13 +62,54 @@ async function registryNevadaVisibleSnapshot(job) {
     const tab=await chrome.tabs.get(job.tab), source=await chrome.tabs.get(job.sender.tab.id);
     if (!tab.active && tab.windowId===source.windowId && new URL(source.url).origin===P.TRIAL_ORIGIN)
       return (await chrome.tabs.query({active:true,windowId:tab.windowId}))[0]||null;
+    if (tab.active && tab.windowId!==source.windowId && new URL(source.url).origin===P.TRIAL_ORIGIN) {
+      const focus=await chrome.windows.getLastFocused();
+      const prior=(await chrome.tabs.query({active:true,windowId:focus.id}))[0];
+      // A native-app/user-window switch is never a reason to take focus.
+      if(!focus.focused || focus.id===tab.windowId || !registryNevadaOwnedForeground(prior,source))return null;
+      return {mode:'window',id:prior.id,windowId:prior.windowId,url:prior.url,
+        nvWindowId:tab.windowId,sourceWindowId:source.windowId,sourceUrl:source.url};
+    }
   } catch {}
   return null;
+}
+function registryNevadaOwnedForeground(tab,source) {
+  if(!tab?.active)return false;
+  if(tab.id===source.id)return tab.windowId===source.windowId&&tab.url===source.url;
+  if(!owned.has(tab.id))return false;
+  try {return nyRegistryPage(tab.url)||['IL','GA','AL','NC','NV','TN','NM'].some(s=>new URL(tab.url).origin===registryOrigin(s));}
+  catch {return false;}
+}
+async function registryNevadaExposeWindow(job,previous) {
+  const tab=await chrome.tabs.get(job.tab),source=await chrome.tabs.get(job.sender.tab.id);
+  const siblings=await chrome.tabs.query({windowId:tab.windowId});
+  const bounds=await chrome.windows.get(source.windowId),nv=await chrome.windows.get(tab.windowId);
+  // Read foreground last: geometry reads may yield while the user switches.
+  const focus=await chrome.windows.getLastFocused();
+  const prior=(await chrome.tabs.query({active:true,windowId:previous.windowId}))[0];
+  if(!tab.active || tab.windowId!==previous.nvWindowId || tab.windowId===source.windowId
+      || source.windowId!==previous.sourceWindowId || source.url!==previous.sourceUrl
+      || new URL(source.url).origin!==P.TRIAL_ORIGIN || new URL(tab.url).origin!==registryOrigin('NV')
+      || !new URL(tab.url).pathname.startsWith('/portal/public/') || siblings.length!==1 || siblings[0].id!==tab.id
+      || !focus.focused || focus.id!==previous.windowId || prior?.id!==previous.id || prior.url!==previous.url
+      || !registryNevadaOwnedForeground(prior,source) || nv.state==='minimized' || bounds.state==='minimized'
+      || !['left','top','width','height'].every(k=>Number.isFinite(bounds[k])) || bounds.width<1000 || bounds.height<700
+      || job.closed || Date.now()>=job.activeExpiresAt || job.tab!==tab.id || !owned.has(tab.id))return null;
+  // Unlike the four-window experiment, move only our stalled NV window.
+  // A smaller foreground window leaves other full-size collectors exposed;
+  // never reload/resubmit the in-flight command or extend its deadline.
+  const width=Math.min(960,Math.floor(bounds.width*.7)),height=Math.min(700,Math.floor(bounds.height*.7));
+  job.nvVisibilityAttempted=true;job.nvPreviousVisible=previous;
+  await chrome.windows.update(tab.windowId,{focused:true,state:'normal',width,height,
+    left:bounds.left+bounds.width-width-8,top:bounds.top+bounds.height-height-8});
+  diagnostic('nv-visibility',job,'owned separate window; same document and deadline');
+  await saveRuntime();return previous;
 }
 async function registryNevadaMakeVisible(job, initialVisible) {
   if (!P.TRIAL_ORIGIN || job.registryState!=='NV' || !initialVisible || job.closed || job.nvVisibilityAttempted
       || Date.now()>=job.activeExpiresAt || !owned.has(job.tab)) return null;
   try {
+    if(initialVisible.mode==='window')return await registryNevadaExposeWindow(job,initialVisible);
     const tab=await chrome.tabs.get(job.tab), source=await chrome.tabs.get(job.sender.tab.id);
     const active=(await chrome.tabs.query({active:true,windowId:tab.windowId}))[0];
     if (tab.active || tab.windowId!==initialVisible.windowId || tab.windowId!==source.windowId
@@ -127,6 +168,17 @@ async function registryRestoreNevadaVisibility(job) {
   try {
     const tab=await chrome.tabs.get(job.tab),prior=await chrome.tabs.get(previous.id);
     const source=await chrome.tabs.get(job.sender.tab.id);
+    if(previous.mode==='window'){
+      const focus=await chrome.windows.getLastFocused();
+      const siblings=await chrome.tabs.query({windowId:tab.windowId});
+      if(focus.focused && focus.id===previous.nvWindowId && tab.active && tab.windowId===previous.nvWindowId
+          && siblings.length===1 && siblings[0].id===tab.id && prior.windowId===previous.windowId
+          && prior.url===previous.url && source.windowId===previous.sourceWindowId && source.url===previous.sourceUrl
+          && new URL(source.url).origin===P.TRIAL_ORIGIN && new URL(tab.url).origin===registryOrigin('NV')
+          && new URL(tab.url).pathname.startsWith('/portal/public/') && registryNevadaOwnedForeground(prior,source))
+        await chrome.windows.update(previous.windowId,{focused:true});
+      return;
+    }
     if (tab.active && tab.windowId===previous.windowId && prior.windowId===tab.windowId
         && source.windowId===tab.windowId && new URL(source.url).origin===P.TRIAL_ORIGIN
         && new URL(tab.url).origin===registryOrigin('NV') && new URL(tab.url).pathname.startsWith('/portal/public/'))
