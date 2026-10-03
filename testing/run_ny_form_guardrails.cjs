@@ -3,12 +3,13 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');const vm=require('node:vm');const path=require('node:path');
 const root=path.join(__dirname,'..','browser-connector');
-async function run({alreadyVerified=false,rejectFirst=false,failSearch=false,verificationDelay=0,trial=false,resetOnClear=false,dirtyFields=false}={}) {
+async function run({alreadyVerified=false,rejectFirst=false,failSearch=false,verificationDelay=0,trial=false,resetOnClear=false,dirtyFields=false,initialFields={}}={}) {
   const origin='https://charities-search.ag.ny.gov',calls=[],listeners={};let searches=0,resolve,clears=0;
   const completed=new Promise(r=>resolve=r);
   class Input {constructor(){this.v='';}get value(){return this.v;}set value(v){this.v=v;}dispatchEvent(){}}
   const inputs=Object.fromEntries(['ein','orgName','orgID','city'].map(k=>[k,new Input()]));
   if(dirtyFields)for(const input of Object.values(inputs))input.value='Previous organization';
+  for(const [key,value] of Object.entries(initialFields))inputs[key].value=value;
   const buttons=[{textContent:'Clear fields',click:()=>{clears++;Object.values(inputs).forEach(x=>x.value='');if(resetOnClear){buttons[2].disabled=true;buttons[1].disabled=false;}}},
     {textContent:'Verify',disabled:alreadyVerified,click:()=>{calls.push('verify');buttons[2].disabled=false;context.window.fetch('https://charities-search-api.ag.ny.gov/api/recaptcha/verify',{method:'POST'});}},
     {textContent:'Search',disabled:!alreadyVerified,click:()=>{calls.push('search');context.window.fetch('https://charities-search-api.ag.ny.gov/api/FileNet/RegistrySearch?ein='+inputs.ein.value);}}];
@@ -37,11 +38,17 @@ async function run({alreadyVerified=false,rejectFirst=false,failSearch=false,ver
   const reply=await completed;return {reply,calls,clears,inputs};
 }
 
-test('trial verified form replaces all old text filters without resetting verification',async()=>{
- const {reply,calls,clears,inputs}=await run({trial:true,alreadyVerified:true,resetOnClear:true,dirtyFields:true});
+test('trial verified form replaces the same field without resetting verification',async()=>{
+ const {reply,calls,clears,inputs}=await run({trial:true,alreadyVerified:true,resetOnClear:true,initialFields:{ein:'987654321'}});
  assert.equal(reply.ok,true);assert.equal(clears,0);assert.deepEqual(calls,['search']);
  assert.equal(inputs.ein.value,'123456789');
  for(const key of ['orgName','orgID','city'])assert.equal(inputs[key].value,'');
+});
+
+test('trial adapter refuses cross-field edits until the worker supplies a fresh form',async()=>{
+ const {reply,calls,clears}=await run({trial:true,alreadyVerified:true,resetOnClear:true,dirtyFields:true});
+ assert.equal(reply.ok,false);assert.equal(reply.reason,'NY_CONNECTOR_SEARCH_FORM_CHANGED');
+ assert.deepEqual(calls,[]);assert.equal(clears,0);
 });
 test('trial unverified form still uses normal Clear and Verify',async()=>{
  const {reply,calls,clears}=await run({trial:true,resetOnClear:true});

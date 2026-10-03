@@ -1,10 +1,11 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
-function relay(){
+function relay(fields={}){
  const NY='https://charities-search.ag.ny.gov',listeners=[],requests=[],timers=[],handlers=[];
  const window={top:null,addEventListener:(n,f)=>listeners.push(f),postMessage:m=>requests.push(m)};window.top=window;
  const chrome={runtime:{id:'fixture',onMessage:{addListener:f=>handlers.push(f)}}};
- vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../browser-connector/ny-content.js'),'utf8'),{window,location:{origin:NY},chrome,document:{querySelector:()=>({})},setTimeout:(f,ms)=>{const t={f,ms};timers.push(t);return t;},clearTimeout:t=>t.cleared=true});
+  let source=fs.readFileSync(path.join(process.env.CC_TEST_TRIAL_DIR||path.join(__dirname,'../browser-connector'),'ny-content.js'),'utf8').replaceAll('cc-final-four-ny-page-v1','cc-ny-page-v1');
+  vm.runInNewContext(source,{window,location:{origin:NY,pathname:'/RegistrySearch',href:NY+'/RegistrySearch'},chrome,document:{querySelector:s=>({value:fields[s.slice(1)]||''})},setTimeout:(f,ms)=>{const t={f,ms};timers.push(t);return t;},clearTimeout:t=>t.cleared=true});
  const send=(m,fn,sender={id:'fixture'})=>handlers[0](m,sender,fn);
  const response=(id,query)=>listeners[0]({source:window,origin:NY,data:{channel:'cc-ny-page-v1',direction:'response',id,ok:true,evidence:{query,rows:[]},verificationRetryUsed:true}});
  return {send,response,requests,timers};
@@ -31,4 +32,13 @@ test('permitted retry has a new attempt while reconnect preserves its command',(
  const h=relay(),m={action:'search',id:'x'.repeat(80),attempt:'0:0',query:{ein:'123456789'}};
  h.send(m,()=>{});h.response(m.id,m.query);h.send({...m,attempt:'0:1'},()=>{});
  assert.equal(h.requests.length,2);h.send({...m,attempt:'0:1'},()=>{});assert.equal(h.requests.length,2);
+});
+
+test('NY readiness exposes populated field names without their contents',()=>{
+ const h=relay({ein:'271635830',orgName:'A public charity',city:'Example'});let response;
+ h.send({action:'ready'},r=>response=r);
+ assert.deepEqual(Array.from(response.formFields),['ein','orgName','city']);
+ assert.equal(response.ready,true);
+ assert.ok(!JSON.stringify(response).includes('271635830'));
+ assert.ok(!JSON.stringify(response).includes('A public charity'));
 });

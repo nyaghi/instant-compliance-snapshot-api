@@ -972,6 +972,15 @@
     return !!(input&&input.value===query.name&&starts&&words.value===starts.value&&print&&!print.checked
       &&visible(button)&&!button.disabled&&text(button)==='Search');
   }
+  function ncReadiness(query) {
+    const button=document.querySelector('#SubmitButton');
+    return {document_complete:document.readyState==='complete',visible:document.visibilityState==='visible',
+      search_form:location.pathname==='/online_services/search/by_title/search_charities',
+      results_page:location.pathname==='/online_services/search/Charities_Results',
+      processing:!!button&&(button.disabled||text(button)==='Processing'),
+      query_matches:document.querySelector('#SearchCriteria')?.value===query.name,
+      idle:ncIdleSearch(query)};
+  }
   function ncRetry(query) {
     if(query?.state!=='NC'||query.operation!=='search'||typeof query.name!=='string'||!query.name.trim()||query.name.length>500)
       throw new Error('REGISTRY_NC_QUERY_INVALID');
@@ -1379,7 +1388,7 @@
       ...(NV ? {nv_readiness:nvReadiness()} : {}),
       ...(NC ? {verification_pending:/^Just a moment/i.test(document.title||'')
         && /Performing security verification|verifies you are not a bot/i.test(text(document.body)),
-        ...(m.query ? {nc_search_idle:ncIdleSearch(m.query)} : {})} : {}),
+        ...(m.query ? {nc_search_idle:ncIdleSearch(m.query),nc_readiness:ncReadiness(m.query)} : {})} : {}),
       ...(TN ? {verification_pending:!!document.querySelector('div[id^="recaptcha_"]') && !registryDocumentReady()} : {})};
     if (NC) {
       if(m.action==='registry-nc-form')return ncForm(m.query);

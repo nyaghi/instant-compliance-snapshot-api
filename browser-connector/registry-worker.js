@@ -5,7 +5,7 @@ async function registryCreateOwnedTab(job,url,origin) {
   let tab;
   // Isolate active-page requirements without taking the user's focus or
   // another registry's active tab. Ordinary installed connectors stay exact.
-  if(P.TRIAL_ORIGIN && ['NV','NY','IL'].includes(job.registryState) && new URL(origin.url).origin===P.TRIAL_ORIGIN){
+  if(P.TRIAL_ORIGIN && ['NV','NY','IL','NC'].includes(job.registryState) && new URL(origin.url).origin===P.TRIAL_ORIGIN){
     const window=await chrome.windows.create({url,type:'normal',focused:false});
     tab=window?.tabs?.[0];
     if(!Number.isInteger(tab?.id))throw new Error('NY_CONNECTOR_INCOMPLETE');
@@ -99,6 +99,15 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
   try { while (!job.closed && Date.now()<deadline) {
     try {
       const value=await registryMessage(job,{action:"registry-ready",...(ncSubmittedQuery ? {query:ncSubmittedQuery} : {})});
+      if(P.TRIAL_ORIGIN && job.registryState==='NC' && ncSubmittedQuery && value?.nc_readiness) {
+        const observed=value.nc_readiness,signature=JSON.stringify(observed);
+        if(signature!==job.ncSubmissionSignature){
+          job.ncSubmissionSignature=signature;job.ncSubmissionObservations ||= [];
+          const entry={seconds:(Date.now()-started)/1000,...observed};
+          if(job.ncSubmissionObservations.length<8)job.ncSubmissionObservations.push(entry);
+          else job.ncSubmissionObservations[7]=entry;
+        }
+      }
       if(job.registryState==='NM' && value?.source_failure==='REGISTRY_NM_SOURCE_ERROR')
         throw new Error('NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR');
       if(job.registryState==='NV'&&value?.nv_readiness)job.nvReadiness=value.nv_readiness;
@@ -453,6 +462,7 @@ async function performRegistryQuery(job, query) {
 }
 async function registryNorthCarolinaQuery(job,query) {
   if(query.operation==='search') {
+    job.ncSubmissionObservations=[];job.ncSubmissionSignature=null;
     const prior=await registryNavigate(job,registryStart('NC'));
     const submitted=await registryMessage(job,{action:'registry-nc-form',query});
     if(!submitted?.ok||submitted.phase!=='submitted')throw new Error('NY_CONNECTOR_INCOMPLETE');

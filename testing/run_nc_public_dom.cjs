@@ -129,6 +129,18 @@ test('NC query dispatch does not depend on a background-tab timer',()=>{
  assert.equal(h.api.ncForm({state:'NC',operation:'search',name:'Reviewed Alternate Name'}).phase,'submitted');
  assert.equal(h.formClicks(),1);
 });
+
+test('NC submission observations distinguish visible processing from an idle hidden form',async()=>{
+ const h=harness({url:origin+'/online_services/search/by_title/search_charities'}),q={state:'NC',operation:'search',name:'Achieving'};
+ h.api.ncForm(q);h.context.document.visibilityState='hidden';
+ let value=(await h.api.handle({action:'registry-ready',query:q})).nc_readiness;
+ assert.equal(value.visible,false);assert.equal(value.idle,true);assert.equal(value.query_matches,true);
+ h.context.document.visibilityState='visible';h.button.disabled=true;h.button.innerText='Processing';
+ value=(await h.api.handle({action:'registry-ready',query:q})).nc_readiness;
+ assert.equal(value.visible,true);assert.equal(value.processing,true);assert.equal(value.idle,false);
+ assert.ok(!JSON.stringify(value).includes('Achieving'));
+ assert.deepEqual(Object.keys(value).sort(),['document_complete','idle','processing','query_matches','results_page','search_form','visible']);
+});
 test('NC retains an already selected mode without firing its source change handler',()=>{
  const h=harness({url:origin+'/online_services/search/by_title/search_charities'});
  h.words.value='0';h.words.dispatchEvent=()=>{throw Error('Unnecessary search-type change');};

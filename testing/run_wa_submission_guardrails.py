@@ -18,8 +18,8 @@ class Submission(unittest.TestCase):
                 # three existing compatibility gates; retain all other scope checks.
                 self.assertEqual(current.count(', "0.6.63"'),3)
                 self.assertEqual(current.count(', "0.6.64"'),3)
-                self.assertEqual(current.count(', "0.6.65"'),3)
-                current=current.replace(', "0.6.63"','').replace(', "0.6.64"','').replace(', "0.6.65"','')
+                self.assertEqual(current.count(', "0.6.66"'),3)
+                current=current.replace(', "0.6.63"','').replace(', "0.6.64"','').replace(', "0.6.66"','')
             new=ast.parse(current)
             allowed={'fill_fein_and_search','search_wa'} if name.startswith('Charity') else {'final_four_browser_lookup'}
             for tree in [old,new]:

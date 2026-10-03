@@ -24,7 +24,10 @@
     if (sender.id !== chrome.runtime.id) return false;
     if (message?.action === "ready") {
       const ready = !!document.querySelector("#ein") || /^\/RegistrySearch\/[0-9]{2}-[0-9]{2}-[0-9]{2}\/?$/.test(location.pathname);
-      respond({ ready, documentId, url: location.href, rateLimited: !ready && /(?:429\s+Too Many Requests|Too Many Requests\s*429)/i.test(document.body?.innerText || "") });
+      // Report only which public filters are populated, never their values or
+      // verification data. The worker can avoid an invalid EIN/name transition.
+      const formFields = ["ein", "orgName", "orgID", "city"].filter(key => document.querySelector("#" + key)?.value);
+      respond({ ready, documentId, url: location.href, formFields, rateLimited: !ready && /(?:429\s+Too Many Requests|Too Many Requests\s*429)/i.test(document.body?.innerText || "") });
       return false;
     }
     if (message?.action === "back-to-results") {

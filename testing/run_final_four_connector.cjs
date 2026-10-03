@@ -309,7 +309,7 @@ test('NC early recovery requires fresh exact idle-form proof after its one ackno
  assert.equal(p.messages.find(m=>m.id===id(2)&&!m.progress),undefined);
  await h.advance(37000);assert.equal(p.messages.find(m=>m.id===id(2)&&!m.progress)?.reason,'NY_CONNECTOR_TAB_READY_TIMEOUT');
 });
-test('NC stalled acknowledged form becomes visible only for its one exact-query retry',async()=>{
+test('NC isolated form stays visible for its one exact-query retry without stealing focus',async()=>{
  const {h,search,retries}=ncStalledSubmission(),update=h.chrome.tabs.update,changes=[];
  h.tabs.get(1).active=true;
  h.chrome.tabs.query=async q=>[...h.tabs.values()].filter(t=>t.active&&t.windowId===q.windowId);
@@ -324,7 +324,7 @@ test('NC stalled acknowledged form becomes visible only for its one exact-query 
  };
  const p=connect(h,'NC');await h.query(p,2,search);await h.advance(2900);assert.deepEqual(changes,[]);
  await h.advance(550);assert.equal(retries(),1);assert.equal(p.messages.find(m=>m.id===id(2)&&!m.progress)?.ok,true);
- assert.deepEqual(changes,[h.created[0],1]);assert.equal(h.reloads.length,0);
+ assert.deepEqual(changes,[]);assert.equal(h.tabs.get(1).active,true);assert.equal(h.reloads.length,0);
 });
 test('NC a visible Processing state is not resubmitted',async()=>{
  const {h,search,retries}=ncStalledSubmission({processing:true}),p=connect(h,'NC');
@@ -343,6 +343,7 @@ test('NC persistent visible verification is identified separately from a registr
 
 function ncVisibilityFixture({persistent=false,missingContent=false}={}){
  const f=ncFixture(),{h}=f,send=h.chrome.tabs.sendMessage,update=h.chrome.tabs.update,changes=[];
+ let challenges=0;
  h.tabs.get(1).active=true;
  h.chrome.tabs.query=async q=>[...h.tabs.values()].filter(t=>t.active&&t.windowId===q.windowId);
  h.chrome.tabs.update=async(id,options)=>{
@@ -351,22 +352,23 @@ function ncVisibilityFixture({persistent=false,missingContent=false}={}){
  };
  h.chrome.tabs.sendMessage=async(id,m)=>{
   const tab=h.tabs.get(id);
-  if(m.action==='registry-ready'&&tab.url.endsWith('/search_charities')&&(!tab.active||persistent)){
+  if(m.action==='registry-ready'&&tab.url.endsWith('/search_charities')&&(persistent||challenges===0)){
+   challenges++;
    tab.title='Just a moment...';
    if(missingContent)throw Error('Content receiver is not ready');
    return {...(await send(id,m)),ready:false,verification_pending:true};
   }
   tab.title='Search Charities';return send(id,m);
  };
- return {...f,changes};
+ return {...f,changes,challenges:()=>challenges};
 }
 
-test('NC passive verification reuses its owned document and restores the prior active tab',async()=>{
+test('NC passive verification reuses its isolated document without changing user focus',async()=>{
  for(const missingContent of [false,true]){
-  const {h,search,changes}=ncVisibilityFixture({missingContent}),p=connect(h,'NC');
+  const {h,search,changes,challenges}=ncVisibilityFixture({missingContent}),p=connect(h,'NC');
   await h.query(p,2,search);await h.advance(250);
   assert.equal(p.messages.find(m=>m.id===id(2)&&!m.progress)?.ok,true);
-  assert.deepEqual(changes,[h.created[0],1]);assert.equal(h.tabs.get(1).active,true);
+  assert.equal(challenges(),1);assert.deepEqual(changes,[]);assert.equal(h.tabs.get(1).active,true);
   assert.equal(h.created.length,1);assert.equal(h.reloads.length,0);
  }
 });
@@ -375,15 +377,15 @@ test('NC persistent verification is not reloaded, retried, or given a fresh time
  const {h,search,changes}=ncVisibilityFixture({persistent:true}),p=connect(h,'NC');
  await h.query(p,2,search);await h.advance(45001);
  assert.equal(p.messages.find(m=>m.id===id(2)&&!m.progress)?.reason,'NY_CONNECTOR_NC_VERIFICATION_PENDING');
- assert.deepEqual(changes,[h.created[0],1]);assert.equal(h.reloads.length,0);assert.equal(h.calls.length,0);
+ assert.deepEqual(changes,[]);assert.equal(h.reloads.length,0);assert.equal(h.calls.length,0);
 });
 
 test('NC verification recovery does not override a user switching to another tab',async()=>{
  const {h,search,changes}=ncVisibilityFixture({persistent:true}),p=connect(h,'NC');
  await h.query(p,2,search);
- h.tabs.get(h.created[0]).active=false;h.tabs.set(3,{id:3,windowId:10,url:'https://example.com',active:true});
+ h.tabs.get(h.created[0]).active=false;h.tabs.set(3,{id:3,windowId:h.tabs.get(h.created[0]).windowId,url:'https://example.com',active:true});
  await h.advance(45001);
- assert.deepEqual(changes,[h.created[0]]);assert.equal(h.tabs.get(3).active,true);
+ assert.deepEqual(changes,[]);assert.equal(h.tabs.get(3).active,true);
 });
 
 test('NC visibility recovery does not take a source tab in another window',async()=>{

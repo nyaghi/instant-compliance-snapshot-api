@@ -373,6 +373,29 @@ async function openDetail(job, query) {
   if (!opened?.ok) throw new Error(opened?.reason || "NY_CONNECTOR_DETAIL_LINK_MISSING");
   await waitForRegistryDocument(job, path);
 }
+async function prepareNySearchForm(job, query) {
+  if (!P.TRIAL_ORIGIN || Object.hasOwn(query, "orgID")) return;
+  const key=Object.keys(query)[0],tab=await chrome.tabs.get(job.tab);
+  if (job.closed || Date.now()>=job.activeExpiresAt) throw new Error("NY_CONNECTOR_INTERRUPTED");
+  const url=new URL(tab.url);
+  if (!owned.has(tab.id) || url.origin!==P.NY || !/^\/RegistrySearch\/?$/.test(url.pathname)) throw new Error("NY_CONNECTOR_INCOMPLETE");
+  const before=await chrome.tabs.sendMessage(tab.id,{action:"ready"},{frameId:0});
+  if (!Array.isArray(before?.formFields) || !before.formFields.some(field=>field!==key)) return;
+  if (!before.documentId) throw new Error("NY_CONNECTOR_SEARCH_FORM_CHANGED");
+  // A fresh normal page resets the state's form model, unlike changing its
+  // prior EIN input to an empty string. Do not reset cookies, retry allowances,
+  // or the lookup deadline. Same-field searches retain the verified document.
+  const current=await chrome.tabs.get(tab.id);
+  if(job.closed || Date.now()>=job.activeExpiresAt)throw new Error("NY_CONNECTOR_INTERRUPTED");
+  if(job.tab!==tab.id || !owned.has(tab.id) || current.url!==tab.url)throw new Error("NY_CONNECTOR_SEARCH_FORM_CHANGED");
+  await chrome.tabs.reload(tab.id);job.generation++;
+  await waitForRegistryDocument(job,url.pathname,before.documentId);
+  if (job.closed || Date.now()>=job.activeExpiresAt) throw new Error("NY_CONNECTOR_INTERRUPTED");
+  const after=await chrome.tabs.sendMessage(tab.id,{action:"ready"},{frameId:0});
+  if (after?.formFields?.some(field=>field!==key)) throw new Error("NY_CONNECTOR_SEARCH_FORM_CHANGED");
+  diagnostic("ny-form-transition",job,"new normal document for a different search field");
+  await saveRuntime();
+}
 async function performSearch(job, query, id) {
   if (job.closed) return;
   if (job.command?.id === id && !P.sameQuery(job.command.query, query)) { post(job, { id, ok: false, reason: "NY_CONNECTOR_INVALID_SEQUENCE" }); return; }
@@ -411,6 +434,7 @@ async function performSearch(job, query, id) {
           if(!returned?.ok)throw new Error('NY_CONNECTOR_RETURN_FORM_TIMEOUT');
           await waitForRegistryDocument(job,'/RegistrySearch');
         }
+        await prepareNySearchForm(job,query);
         if (job.closed) return;
         const generation = job.generation;
         // Stable across reconnection, distinct for an already permitted retry.
@@ -532,6 +556,7 @@ async function performSearch(job, query, id) {
     job.nyLastSearchQuery = {...query};
   }
   if(P.TRIAL_ORIGIN&&job.registryState==='NV'&&job.nvReadiness)response.nv_readiness=job.nvReadiness;
+  if(P.TRIAL_ORIGIN&&job.registryState==='NC'&&job.ncSubmissionObservations)response.nc_submission=job.ncSubmissionObservations;
   job.lastResponse = { id, ...response, ...(!response.ok && repair.nextAllowedAt > Date.now() ? { retryAt: repair.nextAllowedAt } : {}) };
   try { await saveRuntime(); } catch { close(job, "NY_CONNECTOR_INTERRUPTED"); return; }
   post(job, job.lastResponse);

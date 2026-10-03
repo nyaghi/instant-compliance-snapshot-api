@@ -44,3 +44,53 @@ test('closing the source removes its idle NY collector, without touching other N
  h.chrome.tabs.onRemoved.emit(1);await tick();assert.ok(!h.tabs.has(100));assert.ok(h.tabs.has(2));
  assert.equal(h.data.session.ccnyRuntime.trialNyIdle,undefined);
 });
+
+async function fieldTransitionFixture(){
+ const h=await setup();let fields=[],document=1,reloads=0;
+ const original=h.chrome.tabs.sendMessage;
+ h.chrome.tabs.reload=async()=>{reloads++;document++;fields=[];};
+ h.chrome.tabs.sendMessage=async(tab,m)=>{
+  if(m.action==='ready')return {ready:true,url:h.tabs.get(tab).url,documentId:String(document),formFields:[...fields]};
+  if(m.action==='search'&&!m.query.orgID){
+   const key=Object.keys(m.query)[0];
+   // Live NY returned HTTP400 after editing EIN to empty and switching to
+   // name. A fresh name-only form and same-field name edits both succeeded.
+   if(fields.some(old=>old!==key))return {ok:false,reason:'NY_CONNECTOR_SEARCH_HTTP_ERROR'};
+   fields=[key];
+  }
+  return original(tab,m);
+ };
+ return {h,reloads:()=>reloads,fields:()=>fields};
+}
+test('NY EIN-to-name uses a new normal document, while same-field queries reuse verification',async()=>{
+ const {h,reloads}=await fieldTransitionFixture(),p=h.connect();
+ assert.equal((await h.query(p,11,{ein:'271635830'})).ok,true);
+ const deadline=h.data.session.ccnyRuntime.queue[0].activeExpiresAt;
+ assert.equal((await h.query(p,12,{orgName:'Achieving the Dream, Inc.'})).ok,true);
+ assert.equal(reloads(),1);
+ assert.equal((await h.query(p,13,{orgName:'Achieving The Dream Inc'})).ok,true);
+ assert.equal(reloads(),1,'same-field alias must not repeat verification');
+ assert.equal(h.data.session.ccnyRuntime.queue[0].activeExpiresAt,deadline);
+ assert.deepEqual(h.created,[100]);assert.deepEqual(h.repairs,[]);
+});
+test('NY cross-organization reuse checks the actual restored form filters',async()=>{
+ const {h,reloads}=await fieldTransitionFixture(),p=h.connect();
+ await h.query(p,11,{orgName:'Previous Charity'});p.onMessage.emit({action:'finish',id:id(12)});await tick();
+ await h.advance(3000);const q=h.connect(2);
+ assert.equal((await h.query(q,21,{ein:'271635830'})).ok,true);assert.equal(reloads(),1);
+ assert.deepEqual(h.created,[100]);assert.ok(h.tabs.has(2));
+});
+
+test('NY form transition stops if the job expires during readiness inspection',async()=>{
+ const {h,reloads}=await fieldTransitionFixture(),p=h.connect();
+ await h.query(p,11,{ein:'271635830'});
+ const original=h.chrome.tabs.sendMessage,job=vm.runInContext('allJobs()[0]',h.context);
+ h.chrome.tabs.sendMessage=async(tab,m)=>{
+  const result=await original(tab,m);
+  if(m.action==='ready')job.activeExpiresAt=0;
+  return result;
+ };
+ const result=await h.query(p,12,{orgName:'Achieving the Dream, Inc.'});
+ assert.equal(result.ok,false);assert.equal(result.reason,'NY_CONNECTOR_INTERRUPTED');
+ assert.equal(reloads(),0);assert.equal(h.queries.length,1);
+});

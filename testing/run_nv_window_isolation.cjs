@@ -11,8 +11,9 @@ async function setup(trial=true){
   const windows=[];
   h.chrome.windows={create:async options=>{
     windows.push(options);
-    const tab=await h.chrome.tabs.create({windowId:20,active:true,url:options.url});
-    return {id:20,tabs:[tab]};
+    const windowId=19+windows.length;
+    const tab=await h.chrome.tabs.create({windowId,active:true,url:options.url});
+    return {id:windowId,tabs:[tab]};
   }};
   h.chrome.tabs.query=async q=>[...h.tabs.values()].filter(t=>t.windowId===q.windowId&&t.active===q.active);
   h.chrome.tabs.update=async(id,options)=>{
@@ -48,7 +49,7 @@ test('trial Nevada stays active when another state activates its own collector',
 });
 
 test('Nevada continuation reuses its window and ordinary states keep existing creation',async()=>{
-  for(const [trial,state,expectedWindows] of [[true,'NV',1],[false,'NV',0],[true,'NC',0],[true,'TN',0],[true,'IL',1],[false,'IL',0]]){
+  for(const [trial,state,expectedWindows] of [[true,'NV',1],[false,'NV',0],[true,'NC',1],[true,'TN',0],[true,'IL',1],[false,'IL',0]]){
     const {h,job,windows}=await setup(trial);job.registryState=state;
     const url=vm.runInContext(`registryStart('${state}')`,h.context);
     await h.context.registryNavigate(job,url);
@@ -63,6 +64,19 @@ test('Nevada continuation reuses its window and ordinary states keep existing cr
       assert.equal(windows.length,1);assert.equal(h.created.length,1);
     }
   }
+});
+
+test('North Carolina keeps its active form when Tennessee activates in the source window',async()=>{
+ const {h,job,windows}=await setup();job.registryState='NC';
+ await h.context.registryNavigate(job,vm.runInContext("registryStart('NC')",h.context));
+ h.tabs.set(4,{id:4,windowId:10,active:false,url:vm.runInContext("registryStart('TN')",h.context)});
+ vm.runInContext('owned.add(4)',h.context);
+ await h.context.registryNorthCarolinaVisibility({tab:4,sender:{tab:{id:1}},registryState:'TN',closed:false});
+ assert.equal(h.tabs.get(4).active,true);
+ assert.equal(h.tabs.get(job.tab).active,true,'TN must not hide NC during submission');
+ assert.notEqual(h.tabs.get(job.tab).windowId,h.tabs.get(4).windowId);
+ assert.equal(windows[0].focused,false);assert.equal(job.activeExpiresAt,70000);
+ const nc=job.tab;await h.context.close(job);assert.deepEqual(h.removed,[nc]);assert.ok(h.tabs.has(4)&&h.tabs.has(1));
 });
 
 test('Illinois trial verification can await its already active isolated form without focus changes',async()=>{

@@ -173,22 +173,22 @@
   async function run(query, forceVerification = false) {
     if (Object.hasOwn(query, "orgID")) return runDetail(query);
     await returnToResults();
-    if (P.TRIAL_ORIGIN && !forceVerification && button("Search") && !button("Search").disabled) {
-      // A verified form restored by Back is already allowed to search. Replace
-      // its text filters through normal input events instead of resetting the
-      // whole form. Every response still has to match the new query exactly.
-      for (const id of ["ein", "orgName", "orgID", "city"]) {
-        const field = document.getElementById(id);
-        if (!field) throw new Error("NY_CONNECTOR_INCOMPLETE");
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(field, "");
-        field.dispatchEvent(new Event("input", { bubbles: true }));
-        field.dispatchEvent(new Event("change", { bubbles: true }));
-      }
+    const reuseVerifiedForm = P.TRIAL_ORIGIN && !forceVerification && button("Search") && !button("Search").disabled;
+    if (reuseVerifiedForm) {
+      // The enabled form supports same-field reuse. Editing an old EIN to
+      // blank and switching to a name produced HTTP400 in the live portal.
+      // The worker must obtain a fresh document for that transition; do not
+      // clear foreign filters here and mistake a visible blank for a reset.
+      const key = Object.keys(query)[0];
+      if (["ein", "orgName", "orgID", "city"].some(id => id !== key && document.getElementById(id)?.value))
+        throw new Error("NY_CONNECTOR_SEARCH_FORM_CHANGED");
     } else {
       const clear = await until(() => button("Clear fields"), 10000, "NY_CONNECTOR_CLEAR_BUTTON_TIMEOUT");
       clear.click();
     }
-    await until(() => ["ein", "orgName", "orgID", "city"].every(id => document.getElementById(id)?.value === ""), 3000, "NY_CONNECTOR_CLEAR_FIELDS_TIMEOUT");
+    await until(() => ["ein", "orgName", "orgID", "city"].every(id =>
+      id === Object.keys(query)[0] && reuseVerifiedForm
+        || document.getElementById(id)?.value === ""), 3000, "NY_CONNECTOR_CLEAR_FIELDS_TIMEOUT");
     const [key, value] = Object.entries(query)[0];
     const input = document.getElementById(key);
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, value);
