@@ -1,6 +1,17 @@
 /* Public-registry transport in the existing connector; no independent runtime. */
 const registryOrigin = state => ({IL:"https://charitable.illinoisattorneygeneral.gov",GA:"https://verify.sos.ga.gov",AL:"https://ago.igovsolution.net",NC:"https://www.sosnc.gov",NV:"https://orion.nv.gov",TN:"https://tncab.tnsos.gov",NM:"https://secure.nmdoj.gov"})[state];
 const registryStart = state => registryOrigin(state) + ({IL:"/search",GA:"/verification/Search.aspx?facility=Y",AL:"/online/Lookups/Business.aspx",NC:"/online_services/search/by_title/search_charities",NV:"/portal/public/#/public/nvsos/en/CaseXscreen?screen=external-GenericFilingsSearch&tabRoute=business",TN:"/portal/registered-charities-search",NM:"/CharitySearch/"})[state];
+async function registryCreateOwnedTab(job,url,origin) {
+  let tab;
+  // Isolate active-page requirements without taking the user's focus or
+  // another registry's active tab. Ordinary installed connectors stay exact.
+  if(P.TRIAL_ORIGIN && ['NV','NY','IL'].includes(job.registryState) && new URL(origin.url).origin===P.TRIAL_ORIGIN){
+    const window=await chrome.windows.create({url,type:'normal',focused:false});
+    tab=window?.tabs?.[0];
+    if(!Number.isInteger(tab?.id))throw new Error('NY_CONNECTOR_INCOMPLETE');
+  } else tab=await chrome.tabs.create({windowId:origin.windowId,url,active:false});
+  job.tab=tab.id;owned.add(tab.id);await saveRuntime();
+}
 async function registryNevadaVisibleSnapshot(job) {
   if (!P.TRIAL_ORIGIN || job.registryState!=='NV' || job.nvVisibilityAttempted || !owned.has(job.tab)) return null;
   try {
@@ -213,15 +224,9 @@ async function registryNavigate(job, url, budgetMs = 45000, freshNvRecovery = fa
       // recovery. An active tab in a separate, unfocused normal window removes
       // that competition without serializing states or extending their budgets.
       // Existing owned-tab cleanup closes this window's only tab on completion.
-      let tab;
-      if(P.TRIAL_ORIGIN && job.registryState==='NV' && new URL(origin.url).origin===P.TRIAL_ORIGIN){
-        const window=await chrome.windows.create({url,type:'normal',focused:false});
-        tab=window?.tabs?.[0];
-        if(!Number.isInteger(tab?.id))throw new Error('NY_CONNECTOR_INCOMPLETE');
-      } else tab=await chrome.tabs.create({windowId:origin.windowId,url,active:false});
       // Record ownership before creation settles so cancellation can clean up
       // a window that Chrome creates after the caller has already stopped.
-      job.tab=tab.id;owned.add(tab.id);await saveRuntime();
+      await registryCreateOwnedTab(job,url,origin);
     })();
     await job.creating;job.creating=null;
   }
@@ -235,7 +240,8 @@ async function registryIllinoisVerification(job, collect) {
     return {ok:false,reason:"NY_CONNECTOR_IL_VERIFICATION_PENDING"};
   const tab = await chrome.tabs.get(job.tab);
   const origin = await chrome.tabs.get(job.sender.tab.id);
-  if (tab.url !== registryStart("IL") || tab.windowId !== origin.windowId)
+  const activeTrialCollector=P.TRIAL_ORIGIN && new URL(origin.url).origin===P.TRIAL_ORIGIN && tab.active;
+  if (tab.url !== registryStart("IL") || (tab.windowId !== origin.windowId && !activeTrialCollector))
     throw new Error("NY_CONNECTOR_INCOMPLETE");
   const previous = (await chrome.tabs.query({active:true,windowId:tab.windowId}))[0];
   diagnostic("il-verification",job,"same-document visibility recovery");

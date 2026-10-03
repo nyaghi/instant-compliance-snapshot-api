@@ -48,7 +48,7 @@ test('trial Nevada stays active when another state activates its own collector',
 });
 
 test('Nevada continuation reuses its window and ordinary states keep existing creation',async()=>{
-  for(const [trial,state,expectedWindows] of [[true,'NV',1],[false,'NV',0],[true,'NC',0],[true,'TN',0],[true,'IL',0]]){
+  for(const [trial,state,expectedWindows] of [[true,'NV',1],[false,'NV',0],[true,'NC',0],[true,'TN',0],[true,'IL',1],[false,'IL',0]]){
     const {h,job,windows}=await setup(trial);job.registryState=state;
     const url=vm.runInContext(`registryStart('${state}')`,h.context);
     await h.context.registryNavigate(job,url);
@@ -65,6 +65,15 @@ test('Nevada continuation reuses its window and ordinary states keep existing cr
   }
 });
 
+test('Illinois trial verification can await its already active isolated form without focus changes',async()=>{
+ const {h,job}=await setup();job.registryState='IL';job.activeExpiresAt=90000;
+ await h.context.registryNavigate(job,vm.runInContext("registryStart('IL')",h.context));
+ let allowance;
+ const result=await h.context.registryIllinoisVerification(job,async ms=>{allowance=ms;return {ok:true};});
+ assert.equal(result.ok,true);assert.equal(allowance,45000);assert.equal(job.activeExpiresAt,90000);
+ assert.equal(h.tabs.get(1).active,true);assert.equal(h.tabs.get(job.tab).active,true);
+});
+
 test('cancellation during isolated window creation removes the owned tab',async()=>{
   const {h,job}=await setup();let release;
   h.deferCreate(new Promise(r=>{release=r;}));
@@ -73,4 +82,23 @@ test('cancellation during isolated window creation removes the owned tab',async(
   await tick();const closing=h.context.close(job);release();await tick();await closing;await rejected;
   assert.equal(h.created.length,1);assert.deepEqual(h.removed,h.created);
   assert.ok(h.tabs.has(1)&&h.tabs.has(2));
+});
+
+test('NY trial verification retains an active page without changing mature NY placement',async()=>{
+ for(const trial of [true,false]){
+  const {h,job,windows}=await setup(trial);job.registryState='NY';
+  await h.context.lookupTab(job);
+  assert.equal(windows.length,trial?1:0);
+  assert.equal(h.tabs.get(job.tab).windowId,trial?20:10);
+  assert.equal(h.tabs.get(job.tab).active,trial);
+  assert.equal(h.tabs.get(1).active,true);
+  if(trial){
+   assert.equal(windows[0].focused,false);
+   h.tabs.set(4,{id:4,windowId:10,active:false,url:vm.runInContext("registryStart('TN')",h.context)});
+   vm.runInContext('owned.add(4)',h.context);
+   await h.context.registryNorthCarolinaVisibility({tab:4,sender:{tab:{id:1}},registryState:'TN',closed:false});
+   assert.equal(h.tabs.get(job.tab).active,true);
+  }
+  const tab=job.tab;await h.context.close(job);assert.deepEqual(h.removed,[tab]);
+ }
 });

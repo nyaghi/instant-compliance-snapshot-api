@@ -235,8 +235,7 @@ async function lookupTab(job) {
   job.creating = chrome.tabs.get(job.sender.tab.id).then(async origin => {
     if (job.closed) return;
     if (!Number.isInteger(origin.windowId) || origin.windowId < 0) throw new Error("NY_CONNECTOR_INCOMPLETE");
-    const tab = await chrome.tabs.create({ windowId: origin.windowId, url: P.NY + "/RegistrySearch", active: false });
-    job.tab = tab.id; owned.add(tab.id); await saveRuntime();
+    await registryCreateOwnedTab(job,P.NY + "/RegistrySearch",origin);
   });
   await job.creating; job.creating = null;
   // The content script's form check below is authoritative. Unrelated page

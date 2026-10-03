@@ -6,7 +6,7 @@ const source=fs.readFileSync(path.join(__dirname,'../browser-connector/registry-
 const headers=['Name','License/Registration#','Status','Registration Type','Issued Date','Expiration Date','Address','City','State','Zip','Print'];
 const row=['YWCA of the USA National Board','AL97-431','Active','Charitable Organization','08/29/2001','03/28/2027','1400 I Street NW','Washington','DC','20005','Print'];
 const txt=innerText=>({innerText,getClientRects:()=>[{}]});
-function harness({rows=[row],total=rows.length,page=1,pages=1,from=1,to=rows.length,verification='user-entered-test-placeholder',outcome='success',delayedPage=false,allRows=null,resize='success'}={}){
+function harness({rows=[row],total=rows.length,page=1,pages=1,from=1,to=rows.length,verification='user-entered-test-placeholder',outcome='success',delayedPage=false,allRows=null,resize='success',unrelatedMutations=false}={}){
  let table=null,alert=null,observer=null,clicks=0,pageValue=page,filters=[],pageSize=5,pageActions=0,sizeActions=0;
  const labels={pgfrm:from,pgto:to,tot_pgs:total,totpg:pages};
  class Input{get value(){return this.v||'';}set value(v){this.v=v;}dispatchEvent(){}}
@@ -28,6 +28,7 @@ function harness({rows=[row],total=rows.length,page=1,pages=1,from=1,to=rows.len
   if(outcome==='success')table=makeTable();
   else {table=null;alert=txt(outcome==='negative'?'•No Records Found':outcome==='verification'?'Verification code incorrect':'Error:');}
   observer?.();
+  if(unrelatedMutations)for(let i=1;i<=12;i++)setTimeout(()=>observer?.([]),i*25);
  }};
  inputs.btn_search=search;
  const win={};win.top=win;
@@ -49,6 +50,14 @@ test('AL clears restrictive filters and collects all public identity fields with
 });
 test('AL explicit fresh no-record alert is conclusive source evidence',async()=>{
  const h=harness({outcome:'negative'}),r=await h.api.alSearch(q,Date.now()+1000);assert.equal(r.total,0);assert.equal(r.complete,true);
+});
+
+test('AL completed fresh evidence is not delayed by unrelated document mutations',async()=>{
+ for(const outcome of ['negative','success']){
+  const h=harness({outcome,unrelatedMutations:true});
+  const result=await h.api.alSearch(q,Date.now()+250);
+  assert.equal(result.complete,true);assert.equal(result.total,outcome==='negative'?0:1);
+ }
 });
 test('AL missing or rejected verification is never automated or accepted as no records',async()=>{
  const h=harness({verification:''});await assert.rejects(h.api.alSearch(q,Date.now()+1000),/VERIFICATION_REQUIRED/);assert.equal(h.clicks(),0);

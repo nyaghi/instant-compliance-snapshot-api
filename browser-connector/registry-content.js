@@ -1213,7 +1213,11 @@
       const currentRows=table?[...table.querySelectorAll('tbody tr.grid_tr')]:[];
       if (!table || (table===oldTable && currentRows.length===oldRows.length && currentRows.every((r,i)=>r===oldRows[i]))) return null;
       return alPage();
-    },Math.max(1,deadline-Date.now()),{action:()=>button.click(),settle:150});
+    // The old alert is dismissed before submission, and positive grids must
+    // contain fresh nodes plus complete row/count evidence. A document-wide
+    // settling timer adds no freshness guarantee and can be starved by
+    // unrelated mutations or hidden-page timer throttling.
+    },Math.max(1,deadline-Date.now()),{action:()=>button.click()});
     if (!page.total) return {state:'AL',query,complete:true,verification_pending:false,headers:alHeaders,rows:[],total:0};
     page=await alExpandPage(page,deadline);
     const rows=[...page.rows]; let current=page;
