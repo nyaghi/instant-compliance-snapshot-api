@@ -8,6 +8,13 @@
   let pending = null;
   let completed = null;
   const documentId = `${Date.now()}:${Math.random()}`;
+  const navigate = (message, action) => {
+    // The isolated worker authorizes only its normal observed link/history
+    // action. A microtask preserves acknowledgment before navigation without
+    // waiting for a background page's zero-delay timer to be throttled.
+    if (message.trialNavigation === true) queueMicrotask(action);
+    else setTimeout(action, 0);
+  };
   const same = (a, b) => a.action === b.action && JSON.stringify(a.query || null) === JSON.stringify(b.query || null);
   function finish(task, response) {
     completed = { id: task.id, attempt: task.attempt, action: task.action, query: task.query, response };
@@ -31,7 +38,7 @@
       if (!/^\/RegistrySearch\/[0-9]{2}-[0-9]{2}-[0-9]{2}\/?$/.test(location.pathname)) {
         respond({ ok: false }); return false;
       }
-      respond({ ok: true }); setTimeout(() => window.history.back(), 0); return false;
+      respond({ ok: true }); navigate(message, () => window.history.back()); return false;
     }
     if (message?.action === "open-detail") {
       const identifier = message.query?.orgID;
@@ -41,7 +48,7 @@
       const link = Array.from(document.querySelectorAll("a")).find(a => a.textContent.trim() === identifier && a.href === NY + "/RegistrySearch/" + identifier);
       if (!link) { respond({ ok: false, reason: "NY_CONNECTOR_DETAIL_LINK_MISSING" }); return false; }
       // Acknowledge before normal full-page navigation destroys this relay.
-      respond({ ok: true }); setTimeout(() => link.click(), 0); return false;
+      respond({ ok: true }); navigate(message, () => link.click()); return false;
     }
     if (!["search", "verify"].includes(message?.action) || typeof message.id !== "string" || message.id.length > 80) return false;
     if (completed?.id === message.id && completed.attempt === message.attempt) { respond(same(completed, message) ? completed.response : { ok: false, reason: "NY_CONNECTOR_INVALID_SEQUENCE" }); return false; }

@@ -321,12 +321,12 @@ async function openDetail(job, query) {
   const path = "/RegistrySearch/" + query.orgID;
   if (tab.url === P.NY + path) return;
   if (/^\/RegistrySearch\/[0-9]{2}-[0-9]{2}-[0-9]{2}\/?$/.test(new URL(tab.url).pathname)) {
-    const returned = await chrome.tabs.sendMessage(job.tab, { action: "back-to-results" }, { frameId: 0 });
+    const returned = await chrome.tabs.sendMessage(job.tab, { action: "back-to-results", ...(P.TRIAL_ORIGIN ? {trialNavigation:true} : {}) }, { frameId: 0 });
     if (!returned?.ok) throw new Error("NY_CONNECTOR_DETAIL_LINK_MISSING");
     await waitForRegistryDocument(job, "/RegistrySearch");
   }
   if (job.closed) throw new Error("NY_CONNECTOR_INTERRUPTED");
-  const opened = await chrome.tabs.sendMessage(job.tab, { action: "open-detail", query }, { frameId: 0 });
+  const opened = await chrome.tabs.sendMessage(job.tab, { action: "open-detail", query, ...(P.TRIAL_ORIGIN ? {trialNavigation:true} : {}) }, { frameId: 0 });
   if (!opened?.ok) throw new Error(opened?.reason || "NY_CONNECTOR_DETAIL_LINK_MISSING");
   await waitForRegistryDocument(job, path);
 }
@@ -381,7 +381,7 @@ async function performSearch(job, query, id) {
           // reset the shared verification budget, or retry another rejection.
           job.detailAuthRetryUsed = true; job.verificationRetryUsed = true;
           await saveRuntime();
-          const returned = await chrome.tabs.sendMessage(job.tab, {action:"back-to-results"}, {frameId:0});
+          const returned = await chrome.tabs.sendMessage(job.tab, {action:"back-to-results",trialNavigation:true}, {frameId:0});
           if (!returned?.ok) break;
           await waitForRegistryDocument(job, "/RegistrySearch");
           if (job.closed || Date.now() >= job.activeExpiresAt) return;

@@ -9,14 +9,14 @@ CHANGED = {'nj_loaded_detail_body', 'search_fl_with_transport', 'search_wv_publi
 def strip_mi_exhaustive_reuse(tree):
     """Normalize only the separately exercised trial MI acquisition delta."""
     strip_il_reviewed_alias_coverage(tree)
-    # 29.2AZ changes only the trial-gated installed-version allowlist in
+    # 29.2AZ/BB change only the trial-gated installed-version allowlist in
     # these three handlers; compare all remaining master statements exactly.
     for fn in tree.body:
         if getattr(fn, 'name', '') not in {'ny_connector_request', 'ny_connector_advance', 'il_verification_recovery'}:
             continue
         for node in ast.walk(fn):
             if isinstance(node, ast.Set) and any(isinstance(v, ast.Constant) and v.value == '0.6.56' for v in node.elts):
-                node.elts = [v for v in node.elts if not (isinstance(v, ast.Constant) and v.value == '0.6.57')]
+                node.elts = [v for v in node.elts if not (isinstance(v, ast.Constant) and v.value in {'0.6.57', '0.6.58'})]
     if not any(getattr(n,'name','')=='mi_http_complete_unmatched_grid' for n in tree.body): return
     root=Path(__file__).resolve().parents[2]
     old=ast.parse(subprocess.check_output(['git','show','0ceb32c194d70f59b15ce1d820b67443d3f50540:registry_snapshot_server.py'],cwd=root).decode('utf-8'))

@@ -626,8 +626,8 @@ for(const scenario of ['success','rejected-again','verify-fails','late','mature'
  let searches=0,verifications=0,backs=0,opens=0;const deadlines=[];
  h.chrome.tabs.sendMessage=async(tab,m)=>{
   if(m.action==='ready')return {ready:true,url:h.tabs.get(tab).url,documentId:String(opens)+String(backs)};
-  if(m.action==='back-to-results'){backs++;h.tabs.get(tab).url='https://charities-search.ag.ny.gov/RegistrySearch';return {ok:true};}
-  if(m.action==='open-detail'){opens++;h.tabs.get(tab).url='https://charities-search.ag.ny.gov/RegistrySearch/'+m.query.orgID;return {ok:true};}
+  if(m.action==='back-to-results'){assert.equal(m.trialNavigation,trialOrigin?true:undefined);backs++;h.tabs.get(tab).url='https://charities-search.ag.ny.gov/RegistrySearch';return {ok:true};}
+  if(m.action==='open-detail'){assert.equal(m.trialNavigation,trialOrigin?true:undefined);opens++;h.tabs.get(tab).url='https://charities-search.ag.ny.gov/RegistrySearch/'+m.query.orgID;return {ok:true};}
   if(m.action==='verify'){verifications++;assert.equal(m.verificationRetryUsed,true);return scenario==='verify-fails'?{ok:false,reason:'NY_CONNECTOR_VERIFICATION_REJECTED'}:{ok:true,evidence:{verified:true}};}
   searches++;deadlines.push(h.data.session.ccnyRuntime.queue[0].activeExpiresAt);
   return searches===2&&scenario==='success'?{ok:true,evidence:{query:m.query}}:{ok:false,reason:'NY_CONNECTOR_DETAIL_UNAUTHORIZED'};
