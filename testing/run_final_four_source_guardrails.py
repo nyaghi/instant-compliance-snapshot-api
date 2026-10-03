@@ -1257,6 +1257,83 @@ class LookupControls(unittest.TestCase):
         self.assertEqual(result.status, 'Unable to Confirm')
         self.assertIn('filing scope', result.source_note)
 
+    def test_nv_confirmed_adverse_record_finishes_after_all_reviewed_names(self):
+        primary = self.orgs['NV'].organization_name
+        searches = []
+        def source(q):
+            payload = self.provider(q)
+            if q['operation'] == 'search':
+                searches.append(q['name'])
+                if q['name'] == 'Other Reviewed Name':
+                    payload.update(rows=[], total=0)
+                elif q['name'] != primary:
+                    raise TimeoutError('Unnecessary generated query consumed Sales budget')
+            else:
+                payload['fields']['Entity Status'] = 'Revoked'
+            return payload
+        with patch.object(cc, 'trial_identity', return_value={'origin':'isolated'}), patch.object(
+                cc, 'licensed_charity_names', return_value=([primary, 'Other Reviewed Name'], ['make wish'])):
+            result = cc.final_four_browser_lookup(self.orgs['NV'], 'NV', source)
+        self.assertEqual(searches, [primary, 'Other Reviewed Name'])
+        self.assertEqual(result.status, 'Revoked')
+        self.assertTrue(result.success)
+
+    def test_nv_adverse_record_does_not_skip_incomplete_reviewed_alias(self):
+        primary = self.orgs['NV'].organization_name
+        def source(q):
+            if q.get('name') == 'Other Reviewed Name':
+                raise TimeoutError('Reviewed alias did not complete')
+            payload = self.provider(q)
+            if q['operation'] == 'detail': payload['fields']['Entity Status'] = 'Revoked'
+            return payload
+        with patch.object(cc, 'trial_identity', return_value={'origin':'isolated'}), patch.object(
+                cc, 'licensed_charity_names', return_value=([primary, 'Other Reviewed Name'], ['make wish'])):
+            with self.assertRaisesRegex(TimeoutError, 'Reviewed alias'):
+                cc.final_four_browser_lookup(self.orgs['NV'], 'NV', source)
+
+    def test_nv_newer_record_under_reviewed_alias_wins_over_revoked_record(self):
+        primary = self.orgs['NV'].organization_name
+        newer = 'NV20261234567'
+        def source(q):
+            payload = self.provider(q)
+            if q.get('name') == 'Other Reviewed Name':
+                payload['rows'][0]['identifier'] = newer
+            elif q['operation'] == 'detail':
+                payload['fields']['NV Business ID'] = q['identifier']
+                payload['fields']['Entity Status'] = 'Active' if q['identifier']==newer else 'Revoked'
+                if q['identifier'] != newer:
+                    payload['fields']['Annual Renewal Due Date/Expiration Date'] = '12/31/2024'
+            return payload
+        with patch.object(cc, 'trial_identity', return_value={'origin':'isolated'}), patch.object(
+                cc, 'licensed_charity_names', return_value=([primary, 'Other Reviewed Name'], ['make wish'])):
+            result = cc.final_four_browser_lookup(self.orgs['NV'], 'NV', source)
+        self.assertEqual(result.status, 'Upcoming Filing')
+        self.assertEqual(result.matched_registry_identifier, newer)
+        self.assertEqual([q['name'] for q in self.calls if q['operation']=='search'], [primary, 'Other Reviewed Name'])
+
+    def test_nv_no_record_still_searches_generated_name(self):
+        primary = self.orgs['NV'].organization_name
+        def source(q):
+            payload = self.provider(q)
+            if q.get('name') == primary: payload.update(rows=[], total=0)
+            return payload
+        with patch.object(cc, 'trial_identity', return_value={'origin':'isolated'}), patch.object(
+                cc, 'licensed_charity_names', return_value=([primary], ['make wish'])):
+            result = cc.final_four_browser_lookup(self.orgs['NV'], 'NV', source)
+        self.assertEqual(result.status, 'Upcoming Filing')
+        self.assertEqual([q['name'] for q in self.calls if q['operation']=='search'], [primary, 'make wish'])
+
+    def test_nv_adverse_finish_is_trial_only(self):
+        primary = self.orgs['NV'].organization_name
+        def source(q):
+            payload = self.provider(q)
+            if q['operation'] == 'detail': payload['fields']['Entity Status'] = 'Revoked'
+            return payload
+        with patch.object(cc, 'trial_identity', return_value=None), patch.object(
+                cc, 'licensed_charity_names', return_value=([primary], ['make wish'])):
+            cc.final_four_browser_lookup(self.orgs['NV'], 'NV', source)
+        self.assertEqual([q['name'] for q in self.calls if q['operation']=='search'], [primary, 'make wish'])
+
     def test_nv_partial_scope_candidate_does_not_override_confirmed_full_record(self):
         # Reproduces the observed Better World Fund / A Better World pair.
         # Filing rows below are synthetic controls, not live status assertions.

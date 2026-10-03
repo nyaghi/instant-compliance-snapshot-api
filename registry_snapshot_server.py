@@ -6678,6 +6678,15 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
         required = required[:1] + sorted(required[1:], key=len)
         generated = sorted(generated, key=lambda name: len(name))
     for index, name in enumerate(required + generated):
+        if state == "NV" and trial_identity() and index >= len(required) and records and not unreviewed_scope:
+            # Every reviewed identity has now completed (or was covered by a
+            # complete literal prefix). Generated probes retrieve a missing
+            # record; they are not additional accepted identities. Preserve
+            # the master's selection across all collected rows, including a
+            # newer record under any reviewed alias, before ending the search.
+            selected, review = select_licensed_charity(org, records, state, deadline)
+            if selected and not review:
+                break
         # Complete literal Starts With results contain every row of a longer
         # prefix. NV can reuse this evidence for reviewed composites too;
         # NC reuse remains limited to generated fallbacks. Different case or

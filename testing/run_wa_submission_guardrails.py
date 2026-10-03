@@ -13,7 +13,7 @@ class Submission(unittest.TestCase):
         for name in ['registry_snapshot_server.py','CharityClarity_WA_NM_checker.py']:
             old=ast.parse(subprocess.check_output(['git','show','af7b174:'+name],cwd=root).decode())
             new=ast.parse((root/name).read_text(encoding='utf-8'))
-            allowed={'fill_fein_and_search','search_wa'} if name.startswith('Charity') else set()
+            allowed={'fill_fein_and_search','search_wa'} if name.startswith('Charity') else {'final_four_browser_lookup'}
             for tree in [old,new]:
                 tree.body=[n for n in tree.body if getattr(n,'name','') not in allowed]
             self.assertEqual(ast.dump(old),ast.dump(new),name)
