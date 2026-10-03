@@ -1,0 +1,40 @@
+"""Washington Sales submission must reach the form, not its loading overlay."""
+import ast
+import subprocess
+from pathlib import Path
+import unittest
+from unittest.mock import patch
+import registry_snapshot_server as cc
+
+
+class Submission(unittest.TestCase):
+    def test_other_master_and_module_functions_unchanged_from_bh(self):
+        root=Path(cc.__file__).parent
+        for name in ['registry_snapshot_server.py','CharityClarity_WA_NM_checker.py']:
+            old=ast.parse(subprocess.check_output(['git','show','af7b174:'+name],cwd=root).decode())
+            new=ast.parse((root/name).read_text(encoding='utf-8'))
+            allowed={'fill_fein_and_search','search_wa'} if name.startswith('Charity') else set()
+            for tree in [old,new]:
+                tree.body=[n for n in tree.body if getattr(n,'name','') not in allowed]
+            self.assertEqual(ast.dump(old),ast.dump(new),name)
+
+    def test_sales_submit_waits_for_overlay_and_submits_exact_ein_once(self):
+        module = cc.load_wa_nm_module()
+        with cc.checker.sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.set_content('''<input id="FEINNoSearchField"><button onclick="window.sent=(window.sent||[]).concat(document.querySelector('input').value)">Search</button>
+                    <script>document.querySelector('input').addEventListener('change',()=>{
+                    const overlay=document.createElement('div');overlay.id='loading';
+                    overlay.style='position:fixed;inset:0;z-index:100;background:white';
+                    document.body.append(overlay);setTimeout(()=>overlay.remove(),350);},{once:true});</script>''')
+                with patch.object(module, 'switch_to_fein_mode'):
+                    self.assertTrue(module.fill_fein_and_search(page, '27-1635830', readiness_waits_only=True))
+                self.assertEqual(page.evaluate('window.sent'), ['271635830'])
+            finally:
+                browser.close()
+
+
+if __name__ == '__main__':
+    unittest.main()

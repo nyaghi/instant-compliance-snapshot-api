@@ -14,6 +14,15 @@ def strip_wa_form_waits(tree):
                 self.count+=1;return node.body
             return self.generic_visit(node)
     restore=Restore();restore.visit(fn);assert restore.count==2
+    # The later Sales submission correction changes only actionability of the
+    # same Search click; normalize that exact branch for this historical test.
+    for node in ast.walk(fn):
+        if isinstance(node,ast.Try) and node.body and isinstance(node.body[0],ast.If):
+            branch=node.body[0]
+            if ast.unparse(branch.test)=='readiness_waits_only':
+                assert ast.unparse(branch.body[0])=='candidate.click(timeout=5000)'
+                assert len(branch.orelse)==1 and ast.unparse(branch.orelse[0])=='candidate.click(timeout=5000, force=True)'
+                node.body[:1]=branch.orelse
     wait=next(n for n in tree.body if getattr(n,'name','')=='wait_for_result_link_or_no_value')
     loop=next(n for n in wait.body if isinstance(n,ast.While))
     matches=[(i,n) for i,n in enumerate(loop.body) if isinstance(n,ast.If) and ast.unparse(n.test)=='not require_complete_before_link']

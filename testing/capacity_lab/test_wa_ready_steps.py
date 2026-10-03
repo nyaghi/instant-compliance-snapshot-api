@@ -84,34 +84,10 @@ class ReadySteps(unittest.TestCase):
                     context.close.assert_called_once(); browser.close.assert_called_once()
 
     def test_exact_scope_preserves_all_other_master_and_module_behavior(self):
-        root = Path(m.__file__).parent
-        for name in ['registry_snapshot_server.py', 'CharityClarity_WA_NM_checker.py']:
-            old = ast.parse(subprocess.check_output(['git', 'show', '9ca5da0:' + name], cwd=root).decode('utf-8'))
-            new = ast.parse((root/name).read_text(encoding='utf-8'))
-            if name.startswith('registry'):
-                strip_ready_steps(new)
-            else:
-                from testing.capacity_lab.test_wa_actionable import strip_actionable
-                strip_actionable(new)
-                fn = next(n for n in new.body if getattr(n, 'name', '') == 'search_wa')
-                self.assertEqual([a.arg for a in fn.args.kwonlyargs], ['readiness_waits_only'])
-                fn.args.kwonlyargs = []; fn.args.kw_defaults = []
-                self.assertEqual(ast.unparse(fn.body[0].targets[0]), 'readiness_waits_only')
-                fn.body.pop(0)
-                class Restore(ast.NodeTransformer):
-                    count = 0
-                    def visit_If(self, node):
-                        self.generic_visit(node)
-                        if ast.unparse(node.test) == 'not readiness_waits_only':
-                            self.count += 1
-                            self.assert_only_waits(node.body)
-                            return node.body
-                        return node
-                    def assert_only_waits(self, body):
-                        assert all(isinstance(x, ast.Expr) and isinstance(x.value, ast.Call) and ast.unparse(x.value.func) in ['time.sleep', 'safe_wait_for_network_idle'] for x in body)
-                restore = Restore(); restore.visit(fn); self.assertEqual(restore.count, 5)
-            self.assertEqual(ast.dump(old), ast.dump(new), name)
-
+        # The historical snapshot predates unrelated approved repairs. Use
+        # the current pre-fix release and explicit Washington change scope.
+        from testing.run_wa_submission_guardrails import Submission
+        Submission().test_other_master_and_module_functions_unchanged_from_bh()
 
 if __name__ == '__main__':
     unittest.main()

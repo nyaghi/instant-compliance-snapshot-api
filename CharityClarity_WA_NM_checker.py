@@ -274,7 +274,13 @@ def fill_fein_and_search(page, ein: str, *, readiness_waits_only: bool = False) 
         page.locator("input[value='Search']").first,
     ]:
         try:
-            candidate.click(timeout=5000, force=True)
+            # Sales omits general idle waits. An acknowledged forced click can
+            # hit the SPA loading overlay without submitting any request.
+            # Normal actionability waits within the existing five-second cap.
+            if readiness_waits_only:
+                candidate.click(timeout=5000)
+            else:
+                candidate.click(timeout=5000, force=True)
             return True
         except Exception:
             continue
@@ -698,7 +704,12 @@ def search_wa(org: Organization, show_process: bool = False, *, readiness_waits_
                 elif status >= 400:
                     result.error = f"Washington search request failed with HTTP {status}."
                 else:
-                    result.error = "Could not locate the Washington organization result link after the search completed."
+                    result.status = "Unable to Confirm"
+                    result.error = ("Washington search submission was not observed; no completed registry search was available."
+                        if not tracker.get("started") else
+                        "Washington search did not produce complete rendered results within the bounded wait.")
+                    result.raw_status_text = "Washington search workflow incomplete"
+                    result.source_note = "The Washington page was reached, but its search workflow did not complete. This does not establish that the registry is down or that the organization is unregistered."
                 return result
 
             try:
