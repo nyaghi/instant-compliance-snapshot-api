@@ -36,33 +36,6 @@ function fixture(enabled=true){
   return Object.assign(h,{calls,reloads});
 }
 
-test('trial DOM worker clocks require an owned active registry document and cancel cleanly',async()=>{
- const h=fixture();await tick();
- h.tabs.set(3,{id:3,windowId:10,url:'https://tncab.tnsos.gov/portal/registered-charities-search'});
- vm.runInContext("owned.add(3);activeLanes.set('TN',{tab:3,registryState:'TN',pending:'command',generation:1,closed:false,activeExpiresAt:70000,sender:{url:'https://fixture-final-four.onrender.com/'}})",h.context);
- const sender={id:h.chrome.runtime.id,frameId:0,documentId:'doc-1',url:h.tabs.get(3).url,tab:{id:3}};
- const request={action:'registry-clock',clockId:id(901),delayMs:200};let result;
- assert.equal(h.context.registryClockMessage(request,sender,r=>{result=r;}),true);
- await h.advance(200);assert.equal(result.ok,true);
- result=null;assert.equal(h.context.registryClockMessage({...request,clockId:id(902)},sender,r=>{result=r;}),true);
- h.context.registryClockMessage({action:'registry-clock-cancel',clockId:id(902)},sender,()=>{});
- assert.equal(result.ok,false);assert.equal(vm.runInContext('registryClocks.size',h.context),0);
-});
-test('worker clocks reject wrong tabs, origins, frames, oversized waits and closed or replaced commands',async()=>{
- const h=fixture();await tick();
- vm.runInContext("owned.add(3);activeLanes.set('TN',{tab:3,registryState:'TN',pending:'command',generation:1,closed:false,activeExpiresAt:70000,sender:{url:'https://fixture-final-four.onrender.com/'}})",h.context);
- const sender={id:h.chrome.runtime.id,frameId:0,documentId:'doc-1',url:'https://tncab.tnsos.gov/portal/registered-charities-search',tab:{id:3}};
- const message={action:'registry-clock',clockId:id(903),delayMs:200};
- for(const altered of [{...sender,tab:{id:4}},{...sender,frameId:1},{...sender,url:TRIAL},{...sender,documentId:''},{...sender,id:'different-extension'}])
-  assert.equal(h.context.registryClockMessage(message,altered,()=>{}),false);
- assert.equal(h.context.registryClockMessage({...message,delayMs:45001},sender,()=>{}),false);
- let result;assert.equal(h.context.registryClockMessage(message,sender,r=>{result=r;}),true);
- vm.runInContext("activeLanes.get('TN').generation++",h.context);await h.advance(200);assert.equal(result.ok,false);
- vm.runInContext("activeLanes.get('TN').closed=true",h.context);
- assert.equal(h.context.registryClockMessage({...message,clockId:id(904)},sender,()=>{}),false);
- const mature=fixture(false);await tick();assert.equal(mature.context.registryClockMessage(message,sender,()=>{}),false);
-});
-
 test('NM public error aborts readiness immediately rather than consuming thirty seconds',async()=>{
  const h=fixture();h.tabs.set(3,{id:3,windowId:10,url:'https://secure.nmdoj.gov/CharitySearch/'});
  let checks=0;h.chrome.tabs.sendMessage=async()=>{checks++;return {ready:false,source_failure:'REGISTRY_NM_SOURCE_ERROR'};};

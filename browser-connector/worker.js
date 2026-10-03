@@ -321,12 +321,12 @@ async function openDetail(job, query) {
   const path = "/RegistrySearch/" + query.orgID;
   if (tab.url === P.NY + path) return;
   if (/^\/RegistrySearch\/[0-9]{2}-[0-9]{2}-[0-9]{2}\/?$/.test(new URL(tab.url).pathname)) {
-    const returned = await chrome.tabs.sendMessage(job.tab, { action: "back-to-results", ...(P.TRIAL_ORIGIN ? {trialNavigation:true} : {}) }, { frameId: 0 });
+    const returned = await chrome.tabs.sendMessage(job.tab, { action: "back-to-results" }, { frameId: 0 });
     if (!returned?.ok) throw new Error("NY_CONNECTOR_DETAIL_LINK_MISSING");
     await waitForRegistryDocument(job, "/RegistrySearch");
   }
   if (job.closed) throw new Error("NY_CONNECTOR_INTERRUPTED");
-  const opened = await chrome.tabs.sendMessage(job.tab, { action: "open-detail", query, ...(P.TRIAL_ORIGIN ? {trialNavigation:true} : {}) }, { frameId: 0 });
+  const opened = await chrome.tabs.sendMessage(job.tab, { action: "open-detail", query }, { frameId: 0 });
   if (!opened?.ok) throw new Error(opened?.reason || "NY_CONNECTOR_DETAIL_LINK_MISSING");
   await waitForRegistryDocument(job, path);
 }
@@ -381,7 +381,7 @@ async function performSearch(job, query, id) {
           // reset the shared verification budget, or retry another rejection.
           job.detailAuthRetryUsed = true; job.verificationRetryUsed = true;
           await saveRuntime();
-          const returned = await chrome.tabs.sendMessage(job.tab, {action:"back-to-results",trialNavigation:true}, {frameId:0});
+          const returned = await chrome.tabs.sendMessage(job.tab, {action:"back-to-results"}, {frameId:0});
           if (!returned?.ok) break;
           await waitForRegistryDocument(job, "/RegistrySearch");
           if (job.closed || Date.now() >= job.activeExpiresAt) return;
@@ -509,8 +509,6 @@ chrome.tabs.onRemoved.addListener(id => {
   }
 });
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
-  if (message?.action === 'registry-clock' || message?.action === 'registry-clock-cancel')
-    return registryClockMessage(message,sender,respond);
   if (!allowedSender(sender) || !P.validId(message?.id) || message.action !== "ping") return false;
   boot.then(() => respond({ ok: true, version: chrome.runtime.getManifest().version, capabilities: ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "origin-window-v1", "connection-recovery-v1", "recovery-causes-v1", "cleanup-ack-v1", "timeout-recovery-v1", "resume-v1", "verified-detail-v1", "detail-navigation-v1", "il-ga-public-dom-v1", "ga-exempt-record-v1", "ga-legacy-rows-v1", "il-ga-complete-search-v2", "il-session-reuse-v1", "il-large-pages-v1", "il-dom-events-v1", "il-verification-visibility-v1", ...(P.TRIAL_ORIGIN ? ["final-four-public-v1"] : [])], recovery: { phase: repair.phase || "idle", nextAllowedAt: repair.nextAllowedAt || 0, verifiedAt: repair.finishedAt || 0 } }), () => respond({ ok: false, reason: "NY_CONNECTOR_INTERRUPTED" }));
   return true;

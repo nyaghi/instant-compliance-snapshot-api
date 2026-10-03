@@ -2,11 +2,11 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const source=fs.readFileSync(process.env.CC_TEST_TRIAL_DIR?path.join(process.env.CC_TEST_TRIAL_DIR,'registry-content.js'):path.join(__dirname,'../browser-connector/registry-content.js'),'utf8')
- .replace('  async function handle(m) {','  globalThis.testTN={tnPage,tnFields,tnFinancials,tnSearch,tnDetail,enableWorkerClock:()=>{workerClock=true;}};\n  async function handle(m) {');
+ .replace('  async function handle(m) {','  globalThis.testTN={tnPage,tnFields,tnFinancials,tnSearch,tnDetail};\n  async function handle(m) {');
 const columns=[null,'Id','Id','FileNumber','DisplayName','OtherNames','Status','City','StateName','StateCode','RegistrationDate'];
 const national=['Details','unused summary','2162','CO2559','YWCA USA, INC.',"YOUNG WOMEN'S CHRISTIAN ASSOCIATION OF THE UNITED STATES OF AMERICA, INC.\nYWCA OF THE U.S.A.",'Active','WASHINGTON','DC','DC','5/12/1995'];
 const local=['Details','unused summary','3596572','CO224','YWCA NASHVILLE & MIDDLE TENNESSEE','','Active','NASHVILLE','TN','TN','11/14/1985'];
-function fixture({rows=[local,national],activity=true,ready=true,responseDelay=100,detailId='CO2559',periods=['06/30/2024','06/30/2025'],count=2,closeDelay=0,closedInitially=true,timerClamp=0,workerClock=false}={}) {
+function fixture({rows=[local,national],activity=true,ready=true,responseDelay=100,detailId='CO2559',periods=['06/30/2024','06/30/2025'],count=2,closeDelay=0,closedInitially=true}={}) {
  let clock=1000,serial=0,loading=false,doneRows=[],dialogVisible=!closedInitially,opened=[];
  const events=new Map(),observers=new Set(),root={};
  const later=(fn,ms)=>{let id=++serial;events.set(id,{fn,at:clock+ms});return id;};
@@ -37,21 +37,17 @@ function fixture({rows=[local,national],activity=true,ready=true,responseDelay=1
  const context={window:win,document,location:{origin:'https://tncab.tnsos.gov'},Date:{now:()=>clock},crypto:{randomUUID:()=> 'fixture'},
   HTMLInputElement:Input,HTMLSelectElement:class{},Event:class{},
   MutationObserver:class{constructor(fn){this.fn=fn;}observe(){observers.add(this);}disconnect(){observers.delete(this);}},
-  setTimeout:(fn,ms)=>later(fn,Math.max(ms,timerClamp)),clearTimeout:id=>events.delete(id),chrome:{runtime:{id:'fixture',onMessage:{addListener:()=>{}},sendMessage:async m=>new Promise(resolve=>later(()=>resolve({ok:true}),m.delayMs))}}};
+  setTimeout:later,clearTimeout:id=>events.delete(id),chrome:{runtime:{id:'fixture',onMessage:{addListener:()=>{}}}}};
  vm.createContext(context);vm.runInContext(source,context);
- if(workerClock)vm.runInContext('testTN.enableWorkerClock?.()',context);
  async function drive(p) {let done=false,value,error;p.then(v=>{done=true;value=v;},e=>{done=true;error=e;});
   for(let n=0;!done&&n<1000;n++){for(let i=0;i<20;i++)await Promise.resolve();if(done)break;const next=[...events].sort((a,b)=>a[1].at-b[1].at)[0];assert.ok(next);events.delete(next[0]);clock=next[1].at;next[1].fn();}
   assert.ok(done);assert.equal(observers.size,0);if(error)throw error;return value;
  }
- return {api:context.testTN,drive,h4s,dialog,grid,table,opened,elapsed:()=>clock-1000,
+ return {api:context.testTN,drive,h4s,dialog,grid,table,opened,
   search:()=>drive(context.testTN.tnSearch({state:'TN',operation:'search',name:'YWCA'},clock+45000)),
   detail:()=>drive(context.testTN.tnDetail({state:'TN',operation:'detail',identifier:'CO2559'},clock+45000))};
 }
 test('Tennessee retains national and local candidates with separate CO identifiers',async()=>{const f=fixture(),r=await f.search();assert.equal(r.total,2);assert.deepEqual(Array.from(r.rows,x=>x.identifier),['CO224','CO2559']);assert.equal(r.rows[1].aliases.length,2);assert.ok(!JSON.stringify(r).includes('unused summary'));});
-test('completed Tennessee evidence cannot wait a minute for a throttled settling timer',async()=>{const f=fixture({timerClamp:60000,workerClock:true});assert.equal((await f.search()).total,2);assert.ok(f.elapsed()<1000,'normal completed source must finish promptly');});
-test('worker clock never accepts a late Tennessee response',async()=>{const f=fixture({timerClamp:60000,workerClock:true,responseDelay:40000});await assert.rejects(f.search(),/RESPONSE_PENDING/);});
-test('worker clock never turns an absent Tennessee response into a negative',async()=>{const f=fixture({timerClamp:60000,workerClock:true,activity:false});await assert.rejects(f.search(),/SEARCH_NOT_STARTED/);});
 test('initial zero grid cannot become Not Registered before source completion',async()=>{const f=fixture({rows:[],activity:false});await assert.rejects(f.search(),/SEARCH_NOT_STARTED/);});
 test('completed zero results require the count, zero page, and explicit empty marker',async()=>{const f=fixture({rows:[]});assert.equal((await f.search()).total,0);});
 test('verification/form readiness failure is distinct from no records',async()=>{const f=fixture({ready:false});await assert.rejects(f.search(),/VERIFICATION_OR_FORM_PENDING/);});

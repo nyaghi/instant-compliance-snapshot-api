@@ -8,15 +8,12 @@ CHANGED = {'nj_loaded_detail_body', 'search_fl_with_transport', 'search_wv_publi
 
 def strip_mi_exhaustive_reuse(tree):
     """Normalize only the separately exercised trial MI acquisition delta."""
-    strip_il_reviewed_alias_coverage(tree)
-    # 29.2AZ/BB change only the trial-gated installed-version allowlist in
-    # these three handlers; compare all remaining master statements exactly.
     for fn in tree.body:
-        if getattr(fn, 'name', '') not in {'ny_connector_request', 'ny_connector_advance', 'il_verification_recovery'}:
+        if getattr(fn,'name','') not in {'il_verification_recovery','ny_connector_advance','ny_connector_request'}:
             continue
         for node in ast.walk(fn):
-            if isinstance(node, ast.Set) and any(isinstance(v, ast.Constant) and v.value == '0.6.56' for v in node.elts):
-                node.elts = [v for v in node.elts if not (isinstance(v, ast.Constant) and v.value in {'0.6.57', '0.6.58', '0.6.59'})]
+            if isinstance(node,ast.Set) and any(isinstance(v,ast.Constant) and v.value=='0.6.56' for v in node.elts):
+                node.elts=[v for v in node.elts if not(isinstance(v,ast.Constant) and v.value=='0.6.60')]
     if not any(getattr(n,'name','')=='mi_http_complete_unmatched_grid' for n in tree.body): return
     root=Path(__file__).resolve().parents[2]
     old=ast.parse(subprocess.check_output(['git','show','0ceb32c194d70f59b15ce1d820b67443d3f50540:registry_snapshot_server.py'],cwd=root).decode('utf-8'))
@@ -44,32 +41,6 @@ if trial_identity() and completed_unmatched:
                 if all(ast.dump(body[i+j])==ast.dump(expected) for j,expected in enumerate(transfer)):
                     del body[i:i+2];removed+=1;break
     assert removed==1,'Unexpected MI evidence handoff scope'
-
-
-def strip_il_reviewed_alias_coverage(tree):
-    """Audit 29.2BA's two trial-only IL acquisition branches, not scoring."""
-    if not any(getattr(n, 'name', '') == 'il_browser_covering_alias_order' for n in tree.body):
-        return
-    tree.body = [n for n in tree.body if getattr(n, 'name', '') != 'il_browser_covering_alias_order']
-    fn = next(n for n in tree.body if getattr(n, 'name', '') == 'il_ga_browser_lookup')
-    removed = 0
-    for parent in ast.walk(fn):
-        for field in ('body', 'orelse'):
-            body = getattr(parent, field, None)
-            if not isinstance(body, list):
-                continue
-            for node in list(body):
-                if not isinstance(node, ast.If):
-                    continue
-                condition = ast.unparse(node.test)
-                if condition == "state == 'IL' and trial_identity()":
-                    assert ast.unparse(node.body[0]) == 'names = il_browser_covering_alias_order(required, names)'
-                    assert len(node.body) == 1 and not node.orelse
-                    body.remove(node); removed += 1
-                elif condition == "state == 'IL' and trial_identity() and ('orgName' in query) and any((prior.get('orgName') and prior['orgName'].casefold() in query['orgName'].casefold() for prior in completed))":
-                    assert len(node.body) == 1 and isinstance(node.body[0], ast.Continue) and not node.orelse
-                    body.remove(node); removed += 1
-    assert removed == 2, 'Unexpected Illinois coverage scope'
 
 
 def restore_parsing_optimization(tree):

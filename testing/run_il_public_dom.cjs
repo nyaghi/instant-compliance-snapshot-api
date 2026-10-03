@@ -2,7 +2,7 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const vm=require('node:vm'),fs=require('node:fs'),path=require('node:path');
 const source=fs.readFileSync(process.env.CC_TEST_TRIAL_DIR ? path.join(process.env.CC_TEST_TRIAL_DIR,'registry-content.js') : path.join(__dirname,'../browser-connector/registry-content.js'),'utf8');
-async function run({total=0,activity=true,truncated=false,ready=true,disabled=false,readyAt=null,largePages=false,resizeTotalChange=false,timerClamp=0,responseDelay=100,lateMutation=false,unrelatedMutation=false,detail=null,detailDelay=100,verification=false,verificationAt=null,formWaitMs=45000,workerClock=false}={}) {
+async function run({total=0,activity=true,truncated=false,ready=true,disabled=false,readyAt=null,largePages=false,resizeTotalChange=false,timerClamp=0,responseDelay=100,lateMutation=false,unrelatedMutation=false,detail=null,detailDelay=100,verification=false,verificationAt=null,formWaitMs=45000}={}) {
  let clock=1000,listener,loading=false,page=0,size=10,menu=false,nextClicks=0,searchClicks=0,formReady=ready&&readyAt===null,serial=0,dialog=null,result,done=false;
  const tasks=new Map(),observers=new Set(),root={};
  const schedule=(fn,ms)=>{const id=++serial;tasks.set(id,{at:clock+ms,fn});return id;};
@@ -53,11 +53,11 @@ async function run({total=0,activity=true,truncated=false,ready=true,disabled=fa
   Date:{now:()=>clock},crypto:{randomUUID:()=> 'fixture'},HTMLInputElement:Input,HTMLSelectElement:class {},Event:class {},
   MutationObserver:class{constructor(fn){this.fn=fn;}observe(root){this.root=root;observers.add(this);}disconnect(){observers.delete(this);}},
   setTimeout:(fn,ms)=>schedule(fn,Math.max(ms,timerClamp)),clearTimeout:id=>tasks.delete(id),
-  chrome:{runtime:{id:'test-extension',onMessage:{addListener:fn=>listener=fn},sendMessage:m=>new Promise(resolve=>schedule(()=>resolve({ok:true}),m.delayMs))}}
+  chrome:{runtime:{id:'test-extension',onMessage:{addListener:fn=>listener=fn}}}
  });
  if(readyAt!==null)schedule(()=>{formReady=true;button.disabled=false;mutate('attributes',styleTarget);},readyAt);
  if(verificationAt!==null)schedule(()=>{verification=true;mutate('childList',styleTarget);},verificationAt);
- listener({action:'registry-il',workerClock,formWaitMs,query:detail?{state:'IL',identifier:'10000000'}:{state:'IL',orgName:'Veterans'}},{id:'test-extension'},value=>{result=value;done=true;});
+ listener({action:'registry-il',formWaitMs,query:detail?{state:'IL',identifier:'10000000'}:{state:'IL',orgName:'Veterans'}},{id:'test-extension'},value=>{result=value;done=true;});
  for(let n=0;!done&&n<3000;n++){
   for(let i=0;i<12;i++)await Promise.resolve();
   if(done)break;
@@ -107,8 +107,6 @@ test('changed total during resize remains incomplete',async()=>{assert.equal((aw
 test('truncated pagination remains incomplete',async()=>{assert.equal((await run({total:151,truncated:true})).reason,'NY_CONNECTOR_IL_PAGINATION_INCOMPLETE');});
 test('missing controls and disabled button are distinguished',async()=>{assert.equal((await run({ready:false})).reason,'NY_CONNECTOR_IL_FORM_MISSING');assert.equal((await run({disabled:true})).reason,'NY_CONNECTOR_IL_FORM_DISABLED');});
 test('in-time response survives 60-second timer delay',async()=>{const r=await run({timerClamp:60000});assert.equal(r.ok,true);assert.equal(r.evidence.total,0);assert.equal(r.diagnostics.find(e=>e.phase==='results'&&e.event==='observed').elapsed_ms,100);});
-test('trial worker clock returns settled Illinois rows promptly under hidden-page throttling',async()=>{const r=await run({timerClamp:60000,workerClock:true});assert.equal(r.ok,true);assert.ok(r.elapsed<1000);});
-test('trial worker clock cannot accept incomplete settling or a response after the original deadline',async()=>{for(const responseDelay of [34900,40000])assert.equal((await run({timerClamp:60000,workerClock:true,responseDelay})).reason,'NY_CONNECTOR_IL_RESPONSE_TIMEOUT');});
 test('form readiness is observed immediately while timers are delayed',async()=>{const r=await run({readyAt:100,timerClamp:60000});assert.equal(r.ok,true);assert.equal(r.diagnostics.find(e=>e.phase==='form'&&e.event==='ready').elapsed_ms,100);});
 test('absent response with delayed timers remains incomplete',async()=>{assert.equal((await run({activity:false,timerClamp:60000})).reason,'NY_CONNECTOR_IL_RESPONSE_TIMEOUT');});
 test('response after original deadline is rejected',async()=>{assert.equal((await run({responseDelay:40000,timerClamp:60000})).reason,'NY_CONNECTOR_IL_RESPONSE_TIMEOUT');});
