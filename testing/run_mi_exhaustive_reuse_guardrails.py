@@ -69,6 +69,30 @@ class Reuse(unittest.TestCase):
         self.assertFalse(cc.mi_http_complete_unmatched_grid(source([self.org.organization_name]),self.org,1))
         self.assertFalse(cc.mi_http_complete_unmatched_grid(source(self.names,{3:[self.org.organization_name]}),self.org,2))
 
+    def test_actual_master_browser_confirmation_preserves_evidence_but_controls_fallback(self):
+        tree=ast.parse(Path(cc.__file__).read_text(encoding='utf-8'))
+        fn=next(n for n in tree.body if getattr(n,'name','')=='run_state_lookup')
+        branch=next(n for n in ast.walk(fn) if isinstance(n,ast.If) and ast.unparse(n.test)=="state == 'MI'")
+        code=compile(ast.fix_missing_locations(ast.Module(body=branch.body[:8],type_ignores=[])),str(cc.__file__),'exec')
+        for status in ['Not Registered','Current','Unable to Verify']:
+            probe=SimpleNamespace(success=True,status='Not Registered',reason_code='NO_CANDIDATES_AFTER_COMPLETED_SEARCH',
+                _cc_mi_completed_empty_names=['First Query'],_cc_mi_completed_unmatched_names=['Legal Services'])
+            browser=SimpleNamespace(status=status,raw_status_text='',source_note='',error='')
+            page=SimpleNamespace();confirm=MagicMock(return_value=browser);fallback=MagicMock(return_value=browser)
+            values={**cc.__dict__,'org':self.org,'page':page,'lookup_started':time.perf_counter(),
+                'mi_progress':{},'trial_identity':lambda:True,'public_status':lambda r:r.status,
+                'search_mi_http_completion_probe':lambda *a,**k:probe,
+                'search_bundled_extension_state':confirm,'search_mi_name_fallback':fallback,'MI_ENABLE_NAME_FALLBACK':True}
+            exec(code,values)
+            confirm.assert_called_once_with(page,self.org,'MI')
+            self.assertIs(values['mi_probe_result'],probe)
+            if status=='Not Registered':
+                fallback.assert_called_once_with(page,self.org)
+                self.assertEqual(page._cc_mi_search_progress['http_completed_empty_name_queries'],['First Query'])
+                self.assertEqual(page._cc_mi_search_progress['http_completed_unmatched_name_queries'],['Legal Services'])
+            else:
+                fallback.assert_not_called()
+
     def test_partial_count_pagination_headers_anchor_and_aliases_fail_closed(self):
         s=source(self.names)
         for bad,count in [(s,3),(s,101),(s.replace('Legal Name / Address','Name'),2),

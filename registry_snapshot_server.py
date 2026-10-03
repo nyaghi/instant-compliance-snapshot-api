@@ -31184,7 +31184,8 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                         # original state budget before bounded name fallbacks.
                         page._cc_mi_lookup_deadline = mi_deadline
                         result = search_bundled_extension_state(page, org, "MI")
-                        mi_probe_result = None
+                        # Preserve completed name evidence while the browser
+                        # result still controls entry to the name fallback.
                     mi_elapsed = time.perf_counter() - mi_started
                     mi_incomplete_frame = public_status(result) == "Unable to Verify"
                 else:

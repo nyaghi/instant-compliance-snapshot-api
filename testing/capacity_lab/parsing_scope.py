@@ -16,6 +16,11 @@ def strip_mi_exhaustive_reuse(tree):
     tree.body=[original.get(n.name,n) if isinstance(n,ast.FunctionDef) and n.name in names else n
         for n in tree.body if getattr(n,'name','')!='mi_http_complete_unmatched_grid']
     fn=next(n for n in tree.body if getattr(n,'name','')=='run_state_lookup')
+    browser_confirm = [n for n in ast.walk(fn) if isinstance(n, ast.If)
+                       and ast.unparse(n.test) == "trial_identity() and public_status(result) == 'Not Registered'"]
+    assert len(browser_confirm) == 1
+    assert ast.unparse(browser_confirm[0].body[-1]) == "result = search_bundled_extension_state(page, org, 'MI')"
+    browser_confirm[0].body.append(ast.parse('mi_probe_result = None').body[0])
     transfer=ast.parse('''completed_unmatched = getattr(mi_probe_result, "_cc_mi_completed_unmatched_names", [])
 if trial_identity() and completed_unmatched:
     progress["identity"] = (org.organization_name, canonical_ein_digits(org.ein))
