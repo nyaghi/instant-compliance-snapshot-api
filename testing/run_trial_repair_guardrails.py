@@ -9,6 +9,23 @@ import registry_snapshot_server as cc
 from testing.run_final_four_source_guardrails import AsOf, TN, TN_ROW, NV, NV_FILINGS
 
 class Repairs(unittest.TestCase):
+    def test_bh_preserves_other_master_functions_and_execution_settings(self):
+        import ast, subprocess
+        root = Path(__file__).resolve().parents[1]
+        baseline = subprocess.check_output(['git','show',
+            '06528525fe6a164806428015616cbb4df7f2712f:registry_snapshot_server.py'], cwd=root).decode()
+        current = (root/'registry_snapshot_server.py').read_text(encoding='utf-8')
+        trees = [ast.parse(text) for text in (baseline,current)]
+        changed = {'nm_browser_clean_evidence','final_four_browser_lookup','search_pa_with_name_fallback_core'}
+        for tree in trees:
+            for node in ast.walk(tree):
+                if isinstance(node,ast.Set):
+                    node.elts=[item for item in node.elts if not (
+                        isinstance(item,ast.Constant) and item.value=='0.6.62')]
+            tree.body=[node for node in tree.body if not (
+                isinstance(node,ast.FunctionDef) and node.name in changed)]
+        self.assertEqual(ast.dump(trees[0]),ast.dump(trees[1]))
+
     def setUp(self):
         p=patch.object(cc,'date',AsOf);p.start();self.addCleanup(p.stop)
     def test_trial_ny_detail_failures_keep_the_actual_step_and_reason(self):
@@ -177,6 +194,27 @@ class Repairs(unittest.TestCase):
                       'Registration Submitted 0000412211896704','Extension Granted']:
             with self.assertRaises(ValueError):
                 cc.nm_browser_clean_evidence({**data,'history_rows':[['',label,'7/8/2021']]},q)
+
+    def test_nm_observed_unassigned_amendments_preserve_completed_filing(self):
+        fixture=json.loads((Path(__file__).parent/'fixtures/nm-power-to-decide-20261003.json').read_text())
+        org=cc.checker.Organization('POWER TO DECIDE','52-1974611')
+        def source(q):
+            if q['operation']=='search':
+                return {'query':q,'complete':True,'rows':[{'name':org.organization_name,'ein':'521974611'}],'total':1}
+            return {'query':q,'complete':True,'name':org.organization_name,'ein':'521974611',
+                    'history_rows':fixture['history_rows'],'financial_periods':fixture['financial_periods']}
+        q={'state':'NM','operation':'detail','identifier':'521974611','name':org.organization_name}
+        self.assertEqual(cc.nm_browser_clean_evidence(source(q),q)['history_rows'],fixture['history_rows'])
+        result=cc.nm_browser_lookup(org,source)
+        self.assertTrue(result.success)
+        self.assertNotIn(result.status,{'Unknown','Unable to Confirm','Not Registered'})
+        without=dict(fixture,history_rows=[r for r in fixture['history_rows'] if r[0]])
+        with patch.dict(fixture,without):
+            self.assertEqual(cc.nm_browser_lookup(org,source).status,result.status)
+        for label in ['Registration Amended','Registration Amended 20253622613329405',
+                      'Registration Amended 0000362231243195','Unknown 00003622312431955']:
+            with self.assertRaises(ValueError):
+                cc.nm_browser_clean_evidence({**source(q),'history_rows':[['',label,'5/4/2023']]},q)
 
     def test_shared_inactive_rule_and_later_qualifying_record_across_states(self):
         org=cc.checker.Organization('Example National Foundation','12-3456789')

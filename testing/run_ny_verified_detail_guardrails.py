@@ -108,11 +108,12 @@ class VerifiedDetails(unittest.TestCase):
         self.assertEqual(result['result']['status_reason'], 'NY_CONNECTOR_UPDATE_REQUIRED')
 
     def test_status_matching_discovery_and_other_state_functions_unchanged(self):
-        before = subprocess.check_output(['git', 'show', 'fb193e6:registry_snapshot_server.py'], cwd=ROOT).decode('utf-8')
+        before = subprocess.check_output(['git', 'show', '06528525fe6a164806428015616cbb4df7f2712f:registry_snapshot_server.py'], cwd=ROOT).decode('utf-8')
         after = (ROOT/'registry_snapshot_server.py').read_text(encoding='utf-8')
         funcs = lambda source: {n.name: ast.dump(n) for n in ast.parse(source).body if isinstance(n, ast.FunctionDef)}
         old, new = funcs(before), funcs(after)
         self.assertEqual({k for k in old if old[k] != new.get(k)},
-            {'search_ny_direct', 'ny_connector_advance', 'ny_connector_request', 'ny_connector_clean_response', 'ny_connector_failure'})
+            {'nm_browser_clean_evidence', 'final_four_browser_lookup', 'search_pa_with_name_fallback_core',
+             'ny_connector_advance', 'ny_connector_request', 'il_verification_recovery'})
 
 if __name__ == '__main__': unittest.main()

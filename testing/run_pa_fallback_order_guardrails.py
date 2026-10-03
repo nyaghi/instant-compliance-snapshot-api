@@ -86,6 +86,31 @@ class FallbackControls(unittest.TestCase):
             self.assertEqual(r.reason_code, 'PA_INCOMPLETE_SEARCH')
             self.assertEqual(fetch.call_count, 1)
 
+    def test_trial_retries_only_failed_query_without_restarting_completed_searches(self):
+        empty = {'Table':[], 'Table1':[{'RESULTCOUNT':0}]}
+        with patch.object(c, 'trial_identity', return_value={'origin':'isolated'}):
+            r, fetch = self.run_search([empty, TimeoutError('source read timed out'), empty],
+                                      ['Full Legal Name', 'Distinct Alias'])
+        self.assertEqual(r.status, 'Not Registered')
+        self.assertEqual([json.loads(call.kwargs['data'])['EntityName'] for call in fetch.call_args_list],
+                         ['Full Legal Name', 'Distinct Alias', 'Distinct Alias'])
+        self.assertEqual(len({call.args[1] for call in fetch.call_args_list}), 1)
+        self.assertEqual(r._pa_api_attempts[-1]['transport_retries'], 1)
+        self.assertTrue(r._pa_api_attempts[-1]['complete'])
+
+    def test_trial_repeated_timeout_is_never_a_completed_negative(self):
+        with patch.object(c, 'trial_identity', return_value={'origin':'isolated'}):
+            r, fetch = self.run_search([TimeoutError('first'), TimeoutError('second')], ['Full Name'])
+        self.assertEqual(fetch.call_count, 2)
+        self.assertEqual(r.status, 'Site Not Reachable')
+        self.assertFalse(r.success)
+
+    def test_trial_http_rejection_is_not_retried(self):
+        with patch.object(c, 'trial_identity', return_value={'origin':'isolated'}):
+            r, fetch = self.run_search([urllib.error.HTTPError('https://www.charities.pa.gov/',403,'blocked',{},None)], ['Full Name'])
+        self.assertEqual(fetch.call_count, 1)
+        self.assertFalse(r.success)
+
     def test_deterministic_response_limit_does_not_repeat_entire_lookup(self):
         outcome = dict(status='Unable to Confirm', success=False, reason_code='PA_NAME_RESPONSE_INCOMPLETE')
         with patch.object(c,'run_state_lookup',return_value=outcome) as call:

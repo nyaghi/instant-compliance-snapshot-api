@@ -206,3 +206,18 @@ test('NC grouped pending count retains every distinct pending application withou
   await assert.rejects(harness({cards:[active,pending,pending],total:2,profileIds:['5700751','15114421','20537566'],...opts}).api.ncRows({state:'NC',operation:'search',name:"America's Charities"}));
  }
 });
+
+test('NC Achieving count groups a pending application with its exact existing legal name',async()=>{
+ const licensed={...exempt,'CSL Legal Name':'Achieving Our Greatness, Inc.',License:'EX008905',Status:'Expired Exempt'};
+ const pending={'CSL Legal Name':licensed['CSL Legal Name'],'CSL Type':'In-Process',Status:'In-Process'};
+ const cards=[{...exempt,'CSL Legal Name':'Achieving the Best Life for Everyone (ABLE)',License:'EX012672'},licensed,pending,
+  {...active,'CSL Legal Name':'Achieving Success on Purpose, Inc.',License:'SL008634'}];
+ const q={state:'NC',operation:'search',name:'Achieving'};
+ const opts={cards,total:3,query:q.name,profileIds:['100','101','102','103']};
+ const r=await harness(opts).api.ncRows(q);
+ assert.equal(r.evidence.rows.length,4);assert.equal(r.evidence.total,4);
+ assert.equal(r.evidence.rows[2].Status,'In-Process');
+ for(const change of [{total:2},{total:5},{cards:[...cards.slice(0,2),{...pending,'CSL Legal Name':'Different Name'},cards[3]]},
+  {cards:[cards[0],licensed,{...licensed,License:'EX099999'},cards[3]]}])
+  await assert.rejects(harness({...opts,...change}).api.ncRows(q));
+});

@@ -1040,7 +1040,7 @@ class LookupControls(unittest.TestCase):
                  'search_ok_precise','run_state_lookup','ny_connector_request','ny_connector_advance','il_verification_recovery',
                  'nm_browser_clean_evidence','nm_browser_lookup','final_four_clean_evidence','final_four_compact_search_evidence','final_four_search_candidate_scores',
                  'final_four_connector_advance','final_four_connector_request','final_four_connector_failure','lab_mi_query_dominance_enabled'}
-        allowed.update({'structured_registry_name','ar_result_rows','search_ar_precise','ok_choose_safe_result_row_on_page',
+        allowed.update({'search_pa_with_name_fallback_core','structured_registry_name','ar_result_rows','search_ar_precise','ok_choose_safe_result_row_on_page',
                         'ok_open_latest_equivalent_detail','licensed_compound_retrieval_names','irs_index_object_ids',
                         'identity_irs_historical_names','irs_period_for_label','ms_name_search_plan'})
         # Only the documented NM inactive-lifecycle prefix is new. Compare
@@ -1096,7 +1096,7 @@ class LookupControls(unittest.TestCase):
         before = ast.parse(subprocess.check_output(['git', 'show', baseline + ':registry_snapshot_server.py'], cwd=root).decode('utf-8'))
         after = ast.parse((root / 'registry_snapshot_server.py').read_text(encoding='utf-8'))
         changed = {'nm_browser_courtesy_names','nm_browser_lookup','pa_name_search_plan','final_four_connector_failure','final_four_browser_lookup'}
-        changed.update({'structured_registry_name','ar_result_rows','search_ar_precise','ok_choose_safe_result_row_on_page',
+        changed.update({'search_pa_with_name_fallback_core','nm_browser_clean_evidence','structured_registry_name','ar_result_rows','search_ar_precise','ok_choose_safe_result_row_on_page',
                         'ok_open_latest_equivalent_detail','search_ok_precise','licensed_compound_retrieval_names','irs_index_object_ids',
                         'identity_irs_historical_names','irs_period_for_label','ms_name_search_plan','ny_connector_failure',
                         'nc_charity_record_evidence','nv_charity_detail_evidence','nv_charity_filings_evidence','lab_mi_query_dominance_enabled'})
@@ -1115,13 +1115,14 @@ class LookupControls(unittest.TestCase):
                         n.comparators=[ast.Constant(60)]
             for handler in [n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in {'ny_connector_request','ny_connector_advance','il_verification_recovery'}]:
                 for n in ast.walk(handler):
-                    if isinstance(n,ast.Set):n.elts=[v for v in n.elts if not(isinstance(v,ast.Constant) and v.value in {'0.6.46','0.6.47','0.6.48','0.6.49','0.6.50','0.6.51','0.6.52','0.6.53','0.6.54','0.6.55','0.6.56'})]
+                    if isinstance(n,ast.Set):n.elts=[v for v in n.elts if not(isinstance(v,ast.Constant) and v.value in {'0.6.46','0.6.47','0.6.48','0.6.49','0.6.50','0.6.51','0.6.52','0.6.53','0.6.54','0.6.55','0.6.56','0.6.61','0.6.62'})]
             tree.body = [node for node in tree.body if not (isinstance(node, ast.FunctionDef) and node.name in changed)]
         self.assertEqual(ast.dump(before), ast.dump(after))
         for file in ['web-staging/index.html', 'web-staging/optimized-workflows.js', 'web-staging/sales-mode.js',
                      'web-staging/ny-connector.js']:
             with self.subTest(file=file):
-                original = subprocess.check_output(['git', 'show', baseline + ':' + file], cwd=root)
+                # Compare the approved frontend from the deployed BG release.
+                original = subprocess.check_output(['git', 'show', '06528525fe6a164806428015616cbb4df7f2712f:' + file], cwd=root)
                 self.assertEqual(original.replace(b'\r\n', b'\n'), (root / file).read_bytes().replace(b'\r\n', b'\n'))
 
     def test_nv_nr_identity_is_filtered_without_inventing_a_corporation(self):
@@ -1255,6 +1256,40 @@ class LookupControls(unittest.TestCase):
         result = cc.final_four_browser_lookup(self.orgs['NV'], 'NV', mixed)
         self.assertEqual(result.status, 'Unable to Confirm')
         self.assertIn('filing scope', result.source_note)
+
+    def test_nv_partial_scope_candidate_does_not_override_confirmed_full_record(self):
+        # Reproduces the observed Better World Fund / A Better World pair.
+        # Filing rows below are synthetic controls, not live status assertions.
+        org = cc.checker.Organization('Better World Fund, Inc.', '58-2366765')
+        def provider(q):
+            if q['operation'] == 'search':
+                rows = [{'name': 'Better World Fund Inc', 'identifier': 'NV20081653535',
+                         'entity_type': NV['Entity Type']},
+                        {'name': 'A Better World', 'identifier': 'NV20201848885',
+                         'entity_type': NV_SOLICITATION['Entity Type']}]
+                return {'state':'NV','query':q,'complete':True,'verification_pending':False,
+                        'rows':rows,'total':len(rows)}
+            primary = q['identifier'] == 'NV20081653535'
+            fields = {**NV, 'Entity Name': 'Better World Fund Inc' if primary else 'A Better World',
+                      'NV Business ID': q['identifier'], 'Entity Status':'Revoked' if primary else 'Expired',
+                      'Entity Type': NV['Entity Type'] if primary else NV_SOLICITATION['Entity Type'],
+                      'Annual Renewal Due Date/Expiration Date':'07/31/2024'}
+            payload = {'query':q,'complete':True,'fields':fields,'source_url':self.nvurl}
+            if primary:
+                payload['filings'] = {**copy.deepcopy(NV_QUALIFIED_FILINGS),
+                                      'identifier':q['identifier'],'name':fields['Entity Name']}
+            return payload
+        result = cc.final_four_browser_lookup(org, 'NV', provider)
+        self.assertEqual(result.status, 'Revoked')
+        self.assertEqual(result.matched_registry_identifier, 'NV20081653535')
+        self.assertTrue(any(r['identifier']=='NV20201848885' for r in result.rejected_candidates))
+
+        def partial_only(q):
+            payload = provider(q)
+            if q['operation']=='search':
+                payload['rows']=payload['rows'][1:];payload['total']=1
+            return payload
+        self.assertEqual(cc.final_four_browser_lookup(org,'NV',partial_only).status, 'Unable to Confirm')
 
     def test_nv_charity_only_registration_full_lookup_and_dates(self):
         def provider(q):

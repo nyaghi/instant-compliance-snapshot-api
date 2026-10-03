@@ -6001,7 +6001,7 @@ def il_verification_recovery(record, payload, now):
     if (record.get("state") != "IL" or record.get("purpose") != "registration"
             or record.get("recovery_protocol") != "il-fresh-page-v1"
             or (record.get("connector_version") != "0.5.10"
-                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61"}))
+                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62"}))
             or payload.get("reason") != "NY_CONNECTOR_IL_VERIFICATION_PENDING"
             or record.get("il_verification_recovery")
             or now + 120 >= record["issued"] + NY_CONNECTOR_TTL_SECONDS):
@@ -6656,6 +6656,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
     unreviewed_scope = False
     missing_nv_business_id = False
     scope_reviews = []
+    nv_scope_records = {}
     excluded_nv_entities = []
     def collect(query):
         if time.monotonic() >= deadline:
@@ -6816,6 +6817,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                     if (record.get("requires_solicitation_history")
                             and not record.get("solicitation_statement_filed")):
                         unreviewed_scope = True
+                        nv_scope_records[record["identifier"]] = record
                         scope_reviews.append({"name": record["name"], "identifier": record["identifier"],
                                               "category": "Unconfirmed charitable-solicitation filing history", "source_url": record["url"]})
                         seen.add(row["identifier"])
@@ -6847,6 +6849,22 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
         result.source_note += " Same-name records confirmed to be outside the nonprofit/charity scope were excluded."
         if any(row.get("basis") for row in excluded_nv_entities):
             result.source_note += " A withdrawn nonprofit corporation with a complete non-soliciting history and no charitable-solicitation statement was excluded; corporate withdrawal is not classified as a withdrawn charity registration."
+    if state == "NV" and result.success and result.matched_registry_identifier and nv_scope_records:
+        # Match the master's ordinary partial-name behavior: a merely possible
+        # name does not veto a fully confirmed record. Exact/accepted identities,
+        # address conflicts and unconfirmed reviewed aliases still need review.
+        # With no confirmed record, incomplete scope can never become a negative.
+        retained = []
+        for candidate in scope_reviews:
+            record = nv_scope_records.get(candidate["identifier"])
+            identity = licensed_charity_identity(org, record, state, deadline) if record else None
+            if identity == "possible" and record["match"].get("reason") != "ALIAS_IDENTITY_UNCONFIRMED":
+                result.rejected_candidates = list(getattr(result, "rejected_candidates", [])) + [{
+                    **candidate, "reason": "Partial name was not corroborated; a separate full record was confirmed."}]
+            else:
+                retained.append(candidate)
+        scope_reviews = retained
+        unreviewed_scope = bool(scope_reviews)
     if unreviewed_scope and (state == "AL" or result.status not in {"Current", "Upcoming Filing", "Exempt"}):
         result.status = "Needs Review" if state in {"AL", "NC"} else "Unable to Confirm"; result.success = False
         result.source_note = ("Alabama returned a potentially matching private foundation without a public registration number. Review its identity and registration scope; this does not establish current registration, delinquency or non-registration."
@@ -6907,7 +6925,7 @@ def nm_browser_clean_evidence(payload, query):
             if (not isinstance(row, list) or len(row) != 3 or not all(public_text(v) for v in row)
                     or not (re.fullmatch(r'20[0-9]{2}', row[0])
                             or (row[0] == '' and (row[1] in {'Charity Added to COROS', 'Inactive Registration'}
-                                or re.fullmatch(r'Registration Submitted 0000[0-9]{13}', row[1]))))
+                                or re.fullmatch(r'Registration (?:Submitted|Amended) 0000[0-9]{13}', row[1]))))
                     or parse_due_date(row[2]) is None or not row[1].strip()):
                 raise ValueError('Invalid New Mexico history row')
         for period in periods:
@@ -6960,7 +6978,7 @@ def nm_browser_lookup(org, evidence):
         detail = nm_browser_clean_evidence(evidence(query), query)
         module = load_wa_nm_module()
         # COROS's enrollment row and observed 0000-prefixed unassigned-year
-        # submissions have no tax year. Preserve their dated source evidence;
+        # submissions/amendments have no tax year. Preserve their dated source evidence;
         # neither can establish a filing cycle or original registration date.
         # Inactive lifecycle rows use an internal zero marker, never a tax year.
         rows = [(int(year) if year else 0, status, when) for year, status, when in detail['history_rows']
@@ -22946,9 +22964,22 @@ def search_pa_with_name_fallback_core(page, org, completion_guard, completion_wa
                 "CountryId": 1756, "CountryCode": "UNITED_STATES", "Zip": None}
             # Same public endpoint and field contract already used for PA EIN name discovery.
             # Bind parsing to this request instead of a temporarily empty Angular table.
-            body = identity_fetch("https://www.charities.pa.gov/api/Charities/Search", deadline,
-                headers={"Content-Type": "application/json", "Accept": "application/json"},
-                data=json.dumps(payload).encode(), request_timeout=min(12.0, max(0.1, deadline-time.monotonic())))
+            for transport_attempt in range(2):
+                try:
+                    body = identity_fetch("https://www.charities.pa.gov/api/Charities/Search", deadline,
+                        headers={"Content-Type": "application/json", "Accept": "application/json"},
+                        data=json.dumps(payload).encode(), request_timeout=min(12.0, max(0.1, deadline-time.monotonic())))
+                    break
+                except (urllib.error.URLError, OSError) as exc:
+                    # In the disposable trial, recover this exact read-only
+                    # query once instead of discarding already completed EIN
+                    # and name responses. Keep the original fallback deadline;
+                    # HTTP rejections and malformed responses are not retried.
+                    if (transport_attempt or isinstance(exc, urllib.error.HTTPError)
+                            or not trial_identity() or deadline-time.monotonic() < 1.0):
+                        raise
+                    entry["transport_retries"] = 1
+                    entry["initial_transport_failure"] = type(exc).__name__
             entry["http_status"] = 200
             data = json.loads(body)
             rows = data.get("Table") if isinstance(data, dict) else None
@@ -24088,7 +24119,7 @@ def ny_connector_advance(record):
     org = checker.Organization(record["organization_name"], record["ein"])
     started = time.perf_counter()
     supports_browser_detail = (record.get("connector_version") in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"}
-                               or bool(trial_identity() and record.get("connector_version") in {"0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61"}))
+                               or bool(trial_identity() and record.get("connector_version") in {"0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62"}))
     try:
         if record.get("purpose") == "identity":
             ein = canonical_ein_digits(record["ein"])
@@ -24138,7 +24169,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61"})):
+        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62"})):
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()

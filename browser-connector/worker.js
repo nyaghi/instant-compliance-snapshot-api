@@ -48,7 +48,7 @@ function keepAlive() {
 const rejected = reason => ["NY_CONNECTOR_VERIFICATION_REJECTED", "NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED"].includes(reason);
 const recoveryFailure = reason => rejected(reason) ? "NY_CONNECTOR_RECOVERY_REJECTED" :
   typeof reason === "string" && /^NY_CONNECTOR_[A-Z_]+$/.test(reason) ? reason : "NY_CONNECTOR_INCOMPLETE";
-const runtimeState = () => ({ schema: 2, nextStart, laneStarts: Object.fromEntries(laneStarts), ownedTabs: [...owned], diagnostics: [...diagnostics], queue: allJobs().filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, expiresAt: j.expiresAt, active: isActive(j), activeExpiresAt: j.activeExpiresAt, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, detailRetryUsed: j.detailRetryUsed, detailAuthRetryUsed: j.detailAuthRetryUsed, retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.registryState === "AL" ? null : j.command, lastResponse: j.registryState === "AL" ? null : j.lastResponse, queryRepaired: j.queryRepaired, nyFreshPageRecoveryOnly: j.nyFreshPageRecoveryOnly, nvReturnRecoveryUsed: j.nvReturnRecoveryUsed, ...(P.TRIAL_ORIGIN && j.registryState === "NV" ? {nvVisibilityAttempted:j.nvVisibilityAttempted,nvPreviousVisible:j.nvPreviousVisible} : {}) })) });
+const runtimeState = () => ({ schema: 2, nextStart, laneStarts: Object.fromEntries(laneStarts), ownedTabs: [...owned], diagnostics: [...diagnostics], queue: allJobs().filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, expiresAt: j.expiresAt, active: isActive(j), activeExpiresAt: j.activeExpiresAt, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, detailRetryUsed: j.detailRetryUsed, detailAuthRetryUsed: j.detailAuthRetryUsed, nyLastSearchQuery: j.nyLastSearchQuery, retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.registryState === "AL" ? null : j.command, lastResponse: j.registryState === "AL" ? null : j.lastResponse, queryRepaired: j.queryRepaired, nyFreshPageRecoveryOnly: j.nyFreshPageRecoveryOnly, nvReturnRecoveryUsed: j.nvReturnRecoveryUsed, ...(P.TRIAL_ORIGIN && j.registryState === "NV" ? {nvVisibilityAttempted:j.nvVisibilityAttempted,nvPreviousVisible:j.nvPreviousVisible} : {}) })) });
 function saveRuntime() {
   keepAlive();
   if (!allJobs().length && keepAliveTimer) { clearTimeout(keepAliveTimer); keepAliveTimer = null; }
@@ -400,7 +400,20 @@ async function performSearch(job, query, id) {
           if (!verified?.ok || verified.evidence?.verified !== true) {
             response = {ok:false, reason:verified?.reason || "NY_CONNECTOR_VERIFICATION_REQUIRED"}; break;
           }
-          diagnostic("ny-detail-session", job, "normal verification renewed; same observed ID reopened");
+          // Reload removed the result links. Re-run only the successful query
+          // that produced this detail, then open its observed link again.
+          // Verification and the original job deadline remain shared.
+          if (!job.nyLastSearchQuery) {
+            response = {ok:false, reason:"NY_CONNECTOR_DETAIL_LINK_MISSING"}; break;
+          }
+          const restored = await chrome.tabs.sendMessage(job.tab, {action:"search", id,
+            attempt:`${attempt}:detail-results`, query:job.nyLastSearchQuery,
+            verificationRetryUsed:true}, {frameId:0});
+          if (job.closed || generation !== job.generation) return;
+          if (!restored?.ok || !P.sameQuery(restored.evidence?.query, job.nyLastSearchQuery)) {
+            response = {ok:false, reason:restored?.reason || "NY_CONNECTOR_INCOMPLETE"}; break;
+          }
+          diagnostic("ny-detail-session", job, "normal verification and original results restored; same observed ID reopened");
           continue;
         }
         if (rejected(response.reason) && !repaired) {
@@ -465,6 +478,9 @@ async function performSearch(job, query, id) {
   }
   if (job.closed) return;
   job.pending = null;
+  if (P.TRIAL_ORIGIN && job.registryState === "NY" && response.ok && !Object.hasOwn(query, "orgID")) {
+    job.nyLastSearchQuery = {...query};
+  }
   if(P.TRIAL_ORIGIN&&job.registryState==='NV'&&job.nvReadiness)response.nv_readiness=job.nvReadiness;
   job.lastResponse = { id, ...response, ...(!response.ok && repair.nextAllowedAt > Date.now() ? { retryAt: repair.nextAllowedAt } : {}) };
   try { await saveRuntime(); } catch { close(job, "NY_CONNECTOR_INTERRUPTED"); return; }

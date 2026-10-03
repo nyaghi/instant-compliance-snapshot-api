@@ -1042,7 +1042,14 @@
     // reconciliation; missing cards, repeated licenses/profiles and arbitrary
     // count changes still fail. No pending application is silently discarded.
     const grouped=new Set(rows.map(row=>row.License||'pending:'+row['CSL Legal Name']));
-    if(rows.length!==total&&grouped.size!==total)throw new Error('REGISTRY_NC_RESULT_COUNT_MISMATCH');
+    // The live Achieving search also groups a pending application with an
+    // existing licensed card bearing the exact legal name. Reconcile only
+    // that observed relationship; distinct issued licenses stay distinct.
+    // Every card still travels to master matching/status selection.
+    const licensedNames=new Set(rows.filter(row=>row.License).map(row=>row['CSL Legal Name']));
+    const registrationGroups=new Set(rows.filter(row=>row.License||!licensedNames.has(row['CSL Legal Name']))
+      .map(row=>row.License||'pending:'+row['CSL Legal Name']));
+    if(rows.length!==total&&grouped.size!==total&&registrationGroups.size!==total)throw new Error('REGISTRY_NC_RESULT_COUNT_MISMATCH');
     return {ok:true,evidence:{state:'NC',query,complete:true,verification_pending:false,total:rows.length,rows},
       diagnostics:rows.length===total?[]:[{phase:'pending-count',displayed:total,cards:rows.length,groups:grouped.size}]};
   }
