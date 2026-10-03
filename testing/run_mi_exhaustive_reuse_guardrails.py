@@ -57,6 +57,9 @@ class Reuse(unittest.TestCase):
         fn=funcs[1]['search_mi_http_completion_probe'];hits=0
         for node in ast.walk(fn):
             if not hasattr(node,'body') or not isinstance(node.body,list):continue
+            node.body[:]=[n for n in node.body if not (isinstance(n,ast.If) and ast.unparse(n.test)=='trial_identity() and mi_http_completed_ein_empty(submitted, formatted_ein)')]
+        for node in ast.walk(fn):
+            if not hasattr(node,'body') or not isinstance(node.body,list):continue
             for i,n in enumerate(node.body):
                 if isinstance(n,ast.If) and ast.unparse(n.test)=='trial_identity()':
                     self.assertEqual([ast.unparse(v.targets[0]) for v in n.body],['unmatched','result._cc_mi_completed_empty_names','result._cc_mi_completed_unmatched_names'])
@@ -92,6 +95,45 @@ class Reuse(unittest.TestCase):
                 self.assertEqual(page._cc_mi_search_progress['http_completed_unmatched_name_queries'],['Legal Services'])
             else:
                 fallback.assert_not_called()
+
+    def test_complete_ein_empty_proof_reuses_only_same_input_and_keeps_name_fallback(self):
+        tree=ast.parse(Path(cc.__file__).read_text(encoding='utf-8'))
+        fn=next(n for n in tree.body if getattr(n,'name','')=='run_state_lookup')
+        branch=next(n for n in ast.walk(fn) if isinstance(n,ast.If) and ast.unparse(n.test)=="state == 'MI'")
+        code=compile(ast.fix_missing_locations(ast.Module(body=branch.body[:8],type_ignores=[])),str(cc.__file__),'exec')
+        for identity in [(self.org.organization_name,'521039060'),('Other','521039060'),(self.org.organization_name,'999999999')]:
+            probe=SimpleNamespace(success=True,status='Not Registered',reason_code='NO_CANDIDATES_AFTER_COMPLETED_SEARCH',
+                raw_status_text='No results found',source_note='',error='',_cc_mi_completed_exact_ein_empty=identity,
+                _cc_mi_completed_empty_names=['Legal Services Corporation'],_cc_mi_completed_unmatched_names=['Legal Services'])
+            confirm=MagicMock(return_value=probe);fallback=MagicMock(return_value=probe);page=SimpleNamespace()
+            values={**cc.__dict__,'org':self.org,'page':page,'lookup_started':time.perf_counter(),'mi_progress':{},
+                'trial_identity':lambda:True,'public_status':lambda r:r.status,'search_mi_http_completion_probe':lambda *a,**k:probe,
+                'search_bundled_extension_state':confirm,'search_mi_name_fallback':fallback,'MI_ENABLE_NAME_FALLBACK':True}
+            exec(code,values)
+            if identity==(self.org.organization_name,'521039060'): confirm.assert_not_called()
+            else: confirm.assert_called_once_with(page,self.org,'MI')
+            fallback.assert_called_once_with(page,self.org)
+            self.assertEqual(page._cc_mi_search_progress['http_completed_unmatched_name_queries'],['Legal Services'])
+
+    def test_exact_ein_empty_response_proof_fails_closed_for_incomplete_and_ambiguous_sources(self):
+        source=('<html><body><h1>Search Results</h1><span id="ctl00_MainContent_lblSearchResults">'
+                'Results for the following input: Organization Type: Charity or Public Safety Organization<br>'
+                'EIN: 52-1039060; 0 record(s) found</span><table id="ctl00_MainContent_GridView1">'
+                '<tr><td colspan="3">No records found for your search criteria</td></tr></table></body></html>')
+        def response(text=source,url='https://www.ag.state.mi.us/CharitableTrust/frmSearchResults.aspx',status=200,history=None):
+            return SimpleNamespace(text=text,url=url,status_code=status,history=history or [])
+        self.assertTrue(cc.mi_http_completed_ein_empty(response(),'52-1039060'))
+        for bad in [source[:-7],source.replace('52-1039060','52-9999999'),source.replace('EIN:', 'Name Includes: Other; EIN:'),
+                    source.replace('0 record(s)','1 record(s)'),source.replace('Charity or Public Safety Organization','Charity Professional Fundraiser'),
+                    source.replace('No records found for your search criteria','Loading'),source.replace('</td>','<a href="x">Candidate</a></td>'),
+                    source.replace('</body>','CAPTCHA</body>'),source.replace('<h1>','<h2>').replace('</h1>','</h2>'),
+                    source.replace('</table>',''),source.replace('</body>','<table id="ctl00_MainContent_GridView1"></table></body>')]:
+            with self.subTest(source=bad):self.assertFalse(cc.mi_http_completed_ein_empty(response(bad),'52-1039060'))
+        for url in ['http://www.ag.state.mi.us/CharitableTrust/frmSearchResults.aspx','https://other.test/CharitableTrust/frmSearchResults.aspx',
+                    'https://www.ag.state.mi.us/CharitableTrust/frmDefault.aspx','https://www.ag.state.mi.us/CharitableTrust/frmSearchResults.aspx?name=other']:
+            self.assertFalse(cc.mi_http_completed_ein_empty(response(url=url),'52-1039060'))
+        self.assertFalse(cc.mi_http_completed_ein_empty(response(status=503),'52-1039060'))
+        self.assertFalse(cc.mi_http_completed_ein_empty(response(history=[response(url='https://other.test/')]),'52-1039060'))
 
     def test_partial_count_pagination_headers_anchor_and_aliases_fail_closed(self):
         s=source(self.names)

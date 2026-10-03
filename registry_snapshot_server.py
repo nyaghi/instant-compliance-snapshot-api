@@ -12720,6 +12720,54 @@ def search_mi_name_fallback(page, org):
     return result
 
 
+def mi_http_completed_ein_empty(response, formatted_ein):
+    """Reuse only a complete official exact-EIN empty results page, never a status."""
+    from html.parser import HTMLParser
+    from urllib.parse import urlparse
+    source = getattr(response, "text", "") or ""
+    if (getattr(response, "status_code", None) != 200 or len(source) > 1_000_000
+            or not re.search(r"</body>\s*</html>\s*$", source, re.I)
+            or re.search(r"captcha|verify you are human|access denied|temporarily unavailable|scheduled maintenance", source, re.I)):
+        return False
+    for item in [*getattr(response, "history", []), response]:
+        url = urlparse(str(getattr(item, "url", "")))
+        if (url.scheme != "https" or url.netloc.lower() != "www.ag.state.mi.us"
+                or url.query or url.fragment or not url.path.startswith("/CharitableTrust/")):
+            return False
+    if url.path != "/CharitableTrust/frmSearchResults.aspx":
+        return False
+
+    class EmptyPage(HTMLParser):
+        def __init__(self):
+            super().__init__(); self.stack=[]; self.echo=[]; self.grid=[]; self.head=[]
+            self.counts={"echo":0,"grid":0,"head":0}; self.bad=False
+        def handle_starttag(self, tag, attrs):
+            attrs=dict(attrs); role=""
+            if attrs.get("id")=="ctl00_MainContent_lblSearchResults": role="echo"
+            elif attrs.get("id")=="ctl00_MainContent_GridView1": role="grid"
+            elif tag=="h1": role="head"
+            if role: self.counts[role]+=1
+            if any(v[1]=="grid" for v in self.stack) and tag not in {"tbody","tr","td"}:
+                self.bad=True
+            if tag not in {"br","img","input","meta","link","hr","area","base","wbr"}:
+                self.stack.append((tag,role))
+        def handle_endtag(self, tag):
+            if self.stack and self.stack[-1][0]==tag: self.stack.pop()
+            elif tag in {"span","table","tr","td","h1"}: self.bad=True
+        def handle_data(self, data):
+            for role in ("echo","grid","head"):
+                if any(v[1]==role for v in self.stack): getattr(self,role).append(data)
+    parsed=EmptyPage()
+    try: parsed.feed(source); parsed.close()
+    except Exception: return False
+    text=lambda values: re.sub(r"\s+", " ", " ".join(values)).strip()
+    expected=("Results for the following input: Organization Type: Charity or Public Safety Organization "
+              f"EIN: {formatted_ein}; 0 record(s) found")
+    return (not parsed.bad and not parsed.stack and parsed.counts=={"echo":1,"grid":1,"head":1}
+            and text(parsed.echo)==expected and text(parsed.head)=="Search Results"
+            and text(parsed.grid)=="No records found for your search criteria")
+
+
 def search_mi_http_completion_probe(org, lookup_deadline=None):
     """Probe Michigan's official EIN form before entering the slower browser frame path."""
     if curl_requests is None:
@@ -12819,6 +12867,8 @@ def search_mi_http_completion_probe(org, lookup_deadline=None):
                 },
             )
             submitted.raise_for_status()
+            if trial_identity() and mi_http_completed_ein_empty(submitted, formatted_ein):
+                result._cc_mi_completed_exact_ein_empty = (org.organization_name, ein_digits)
             submitted_text = sc_html_to_text(submitted.text or "")
             if (mi_http_names_enabled(org) and lookup_deadline is not None
                     and re.search(r"\b0\s+record\(s\)\s+found\b|\bno\s+records?\s+found\b|\bno\s+results?\s+found\b", submitted_text, re.I)):
@@ -31178,10 +31228,12 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                         progress["completed_empty_ein_result"] = mi_probe_result
                 if mi_probe_result is not None:
                     result = mi_probe_result
-                    if trial_identity() and public_status(result) == "Not Registered":
-                        # An optimized HTTP zero is not the final negative in
-                        # this trial. Confirm the actual EIN form in the same
-                        # original state budget before bounded name fallbacks.
+                    if (trial_identity() and public_status(result) == "Not Registered"
+                            and getattr(result, "_cc_mi_completed_exact_ein_empty", None) != (
+                                org.organization_name, canonical_ein_digits(org.ein))):
+                        # An incomplete HTTP zero still needs browser confirmation.
+                        # Complete exact-EIN evidence is reused only within this
+                        # identical bounded check; all name fallbacks remain.
                         page._cc_mi_lookup_deadline = mi_deadline
                         result = search_bundled_extension_state(page, org, "MI")
                         # Preserve completed name evidence while the browser

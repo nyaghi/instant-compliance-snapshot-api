@@ -14,12 +14,13 @@ def strip_mi_exhaustive_reuse(tree):
     original={n.name:n for n in old.body if isinstance(n,ast.FunctionDef)}
     names={'mi_name_http_empty_queries','search_mi_name_fallback','search_mi_http_completion_probe'}
     tree.body=[original.get(n.name,n) if isinstance(n,ast.FunctionDef) and n.name in names else n
-        for n in tree.body if getattr(n,'name','')!='mi_http_complete_unmatched_grid']
+        for n in tree.body if getattr(n,'name','') not in {'mi_http_complete_unmatched_grid','mi_http_completed_ein_empty'}]
     fn=next(n for n in tree.body if getattr(n,'name','')=='run_state_lookup')
     browser_confirm = [n for n in ast.walk(fn) if isinstance(n, ast.If)
-                       and ast.unparse(n.test) == "trial_identity() and public_status(result) == 'Not Registered'"]
+                       and "_cc_mi_completed_exact_ein_empty" in ast.unparse(n.test)]
     assert len(browser_confirm) == 1
     assert ast.unparse(browser_confirm[0].body[-1]) == "result = search_bundled_extension_state(page, org, 'MI')"
+    browser_confirm[0].test = ast.parse("trial_identity() and public_status(result) == 'Not Registered'",mode="eval").body
     browser_confirm[0].body.append(ast.parse('mi_probe_result = None').body[0])
     transfer=ast.parse('''completed_unmatched = getattr(mi_probe_result, "_cc_mi_completed_unmatched_names", [])
 if trial_identity() and completed_unmatched:
