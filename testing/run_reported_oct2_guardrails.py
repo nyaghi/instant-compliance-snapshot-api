@@ -83,6 +83,34 @@ class ReportedNames(unittest.TestCase):
                 cc.final_four_browser_lookup(org, 'NV', source)
         self.assertEqual(seen, ['Lemonade Day', 'P4L'])
 
+    def test_nc_split_names_do_not_repeat_only_case_variants(self):
+        org = cc.checker.Organization('Ronald McDonald House Global / RMHC', '36-2934689')
+        names = [org.organization_name, 'RONALD MCDONALD HOUSE GLOBAL',
+                 'RMHC', 'Ronald McDonald House Charities, Inc.']
+        seen = []
+        def source(query):
+            seen.append(query['name'])
+            return {'state': 'NC', 'query': query, 'complete': True,
+                    'verification_pending': False, 'total': 0, 'rows': []}
+        with patch.object(cc, 'trial_identity', return_value={'origin': 'fixture'}), \
+             patch.object(cc, 'licensed_charity_names', return_value=(names, [])):
+            result = cc.final_four_browser_lookup(org, 'NC', source)
+        self.assertEqual(seen, ['Ronald McDonald House Global', 'RMHC', 'Ronald McDonald House Charities, Inc.'])
+        self.assertEqual(result.status, 'Not Registered')
+
+    def test_nc_split_alias_failure_still_cannot_establish_absence(self):
+        org = cc.checker.Organization('Lemonade Day / P4L', '20-4235269')
+        seen = []
+        def source(query):
+            seen.append(query['name'])
+            return {'state': 'NC', 'query': query, 'complete': query['name'] != 'P4L',
+                    'verification_pending': False, 'total': 0, 'rows': []}
+        with patch.object(cc, 'trial_identity', return_value={'origin': 'fixture'}), \
+             patch.object(cc, 'licensed_charity_names', return_value=([org.organization_name, 'LEMONADE DAY'], [])):
+            with self.assertRaises(ValueError):
+                cc.final_four_browser_lookup(org, 'NC', source)
+        self.assertEqual(seen, ['Lemonade Day', 'P4L'])
+
     def test_irs_index_padded_and_unpadded_links_still_require_same_ein(self):
         one, two, other = '202610509349300401', '202631359349315203', '202600499349301960'
         source = f'/organizations/43367888/{one}/full /organizations/043367888/{two}/full /organizations/143367888/{other}/full'
