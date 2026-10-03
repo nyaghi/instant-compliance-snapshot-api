@@ -14,6 +14,19 @@ const owned = new Set();
 let keepAliveTimer = null;
 let trialAlIdle = null, trialAlIdleTimer = null;
 let trialTnIdle = null, trialTnIdleTimer = null;
+let trialNyIdle = null, trialNyIdleTimer = null;
+const nyRegistryPage = url => {
+  try {const u=new URL(url);return u.origin===P.NY && /^\/RegistrySearch(?:\/[0-9]{2}-[0-9]{2}-[0-9]{2})?\/?$/.test(u.pathname);}
+  catch {return false;}
+};
+function armTrialNyIdle() {
+  clearTimeout(trialNyIdleTimer);
+  if (!P.TRIAL_ORIGIN || !trialNyIdle) return;
+  const saved=trialNyIdle;
+  trialNyIdleTimer=setTimeout(()=>{
+    if(trialNyIdle===saved){trialNyIdle=null;removeOwned(saved.id).catch(()=>{});}
+  },Math.max(0,saved.expiresAt-Date.now()));
+}
 function armTrialTnIdle() {
   clearTimeout(trialTnIdleTimer);
   if (!P.TRIAL_ORIGIN || !trialTnIdle) return;
@@ -55,6 +68,7 @@ function saveRuntime() {
   const value = runtimeState();
   if (P.TRIAL_ORIGIN && trialAlIdle) value.trialAlIdle=trialAlIdle;
   if (P.TRIAL_ORIGIN && trialTnIdle) value.trialTnIdle=trialTnIdle;
+  if (P.TRIAL_ORIGIN && trialNyIdle) value.trialNyIdle=trialNyIdle;
   saving = saving.catch(() => {}).then(() => chrome.storage.session.set({ ccnyRuntime: value })); return saving;
 }
 function newJob(sender, id, refreshOnly, saved = {}) {
@@ -126,7 +140,14 @@ const boot = (async () => {
           && new URL(source.url).origin===P.TRIAL_ORIGIN) {trialTnIdle=tnIdle;armTrialTnIdle();}
     } catch {}
   }
-  for (const id of [...owned]) if (!allJobs().some(j => j?.tab === id) && trialAlIdle?.id!==id && trialTnIdle?.id!==id) await removeOwned(id);
+  const nyIdle=previous?.trialNyIdle;
+  if(P.TRIAL_ORIGIN && Number.isInteger(nyIdle?.id) && owned.has(nyIdle.id) && Number.isFinite(nyIdle.expiresAt)
+      && Date.now()<nyIdle.expiresAt && nyIdle.expiresAt<=Date.now()+300000 && !allJobs().some(j=>j?.tab===nyIdle.id)) {
+    try {const tab=await chrome.tabs.get(nyIdle.id),source=await chrome.tabs.get(nyIdle.sourceTabId);
+      if(nyRegistryPage(tab.url) && new URL(source.url).origin===P.TRIAL_ORIGIN){trialNyIdle=nyIdle;armTrialNyIdle();}
+    } catch {}
+  }
+  for (const id of [...owned]) if (!allJobs().some(j => j?.tab === id) && trialAlIdle?.id!==id && trialTnIdle?.id!==id && trialNyIdle?.id!==id) await removeOwned(id);
   if (repair.phase === "repairing") await saveRepair({ ...repair, phase: "failed", reason: "NY_CONNECTOR_INTERRUPTED" });
   diagnostic("worker-start", active, `restored=${allJobs().filter(Boolean).length}`);
   await saveRuntime();
@@ -213,6 +234,16 @@ async function close(job, reason, finishId) {
           trialTnIdle={id:tabId,sourceTabId:source.id,windowId:tab.windowId,expiresAt:Date.now()+300000};armTrialTnIdle();
         } else await removeOwned(tabId);
       } catch {await removeOwned(tabId);}
+    } else if(tabId!==null && P.TRIAL_ORIGIN && job.registryState==='NY' && finishId && !reason
+        && job.lastResponse?.ok===true && !job.verificationRetryUsed && !job.queryRepaired
+        && !job.nyFreshPageRecoveryOnly && owned.has(tabId)) {
+      try {
+        const tab=await chrome.tabs.get(tabId),source=await chrome.tabs.get(job.sender.tab.id);
+        const expiresAt=job.nySessionExpiresAt || Date.now()+300000;
+        if(nyRegistryPage(tab.url) && expiresAt>Date.now() && new URL(source.url).origin===P.TRIAL_ORIGIN) {
+          trialNyIdle={id:tabId,sourceTabId:source.id,expiresAt};armTrialNyIdle();
+        } else await removeOwned(tabId);
+      } catch {await removeOwned(tabId);}
     } else if (tabId !== null) await removeOwned(tabId);
   })();
   // Browser tab/storage acknowledgements can stall. Finish stays bounded;
@@ -232,6 +263,19 @@ async function close(job, reason, finishId) {
 }
 async function lookupTab(job) {
   if (job.tab !== null) return;
+  if(P.TRIAL_ORIGIN && trialNyIdle) {
+    const saved=trialNyIdle;trialNyIdle=null;clearTimeout(trialNyIdleTimer);
+    try {
+      const tab=await chrome.tabs.get(saved.id),source=await chrome.tabs.get(job.sender.tab.id);
+      if(!job.refreshOnly && !job.closed && owned.has(saved.id) && saved.expiresAt>Date.now()
+          && nyRegistryPage(tab.url) && new URL(source.url).origin===P.TRIAL_ORIGIN) {
+        job.tab=saved.id;job.nySessionExpiresAt=saved.expiresAt;
+        diagnostic('ny-session-reuse',job,'owned successful page; new query and evidence required');
+      } else await removeOwned(saved.id);
+    } catch {await removeOwned(saved.id);}
+    await saveRuntime();
+    if(job.tab!==null || job.closed)return;
+  }
   job.creating = chrome.tabs.get(job.sender.tab.id).then(async origin => {
     if (job.closed) return;
     if (!Number.isInteger(origin.windowId) || origin.windowId < 0) throw new Error("NY_CONNECTOR_INCOMPLETE");
@@ -360,6 +404,13 @@ async function performSearch(job, query, id) {
         const current = await chrome.tabs.get(job.tab), url = new URL(current.url);
         if (url.origin !== P.NY || !/^\/RegistrySearch(?:\/[0-9]{2}-[0-9]{2}-[0-9]{2})?\/?$/.test(url.pathname)) throw new Error("NY_CONNECTOR_INCOMPLETE");
         if (Object.hasOwn(query, "orgID")) await openDetail(job, query);
+        else if(P.TRIAL_ORIGIN && /^\/RegistrySearch\/[0-9]{2}-[0-9]{2}-[0-9]{2}\/?$/.test(url.pathname)) {
+          // Navigate before delivering the next command: full-page Back would
+          // otherwise destroy the content relay waiting to return its result.
+          const returned=await chrome.tabs.sendMessage(job.tab,{action:'back-to-results'},{frameId:0});
+          if(!returned?.ok)throw new Error('NY_CONNECTOR_RETURN_FORM_TIMEOUT');
+          await waitForRegistryDocument(job,'/RegistrySearch');
+        }
         if (job.closed) return;
         const generation = job.generation;
         // Stable across reconnection, distinct for an already permitted retry.
@@ -522,6 +573,11 @@ async function performRefresh(job, id) {
   if (!response.ok) close(job);
 }
 chrome.tabs.onRemoved.addListener(id => {
+  if (trialNyIdle?.id===id || trialNyIdle?.sourceTabId===id) {
+    const saved=trialNyIdle;trialNyIdle=null;clearTimeout(trialNyIdleTimer);
+    if(saved?.id!==id)removeOwned(saved.id).catch(()=>{});else owned.delete(id);
+    saveRuntime().catch(()=>{});
+  }
   if (trialTnIdle?.id===id || trialTnIdle?.sourceTabId===id) {
     const saved=trialTnIdle;trialTnIdle=null;clearTimeout(trialTnIdleTimer);
     if(saved?.id!==id)removeOwned(saved.id).catch(()=>{});else owned.delete(id);

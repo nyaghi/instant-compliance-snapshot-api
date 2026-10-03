@@ -3,12 +3,13 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');const vm=require('node:vm');const path=require('node:path');
 const root=path.join(__dirname,'..','browser-connector');
-async function run({alreadyVerified=false,rejectFirst=false,failSearch=false,verificationDelay=0}={}) {
-  const origin='https://charities-search.ag.ny.gov',calls=[],listeners={};let searches=0,resolve;
+async function run({alreadyVerified=false,rejectFirst=false,failSearch=false,verificationDelay=0,trial=false,resetOnClear=false,dirtyFields=false}={}) {
+  const origin='https://charities-search.ag.ny.gov',calls=[],listeners={};let searches=0,resolve,clears=0;
   const completed=new Promise(r=>resolve=r);
   class Input {constructor(){this.v='';}get value(){return this.v;}set value(v){this.v=v;}dispatchEvent(){}}
   const inputs=Object.fromEntries(['ein','orgName','orgID','city'].map(k=>[k,new Input()]));
-  const buttons=[{textContent:'Clear fields',click:()=>Object.values(inputs).forEach(x=>x.value='')},
+  if(dirtyFields)for(const input of Object.values(inputs))input.value='Previous organization';
+  const buttons=[{textContent:'Clear fields',click:()=>{clears++;Object.values(inputs).forEach(x=>x.value='');if(resetOnClear){buttons[2].disabled=true;buttons[1].disabled=false;}}},
     {textContent:'Verify',disabled:alreadyVerified,click:()=>{calls.push('verify');buttons[2].disabled=false;context.window.fetch('https://charities-search-api.ag.ny.gov/api/recaptcha/verify',{method:'POST'});}},
     {textContent:'Search',disabled:!alreadyVerified,click:()=>{calls.push('search');context.window.fetch('https://charities-search-api.ag.ny.gov/api/FileNet/RegistrySearch?ein='+inputs.ein.value);}}];
   class XHR {open(){}send(){}}
@@ -26,10 +27,30 @@ async function run({alreadyVerified=false,rejectFirst=false,failSearch=false,ver
   const context=vm.createContext({URL,window,location:{origin},XMLHttpRequest:XHR,HTMLInputElement:Input,Event:class{},
     document:{querySelectorAll:()=>buttons,getElementById:id=>inputs[id]},Date,
     setTimeout:(fn,ms)=>setTimeout(fn,ms/1000),clearTimeout});
-  for(const file of ['protocol.js','ny-main.js'])vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),context);
+  for(const file of ['protocol.js','ny-main.js']){
+    let source=fs.readFileSync(path.join(process.env.CC_TEST_TRIAL_DIR||root,file),'utf8');
+    if(process.env.CC_TEST_TRIAL_DIR)source=source.replaceAll('cc-final-four-ny-page-v1','cc-ny-page-v1');
+    if(trial&&file==='protocol.js')source=source.replace('const TRIAL_ORIGIN = "";','const TRIAL_ORIGIN = "https://fixture-final-four.onrender.com";');
+    vm.runInContext(source,context);
+  }
   listeners.message({source:window,origin,data:{channel:'cc-ny-page-v1',direction:'request',id:'12345678-1234-4234-9234-123456789012',query:{ein:'123456789'}}});
-  const reply=await completed;return {reply,calls};
+  const reply=await completed;return {reply,calls,clears,inputs};
 }
+
+test('trial verified form replaces all old text filters without resetting verification',async()=>{
+ const {reply,calls,clears,inputs}=await run({trial:true,alreadyVerified:true,resetOnClear:true,dirtyFields:true});
+ assert.equal(reply.ok,true);assert.equal(clears,0);assert.deepEqual(calls,['search']);
+ assert.equal(inputs.ein.value,'123456789');
+ for(const key of ['orgName','orgID','city'])assert.equal(inputs[key].value,'');
+});
+test('trial unverified form still uses normal Clear and Verify',async()=>{
+ const {reply,calls,clears}=await run({trial:true,resetOnClear:true});
+ assert.equal(reply.ok,true);assert.equal(clears,1);assert.deepEqual(calls,['verify','search']);
+});
+test('trial rejected search does not reuse the invalid verified state',async()=>{
+ const {reply,calls,clears}=await run({trial:true,alreadyVerified:true,resetOnClear:true,rejectFirst:true});
+ assert.equal(reply.ok,true);assert.equal(clears,1);assert.deepEqual(calls,['search','verify','search']);
+});
 test('enabled normal Search reuses valid verification without waiting for disabled Verify',async()=>{
   const {reply,calls}=await run({alreadyVerified:true});assert.equal(reply.ok,true);assert.deepEqual(calls,['search']);
 });

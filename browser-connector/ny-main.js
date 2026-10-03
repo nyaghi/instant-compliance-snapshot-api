@@ -173,8 +173,21 @@
   async function run(query, forceVerification = false) {
     if (Object.hasOwn(query, "orgID")) return runDetail(query);
     await returnToResults();
-    const clear = await until(() => button("Clear fields"), 10000, "NY_CONNECTOR_CLEAR_BUTTON_TIMEOUT");
-    clear.click();
+    if (P.TRIAL_ORIGIN && !forceVerification && button("Search") && !button("Search").disabled) {
+      // A verified form restored by Back is already allowed to search. Replace
+      // its text filters through normal input events instead of resetting the
+      // whole form. Every response still has to match the new query exactly.
+      for (const id of ["ein", "orgName", "orgID", "city"]) {
+        const field = document.getElementById(id);
+        if (!field) throw new Error("NY_CONNECTOR_INCOMPLETE");
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(field, "");
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+        field.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    } else {
+      const clear = await until(() => button("Clear fields"), 10000, "NY_CONNECTOR_CLEAR_BUTTON_TIMEOUT");
+      clear.click();
+    }
     await until(() => ["ein", "orgName", "orgID", "city"].every(id => document.getElementById(id)?.value === ""), 3000, "NY_CONNECTOR_CLEAR_FIELDS_TIMEOUT");
     const [key, value] = Object.entries(query)[0];
     const input = document.getElementById(key);
