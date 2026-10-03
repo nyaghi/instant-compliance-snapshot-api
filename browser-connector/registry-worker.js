@@ -34,6 +34,28 @@ async function registryCreateOwnedTab(job,url,origin) {
   } else tab=await chrome.tabs.create({windowId:origin.windowId,url,active:false});
   job.tab=tab.id;owned.add(tab.id);await saveRuntime();
 }
+async function registryExposeReusedNyTab(job, origin) {
+  // The visible comparison creates windows in front, but a retained NY page
+  // can be covered when the validation page is brought forward for another
+  // run. Expose only its isolated window; preserve the document and session.
+  if(!P.TRIAL_ORIGIN || job.registryState!=='NY' || job.closed
+      || Date.now()>=job.activeExpiresAt || !owned.has(job.tab))return false;
+  try {
+    const sourceUrl=new URL(origin.url);
+    if(sourceUrl.origin!==P.TRIAL_ORIGIN || sourceUrl.pathname!=='/connector/final-four-validation.html'
+        || sourceUrl.searchParams.get('collector_layout')!=='visible')return false;
+    const tab=await chrome.tabs.get(job.tab),source=await chrome.tabs.get(origin.id);
+    if(!nyRegistryPage(tab.url) || !tab.active || tab.windowId===source.windowId
+        || source.windowId!==origin.windowId || source.url!==origin.url)return false;
+    const siblings=await chrome.tabs.query({windowId:tab.windowId});
+    if(siblings.length!==1 || siblings[0].id!==tab.id || !siblings[0].active
+        || siblings[0].url!==tab.url || job.closed || Date.now()>=job.activeExpiresAt
+        || job.tab!==tab.id || !owned.has(tab.id))return false;
+    await chrome.windows.update(tab.windowId,{focused:true});
+    diagnostic('ny-reuse-visible',job,'same owned window and verified document');
+    return true;
+  } catch { return false; } // No extra request or recovery when focus is unavailable.
+}
 async function registryNevadaVisibleSnapshot(job) {
   if (!P.TRIAL_ORIGIN || job.registryState!=='NV' || job.nvVisibilityAttempted || !owned.has(job.tab)) return null;
   try {
@@ -120,6 +142,14 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
   const nvInitialVisible=await registryNevadaVisibleSnapshot(job);
   try { while (!job.closed && Date.now()<deadline) {
     try {
+      if(P.TRIAL_ORIGIN && job.registryState==='NM') {
+        const tab=await chrome.tabs.get(job.tab),url=new URL(tab.url);
+        // NM redirects failures to a lowercase route outside its normal
+        // content-script match. The exact public error route is authoritative
+        // even when there is no content-script receiver on that document.
+        if(url.origin===registryOrigin('NM') && /^\/charitysearch\/GenericError\.htm$/i.test(url.pathname))
+          throw new Error('NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR');
+      }
       const value=await registryMessage(job,{action:"registry-ready",...(ncSubmittedQuery ? {query:ncSubmittedQuery} : {})});
       if(P.TRIAL_ORIGIN && job.registryState==='NC' && ncSubmittedQuery && value?.nc_readiness) {
         const observed=value.nc_readiness,signature=JSON.stringify(observed);

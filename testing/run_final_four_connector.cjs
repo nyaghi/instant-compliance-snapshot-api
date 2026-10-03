@@ -44,6 +44,24 @@ test('NM public error aborts readiness immediately rather than consuming thirty 
  assert.equal(checks,1);assert.equal(job.activeExpiresAt,70000);
 });
 
+test('NM lowercase public error redirect is recognized even without a content script',async()=>{
+ const h=fixture();h.tabs.set(3,{id:3,windowId:10,url:'https://secure.nmdoj.gov/charitysearch/GenericError.htm?aspxerrorpath=/CharitySearch/default.aspx'});
+ h.chrome.tabs.sendMessage=async()=>{throw Error('No content script on lowercase error route');};
+ const job={tab:3,registryState:'NM',activeExpiresAt:70000,closed:false};
+ const pending=h.context.registryReady(job);
+ const checked=assert.rejects(pending,/NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR/);
+ await tick();await h.advance(45000);await checked;
+ assert.equal(job.activeExpiresAt,70000);
+});
+
+test('NM error-route recognition does not treat a normal page or query string as a source failure',async()=>{
+ for(const url of ['https://secure.nmdoj.gov/CharitySearch/','https://secure.nmdoj.gov/CharitySearch/?next=/charitysearch/GenericError.htm']){
+  const h=fixture();h.tabs.set(3,{id:3,windowId:10,url});
+  h.chrome.tabs.sendMessage=async()=>({ready:true,url,documentId:'normal-search'});
+  assert.equal((await h.context.registryReady({tab:3,registryState:'NM',activeExpiresAt:70000,closed:false})).documentId,'normal-search');
+ }
+});
+
 test('NV unsettled mode or bound filters reopen only its owned form once within the original deadline',async()=>{
  for(const reason of ['NY_CONNECTOR_REGISTRY_NV_MODE_NOT_SELECTED','NY_CONNECTOR_REGISTRY_NV_FORM_NOT_SETTLED']){
  for(const remaining of [60000,7000]){

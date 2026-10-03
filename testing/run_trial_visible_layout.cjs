@@ -1,5 +1,6 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
+const vm=require('node:vm');
 const {harness,tick}=require('./run_ny_connector_lifecycle.cjs');
 const ORIGIN='https://fixture-final-four.onrender.com';
 const URL=ORIGIN+'/connector/final-four-validation.html?collector_layout=visible';
@@ -61,5 +62,38 @@ test('visible comparison respects source navigation and cancellation during geom
   };
   await assert.rejects(h.context.registryTrialWindowOptions(j,source),/INTERRUPTED|VISIBLE_LAYOUT_UNAVAILABLE/);
   assert.equal(h.created.length,0);
+ }
+});
+
+test('visible NY reuse exposes its existing owned window without refreshing verification',async()=>{
+ const {h}=await setup();const changes=[];
+ h.chrome.windows.update=async(id,options)=>{changes.push({id,...options});};
+ h.chrome.tabs.query=async({windowId})=>[...h.tabs.values()].filter(t=>t.windowId===windowId);
+ const p=h.connect();assert.equal((await h.query(p,11)).ok,true);
+ p.onMessage.emit({action:'finish',id:String(12).padStart(20,'0')});await tick();
+ const saved=h.data.session.ccnyRuntime.trialNyIdle,tab=h.tabs.get(saved.id);
+ await h.advance(3000);
+ const q=h.connect(2);assert.equal((await h.query(q,21,{ein:'987654321'})).ok,true);
+ assert.deepEqual(changes,[{id:tab.windowId,focused:true}]);
+ assert.equal(h.created.length,1);assert.equal(h.repairs.length,0);
+ assert.equal(h.queries.length,2);assert.equal(vm.runInContext('allJobs()[0].nySessionExpiresAt',h.context),saved.expiresAt);
+});
+
+test('NY visibility reuse never takes user windows, other pages, or canceled work',async()=>{
+ for(const change of ['ordinary','inactive','shared','same-window','navigated','closed','expired','source-moved']){
+  const {h,job}=await setup(change==='ordinary'?ORIGIN+'/':URL),j=job('NY');
+  h.tabs.set(99,{id:99,windowId:20,url:'https://charities-search.ag.ny.gov/RegistrySearch',active:true});
+  vm.runInContext('owned.add(99)',h.context);j.tab=99;
+  h.chrome.tabs.query=async({windowId})=>[...h.tabs.values()].filter(t=>t.windowId===windowId);
+  const source={...h.tabs.get(1)},tab=h.tabs.get(99);
+  if(change==='inactive')tab.active=false;
+  if(change==='shared')h.tabs.set(98,{id:98,windowId:20,url:'https://example.com',active:false});
+  if(change==='same-window')tab.windowId=10;
+  if(change==='navigated')tab.url='https://example.com';
+  if(change==='closed')j.closed=true;
+  if(change==='expired')j.activeExpiresAt=0;
+  if(change==='source-moved')h.tabs.get(1).windowId=42;
+  h.chrome.windows.update=async()=>assert.fail('must not focus');
+  await h.context.registryExposeReusedNyTab(j,source);
  }
 });

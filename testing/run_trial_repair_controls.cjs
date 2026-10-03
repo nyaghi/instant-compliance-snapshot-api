@@ -42,7 +42,7 @@ test('all eight trial browser registries can be admitted independently',async()=
 });
 
 test('NM cleanup closes only an owned public registry tab and preserves the user tab',async()=>{
- for(const pathname of ['/CharitySearch/','/CharitySearch/CharityDetail.aspx?FEIN=12-3456789']){
+ for(const pathname of ['/CharitySearch/','/CharitySearch/CharityDetail.aspx?FEIN=12-3456789','/charitysearch/GenericError.htm?aspxerrorpath=/CharitySearch/default.aspx']){
   const h=harness({trialOrigin:origin});await tick();
   h.tabs.set(3,{id:3,windowId:10,url:'https://secure.nmdoj.gov'+pathname});
   h.tabs.set(4,{id:4,windowId:10,url:'https://secure.nmdoj.gov'+pathname});

@@ -92,7 +92,7 @@ async function removeOwned(tabId) {
     const trialRegistry = P.TRIAL_ORIGIN && ((url.origin === "https://orion.nv.gov" && url.pathname === "/portal/public/")
       || (url.origin === "https://ago.igovsolution.net" && url.pathname === "/online/Lookups/Business.aspx")
       || (url.origin === "https://tncab.tnsos.gov" && url.pathname === "/portal/registered-charities-search")
-      || (url.origin === "https://secure.nmdoj.gov" && ['/CharitySearch/','/CharitySearch/CharityDetail.aspx'].includes(url.pathname))
+      || (url.origin === "https://secure.nmdoj.gov" && /^\/CharitySearch\/(?:CharityDetail\.aspx|GenericError\.htm)?$/i.test(url.pathname))
       || (url.origin === "https://www.sosnc.gov" && /^\/online_services\/search\/(?:by_title\/search_charities|Charities_Results|charities_(?:profile|filings)\/\d+)$/.test(url.pathname)));
     if (trialRegistry || (["https://charitable.illinoisattorneygeneral.gov", "https://verify.sos.ga.gov"].includes(url.origin)) || url.origin === P.NY && /^\/RegistrySearch(?:\/[0-9]{2}-[0-9]{2}-[0-9]{2})?\/?$/.test(url.pathname)) await chrome.tabs.remove(tabId);
   } catch { /* The tab has already closed or was taken over by the user. */ }
@@ -270,6 +270,7 @@ async function lookupTab(job) {
       if(!job.refreshOnly && !job.closed && owned.has(saved.id) && saved.expiresAt>Date.now()
           && nyRegistryPage(tab.url) && new URL(source.url).origin===P.TRIAL_ORIGIN) {
         job.tab=saved.id;job.nySessionExpiresAt=saved.expiresAt;
+        await registryExposeReusedNyTab(job,source);
         diagnostic('ny-session-reuse',job,'owned successful page; new query and evidence required');
       } else await removeOwned(saved.id);
     } catch {await removeOwned(saved.id);}

@@ -149,7 +149,7 @@ class IsolationControls(unittest.TestCase):
                 handlers=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in {'ny_connector_request','ny_connector_advance','il_verification_recovery'}]
                 for handler in handlers:
                     for n in ast.walk(handler):
-                        if isinstance(n,ast.Set):n.elts=[v for v in n.elts if not(isinstance(v,ast.Constant) and v.value in {'0.6.46','0.6.47','0.6.48','0.6.49','0.6.50','0.6.51','0.6.52','0.6.53','0.6.54','0.6.55','0.6.56','0.6.61','0.6.62','0.6.63','0.6.64','0.6.66','0.6.67','0.6.68'})]
+                        if isinstance(n,ast.Set):n.elts=[v for v in n.elts if not(isinstance(v,ast.Constant) and v.value in {'0.6.46','0.6.47','0.6.48','0.6.49','0.6.50','0.6.51','0.6.52','0.6.53','0.6.54','0.6.55','0.6.56','0.6.61','0.6.62','0.6.63','0.6.64','0.6.66','0.6.67','0.6.68','0.6.69'})]
                 tree.body=[n for n in tree.body if not(isinstance(n,ast.FunctionDef) and n.name in allowed)]
             self.assertEqual(ast.dump(trees[0]),ast.dump(trees[1]),name)
 
