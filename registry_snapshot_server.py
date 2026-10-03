@@ -6636,6 +6636,22 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
             for name in required:
                 distinct_names.setdefault(name.casefold(), name)
             required = list(distinct_names.values())
+    nc_retrieval_coverage = {}
+    if state == "NC" and trial_identity():
+        # Starting With returns the complete set for a literal prefix. Reuse
+        # a shorter query already in the master plan instead of loading the
+        # form again for each covered reviewed name. These are retrieval
+        # probes only; org and REVIEWED_NAME_CONTEXT remain identity targets.
+        # Failed/incomplete prefix evidence raises below, never proving absence.
+        planned = required + generated
+        probes = []
+        for name in required:
+            prefix = min((other for other in planned if name.startswith(other)), key=len)
+            if prefix not in probes:
+                probes.append(prefix)
+            if prefix != name:
+                nc_retrieval_coverage.setdefault(prefix, []).append(name)
+        required = probes
     if state == "NC":
         # NC explicitly selects Starting With. Keep every reviewed
         # name, but a longer generated prefix adds nothing to a shorter literal
@@ -6710,11 +6726,16 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
             # This is a retrieval choice, not permission to accept an identity.
             query["exact_above"] = 20
         payload = collect(query)
+        if state == "NC" and nc_retrieval_coverage and payload.get("search_mode") not in (None, "STARTS_WITH"):
+            raise ValueError("North Carolina covering evidence must use Starting With")
         rows = final_four_search_evidence(payload, state, query)
         if payload.get("search_mode") == "EXACT_MATCH":
             narrowed_searches.append(name)
         else:
             completed_searches.append(name)
+            if state == "NC":
+                covered_reviewed_names.extend({"name": reviewed, "completed_starts_with": name}
+                    for reviewed in nc_retrieval_coverage.get(name, []))
         for row in rows:
             if row["identifier"] in seen:
                 continue
@@ -6840,6 +6861,11 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                  or (normalized_match_name(row["name"]) == normalized_match_name(org.organization_name)
                      and len(distinctive_match_tokens(org.organization_name)) >= 2))
             for row in records)
+        # A covering NC probe may return the primary alongside an older alias.
+        # Finish all distinct reviewed-name probes before accepting a positive;
+        # their broader retrieval must not become a new early-exit shortcut.
+        if state == "NC" and nc_retrieval_coverage:
+            primary_positive = False
         if records and (index >= len(required) - 1 or (primary_positive and not unreviewed_scope)):
             selected, review = select_licensed_charity(org, records, state, deadline)
             if selected and not review and selected["status"] in {"Current", "Upcoming Filing", "Exempt"}:

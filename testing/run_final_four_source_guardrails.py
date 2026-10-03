@@ -654,6 +654,77 @@ class LookupControls(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     cc.final_four_browser_lookup(self.orgs['NC'],'NC',lambda q:{'state':'NC','query':q,'complete':True,'verification_pending':False,'rows':[],'total':0,**changed})
 
+    def test_trial_nc_bp_observed_plan_uses_two_queries_without_losing_reviewed_names(self):
+        required = ['Achieving the Dream, Inc.', 'Achieving The Dream Inc']
+        generated = ['achieving dream', 'Achieving', 'Achieving the Dream']
+        calls = []
+        def empty(q):
+            calls.append(q['name'])
+            return {'state':'NC','query':q,'complete':True,'verification_pending':False,'rows':[],'total':0}
+        with patch.object(cc,'licensed_charity_names',return_value=(required,generated)), \
+             patch.object(cc,'trial_identity',return_value={'origin':'isolated'}):
+            result=cc.final_four_browser_lookup(self.orgs['NC'],'NC',empty)
+        self.assertEqual(calls,['Achieving','achieving dream'])
+        self.assertEqual(result.status,'Not Registered')
+        coverage=[a['reviewed_name_coverage'] for a in result.source_attempts if 'reviewed_name_coverage' in a]
+        self.assertEqual(coverage,[{'name':n,'completed_starts_with':'Achieving'} for n in required])
+
+    def test_trial_nc_prefix_keeps_distinct_aliases_case_and_punctuation(self):
+        required=['Example Foundation','EXAMPLE Center','Example-Foundation','Distinct DBA','P4L']
+        calls=[]
+        def empty(q):
+            calls.append(q['name'])
+            return {'state':'NC','query':q,'complete':True,'verification_pending':False,'rows':[],'total':0}
+        with patch.object(cc,'licensed_charity_names',return_value=(required,['Example ', 'Distinct', 'Unrelated'])), \
+             patch.object(cc,'trial_identity',return_value={'origin':'isolated'}):
+            cc.final_four_browser_lookup(self.orgs['NC'],'NC',empty)
+        self.assertEqual(calls,['Example ','EXAMPLE Center','Example-Foundation','Distinct','P4L','Unrelated'])
+
+    def test_trial_nc_covering_failure_cannot_establish_absence_or_skip_to_a_negative(self):
+        for changes in [{'complete':False},{'total':1},{'verification_pending':True},
+                        {'query':{'state':'NC','operation':'search','name':'Different'}},
+                        {'search_mode':'EXACT_MATCH'}]:
+            calls=[]
+            def failed(q):
+                calls.append(q['name'])
+                return {'state':'NC','query':q,'complete':True,'verification_pending':False,'rows':[],'total':0,**changes}
+            with self.subTest(changes=changes), \
+                 patch.object(cc,'licensed_charity_names',return_value=(['Example Charity'],['Example'])), \
+                 patch.object(cc,'trial_identity',return_value={'origin':'isolated'}),self.assertRaises(ValueError):
+                cc.final_four_browser_lookup(self.orgs['NC'],'NC',failed)
+            self.assertEqual(calls,['Example'])
+
+    def test_trial_nc_covering_positive_preserves_identity_detail_and_separate_reviewed_alias(self):
+        primary=self.orgs['NC'].organization_name
+        calls=[]
+        def source(q):
+            calls.append(dict(q))
+            return self.provider(q)
+        with patch.object(cc,'licensed_charity_names',return_value=([primary,'Separate Reviewed DBA'],["America"])), \
+             patch.object(cc,'trial_identity',return_value={'origin':'isolated'}):
+            result=cc.final_four_browser_lookup(self.orgs['NC'],'NC',source)
+        self.assertTrue(result.success);self.assertEqual(result.matched_registry_identifier,'SL000448')
+        self.assertEqual([q['name'] for q in calls if q['operation']=='search'],['America','Separate Reviewed DBA'])
+        self.assertTrue(any(q['operation']=='detail' and q['identifier']=='SL000448' for q in calls))
+
+    def test_trial_nc_prefix_does_not_accept_an_unrelated_record(self):
+        org=cc.checker.Organization('Example Charity Foundation','12-3456789')
+        with patch.object(cc,'licensed_charity_names',return_value=([org.organization_name],['Example'])), \
+             patch.object(cc,'trial_identity',return_value={'origin':'isolated'}):
+            result=cc.final_four_browser_lookup(org,'NC',self.provider)
+        self.assertEqual(result.status,'Not Registered');self.assertFalse(result.matched_registry_identifier)
+        self.assertFalse(any(q['operation']=='detail' for q in self.calls))
+
+    def test_nontrial_nc_required_queries_and_order_are_unchanged(self):
+        calls=[]
+        def empty(q):
+            calls.append(q['name'])
+            return {'state':'NC','query':q,'complete':True,'verification_pending':False,'rows':[],'total':0}
+        with patch.object(cc,'licensed_charity_names',return_value=(['Example Charity','Example DBA'],['Example'])), \
+             patch.object(cc,'trial_identity',return_value=None):
+            cc.final_four_browser_lookup(self.orgs['NC'],'NC',empty)
+        self.assertEqual(calls,['Example Charity','Example DBA','Example'])
+
     def test_tn_completed_contains_coverage_preserves_reviewed_names(self):
         calls=[]
         def empty(q):
