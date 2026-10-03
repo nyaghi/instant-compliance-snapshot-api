@@ -1,6 +1,33 @@
 /* Public-registry transport in the existing connector; no independent runtime. */
 const registryOrigin = state => ({IL:"https://charitable.illinoisattorneygeneral.gov",GA:"https://verify.sos.ga.gov",AL:"https://ago.igovsolution.net",NC:"https://www.sosnc.gov",NV:"https://orion.nv.gov",TN:"https://tncab.tnsos.gov",NM:"https://secure.nmdoj.gov"})[state];
 const registryStart = state => registryOrigin(state) + ({IL:"/search",GA:"/verification/Search.aspx?facility=Y",AL:"/online/Lookups/Business.aspx",NC:"/online_services/search/by_title/search_charities",NV:"/portal/public/#/public/nvsos/en/CaseXscreen?screen=external-GenericFilingsSearch&tabRoute=business",TN:"/portal/registered-charities-search",NM:"/CharitySearch/"})[state];
+// Trial-owned DOM waits use the existing extension worker's clock. Background
+// page timers can wake once a minute; this changes scheduling, never evidence.
+const registryClocks = new Map();
+function registryClockMessage(message, sender, respond) {
+  if (!P.TRIAL_ORIGIN || !['registry-clock','registry-clock-cancel'].includes(message?.action)
+      || sender.id !== chrome.runtime.id || sender.frameId !== 0 || !sender.documentId
+      || !P.validId(message.clockId)) return false;
+  const job = allJobs().find(j => !j.closed && isActive(j) && j.pending && j.tab === sender.tab?.id && owned.has(j.tab));
+  if (!job || Date.now() >= job.activeExpiresAt) return false;
+  try {if (new URL(sender.url).origin !== registryOrigin(job.registryState)
+      || new URL(job.sender.url).origin !== P.TRIAL_ORIGIN) return false;} catch {return false;}
+  const key = `${sender.tab.id}:${sender.documentId}:${message.clockId}`;
+  if (message.action === 'registry-clock-cancel') {
+    const clock = registryClocks.get(key);
+    if (clock) {clearTimeout(clock.timer);registryClocks.delete(key);clock.respond({ok:false});}
+    respond({ok:true});return false;
+  }
+  if (!Number.isInteger(message.delayMs) || message.delayMs < 1 || message.delayMs > 45000
+      || registryClocks.has(key) || registryClocks.size >= 128) return false;
+  const generation = job.generation, pending = job.pending;
+  const timer = setTimeout(() => {
+    registryClocks.delete(key);
+    respond({ok:!job.closed && isActive(job) && job.generation === generation
+      && job.pending === pending && owned.has(job.tab) && Date.now() < job.activeExpiresAt});
+  },Math.min(message.delayMs,Math.max(1,job.activeExpiresAt-Date.now())));
+  registryClocks.set(key,{timer,respond});return true;
+}
 async function registryNevadaVisibleSnapshot(job) {
   if (!P.TRIAL_ORIGIN || job.registryState!=='NV' || job.nvVisibilityAttempted || !owned.has(job.tab)) return null;
   try {
@@ -32,7 +59,7 @@ async function registryMessage(job, message) {
   const send=async()=>{
     const tab = await chrome.tabs.get(job.tab);
     if (new URL(tab.url).origin !== registryOrigin(job.registryState)) throw new Error("NY_CONNECTOR_INCOMPLETE");
-    return chrome.tabs.sendMessage(job.tab, message, {frameId:0});
+    return chrome.tabs.sendMessage(job.tab, {...message,...(P.TRIAL_ORIGIN ? {workerClock:true} : {})}, {frameId:0});
   };
   if (job.registryState!=='NV' || !Number.isFinite(message.budgetMs)) return send();
   // Keep the overall job deadline as the transport bound. A second timer at

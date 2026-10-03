@@ -11,6 +11,7 @@
   const NM = location.origin === "https://secure.nmdoj.gov";
   if (!IL && !GA && !NV && !TN && !NC && !AL && !NM) return;
   const documentId = crypto.randomUUID();
+  let workerClock = false;
   const text = el => (el?.innerText || "").replace(/\s+/g, " ").trim();
   const visible = el => !!el && el.getClientRects().length > 0;
   function wait(fn, ms = 25000, {root = document.documentElement, action, relevant, settle = 0, sameCandidate = null, trace = () => {}} = {}) {
@@ -18,10 +19,23 @@
     // DOM update; they are watchdogs, not the sole observers of completion.
     return new Promise((resolve, reject) => {
       const start = Date.now(), end = start + ms;
-      let done = false, candidate = null, candidateAt = null, timer, settleTimer;
+      let done = false, candidate = null, candidateAt = null, timer, settleTimer, revision = 0;
+      const clocks = new Set();
+      const pulse = (delayMs, callback) => {
+        if (!workerClock) return;
+        const clockId = crypto.randomUUID(); clocks.add(clockId);
+        try {
+          Promise.resolve(chrome.runtime.sendMessage({action:'registry-clock',clockId,delayMs}))
+            .then(value => {clocks.delete(clockId);if (!done && value?.ok === true) callback();},()=>clocks.delete(clockId));
+        } catch { clocks.delete(clockId); } // Existing page watchdog remains available.
+      };
       const finish = (value, error) => {
         if (done) return;
         done = true; observer.disconnect(); clearTimeout(timer); clearTimeout(settleTimer);
+        for (const clockId of clocks) try {
+          Promise.resolve(chrome.runtime.sendMessage({action:'registry-clock-cancel',clockId})).catch(()=>{});
+        } catch {}
+        clocks.clear();
         trace(error ? "incomplete" : "ready", Date.now()-start);
         error ? reject(error) : resolve(value);
       };
@@ -43,20 +57,22 @@
         if (Date.now() > end) return incomplete();
         try {
           const value = fn();
-          if (!value) { candidate = null; candidateAt = null; clearTimeout(settleTimer); return; }
+          if (!value) { revision++; candidate = null; candidateAt = null; clearTimeout(settleTimer); return; }
           if (candidateAt !== null && sameCandidate?.(candidate, value)) return;
           clearTimeout(settleTimer);
           candidate = value; candidateAt = Date.now();
           trace("observed", candidateAt-start);
           if (!settle) return finish(value);
           settleTimer = setTimeout(settleCandidate, settle);
+          const observedRevision = ++revision;
+          pulse(settle, () => {if (revision === observedRevision) settleCandidate();});
         } catch (error) { finish(null, error); }
       };
       const observer = new MutationObserver(list => {
         if (done) return;
         try { if (relevant && !relevant(list)) return; }
         catch (error) { return finish(null, error); }
-        if (!sameCandidate) { candidate = null; candidateAt = null; clearTimeout(settleTimer); }
+        if (!sameCandidate) { revision++; candidate = null; candidateAt = null; clearTimeout(settleTimer); }
         inspect();
       });
       observer.observe(root, {childList:true, subtree:true, attributes:true, characterData:true,
@@ -66,6 +82,7 @@
         attributeFilter:["style", "class", "aria-busy", "disabled", "aria-disabled", "hidden",
           ...(NV ? ["aria-selected", "data-value"] : [])]});
       timer = setTimeout(() => candidateAt === null ? incomplete() : settleCandidate(), ms);
+      pulse(ms, () => candidateAt === null ? incomplete() : settleCandidate());
       try { action?.(); inspect(); } catch (error) { finish(null, error); }
     });
   }
@@ -1450,6 +1467,7 @@
   }
   chrome.runtime.onMessage.addListener((m,sender,reply)=>{
     if(sender.id!==chrome.runtime.id || !m?.action?.startsWith('registry-')) return false;
+    if (m.workerClock === true) workerClock = true;
     handle(m).then(reply,error=>{
       const code=error?.message||'';
       if (NV) nvTrace('command-failed',{code:/^REGISTRY_[A-Z_]+$/.test(code)?code:'UNEXPECTED_ERROR'});
