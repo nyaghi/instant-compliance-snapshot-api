@@ -208,8 +208,22 @@ async function registryNavigate(job, url, budgetMs = 45000, freshNvRecovery = fa
     }
   } else {
     const origin=await chrome.tabs.get(job.sender.tab.id);
-    job.creating=chrome.tabs.create({windowId:origin.windowId,url,active:false});
-    const tab=await job.creating; job.creating=null; job.tab=tab.id; owned.add(tab.id); await saveRuntime();
+    job.creating=(async()=>{
+      // A different state's verification can hide NV after its one visibility
+      // recovery. An active tab in a separate, unfocused normal window removes
+      // that competition without serializing states or extending their budgets.
+      // Existing owned-tab cleanup closes this window's only tab on completion.
+      let tab;
+      if(P.TRIAL_ORIGIN && job.registryState==='NV' && new URL(origin.url).origin===P.TRIAL_ORIGIN){
+        const window=await chrome.windows.create({url,type:'normal',focused:false});
+        tab=window?.tabs?.[0];
+        if(!Number.isInteger(tab?.id))throw new Error('NY_CONNECTOR_INCOMPLETE');
+      } else tab=await chrome.tabs.create({windowId:origin.windowId,url,active:false});
+      // Record ownership before creation settles so cancellation can clean up
+      // a window that Chrome creates after the caller has already stopped.
+      job.tab=tab.id;owned.add(tab.id);await saveRuntime();
+    })();
+    await job.creating;job.creating=null;
   }
     return registryReady(job,previous,new URL(url).pathname,freshNvRecovery?Math.max(1,deadline-Date.now()):budgetMs);
 }

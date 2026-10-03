@@ -21,6 +21,7 @@ function harness(initial={}) {
     remove:async id=>{tabs.delete(id);removed.push(id);chrome.tabs.onRemoved.emit(id);},
     sendMessage:async(tab,message)=>{if(message.action==='ready')return {ready:true,url:tabs.get(tab).url};if(message.action==='back-to-results'){tabs.get(tab).url='https://charities-search.ag.ny.gov/RegistrySearch';return {ok:true};}if(message.action==='open-detail'){tabs.get(tab).url='https://charities-search.ag.ny.gov/RegistrySearch/'+message.query.orgID;return {ok:true};}queries.push({tab,...message});return {ok:true,evidence:{query:message.query,rows:[]}};}
   }};
+  chrome.windows={create:async options=>({id:20,tabs:[await chrome.tabs.create({windowId:20,url:options.url,active:true})]})};
   class Clock extends Date { static now(){return now;} }
   const recovery={clearForTab:async(tabId,owned,close)=>{repairs.push({tabId,owned});await close();}};
   const context=vm.createContext({URL,Date:Clock,chrome,CCNYRecovery:recovery,importScripts:()=>{},setTimeout:(fn,ms)=>{const t={fn,ms,due:now+ms,cleared:false};timers.push(t);return t;},clearTimeout:t=>{if(t)t.cleared=true;}});

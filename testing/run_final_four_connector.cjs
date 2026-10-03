@@ -151,7 +151,8 @@ for(const state of ['NV','TN']) {
     assert.equal((await h.query(p,2,search)).ok,true);assert.equal((await h.query(p,3,detail)).ok,true);
     assert.equal(h.created.length,1);assert.equal(h.calls[0].action,`registry-${state.toLowerCase()}`);
     assert.equal(h.calls.every(c=>c.budgetMs>0&&c.budgetMs<=(state==='NV'&&c.query?.operation==='search'?150000:45000)),true);
-    assert.equal(h.tabs.get(h.created[0]).active,false);
+    assert.equal(h.tabs.get(h.created[0]).active,state==='NV');
+    assert.equal(h.tabs.get(h.created[0]).windowId===h.tabs.get(1).windowId,state!=='NV');
     p.onMessage.emit({action:'finish',id:id(4)});await tick();
     if(state==='TN')await h.advance(300001);
     assert.deepEqual(h.removed,h.created);assert.ok(h.tabs.has(2));

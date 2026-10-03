@@ -1,0 +1,76 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const vm=require('node:vm');
+const {harness,tick}=require('./run_ny_connector_lifecycle.cjs');
+const TRIAL='https://fixture-final-four.onrender.com';
+
+async function setup(trial=true){
+  const h=harness(trial?{trialOrigin:TRIAL}:{});await tick();
+  if(trial)h.tabs.get(1).url=TRIAL+'/';
+  h.tabs.get(1).active=true;
+  const windows=[];
+  h.chrome.windows={create:async options=>{
+    windows.push(options);
+    const tab=await h.chrome.tabs.create({windowId:20,active:true,url:options.url});
+    return {id:20,tabs:[tab]};
+  }};
+  h.chrome.tabs.query=async q=>[...h.tabs.values()].filter(t=>t.windowId===q.windowId&&t.active===q.active);
+  h.chrome.tabs.update=async(id,options)=>{
+    const tab=h.tabs.get(id);
+    if(options.active)for(const other of h.tabs.values())if(other.windowId===tab.windowId)other.active=false;
+    return Object.assign(tab,options);
+  };
+  h.chrome.tabs.sendMessage=async id=>({ready:true,documentId:'public-form',url:h.tabs.get(id).url});
+  const job={tab:null,sender:{tab:{id:1}},registryState:'NV',activeExpiresAt:70000,closed:false};
+  return {h,job,windows};
+}
+
+test('trial Nevada stays active when another state activates its own collector',async()=>{
+  const {h,job,windows}=await setup();
+  await h.context.registryNavigate(job,vm.runInContext("registryStart('NV')",h.context));
+  const sourcePreserved=h.tabs.get(1).active;
+  await h.context.registryNevadaMakeVisible(job,await h.context.registryNevadaVisibleSnapshot(job));
+  h.tabs.set(4,{id:4,windowId:10,active:false,url:vm.runInContext("registryStart('TN')",h.context)});
+  vm.runInContext('owned.add(4)',h.context);
+  const tn={tab:4,sender:{tab:{id:1}},registryState:'TN',activeExpiresAt:70000,closed:false};
+  await h.context.registryNorthCarolinaVisibility(tn);
+  assert.equal(h.tabs.get(4).active,true);
+  assert.equal(h.tabs.get(job.tab).active,true,'TN must not hide Nevada');
+  assert.equal(windows.length,1);
+  assert.equal(windows[0].focused,false);
+  assert.equal(windows[0].type,'normal');
+  assert.equal(sourcePreserved,true,'original active tab preserved');
+  assert.notEqual(h.tabs.get(job.tab).windowId,h.tabs.get(4).windowId);
+  assert.equal(job.activeExpiresAt,70000);
+  const nvTab=job.tab;await h.context.close(job);
+  assert.deepEqual(h.removed,[nvTab]);
+  assert.ok(h.tabs.has(1)&&h.tabs.has(2)&&h.tabs.has(4),'no unrelated tab removed');
+});
+
+test('Nevada continuation reuses its window and ordinary states keep existing creation',async()=>{
+  for(const [trial,state,expectedWindows] of [[true,'NV',1],[false,'NV',0],[true,'NC',0],[true,'TN',0],[true,'IL',0]]){
+    const {h,job,windows}=await setup(trial);job.registryState=state;
+    const url=vm.runInContext(`registryStart('${state}')`,h.context);
+    await h.context.registryNavigate(job,url);
+    assert.equal(windows.length,expectedWindows,`${trial}/${state}`);
+    assert.equal(h.created.length,1);
+    assert.equal(h.tabs.get(job.tab).windowId,expectedWindows?20:10);
+    if(expectedWindows){
+      let document=1;
+      h.chrome.tabs.reload=async()=>{document++;};
+      h.chrome.tabs.sendMessage=async id=>({ready:true,documentId:String(document),url:h.tabs.get(id).url});
+      await h.context.registryNavigate(job,url);
+      assert.equal(windows.length,1);assert.equal(h.created.length,1);
+    }
+  }
+});
+
+test('cancellation during isolated window creation removes the owned tab',async()=>{
+  const {h,job}=await setup();let release;
+  h.deferCreate(new Promise(r=>{release=r;}));
+  const pending=h.context.registryNavigate(job,vm.runInContext("registryStart('NV')",h.context));
+  const rejected=assert.rejects(pending,/NY_CONNECTOR_TAB_READY_TIMEOUT|NY_CONNECTOR_INTERRUPTED/);
+  await tick();const closing=h.context.close(job);release();await tick();await closing;await rejected;
+  assert.equal(h.created.length,1);assert.deepEqual(h.removed,h.created);
+  assert.ok(h.tabs.has(1)&&h.tabs.has(2));
+});

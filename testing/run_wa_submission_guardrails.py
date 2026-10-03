@@ -12,7 +12,13 @@ class Submission(unittest.TestCase):
         root=Path(cc.__file__).parent
         for name in ['registry_snapshot_server.py','CharityClarity_WA_NM_checker.py']:
             old=ast.parse(subprocess.check_output(['git','show','af7b174:'+name],cwd=root).decode())
-            new=ast.parse((root/name).read_text(encoding='utf-8'))
+            current=(root/name).read_text(encoding='utf-8')
+            if name=='registry_snapshot_server.py':
+                # Only the tested new trial connector version is added to the
+                # three existing compatibility gates; retain all other scope checks.
+                self.assertEqual(current.count(', "0.6.63"'),3)
+                current=current.replace(', "0.6.63"','')
+            new=ast.parse(current)
             allowed={'fill_fein_and_search','search_wa'} if name.startswith('Charity') else {'final_four_browser_lookup'}
             for tree in [old,new]:
                 tree.body=[n for n in tree.body if getattr(n,'name','') not in allowed]
