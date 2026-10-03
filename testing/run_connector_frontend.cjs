@@ -7,13 +7,13 @@ const {webcrypto} = require('node:crypto');
 const source = fs.readFileSync(process.env.CC_TEST_CONNECTOR_SOURCE || path.join(__dirname,'../web-staging/ny-connector.js'),'utf8');
 const capabilities = ['lookup-tab-v1','verification-retry-v1','search-verification-retry-v1','search-schema-errors-v1','nullable-ein-v1','queue-v1','connection-recovery-v1','recovery-causes-v1','cleanup-ack-v1','timeout-recovery-v1','resume-v1','verified-detail-v1','detail-navigation-v1','il-ga-public-dom-v1','il-ga-complete-search-v2','il-session-reuse-v1','il-large-pages-v1','ga-exempt-record-v1','ga-legacy-rows-v1'];
 
-async function exercise({state='GA',commands=42,elapsedPerCommand=100,stopStatus='Delinquent',missedPings=0,incompatible=false,oldIllinois=false}={}) {
+async function exercise({state='GA',commands=42,elapsedPerCommand=100,stopStatus='Delinquent',missedPings=0,incompatible=false,oldIllinois=false,nyFailureCause=null}={}) {
   const actions=[],stages=[];let advance=0,clock=0,listener,pings=0;
   const window={addEventListener:(kind,fn)=>{if(kind==='message')listener=fn;},postMessage(message){
     actions.push(message.action);
     if(message.action==='ping' && ++pings<=missedPings)return;
     queueMicrotask(()=>listener({source:window,origin:'https://staging.compliance-express.com',data:{
-      ...message,direction:'response',ok:true,version:oldIllinois?'0.5.8':'0.5.9',capabilities:incompatible?[]:[...capabilities,'final-four-public-v1',...(oldIllinois?[]:['il-dom-events-v1'])],evidence:{complete:true,rows:[]},page_visibility:'hidden',diagnostics:[{phase:'results',event:'incomplete',elapsed_ms:35000,visibility:'hidden',private_field:'MUST-NOT-EXPORT'}]
+      ...message,direction:'response',ok:true,version:oldIllinois?'0.5.8':'0.5.9',capabilities:incompatible?[]:[...capabilities,'final-four-public-v1',...(oldIllinois?[]:['il-dom-events-v1'])],evidence:{complete:true,rows:[]},page_visibility:'hidden',ny_failure_cause:nyFailureCause,ny_reset_cooldown:true,diagnostics:[{phase:'results',event:'incomplete',elapsed_ms:35000,visibility:'hidden',private_field:'MUST-NOT-EXPORT'}]
     }}));
   }};
   const context=vm.createContext({window,location:{origin:'https://staging.compliance-express.com'},
@@ -55,6 +55,19 @@ test('trial stage diagnostics preserve results and export public fields only',{s
     for(const secret of ['MUST-NOT-EXPORT','test-only','test@example.invalid','check_token','private_field'])assert.ok(!publicStages.includes(secret),state+': '+secret);
     assert.equal(mature.stages.find(s=>s.stage==='browser query started').query.orgName,'Variant 0');
   }
+});
+
+test('trial NY failure diagnostics allow only the two source rejection codes',{skip:!process.env.CC_TEST_CONNECTOR_SOURCE},async()=>{
+ for(const cause of ['NY_CONNECTOR_VERIFICATION_REJECTED','NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED','private verification material']) {
+  const r=await exercise({state:'NY',commands:1,nyFailureCause:cause});assert.ifError(r.error);
+  const returned=r.stages.find(s=>s.stage==='browser query returned');
+  if(cause.startsWith('NY_CONNECTOR_')){
+   assert.equal(returned.ny_failure_cause,cause);assert.equal(returned.ny_reset_cooldown,true);
+  } else {
+   assert.equal(returned.ny_failure_cause,undefined);assert.ok(!JSON.stringify(r.stages).includes(cause));
+  }
+  assert.equal(r.advance,1);assert.equal(r.result.status,'Delinquent');
+ }
 });
 test('GA full reviewed-name search completes beyond both former command caps',async()=>{
   const run=await exercise();assert.ifError(run.error);assert.equal(run.advance,42);assert.equal(run.result.status,'Delinquent');assert.ok(run.actions.includes('finish'));

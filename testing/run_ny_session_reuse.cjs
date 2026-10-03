@@ -8,6 +8,17 @@ async function setup(){
  const h=harness({trialOrigin:TRIAL,tabs:[[1,{id:1,windowId:10,url:TRIAL}],[2,{id:2,windowId:99,url:'https://charities-search.ag.ny.gov/RegistrySearch'}]]});
  await tick();return h;
 }
+
+for(const cause of ['NY_CONNECTOR_VERIFICATION_REJECTED','NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED'])test('trial NY retains source rejection when reset is cooling down: '+cause,async()=>{
+ const h=await setup();
+ await h.context.saveRepair({phase:'verified',nextAllowedAt:900000});
+ const original=h.chrome.tabs.sendMessage;
+ h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='search'?{ok:false,reason:cause,verificationRetryUsed:true}:original(tab,m);
+ const p=h.connect(),r=await h.query(p,11);
+ assert.equal(r.ok,false);assert.equal(r.reason,'NY_CONNECTOR_RECOVERY_REJECTED');
+ assert.equal(r.ny_failure_cause,cause);assert.equal(r.ny_reset_cooldown,true);
+ assert.equal(h.repairs.length,0);assert.equal(h.created.length,1);
+});
 test('trial NY consecutive organizations reuse only the owned successful page and search afresh',async()=>{
  const h=await setup(),p=h.connect();assert.equal((await h.query(p,11,{ein:'123456789'})).ok,true);
  p.onMessage.emit({action:'finish',id:id(12)});await tick();assert.ok(h.tabs.has(100));

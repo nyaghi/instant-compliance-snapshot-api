@@ -492,6 +492,12 @@ async function performSearch(job, query, id) {
           diagnostic("ny-detail-session", job, "normal verification and original results restored; same observed ID reopened");
           continue;
         }
+        if (P.TRIAL_ORIGIN && rejected(response.reason)) {
+          // Keep the source failure distinct from a refused origin reset.
+          // These two static codes contain no verification material.
+          job.nyFailureCause=response.reason;
+          job.nyResetCooldown=repair.nextAllowedAt>Date.now();
+        }
         if (rejected(response.reason) && !repaired) {
           if (repair.nextAllowedAt > Date.now()) {
             await saveRepair({ ...repair, phase: "failed", reason: "NY_CONNECTOR_RECOVERY_REJECTED" });
@@ -559,6 +565,10 @@ async function performSearch(job, query, id) {
   }
   if(P.TRIAL_ORIGIN&&job.registryState==='NV'&&job.nvReadiness)response.nv_readiness=job.nvReadiness;
   if(P.TRIAL_ORIGIN&&job.registryState==='NY'&&['visible','hidden'].includes(job.nyPageVisibility))response.page_visibility=job.nyPageVisibility;
+  if(P.TRIAL_ORIGIN&&job.registryState==='NY'&&!response.ok&&rejected(job.nyFailureCause)) {
+    response.ny_failure_cause=job.nyFailureCause;
+    response.ny_reset_cooldown=job.nyResetCooldown===true;
+  }
   if(P.TRIAL_ORIGIN&&job.registryState==='NC'&&job.ncSubmissionObservations)response.nc_submission=job.ncSubmissionObservations;
   job.lastResponse = { id, ...response, ...(!response.ok && repair.nextAllowedAt > Date.now() ? { retryAt: repair.nextAllowedAt } : {}) };
   try { await saveRuntime(); } catch { close(job, "NY_CONNECTOR_INTERRUPTED"); return; }

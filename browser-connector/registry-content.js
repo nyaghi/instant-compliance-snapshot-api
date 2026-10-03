@@ -946,6 +946,23 @@
     }
     return fields;
   }
+  let ncSubmissionStarted = null;
+  function ncRequestTimings() {
+    // Diagnose the public form's own requests without sending a request or
+    // exporting URLs, query strings, headers, response bodies or verification data.
+    try {
+      if (ncSubmissionStarted === null || typeof performance === 'undefined') return [];
+      return performance.getEntriesByType('resource').slice(-64).filter(entry =>
+        entry.startTime >= ncSubmissionStarted && ['fetch','xmlhttprequest'].includes(entry.initiatorType)
+        && new URL(entry.name, location.href).origin === location.origin
+      ).slice(-8).map(entry => ({
+        after_ms: Math.max(0, Math.round(entry.startTime - ncSubmissionStarted)),
+        duration_ms: Math.max(0, Math.round(entry.duration || 0)),
+        status: Number.isInteger(entry.responseStatus) && entry.responseStatus >= 100 && entry.responseStatus <= 599 ? entry.responseStatus : 0,
+        search_route: new URL(entry.name, location.href).pathname.toLowerCase().startsWith('/online_services/search/')
+      }));
+    } catch { return []; }
+  }
   function ncForm(query) {
     if(query?.state!=='NC'||query.operation!=='search'||typeof query.name!=='string'||!query.name.trim()||query.name.length>500)
       throw new Error('REGISTRY_NC_QUERY_INVALID');
@@ -961,6 +978,7 @@
     // timer in a background tab can be throttled after the worker has already
     // started waiting for the results document. NC's action starts an async
     // request, so the message reply is sent before the resulting navigation.
+    ncSubmissionStarted = typeof performance !== 'undefined' ? performance.now() : null;
     button.click();return {ok:true,phase:'submitted'};
   }
   function ncIdleSearch(query) {
@@ -979,7 +997,7 @@
       results_page:location.pathname==='/online_services/search/Charities_Results',
       processing:!!button&&(button.disabled||text(button)==='Processing'),
       query_matches:document.querySelector('#SearchCriteria')?.value===query.name,
-      idle:ncIdleSearch(query)};
+      idle:ncIdleSearch(query),requests:ncRequestTimings()};
   }
   function ncRetry(query) {
     if(query?.state!=='NC'||query.operation!=='search'||typeof query.name!=='string'||!query.name.trim()||query.name.length>500)

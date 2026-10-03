@@ -33,6 +33,42 @@ function harness({cards=[active],total=cards.length,query="America's Charities",
   chrome:{runtime:{id:'fixture',onMessage:{addListener(){}}}}});
  vm.runInContext(source,context);return {api:context.testNC,context,input,words,print,button,main,panels,addressValues,clicks:()=>clicks,formClicks:()=>formClicks};
 }
+
+test('NC passive timing separates completed HTTP failures from idle submission without leaking request data',async()=>{
+ const h=harness({url:origin+'/online_services/search/by_title/search_charities'});
+ const q={state:'NC',operation:'search',name:'Achieving'};
+ const entry=(change={})=>({name:origin+'/online_services/search/check?private=secret',startTime:101,duration:12.8,initiatorType:'xmlhttprequest',responseStatus:429,...change});
+ h.context.performance={now:()=>100,getEntriesByType:()=>[
+  entry({startTime:99}),entry({name:'https://elsewhere.example/token'}),entry({initiatorType:'img'}),entry(),
+  entry({name:origin+'/public-action',responseStatus:200}),entry({responseStatus:undefined})]};
+ h.api.ncForm(q);
+ const r=await h.api.handle({action:'registry-ready',query:q});
+ assert.equal(h.formClicks(),1);
+ assert.deepEqual(JSON.parse(JSON.stringify(r.nc_readiness.requests)),[
+  {after_ms:1,duration_ms:13,status:429,search_route:true},
+  {after_ms:1,duration_ms:13,status:200,search_route:false},
+  {after_ms:1,duration_ms:13,status:0,search_route:true}]);
+ assert.doesNotMatch(JSON.stringify(r.nc_readiness),/secret|private|https|token/);
+});
+
+test('NC timing is optional and cannot break search when resource timing is unavailable',async()=>{
+ const h=harness({url:origin+'/online_services/search/by_title/search_charities'}),q={state:'NC',operation:'search',name:'Example'};
+ h.api.ncForm(q);
+ assert.equal((await h.api.handle({action:'registry-ready',query:q})).nc_readiness.requests.length,0);
+ h.context.performance={now:()=>10,getEntriesByType:()=>{throw Error('unavailable');}};
+ h.api.ncForm(q);
+ assert.equal((await h.api.handle({action:'registry-ready',query:q})).nc_readiness.requests.length,0);
+ assert.equal(h.formClicks(),2);
+});
+
+test('NC timing is bounded and restarts with each new query without extra requests',async()=>{
+ const h=harness({url:origin+'/online_services/search/by_title/search_charities'}),q={state:'NC',operation:'search',name:'Example'};
+ let now=100;
+ h.context.performance={now:()=>now,getEntriesByType:()=>Array.from({length:100},(_,i)=>({name:origin+'/online_services/search/result?x='+i,startTime:101+i,duration:1,initiatorType:'fetch',responseStatus:200}))};
+ h.api.ncForm(q);assert.equal((await h.api.handle({action:'registry-ready',query:q})).nc_readiness.requests.length,8);
+ now=300;h.api.ncForm({...q,name:'Second'});
+ assert.equal((await h.api.handle({action:'registry-ready',query:{...q,name:'Second'}})).nc_readiness.requests.length,0);
+});
 test('NC collects only expanded, complete, query-bound cards and extension date',async()=>{
  const h=harness(),q={state:'NC',operation:'search',name:"America's Charities"};
  const r=await h.api.ncRows(q);assert.equal(r.evidence.total,1);assert.equal(h.clicks(),1);
@@ -139,7 +175,8 @@ test('NC submission observations distinguish visible processing from an idle hid
  value=(await h.api.handle({action:'registry-ready',query:q})).nc_readiness;
  assert.equal(value.visible,true);assert.equal(value.processing,true);assert.equal(value.idle,false);
  assert.ok(!JSON.stringify(value).includes('Achieving'));
- assert.deepEqual(Object.keys(value).sort(),['document_complete','idle','processing','query_matches','results_page','search_form','visible']);
+ assert.deepEqual(Object.keys(value).sort(),['document_complete','idle','processing','query_matches','requests','results_page','search_form','visible']);
+ assert.equal(value.requests.length,0);
 });
 test('NC retains an already selected mode without firing its source change handler',()=>{
  const h=harness({url:origin+'/online_services/search/by_title/search_charities'});
