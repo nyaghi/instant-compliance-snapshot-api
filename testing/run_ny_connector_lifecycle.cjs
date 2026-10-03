@@ -195,6 +195,100 @@ test('NV a user switch after one recovery is respected through later continuatio
  assert.deepEqual(changes,[3]);assert.equal(h.tabs.get(4).active,true);
 });
 
+for(const firstRecovery of [false,true])test(`NV recovery distinguishes another admitted connector's activation from a user switch; initial lease=${firstRecovery}`,async()=>{
+ const {h,job,changes}=await nvVisibilityFixture();let release;
+ vm.runInContext('activeLanes',h.context).set('NV',job);
+ h.chrome.tabs.sendMessage=()=>new Promise(r=>{release=r;});
+ if(firstRecovery){
+  const first=h.context.registryMessage(job,{action:'registry-nv',budgetMs:45000});await tick();await h.advance(3000);
+  release({ok:true});await first;
+ }
+ h.tabs.set(4,{id:4,windowId:10,active:false,url:'https://www.sosnc.gov/online_services/search/by_title/search_charities'});
+ vm.runInContext('owned.add(4)',h.context);
+ const nc={tab:4,sender:{url:'https://fixture-final-four.onrender.com/',tab:{id:1}},registryState:'NC',activeExpiresAt:70000,closed:false};
+ vm.runInContext('activeLanes',h.context).set('NC',nc);
+ const second=h.context.registryMessage(job,{action:'registry-nv',budgetMs:45000});await tick();
+ await h.context.registryNorthCarolinaVisibility(nc);
+ await h.advance(3000);
+ assert.equal(h.tabs.get(3).active,true,'a managed connector switch must not permanently suppress NV rendering');
+ release({ok:true});await second;await h.context.registryRestoreNevadaVisibility(job);
+ assert.equal(h.tabs.get(1).active,true,'restore the original caller rather than a transient verification tab');
+ assert.equal(job.activeExpiresAt,70000);
+ assert.deepEqual(changes,firstRecovery?[3,4,3,1]:[4,3,1]);
+});
+
+for(const change of ['user-tab','peer-navigated','peer-moved','peer-closed','source-left'])test(`NV managed visibility never follows a subsequent user or document change: ${change}`,async()=>{
+ const {h,job,changes}=await nvVisibilityFixture();let release;
+ vm.runInContext('activeLanes',h.context).set('NV',job);
+ h.chrome.tabs.sendMessage=()=>new Promise(r=>{release=r;});
+ const first=h.context.registryMessage(job,{action:'registry-nv',budgetMs:45000});await tick();await h.advance(3000);release({ok:true});await first;
+ h.tabs.set(4,{id:4,windowId:10,active:false,url:'https://www.sosnc.gov/online_services/search/by_title/search_charities'});
+ vm.runInContext('owned.add(4)',h.context);
+ const nc={tab:4,sender:{url:'https://fixture-final-four.onrender.com/',tab:{id:1}},registryState:'NC',activeExpiresAt:70000,closed:false};
+ vm.runInContext('activeLanes',h.context).set('NC',nc);
+ await h.context.registryNorthCarolinaVisibility(nc);
+ const second=h.context.registryMessage(job,{action:'registry-nv',budgetMs:45000});await tick();
+ if(change==='user-tab'){h.tabs.get(4).active=false;h.tabs.set(5,{id:5,windowId:10,active:true,url:'https://example.com/'});}
+ if(change==='peer-navigated')h.tabs.get(4).url='https://example.com/';
+ if(change==='peer-moved')h.tabs.get(4).windowId=99;
+ if(change==='peer-closed')h.tabs.delete(4);
+ if(change==='source-left')h.tabs.get(1).url='https://example.com/';
+ await h.advance(3000);release({ok:true});await second;await h.context.registryRestoreNevadaVisibility(job);
+ assert.deepEqual(changes,[3,4]);assert.equal(job.activeExpiresAt,70000);
+});
+
+test('NV later command recovers after IL explicitly restores the caller from its verification page',async()=>{
+ const {h,job,changes}=await nvVisibilityFixture();let release;
+ vm.runInContext('activeLanes',h.context).set('NV',job);
+ h.chrome.tabs.sendMessage=()=>new Promise(r=>{release=r;});
+ const first=h.context.registryMessage(job,{action:'registry-nv',budgetMs:45000});await tick();await h.advance(3000);release({ok:true});await first;
+ await h.chrome.tabs.update(1,{active:true});
+ h.tabs.set(4,{id:4,windowId:10,active:false,url:'https://charitable.illinoisattorneygeneral.gov/search'});
+ vm.runInContext('owned.add(4)',h.context);
+ const il={tab:4,sender:{url:'https://fixture-final-four.onrender.com/',tab:{id:1}},registryState:'IL',activeExpiresAt:70000,closed:false};
+ vm.runInContext('activeLanes',h.context).set('IL',il);
+ await h.context.registryIllinoisVerification(il,async()=>({ok:true}));
+ const second=h.context.registryMessage(job,{action:'registry-nv',budgetMs:45000});await tick();await h.advance(3000);
+ assert.equal(h.tabs.get(3).active,true);release({ok:true});await second;await h.context.registryRestoreNevadaVisibility(job);
+ assert.equal(h.tabs.get(1).active,true);assert.equal(job.activeExpiresAt,70000);
+ assert.deepEqual(changes,[3,1,4,1,3,1]);
+});
+
+test('NV in-flight command waits for a recent managed restoration without extending its deadline',async()=>{
+ const {h,job,changes}=await nvVisibilityFixture();let release;
+ vm.runInContext('activeLanes',h.context).set('NV',job);
+ h.chrome.tabs.sendMessage=()=>new Promise(r=>{release=r;});
+ const pending=h.context.registryMessage(job,{action:'registry-nv',budgetMs:45000});await tick();
+ await h.advance(2500);
+ h.tabs.set(4,{id:4,windowId:10,active:false,url:'https://charitable.illinoisattorneygeneral.gov/search'});
+ vm.runInContext('owned.add(4)',h.context);
+ const il={tab:4,sender:{url:'https://fixture-final-four.onrender.com/',tab:{id:1}},registryState:'IL',activeExpiresAt:70000,closed:false};
+ vm.runInContext('activeLanes',h.context).set('IL',il);
+ await h.context.registryIllinoisVerification(il,async()=>({ok:true}));
+ await h.advance(500);assert.deepEqual(changes,[4,1]);
+ await h.advance(2499);assert.deepEqual(changes,[4,1]);
+ await h.advance(1);assert.equal(h.tabs.get(3).active,true);
+ release({ok:true});await pending;await h.context.registryRestoreNevadaVisibility(job);
+ assert.deepEqual(changes,[4,1,3,1]);assert.equal(job.activeExpiresAt,70000);
+});
+
+for(const change of ['user-switch','caller-navigation','caller-moved'])test(`NV explicit peer restoration still preserves later user changes: ${change}`,async()=>{
+ const {h,job,changes}=await nvVisibilityFixture();let release;
+ h.chrome.tabs.sendMessage=()=>new Promise(r=>{release=r;});
+ vm.runInContext('activeLanes',h.context).set('NV',job);
+ h.tabs.set(4,{id:4,windowId:10,active:false,url:'https://charitable.illinoisattorneygeneral.gov/search'});
+ vm.runInContext('owned.add(4)',h.context);
+ const il={tab:4,sender:{url:'https://fixture-final-four.onrender.com/',tab:{id:1}},registryState:'IL',activeExpiresAt:70000,closed:false};
+ vm.runInContext('activeLanes',h.context).set('IL',il);
+ await h.context.registryIllinoisVerification(il,async()=>({ok:true}));
+ const pending=h.context.registryMessage(job,{action:'registry-nv',budgetMs:45000});await tick();
+ if(change==='user-switch'){h.tabs.get(1).active=false;h.tabs.set(5,{id:5,windowId:10,active:true,url:'https://example.com/'});}
+ if(change==='caller-navigation')h.tabs.get(1).url='https://example.com/';
+ if(change==='caller-moved')h.tabs.get(1).windowId=99;
+ await h.advance(3000);release({ok:true});await pending;await h.context.registryRestoreNevadaVisibility(job);
+ assert.deepEqual(changes,[4,1]);assert.equal(job.activeExpiresAt,70000);
+});
+
 test('NV visibility recovery preserves user switches before and after activation',async()=>{
  for(const before of [true,false]) {
   const {h,job,changes}=await nvVisibilityFixture();let release;

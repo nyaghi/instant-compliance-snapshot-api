@@ -16,7 +16,7 @@ def strip_mi_exhaustive_reuse(tree):
             continue
         for node in ast.walk(fn):
             if isinstance(node, ast.Set) and any(isinstance(v, ast.Constant) and v.value == '0.6.56' for v in node.elts):
-                node.elts = [v for v in node.elts if not (isinstance(v, ast.Constant) and v.value in {'0.6.57', '0.6.58'})]
+                node.elts = [v for v in node.elts if not (isinstance(v, ast.Constant) and v.value in {'0.6.57', '0.6.58', '0.6.59'})]
     if not any(getattr(n,'name','')=='mi_http_complete_unmatched_grid' for n in tree.body): return
     root=Path(__file__).resolve().parents[2]
     old=ast.parse(subprocess.check_output(['git','show','0ceb32c194d70f59b15ce1d820b67443d3f50540:registry_snapshot_server.py'],cwd=root).decode('utf-8'))

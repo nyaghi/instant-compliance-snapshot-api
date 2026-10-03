@@ -28,27 +28,67 @@ function registryClockMessage(message, sender, respond) {
   },Math.min(message.delayMs,Math.max(1,job.activeExpiresAt-Date.now())));
   registryClocks.set(key,{timer,respond});return true;
 }
+function registryManagedVisibilityActivation(job, previous, tab) {
+  // An admitted IL/NC/TN collector can displace NV's rendering lease. Record
+  // only our own explicit activation, never a browser/user activation event.
+  if (!P.TRIAL_ORIGIN || !['IL','NC','TN'].includes(job.registryState)
+      || job.closed || !isActive(job) || !owned.has(job.tab) || !previous || tab?.id!==job.tab) return;
+  try {if(new URL(job.sender.url).origin!==P.TRIAL_ORIGIN)return;}catch{return;}
+  for(const nv of allJobs()) {
+    if(nv.closed || !isActive(nv) || nv.registryState!=='NV' || !owned.has(nv.tab))continue;
+    if(previous.id!==nv.tab && previous.id!==nv.sender.tab.id
+        && previous.id!==nv.nvManagedVisibility?.id)continue;
+    nv.nvPreviousVisible ||= {id:previous.id,windowId:previous.windowId};
+    nv.nvManagedVisibility={id:job.tab,windowId:previous.windowId,url:tab.url,at:Date.now()};
+  }
+}
+function registryManagedVisibilityRestoration(job, prior) {
+  if (!P.TRIAL_ORIGIN || !['IL','NC','TN'].includes(job.registryState)
+      || job.closed || !isActive(job) || !owned.has(job.tab) || !prior) return;
+  try {if(new URL(job.sender.url).origin!==P.TRIAL_ORIGIN)return;}catch{return;}
+  for(const nv of allJobs()) {
+    if(nv.closed || !isActive(nv) || nv.registryState!=='NV' || !owned.has(nv.tab)
+        || nv.nvManagedVisibility?.id!==job.tab)continue;
+    const restoredCaller=prior.id===nv.sender.tab.id;
+    if(!restoredCaller && !owned.has(prior.id))continue;
+    nv.nvManagedVisibility={id:prior.id,windowId:prior.windowId,url:prior.url,
+      at:Date.now(),restoredCaller};
+  }
+}
+function registryNevadaManagedActive(job, active) {
+  const managed=job.nvManagedVisibility;
+  return !!(managed && active?.id===managed.id && active.windowId===managed.windowId
+    && active.url===managed.url && (owned.has(active.id)
+      || (managed.restoredCaller===true && active.id===job.sender.tab.id)));
+}
 async function registryNevadaVisibleSnapshot(job) {
-  if (!P.TRIAL_ORIGIN || job.registryState!=='NV' || job.nvVisibilityAttempted || !owned.has(job.tab)) return null;
+  if (!P.TRIAL_ORIGIN || job.registryState!=='NV' || !owned.has(job.tab)) return null;
   try {
     const tab=await chrome.tabs.get(job.tab), source=await chrome.tabs.get(job.sender.tab.id);
-    if (!tab.active && tab.windowId===source.windowId && new URL(source.url).origin===P.TRIAL_ORIGIN)
-      return (await chrome.tabs.query({active:true,windowId:tab.windowId}))[0]||null;
+    if (!tab.active && tab.windowId===source.windowId && new URL(source.url).origin===P.TRIAL_ORIGIN) {
+      const active=(await chrome.tabs.query({active:true,windowId:tab.windowId}))[0]||null;
+      if(job.nvVisibilityAttempted && !registryNevadaManagedActive(job,active))return null;
+      return active;
+    }
   } catch {}
   return null;
 }
 async function registryNevadaMakeVisible(job, initialVisible) {
-  if (!P.TRIAL_ORIGIN || job.registryState!=='NV' || !initialVisible || job.closed || job.nvVisibilityAttempted
+  if (!P.TRIAL_ORIGIN || job.registryState!=='NV' || !initialVisible || job.closed
       || Date.now()>=job.activeExpiresAt || !owned.has(job.tab)) return null;
   try {
     const tab=await chrome.tabs.get(job.tab), source=await chrome.tabs.get(job.sender.tab.id);
     const active=(await chrome.tabs.query({active:true,windowId:tab.windowId}))[0];
+    const managed=job.nvManagedVisibility;
+    const managedActive=registryNevadaManagedActive(job,active) && Date.now()-managed.at>=3000;
+    if(registryNevadaManagedActive(job,active) && !managedActive)return null;
+    if(job.nvVisibilityAttempted && !managedActive)return null;
     if (tab.active || tab.windowId!==initialVisible.windowId || tab.windowId!==source.windowId
-        || active?.id!==initialVisible.id || new URL(source.url).origin!==P.TRIAL_ORIGIN
+        || (active?.id!==initialVisible.id && !managedActive) || new URL(source.url).origin!==P.TRIAL_ORIGIN
         || new URL(tab.url).origin!==registryOrigin('NV')
         || !new URL(tab.url).pathname.startsWith('/portal/public/')) return null;
-    const previous={id:initialVisible.id,windowId:initialVisible.windowId};
-    job.nvVisibilityAttempted=true;job.nvPreviousVisible=previous;
+    const previous=job.nvPreviousVisible||{id:initialVisible.id,windowId:initialVisible.windowId};
+    job.nvVisibilityAttempted=true;job.nvPreviousVisible=previous;job.nvManagedVisibility=null;
     diagnostic('nv-visibility',job,'same-document visibility recovery');
     await chrome.tabs.update(tab.id,{active:true});await saveRuntime();
     return previous;
@@ -72,12 +112,22 @@ async function registryMessage(job, message) {
   // in-flight command and document; expose only our owned trial tab once.
   // Capture the active tab first so a later user switch is never overridden.
   const initialVisible=await registryNevadaVisibleSnapshot(job);
-  if (initialVisible) visibilityTimer=setTimeout(()=>{
+  const scheduleVisibility=()=>{
+    visibilityTimer=setTimeout(()=>{
     visibilityPending=(async()=>{
       if (settled || job.closed || Date.now()>=job.activeExpiresAt || !owned.has(job.tab)) return;
-      previousVisible=await registryNevadaMakeVisible(job,initialVisible);
+      const candidate=initialVisible||await registryNevadaVisibleSnapshot(job);
+      previousVisible=await registryNevadaMakeVisible(job,candidate);
+      // An admitted peer may have just restored its caller. Keep the same
+      // command and expiry, waiting only for that explicit activation to settle.
+      if(!previousVisible && job.nvManagedVisibility
+          && Date.now()-job.nvManagedVisibility.at<3000 && !settled) scheduleVisibility();
     })();
-  },Math.min(3000,Math.max(1,job.activeExpiresAt-Date.now())));
+    },Math.min(job.nvManagedVisibility
+      ? Math.max(1,job.nvManagedVisibility.at+3000-Date.now()) : 3000,
+      Math.max(1,job.activeExpiresAt-Date.now())));
+  };
+  if (initialVisible || job.nvPreviousVisible) scheduleVisibility();
   try {
     return await Promise.race([send(),new Promise((_,reject)=>{
       timer=setTimeout(()=>reject(new Error('NY_CONNECTOR_REGISTRY_NV_COMMAND_TIMEOUT')),
@@ -176,8 +226,10 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
     if (previousVisible) try {
       const tab=await chrome.tabs.get(job.tab), prior=await chrome.tabs.get(previousVisible.id);
       if (owned.has(job.tab) && tab.active && tab.windowId===previousVisible.windowId && prior.windowId===tab.windowId
-          && new URL(tab.url).origin===registryOrigin(job.registryState) && (!path || new URL(tab.url).pathname===path))
+          && new URL(tab.url).origin===registryOrigin(job.registryState) && (!path || new URL(tab.url).pathname===path)) {
         await chrome.tabs.update(prior.id,{active:true});
+        registryManagedVisibilityRestoration(job,prior);
+      }
     } catch { /* Preserve user navigation or closure during verification. */ }
   }
 }
@@ -194,6 +246,7 @@ async function registryNorthCarolinaVisibility(job) {
     if (!prior || prior.id===tab.id || job.closed || !owned.has(job.tab)) return null;
     diagnostic('nc-verification',job,'same-document visibility recovery');
     await chrome.tabs.update(tab.id,{active:true});
+    registryManagedVisibilityActivation(job,prior,tab);
     return {id:prior.id,windowId:prior.windowId};
   } catch { return null; }
 }
@@ -254,15 +307,20 @@ async function registryIllinoisVerification(job, collect) {
   diagnostic("il-verification",job,"same-document visibility recovery");
   try {
     if (job.closed || !owned.has(tab.id)) throw new Error("NY_CONNECTOR_INTERRUPTED");
-    if (!tab.active) await chrome.tabs.update(tab.id,{active:true});
+    if (!tab.active) {
+      await chrome.tabs.update(tab.id,{active:true});
+      registryManagedVisibilityActivation(job,previous,tab);
+    }
     return await collect(45000);
   } finally {
     // Do not override a user who switched elsewhere while the check ran.
     try {
       const current = await chrome.tabs.get(tab.id);
       const prior = previous && await chrome.tabs.get(previous.id);
-      if (current.active && current.url === registryStart("IL") && prior && prior.id !== tab.id && prior.windowId === current.windowId)
+      if (current.active && current.url === registryStart("IL") && prior && prior.id !== tab.id && prior.windowId === current.windowId) {
         await chrome.tabs.update(prior.id,{active:true});
+        registryManagedVisibilityRestoration(job,prior);
+      }
     } catch { /* A user may close or move either tab during collection. */ }
   }
 }
