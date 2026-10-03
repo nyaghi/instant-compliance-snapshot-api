@@ -6638,15 +6638,20 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
             required = list(distinct_names.values())
     nc_retrieval_coverage = {}
     if state == "NC" and trial_identity():
-        # Starting With returns the complete set for a literal prefix. Reuse
-        # a shorter query already in the master plan instead of loading the
-        # form again for each covered reviewed name. These are retrieval
-        # probes only; org and REVIEWED_NAME_CONTEXT remain identity targets.
+        # Coalesce only equivalent spellings of the same reviewed name, and
+        # use the longest planned prefix covering that group. Promoting a
+        # distinct alias to a generic word broadened successful exact-name
+        # lookups and unnecessarily disabled their existing positive exit.
+        # org and REVIEWED_NAME_CONTEXT remain the original identity targets.
         # Failed/incomplete prefix evidence raises below, never proving absence.
         planned = required + generated
         probes = []
         for name in required:
-            prefix = min((other for other in planned if name.startswith(other)), key=len)
+            equivalent = [other for other in required
+                          if normalized_match_name(other) == normalized_match_name(name)]
+            covering = [other for other in planned if len(equivalent) > 1
+                        and all(reviewed.startswith(other) for reviewed in equivalent)]
+            prefix = max(covering, key=len) if covering else name
             if prefix not in probes:
                 probes.append(prefix)
             if prefix != name:

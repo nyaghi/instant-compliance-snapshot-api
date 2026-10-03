@@ -678,7 +678,7 @@ class LookupControls(unittest.TestCase):
         with patch.object(cc,'licensed_charity_names',return_value=(required,['Example ', 'Distinct', 'Unrelated'])), \
              patch.object(cc,'trial_identity',return_value={'origin':'isolated'}):
             cc.final_four_browser_lookup(self.orgs['NC'],'NC',empty)
-        self.assertEqual(calls,['Example ','EXAMPLE Center','Example-Foundation','Distinct','P4L','Unrelated'])
+        self.assertEqual(calls,required+['Example ','Distinct','Unrelated'])
 
     def test_trial_nc_covering_failure_cannot_establish_absence_or_skip_to_a_negative(self):
         for changes in [{'complete':False},{'total':1},{'verification_pending':True},
@@ -689,7 +689,7 @@ class LookupControls(unittest.TestCase):
                 calls.append(q['name'])
                 return {'state':'NC','query':q,'complete':True,'verification_pending':False,'rows':[],'total':0,**changes}
             with self.subTest(changes=changes), \
-                 patch.object(cc,'licensed_charity_names',return_value=(['Example Charity'],['Example'])), \
+                 patch.object(cc,'licensed_charity_names',return_value=(['Example Charity, Inc.','Example Charity Inc'],['Example'])), \
                  patch.object(cc,'trial_identity',return_value={'origin':'isolated'}),self.assertRaises(ValueError):
                 cc.final_four_browser_lookup(self.orgs['NC'],'NC',failed)
             self.assertEqual(calls,['Example'])
@@ -700,12 +700,46 @@ class LookupControls(unittest.TestCase):
         def source(q):
             calls.append(dict(q))
             return self.provider(q)
-        with patch.object(cc,'licensed_charity_names',return_value=([primary,'Separate Reviewed DBA'],["America"])), \
+        with patch.object(cc,'licensed_charity_names',return_value=([primary+', Inc.',primary+' Inc','Separate Reviewed DBA'],["America"])), \
              patch.object(cc,'trial_identity',return_value={'origin':'isolated'}):
             result=cc.final_four_browser_lookup(self.orgs['NC'],'NC',source)
         self.assertTrue(result.success);self.assertEqual(result.matched_registry_identifier,'SL000448')
         self.assertEqual([q['name'] for q in calls if q['operation']=='search'],['America','Separate Reviewed DBA'])
         self.assertTrue(any(q['operation']=='detail' and q['identifier']=='SL000448' for q in calls))
+
+    def test_trial_nc_distinct_aliases_do_not_broaden_a_confirmed_primary_or_disable_its_exit(self):
+        primary='Better World Fund, Inc.'
+        org=cc.checker.Organization(primary,'58-2366765')
+        calls=[]
+        def source(q):
+            calls.append(dict(q))
+            if q.get('name')=='Better':
+                raise ValueError('An unrelated card in the broad grid cannot be parsed')
+            payload=self.provider(q)
+            if q['operation']=='search':
+                payload['rows'][0]['CSL Legal Name']=primary
+            else:
+                payload['fields']['Name']=primary
+            return payload
+        with patch.object(cc,'licensed_charity_names',return_value=([primary,'Better World Campaign','Separate Reviewed DBA'],['Better'])), \
+             patch.object(cc,'trial_identity',return_value={'origin':'isolated'}):
+            result=cc.final_four_browser_lookup(org,'NC',source)
+        self.assertTrue(result.success)
+        self.assertEqual([q['name'] for q in calls if q['operation']=='search'],[primary])
+        self.assertEqual(result.matched_registry_identifier,'SL000448')
+
+    def test_trial_nc_equivalent_name_group_uses_longest_existing_literal_prefix(self):
+        required=['Example Charity, Inc.','Example Charity Inc']
+        calls=[]
+        def empty(q):
+            calls.append(q['name'])
+            return {'state':'NC','query':q,'complete':True,'verification_pending':False,'rows':[],'total':0}
+        with patch.object(cc,'licensed_charity_names',return_value=(required,['Example','Example Charity'])), \
+             patch.object(cc,'trial_identity',return_value={'origin':'isolated'}):
+            result=cc.final_four_browser_lookup(self.orgs['NC'],'NC',empty)
+        self.assertEqual(calls[0],'Example Charity')
+        self.assertEqual(calls,['Example Charity','Example'])
+        self.assertEqual(result.status,'Not Registered')
 
     def test_trial_nc_prefix_does_not_accept_an_unrelated_record(self):
         org=cc.checker.Organization('Example Charity Foundation','12-3456789')
