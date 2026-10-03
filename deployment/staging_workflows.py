@@ -189,6 +189,8 @@ def handle(master, handler, *, trial_queue=None):
             record = unpack(master, payload.get('token'), owner)
             path = '/api/lab/workflows/' + record['id']
             if action == 'poll':
+                if trial and 'settled_count' in payload:
+                    transport(path + '/release-external', {'settled_count': payload['settled_count']})
                 status = transport(path)
                 if (status.get('source_version') != os.environ.get('CE_STAGING_WORKFLOW_VERSION')
                         or status.get('ein') != record['ein']): raise ValueError('Worker release mismatch')

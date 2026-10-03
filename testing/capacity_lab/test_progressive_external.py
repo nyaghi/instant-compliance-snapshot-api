@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 import io
 import json
+import os
 import threading
 import time
 import types
@@ -99,6 +100,13 @@ class ProgressiveExternalControls(unittest.TestCase):
         self.assertTrue(result['progressive_external_release'])
         request({'action':'release-external','token':result['token'],'settled_count':2})
         queue.release_external_slots.assert_called_once_with('private-performance-lab',ident,2)
+        queue.reset_mock()
+        queue.status.return_value={'source_version':'fixture','ein':'123456789','phase':'active',
+            'completed':0,'total':1,'submitted':1,'deadline':61,'started':1,'finished':None,'jobs':[]}
+        with patch.dict(os.environ,{'CE_STAGING_WORKFLOW_VERSION':'fixture'}):
+            request({'action':'poll','token':result['token'],'settled_count':3})
+        self.assertEqual([c[0] for c in queue.mock_calls],['release_external_slots','status'])
+        queue.release_external_slots.assert_called_once_with('private-performance-lab',ident,3)
         with patch.object(workflows,'call',return_value={'id':ident}) as transport:
             legacy=request(start,trial=False)
             self.assertNotIn('progressive_external_release',legacy)

@@ -80,7 +80,8 @@ test('negotiated progressive release returns a completed lane while its peer sti
  let finishSlow, polls=0;const releases=[],seen=[];
  const cc=setup(async(u,o)=>{const p=JSON.parse(o.body);
   if(p.action==='start')return response({token:'signed',progressive_external_release:true});
-  if(p.action==='release-external'){releases.push(p.settled_count);return response({ok:true});}
+  assert.notEqual(p.action,'release-external');
+  if('settled_count' in p)releases.push(p.settled_count);
   if(++polls===2){assert.deepEqual(releases,[1]);finishSlow({state:'IL',status:'Current'});}
   return response({finished:polls>=3?1:null,results:polls>=3?[{state:'CO',status:'Current'}]:[]});
  });
@@ -93,8 +94,9 @@ test('progressive release retries the cumulative count after a lost acknowledgem
  let polls=0,failed=false,finishSlow;const releases=[];
  const cc=setup(async(u,o)=>{const p=JSON.parse(o.body);
   if(p.action==='start')return response({token:'signed',progressive_external_release:true});
-  if(p.action==='release-external'){
-   releases.push(p.settled_count);if(!failed){failed=true;throw Error('ack lost');}return response({ok:true});
+  assert.notEqual(p.action,'release-external');
+  if('settled_count' in p){
+   releases.push(p.settled_count);if(!failed){failed=true;throw Error('ack lost');}
   }
   if(++polls===2)finishSlow({state:'IL',status:'Current'});
   return response({finished:polls>=3?1:null,results:polls>=3?[{state:'CO',status:'Current'}]:[]});
@@ -108,7 +110,8 @@ test('failed connector releases capacity but preserves an inconclusive result',a
  const releases=[];let polls=0;
  const cc=setup(async(u,o)=>{const p=JSON.parse(o.body);
   if(p.action==='start')return response({token:'signed',progressive_external_release:true});
-  if(p.action==='release-external'){releases.push(p.settled_count);return response({ok:true});}
+  assert.notEqual(p.action,'release-external');
+  if('settled_count' in p)releases.push(p.settled_count);
   return response({finished:++polls>=2?1:null,results:[{state:'CO',status:'Current'}]});
  });
  const r=await cc.run({...base,states:['CO','GA'],aliases:['Reviewed name'],externalLookup:async()=>{throw Error('source unavailable');}});

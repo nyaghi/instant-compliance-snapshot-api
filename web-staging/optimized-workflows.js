@@ -57,15 +57,13 @@
         const deadline=performance.now()+900000;
         while(performance.now()<deadline) {
           signal?.throwIfAborted();
-          if(progressiveRelease&&settledExternal.size>releasedCount){
-            const settled_count=settledExternal.size;
-            try{await call('release-external',{settled_count});releasedCount=settled_count;}
-            catch{signal?.throwIfAborted();}
-          }else if(!progressiveRelease&&externalDone&&!released&&external.length){
+          if(!progressiveRelease&&externalDone&&!released&&external.length){
             try{await call('release-external');released=true;}catch{signal?.throwIfAborted();}
           }
           let progress;
-          try{progress=await call('poll');failures=0;}catch(error){
+          const settled_count=settledExternal.size;
+          const update=progressiveRelease&&settled_count>releasedCount?{settled_count}:{};
+          try{progress=await call('poll',update);releasedCount=settled_count;failures=0;}catch(error){
             signal?.throwIfAborted();if(++failures>=5)throw error;
           }
           if(progress){
