@@ -33,6 +33,7 @@ def build(origin, destination):
         raise ValueError('Use a new output directory; do not overwrite an installed connector')
     destination.mkdir(parents=True)
     hashes={}
+    packaged_protocol = None
     for name in FILES:
         text=(ROOT/'browser-connector'/name).read_text(encoding='utf-8')
         if name=='protocol.js':
@@ -46,15 +47,26 @@ def build(origin, destination):
         # Namespace DOM messages so the installed 29.1 connector cannot also
         # react to a trial pager or page request. NY uses the mature public browser transport.
         text=text.replace('cc-ny-staging-v1','cc-final-four-trial-v1').replace('cc-ga-public-pager-v1','cc-final-four-ga-pager-v1').replace('cc-ny-page-v1','cc-final-four-ny-page-v1')
+        if name == 'protocol.js':
+            packaged_protocol = text
+        if name == 'ny-main.js':
+            # Both installed connectors execute on NY in the page's MAIN
+            # world. A namespaced message channel does not isolate a shared
+            # global protocol. Bundle the unchanged master protocol privately
+            # with its adapter so extension injection order cannot replace
+            # the mature connector's object or select the wrong trial rules.
+            assert packaged_protocol and packaged_protocol.count('globalThis.CCNYProtocol = ') == 1
+            private_protocol = packaged_protocol.replace('globalThis.CCNYProtocol = ', 'return ')
+            text = '(() => {\nconst CCNYProtocol = ' + private_protocol + '\n' + text + '\n})();\n'
         data=text.encode('utf-8');(destination/name).write_bytes(data)
         hashes[name]=hashlib.sha256(data).hexdigest()
     manifest={
-        'manifest_version':3,'name':'CharityClarity — Isolated 29.2BU Trial Connector','version':'0.6.71','minimum_chrome_version':'132',
-        'description':'Public registry access for the isolated CharityClarity 29.2BU trial.',
+        'manifest_version':3,'name':'CharityClarity — Isolated 29.2BV Trial Connector','version':'0.6.72','minimum_chrome_version':'132',
+        'description':'Public registry access for the isolated CharityClarity 29.2BV trial.',
         'permissions':['storage','browsingData','cookies'],'host_permissions':[origin+'/*',*MATCHES,'https://charities-search.ag.ny.gov/RegistrySearch*'],
         'incognito':'not_allowed','background':{'service_worker':'worker.js'},
         'content_scripts':[
-            {'matches':['https://charities-search.ag.ny.gov/RegistrySearch*'],'js':['protocol.js','ny-main.js'],'run_at':'document_start','world':'MAIN'},
+            {'matches':['https://charities-search.ag.ny.gov/RegistrySearch*'],'js':['ny-main.js'],'run_at':'document_start','world':'MAIN'},
             {'matches':['https://charities-search.ag.ny.gov/RegistrySearch*'],'js':['ny-content.js'],'run_at':'document_start'},
             {'matches':[origin+'/*'],'js':['protocol.js','staging-bridge.js'],'run_at':'document_start'},
             {'matches':['https://verify.sos.ga.gov/verification/SearchResults.aspx*'],'js':['registry-ga-main.js'],'run_at':'document_start','world':'MAIN'},
@@ -62,13 +74,13 @@ def build(origin, destination):
         ],
     }
     (destination/'manifest.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
-    (destination/'build-evidence.json').write_text(json.dumps({'origin':origin,'version':'0.6.71','files':hashes,
+    (destination/'build-evidence.json').write_text(json.dumps({'origin':origin,'version':'0.6.72','files':hashes,
         'installed_connector_untouched':True,'ny_uses_lab_backend':False},indent=2),encoding='utf-8')
     archive=destination.parent/(destination.name+'.zip')
     if archive.exists():raise ValueError('Refusing to overwrite an existing trial archive')
     with zipfile.ZipFile(archive,'x',zipfile.ZIP_DEFLATED) as package:
         for file in destination.iterdir():package.write(file,file.name)
-    return {'directory':str(destination),'zip':str(archive),'origin':origin,'version':'0.6.71'}
+    return {'directory':str(destination),'zip':str(archive),'origin':origin,'version':'0.6.72'}
 
 
 if __name__=='__main__':

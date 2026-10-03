@@ -21,7 +21,7 @@ class Repairs(unittest.TestCase):
             for node in ast.walk(tree):
                 if isinstance(node,ast.Set):
                     node.elts=[item for item in node.elts if not (
-                        isinstance(item,ast.Constant) and item.value in {'0.6.62','0.6.63','0.6.64','0.6.66','0.6.67','0.6.68','0.6.69','0.6.70','0.6.71'})]
+                        isinstance(item,ast.Constant) and item.value in {'0.6.62','0.6.63','0.6.64','0.6.66','0.6.67','0.6.68','0.6.69','0.6.70','0.6.71','0.6.72'})]
             tree.body=[node for node in tree.body if not (
                 isinstance(node,ast.FunctionDef) and node.name in changed)]
         self.assertEqual(ast.dump(trees[0]),ast.dump(trees[1]))
