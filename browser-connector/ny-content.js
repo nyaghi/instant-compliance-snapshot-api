@@ -27,7 +27,7 @@
       // Report only which public filters are populated, never their values or
       // verification data. The worker can avoid an invalid EIN/name transition.
       const formFields = ["ein", "orgName", "orgID", "city"].filter(key => document.querySelector("#" + key)?.value);
-      respond({ ready, documentId, url: location.href, formFields, rateLimited: !ready && /(?:429\s+Too Many Requests|Too Many Requests\s*429)/i.test(document.body?.innerText || "") });
+      respond({ ready, documentId, url: location.href, formFields, page_visibility:document.visibilityState, rateLimited: !ready && /(?:429\s+Too Many Requests|Too Many Requests\s*429)/i.test(document.body?.innerText || "") });
       return false;
     }
     if (message?.action === "back-to-results") {

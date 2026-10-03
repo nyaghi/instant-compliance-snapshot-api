@@ -1385,7 +1385,7 @@
       }
     }
     if (m.action === "registry-ready") return {ready:registryDocumentReady(), url:location.href, documentId,
-      ...(NV ? {nv_readiness:nvReadiness()} : {}),
+      ...(NV ? {nv_readiness:nvReadiness(),page_visibility:document.visibilityState} : {}),
       ...(NC ? {verification_pending:/^Just a moment/i.test(document.title||'')
         && /Performing security verification|verifies you are not a bot/i.test(text(document.body)),
         ...(m.query ? {nc_search_idle:ncIdleSearch(m.query),nc_readiness:ncReadiness(m.query)} : {})} : {}),
@@ -1477,7 +1477,7 @@
         ? 'NY_CONNECTOR_'+code : null;
       const ilReasons={REGISTRY_RESPONSE_INCOMPLETE:'NY_CONNECTOR_IL_RESPONSE_TIMEOUT',REGISTRY_RESULTS_INCOMPLETE:'NY_CONNECTOR_IL_RESULTS_INCOMPLETE',REGISTRY_TOTAL_CHANGED:'NY_CONNECTOR_IL_TOTAL_CHANGED',REGISTRY_RESULT_LIMIT:'NY_CONNECTOR_IL_RESULT_LIMIT',REGISTRY_PAGINATION_INCOMPLETE:'NY_CONNECTOR_IL_PAGINATION_INCOMPLETE'};
       reply({ok:false,reason:trialReason || (AL && code==='NY_CONNECTOR_AL_VERIFICATION_REQUIRED' ? code : TN && code==='NY_CONNECTOR_TN_VERIFICATION_OR_FORM_PENDING' ? code : /^NY_CONNECTOR_IL_(?:VERIFICATION_PENDING|FORM_READY_TIMEOUT|FORM_DISABLED|FORM_MISSING|DETAIL_(?:NOT_OPENED|BLANK|IDENTITY_INCOMPLETE|RESPONSE_TIMEOUT))$/.test(code) ? code : IL && ilReasons[code] || 'NY_CONNECTOR_INCOMPLETE'),
-        ...(NV ? {nv_readiness:nvReadiness()} : {}),
+        ...(NV ? {nv_readiness:{...nvReadiness(),page_visibility:document.visibilityState}} : {}),
         ...(IL && error.diagnostics ? {diagnostics:error.diagnostics} : {})});
     });
     return true;

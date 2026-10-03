@@ -341,7 +341,7 @@ async function ready(job) {
     try { state = await chrome.tabs.sendMessage(job.tab, { action: "ready" }, { frameId: 0 }); }
     catch { /* Content script is still loading. */ }
     if (state?.rateLimited) throw new Error("NY_CONNECTOR_RATE_LIMITED");
-    if (state?.ready) return;
+    if (state?.ready) { job.nyPageVisibility=state.page_visibility;return; }
     await nap(250);
   }
   throw new Error("NY_CONNECTOR_TAB_READY_TIMEOUT");
@@ -380,6 +380,7 @@ async function prepareNySearchForm(job, query) {
   const url=new URL(tab.url);
   if (!owned.has(tab.id) || url.origin!==P.NY || !/^\/RegistrySearch\/?$/.test(url.pathname)) throw new Error("NY_CONNECTOR_INCOMPLETE");
   const before=await chrome.tabs.sendMessage(tab.id,{action:"ready"},{frameId:0});
+  job.nyPageVisibility=before?.page_visibility;
   if (!Array.isArray(before?.formFields) || !before.formFields.some(field=>field!==key)) return;
   if (!before.documentId) throw new Error("NY_CONNECTOR_SEARCH_FORM_CHANGED");
   // A fresh normal page resets the state's form model, unlike changing its
@@ -392,6 +393,7 @@ async function prepareNySearchForm(job, query) {
   await waitForRegistryDocument(job,url.pathname,before.documentId);
   if (job.closed || Date.now()>=job.activeExpiresAt) throw new Error("NY_CONNECTOR_INTERRUPTED");
   const after=await chrome.tabs.sendMessage(tab.id,{action:"ready"},{frameId:0});
+  job.nyPageVisibility=after?.page_visibility;
   if (after?.formFields?.some(field=>field!==key)) throw new Error("NY_CONNECTOR_SEARCH_FORM_CHANGED");
   diagnostic("ny-form-transition",job,"new normal document for a different search field");
   await saveRuntime();
@@ -556,6 +558,7 @@ async function performSearch(job, query, id) {
     job.nyLastSearchQuery = {...query};
   }
   if(P.TRIAL_ORIGIN&&job.registryState==='NV'&&job.nvReadiness)response.nv_readiness=job.nvReadiness;
+  if(P.TRIAL_ORIGIN&&job.registryState==='NY'&&['visible','hidden'].includes(job.nyPageVisibility))response.page_visibility=job.nyPageVisibility;
   if(P.TRIAL_ORIGIN&&job.registryState==='NC'&&job.ncSubmissionObservations)response.nc_submission=job.ncSubmissionObservations;
   job.lastResponse = { id, ...response, ...(!response.ok && repair.nextAllowedAt > Date.now() ? { retryAt: repair.nextAllowedAt } : {}) };
   try { await saveRuntime(); } catch { close(job, "NY_CONNECTOR_INTERRUPTED"); return; }

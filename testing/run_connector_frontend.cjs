@@ -13,7 +13,7 @@ async function exercise({state='GA',commands=42,elapsedPerCommand=100,stopStatus
     actions.push(message.action);
     if(message.action==='ping' && ++pings<=missedPings)return;
     queueMicrotask(()=>listener({source:window,origin:'https://staging.compliance-express.com',data:{
-      ...message,direction:'response',ok:true,version:oldIllinois?'0.5.8':'0.5.9',capabilities:incompatible?[]:[...capabilities,'final-four-public-v1',...(oldIllinois?[]:['il-dom-events-v1'])],evidence:{complete:true,rows:[]}
+      ...message,direction:'response',ok:true,version:oldIllinois?'0.5.8':'0.5.9',capabilities:incompatible?[]:[...capabilities,'final-four-public-v1',...(oldIllinois?[]:['il-dom-events-v1'])],evidence:{complete:true,rows:[]},page_visibility:'hidden',diagnostics:[{phase:'results',event:'incomplete',elapsed_ms:35000,visibility:'hidden',private_field:'MUST-NOT-EXPORT'}]
     }}));
   }};
   const context=vm.createContext({window,location:{origin:'https://staging.compliance-express.com'},
@@ -49,6 +49,8 @@ test('trial stage diagnostics preserve results and export public fields only',{s
     const mature=await exercise({state,commands:1});assert.ifError(mature.error);
     assert.equal(mature.result.status,'Delinquent');assert.equal(mature.advance,1);
     assert.equal(mature.stages.filter(s=>s.stage==='browser query returned').length,1);
+    assert.equal(mature.stages.find(s=>s.stage==='browser query returned').page_visibility,'hidden');
+    if(state==='IL')assert.deepEqual(JSON.parse(JSON.stringify(mature.stages.find(s=>s.stage==='browser query returned').il_dom)),[{phase:'results',event:'incomplete',elapsed_ms:35000,visibility:'hidden'}]);
     const publicStages=JSON.stringify(mature.stages);
     for(const secret of ['MUST-NOT-EXPORT','test-only','test@example.invalid','check_token','private_field'])assert.ok(!publicStages.includes(secret),state+': '+secret);
     assert.equal(mature.stages.find(s=>s.stage==='browser query started').query.orgName,'Variant 0');

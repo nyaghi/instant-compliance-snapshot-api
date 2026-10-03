@@ -1,12 +1,34 @@
 /* Public-registry transport in the existing connector; no independent runtime. */
 const registryOrigin = state => ({IL:"https://charitable.illinoisattorneygeneral.gov",GA:"https://verify.sos.ga.gov",AL:"https://ago.igovsolution.net",NC:"https://www.sosnc.gov",NV:"https://orion.nv.gov",TN:"https://tncab.tnsos.gov",NM:"https://secure.nmdoj.gov"})[state];
 const registryStart = state => registryOrigin(state) + ({IL:"/search",GA:"/verification/Search.aspx?facility=Y",AL:"/online/Lookups/Business.aspx",NC:"/online_services/search/by_title/search_charities",NV:"/portal/public/#/public/nvsos/en/CaseXscreen?screen=external-GenericFilingsSearch&tabRoute=business",TN:"/portal/registered-charities-search",NM:"/CharitySearch/"})[state];
+async function registryTrialWindowOptions(job, origin) {
+  const options={type:'normal',focused:false},source=new URL(origin.url);
+  // Explicit lab diagnostic only. An active tab in an occluded window can
+  // still be hidden. Compare four visible, non-overlapping collector windows
+  // without changing ordinary app behavior or moving any existing window.
+  if(!P.TRIAL_ORIGIN || source.origin!==P.TRIAL_ORIGIN
+      || source.pathname!=='/connector/final-four-validation.html'
+      || source.searchParams.get('collector_layout')!=='visible')return options;
+  const slot=['NV','NY','IL','NC'].indexOf(job.registryState);
+  if(slot<0)return options;
+  const bounds=await chrome.windows.get(origin.windowId);
+  if(!['left','top','width','height'].every(k=>Number.isFinite(bounds?.[k]))
+      || bounds.width<1080 || bounds.height<700 || bounds.state==='minimized')
+    throw new Error('NY_CONNECTOR_VISIBLE_LAYOUT_UNAVAILABLE');
+  if(job.closed || Date.now()>=job.activeExpiresAt)throw new Error('NY_CONNECTOR_INTERRUPTED');
+  const current=await chrome.tabs.get(origin.id);
+  if(current.windowId!==origin.windowId || current.url!==origin.url)
+    throw new Error('NY_CONNECTOR_VISIBLE_LAYOUT_UNAVAILABLE');
+  const width=Math.floor((bounds.width-24)/2),height=Math.floor((bounds.height-24)/2);
+  return {...options,focused:true,state:'normal',width,height,
+    left:bounds.left+8+(slot%2)*(width+8),top:bounds.top+8+Math.floor(slot/2)*(height+8)};
+}
 async function registryCreateOwnedTab(job,url,origin) {
   let tab;
-  // Isolate active-page requirements without taking the user's focus or
-  // another registry's active tab. Ordinary installed connectors stay exact.
+  // Ordinary trial isolation preserves focus. Only the explicit validation
+  // comparison above arranges visible windows. Mature connectors stay exact.
   if(P.TRIAL_ORIGIN && ['NV','NY','IL','NC'].includes(job.registryState) && new URL(origin.url).origin===P.TRIAL_ORIGIN){
-    const window=await chrome.windows.create({url,type:'normal',focused:false});
+    const window=await chrome.windows.create({url,...await registryTrialWindowOptions(job,origin)});
     tab=window?.tabs?.[0];
     if(!Number.isInteger(tab?.id))throw new Error('NY_CONNECTOR_INCOMPLETE');
   } else tab=await chrome.tabs.create({windowId:origin.windowId,url,active:false});
@@ -110,7 +132,7 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
       }
       if(job.registryState==='NM' && value?.source_failure==='REGISTRY_NM_SOURCE_ERROR')
         throw new Error('NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR');
-      if(job.registryState==='NV'&&value?.nv_readiness)job.nvReadiness=value.nv_readiness;
+      if(job.registryState==='NV'&&value?.nv_readiness)job.nvReadiness={...value.nv_readiness,page_visibility:value.page_visibility||'unknown'};
       // Fast readiness polls never leave registryMessage's visibility timer
       // pending long enough to fire. Recover a stalled initial form using the
       // same owned-tab lease as detail commands, without a request or reload.
