@@ -620,26 +620,38 @@ test('verified detail navigation closes only owned detail tabs and releases queu
 
 module.exports={harness,tick,id};
 
-for(const scenario of ['success','rejected-again','verify-fails','late','mature'])test(`NY detail authorization recovery remains bounded: ${scenario}`,async()=>{
+for(const scenario of ['success','rejected-again','verify-fails','late','mature','stale-form','missing-record','cancel-on-reload'])test(`NY detail authorization recovery remains bounded: ${scenario}`,async()=>{
  const trialOrigin=scenario==='mature'?null:'https://fixture-final-four.onrender.com';
  const h=harness({trialOrigin});if(trialOrigin)h.tabs.get(1).url=trialOrigin;
- let searches=0,verifications=0,backs=0,opens=0;const deadlines=[];
+ let searches=0,verifications=0,backs=0,opens=0,reloads=0;const deadlines=[];let p;
+ h.chrome.tabs.reload=async tab=>{
+  assert.equal(h.tabs.get(tab).url,'https://charities-search.ag.ny.gov/RegistrySearch');
+  assert.ok(h.created.includes(tab));reloads++;
+  if(scenario==='cancel-on-reload'){p.onMessage.emit({action:'finish',id:id(12)});await tick();}
+ };
  h.chrome.tabs.sendMessage=async(tab,m)=>{
-  if(m.action==='ready')return {ready:true,url:h.tabs.get(tab).url,documentId:String(opens)+String(backs)};
+  if(m.action==='ready')return {ready:true,url:h.tabs.get(tab).url,documentId:[opens,backs,scenario==='stale-form'?0:reloads].join(':')};
   if(m.action==='back-to-results'){backs++;h.tabs.get(tab).url='https://charities-search.ag.ny.gov/RegistrySearch';return {ok:true};}
-  if(m.action==='open-detail'){opens++;h.tabs.get(tab).url='https://charities-search.ag.ny.gov/RegistrySearch/'+m.query.orgID;return {ok:true};}
-  if(m.action==='verify'){verifications++;assert.equal(m.verificationRetryUsed,true);return scenario==='verify-fails'?{ok:false,reason:'NY_CONNECTOR_VERIFICATION_REJECTED'}:{ok:true,evidence:{verified:true}};}
+  if(m.action==='open-detail'){if(reloads&&scenario==='missing-record')return {ok:false,reason:'NY_CONNECTOR_DETAIL_LINK_MISSING'};opens++;h.tabs.get(tab).url='https://charities-search.ag.ny.gov/RegistrySearch/'+m.query.orgID;return {ok:true};}
+  // Browser Back restores the already-verified form: its button says
+  // "Verified", so forcing "Verify" there fails before any new request.
+  if(m.action==='verify'){verifications++;assert.equal(m.verificationRetryUsed,true);return !reloads?{ok:false,reason:'NY_CONNECTOR_VERIFY_BUTTON_TIMEOUT'}:scenario==='verify-fails'?{ok:false,reason:'NY_CONNECTOR_VERIFICATION_REJECTED'}:{ok:true,evidence:{verified:true}};}
   searches++;deadlines.push(h.data.session.ccnyRuntime.queue[0].activeExpiresAt);
   return searches===2&&scenario==='success'?{ok:true,evidence:{query:m.query}}:{ok:false,reason:'NY_CONNECTOR_DETAIL_UNAUTHORIZED'};
  };
- const p=h.connect();await tick();if(scenario==='late')await h.advance(286000);
+ p=h.connect();await tick();if(scenario==='late')await h.advance(286000);
  let result=await h.query(p,11,{orgID:'12-34-56'});await tick();
+ if(['stale-form','cancel-on-reload'].includes(scenario))await h.advance(10000);
  result=p.messages.find(m=>m.id===id(11)&&!m.progress);
+ if(scenario==='cancel-on-reload'){assert.equal(result,undefined);assert.equal(verifications,0);assert.equal(searches,1);return;}
  assert.equal(result?.ok,scenario==='success');
- assert.equal(verifications,['mature','late'].includes(scenario)?0:1);
+ assert.equal(verifications,['mature','late','stale-form'].includes(scenario)?0:1);
+ assert.equal(reloads,['mature','late'].includes(scenario)?0:1);
  assert.equal(searches,scenario==='success'||scenario==='rejected-again'?2:1);
  assert.equal(h.repairs.length,0);assert.ok(h.tabs.has(2));
  if(scenario==='verify-fails')assert.equal(result.reason,'NY_CONNECTOR_VERIFICATION_REJECTED');
+ else if(scenario==='stale-form')assert.equal(result.reason,'NY_CONNECTOR_DETAIL_RESPONSE_TIMEOUT');
+ else if(scenario==='missing-record')assert.equal(result.reason,'NY_CONNECTOR_DETAIL_LINK_MISSING');
  else if(scenario!=='success')assert.equal(result.reason,'NY_CONNECTOR_DETAIL_UNAUTHORIZED');
  assert.ok(deadlines.length);assert.ok(deadlines.every(value=>value===310000));
 });

@@ -376,14 +376,23 @@ async function performSearch(job, query, id) {
             && Object.hasOwn(query, "orgID") && !job.detailAuthRetryUsed && !job.verificationRetryUsed
             && job.activeExpiresAt - Date.now() > 15000) {
           // A successful search can be followed by an expired detail session.
-          // Return to its observed result list, click normal Verify once, and
-          // reopen the same public ID link. Never erase cookies/user pages,
+          // Return to its observed result list, renew the owned form, click
+          // normal Verify once, and reopen the same public ID link. Browser
+          // Back restores a "Verified" form whose Verify button is absent.
+          // Never erase cookies/user pages,
           // reset the shared verification budget, or retry another rejection.
           job.detailAuthRetryUsed = true; job.verificationRetryUsed = true;
           await saveRuntime();
           const returned = await chrome.tabs.sendMessage(job.tab, {action:"back-to-results"}, {frameId:0});
           if (!returned?.ok) break;
           await waitForRegistryDocument(job, "/RegistrySearch");
+          if (job.closed || Date.now() >= job.activeExpiresAt) return;
+          const formTab = job.tab;
+          const priorForm = await chrome.tabs.sendMessage(formTab, {action:"ready"}, {frameId:0});
+          if (job.closed || job.tab !== formTab || !owned.has(formTab) || Date.now() >= job.activeExpiresAt) return;
+          if (!priorForm?.documentId) throw new Error("NY_CONNECTOR_DETAIL_RESPONSE_TIMEOUT");
+          await chrome.tabs.reload(formTab);
+          await waitForRegistryDocument(job, "/RegistrySearch", priorForm.documentId);
           if (job.closed || Date.now() >= job.activeExpiresAt) return;
           const verified = await chrome.tabs.sendMessage(job.tab, {action:"verify", id,
             attempt:`${attempt}:detail-auth`, verificationRetryUsed:true}, {frameId:0});
