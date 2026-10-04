@@ -117,3 +117,37 @@ test('NV inactive-browser recovery cancels for an active user page or a context 
   assert.equal(changes.length,0,condition);
  }
 });
+
+test('NV inactive-browser recovery focuses in place when the source has no usable layout',async()=>{
+ const {h,job,changes,bounds}=await setup('NV');Object.assign(bounds,{width:560,height:400});
+ h.chrome.tabs.sendMessage=async()=>({}); // Display/work-area response unavailable.
+ h.tabs.set(4,{id:4,windowId:30,url:'https://example.org/user-page',active:true});
+ h.chrome.windows.getLastFocused=async()=>({id:30,focused:false});
+ const snapshot=await h.context.registryNevadaVisibleSnapshot(job);
+ assert.ok(snapshot);assert.equal(snapshot.coordinatedPlacement,null);assert.equal(snapshot.inactiveBrowser,true);
+ await h.context.registryNevadaMakeVisible(job,snapshot);
+ assert.deepEqual(changes,[{id:20,focused:true}]);
+ assert.equal(job.activeExpiresAt,70000);assert.equal(h.queries.length,0);
+ assert.equal(job.nvInactiveBrowserActivationUsed,true);
+ await h.context.registryRestoreNevadaVisibility(job);assert.equal(changes.length,1);
+});
+
+test('NV focus-in-place still refuses minimized, shared, canceled and changed contexts',async()=>{
+ for(const condition of ['source-minimized','nv-minimized','shared','source-moved','source-navigated','nv-navigated','focus-changed','expired','closed']){
+  const {h,job,changes,bounds}=await setup('NV');Object.assign(bounds,{width:560,height:400});
+  h.chrome.tabs.sendMessage=async()=>({});
+  h.tabs.set(4,{id:4,windowId:30,url:'https://example.org/user-page',active:true});
+  h.chrome.windows.getLastFocused=async()=>({id:30,focused:false});
+  const snapshot=await h.context.registryNevadaVisibleSnapshot(job);assert.ok(snapshot);
+  if(condition==='source-minimized')h.chrome.windows.get=async id=>({id,...bounds,state:id===10?'minimized':'normal'});
+  if(condition==='nv-minimized')h.chrome.windows.get=async id=>({id,...bounds,state:id===20?'minimized':'normal'});
+  if(condition==='shared')h.tabs.set(5,{id:5,windowId:20,url:'https://example.org/shared',active:false});
+  if(condition==='source-moved')h.tabs.get(1).windowId=99;
+  if(condition==='source-navigated')h.tabs.get(1).url='https://example.org/';
+  if(condition==='nv-navigated')h.tabs.get(3).url='https://example.org/';
+  if(condition==='focus-changed')h.chrome.windows.getLastFocused=async()=>({id:30,focused:true});
+  if(condition==='expired')job.activeExpiresAt=0;
+  if(condition==='closed')job.closed=true;
+  await h.context.registryNevadaMakeVisible(job,snapshot);assert.equal(changes.length,0,condition);
+ }
+});

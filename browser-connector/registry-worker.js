@@ -131,12 +131,13 @@ async function registryNevadaVisibleSnapshot(job) {
       // not foreground at all. An explicit trial may expose its own isolated
       // collector once in that case, without touching/restoring that old tab.
       const inactiveBrowser=focus.focused===false && prior?.active===true
-        && !job.nvInactiveBrowserActivationUsed && !!coordinatedPlacement;
+        && !job.nvInactiveBrowserActivationUsed;
       if(!registryNevadaOwnedForeground(prior,source) && !inactiveBrowser){
         job.nvVisibilityOutcome='user_window_or_tab';
         registryNevadaDiagnostic(job,'visibility-snapshot-refused',{
           prior_present:!!prior,prior_active:prior?.active===true,prior_owned:!!prior&&owned.has(prior.id),
-          prior_is_source:prior?.id===source.id,browser_focused:focus.focused===true});
+          prior_is_source:prior?.id===source.id,browser_focused:focus.focused===true,
+          coordinated_placement:!!coordinatedPlacement,inactive_activation_used:!!job.nvInactiveBrowserActivationUsed});
         return null;
       }
       // Starting an explicit trial already creates focused collector windows.
@@ -179,7 +180,7 @@ async function registryNevadaExposeWindow(job,previous) {
   const ownedTransition=prior?.id!==previous.id && registryNevadaOwnedForeground(prior,source)
     && owned.has(prior.id);
   const inactiveBrowser=previous.inactiveBrowser===true && focus.focused===false
-    && !job.nvInactiveBrowserActivationUsed && !!previous.coordinatedPlacement
+    && !job.nvInactiveBrowserActivationUsed
     && prior?.active===true && prior.id===previous.id && prior.url===previous.url;
   if(!tab.active || tab.windowId!==previous.nvWindowId || tab.windowId===source.windowId
       || source.windowId!==previous.sourceWindowId || source.url!==previous.sourceUrl
@@ -188,7 +189,7 @@ async function registryNevadaExposeWindow(job,previous) {
       || (!ownedTransition && (prior?.id!==previous.id || prior.url!==previous.url))
       || (!registryNevadaOwnedForeground(prior,source) && !inactiveBrowser) || nv.state==='minimized' || bounds.state==='minimized'
       || !['left','top','width','height'].every(k=>Number.isFinite(bounds[k]))
-      || !previous.coordinatedPlacement && (bounds.width<1000 || bounds.height<700)
+      || !inactiveBrowser && !previous.coordinatedPlacement && (bounds.width<1000 || bounds.height<700)
       || job.closed || Date.now()>=job.activeExpiresAt || job.tab!==tab.id || !owned.has(tab.id)){
     job.nvVisibilityOutcome='ownership_or_geometry_changed';
     registryNevadaDiagnostic(job,'visibility-refused',{
@@ -218,12 +219,14 @@ async function registryNevadaExposeWindow(job,previous) {
   job.nvVisibilityAttempted=true;job.nvPreviousVisible=restore;
   if(inactiveBrowser)job.nvInactiveBrowserActivationUsed=true;
   // An already tiled collector must keep its footprint, not expand over peers.
-  const placement=previous.coordinatedPlacement || {focused:true,state:'normal',width,height,
-    left:bounds.left+bounds.width-width-8,top:bounds.top+bounds.height-height-8};
+  // Missing layout information must not block exposure of an already owned
+  // isolated collector. Focus in place: no guessed geometry or other windows.
+  const placement=previous.coordinatedPlacement || (inactiveBrowser?{focused:true}:{focused:true,state:'normal',width,height,
+    left:bounds.left+bounds.width-width-8,top:bounds.top+bounds.height-height-8});
   await chrome.windows.update(tab.windowId,placement);
   diagnostic('nv-visibility',job,'owned separate window; same document and deadline');
   job.nvVisibilityOutcome=inactiveBrowser?'activated_from_inactive_browser':ownedTransition?'activated_after_owned_transition':'activated_separate_window';
-  registryNevadaDiagnostic(job,'visibility-activated',{inactive_browser:inactiveBrowser});
+  registryNevadaDiagnostic(job,'visibility-activated',{inactive_browser:inactiveBrowser,kept_existing_bounds:inactiveBrowser&&!previous.coordinatedPlacement});
   await saveRuntime();return restore;
 }
 async function registryNevadaMakeVisible(job, initialVisible) {
