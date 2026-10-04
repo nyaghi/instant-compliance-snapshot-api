@@ -170,6 +170,23 @@ async function registryNevadaMakeVisible(job, initialVisible) {
 }
 async function registryMessage(job, message) {
   if (job.closed || Date.now() >= job.activeExpiresAt) throw new Error("NY_CONNECTOR_TIMEOUT");
+  // Search and detail are separate hydration steps. Another owned collector
+  // may cover NV between them; allow one fresh guarded visibility check at
+  // the first detail, never a repeated focus loop or a new request/deadline.
+  if (P.TRIAL_ORIGIN && job.registryState==='NV' && message.action==='registry-nv'
+      && message.query?.operation==='detail' && !job.nvDetailVisibilityChecked) {
+    job.nvDetailVisibilityChecked=true;
+    if(job.nvVisibilityAttempted && owned.has(job.tab)) {
+      try {
+        const tab=await chrome.tabs.get(job.tab);
+        if(new URL(tab.url).origin===registryOrigin('NV')) {
+          const state=await chrome.tabs.sendMessage(job.tab,{action:'registry-ready'},{frameId:0});
+          if(state?.page_visibility==='hidden')job.nvVisibilityAttempted=false;
+        }
+      } catch { /* Observation failure must not prevent the original detail. */ }
+    }
+    await saveRuntime();
+  }
   const send=async()=>{
     const tab = await chrome.tabs.get(job.tab);
     if (new URL(tab.url).origin !== registryOrigin(job.registryState)) throw new Error("NY_CONNECTOR_INCOMPLETE");
@@ -256,6 +273,10 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
           if(job.ncSubmissionObservations.length<8)job.ncSubmissionObservations.push(entry);
           else job.ncSubmissionObservations[7]=entry;
         }
+        // A rejected request is not an idle form awaiting a second click.
+        if (Array.isArray(observed.requests) && observed.requests.some(request =>
+            request?.search_route===true && request.status===429))
+          throw new Error('NY_CONNECTOR_NC_RATE_LIMITED');
       }
       if(job.registryState==='NM' && value?.source_failure==='REGISTRY_NM_SOURCE_ERROR')
         throw new Error('NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR');
@@ -299,7 +320,7 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
           && value.documentId===oldDocument && new URL(value.url).pathname==='/online_services/search/by_title/search_charities')
         throw new Error('NY_CONNECTOR_NC_SEARCH_NOT_STARTED');
     } catch(error) {
-      if(['NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR','NY_CONNECTOR_NC_SEARCH_NOT_STARTED'].includes(error?.message))throw error;
+      if(['NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR','NY_CONNECTOR_NC_SEARCH_NOT_STARTED','NY_CONNECTOR_NC_RATE_LIMITED'].includes(error?.message))throw error;
       // The public challenge can precede content-script readiness. Its visible
       // tab title is sufficient to describe a pending verification, not a result.
       if (job.registryState==='NC') try {

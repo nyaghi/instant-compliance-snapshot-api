@@ -16,6 +16,13 @@
     for (const respond of task.responders) try { respond(response); } catch { /* Previous worker has exited. */ }
   }
   window.addEventListener("message", event => {
+    if(event.source===window && event.origin===NY && event.data?.channel==='cc-ny-page-v1'
+        && event.data.direction==='diagnostic' && pending && event.data.id===pending.id) {
+      // The worker revalidates sender ownership and sanitizes this payload.
+      if(Array.isArray(event.data.ny_diagnostics))chrome.runtime.sendMessage({action:'ny-diagnostic',
+        id:pending.id,ny_diagnostics:event.data.ny_diagnostics.slice(-1)}).catch(()=>{});
+      return;
+    }
     if (event.source !== window || event.origin !== NY || event.data?.channel !== "cc-ny-page-v1" || event.data.direction !== "response") return;
     if (!pending || event.data.id !== pending.id) return;
     finish(pending, { ...(event.data.ok ? { ok: true, evidence: event.data.evidence } : { ok: false, reason: event.data.reason }), verificationRetryUsed: event.data.verificationRetryUsed === true, ...(Array.isArray(event.data.ny_diagnostics) ? {ny_diagnostics:event.data.ny_diagnostics.slice(-32)} : {}) });

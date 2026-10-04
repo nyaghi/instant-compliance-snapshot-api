@@ -7,11 +7,13 @@ const {webcrypto} = require('node:crypto');
 const source = fs.readFileSync(process.env.CC_TEST_CONNECTOR_SOURCE || path.join(__dirname,'../web-staging/ny-connector.js'),'utf8');
 const capabilities = ['lookup-tab-v1','verification-retry-v1','search-verification-retry-v1','search-schema-errors-v1','nullable-ein-v1','queue-v1','connection-recovery-v1','recovery-causes-v1','cleanup-ack-v1','timeout-recovery-v1','resume-v1','verified-detail-v1','detail-navigation-v1','il-ga-public-dom-v1','il-ga-complete-search-v2','il-session-reuse-v1','il-large-pages-v1','ga-exempt-record-v1','ga-legacy-rows-v1'];
 
-async function exercise({state='GA',commands=42,elapsedPerCommand=100,stopStatus='Delinquent',missedPings=0,incompatible=false,oldIllinois=false,nyFailureCause=null}={}) {
+async function exercise({state='GA',commands=42,elapsedPerCommand=100,stopStatus='Delinquent',missedPings=0,incompatible=false,oldIllinois=false,nyFailureCause=null,abortCheckpoint=false}={}) {
+  const controller=new AbortController();
   const actions=[],stages=[];let advance=0,clock=0,listener,pings=0;
   const window={addEventListener:(kind,fn)=>{if(kind==='message')listener=fn;},postMessage(message){
     actions.push(message.action);
     if(message.action==='ping' && ++pings<=missedPings)return;
+    if(message.action==='search')queueMicrotask(()=>listener({source:window,origin:'https://staging.compliance-express.com',data:{...message,direction:'response',progress:true,ny_diagnostics:[{stage:'verify',event:'click',elapsed_ms:1,visibility:'hidden',token:'MUST-NOT-EXPORT'}]}}));
     queueMicrotask(()=>listener({source:window,origin:'https://staging.compliance-express.com',data:{
       ...message,direction:'response',ok:true,version:oldIllinois?'0.5.8':'0.5.9',capabilities:incompatible?[]:[...capabilities,'final-four-public-v1',...(oldIllinois?[]:['il-dom-events-v1'])],evidence:{complete:true,rows:[]},page_visibility:'hidden',ny_failure_cause:nyFailureCause,ny_reset_cooldown:true,ny_diagnostics:[{stage:'verify',event:'response',elapsed_ms:15,http_status:401,verified:false,payload_type:'object',visibility:'hidden',error_codes:['timeout-or-duplicate','MUST-NOT-EXPORT'],token:'MUST-NOT-EXPORT'}],diagnostics:[{phase:'results',event:'incomplete',elapsed_ms:35000,visibility:'hidden',private_field:'MUST-NOT-EXPORT'}]
     }}));
@@ -32,7 +34,7 @@ async function exercise({state='GA',commands=42,elapsedPerCommand=100,stopStatus
     }});
   vm.runInContext(source,context);
   let result,error;
-  try {result=await window.CCNYConnector.lookup({state,organization_name:'Example Foundation',ein:'12-3456789',email:'test@example.invalid',admin_passcode:'test-only',device_id:'test-only',onProgress:(_message,stage)=>{if(stage)stages.push(stage);}});}
+  try {result=await window.CCNYConnector.lookup({state,organization_name:'Example Foundation',ein:'12-3456789',email:'test@example.invalid',admin_passcode:'test-only',device_id:'test-only',signal:controller.signal,onProgress:(_message,stage)=>{if(stage)stages.push(stage);if(abortCheckpoint&&stage?.stage==='browser stage')controller.abort();}});}
   catch(e){error=e;}
   return {result,error,advance,actions,stages};
 }
@@ -193,4 +195,18 @@ test('persistent cleanup interruption cannot acquire a fresh job or loop',async(
   assert.equal(r.result.status,'Unable to Confirm');assert.equal(r.result.reason,'NY_CONNECTOR_INTERRUPTED');
   assert.equal(r.searches.length,1);assert.equal(r.actions.filter(a=>a.action==='acquire').length,1);
   assert.equal(r.actions.filter(a=>a.action==='finish').length,3); // two bounded attempts and final cleanup
+});
+
+test('trial frontend saves checkpoint before completed response',{skip:!process.env.CC_TEST_CONNECTOR_SOURCE},async()=>{
+ const r=await exercise({state:'NY',commands:1});
+ const before=r.stages.findIndex(s=>s.stage==='browser stage');
+ const after=r.stages.findIndex(s=>s.stage==='browser query returned');
+ assert.ok(before>=0&&before<after);assert.equal(r.advance,1);
+ assert.ok(!JSON.stringify(r.stages).includes('MUST-NOT-EXPORT'));
+});
+
+test('trial NY checkpoint survives cancellation without accepting a late result',{skip:!process.env.CC_TEST_CONNECTOR_SOURCE},async()=>{
+ const r=await exercise({state:'NY',commands:1,abortCheckpoint:true});
+ assert.ok(r.error);assert.equal(r.result,undefined);assert.equal(r.advance,0);
+ assert.ok(r.stages.some(s=>s.stage==='browser stage'));assert.ok(r.actions.includes('finish'));
 });

@@ -65,7 +65,7 @@ function collectNyDiagnostics(job, response) {
   if(P.TRIAL_ORIGIN && job.registryState === "NY")
     job.nyDiagnostics=P.nyDiagnostics([...(job.nyDiagnostics||[]),...P.nyDiagnostics(response?.ny_diagnostics)]);
 }
-const runtimeState = () => ({ schema: 2, nextStart, laneStarts: Object.fromEntries(laneStarts), ownedTabs: [...owned], diagnostics: [...diagnostics], queue: allJobs().filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, expiresAt: j.expiresAt, active: isActive(j), activeExpiresAt: j.activeExpiresAt, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, detailRetryUsed: j.detailRetryUsed, detailAuthRetryUsed: j.detailAuthRetryUsed, nyLastSearchQuery: j.nyLastSearchQuery, nyDiagnostics: P.nyDiagnostics(j.nyDiagnostics), retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.registryState === "AL" ? null : j.command, lastResponse: j.registryState === "AL" ? null : j.lastResponse, queryRepaired: j.queryRepaired, nyFreshPageRecoveryOnly: j.nyFreshPageRecoveryOnly, nvReturnRecoveryUsed: j.nvReturnRecoveryUsed, ...(P.TRIAL_ORIGIN && j.registryState === "NV" ? {nvVisibilityAttempted:j.nvVisibilityAttempted,nvPreviousVisible:j.nvPreviousVisible} : {}) })) });
+const runtimeState = () => ({ schema: 2, nextStart, laneStarts: Object.fromEntries(laneStarts), ownedTabs: [...owned], diagnostics: [...diagnostics], queue: allJobs().filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, expiresAt: j.expiresAt, active: isActive(j), activeExpiresAt: j.activeExpiresAt, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, detailRetryUsed: j.detailRetryUsed, detailAuthRetryUsed: j.detailAuthRetryUsed, nyLastSearchQuery: j.nyLastSearchQuery, nyDiagnostics: P.nyDiagnostics(j.nyDiagnostics), retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.registryState === "AL" ? null : j.command, lastResponse: j.registryState === "AL" ? null : j.lastResponse, queryRepaired: j.queryRepaired, nyFreshPageRecoveryOnly: j.nyFreshPageRecoveryOnly, nvReturnRecoveryUsed: j.nvReturnRecoveryUsed, ...(P.TRIAL_ORIGIN && j.registryState === "NV" ? {nvVisibilityAttempted:j.nvVisibilityAttempted,nvDetailVisibilityChecked:j.nvDetailVisibilityChecked,nvPreviousVisible:j.nvPreviousVisible} : {}) })) });
 function saveRuntime() {
   keepAlive();
   if (!allJobs().length && keepAliveTimer) { clearTimeout(keepAliveTimer); keepAliveTimer = null; }
@@ -428,7 +428,9 @@ async function performSearch(job, query, id) {
       }
       let documentLimited = false;
       try {
+        if(P.TRIAL_ORIGIN)post(job,{id,progress:true,ny_phase:"opening_page"});
         await lookupTab(job);
+        if(P.TRIAL_ORIGIN)post(job,{id,progress:true,ny_phase:"waiting_for_form"});
         try { await ready(job); }
         catch (error) { documentLimited = error.message === "NY_CONNECTOR_RATE_LIMITED"; throw error; }
         const current = await chrome.tabs.get(job.tab), url = new URL(current.url);
@@ -441,11 +443,13 @@ async function performSearch(job, query, id) {
           if(!returned?.ok)throw new Error('NY_CONNECTOR_RETURN_FORM_TIMEOUT');
           await waitForRegistryDocument(job,'/RegistrySearch');
         }
+        if(P.TRIAL_ORIGIN)post(job,{id,progress:true,ny_phase:"preparing_query"});
         await prepareNySearchForm(job,query);
         if (job.closed) return;
         const generation = job.generation;
         // Stable across reconnection, distinct for an already permitted retry.
         const attempt = `${job.generation}:${job.rateRetries}`;
+        if(P.TRIAL_ORIGIN)post(job,{id,progress:true,ny_phase:"query_sent"});
         response = await chrome.tabs.sendMessage(job.tab, { action: "search", id, attempt, query, verificationRetryUsed: job.verificationRetryUsed }, { frameId: 0 });
         if (job.closed || generation !== job.generation) return;
         collectNyDiagnostics(job,response);
@@ -637,6 +641,17 @@ chrome.tabs.onRemoved.addListener(id => {
   }
 });
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
+  if(P.TRIAL_ORIGIN && message?.action==='ny-diagnostic') {
+    if(sender.id!==chrome.runtime.id || sender.frameId!==0 || !nyRegistryPage(sender.url)
+        || !P.validId(message.id))return false;
+    const job=allJobs().find(job=>isActive(job)&&!job.closed&&job.registryState==='NY'
+      && job.tab===sender.tab?.id && owned.has(job.tab) && job.pending===message.id);
+    if(!job)return false;
+    const entries=P.nyDiagnostics(message.ny_diagnostics).slice(-1);
+    if(job.nyDiagnosticCommand!==message.id){job.nyDiagnosticCommand=message.id;job.nyDiagnosticCount=0;}
+    if(entries.length && job.nyDiagnosticCount++<32)post(job,{id:message.id,progress:true,ny_diagnostics:entries});
+    return false;
+  }
   if (!allowedSender(sender) || !P.validId(message?.id) || message.action !== "ping") return false;
   boot.then(() => respond({ ok: true, version: chrome.runtime.getManifest().version, capabilities: ["lookup-tab-v1", "verification-retry-v1", "search-verification-retry-v1", "search-schema-errors-v1", "nullable-ein-v1", "queue-v1", "origin-window-v1", "connection-recovery-v1", "recovery-causes-v1", "cleanup-ack-v1", "timeout-recovery-v1", "resume-v1", "verified-detail-v1", "detail-navigation-v1", "il-ga-public-dom-v1", "ga-exempt-record-v1", "ga-legacy-rows-v1", "il-ga-complete-search-v2", "il-session-reuse-v1", "il-large-pages-v1", "il-dom-events-v1", "il-verification-visibility-v1", ...(P.TRIAL_ORIGIN ? ["final-four-public-v1"] : [])], recovery: { phase: repair.phase || "idle", nextAllowedAt: repair.nextAllowedAt || 0, verifiedAt: repair.finishedAt || 0 } }), () => respond({ ok: false, reason: "NY_CONNECTOR_INTERRUPTED" }));
   return true;

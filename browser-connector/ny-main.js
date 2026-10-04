@@ -16,6 +16,8 @@
       payload_type:payload === null ? "non_json" : typeof payload === "object" && !Array.isArray(payload) ? "object" : "other",
       error_codes:codes,visibility:document.visibilityState}]));
     active.diagnostics=active.diagnostics.slice(-32);
+    window.postMessage({channel:'cc-ny-page-v1',direction:'diagnostic',id:active.id,
+      ny_diagnostics:P.nyDiagnostics(active.diagnostics.slice(-1))},P.NY);
   };
   const xhrMetadata = new WeakMap();
   const originalOpen = XMLHttpRequest.prototype.open;

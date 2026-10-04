@@ -90,3 +90,21 @@ test('NV isolated stalled command retains its deadline and restores after timeou
  const pending=assert.rejects(h.context.registryMessage(job,{action:'registry-nv',budgetMs:45000}),/NV_COMMAND_TIMEOUT/);
  await tick();await h.advance(60000);await pending;assert.deepEqual(changes.map(x=>x.id),[20,10]);assert.equal(job.activeExpiresAt,70000);
 });
+
+test('NV detail permits one new guarded visibility recovery after search, with no extra registry command',async()=>{
+ const {h,job,changes,focus}=await setup();job.nvVisibilityAttempted=true;focus(30);
+ let release,commands=0;
+ h.chrome.tabs.sendMessage=async(id,m)=>m.action==='registry-ready'?{page_visibility:'hidden'}:(commands++,new Promise(r=>release=r));
+ const pending=h.context.registryMessage(job,{action:'registry-nv',query:{operation:'detail'},budgetMs:45000});await tick();await h.advance(3000);
+ assert.equal(changes.length,1);assert.equal(job.nvDetailVisibilityChecked,true);assert.equal(commands,1);
+ release({ok:true});await pending;
+ focus(30);h.chrome.tabs.sendMessage=async()=>({ok:true});
+ await h.context.registryMessage(job,{action:'registry-nv',query:{operation:'detail'},budgetMs:45000});await h.advance(3000);
+ assert.equal(changes.length,1);assert.equal(job.activeExpiresAt,70000);
+});
+test('NV detail recovery preserves a user window switch',async()=>{
+ const {h,job,changes,focus}=await setup();job.nvVisibilityAttempted=true;focus(99);
+ h.chrome.tabs.sendMessage=async(id,m)=>m.action==='registry-ready'?{page_visibility:'hidden'}:{ok:true};
+ await h.context.registryMessage(job,{action:'registry-nv',query:{operation:'detail'},budgetMs:45000});await h.advance(3000);
+ assert.equal(changes.length,0);
+});
