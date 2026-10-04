@@ -55,6 +55,10 @@ async function registryTrialWindowOptions(job, origin) {
 }
 async function registryCreateOwnedTab(job,url,origin) {
   let tab;
+  if(P.TRIAL_ORIGIN && job.registryState==='NV' && job.nvSourceInitiallyMinimized===undefined) {
+    try {job.nvSourceInitiallyMinimized=(await chrome.windows.get(origin.windowId)).state==='minimized';}
+    catch {job.nvSourceInitiallyMinimized=false;}
+  }
   // Tennessee also needs its own visible document for Kendo modal transitions.
   // The mature connector and unrelated trial states retain their existing path.
   if(P.TRIAL_ORIGIN && (['NV','NY','IL','NC'].includes(job.registryState)
@@ -148,6 +152,7 @@ async function registryNevadaVisibleSnapshot(job) {
       return {mode:'window',id:prior.id,windowId:prior.windowId,url:prior.url,
         nvWindowId:tab.windowId,sourceWindowId:source.windowId,sourceUrl:source.url,
         browserFocused:focus.focused===true,coordinatedPlacement,
+        sourceWasMinimized:job.nvSourceInitiallyMinimized===true&&(await chrome.windows.get(source.windowId)).state==='minimized',
         inactiveBrowser:inactiveBrowser&&!registryNevadaOwnedForeground(prior,source)};
     }
   } catch {job.nvVisibilityOutcome='snapshot_unavailable';}
@@ -182,14 +187,17 @@ async function registryNevadaExposeWindow(job,previous) {
   const inactiveBrowser=previous.inactiveBrowser===true && focus.focused===false
     && !job.nvInactiveBrowserActivationUsed
     && prior?.active===true && prior.id===previous.id && prior.url===previous.url;
+  const minimizedSourceAllowed=job.nvSourceInitiallyMinimized===true
+    && previous.sourceWasMinimized===true && focus.focused===false;
   if(!tab.active || tab.windowId!==previous.nvWindowId || tab.windowId===source.windowId
       || source.windowId!==previous.sourceWindowId || source.url!==previous.sourceUrl
       || new URL(source.url).origin!==P.TRIAL_ORIGIN || new URL(tab.url).origin!==registryOrigin('NV')
       || !new URL(tab.url).pathname.startsWith('/portal/public/') || siblings.length!==1 || siblings[0].id!==tab.id
       || (!ownedTransition && (prior?.id!==previous.id || prior.url!==previous.url))
-      || (!registryNevadaOwnedForeground(prior,source) && !inactiveBrowser) || nv.state==='minimized' || bounds.state==='minimized'
+      || (!registryNevadaOwnedForeground(prior,source) && !inactiveBrowser) || nv.state==='minimized'
+      || bounds.state==='minimized' && !minimizedSourceAllowed
       || !['left','top','width','height'].every(k=>Number.isFinite(bounds[k]))
-      || !inactiveBrowser && !previous.coordinatedPlacement && (bounds.width<1000 || bounds.height<700)
+      || !inactiveBrowser && !minimizedSourceAllowed && !previous.coordinatedPlacement && (bounds.width<1000 || bounds.height<700)
       || job.closed || Date.now()>=job.activeExpiresAt || job.tab!==tab.id || !owned.has(tab.id)){
     job.nvVisibilityOutcome='ownership_or_geometry_changed';
     registryNevadaDiagnostic(job,'visibility-refused',{
@@ -221,12 +229,14 @@ async function registryNevadaExposeWindow(job,previous) {
   // An already tiled collector must keep its footprint, not expand over peers.
   // Missing layout information must not block exposure of an already owned
   // isolated collector. Focus in place: no guessed geometry or other windows.
-  const placement=previous.coordinatedPlacement || (inactiveBrowser?{focused:true}:{focused:true,state:'normal',width,height,
+  const placement=minimizedSourceAllowed?{focused:true}:previous.coordinatedPlacement || (inactiveBrowser?{focused:true}:{focused:true,state:'normal',width,height,
     left:bounds.left+bounds.width-width-8,top:bounds.top+bounds.height-height-8});
   await chrome.windows.update(tab.windowId,placement);
   diagnostic('nv-visibility',job,'owned separate window; same document and deadline');
   job.nvVisibilityOutcome=inactiveBrowser?'activated_from_inactive_browser':ownedTransition?'activated_after_owned_transition':'activated_separate_window';
-  registryNevadaDiagnostic(job,'visibility-activated',{inactive_browser:inactiveBrowser,kept_existing_bounds:inactiveBrowser&&!previous.coordinatedPlacement});
+  registryNevadaDiagnostic(job,'visibility-activated',{inactive_browser:inactiveBrowser,
+    kept_existing_bounds:minimizedSourceAllowed||inactiveBrowser&&!previous.coordinatedPlacement,
+    source_remains_minimized:minimizedSourceAllowed});
   await saveRuntime();return restore;
 }
 async function registryNevadaMakeVisible(job, initialVisible) {
@@ -309,7 +319,7 @@ async function registryMessage(job, message) {
 async function registryRestoreNevadaVisibility(job) {
   const previous=job.nvPreviousVisible;job.nvPreviousVisible=null;
   if (!P.TRIAL_ORIGIN || job.registryState!=='NV' || !previous || !owned.has(job.tab)) return;
-  if(previous.inactiveBrowser)return; // Never bring an unrelated stale Chrome tab forward.
+  if(previous.inactiveBrowser||previous.sourceWasMinimized)return; // Never restore unrelated or minimized source windows.
   try {
     const tab=await chrome.tabs.get(job.tab),prior=await chrome.tabs.get(previous.id);
     const source=await chrome.tabs.get(job.sender.tab.id);

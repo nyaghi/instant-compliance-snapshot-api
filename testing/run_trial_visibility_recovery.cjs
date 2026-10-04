@@ -151,3 +151,26 @@ test('NV focus-in-place still refuses minimized, shared, canceled and changed co
   await h.context.registryNevadaMakeVisible(job,snapshot);assert.equal(changes.length,0,condition);
  }
 });
+
+test('NV can focus its isolated collector when the source was already minimized at job start',async()=>{
+ const {h,job,changes,bounds}=await setup('NV');job.nvSourceInitiallyMinimized=true;
+ h.chrome.windows.get=async id=>({id,...bounds,state:id===10?'minimized':'normal'});
+ h.tabs.set(4,{id:4,windowId:30,url:'https://example.org/user-page',active:true});
+ h.chrome.windows.getLastFocused=async()=>({id:30,focused:false});
+ const snapshot=await h.context.registryNevadaVisibleSnapshot(job);
+ assert.equal(snapshot.sourceWasMinimized,true);
+ await h.context.registryNevadaMakeVisible(job,snapshot);
+ assert.deepEqual(changes,[{id:20,focused:true}]);
+ assert.equal(job.activeExpiresAt,70000);assert.equal(h.queries.length,0);
+ await h.context.registryRestoreNevadaVisibility(job);assert.equal(changes.length,1);
+});
+
+test('NV records initial minimized state before creating its isolated collector',async()=>{
+ for(const minimized of [true,false]) {
+  const {h,job,bounds}=await setup('NV');
+  h.chrome.windows.get=async id=>({id,...bounds,state:minimized?'minimized':'normal'});
+  h.chrome.windows.create=async options=>({id:40,tabs:[{id:9,windowId:40,url:options.url,active:true}]});
+  await h.context.registryCreateOwnedTab(job,h.tabs.get(3).url,h.tabs.get(1));
+  assert.equal(job.nvSourceInitiallyMinimized,minimized);assert.equal(job.tab,9);
+ }
+});
