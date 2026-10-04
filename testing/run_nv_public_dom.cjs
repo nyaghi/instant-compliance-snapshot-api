@@ -780,3 +780,22 @@ test('NV streams click and filing checkpoints with real frontend command IDs wit
  assert.equal(detail.evidence.filings.complete,false,'fixture has no filing table');
  assert.ok(messages.every(m=>m.id===diagnosticId&&!('name' in m.nv_diagnostic)&&!('identifier' in m.nv_diagnostic)));
 });
+
+
+test('NV trial detail completes without a filing table or history wait',async()=>{
+ const h=fixture({rows:observed.slice(0,2)}),messages=[];
+ h.context.chrome.runtime.sendMessage=async m=>messages.push(m);
+ const diagnosticId='abcdef0123456789abcdef0123456789';
+ await h.drive(h.api.handle({action:'registry-nv',diagnosticId,query:{state:'NV',operation:'search',name:'MAKE-A-WISH'},budgetMs:45000}));
+ const started=h.time;
+ const detail=await h.drive(h.api.handle({action:'registry-nv',diagnosticId,skipHistory:true,query:{state:'NV',operation:'detail',identifier:observed[1][1]},budgetMs:45000}));
+ assert.equal(detail.ok,true);assert.equal(detail.evidence.fields['NV Business ID'],observed[1][1]);
+ assert.ok(!('filings' in detail.evidence));assert.ok(h.time-started<35000);
+ assert.ok(!messages.some(m=>m.nv_diagnostic.phase.startsWith('filings-')));
+});
+
+test('NV trial history omission does not allow an unobserved business ID',async()=>{
+ const h=fixture({rows:observed.slice(0,2)});await h.search();
+ await assert.rejects(h.drive(h.api.nvDetail({state:'NV',operation:'detail',identifier:'NV99999999999'},45000,{skipHistory:true})),/DETAIL_NOT_OBSERVED/);
+ assert.equal(h.detailClicks,0);
+});

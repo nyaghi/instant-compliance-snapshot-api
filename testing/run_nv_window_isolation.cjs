@@ -159,3 +159,14 @@ test('NV diagnostic transport binds events to the owned active command and strip
  assert.equal(messages.length,1);assert.equal(messages[0].progress,true);
  assert.deepEqual(JSON.parse(JSON.stringify(messages[0].nv_diagnostic)),{phase:'detail-clicked',visibility:'hidden'});
 });
+
+
+test('only trial NV detail commands omit filing history',async()=>{
+ for(const [trial,state,operation,expected] of [[true,'NV','detail',true],[true,'NV','search',false],[false,'NV','detail',undefined],[true,'TN','detail',undefined]]){
+  const {h,job}=await setup(trial);job.registryState=state;job.tab=3;
+  h.tabs.set(3,{id:3,windowId:20,active:true,url:vm.runInContext(`registryStart('${state}')`,h.context)});
+  const messages=[];h.chrome.tabs.sendMessage=async(id,message)=>{messages.push(message);return {ok:true};};
+  await h.context.registryMessage(job,{action:'registry-'+state.toLowerCase(),query:{state,operation}});
+  assert.equal(messages.at(-1).skipHistory,expected);
+ }
+});

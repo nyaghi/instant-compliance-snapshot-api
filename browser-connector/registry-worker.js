@@ -214,7 +214,7 @@ async function registryMessage(job, message) {
   const send=async()=>{
     const tab = await chrome.tabs.get(job.tab);
     if (new URL(tab.url).origin !== registryOrigin(job.registryState)) throw new Error("NY_CONNECTOR_INCOMPLETE");
-    return chrome.tabs.sendMessage(job.tab, {...message,...(P.TRIAL_ORIGIN && job.registryState==='NV' && message.action==='registry-nv'?{diagnosticId:job.pending}:{})}, {frameId:0});
+    return chrome.tabs.sendMessage(job.tab, {...message,...(P.TRIAL_ORIGIN && job.registryState==='NV' && message.action==='registry-nv'?{diagnosticId:job.pending,skipHistory:message.query?.operation==='detail'}:{})}, {frameId:0});
   };
   if (job.registryState!=='NV' || !Number.isFinite(message.budgetMs)) return send();
   // Keep the overall job deadline as the transport bound. A second timer at

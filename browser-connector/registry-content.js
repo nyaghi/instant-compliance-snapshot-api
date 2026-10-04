@@ -619,7 +619,7 @@
     if(!wanted.every(k=>Object.hasOwn(fields,k))||fields['Entity Number']!==identifier||!fields['Reserved Name']||!fields.Status||!fields['Linked Entity Information'])return null;
     return fields;
   }
-  async function nvDetail(query, deadline) {
+  async function nvDetail(query, deadline, {skipHistory=false}={}) {
     if (query?.state !== 'NV' || query.operation !== 'detail' || !/^(?:NV\d+|(?:NR|C)\d{8}-\d+)$/.test(query.identifier)
         || Object.keys(query).sort().join(',') !== 'identifier,operation,state') throw new Error("REGISTRY_COMMAND_INVALID");
     const target = nvObserved.get(query.identifier), sourceQuery = nvLastSearch;
@@ -748,6 +748,8 @@
       return {query,complete:true,source_url:location.href,fields};
     }
     const evidence = {query,complete:true,source_url:location.href,fields};
+    // Trial scope uses the matched entity and displayed renewal date only.
+    if (skipHistory) return evidence;
     try {
       // ORION mounts the entity fields before its filing-history request has
       // rendered. Reading the table immediately can discard the solicitation
@@ -1442,7 +1444,7 @@
       const deadline = Date.now() + Math.min(maximum, Number.isFinite(m.budgetMs) && m.budgetMs > 0 ? m.budgetMs : 45000);
       nvDiagnosticId=typeof m.diagnosticId==='string' && /^[a-zA-Z0-9_-]{16,80}$/.test(m.diagnosticId)?m.diagnosticId:null;
       try {
-        const evidence = m.query?.operation === 'search' ? await nvSearch(m.query,deadline) : await nvDetail(m.query,deadline);
+        const evidence = m.query?.operation === 'search' ? await nvSearch(m.query,deadline) : await nvDetail(m.query,deadline,{skipHistory:m.skipHistory===true});
         return {ok:true,evidence};
       } finally {nvDiagnosticId=null;}
     }
