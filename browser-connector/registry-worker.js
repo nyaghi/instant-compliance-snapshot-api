@@ -134,7 +134,9 @@ async function registryNevadaVisibleSnapshot(job) {
       // getLastFocused can describe a stale, unrelated tab while Chrome is
       // not foreground at all. An explicit trial may expose its own isolated
       // collector once in that case, without touching/restoring that old tab.
-      const inactiveBrowser=focus.focused===false && prior?.active===true
+      const initialMinimized=job.nvSourceInitiallyMinimized===true
+        && (await chrome.windows.get(source.windowId)).state==='minimized';
+      const inactiveBrowser=(focus.focused===false||initialMinimized) && prior?.active===true
         && !job.nvInactiveBrowserActivationUsed;
       if(!registryNevadaOwnedForeground(prior,source) && !inactiveBrowser){
         job.nvVisibilityOutcome='user_window_or_tab';
@@ -152,7 +154,7 @@ async function registryNevadaVisibleSnapshot(job) {
       return {mode:'window',id:prior.id,windowId:prior.windowId,url:prior.url,
         nvWindowId:tab.windowId,sourceWindowId:source.windowId,sourceUrl:source.url,
         browserFocused:focus.focused===true,coordinatedPlacement,
-        sourceWasMinimized:job.nvSourceInitiallyMinimized===true&&(await chrome.windows.get(source.windowId)).state==='minimized',
+        sourceWasMinimized:initialMinimized,
         inactiveBrowser:inactiveBrowser&&!registryNevadaOwnedForeground(prior,source)};
     }
   } catch {job.nvVisibilityOutcome='snapshot_unavailable';}
@@ -184,11 +186,11 @@ async function registryNevadaExposeWindow(job,previous) {
   // Record the actual owned foreground so completion restores that collector.
   const ownedTransition=prior?.id!==previous.id && registryNevadaOwnedForeground(prior,source)
     && owned.has(prior.id);
-  const inactiveBrowser=previous.inactiveBrowser===true && focus.focused===false
+  const minimizedSourceAllowed=job.nvSourceInitiallyMinimized===true
+    && previous.sourceWasMinimized===true && bounds.state==='minimized';
+  const inactiveBrowser=previous.inactiveBrowser===true && (focus.focused===false||minimizedSourceAllowed)
     && !job.nvInactiveBrowserActivationUsed
     && prior?.active===true && prior.id===previous.id && prior.url===previous.url;
-  const minimizedSourceAllowed=job.nvSourceInitiallyMinimized===true
-    && previous.sourceWasMinimized===true && focus.focused===false;
   if(!tab.active || tab.windowId!==previous.nvWindowId || tab.windowId===source.windowId
       || source.windowId!==previous.sourceWindowId || source.url!==previous.sourceUrl
       || new URL(source.url).origin!==P.TRIAL_ORIGIN || new URL(tab.url).origin!==registryOrigin('NV')
@@ -234,7 +236,7 @@ async function registryNevadaExposeWindow(job,previous) {
   await chrome.windows.update(tab.windowId,placement);
   diagnostic('nv-visibility',job,'owned separate window; same document and deadline');
   job.nvVisibilityOutcome=inactiveBrowser?'activated_from_inactive_browser':ownedTransition?'activated_after_owned_transition':'activated_separate_window';
-  registryNevadaDiagnostic(job,'visibility-activated',{inactive_browser:inactiveBrowser,
+  registryNevadaDiagnostic(job,'visibility-activated',{inactive_browser:focus.focused===false,
     kept_existing_bounds:minimizedSourceAllowed||inactiveBrowser&&!previous.coordinatedPlacement,
     source_remains_minimized:minimizedSourceAllowed});
   await saveRuntime();return restore;

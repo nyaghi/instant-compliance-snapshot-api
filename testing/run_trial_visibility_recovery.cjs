@@ -174,3 +174,29 @@ test('NV records initial minimized state before creating its isolated collector'
   assert.equal(job.nvSourceInitiallyMinimized,minimized);assert.equal(job.tab,9);
  }
 });
+
+test('NV autonomous minimized-source run handles unchanged active Chrome after a collector closes',async()=>{
+ const {h,job,changes,bounds}=await setup('NV');job.nvSourceInitiallyMinimized=true;
+ h.chrome.windows.get=async id=>({id,...bounds,state:id===10?'minimized':'normal'});
+ h.tabs.set(4,{id:4,windowId:30,url:'https://example.org/user-page',active:true});
+ h.chrome.windows.getLastFocused=async()=>({id:30,focused:true});
+ const snapshot=await h.context.registryNevadaVisibleSnapshot(job);assert.ok(snapshot);
+ assert.equal(snapshot.sourceWasMinimized,true);assert.equal(snapshot.browserFocused,true);
+ await h.context.registryNevadaMakeVisible(job,snapshot);assert.deepEqual(changes,[{id:20,focused:true}]);
+ await h.context.registryRestoreNevadaVisibility(job);assert.equal(changes.length,1);
+ assert.equal(job.activeExpiresAt,70000);
+});
+
+test('NV autonomous minimized-source permission expires when browser context changes',async()=>{
+ for(const condition of ['focus','source-restored','prior-navigation']) {
+  const {h,job,changes,bounds}=await setup('NV');job.nvSourceInitiallyMinimized=true;
+  h.chrome.windows.get=async id=>({id,...bounds,state:id===10?'minimized':'normal'});
+  h.tabs.set(4,{id:4,windowId:30,url:'https://example.org/user-page',active:true});
+  h.chrome.windows.getLastFocused=async()=>({id:30,focused:true});
+  const snapshot=await h.context.registryNevadaVisibleSnapshot(job);assert.ok(snapshot);
+  if(condition==='focus')h.chrome.windows.getLastFocused=async()=>({id:30,focused:false});
+  if(condition==='source-restored')h.chrome.windows.get=async id=>({id,...bounds,state:'normal'});
+  if(condition==='prior-navigation')h.tabs.get(4).url='https://example.org/other';
+  await h.context.registryNevadaMakeVisible(job,snapshot);assert.equal(changes.length,0,condition);
+ }
+});
