@@ -6658,14 +6658,14 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
                 nc_retrieval_coverage.setdefault(prefix, []).append(name)
         required = probes
     if state == "NC":
-        # NC explicitly selects Starting With. Keep every reviewed
-        # name, but a longer generated prefix adds nothing to a shorter literal
-        # prefix already in this bounded plan. The covering query must still
-        # complete before a negative/adverse result; an incomplete response
-        # raises rather than establishing absence. Case/punctuation stay exact.
+        # The trial keeps bounded spelling phrases until actual evidence can
+        # establish coverage below. A planned broad word might become redundant
+        # after a full profile is found; it must not erase a useful phrase first.
+        # Preserve the nontrial planner and literal case/punctuation semantics.
         planned = required + generated
-        generated = [name for name in generated if not any(
-            other != name and name.startswith(other) for other in planned)]
+        if not trial_identity():
+            generated = [name for name in generated if not any(
+                other != name and name.startswith(other) for other in planned)]
     if state == "TN":
         generated = tn_browser_generated_queries(required, generated)
     if (state in {"AL", "NV"} or state == "NC" and trial_identity()) and all(
@@ -6700,6 +6700,9 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
         required = required[:1] + sorted(required[1:], key=len)
         generated = sorted(generated, key=lambda name: len(name))
     for index, name in enumerate(required + generated):
+        if (state == "NC" and trial_identity() and index >= len(required)
+                and nc_redundant_broad_query(name, required, records)):
+            continue
         if state == "NV" and trial_identity() and index >= len(required) and records and not unreviewed_scope:
             # Every reviewed identity has now completed (or was covered by a
             # complete literal prefix). Generated probes retrieve a missing
@@ -7221,6 +7224,7 @@ def final_four_connector_failure(record, reason=""):
     if re.fullmatch(r"NY_CONNECTOR_[A-Z_]{1,60}", reason or ""):
         result.status_reason = reason
     why = ("The registry lookup reached its time limit before all required records were confirmed." if reason == "NY_CONNECTOR_TIMEOUT" else
+           "North Carolina limited this search (HTTP 429). CharityClarity retained completed records and did not restart the rejected search in another page." if state == "NC" and reason == "NY_CONNECTOR_NC_RATE_LIMITED" else
            "New Mexico returned its public unexpected-error page for the submitted search." if state == 'NM' and reason == 'NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR' else
            "North Carolina's displayed result count does not agree with its result cards, so the search's completeness could not be confirmed." if state == "NC" and reason == "NY_CONNECTOR_REGISTRY_NC_RESULT_COUNT_MISMATCH" else
            "The registry requires browser verification before its search can complete." if "VERIFICATION" in reason else
@@ -7586,6 +7590,24 @@ def licensed_charity_names(org):
             seen.add(value.casefold()); generated.append(value); added += 1
             if added == 3: break
     return required, generated
+
+
+def nc_redundant_broad_query(query, required, records):
+    """A complete full-name profile makes its broad single-word probe redundant.
+
+    This never skips reviewed names or spelling phrases and never proves
+    absence. Identity conflicts still go through the existing review path.
+    """
+    if len(re.findall(r"[A-Za-z0-9]+", query)) != 1:
+        return False
+    for name in required:
+        if len(distinctive_match_tokens(name)) < 2 or not name.casefold().startswith(query.casefold() + " "):
+            continue
+        if any(normalized_match_name(row.get("name", "")) == normalized_match_name(name)
+               and row.get("identifier") and row.get("url") and row.get("expiration")
+               for row in records):
+            return True
+    return False
 
 
 def licensed_primary_positive_complete(org, selected, records, *, unreviewed_scope=False):
@@ -19405,6 +19427,9 @@ def explicit_acronym_alias_matches_registry(original_name: str, registry_name: s
 def wi_live_candidate_name_is_safe(registry_name: str, target_names: list[str], original_name: str, ein: str) -> bool:
     if not reviewed_name_candidate_is_safe(registry_name, original_name, ein):
         return False
+    if (supplied_separator_component_match(original_name, registry_name)
+            and registry_name_is_safe_for_org(registry_name, original_name, ein)):
+        return True
     # A shared acronym alone cannot replace the full organization identity.
     explicit_acronyms = [part.strip() for part in re.split(r"[/|]", original_name or "") if re.fullmatch(r"[A-Z]{3,8}", part.strip())]
     if normalized_match_name(registry_name).upper() in explicit_acronyms and len(normalized_match_name(original_name).split()) >= 3:
@@ -19659,7 +19684,8 @@ def wi_candidate_from_row_html(row_html: str, target_names: list[str], original_
     if not wi_live_candidate_name_is_safe(registry_name, target_names, original_name, ein):
         return wi_foundation_identity_review(registry_name, original_name, license_number, review_href, expiration_text, location)
     score = checker.name_match_priority_for_targets(registry_name, target_names)
-    if explicit_acronym_alias_matches_registry(original_name, registry_name):
+    if (explicit_acronym_alias_matches_registry(original_name, registry_name)
+            or supplied_separator_component_match(original_name, registry_name)):
         score = max(score, 4)
     if score < 4 and not wi_contains_full_target_name(registry_name, target_names):
         return wi_foundation_identity_review(registry_name, original_name, license_number, review_href, expiration_text, location)
@@ -19695,7 +19721,8 @@ def wi_candidate_from_markdown_row(row_text: str, target_names: list[str], origi
     if not wi_live_candidate_name_is_safe(registry_name, target_names, original_name, ein):
         return wi_foundation_identity_review(registry_name, original_name, license_number, detail_href, expiration_text, location)
     score = checker.name_match_priority_for_targets(registry_name, target_names)
-    if explicit_acronym_alias_matches_registry(original_name, registry_name):
+    if (explicit_acronym_alias_matches_registry(original_name, registry_name)
+            or supplied_separator_component_match(original_name, registry_name)):
         score = max(score, 4)
     if score < 4 and not wi_contains_full_target_name(registry_name, target_names):
         return wi_foundation_identity_review(registry_name, original_name, license_number, detail_href, expiration_text, location)

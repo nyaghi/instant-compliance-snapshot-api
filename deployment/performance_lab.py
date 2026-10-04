@@ -167,6 +167,18 @@ def final_four_asset(name, text):
         replace('      const payload = await response.json();', '      const payload = await response.json();\n      if (!cleanup) trace("master response", null, {action:fields.action,http_status:response.status,phase:payload.phase});')
         replace('        let completed;', '        let completed;\n        trace("browser query started", state.query);')
         replace('        state = completed.ok', '        trace("browser query returned", state.query, {ok:completed.ok,reason:completed.reason||"",...(["NY_CONNECTOR_VERIFICATION_REJECTED","NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED"].includes(completed.ny_failure_cause) ? {ny_failure_cause:completed.ny_failure_cause,ny_reset_cooldown:completed.ny_reset_cooldown===true} : {}),...(completed.nv_readiness ? {nv_readiness:completed.nv_readiness} : {}),...(completed.nc_submission ? {nc_submission:completed.nc_submission} : {}),...(["visible","hidden"].includes(completed.page_visibility) ? {page_visibility:completed.page_visibility} : {}),...(registryState === "IL" && Array.isArray(completed.diagnostics) ? {il_dom:completed.diagnostics.slice(0,32).map(({phase,event,elapsed_ms,visibility})=>({phase,event,elapsed_ms,visibility}))} : {}),...(registryState === "NV" && completed.evidence?.filings ? {nv_filings:{complete:completed.evidence.filings.complete===true,total:completed.evidence.filings.total??null,failure_code:completed.evidence.filings.failure_code||""}} : {})});\n        state = completed.ok')
+        # An explicit source rejection is not an idle browser form. The
+        # installed collector already exports these bounded public timings.
+        # Keep its normal same-page attempt, but do not amplify a 429 by
+        # requesting the master's fresh-page recovery as well.
+        replace('        state = completed.ok', '''        if (registryState === "NC" && completed.ok === false &&
+            completed.reason === "NY_CONNECTOR_NC_SEARCH_NOT_STARTED" &&
+            Array.isArray(completed.nc_submission) && completed.nc_submission.some(entry =>
+              Array.isArray(entry?.requests) && entry.requests.some(request =>
+                request?.search_route === true && request.status === 429))) {
+          completed = {...completed, reason:"NY_CONNECTOR_NC_RATE_LIMITED"};
+        }
+        state = completed.ok''')
     return text
 
 
