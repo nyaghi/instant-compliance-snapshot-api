@@ -470,7 +470,13 @@ def execute(master, job, source_finished=None, trace_path=None):
     if job['version'] != master.APP_VERSION:
         raise ValueError('Master version mismatch')
     p = job['payload']
+    from deployment.lab_identity import trial_identity
+    primary_sales = p.get('mode') == 'sales' and bool(trial_identity())
+    if primary_sales:
+        p = {**p, 'alternate_names': []}
     if job['state'] == '@sales_identity':
+        if primary_sales:
+            raise ValueError('Supplemental names are disabled for trial Sales')
         from deployment.lab_capacity import sales_identity_seconds
         evidence = master.sales_identity_evidence(p['organization_name'], p['ein'],
                                                  budget_seconds=sales_identity_seconds(job['version']))
@@ -499,7 +505,7 @@ def execute(master, job, source_finished=None, trace_path=None):
         raise ValueError('Isolated NY collector not configured')
     if job['state'] not in master.SUPPORTED_STATES:
         raise ValueError('Unsupported state')
-    identity = job.get('sales_identity')
+    identity = None if primary_sales else job.get('sales_identity')
     if identity is not None:
         if p.get('mode') != 'sales' or p.get('alternate_names'):
             raise ValueError('Automatic Sales identity cannot override reviewed input')

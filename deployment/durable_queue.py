@@ -87,6 +87,8 @@ def normalize_submission(payload, supported):
         raise ValueError('Lab state concurrency must be 5, 10, 15 or 20; Sales also allows 32')
     if kind == 'discovery' and 'state_concurrency' in payload:
         raise ValueError('State concurrency applies only to registration')
+    if mode == 'sales' and trial_identity():
+        aliases = []  # Approved quick-check contract; Standard owns aliases.
     normalized = {'organization_name': name.strip(), 'ein': ein.replace('-', ''),
                   'alternate_names': aliases, 'states': sorted(set(states)), 'mode': mode, 'kind': kind}
     cutoff = trial_sales_cutoff(payload, trial_identity())
@@ -469,7 +471,8 @@ class Queue:
                           "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'queued',%s,%s)",
                           (ident, scope, payload['ein'], fingerprint, Jsonb(payload), payload['kind'], payload['mode'], version, now, now+seconds))
                 states = ['@discovery'] if payload['kind'] == 'discovery' else payload['states']
-                if payload['kind'] == 'registration' and payload['mode'] == 'sales' and not payload['alternate_names']:
+                if (payload['kind'] == 'registration' and payload['mode'] == 'sales'
+                        and not payload['alternate_names'] and not trial_identity()):
                     states = ['@sales_identity', *states]
                 for state in states:
                     resources = (sorted(set(discovery_sources)) if state == '@discovery' else

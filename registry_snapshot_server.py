@@ -7343,7 +7343,7 @@ def final_four_connector_request(payload, origin):
                 or ein.replace("-", "") == "000000000"):
             return 400, {"error": "Enter a supported state, mode, organization name and nine-digit EIN."}
         try:
-            alternate_names = normalize_reviewed_names(payload.get("alternate_names", []))
+            alternate_names = normalize_reviewed_names([] if mode == "sales" else payload.get("alternate_names", []))
         except ValueError as exc:
             return 400, {"error": str(exc)}
         from deployment.lab_identity import trial_sales_cutoff
@@ -24231,6 +24231,8 @@ def ny_connector_request(payload, origin):
                 record["alternate_names"] = normalize_reviewed_names(payload["alternate_names"])
             except ValueError as exc:
                 return 400, {"error": str(exc)}
+        if trial_identity() and purpose == "registration" and payload.get("mode") == "sales":
+            record["alternate_names"] = []
     else:
         try:
             record = ny_connector_unpack(payload.get("check_token"), email, device)

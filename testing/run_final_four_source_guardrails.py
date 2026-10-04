@@ -1206,6 +1206,8 @@ class LookupControls(unittest.TestCase):
                         'identity_irs_historical_names','irs_period_for_label','ms_name_search_plan','ny_connector_failure',
                         'nc_charity_record_evidence','nv_charity_detail_evidence','nv_charity_filings_evidence','lab_mi_query_dominance_enabled'})
         for tree in (before, after):
+            from testing.run_sales_primary_contract import restore_primary_sales_scope
+            restore_primary_sales_scope(tree)
             from testing.capacity_lab.parsing_scope import strip_mi_exhaustive_reuse
             strip_mi_exhaustive_reuse(tree)
             for handler in [n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='final_four_connector_request']:

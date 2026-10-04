@@ -74,6 +74,9 @@ def prepare(master, payload, owner, *, transport=None, external_states=None, ext
         raise ValueError('Select supported states')
     mode = payload.get('mode', 'standard')
     if mode not in ('sales', 'standard'): raise ValueError('Invalid mode')
+    from deployment.lab_identity import trial_identity
+    if mode == 'sales' and trial_identity():
+        aliases = []
     nonce = payload.get('request_id')
     if not isinstance(nonce, str) or not re.fullmatch(r'[a-f0-9-]{36}', nonce): raise ValueError('Invalid request ID')
     external = sorted(set(states) & ({'IL', 'GA'} if external_states is None else set(external_states)))
