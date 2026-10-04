@@ -766,3 +766,17 @@ test('Nevada does not search a partially mounted return form beyond its command 
 });
 test('extra search filters are refused rather than narrowing the search invisibly',async()=>{const f=fixture();await assert.rejects(f.drive(f.api.nvSearch({state:'NV',operation:'search',name:'MAKE-A-WISH',status:'Active'},45000)),/COMMAND_INVALID/);assert.equal(f.clicks,0);});
 test('candidate Nevada access remains absent from the approved connector manifest',()=>{const m=JSON.parse(fs.readFileSync(path.join(__dirname,'../browser-connector/manifest.json'),'utf8'));assert.equal(m.version,'0.5.10');assert.ok(!JSON.stringify(m).includes('orion.nv.gov'));});
+
+test('NV streams click and filing checkpoints with real frontend command IDs without altering results',async()=>{
+ const h=fixture({rows:observed.slice(0,2)}),messages=[];
+ h.context.chrome.runtime.sendMessage=async m=>{messages.push(JSON.parse(JSON.stringify(m)));};
+ const diagnosticId='abcdef0123456789abcdef0123456789';
+ const result=await h.drive(h.api.handle({action:'registry-nv',diagnosticId,query:{state:'NV',operation:'search',name:'MAKE-A-WISH'},budgetMs:45000}));
+ assert.equal(result.ok,true);assert.ok(messages.some(m=>m.nv_diagnostic.phase==='search-returned'));
+ const detail=await h.drive(h.api.handle({action:'registry-nv',diagnosticId,query:{state:'NV',operation:'detail',identifier:observed[0][1]},budgetMs:45000}));
+ assert.equal(detail.ok,true);assert.ok(messages.some(m=>m.nv_diagnostic.phase==='detail-clicked'));
+ assert.ok(messages.some(m=>m.nv_diagnostic.phase==='filings-started'));
+ assert.ok(messages.some(m=>m.nv_diagnostic.phase==='filings-incomplete'));
+ assert.equal(detail.evidence.filings.complete,false,'fixture has no filing table');
+ assert.ok(messages.every(m=>m.id===diagnosticId&&!('name' in m.nv_diagnostic)&&!('identifier' in m.nv_diagnostic)));
+});

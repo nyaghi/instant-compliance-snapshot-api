@@ -641,6 +641,21 @@ chrome.tabs.onRemoved.addListener(id => {
   }
 });
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
+  if(P.TRIAL_ORIGIN && message?.action==='nv-diagnostic') {
+    if(sender.id!==chrome.runtime.id || sender.frameId!==0 || !P.validId(message.id)
+        || !sender.url?.startsWith('https://orion.nv.gov/portal/public/'))return false;
+    const job=allJobs().find(job=>isActive(job)&&!job.closed&&job.registryState==='NV'
+      && job.tab===sender.tab?.id && owned.has(job.tab) && job.pending===message.id);
+    const value=message.nv_diagnostic;
+    const phases=['search-started','mode-selected','search-submitted','search-narrowed','page-collected',
+      'pages-complete','search-returned','detail-started','detail-row-confirmed','detail-clicked',
+      'detail-click-retried','detail-returned','filings-started','filings-incomplete','filings-first-page','filings-page-size-ready','filings-complete'];
+    if(!job || !phases.includes(value?.phase))return false;
+    const detail={visibility:['visible','hidden'].includes(value.visibility)?value.visibility:'unknown'};
+    for(const key of ['page','pages','rows','total','on_search'])
+      if(typeof value[key]==='boolean' || Number.isFinite(value[key]))detail[key]=value[key];
+    registryNevadaDiagnostic(job,value.phase,detail);return false;
+  }
   if(P.TRIAL_ORIGIN && message?.action==='ny-diagnostic') {
     if(sender.id!==chrome.runtime.id || sender.frameId!==0 || !nyRegistryPage(sender.url)
         || !P.validId(message.id))return false;

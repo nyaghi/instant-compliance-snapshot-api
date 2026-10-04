@@ -115,6 +115,12 @@ function registryNevadaOwnedForeground(tab,source) {
   try {return nyRegistryPage(tab.url)||['IL','GA','AL','NC','NV','TN','NM'].some(s=>new URL(tab.url).origin===registryOrigin(s));}
   catch {return false;}
 }
+function registryNevadaDiagnostic(job, phase, detail={}) {
+  if(!P.TRIAL_ORIGIN || job.registryState!=='NV' || job.closed || !job.pending
+      || !owned.has(job.tab) || (job.nvDiagnosticCount||0)>=96)return;
+  job.nvDiagnosticCount=(job.nvDiagnosticCount||0)+1;
+  post(job,{id:job.pending,progress:true,nv_diagnostic:{phase,...detail}});
+}
 async function registryNevadaExposeWindow(job,previous) {
   const tab=await chrome.tabs.get(job.tab),source=await chrome.tabs.get(job.sender.tab.id);
   const siblings=await chrome.tabs.query({windowId:tab.windowId});
@@ -122,7 +128,7 @@ async function registryNevadaExposeWindow(job,previous) {
   // Read foreground last: geometry reads may yield while the user switches.
   const focus=await chrome.windows.getLastFocused();
   const prior=(await chrome.tabs.query({active:true,windowId:previous.windowId}))[0];
-  if(!focus.focused || focus.id!==previous.windowId){job.nvVisibilityOutcome='foreground_changed';return null;}
+  if(!focus.focused || focus.id!==previous.windowId){job.nvVisibilityOutcome='foreground_changed';registryNevadaDiagnostic(job,'foreground-changed',{browser_focused:focus.focused===true});return null;}
   // TN can legitimately activate its owned collector in the source window.
   // Treat that as coordination, not as a user selecting an unrelated page.
   // Record the actual owned foreground so completion restores that collector.
@@ -136,7 +142,25 @@ async function registryNevadaExposeWindow(job,previous) {
       || !registryNevadaOwnedForeground(prior,source) || nv.state==='minimized' || bounds.state==='minimized'
       || !['left','top','width','height'].every(k=>Number.isFinite(bounds[k])) || bounds.width<1000 || bounds.height<700
       || job.closed || Date.now()>=job.activeExpiresAt || job.tab!==tab.id || !owned.has(tab.id)){
-    job.nvVisibilityOutcome='ownership_or_geometry_changed';return null;
+    job.nvVisibilityOutcome='ownership_or_geometry_changed';
+    registryNevadaDiagnostic(job,'visibility-refused',{
+      inactive_tab:!tab.active, nv_window_changed:tab.windowId!==previous.nvWindowId,
+      shared_window:tab.windowId===source.windowId,
+      source_window_changed:source.windowId!==previous.sourceWindowId,
+      source_url_changed:source.url!==previous.sourceUrl,
+      source_origin_changed:new URL(source.url).origin!==P.TRIAL_ORIGIN,
+      nv_origin_changed:new URL(tab.url).origin!==registryOrigin('NV'),
+      nv_path_changed:!new URL(tab.url).pathname.startsWith('/portal/public/'),
+      siblings_changed:siblings.length!==1 || siblings[0].id!==tab.id,
+      prior_changed:!ownedTransition && (prior?.id!==previous.id || prior.url!==previous.url),
+      foreground_not_owned:!registryNevadaOwnedForeground(prior,source),
+      nv_minimized:nv.state==='minimized',source_minimized:bounds.state==='minimized',
+      invalid_bounds:!['left','top','width','height'].every(k=>Number.isFinite(bounds[k])),
+      source_width_small:bounds.width<1000,source_height_small:bounds.height<700,
+      source_width:bounds.width,source_height:bounds.height,
+      expired:Date.now()>=job.activeExpiresAt,closed:job.closed,
+      tab_changed:job.tab!==tab.id,not_owned:!owned.has(tab.id)});
+    return null;
   }
   // Unlike the four-window experiment, move only our stalled NV window.
   // A smaller foreground window leaves other full-size collectors exposed;
@@ -190,7 +214,7 @@ async function registryMessage(job, message) {
   const send=async()=>{
     const tab = await chrome.tabs.get(job.tab);
     if (new URL(tab.url).origin !== registryOrigin(job.registryState)) throw new Error("NY_CONNECTOR_INCOMPLETE");
-    return chrome.tabs.sendMessage(job.tab, message, {frameId:0});
+    return chrome.tabs.sendMessage(job.tab, {...message,...(P.TRIAL_ORIGIN && job.registryState==='NV' && message.action==='registry-nv'?{diagnosticId:job.pending}:{})}, {frameId:0});
   };
   if (job.registryState!=='NV' || !Number.isFinite(message.budgetMs)) return send();
   // Keep the overall job deadline as the transport bound. A second timer at

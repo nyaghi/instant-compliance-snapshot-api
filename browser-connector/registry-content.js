@@ -236,7 +236,17 @@
   let nvLastSearch = null;
   let nvLastSearchMode = 'STARTS_WITH';
   const nvObserved = new Map();
-  const nvTrace = (phase, detail={}) => console.info('CharityClarity NV collector', JSON.stringify({phase,...detail}));
+  let nvDiagnosticId=null;
+  const nvTrace = (phase, detail={}) => {
+    console.info('CharityClarity NV collector', JSON.stringify({phase,...detail}));
+    if(!nvDiagnosticId)return;
+    // Public phase/timing only; never transmit names, page HTML or session data.
+    const sample={phase,visibility:document.visibilityState};
+    for(const key of ['page','pages','rows','total','on_search'])
+      if(typeof detail[key]==='boolean' || Number.isFinite(detail[key]))sample[key]=detail[key];
+    try {chrome.runtime.sendMessage({action:'nv-diagnostic',id:nvDiagnosticId,nv_diagnostic:sample})?.catch(()=>{});}
+    catch { /* Diagnostics cannot change lookup behavior. */ }
+  };
   const nvSearchHeaders = ["Entity Name", "NV Business Id #", "Entity No.", "Entity Type", "Registered Agent Name", "Formation Date", "Status"];
   const nvFilingHeaders = ["Filed Date", "Effective Date", "Filing Number", "Filing Type", "Source", "No. of Pages"];
   function nvSearchModeSelected(mode) {
@@ -743,6 +753,7 @@
       // rendered. Reading the table immediately can discard the solicitation
       // statement even though it appears a moment later. Observe the first
       // complete page within the existing detail deadline before paging it.
+      nvTrace('filings-started');
       let firstFailure = 'REGISTRY_NV_FILINGS_NOT_LOADED';
       let first;
       try { first = await wait(() => {
@@ -773,12 +784,16 @@
       // another filing with the same date. Use its public 50/100-row choice,
       // as for search results, before paging. Preserve total/identity/unique-
       // filing checks; never accept duplicates or extend the detail deadline.
+      nvTrace('filings-first-page',{total:first.total,page:first.page});
       first = await nvExpandSearchPage(first,deadline,'Filing History Details',nvFilingHeaders);
+      nvTrace('filings-page-size-ready',{total:first.total,page:first.page});
       const filings = await nvPages('Filing History Details',nvFilingHeaders,deadline,first);
+      nvTrace('filings-complete',{rows:filings.length});
       evidence.filings = {identifier:query.identifier,name:fields['Entity Name'],complete:true,total:filings.length,
         headers:nvFilingHeaders,rows:filings.map(row=>row.cells)};
     } catch (error) {
       // Optional history failure cannot erase a fully loaded corporate status.
+      nvTrace('filings-incomplete');
       evidence.filings = {complete:false,failure_code:/^REGISTRY_[A-Z_]+$/.test(error.message)?error.message:'REGISTRY_NV_FILINGS_INCOMPLETE'};
     }
     return evidence;
@@ -1425,8 +1440,11 @@
     if (NV && m.action === 'registry-nv') {
       const maximum=m.query?.operation==='search'?150000:45000;
       const deadline = Date.now() + Math.min(maximum, Number.isFinite(m.budgetMs) && m.budgetMs > 0 ? m.budgetMs : 45000);
-      const evidence = m.query?.operation === 'search' ? await nvSearch(m.query,deadline) : await nvDetail(m.query,deadline);
-      return {ok:true,evidence};
+      nvDiagnosticId=typeof m.diagnosticId==='string' && /^[a-zA-Z0-9_-]{16,80}$/.test(m.diagnosticId)?m.diagnosticId:null;
+      try {
+        const evidence = m.query?.operation === 'search' ? await nvSearch(m.query,deadline) : await nvDetail(m.query,deadline);
+        return {ok:true,evidence};
+      } finally {nvDiagnosticId=null;}
     }
     if (m.action === "registry-il" && IL) {
       const diagnostics = [];

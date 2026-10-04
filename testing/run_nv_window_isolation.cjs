@@ -116,3 +116,46 @@ test('NY trial verification retains an active page without changing mature NY pl
   const tab=job.tab;await h.context.close(job);assert.deepEqual(h.removed,[tab]);
  }
 });
+
+test('NV diagnostic identifies small geometry without relaxing recovery guards',async()=>{
+ const {h,job}=await setup();
+ const nv='https://orion.nv.gov/portal/public/';
+ h.tabs.set(3,{id:3,windowId:20,url:nv,active:true});vm.runInContext('owned.add(3)',h.context);
+ Object.assign(job,{tab:3,pending:'00000000000000000001'});
+ const messages=[];job.port={postMessage:m=>messages.push(m)};
+ h.chrome.tabs.query=async q=>[...h.tabs.values()].filter(t=>t.windowId===q.windowId&&(!q.active||t.active));
+ h.chrome.windows.get=async id=>({id,left:0,top:0,width:id===10?545:700,height:id===10?400:800,state:'normal'});
+ h.chrome.windows.getLastFocused=async()=>({id:10,focused:true});
+ h.chrome.windows.update=async()=>{throw Error('guard must still refuse');};
+ const previous={mode:'window',id:1,windowId:10,url:TRIAL+'/',nvWindowId:20,sourceWindowId:10,sourceUrl:TRIAL+'/'};
+ assert.equal(await h.context.registryNevadaExposeWindow(job,previous),null);
+ const d=messages[0].nv_diagnostic;
+ assert.equal(d.phase,'visibility-refused');assert.equal(d.source_width_small,true);assert.equal(d.source_height_small,true);
+ assert.equal(d.not_owned,false);assert.equal(d.prior_changed,false);assert.equal(d.source_width,545);
+ assert.equal(job.activeExpiresAt,70000);assert.equal(job.nvVisibilityAttempted,undefined);
+});
+
+test('NV diagnostic is bounded and disabled for mature connector and other states',async()=>{
+ for(const [trial,state,expected] of [[true,'NV',96],[false,'NV',0],[true,'NC',0]]) {
+  const {h,job}=await setup(trial);h.tabs.set(3,{id:3,windowId:20,url:'https://orion.nv.gov/portal/public/',active:true});
+  vm.runInContext('owned.add(3)',h.context);const messages=[];
+  Object.assign(job,{tab:3,pending:'00000000000000000001',registryState:state,port:{postMessage:m=>messages.push(m)}});
+  for(let i=0;i<110;i++)h.context.registryNevadaDiagnostic(job,'detail-clicked');
+  assert.equal(messages.length,expected);assert.equal(job.activeExpiresAt,70000);
+ }
+});
+
+test('NV diagnostic transport binds events to the owned active command and strips extra data',async()=>{
+ const {h,job}=await setup();const messages=[];
+ Object.assign(job,{tab:3,pending:'abcdef0123456789abcdef0123456789',port:{postMessage:m=>messages.push(m)}});
+ h.context.fixtureJob=job;vm.runInContext("owned.add(3);activeLanes.set('NV',fixtureJob)",h.context);
+ const sender={id:h.chrome.runtime.id,frameId:0,url:'https://orion.nv.gov/portal/public/',tab:{id:3}};
+ const message={action:'nv-diagnostic',id:job.pending,nv_diagnostic:{phase:'detail-clicked',visibility:'hidden',name:'must not forward',cookie:'must not forward'}};
+ h.chrome.runtime.onMessage.emit({...message,id:'wrong-command-123456'},sender,()=>{});
+ h.chrome.runtime.onMessage.emit(message,{...sender,tab:{id:4}},()=>{});
+ h.chrome.runtime.onMessage.emit(message,{...sender,frameId:1},()=>{});
+ assert.equal(messages.length,0);
+ h.chrome.runtime.onMessage.emit(message,sender,()=>{});
+ assert.equal(messages.length,1);assert.equal(messages[0].progress,true);
+ assert.deepEqual(JSON.parse(JSON.stringify(messages[0].nv_diagnostic)),{phase:'detail-clicked',visibility:'hidden'});
+});
