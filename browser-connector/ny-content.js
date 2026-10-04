@@ -18,7 +18,7 @@
   window.addEventListener("message", event => {
     if (event.source !== window || event.origin !== NY || event.data?.channel !== "cc-ny-page-v1" || event.data.direction !== "response") return;
     if (!pending || event.data.id !== pending.id) return;
-    finish(pending, { ...(event.data.ok ? { ok: true, evidence: event.data.evidence } : { ok: false, reason: event.data.reason }), verificationRetryUsed: event.data.verificationRetryUsed === true });
+    finish(pending, { ...(event.data.ok ? { ok: true, evidence: event.data.evidence } : { ok: false, reason: event.data.reason }), verificationRetryUsed: event.data.verificationRetryUsed === true, ...(Array.isArray(event.data.ny_diagnostics) ? {ny_diagnostics:event.data.ny_diagnostics.slice(-32)} : {}) });
   });
   chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (sender.id !== chrome.runtime.id) return false;

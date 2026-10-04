@@ -61,7 +61,11 @@ function keepAlive() {
 const rejected = reason => ["NY_CONNECTOR_VERIFICATION_REJECTED", "NY_CONNECTOR_SEARCH_VERIFICATION_REJECTED"].includes(reason);
 const recoveryFailure = reason => rejected(reason) ? "NY_CONNECTOR_RECOVERY_REJECTED" :
   typeof reason === "string" && /^NY_CONNECTOR_[A-Z_]+$/.test(reason) ? reason : "NY_CONNECTOR_INCOMPLETE";
-const runtimeState = () => ({ schema: 2, nextStart, laneStarts: Object.fromEntries(laneStarts), ownedTabs: [...owned], diagnostics: [...diagnostics], queue: allJobs().filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, expiresAt: j.expiresAt, active: isActive(j), activeExpiresAt: j.activeExpiresAt, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, detailRetryUsed: j.detailRetryUsed, detailAuthRetryUsed: j.detailAuthRetryUsed, nyLastSearchQuery: j.nyLastSearchQuery, retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.registryState === "AL" ? null : j.command, lastResponse: j.registryState === "AL" ? null : j.lastResponse, queryRepaired: j.queryRepaired, nyFreshPageRecoveryOnly: j.nyFreshPageRecoveryOnly, nvReturnRecoveryUsed: j.nvReturnRecoveryUsed, ...(P.TRIAL_ORIGIN && j.registryState === "NV" ? {nvVisibilityAttempted:j.nvVisibilityAttempted,nvPreviousVisible:j.nvPreviousVisible} : {}) })) });
+function collectNyDiagnostics(job, response) {
+  if(P.TRIAL_ORIGIN && job.registryState === "NY")
+    job.nyDiagnostics=P.nyDiagnostics([...(job.nyDiagnostics||[]),...P.nyDiagnostics(response?.ny_diagnostics)]);
+}
+const runtimeState = () => ({ schema: 2, nextStart, laneStarts: Object.fromEntries(laneStarts), ownedTabs: [...owned], diagnostics: [...diagnostics], queue: allJobs().filter(j => j && !j.closed).map(j => ({ id: j.lookupId, registryState: j.registryState || "NY", tabId: j.sender.tab.id, documentId: j.sender.documentId || "", enqueuedAt: j.enqueuedAt, expiresAt: j.expiresAt, active: isActive(j), activeExpiresAt: j.activeExpiresAt, tab: j.tab, refreshOnly: j.refreshOnly, generation: j.generation, rateRetries: j.rateRetries, timeoutRetries: j.timeoutRetries, detailRetryUsed: j.detailRetryUsed, detailAuthRetryUsed: j.detailAuthRetryUsed, nyLastSearchQuery: j.nyLastSearchQuery, nyDiagnostics: P.nyDiagnostics(j.nyDiagnostics), retryNotBefore: j.retryNotBefore, reloadAfterRateLimit: j.reloadAfterRateLimit, verificationRetryUsed: j.verificationRetryUsed, command: j.registryState === "AL" ? null : j.command, lastResponse: j.registryState === "AL" ? null : j.lastResponse, queryRepaired: j.queryRepaired, nyFreshPageRecoveryOnly: j.nyFreshPageRecoveryOnly, nvReturnRecoveryUsed: j.nvReturnRecoveryUsed, ...(P.TRIAL_ORIGIN && j.registryState === "NV" ? {nvVisibilityAttempted:j.nvVisibilityAttempted,nvPreviousVisible:j.nvPreviousVisible} : {}) })) });
 function saveRuntime() {
   keepAlive();
   if (!allJobs().length && keepAliveTimer) { clearTimeout(keepAliveTimer); keepAliveTimer = null; }
@@ -444,6 +448,7 @@ async function performSearch(job, query, id) {
         const attempt = `${job.generation}:${job.rateRetries}`;
         response = await chrome.tabs.sendMessage(job.tab, { action: "search", id, attempt, query, verificationRetryUsed: job.verificationRetryUsed }, { frameId: 0 });
         if (job.closed || generation !== job.generation) return;
+        collectNyDiagnostics(job,response);
         job.verificationRetryUsed ||= response?.verificationRetryUsed === true;
         await saveRuntime();
         if (["NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT", "NY_CONNECTOR_SEARCH_RESPONSE_TIMEOUT", "NY_CONNECTOR_DETAIL_RESPONSE_TIMEOUT"].includes(response?.reason)) throw new Error(response.reason);
@@ -474,6 +479,7 @@ async function performSearch(job, query, id) {
           const verified = await chrome.tabs.sendMessage(job.tab, {action:"verify", id,
             attempt:`${attempt}:detail-auth`, verificationRetryUsed:true}, {frameId:0});
           if (job.closed || generation !== job.generation) return;
+          collectNyDiagnostics(job,verified);
           if (!verified?.ok || verified.evidence?.verified !== true) {
             response = {ok:false, reason:verified?.reason || "NY_CONNECTOR_VERIFICATION_REQUIRED"}; break;
           }
@@ -487,6 +493,7 @@ async function performSearch(job, query, id) {
             attempt:`${attempt}:detail-results`, query:job.nyLastSearchQuery,
             verificationRetryUsed:true}, {frameId:0});
           if (job.closed || generation !== job.generation) return;
+          collectNyDiagnostics(job,restored);
           if (!restored?.ok || !P.sameQuery(restored.evidence?.query, job.nyLastSearchQuery)) {
             response = {ok:false, reason:restored?.reason || "NY_CONNECTOR_INCOMPLETE"}; break;
           }
@@ -566,6 +573,7 @@ async function performSearch(job, query, id) {
   }
   if(P.TRIAL_ORIGIN&&job.registryState==='NV'&&job.nvReadiness)response.nv_readiness={...job.nvReadiness,
     visibility_recovery:job.nvVisibilityOutcome||'not_requested',visibility_attempted:job.nvVisibilityAttempted===true};
+  if(P.TRIAL_ORIGIN&&job.registryState==='NY')response.ny_diagnostics=P.nyDiagnostics(job.nyDiagnostics);
   if(P.TRIAL_ORIGIN&&job.registryState==='NY'&&['visible','hidden'].includes(job.nyPageVisibility))response.page_visibility=job.nyPageVisibility;
   if(P.TRIAL_ORIGIN&&job.registryState==='NY'&&!response.ok&&rejected(job.nyFailureCause)) {
     response.ny_failure_cause=job.nyFailureCause;

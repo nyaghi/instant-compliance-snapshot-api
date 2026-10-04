@@ -84,6 +84,21 @@
     }
     return { kind: "search", query };
   }
+  // BEGIN NY_DIAGNOSTICS: shared export boundary, also embedded in lab frontend.
+  function nyDiagnostics(entries) {
+    if (!Array.isArray(entries)) return [];
+    return entries.slice(-32).filter(e => e && ["verify","search","detail"].includes(e.stage)
+      && ["click","response","network_error","timeout","reuse"].includes(e.event)).map(e => ({
+        stage:e.stage,event:e.event,
+        elapsed_ms:Number.isFinite(e.elapsed_ms)?Math.max(0,Math.min(300000,Math.round(e.elapsed_ms))):0,
+        http_status:Number.isInteger(e.http_status)&&e.http_status>=0&&e.http_status<=599?e.http_status:null,
+        verified:typeof e.verified === "boolean"?e.verified:null,
+        payload_type:["object","non_json","other"].includes(e.payload_type)?e.payload_type:"other",
+        error_codes:Array.isArray(e.error_codes)?e.error_codes.filter(c => ["missing-input-secret","invalid-input-secret","missing-input-response","invalid-input-response","bad-request","timeout-or-duplicate","browser-error"].includes(c)).slice(0,8):[],
+        visibility:["visible","hidden"].includes(e.visibility)?e.visibility:"unknown"
+      }));
+  }
+  // END NY_DIAGNOSTICS
   function publicResponse(request, status, payload) {
     if (request.kind === "verify") return { kind: "verify", http_status: status, verified: payload?.verified === true };
     if (request.kind === "detail") {
@@ -134,5 +149,5 @@
         return { orgID: row.orgID, orgName: row.orgName, ein };
       }) };
   }
-  globalThis.CCNYProtocol = Object.freeze({ STAGING, TRIAL_ORIGIN, APP_ORIGINS, allowedOrigin, registryAllowed, NY, validId, validQuery, sameQuery, publicRequest, publicResponse });
+  globalThis.CCNYProtocol = Object.freeze({ STAGING, TRIAL_ORIGIN, APP_ORIGINS, allowedOrigin, registryAllowed, NY, validId, validQuery, sameQuery, publicRequest, publicResponse, nyDiagnostics });
 })();

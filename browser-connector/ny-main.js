@@ -7,6 +7,16 @@
   let documentDetail = null;
   // Verify and Search share one retry across this page's EIN/name lookup.
   let verificationRetryUsed = false;
+  // Trial diagnostics observe existing actions only; no additional requests.
+  const note = (stage, event, status = null, payload = null) => {
+    if (!P.TRIAL_ORIGIN || !active) return;
+    const codes = payload && (payload["error-codes"] || payload.errorCodes);
+    active.diagnostics.push(...P.nyDiagnostics([{stage,event,http_status:status,
+      elapsed_ms:Date.now()-active.started,verified:payload?.verified,
+      payload_type:payload === null ? "non_json" : typeof payload === "object" && !Array.isArray(payload) ? "object" : "other",
+      error_codes:codes,visibility:document.visibilityState}]));
+    active.diagnostics=active.diagnostics.slice(-32);
+  };
   const xhrMetadata = new WeakMap();
   const originalOpen = XMLHttpRequest.prototype.open;
   const originalSend = XMLHttpRequest.prototype.send;
@@ -22,6 +32,7 @@
     : status >= 500 && status <= 599 ? "NY_CONNECTOR_DETAIL_SERVER_ERROR"
     : status !== 200 ? "NY_CONNECTOR_DETAIL_HTTP_ERROR" : "NY_CONNECTOR_DETAIL_SCHEMA_INVALID";
   const observe = (request, status, payload, jobId) => {
+    if (active?.id === jobId) note(request.kind,"response",status,payload);
     // A normal detail link loads a new document. Its response can finish
     // before the worker reconnects; retain only that document's public fields.
     if (request.kind === "detail" && location.pathname === "/RegistrySearch/" + request.query.orgID) {
@@ -54,6 +65,7 @@
     const waiter = job.waiter; job.waiter = null; clearTimeout(waiter.timer); waiter.reject(new Error(reason));
   };
   const networkFailure = (request, jobId) => {
+    if (active?.id === jobId) note(request.kind,"network_error");
     if (request.kind === "detail" && location.pathname === "/RegistrySearch/" + request.query.orgID) {
       documentDetail = { reason: "NY_CONNECTOR_DETAIL_INCOMPLETE" };
       if (active && P.sameQuery(active.query, request.query)) rejectRequest(request, active.id, documentDetail.reason);
@@ -128,7 +140,7 @@
   function waitResponse(kind, ms) {
     return new Promise((resolve, reject) => {
       const job = active;
-      const timer = setTimeout(() => { if (job.waiter?.timer === timer) job.waiter = null; reject(new Error(kind === "verify" ? "NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT" : kind === "detail" ? "NY_CONNECTOR_DETAIL_RESPONSE_TIMEOUT" : "NY_CONNECTOR_SEARCH_RESPONSE_TIMEOUT")); }, ms);
+      const timer = setTimeout(() => { if (job.waiter?.timer === timer) job.waiter = null; if (active === job) note(kind,"timeout"); reject(new Error(kind === "verify" ? "NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT" : kind === "detail" ? "NY_CONNECTOR_DETAIL_RESPONSE_TIMEOUT" : "NY_CONNECTOR_SEARCH_RESPONSE_TIMEOUT")); }, ms);
       job.waiter = { kind, resolve, reject, timer };
     });
   }
@@ -137,12 +149,13 @@
       // New York can retain a valid verification across form resets. Its
       // enabled Search button is the normal UI signal; do not require a second
       // Verify click when the page already permits this search.
-      if (!force && attempt === 0 && button("Search") && !button("Search").disabled) return;
+      if (!force && attempt === 0 && button("Search") && !button("Search").disabled) { note("verify","reuse"); return; }
       const verify = await until(() => { const b = button("Verify"); return b && !b.disabled && b; }, 3000, "NY_CONNECTOR_VERIFY_BUTTON_TIMEOUT");
       // The portal's visible reCAPTCHA frame advertises a 30-second execution
       // allowance. Let that normal flow finish plus its public API response;
       // a matching 30-second observer deadline could expire first.
       const verification = waitResponse("verify", 45000);
+      note("verify","click");
       verify.click();
       const result = await verification;
       if (result.http_status === 401) {
@@ -200,6 +213,7 @@
     // rendered button update. Wait for the real enabled control, still bounded.
     const search = await until(() => { const b = button("Search"); return b && !b.disabled && b; }, 15000, "NY_CONNECTOR_SEARCH_BUTTON_TIMEOUT");
     const completed = waitResponse("search", 30000);
+    note("search","click");
     search.click();
     const evidence = await completed;
     if (evidence.http_status === 401) {
@@ -218,7 +232,7 @@
     if (event.source !== window || event.origin !== P.NY) return;
     const m = event.data;
     if (m?.channel !== "cc-ny-page-v1" || m.direction !== "request" || !P.validId(m.id) || (m.action !== "verify" && !P.validQuery(m.query)) || active) return;
-    const job = { id: m.id, query: m.query, waiter: null }; active = job;
+    const job = { id: m.id, query: m.query, waiter: null, started:Date.now(), diagnostics:[] }; active = job;
     verificationRetryUsed ||= m.verificationRetryUsed === true;
     let reply;
     try {
@@ -227,6 +241,6 @@
     }
     catch (e) { reply = { ok: false, reason: /^NY_CONNECTOR_[A-Z_]+$/.test(e.message) ? e.message : "NY_CONNECTOR_INCOMPLETE" }; }
     finally { if (job.waiter) clearTimeout(job.waiter.timer); active = null; }
-    window.postMessage({ channel: "cc-ny-page-v1", direction: "response", id: m.id, ...reply, verificationRetryUsed }, P.NY);
+    window.postMessage({ channel: "cc-ny-page-v1", direction: "response", id: m.id, ...reply, verificationRetryUsed, ...(P.TRIAL_ORIGIN ? {ny_diagnostics:P.nyDiagnostics(job.diagnostics)} : {}) }, P.NY);
   });
 })();

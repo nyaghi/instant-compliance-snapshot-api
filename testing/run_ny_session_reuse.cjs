@@ -105,3 +105,13 @@ test('NY form transition stops if the job expires during readiness inspection',a
  assert.equal(result.ok,false);assert.equal(result.reason,'NY_CONNECTOR_INTERRUPTED');
  assert.equal(reloads(),0);assert.equal(h.queries.length,1);
 });
+
+test('trial NY preserves sanitized HTTP evidence when recovery replaces the reason',async()=>{
+ const h=await setup();await h.context.saveRepair({phase:'verified',nextAllowedAt:900000});
+ const original=h.chrome.tabs.sendMessage;
+ h.chrome.tabs.sendMessage=async(tab,m)=>m.action==='search'?{ok:false,reason:'NY_CONNECTOR_VERIFICATION_REJECTED',verificationRetryUsed:true,
+ ny_diagnostics:[{stage:'verify',event:'response',http_status:401,elapsed_ms:27,verified:false,visibility:'visible',payload_type:'object',error_codes:['timeout-or-duplicate','SECRET'],token:'SECRET'}]}:original(tab,m);
+ const r=await h.query(h.connect(),11);assert.equal(r.reason,'NY_CONNECTOR_RECOVERY_REJECTED');
+ assert.equal(r.ny_diagnostics[0].http_status,401);assert.equal(r.ny_diagnostics[0].elapsed_ms,27);
+ assert.ok(!JSON.stringify(r).includes('SECRET'));assert.equal(h.repairs.length,0);
+});

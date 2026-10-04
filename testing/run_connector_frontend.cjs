@@ -13,7 +13,7 @@ async function exercise({state='GA',commands=42,elapsedPerCommand=100,stopStatus
     actions.push(message.action);
     if(message.action==='ping' && ++pings<=missedPings)return;
     queueMicrotask(()=>listener({source:window,origin:'https://staging.compliance-express.com',data:{
-      ...message,direction:'response',ok:true,version:oldIllinois?'0.5.8':'0.5.9',capabilities:incompatible?[]:[...capabilities,'final-four-public-v1',...(oldIllinois?[]:['il-dom-events-v1'])],evidence:{complete:true,rows:[]},page_visibility:'hidden',ny_failure_cause:nyFailureCause,ny_reset_cooldown:true,diagnostics:[{phase:'results',event:'incomplete',elapsed_ms:35000,visibility:'hidden',private_field:'MUST-NOT-EXPORT'}]
+      ...message,direction:'response',ok:true,version:oldIllinois?'0.5.8':'0.5.9',capabilities:incompatible?[]:[...capabilities,'final-four-public-v1',...(oldIllinois?[]:['il-dom-events-v1'])],evidence:{complete:true,rows:[]},page_visibility:'hidden',ny_failure_cause:nyFailureCause,ny_reset_cooldown:true,ny_diagnostics:[{stage:'verify',event:'response',elapsed_ms:15,http_status:401,verified:false,payload_type:'object',visibility:'hidden',error_codes:['timeout-or-duplicate','MUST-NOT-EXPORT'],token:'MUST-NOT-EXPORT'}],diagnostics:[{phase:'results',event:'incomplete',elapsed_ms:35000,visibility:'hidden',private_field:'MUST-NOT-EXPORT'}]
     }}));
   }};
   const context=vm.createContext({window,location:{origin:'https://staging.compliance-express.com'},
@@ -62,7 +62,7 @@ test('trial NY failure diagnostics allow only the two source rejection codes',{s
   const r=await exercise({state:'NY',commands:1,nyFailureCause:cause});assert.ifError(r.error);
   const returned=r.stages.find(s=>s.stage==='browser query returned');
   if(cause.startsWith('NY_CONNECTOR_')){
-   assert.equal(returned.ny_failure_cause,cause);assert.equal(returned.ny_reset_cooldown,true);
+   assert.equal(returned.ny_diagnostics[0].http_status,401);assert.ok(!JSON.stringify(returned).includes('MUST-NOT-EXPORT'));assert.equal(returned.ny_failure_cause,cause);assert.equal(returned.ny_reset_cooldown,true);
   } else {
    assert.equal(returned.ny_failure_cause,undefined);assert.ok(!JSON.stringify(r.stages).includes(cause));
   }

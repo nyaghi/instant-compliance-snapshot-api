@@ -3,7 +3,7 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');const vm=require('node:vm');const path=require('node:path');
 const root=path.join(__dirname,'..','browser-connector');
-async function run({alreadyVerified=false,rejectFirst=false,failSearch=false,verificationDelay=0,trial=false,resetOnClear=false,dirtyFields=false,initialFields={}}={}) {
+async function run({alreadyVerified=false,rejectFirst=false,failSearch=false,verificationDelay=0,trial=false,resetOnClear=false,dirtyFields=false,initialFields={},verifyStatus=200,verifyPayload={verified:true},networkError=false}={}) {
   const origin='https://charities-search.ag.ny.gov',calls=[],listeners={};let searches=0,resolve,clears=0;
   const completed=new Promise(r=>resolve=r);
   class Input {constructor(){this.v='';}get value(){return this.v;}set value(v){this.v=v;}dispatchEvent(){}}
@@ -11,13 +11,13 @@ async function run({alreadyVerified=false,rejectFirst=false,failSearch=false,ver
   if(dirtyFields)for(const input of Object.values(inputs))input.value='Previous organization';
   for(const [key,value] of Object.entries(initialFields))inputs[key].value=value;
   const buttons=[{textContent:'Clear fields',click:()=>{clears++;Object.values(inputs).forEach(x=>x.value='');if(resetOnClear){buttons[2].disabled=true;buttons[1].disabled=false;}}},
-    {textContent:'Verify',disabled:alreadyVerified,click:()=>{calls.push('verify');buttons[2].disabled=false;context.window.fetch('https://charities-search-api.ag.ny.gov/api/recaptcha/verify',{method:'POST'});}},
+    {textContent:'Verify',disabled:alreadyVerified,click:()=>{calls.push('verify');buttons[2].disabled=false;context.window.fetch('https://charities-search-api.ag.ny.gov/api/recaptcha/verify',{method:'POST'}).catch(()=>{});}},
     {textContent:'Search',disabled:!alreadyVerified,click:()=>{calls.push('search');context.window.fetch('https://charities-search-api.ag.ny.gov/api/FileNet/RegistrySearch?ein='+inputs.ein.value);}}];
   class XHR {open(){}send(){}}
   const window={addEventListener:(name,fn)=>listeners[name]=fn,postMessage:resolve};window.top=window;
   window.fetch=async url=>{
     const verify=url.includes('/recaptcha/verify');let status=200,payload;
-    if(verify){if(verificationDelay)await new Promise(r=>setTimeout(r,verificationDelay/1000));payload={verified:true};}
+    if(verify){if(networkError)throw Error("SECRET-NETWORK");status=verifyStatus;if(verificationDelay)await new Promise(r=>setTimeout(r,verificationDelay/1000));payload=verifyPayload;}
     else {
       searches++;status=rejectFirst&&searches===1?401:200;
       if(status===401)buttons[1].disabled=false;
@@ -75,4 +75,25 @@ test('verification finishing after the portal execution window is still observed
 });
 test('verification remains bounded when the portal never finishes in time',async()=>{
   const {reply,calls}=await run({verificationDelay:60000});assert.equal(reply.ok,false);assert.equal(reply.reason,'NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT');assert.deepEqual(calls,['verify']);
+});
+
+for(const status of [200,401,403,429,500])test('trial NY diagnostics retain verification HTTP '+status+' without private payload',async()=>{
+ const {reply,calls}=await run({trial:true,verifyStatus:status,verifyPayload:{verified:status===200,token:'SECRET-TOKEN',message:'SECRET-MESSAGE','error-codes':['timeout-or-duplicate','SECRET-CODE']}});
+ const responses=reply.ny_diagnostics.filter(e=>e.stage==='verify'&&e.event==='response');
+ assert.ok(responses.length>0);assert.ok(responses.every(e=>e.http_status===status));
+ assert.deepEqual([...responses[0].error_codes],['timeout-or-duplicate']);
+ assert.ok(!JSON.stringify(reply).includes('SECRET'));
+ assert.equal(reply.ok,status===200);assert.equal(calls.filter(c=>c==='verify').length,status===401?2:1);
+});
+test('trial NY diagnostics capture network failure without leaking exception',async()=>{
+ const {reply}=await run({trial:true,networkError:true});assert.equal(reply.ok,false);
+ assert.ok(reply.ny_diagnostics.some(e=>e.event==='network_error'));assert.ok(!JSON.stringify(reply).includes('SECRET'));
+});
+test('trial NY timeout diagnostics preserve deadline behavior',async()=>{
+ const {reply}=await run({trial:true,verificationDelay:60000});assert.equal(reply.reason,'NY_CONNECTOR_VERIFY_RESPONSE_TIMEOUT');
+ assert.ok(reply.ny_diagnostics.some(e=>e.stage==='verify'&&e.event==='timeout'));
+});
+test('mature adapter does not emit trial diagnostics',async()=>{
+ if(process.env.CC_TEST_TRIAL_DIR)return;
+ const {reply}=await run();assert.equal(reply.ny_diagnostics,undefined);
 });
