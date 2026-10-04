@@ -338,6 +338,34 @@ class OctoberTwoSpeedControls(unittest.TestCase):
         with patch.object(cc,'licensed_charity_names',return_value=(['Ceres'],['Ceres'])):
             with self.assertRaises(ValueError):cc.final_four_browser_lookup(org,'NV',evidence)
         self.assertEqual(seen[0]['name'],'Ceres')
+    def test_trial_nc_omits_generated_single_word_but_keeps_reviewed_aliases(self):
+        org=cc.checker.Organization('Give Something Back','81-1504712')
+        required=['Give Something Back','GIVE SOMETHING BACK, A NEW JERSEY NONPROFIT CORPORATION',
+                  'Give Something Back A NJ Nonprofit Corporation','GIVE SOMETHING BA CK, A NEW JERSEY NONPROFIT CORPORATION']
+        for trial in (False,True):
+            calls=[]
+            def evidence(q):
+                calls.append(q['name'])
+                return {'state':'NC','query':q,'complete':True,'verification_pending':False,'total':0,'rows':[]}
+            with patch.object(cc,'licensed_charity_names',return_value=(required,['Something','Give-Something Back','give something'])), \
+                 patch.object(cc,'trial_identity',return_value={'origin':'isolated'} if trial else None):
+                result=cc.final_four_browser_lookup(org,'NC',evidence)
+            self.assertEqual(result.status,'Not Registered')
+            self.assertTrue(set(required).issubset(calls))
+            self.assertIn('Give-Something Back',calls)
+            self.assertIn('give something',calls)
+            self.assertEqual('Something' in calls,not trial)
+    def test_trial_nc_reviewed_acronyms_and_incomplete_aliases_remain_required(self):
+        org=cc.checker.Organization('Prepared 4 Life','20-4235269')
+        for alias in ('P4L','ELI','Something'):
+            calls=[]
+            def evidence(q):
+                calls.append(q['name'])
+                return {'state':'NC','query':q,'complete':q['name']!=alias,'verification_pending':False,'total':0,'rows':[]}
+            with patch.object(cc,'licensed_charity_names',return_value=([org.organization_name,alias],[])), \
+                 patch.object(cc,'trial_identity',return_value={'origin':'isolated'}):
+                with self.assertRaises(ValueError):cc.final_four_browser_lookup(org,'NC',evidence)
+            self.assertIn(alias,calls)
     def test_nm_courtesy_preserves_aliases_and_ein_is_still_primary(self):
         required=["First Choice Women's Resource Centers, Inc.",'Independent Reviewed Alias']
         names=cc.nm_browser_courtesy_names(required,[])

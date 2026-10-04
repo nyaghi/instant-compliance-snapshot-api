@@ -6668,7 +6668,8 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
             other != name and name.startswith(other) for other in planned)]
     if state == "TN":
         generated = tn_browser_generated_queries(required, generated)
-    if state in {"AL", "NV"} and all(len(distinctive_match_tokens(name)) >= 2 for name in required):
+    if (state in {"AL", "NV"} or state == "NC" and trial_identity()) and all(
+            len(distinctive_match_tokens(name)) >= 2 for name in required):
         # Keep every reviewed name and punctuation form. A generated generic
         # single word (e.g. Education or Fitness) produces an unrelated grid;
         # it is not another reviewed identity that the master must search.
