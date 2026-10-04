@@ -7161,6 +7161,46 @@ def final_four_compact_search_evidence(record, evidence):
             "master_search_audit": {"source_total": evidence["total"], "rejected": evidence["total"]-len(retained)}}
 
 
+def nc_completed_candidates_for_review(record):
+    """Retain complete NC profiles after a later query fails, without new I/O.
+
+    These are review candidates, never automatic registration conclusions.
+    Reuse the same public-evidence parsers and signed query pairing as the
+    normal lookup. An incomplete search cannot become a negative on rejection.
+    """
+    if record.get("state") != "NC":
+        return []
+    org = checker.Organization(record["organization_name"], record["ein"])
+    names = [] if record.get("mode") == "sales" else record.get("alternate_names", [])
+    context = REVIEWED_NAME_CONTEXT.set({canonical_ein_digits(org.ein): tuple(names)})
+    cards, retained = {}, {}
+    try:
+        for item in record.get("completed", []):
+            query, evidence = item.get("query", {}), item.get("evidence", {})
+            if query.get("state") != "NC":
+                continue
+            try:
+                final_four_clean_evidence(evidence, query)
+                if query.get("operation") == "search":
+                    for card in final_four_search_evidence(evidence, "NC", query):
+                        candidates = final_four_search_candidate_scores(org.organization_name, org.ein, "NC", card)
+                        if any(c["decision"] != "rejected" for c in candidates):
+                            cards[card["identifier"]] = card
+                elif query.get("operation") == "detail":
+                    card = cards.get(query.get("identifier"))
+                    if not card or query.get("url") != card.get("url"):
+                        continue
+                    row = nc_charity_profile_evidence(card, evidence.get("fields"))
+                    row["_identity_outcome"] = "possible"
+                    retained[row["identifier"]] = row
+            except (ValueError, KeyError, TypeError):
+                # Invalid evidence cannot supply a candidate or status.
+                continue
+        return list(retained.values())
+    finally:
+        REVIEWED_NAME_CONTEXT.reset(context)
+
+
 def final_four_connector_failure(record, reason=""):
     state = record["state"]
     sources = {"AL": "https://ago.igovsolution.net/online/Lookups/Business.aspx",
@@ -7188,6 +7228,10 @@ def final_four_connector_failure(record, reason=""):
            "The trial browser connector is unavailable or needs an update." if reason in {"NY_CONNECTOR_UNAVAILABLE", "NY_CONNECTOR_UPDATE_REQUIRED"} else
            "The registry search or selected record did not return complete, confirmed information.")
     result.source_note = f"{why} CharityClarity reports Unable to Confirm. This incomplete lookup does not establish non-registration or delinquency."
+    candidates = nc_completed_candidates_for_review(record)
+    if candidates:
+        result._cc_identity_review = {"records": candidates, "search_complete": False, "freshness": ""}
+        result.source_note += " Complete North Carolina profiles were retrieved before the later search failed. Their identity remains unconfirmed; use Accept or Reject match to review them. Rejecting them does not establish non-registration because the search is incomplete."
     started = time.perf_counter() - max(0, time.time() - record["issued"])
     data = response_data_for_lookup(result, "", org, org.organization_name, org.ein, state, started)
     # Explicit failure requests return before the continuation's name context
@@ -7828,6 +7872,30 @@ def dc_repeated_name_identity(org, row, deadline):
     return "possible"
 
 
+def licensed_same_legal_dba_records(rows):
+    """Resolve wording differences only among already confirmed registrations.
+
+    An explicit DBA keeps the complete legal name before the marker. It is
+    not a discovered alias, fuzzy prefix, former name, or independent proof
+    of identity. Status/date conflict checks still follow in the selector.
+    """
+    keys, explicit_dba, eins = set(), False, set()
+    for row in rows:
+        if row.get("_identity_outcome") != "accepted":
+            return False
+        ein = canonical_ein_digits(row.get("ein", ""))
+        if ein:
+            eins.add(ein)
+        name = canonical_name_punctuation(row.get("name", ""))
+        marker = re.search(r"\b(?:d\s*/?\s*b\s*/?\s*a|doing\s+business\s+as)\b\s+\S", name, re.I)
+        legal = name[:marker.start()].rstrip(" (,;-/") if marker else name
+        if len(distinctive_match_tokens(legal)) < 2:
+            return False
+        keys.add(complete_name_identity_key(legal))
+        explicit_dba = explicit_dba or bool(marker)
+    return len(rows) > 1 and explicit_dba and len(keys) == 1 and len(eins) <= 1
+
+
 def select_licensed_charity(org, rows, state, deadline):
     """Evaluate the full candidate set, then prefer a live record of the same entity.
 
@@ -7881,7 +7949,7 @@ def select_licensed_charity(org, rows, state, deadline):
     if len(pool) > 1:
         keys = {normalized_match_name(r["name"]) for r in pool}
         addresses_agree = all(r.get("address_evidence", {}).get("decision") == "corroborated" for r in pool)
-        if len(keys) > 1 and not addresses_agree:
+        if len(keys) > 1 and not addresses_agree and not licensed_same_legal_dba_records(pool):
             return None, f"{state} returned multiple matching registrations whose identities could not be distinguished safely. Confirm the registration number."
         top_date = max((r.get("expiration") or date.min) for r in pool)
         tied = [r for r in pool if (r.get("expiration") or date.min) == top_date]
@@ -8204,6 +8272,23 @@ def explicit_legal_identity_match(original_name: str, registry_name: str) -> boo
     return bool(wanted and normalized_match_name(legal) == wanted)
 
 
+def supplied_separator_component_match(original_name: str, registry_name: str) -> bool:
+    """Exact supplied display-name component, never a fuzzy shortened alias.
+
+    Search planners already split spaced dash/slash labels. Recognize an
+    exact component here without adding its broad/suffix variants to identity
+    targets. The caller retains geographic, institution and candidate-EIN
+    safeguards; licensed registries still apply their address corroboration.
+    """
+    parts = licensed_compound_retrieval_names(original_name)
+    candidate = complete_name_identity_key(registry_name)
+    return bool(candidate and any(
+        complete_name_identity_key(part) == candidate
+        and (len(distinctive_match_tokens(part)) >= 2
+             or len(re.findall(r"[A-Za-z0-9]+", part)) == 1 and len(candidate) >= 5)
+        for part in parts))
+
+
 def score_candidate(expected_name: str, expected_ein: str | None, candidate: dict) -> dict:
     """Conservative identity score used for debug traces and shared gates."""
     candidate_name = clean_registry_name(str(candidate.get("name") or candidate.get("matched_registry_name") or ""))
@@ -8354,6 +8439,8 @@ def registry_name_is_safe_for_org(registry_name: str, original_name: str, ein: s
     if institutional_subunit_identity_conflict(original_name, registry_name):
         return False
     if redundant_bracket_acronym_match(original_name, registry_name):
+        return True
+    if supplied_separator_component_match(original_name, registry_name):
         return True
     if explicit_legal_identity_match(original_name, registry_name):
         return True
