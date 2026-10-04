@@ -80,7 +80,8 @@ test('NC reports visible verification without collecting tokens or submitting th
  h.context.document.querySelector=()=>null;
  const r=await h.api.handle({action:'registry-ready'});
  assert.equal(r.ready,false);assert.equal(r.verification_pending,true);assert.equal(h.formClicks(),0);
- assert.deepEqual(Object.keys(r).sort(),['documentId','ready','url','verification_pending']);
+ assert.deepEqual(Object.keys(r).sort(),['documentId','page_visibility','ready','url','verification_pending']);
+ assert.equal(r.page_visibility,h.context.document.visibilityState);
  h.context.document.title='Search Charities';assert.equal((await h.api.handle({action:'registry-ready'})).verification_pending,false);
 });
 test('NC explicit exemption can omit expiration without omitting identity',async()=>{

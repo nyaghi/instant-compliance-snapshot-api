@@ -3,6 +3,13 @@
   const P = CCNYProtocol;
   const ORIGIN = location.origin;
   if (!P.allowedOrigin(ORIGIN) || window !== window.top) return;
+  // Read only the current display's usable rectangle, not browsing/session data.
+  // A small application window must not disable the isolated collector layout.
+  if (P.TRIAL_ORIGIN === ORIGIN) chrome.runtime.onMessage?.addListener((m, sender, respond) => {
+    if (m?.action !== 'trial-collector-display' || sender.id !== chrome.runtime.id || sender.tab) return;
+    const s = window.screen;
+    respond({left:s.availLeft,top:s.availTop,width:s.availWidth,height:s.availHeight});
+  });
   let singleActive = null;
   const trialJobs = new Map();
   const reply = (id, response) => window.postMessage({ channel: "cc-ny-staging-v1", direction: "response", ...response, id }, ORIGIN);

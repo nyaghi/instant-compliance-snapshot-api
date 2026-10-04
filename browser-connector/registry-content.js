@@ -1420,7 +1420,8 @@
       }
     }
     if (m.action === "registry-ready") return {ready:registryDocumentReady(), url:location.href, documentId,
-      ...(NV ? {nv_readiness:nvReadiness(),page_visibility:document.visibilityState} : {}),
+      ...((NV||NC) ? {page_visibility:document.visibilityState} : {}),
+      ...(NV ? {nv_readiness:nvReadiness()} : {}),
       ...(NC ? {verification_pending:/^Just a moment/i.test(document.title||'')
         && /Performing security verification|verifies you are not a bot/i.test(text(document.body)),
         ...(m.query ? {nc_search_idle:ncIdleSearch(m.query),nc_readiness:ncReadiness(m.query)} : {})} : {}),

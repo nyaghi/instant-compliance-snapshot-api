@@ -23,6 +23,22 @@ async function registryTrialWindowOptions(job, origin) {
   let bounds;
   try { bounds=await chrome.windows.get(origin.windowId); }
   catch(error) { if(layout==='visible')throw error;return options; }
+  // Existing full-size layouts stay unchanged. The ordinary trial may be
+  // launched from a small window; use that window's actual display work area
+  // rather than silently creating overlapping, unfocused collectors.
+  const usable=b=>['left','top','width','height'].every(k=>Number.isFinite(b?.[k]))
+    && b.width>=1080 && b.height>=700 && b.width<=16384 && b.height<=16384;
+  if(layout==='coordinated' && bounds?.state!=='minimized' && !usable(bounds)) {
+    let timer;
+    try {
+      const display=await Promise.race([
+        chrome.tabs.sendMessage(origin.id,{action:'trial-collector-display'},{frameId:0}),
+        new Promise(resolve=>{timer=setTimeout(()=>resolve(null),Math.max(1,Math.min(250,job.activeExpiresAt-Date.now())));})
+      ]);
+      if(usable(display) && Math.abs(display.left)<=65536 && Math.abs(display.top)<=65536)
+        bounds={...display,state:'normal'};
+    } catch {} finally {clearTimeout(timer);}
+  }
   if(!['left','top','width','height'].every(k=>Number.isFinite(bounds?.[k]))
       || bounds.width<1080 || bounds.height<700 || bounds.state==='minimized') {
     if(layout!=='visible')return options;
@@ -107,7 +123,13 @@ async function registryNevadaVisibleSnapshot(job) {
       const focus=await chrome.windows.getLastFocused();
       const prior=(await chrome.tabs.query({active:true,windowId:focus.id}))[0];
       if(focus.focused && focus.id===tab.windowId){job.nvVisibilityOutcome='already_foreground';return null;}
-      if(!registryNevadaOwnedForeground(prior,source)){job.nvVisibilityOutcome='user_window_or_tab';return null;}
+      if(!registryNevadaOwnedForeground(prior,source)){
+        job.nvVisibilityOutcome='user_window_or_tab';
+        registryNevadaDiagnostic(job,'visibility-snapshot-refused',{
+          prior_present:!!prior,prior_active:prior?.active===true,prior_owned:!!prior&&owned.has(prior.id),
+          prior_is_source:prior?.id===source.id,browser_focused:focus.focused===true});
+        return null;
+      }
       // Starting an explicit trial already creates focused collector windows.
       // Give this owned stalled window the same single bounded activation even
       // when the initiating application (e.g. Codex) remains foreground. Keep
@@ -152,7 +174,8 @@ async function registryNevadaExposeWindow(job,previous) {
       || !new URL(tab.url).pathname.startsWith('/portal/public/') || siblings.length!==1 || siblings[0].id!==tab.id
       || (!ownedTransition && (prior?.id!==previous.id || prior.url!==previous.url))
       || !registryNevadaOwnedForeground(prior,source) || nv.state==='minimized' || bounds.state==='minimized'
-      || !['left','top','width','height'].every(k=>Number.isFinite(bounds[k])) || bounds.width<1000 || bounds.height<700
+      || !['left','top','width','height'].every(k=>Number.isFinite(bounds[k]))
+      || !previous.coordinatedPlacement && (bounds.width<1000 || bounds.height<700)
       || job.closed || Date.now()>=job.activeExpiresAt || job.tab!==tab.id || !owned.has(tab.id)){
     job.nvVisibilityOutcome='ownership_or_geometry_changed';
     registryNevadaDiagnostic(job,'visibility-refused',{
@@ -241,10 +264,13 @@ async function registryMessage(job, message) {
   // in-flight command and document; expose only our owned trial tab once.
   // Capture the active tab first so a later user switch is never overridden.
   const initialVisible=await registryNevadaVisibleSnapshot(job);
-  if (initialVisible) visibilityTimer=setTimeout(()=>{
+  visibilityTimer=setTimeout(()=>{
     visibilityPending=(async()=>{
       if (settled || job.closed || Date.now()>=job.activeExpiresAt || !owned.has(job.tab)) return;
-      previousVisible=await registryNevadaMakeVisible(job,initialVisible);
+      // A concurrent owned collector can finish opening after the initial
+      // snapshot. Reassess a missing snapshot once; never override a changed
+      // foreground captured in a previously eligible snapshot.
+      previousVisible=await registryNevadaMakeVisible(job,initialVisible || await registryNevadaVisibleSnapshot(job));
     })();
   },Math.min(3000,Math.max(1,job.activeExpiresAt-Date.now())));
   try {
@@ -291,7 +317,7 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
   const started = Date.now();
   const deadline = Math.min(Date.now()+Math.max(1,Math.min(45000,budgetMs)), job.activeExpiresAt);
   let verificationPending=false, visibilityAttempted=false, previousVisible=null, submissionRetried=false, resubmissionAcknowledged=false;
-  const nvInitialVisible=await registryNevadaVisibleSnapshot(job);
+  let nvInitialVisible=await registryNevadaVisibleSnapshot(job), nvVisibilityRechecked=false, ncVisibilityRechecked=false;
   try { while (!job.closed && Date.now()<deadline) {
     try {
       if(P.TRIAL_ORIGIN && job.registryState==='NM') {
@@ -303,6 +329,17 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
           throw new Error('NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR');
       }
       const value=await registryMessage(job,{action:"registry-ready",...(ncSubmittedQuery ? {query:ncSubmittedQuery} : {})});
+      if(P.TRIAL_ORIGIN && job.registryState==='NC' && !ncSubmittedQuery) {
+        const observed={phase:'readiness',ready:value?.ready===true,
+          visible:value?.page_visibility==='visible',verification_pending:value?.verification_pending===true,
+          separate_window_activated:job.ncWindowVisibilityAttempted===true};
+        const signature=JSON.stringify(observed);
+        if(signature!==job.ncSubmissionSignature) {
+          job.ncSubmissionSignature=signature;job.ncSubmissionObservations ||= [];
+          const entry={seconds:(Date.now()-started)/1000,...observed};
+          if(job.ncSubmissionObservations.length<8)job.ncSubmissionObservations.push(entry);else job.ncSubmissionObservations[7]=entry;
+        }
+      }
       if(P.TRIAL_ORIGIN && job.registryState==='NC' && ncSubmittedQuery && value?.nc_readiness) {
         const observed=value.nc_readiness,signature=JSON.stringify(observed);
         if(signature!==job.ncSubmissionSignature){
@@ -322,8 +359,12 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
       // Fast readiness polls never leave registryMessage's visibility timer
       // pending long enough to fire. Recover a stalled initial form using the
       // same owned-tab lease as detail commands, without a request or reload.
-      if(job.registryState==='NV'&&!value?.ready&&Date.now()-started>=3000)
+      if(job.registryState==='NV'&&!value?.ready&&Date.now()-started>=3000) {
+        if(!nvInitialVisible && !nvVisibilityRechecked) {
+          nvVisibilityRechecked=true;nvInitialVisible=await registryNevadaVisibleSnapshot(job);
+        }
         await registryNevadaMakeVisible(job,nvInitialVisible);
+      }
       verificationPending=['NC','TN'].includes(job.registryState)&&value?.verification_pending===true;
       if(job.registryState==='TN'&&!value?.ready&&!visibilityAttempted&&Date.now()-started>=3000) {
         visibilityAttempted=true;previousVisible=await registryNorthCarolinaVisibility(job);
@@ -370,6 +411,10 @@ async function registryReady(job, oldDocument = null, path = null, budgetMs = 45
       visibilityAttempted=true;
       previousVisible=await registryNorthCarolinaVisibility(job);
     }
+    if(P.TRIAL_ORIGIN && job.registryState==='NC' && verificationPending
+        && !job.ncWindowVisibilityAttempted && !ncVisibilityRechecked && Date.now()-started>=3000 && Date.now()<deadline) {
+      ncVisibilityRechecked=true;await registryNorthCarolinaVisibility(job);
+    }
     await nap(200);
   }
   throw new Error(verificationPending ? `NY_CONNECTOR_${job.registryState}_VERIFICATION_PENDING` : "NY_CONNECTOR_TAB_READY_TIMEOUT");
@@ -389,6 +434,32 @@ async function registryNorthCarolinaVisibility(job) {
   if (!['NC','TN'].includes(job.registryState) || job.closed || !owned.has(job.tab)) return null;
   try {
     const tab=await chrome.tabs.get(job.tab), source=await chrome.tabs.get(job.sender.tab.id);
+    if(P.TRIAL_ORIGIN && job.registryState==='NC' && !job.ncWindowVisibilityAttempted && tab.active && tab.windowId!==source.windowId
+        && new URL(source.url).origin===P.TRIAL_ORIGIN && new URL(tab.url).origin===registryOrigin('NC')
+        && new URL(tab.url).pathname.startsWith('/online_services/search/') && Date.now()<job.activeExpiresAt) {
+      const focus=await chrome.windows.getLastFocused();
+      const prior=(await chrome.tabs.query({active:true,windowId:focus.id}))[0];
+      if(focus.focused && focus.id===tab.windowId || !registryNevadaOwnedForeground(prior,source))return null;
+      const siblings=await chrome.tabs.query({windowId:tab.windowId});
+      if(siblings.length!==1 || siblings[0].id!==tab.id)return null;
+      const placement=await registryTrialWindowOptions(job,source);
+      if(!placement.focused)return null;
+      const latest=await chrome.tabs.get(tab.id),currentSource=await chrome.tabs.get(source.id);
+      const latestFocus=await chrome.windows.getLastFocused();
+      const active=(await chrome.tabs.query({active:true,windowId:focus.id}))[0];
+      if(latest.windowId!==tab.windowId || latest.url!==tab.url || !latest.active
+          || currentSource.windowId!==source.windowId || currentSource.url!==source.url
+          || latestFocus.id!==focus.id || latestFocus.focused!==focus.focused
+          || active?.id!==prior.id || active.url!==prior.url
+          || !owned.has(tab.id) || job.closed || Date.now()>=job.activeExpiresAt)return null;
+      const {type,...update}=placement;
+      await chrome.windows.update(tab.windowId,update);
+      job.ncWindowVisibilityAttempted=true;
+      diagnostic('nc-verification',job,'owned separate window; same document and deadline');
+      // Closing the collector releases this window. Do not activate a prior
+      // tab inside another collector while its own command is still running.
+      return null;
+    }
     if (tab.active || tab.windowId!==source.windowId || new URL(tab.url).origin!==registryOrigin(job.registryState)
         || (job.registryState==='NC' ? !new URL(tab.url).pathname.startsWith('/online_services/search/') : tab.url!==registryStart('TN'))) return null;
     const prior=(await chrome.tabs.query({active:true,windowId:tab.windowId}))[0];
