@@ -6001,7 +6001,7 @@ def il_verification_recovery(record, payload, now):
     if (record.get("state") != "IL" or record.get("purpose") != "registration"
             or record.get("recovery_protocol") != "il-fresh-page-v1"
             or (record.get("connector_version") != "0.5.10"
-                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79"}))
+                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80"}))
             or payload.get("reason") != "NY_CONNECTOR_IL_VERIFICATION_PENDING"
             or record.get("il_verification_recovery")
             or now + 120 >= record["issued"] + NY_CONNECTOR_TTL_SECONDS):
@@ -8352,9 +8352,39 @@ def supplied_separator_component_match(original_name: str, registry_name: str) -
         for part in parts))
 
 
+def supplied_complete_name_identity_match(original_name: str, registry_name: str) -> bool:
+    """Recognize complete names supplied by the user, not shortened probes.
+
+    A multiword component of a spaced separator label is an identity input.
+    A lone nickname remains a possible match; an explicit registry DBA must
+    agree with the supplied legal name and the other supplied component.
+    """
+    parts = licensed_compound_retrieval_names(original_name)
+    if len(parts) < 2:
+        return False
+    if any(guard(original_name, registry_name) for guard in (
+            institution_location_conflict, named_jurisdiction_scope_conflict,
+            named_geographic_scope_conflict, embedded_institution_identity_conflict,
+            institutional_subunit_identity_conflict, related_affiliate_or_chapter_mismatch)):
+        return False
+    complete = {complete_name_identity_key(part) for part in parts
+                if len(distinctive_match_tokens(part)) >= 2}
+    candidate = complete_name_identity_key(registry_name)
+    if candidate in complete:
+        return True
+    marker = re.search(r"\b(?:d\s*/?\s*b\s*/?\s*a|doing\s+business\s+as|also\s+known\s+as|aka)\b", registry_name, re.I)
+    if not marker:
+        return False
+    legal = complete_name_identity_key(registry_name[:marker.start()].rstrip(" (,;-/"))
+    alias = complete_name_identity_key(registry_name[marker.end():].strip(" (,;-/"))
+    return bool(legal in complete and alias and alias != legal
+                and alias in {complete_name_identity_key(part) for part in parts})
+
+
 def score_candidate(expected_name: str, expected_ein: str | None, candidate: dict) -> dict:
     """Conservative identity score used for debug traces and shared gates."""
-    candidate_name = clean_registry_name(str(candidate.get("name") or candidate.get("matched_registry_name") or ""))
+    raw_candidate_name = str(candidate.get("name") or candidate.get("matched_registry_name") or "")
+    candidate_name = clean_registry_name(raw_candidate_name)
     candidate_ein = re.sub(r"\D", "", str(candidate.get("ein") or candidate.get("fein") or ""))
     expected_digits = re.sub(r"\D", "", expected_ein or "")
     decision = "rejected"
@@ -8388,6 +8418,10 @@ def score_candidate(expected_name: str, expected_ein: str | None, candidate: dic
             score += 80
             decision = "accepted"
             reason = "MATCH_EXPLICIT_ACRONYM_ALIAS" if reason != "MATCH_EIN_EXACT" else reason
+        elif supplied_complete_name_identity_match(expected_name, raw_candidate_name):
+            score += 80
+            decision = "accepted"
+            reason = "MATCH_SUPPLIED_COMPLETE_NAME" if reason != "MATCH_EIN_EXACT" else reason
         elif registry_name_is_safe_for_org(candidate_name, expected_name, expected_digits):
             score += 55
             if score >= 70:
@@ -9025,6 +9059,8 @@ def distinctive_entity_extension_mismatch_against_targets(original_name: str, re
     Callers must still pass the registry candidate through the master identity
     check. Search prefixes are not acceptance targets.
     """
+    if supplied_complete_name_identity_match(original_name, registry_name):
+        return False
     registry_norm = normalized_match_name(registry_name)
     return distinctive_entity_extension_mismatch(original_name, registry_name) and not any(
         registry_norm and registry_norm == normalized_match_name(target) for target in targets
@@ -10635,6 +10671,12 @@ def me_fast_direct_query_variants(org) -> list[str]:
         if compatible_ein_alias_for_name(original_name, alias):
             add(alias)
             add(re.sub(r"^(?:the|a|an)\s+", "", alias or "", flags=re.I).strip())
+
+    # Preserve supplied separator components before the six-query cap is
+    # consumed by cosmetic variants of the combined display name. These are
+    # generated from the input, never discovered aliases or extra requests.
+    for component in licensed_compound_retrieval_names(original_name):
+        add(component)
 
     # Maine searches literal prefixes: AND and & are not interchangeable at
     # the registry. Cover both before spending the same six slots on hyphens.
@@ -24320,7 +24362,7 @@ def ny_connector_advance(record):
     org = checker.Organization(record["organization_name"], record["ein"])
     started = time.perf_counter()
     supports_browser_detail = (record.get("connector_version") in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"}
-                               or bool(trial_identity() and record.get("connector_version") in {"0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79"}))
+                               or bool(trial_identity() and record.get("connector_version") in {"0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80"}))
     try:
         if record.get("purpose") == "identity":
             ein = canonical_ein_digits(record["ein"])
@@ -24370,7 +24412,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79"})):
+        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80"})):
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()

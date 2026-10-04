@@ -45,27 +45,28 @@ class EnteredSeparatorControls(unittest.TestCase):
                 self.assertIn('RedRover',cc.licensed_compound_retrieval_names(name))
                 self.assertTrue(cc.ar_registry_name_is_safe('United Animal Nations',name,targets,''))
                 score=cc.score_candidate(name,'680124097',{'name':'United Animal Nations'})
-                self.assertEqual(score['decision'],'possible')
+                self.assertEqual(score['decision'],'accepted')
 
-    def test_no_discovery_or_automatic_identity_acceptance(self):
+    def test_no_discovery_or_automatic_nickname_acceptance(self):
         with patch.object(cc,'known_names_for_ein',return_value=[]),patch.object(cc,'discover_organization_names',side_effect=AssertionError('Discovery forbidden')):
             name='United Animal Nations \u2014 RedRover'
             self.assertEqual(cc.score_candidate(name,'680124097',{'name':'United Animal Nations','ein':'123456789'})['reason'],'REJECT_DIFFERENT_EIN')
-            for candidate in ['United Animal Nations','RedRover']:
-                self.assertNotEqual(cc.score_candidate(name,'680124097',{'name':candidate})['decision'],'accepted')
+            self.assertEqual(cc.score_candidate(name,'680124097',{'name':'United Animal Nations'})['decision'],'accepted')
+            self.assertNotEqual(cc.score_candidate(name,'680124097',{'name':'RedRover'})['decision'],'accepted')
 
     def test_rule_generalizes_without_organization_or_ein_exceptions(self):
         for name,component in [('Beacon Literacy Network - ReadTogether','Beacon Literacy Network'),('Harbor Animal Rescue / RescueBridge','Harbor Animal Rescue, Inc.'),('River Habitat Alliance — GreenFuture','GreenFuture')]:
             with self.subTest(name=name):
                 self.assertTrue(cc.supplied_separator_component_match(name,component))
-                self.assertEqual(cc.score_candidate(name,'123456789',{'name':component})['decision'],'possible')
+                self.assertEqual(cc.score_candidate(name,'123456789',{'name':component})['decision'],
+                                 'accepted' if len(cc.distinctive_match_tokens(component))>=2 else 'possible')
                 self.assertFalse(cc.supplied_separator_component_match(name,component+' Foundation'))
 
-    def test_licensed_identity_still_requires_corroboration_for_component(self):
+    def test_complete_supplied_legal_name_uses_normal_full_name_identity(self):
         import time
         name='Beacon Literacy Network - ReadTogether'
         org=cc.checker.Organization(name,'123456789')
-        for address,expected in [({'decision':'unavailable'},'possible'),({'decision':'corroborated'},'accepted')]:
+        for address,expected in [({'decision':'unavailable'},'accepted'),({'decision':'corroborated'},'accepted')]:
             with patch.object(cc,'reconciled_registry_address',return_value=address):
                 row={'name':'Beacon Literacy Network','ein':'','location':'Example, NY'}
                 self.assertEqual(cc.licensed_charity_identity(org,row,'NC',time.monotonic()+1),expected)

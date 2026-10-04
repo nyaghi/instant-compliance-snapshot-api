@@ -81,3 +81,39 @@ test('display bridge answers only the same extension background in its isolated 
  assert.equal(replies.length,0);listeners[0]({action:'trial-collector-display'},{id:'fixture'},x=>replies.push(x));
  assert.equal(replies.length,1);assert.deepEqual(JSON.parse(JSON.stringify(replies[0])),{left:0,top:0,width:1920,height:1040});
 });
+
+test('NV exposes only its isolated collector when Chrome is inactive on a stale unrelated tab',async()=>{
+ const {h,job,changes}=await setup('NV');
+ h.tabs.set(4,{id:4,windowId:30,url:'https://example.org/user-page',active:true});
+ let focus={id:30,focused:false};h.chrome.windows.getLastFocused=async()=>focus;
+ const snapshot=await h.context.registryNevadaVisibleSnapshot(job);
+ assert.equal(snapshot.inactiveBrowser,true);assert.ok(snapshot.coordinatedPlacement);
+ await h.context.registryNevadaMakeVisible(job,snapshot);
+ assert.equal(changes.length,1);assert.equal(changes[0].id,20);
+ assert.equal(job.nvInactiveBrowserActivationUsed,true);
+ assert.equal(job.nvVisibilityOutcome,'activated_from_inactive_browser');
+ assert.equal(job.activeExpiresAt,70000);assert.equal(h.queries.length,0);
+ focus={id:20,focused:true};await h.context.registryRestoreNevadaVisibility(job);
+ assert.equal(changes.length,1,'Unrelated prior window must never be restored or changed');
+ focus={id:30,focused:false};job.nvVisibilityAttempted=false;
+ assert.equal(await h.context.registryNevadaVisibleSnapshot(job),null,'One inactive-browser activation per job');
+});
+
+test('NV inactive-browser recovery cancels for an active user page or a context change',async()=>{
+ for(const condition of ['already-focused','focus-changed','tab-changed','shared','expired','closed']){
+  const {h,job,changes}=await setup('NV');
+  h.tabs.set(4,{id:4,windowId:30,url:'https://example.org/user-page',active:true});
+  let focus={id:30,focused:condition==='already-focused'};
+  h.chrome.windows.getLastFocused=async()=>focus;
+  const snapshot=await h.context.registryNevadaVisibleSnapshot(job);
+  if(condition==='already-focused'){assert.equal(snapshot,null);continue;}
+  assert.ok(snapshot);
+  if(condition==='focus-changed')focus={id:30,focused:true};
+  if(condition==='tab-changed')h.tabs.get(4).url='https://example.org/changed';
+  if(condition==='shared')h.tabs.set(5,{id:5,windowId:20,url:'https://example.org/shared',active:false});
+  if(condition==='expired')job.activeExpiresAt=0;
+  if(condition==='closed')job.closed=true;
+  await h.context.registryNevadaMakeVisible(job,snapshot);
+  assert.equal(changes.length,0,condition);
+ }
+});

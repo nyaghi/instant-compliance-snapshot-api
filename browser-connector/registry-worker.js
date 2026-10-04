@@ -105,6 +105,10 @@ async function registryNevadaVisibleSnapshot(job) {
     let coordinatedPlacement=null;
     if(tab.active && tab.windowId!==source.windowId && registryTrialLayout(source)==='coordinated') {
       const planned=await registryTrialWindowOptions(job,source),actual=await chrome.windows.get(tab.windowId);
+      // Chrome may clamp a small collector to its minimum window size. The
+      // planned footprint is still valid for our isolated window; exact old
+      // coordinates must not disable bounded visibility recovery.
+      if(planned.focused){const {type,...placement}=planned;coordinatedPlacement=placement;}
       if(planned.focused && ['left','top','width','height'].every(k=>actual[k]===planned[k])) {
         // Matching coordinates do not prove that another application/window
         // has not covered this document. Confirm visibility in the page.
@@ -123,7 +127,12 @@ async function registryNevadaVisibleSnapshot(job) {
       const focus=await chrome.windows.getLastFocused();
       const prior=(await chrome.tabs.query({active:true,windowId:focus.id}))[0];
       if(focus.focused && focus.id===tab.windowId){job.nvVisibilityOutcome='already_foreground';return null;}
-      if(!registryNevadaOwnedForeground(prior,source)){
+      // getLastFocused can describe a stale, unrelated tab while Chrome is
+      // not foreground at all. An explicit trial may expose its own isolated
+      // collector once in that case, without touching/restoring that old tab.
+      const inactiveBrowser=focus.focused===false && prior?.active===true
+        && !job.nvInactiveBrowserActivationUsed && !!coordinatedPlacement;
+      if(!registryNevadaOwnedForeground(prior,source) && !inactiveBrowser){
         job.nvVisibilityOutcome='user_window_or_tab';
         registryNevadaDiagnostic(job,'visibility-snapshot-refused',{
           prior_present:!!prior,prior_active:prior?.active===true,prior_owned:!!prior&&owned.has(prior.id),
@@ -137,7 +146,8 @@ async function registryNevadaVisibleSnapshot(job) {
       job.nvVisibilityOutcome=focus.focused?'eligible_separate_window':'eligible_owned_browser_activation';
       return {mode:'window',id:prior.id,windowId:prior.windowId,url:prior.url,
         nvWindowId:tab.windowId,sourceWindowId:source.windowId,sourceUrl:source.url,
-        browserFocused:focus.focused===true,coordinatedPlacement};
+        browserFocused:focus.focused===true,coordinatedPlacement,
+        inactiveBrowser:inactiveBrowser&&!registryNevadaOwnedForeground(prior,source)};
     }
   } catch {job.nvVisibilityOutcome='snapshot_unavailable';}
   return null;
@@ -168,12 +178,15 @@ async function registryNevadaExposeWindow(job,previous) {
   // Record the actual owned foreground so completion restores that collector.
   const ownedTransition=prior?.id!==previous.id && registryNevadaOwnedForeground(prior,source)
     && owned.has(prior.id);
+  const inactiveBrowser=previous.inactiveBrowser===true && focus.focused===false
+    && !job.nvInactiveBrowserActivationUsed && !!previous.coordinatedPlacement
+    && prior?.active===true && prior.id===previous.id && prior.url===previous.url;
   if(!tab.active || tab.windowId!==previous.nvWindowId || tab.windowId===source.windowId
       || source.windowId!==previous.sourceWindowId || source.url!==previous.sourceUrl
       || new URL(source.url).origin!==P.TRIAL_ORIGIN || new URL(tab.url).origin!==registryOrigin('NV')
       || !new URL(tab.url).pathname.startsWith('/portal/public/') || siblings.length!==1 || siblings[0].id!==tab.id
       || (!ownedTransition && (prior?.id!==previous.id || prior.url!==previous.url))
-      || !registryNevadaOwnedForeground(prior,source) || nv.state==='minimized' || bounds.state==='minimized'
+      || (!registryNevadaOwnedForeground(prior,source) && !inactiveBrowser) || nv.state==='minimized' || bounds.state==='minimized'
       || !['left','top','width','height'].every(k=>Number.isFinite(bounds[k]))
       || !previous.coordinatedPlacement && (bounds.width<1000 || bounds.height<700)
       || job.closed || Date.now()>=job.activeExpiresAt || job.tab!==tab.id || !owned.has(tab.id)){
@@ -203,12 +216,14 @@ async function registryNevadaExposeWindow(job,previous) {
   const width=Math.min(960,Math.floor(bounds.width*.7)),height=Math.min(700,Math.floor(bounds.height*.7));
   const restore={...previous,id:prior.id,url:prior.url};
   job.nvVisibilityAttempted=true;job.nvPreviousVisible=restore;
+  if(inactiveBrowser)job.nvInactiveBrowserActivationUsed=true;
   // An already tiled collector must keep its footprint, not expand over peers.
   const placement=previous.coordinatedPlacement || {focused:true,state:'normal',width,height,
     left:bounds.left+bounds.width-width-8,top:bounds.top+bounds.height-height-8};
   await chrome.windows.update(tab.windowId,placement);
   diagnostic('nv-visibility',job,'owned separate window; same document and deadline');
-  job.nvVisibilityOutcome=ownedTransition?'activated_after_owned_transition':'activated_separate_window';
+  job.nvVisibilityOutcome=inactiveBrowser?'activated_from_inactive_browser':ownedTransition?'activated_after_owned_transition':'activated_separate_window';
+  registryNevadaDiagnostic(job,'visibility-activated',{inactive_browser:inactiveBrowser});
   await saveRuntime();return restore;
 }
 async function registryNevadaMakeVisible(job, initialVisible) {
@@ -291,6 +306,7 @@ async function registryMessage(job, message) {
 async function registryRestoreNevadaVisibility(job) {
   const previous=job.nvPreviousVisible;job.nvPreviousVisible=null;
   if (!P.TRIAL_ORIGIN || job.registryState!=='NV' || !previous || !owned.has(job.tab)) return;
+  if(previous.inactiveBrowser)return; // Never bring an unrelated stale Chrome tab forward.
   try {
     const tab=await chrome.tabs.get(job.tab),prior=await chrome.tabs.get(previous.id);
     const source=await chrome.tabs.get(job.sender.tab.id);
