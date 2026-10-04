@@ -49,7 +49,7 @@ test('trial Nevada stays active when another state activates its own collector',
 });
 
 test('Nevada continuation reuses its window and ordinary states keep existing creation',async()=>{
-  for(const [trial,state,expectedWindows] of [[true,'NV',1],[false,'NV',0],[true,'NC',1],[true,'TN',0],[true,'IL',1],[false,'IL',0]]){
+  for(const [trial,state,expectedWindows] of [[true,'NV',1],[false,'NV',0],[true,'NC',1],[true,'TN',1],[true,'IL',1],[false,'IL',0]]){
     const {h,job,windows}=await setup(trial);job.registryState=state;
     const url=vm.runInContext(`registryStart('${state}')`,h.context);
     await h.context.registryNavigate(job,url);

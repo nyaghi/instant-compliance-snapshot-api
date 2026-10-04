@@ -31,8 +31,8 @@ test('visible validation creates four disjoint collector windows inside the sour
  }
  assert.equal(h.tabs.get(1).url,URL);assert.equal(h.tabs.get(1).windowId,10);
 });
-test('ordinary app, normal validation, and nontrial paths never enable visible layout',async()=>{
- for(const url of [ORIGIN+'/',ORIGIN+'/?collector_layout=visible',ORIGIN+'/connector/final-four-validation.html',ORIGIN+'/connector/final-four-validation.html?collector_layout=other','https://staging.compliance-express.com/connector/final-four-validation.html?collector_layout=visible']){
+test('unrelated paths, explicit ordinary comparison and protected origins keep old placement',async()=>{
+ for(const url of [ORIGIN+'/unrelated',ORIGIN+'/connector/final-four-validation.html?collector_layout=ordinary',ORIGIN+'/connector/final-four-validation.html?collector_layout=other','https://staging.compliance-express.com/connector/final-four-validation.html?collector_layout=visible']){
   const {h,job}=await setup(url);h.chrome.windows.get=async()=>{throw Error('must not inspect window');};
   const options=await h.context.registryTrialWindowOptions(job('NV'),h.tabs.get(1));
   assert.equal(options.focused,false);assert.equal(options.width,undefined);
@@ -80,8 +80,8 @@ test('visible NY reuse exposes its existing owned window without refreshing veri
 });
 
 test('NY visibility reuse never takes user windows, other pages, or canceled work',async()=>{
- for(const change of ['ordinary','inactive','shared','same-window','navigated','closed','expired','source-moved']){
-  const {h,job}=await setup(change==='ordinary'?ORIGIN+'/':URL),j=job('NY');
+ for(const change of ['unrelated','inactive','shared','same-window','navigated','closed','expired','source-moved']){
+  const {h,job}=await setup(change==='unrelated'?ORIGIN+'/unrelated':URL),j=job('NY');
   h.tabs.set(99,{id:99,windowId:20,url:'https://charities-search.ag.ny.gov/RegistrySearch',active:true});
   vm.runInContext('owned.add(99)',h.context);j.tab=99;
   h.chrome.tabs.query=async({windowId})=>[...h.tabs.values()].filter(t=>t.windowId===windowId);
@@ -96,4 +96,51 @@ test('NY visibility reuse never takes user windows, other pages, or canceled wor
   h.chrome.windows.update=async()=>assert.fail('must not focus');
   await h.context.registryExposeReusedNyTab(j,source);
  }
+});
+
+test('ordinary trial coordinates five non-overlapping active windows including Tennessee',async()=>{
+ for(const url of [ORIGIN+'/',ORIGIN+'/connector/final-four-validation.html']) {
+  const {h,job,created}=await setup(url);
+  for(const state of ['NV','NY','IL','NC','TN']) {
+   const j=job(state);await h.context.registryCreateOwnedTab(j,'https://example.invalid/'+state,h.tabs.get(1));
+   assert.equal(j.activeExpiresAt,70000);
+  }
+  assert.equal(created.length,5);
+  for(const r of created) {
+   assert.equal(r.focused,true);assert.equal(r.state,'normal');
+   assert.ok(r.left>=20&&r.top>=30&&r.left+r.width<=1420&&r.top+r.height<=1030);
+  }
+  for(let i=0;i<5;i++)for(let j=i+1;j<5;j++) {
+   const a=created[i],b=created[j];
+   assert.ok(a.left+a.width<=b.left||b.left+b.width<=a.left||a.top+a.height<=b.top||b.top+b.height<=a.top);
+  }
+  assert.equal(h.tabs.get(1).url,url);assert.equal(h.tabs.get(1).windowId,10);
+ }
+});
+
+test('coordinated NY reuse repositions only its owned isolated window without navigation',async()=>{
+ const {h,job}=await setup(ORIGIN+'/'),j=job('NY'),updates=[];
+ h.tabs.set(99,{id:99,windowId:20,url:'https://charities-search.ag.ny.gov/RegistrySearch',active:true});
+ vm.runInContext('owned.add(99)',h.context);j.tab=99;
+ h.chrome.tabs.query=async({windowId})=>[...h.tabs.values()].filter(t=>t.windowId===windowId);
+ h.chrome.windows.update=async(id,options)=>updates.push({id,...options});
+ assert.equal(await h.context.registryExposeReusedNyTab(j,{...h.tabs.get(1)}),true);
+ assert.equal(updates.length,1);assert.equal(updates[0].id,20);
+ assert.equal(updates[0].width,456);assert.equal(updates[0].left,492);
+ assert.equal(h.created.length,0);assert.equal(h.repairs.length,0);assert.equal(h.queries.length,0);
+});
+
+test('ordinary layout falls back safely on unavailable geometry without changing requests',async()=>{
+ const {h,job}=await setup(ORIGIN+'/',{width:800,height:600});
+ const options=await h.context.registryTrialWindowOptions(job('NV'),h.tabs.get(1));
+ assert.equal(options.focused,false);assert.equal(options.width,undefined);
+});
+
+test('Nevada fallback never enlarges a correctly coordinated window over its peers',async()=>{
+ const {h,job,created}=await setup(ORIGIN+'/'),j=job('NV');
+ await h.context.registryCreateOwnedTab(j,'https://orion.nv.gov/portal/public/',h.tabs.get(1));
+ h.chrome.windows.get=async id=>id===10?{left:20,top:30,width:1400,height:1000,state:'normal'}:created[0];
+ assert.equal(await h.context.registryNevadaVisibleSnapshot(j),null);
+ assert.equal(j.nvVisibilityOutcome,'coordinated_window');
+ assert.equal(j.nvVisibilityAttempted,undefined);
 });

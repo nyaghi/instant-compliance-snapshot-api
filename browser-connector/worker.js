@@ -136,8 +136,8 @@ const boot = (async () => {
       && Date.now()<tnIdle.expiresAt && tnIdle.expiresAt<=Date.now()+300000 && !allJobs().some(j=>j?.tab===tnIdle.id)) {
     try {
       const tab=await chrome.tabs.get(tnIdle.id),source=await chrome.tabs.get(tnIdle.sourceTabId);
-      if(tab.url===registryStart('TN') && tab.windowId===tnIdle.windowId && source.windowId===tab.windowId
-          && new URL(source.url).origin===P.TRIAL_ORIGIN) {trialTnIdle=tnIdle;armTrialTnIdle();}
+      if(tab.url===registryStart('TN') && tab.windowId===tnIdle.windowId && source.windowId===(tnIdle.sourceWindowId??tnIdle.windowId)
+          && new URL(source.url).origin===P.TRIAL_ORIGIN && await registryTennesseeOwnedWindow(tab,source)) {trialTnIdle=tnIdle;armTrialTnIdle();}
     } catch {}
   }
   const nyIdle=previous?.trialNyIdle;
@@ -230,8 +230,8 @@ async function close(job, reason, finishId) {
         && job.lastResponse?.ok===true && job.finalFourReusableForm && owned.has(tabId)) {
       try {
         const tab=await chrome.tabs.get(tabId),source=await chrome.tabs.get(job.sender.tab.id);
-        if(tab.url===registryStart('TN') && tab.windowId===source.windowId && new URL(source.url).origin===P.TRIAL_ORIGIN) {
-          trialTnIdle={id:tabId,sourceTabId:source.id,windowId:tab.windowId,expiresAt:Date.now()+300000};armTrialTnIdle();
+        if(tab.url===registryStart('TN') && new URL(source.url).origin===P.TRIAL_ORIGIN && await registryTennesseeOwnedWindow(tab,source)) {
+          trialTnIdle={id:tabId,sourceTabId:source.id,sourceWindowId:source.windowId,windowId:tab.windowId,expiresAt:Date.now()+300000};armTrialTnIdle();
         } else await removeOwned(tabId);
       } catch {await removeOwned(tabId);}
     } else if(tabId!==null && P.TRIAL_ORIGIN && job.registryState==='NY' && finishId && !reason

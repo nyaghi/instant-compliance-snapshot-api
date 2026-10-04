@@ -1,58 +1,84 @@
 /* Public-registry transport in the existing connector; no independent runtime. */
 const registryOrigin = state => ({IL:"https://charitable.illinoisattorneygeneral.gov",GA:"https://verify.sos.ga.gov",AL:"https://ago.igovsolution.net",NC:"https://www.sosnc.gov",NV:"https://orion.nv.gov",TN:"https://tncab.tnsos.gov",NM:"https://secure.nmdoj.gov"})[state];
 const registryStart = state => registryOrigin(state) + ({IL:"/search",GA:"/verification/Search.aspx?facility=Y",AL:"/online/Lookups/Business.aspx",NC:"/online_services/search/by_title/search_charities",NV:"/portal/public/#/public/nvsos/en/CaseXscreen?screen=external-GenericFilingsSearch&tabRoute=business",TN:"/portal/registered-charities-search",NM:"/CharitySearch/"})[state];
-async function registryTrialWindowOptions(job, origin) {
-  const options={type:'normal',focused:false},source=new URL(origin.url);
-  // Explicit lab diagnostic only. An active tab in an occluded window can
-  // still be hidden. Compare four visible, non-overlapping collector windows
-  // without changing ordinary app behavior or moving any existing window.
+function registryTrialLayout(origin) {
+  const source=new URL(origin.url);
   if(!P.TRIAL_ORIGIN || source.origin!==P.TRIAL_ORIGIN
-      || source.pathname!=='/connector/final-four-validation.html'
-      || source.searchParams.get('collector_layout')!=='visible')return options;
-  const slot=['NV','NY','IL','NC'].indexOf(job.registryState);
+      || !['/','/connector/final-four-validation.html'].includes(source.pathname))return '';
+  if(source.pathname==='/connector/final-four-validation.html') {
+    const requested=source.searchParams.get('collector_layout');
+    if(requested==='visible')return 'visible'; // Preserve the four-state comparison.
+    if(requested && requested!=='coordinated')return '';
+  }
+  return 'coordinated';
+}
+async function registryTrialWindowOptions(job, origin) {
+  const options={type:'normal',focused:false};
+  // Active tabs can still be hidden when their windows cover one another.
+  // Keep owned trial collectors disjoint; never move the user's source window.
+  const layout=registryTrialLayout(origin);
+  if(!layout)return options;
+  const slot=(layout==='visible'?['NV','NY','IL','NC']:['NV','NY','IL','NC','TN']).indexOf(job.registryState);
   if(slot<0)return options;
-  const bounds=await chrome.windows.get(origin.windowId);
+  let bounds;
+  try { bounds=await chrome.windows.get(origin.windowId); }
+  catch(error) { if(layout==='visible')throw error;return options; }
   if(!['left','top','width','height'].every(k=>Number.isFinite(bounds?.[k]))
-      || bounds.width<1080 || bounds.height<700 || bounds.state==='minimized')
+      || bounds.width<1080 || bounds.height<700 || bounds.state==='minimized') {
+    if(layout!=='visible')return options;
     throw new Error('NY_CONNECTOR_VISIBLE_LAYOUT_UNAVAILABLE');
+  }
   if(job.closed || Date.now()>=job.activeExpiresAt)throw new Error('NY_CONNECTOR_INTERRUPTED');
   const current=await chrome.tabs.get(origin.id);
   if(current.windowId!==origin.windowId || current.url!==origin.url)
     throw new Error('NY_CONNECTOR_VISIBLE_LAYOUT_UNAVAILABLE');
-  const width=Math.floor((bounds.width-24)/2),height=Math.floor((bounds.height-24)/2);
+  const columns=layout==='visible'?2:3;
+  const width=Math.floor((bounds.width-8*(columns+1))/columns),height=Math.floor((bounds.height-24)/2);
   return {...options,focused:true,state:'normal',width,height,
-    left:bounds.left+8+(slot%2)*(width+8),top:bounds.top+8+Math.floor(slot/2)*(height+8)};
+    left:bounds.left+8+(slot%columns)*(width+8),top:bounds.top+8+Math.floor(slot/columns)*(height+8)};
 }
 async function registryCreateOwnedTab(job,url,origin) {
   let tab;
-  // Ordinary trial isolation preserves focus. Only the explicit validation
-  // comparison above arranges visible windows. Mature connectors stay exact.
-  if(P.TRIAL_ORIGIN && ['NV','NY','IL','NC'].includes(job.registryState) && new URL(origin.url).origin===P.TRIAL_ORIGIN){
+  // Tennessee also needs its own visible document for Kendo modal transitions.
+  // The mature connector and unrelated trial states retain their existing path.
+  if(P.TRIAL_ORIGIN && (['NV','NY','IL','NC'].includes(job.registryState)
+      || job.registryState==='TN'&&registryTrialLayout(origin)==='coordinated') && new URL(origin.url).origin===P.TRIAL_ORIGIN){
     const window=await chrome.windows.create({url,...await registryTrialWindowOptions(job,origin)});
     tab=window?.tabs?.[0];
     if(!Number.isInteger(tab?.id))throw new Error('NY_CONNECTOR_INCOMPLETE');
   } else tab=await chrome.tabs.create({windowId:origin.windowId,url,active:false});
   job.tab=tab.id;owned.add(tab.id);await saveRuntime();
 }
+async function registryTennesseeOwnedWindow(tab,source) {
+  if(!owned.has(tab.id) || tab.url!==registryStart('TN'))return false;
+  if(tab.windowId===source.windowId)return true; // Existing same-window sessions.
+  const siblings=await chrome.tabs.query({windowId:tab.windowId});
+  return siblings.length===1 && siblings[0].id===tab.id && tab.active;
+}
 async function registryExposeReusedNyTab(job, origin) {
-  // The visible comparison creates windows in front, but a retained NY page
+  // The layout creates windows in front, but a retained NY or TN page
   // can be covered when the validation page is brought forward for another
   // run. Expose only its isolated window; preserve the document and session.
-  if(!P.TRIAL_ORIGIN || job.registryState!=='NY' || job.closed
+  if(!P.TRIAL_ORIGIN || !['NY','TN'].includes(job.registryState) || job.closed
       || Date.now()>=job.activeExpiresAt || !owned.has(job.tab))return false;
   try {
-    const sourceUrl=new URL(origin.url);
-    if(sourceUrl.origin!==P.TRIAL_ORIGIN || sourceUrl.pathname!=='/connector/final-four-validation.html'
-        || sourceUrl.searchParams.get('collector_layout')!=='visible')return false;
+    const layout=registryTrialLayout(origin);
+    if(!layout)return false;
     const tab=await chrome.tabs.get(job.tab),source=await chrome.tabs.get(origin.id);
-    if(!nyRegistryPage(tab.url) || !tab.active || tab.windowId===source.windowId
+    if(!(job.registryState==='NY'?nyRegistryPage(tab.url):tab.url===registryStart('TN')) || !tab.active || tab.windowId===source.windowId
         || source.windowId!==origin.windowId || source.url!==origin.url)return false;
     const siblings=await chrome.tabs.query({windowId:tab.windowId});
     if(siblings.length!==1 || siblings[0].id!==tab.id || !siblings[0].active
         || siblings[0].url!==tab.url || job.closed || Date.now()>=job.activeExpiresAt
         || job.tab!==tab.id || !owned.has(tab.id))return false;
-    await chrome.windows.update(tab.windowId,{focused:true});
-    diagnostic('ny-reuse-visible',job,'same owned window and verified document');
+    const placement=layout==='coordinated'?await registryTrialWindowOptions(job,origin):{focused:true};
+    if(!placement.focused)return false;
+    const {type,...update}=placement;
+    const latest=await chrome.tabs.get(tab.id);
+    if(job.closed || Date.now()>=job.activeExpiresAt || !owned.has(tab.id)
+        || latest.windowId!==tab.windowId || latest.url!==tab.url || !latest.active)return false;
+    await chrome.windows.update(tab.windowId,update);
+    diagnostic(job.registryState.toLowerCase()+'-reuse-visible',job,'same owned window and verified document');
     return true;
   } catch { return false; } // No extra request or recovery when focus is unavailable.
 }
@@ -60,6 +86,12 @@ async function registryNevadaVisibleSnapshot(job) {
   if (!P.TRIAL_ORIGIN || job.registryState!=='NV' || job.nvVisibilityAttempted || !owned.has(job.tab)) return null;
   try {
     const tab=await chrome.tabs.get(job.tab), source=await chrome.tabs.get(job.sender.tab.id);
+    if(tab.active && tab.windowId!==source.windowId && registryTrialLayout(source)==='coordinated') {
+      const planned=await registryTrialWindowOptions(job,source),actual=await chrome.windows.get(tab.windowId);
+      if(planned.focused && ['left','top','width','height'].every(k=>actual[k]===planned[k])) {
+        job.nvVisibilityOutcome='coordinated_window';return null;
+      }
+    }
     if (!tab.active && tab.windowId===source.windowId && new URL(source.url).origin===P.TRIAL_ORIGIN)
       return (await chrome.tabs.query({active:true,windowId:tab.windowId}))[0]||null;
     if (tab.active && tab.windowId!==source.windowId && new URL(source.url).origin===P.TRIAL_ORIGIN) {
@@ -436,8 +468,11 @@ async function performRegistryQuery(job, query) {
       try {
         const tab=await chrome.tabs.get(saved.id),source=await chrome.tabs.get(job.sender.tab.id);
         if(owned.has(saved.id) && saved.expiresAt>Date.now() && tab.url===registryStart('TN')
-            && tab.windowId===saved.windowId && tab.windowId===source.windowId && new URL(source.url).origin===P.TRIAL_ORIGIN) {
+            && tab.windowId===saved.windowId && source.windowId===(saved.sourceWindowId??saved.windowId)
+            && new URL(source.url).origin===P.TRIAL_ORIGIN
+            && await registryTennesseeOwnedWindow(tab,source)) {
           job.tab=saved.id;job.finalFourReusableForm=true;
+          await registryExposeReusedNyTab(job,source);
           // Reuse page initialization only. tnSearch closes any old dialog,
           // clears observed rows and submits every new query afresh.
           diagnostic('tn-session-reuse',job,'initialized owned page; fresh query required');

@@ -22,6 +22,7 @@ function fixture(enabled=true){
     return update(id,options);
   };
   h.chrome.tabs.reload=async id=>{reloads.push(id);docs.set(id,++serial);};
+  h.chrome.tabs.query=async q=>[...h.tabs.values()].filter(t=>t.windowId===q.windowId && (q.active===undefined||t.active===q.active));
   h.chrome.tabs.sendMessage=async(id,m)=>{
     const tab=h.tabs.get(id);
     if(m.action==='registry-ready')return {ready:true,documentId:String(docs.get(id)),url:tab.url};
@@ -169,8 +170,8 @@ for(const state of ['NV','TN']) {
     assert.equal((await h.query(p,2,search)).ok,true);assert.equal((await h.query(p,3,detail)).ok,true);
     assert.equal(h.created.length,1);assert.equal(h.calls[0].action,`registry-${state.toLowerCase()}`);
     assert.equal(h.calls.every(c=>c.budgetMs>0&&c.budgetMs<=(state==='NV'&&c.query?.operation==='search'?150000:45000)),true);
-    assert.equal(h.tabs.get(h.created[0]).active,state==='NV');
-    assert.equal(h.tabs.get(h.created[0]).windowId===h.tabs.get(1).windowId,state!=='NV');
+    assert.equal(h.tabs.get(h.created[0]).active,['NV','TN'].includes(state));
+    assert.equal(h.tabs.get(h.created[0]).windowId===h.tabs.get(1).windowId,!['NV','TN'].includes(state));
     p.onMessage.emit({action:'finish',id:id(4)});await tick();
     if(state==='TN')await h.advance(300001);
     assert.deepEqual(h.removed,h.created);assert.ok(h.tabs.has(2));
