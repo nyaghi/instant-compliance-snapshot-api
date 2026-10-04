@@ -19141,6 +19141,11 @@ def wi_snapshot_record_match(record: dict, org, targets: list[str]) -> tuple[int
         priority = checker.name_match_priority_for_targets(registry_name, targets)
         if wi_snapshot_canonical_target_match(registry_name, targets):
             priority = max(priority, 5)
+        if supplied_separator_component_match(original_name, registry_name):
+            # The full supplied legal/DBA name has already passed the same
+            # Wisconsin scope guards as an ordinary single entered name.
+            # Do not discard it merely because the display label joins names.
+            priority = max(priority, 4)
         full_target = wi_contains_full_target_name(registry_name, targets)
         if priority < 4 and not full_target:
             continue
