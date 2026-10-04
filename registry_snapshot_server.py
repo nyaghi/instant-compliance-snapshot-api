@@ -6879,7 +6879,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
             selected, review = select_licensed_charity(org, records, state, deadline)
             if selected and not review and selected["status"] in {"Current", "Upcoming Filing", "Exempt"}:
                 if index >= len(required) - 1 or licensed_primary_positive_complete(
-                        org, selected, records, unreviewed_scope=unreviewed_scope):
+                        org, selected, records, unreviewed_scope=unreviewed_scope, state=state):
                     break
     result = final_four_license_result(org, state, records, deadline, sources[state])
     if covered_reviewed_names:
@@ -7610,7 +7610,7 @@ def nc_redundant_broad_query(query, required, records):
     return False
 
 
-def licensed_primary_positive_complete(org, selected, records, *, unreviewed_scope=False):
+def licensed_primary_positive_complete(org, selected, records, *, unreviewed_scope=False, state=None):
     """End fallback work only after a complete search and safe primary match.
 
     Called by the final-four adapter after every potentially matching row in
@@ -7621,8 +7621,18 @@ def licensed_primary_positive_complete(org, selected, records, *, unreviewed_sco
     This changes query completion, never name acceptance or status rules.
     """
     if (unreviewed_scope or not selected or selected.get("status") not in {"Current", "Upcoming Filing", "Exempt"}
-            or selected.get("_identity_outcome") != "accepted"
-            or any(row.get("_identity_outcome") in {"possible", "conflict"} for row in records)):
+            or selected.get("_identity_outcome") != "accepted"):
+        return False
+    # The master selector has already considered every completed candidate.
+    # In the isolated NC trial, an address-conflicting namesake must not force
+    # extra alias requests after a primary record is positively corroborated.
+    # This agrees with final selection; it does not accept the conflicting row.
+    # Possible identities, incomplete scope, and master review still block exit.
+    corroborated_nc_primary = (state == "NC" and bool(trial_identity())
+        and selected.get("address_evidence", {}).get("decision") == "corroborated")
+    if any(row.get("_identity_outcome") == "possible"
+           or row.get("_identity_outcome") == "conflict" and not corroborated_nc_primary
+           for row in records):
         return False
     observed_ein = canonical_ein_digits(selected.get("ein", ""))
     if observed_ein:

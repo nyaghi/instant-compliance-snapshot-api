@@ -728,6 +728,61 @@ class LookupControls(unittest.TestCase):
         self.assertEqual([q['name'] for q in calls if q['operation']=='search'],[primary])
         self.assertEqual(result.matched_registry_identifier,'SL000448')
 
+    def test_nc_confirmed_primary_and_address_conflict_use_master_selection_before_aliases(self):
+        # Public NC shape: the second card has the same displayed name but a
+        # different legal name and office. Fixtures remain test-only.
+        for primary in ['Operation Homefront, Inc.', 'Example Relief Network, Inc.']:
+            with self.subTest(primary=primary):
+                org=cc.checker.Organization(primary,'32-0033325')
+                calls=[]
+                second_url=NC['profile_url'].rsplit('/',1)[0]+'/22568403'
+                def source(q):
+                    calls.append(dict(q))
+                    if q['operation']=='search':
+                        if q['name']!=primary:
+                            raise ValueError('Later alias returned HTTP 429')
+                        rows=[{**NC,'CSL Legal Name':primary},
+                              {**NC,'CSL Legal Name':'Separate Local Charity',
+                               'display_name':primary,'aliases':[primary,'Separate Local Charity'],
+                               'License':'SL016449','profile_url':second_url}]
+                        return {'state':'NC','query':q,'complete':True,
+                                'verification_pending':False,'rows':rows,'total':2}
+                    other=q['identifier']=='SL016449'
+                    fields={**NC_PROFILE,'Name':primary,'Registration #':q['identifier'],
+                            'profile_url':q['url'],'City':'Lawrenceville' if other else 'San Antonio',
+                            'State':'NJ' if other else 'TX'}
+                    return {'query':q,'complete':True,'fields':fields}
+                def address(*args,**kwargs):
+                    return {'decision':'conflict' if 'Lawrenceville' in str(args) else 'corroborated',
+                            'ein_linked_location':'San Antonio, TX'}
+                with patch.object(cc,'licensed_charity_names',return_value=([primary,'Separate Reviewed DBA'],[])), \
+                     patch.object(cc,'reconciled_registry_address',side_effect=address), \
+                     patch.object(cc,'licensed_charity_street_evidence',return_value={}), \
+                     patch.object(cc,'trial_identity',return_value={'origin':'isolated'}):
+                    result=cc.final_four_browser_lookup(org,'NC',source)
+                self.assertTrue(result.success)
+                self.assertEqual(result.matched_registry_identifier,'SL000448')
+                self.assertEqual([q['operation'] for q in calls],['search','detail','detail'])
+
+    def test_nc_primary_exit_preserves_identity_scope_and_nontrial_guards(self):
+        org=cc.checker.Organization('Example Relief Network','12-3456789')
+        selected={'name':org.organization_name,'ein':'','status':'Current',
+                  '_identity_outcome':'accepted','match':{'decision':'accepted'},
+                  'address_evidence':{'decision':'corroborated'}}
+        conflict={'_identity_outcome':'conflict'}
+        with patch.object(cc,'trial_identity',return_value={'origin':'isolated'}):
+            for state in ['AL','NV','TN',None]:
+                self.assertFalse(cc.licensed_primary_positive_complete(org,selected,[selected,conflict],state=state))
+            self.assertFalse(cc.licensed_primary_positive_complete(org,selected,[selected,conflict],state='NC',unreviewed_scope=True))
+            self.assertFalse(cc.licensed_primary_positive_complete(org,selected,[selected,{'_identity_outcome':'possible'}],state='NC'))
+            for changes in [{'address_evidence':{'decision':'unavailable'}},
+                            {'name':'Separate Reviewed Alias'}, {'status':'Revoked'},
+                            {'ein':'98-7654321'}, {'_identity_outcome':'conflict'}]:
+                altered={**selected,**changes}
+                self.assertFalse(cc.licensed_primary_positive_complete(org,altered,[altered,conflict],state='NC'),changes)
+        with patch.object(cc,'trial_identity',return_value=None):
+            self.assertFalse(cc.licensed_primary_positive_complete(org,selected,[selected,conflict],state='NC'))
+
     def test_trial_nc_equivalent_name_group_uses_longest_existing_literal_prefix(self):
         required=['Example Charity, Inc.','Example Charity Inc']
         calls=[]
