@@ -70,13 +70,37 @@ test('NV distinguishes a concurrent owned Tennessee activation from a user tab s
  await h.context.registryRestoreNevadaVisibility(job);assert.deepEqual(changes.map(x=>x.id),[20,10]);
  assert.equal(h.tabs.get(6).active,true);
 });
-test('NV never claims an unfocused browser, unrelated tab, or a non-Nevada job',async()=>{
- for(const reason of ['native-app','personal-tab','NY','IL','NC']){
+test('NV never claims an unrelated tab or a non-Nevada job',async()=>{
+ for(const reason of ['personal-tab','NY','IL','NC']){
   const {h,job,windows,focus}=await setup();
   if(reason==='native-app')for(const w of windows.values())w.focused=false;
   else if(reason==='personal-tab'){focus(99);h.tabs.set(9,{id:9,windowId:99,active:true,url:'https://example.org/'});}
   else job.registryState=reason;
   assert.equal(await h.context.registryNevadaVisibleSnapshot(job),null,reason);
+ }
+});
+
+test('NV may activate an initially unfocused owned browser once without a reload or deadline change',async()=>{
+ const {h,job,windows,changes,focus}=await setup();focus(10);
+ for(const w of windows.values())w.focused=false;
+ h.chrome.windows.getLastFocused=async()=>({...windows.get(10)});
+ const snapshot=await h.context.registryNevadaVisibleSnapshot(job);
+ assert.equal(snapshot.browserFocused,false);
+ assert.ok(await h.context.registryNevadaMakeVisible(job,snapshot));
+ assert.equal(changes.length,1);assert.equal(changes[0].id,20);assert.equal(changes[0].focused,true);
+ assert.equal(job.activeExpiresAt,70000);assert.equal(h.repairs.length,0);assert.equal(h.queries.length,0);
+ assert.equal(await h.context.registryNevadaMakeVisible(job,snapshot),null);
+ assert.equal(changes.length,1);
+});
+
+test('NV cancels activation if browser focus changes after the captured lease',async()=>{
+ for(const initiallyFocused of [true,false]){
+  const {h,job,windows,changes}=await setup();windows.get(10).focused=initiallyFocused;
+  h.chrome.windows.getLastFocused=async()=>({...windows.get(10)});
+  const snapshot=await h.context.registryNevadaVisibleSnapshot(job);assert.ok(snapshot);
+  windows.get(10).focused=!initiallyFocused;
+  assert.equal(await h.context.registryNevadaMakeVisible(job,snapshot),null);
+  assert.equal(changes.length,0);
  }
 });
 test('NV may recover from an unchanged owned collector without editing its page or restoring a closed collector',async()=>{

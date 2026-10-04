@@ -6001,7 +6001,7 @@ def il_verification_recovery(record, payload, now):
     if (record.get("state") != "IL" or record.get("purpose") != "registration"
             or record.get("recovery_protocol") != "il-fresh-page-v1"
             or (record.get("connector_version") != "0.5.10"
-                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77"}))
+                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78"}))
             or payload.get("reason") != "NY_CONNECTOR_IL_VERIFICATION_PENDING"
             or record.get("il_verification_recovery")
             or now + 120 >= record["issued"] + NY_CONNECTOR_TTL_SECONDS):
@@ -6876,7 +6876,8 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
             row.get("status") in {"Current", "Upcoming Filing", "Exempt"}
             and (canonical_ein_digits(row.get("ein", "")) == canonical_ein_digits(org.ein)
                  or (normalized_match_name(row["name"]) == normalized_match_name(org.organization_name)
-                     and len(distinctive_match_tokens(org.organization_name)) >= 2))
+                     and len(distinctive_match_tokens(org.organization_name)) >= 2)
+                 or state == "NC" and nc_entered_components_complete(org, row, completed_searches))
             for row in records)
         # A covering NC probe may return the primary alongside an older alias.
         # Finish all distinct reviewed-name probes before accepting a positive;
@@ -6887,7 +6888,8 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
             selected, review = select_licensed_charity(org, records, state, deadline)
             if selected and not review and selected["status"] in {"Current", "Upcoming Filing", "Exempt"}:
                 if index >= len(required) - 1 or licensed_primary_positive_complete(
-                        org, selected, records, unreviewed_scope=unreviewed_scope, state=state):
+                        org, selected, records, unreviewed_scope=unreviewed_scope, state=state,
+                        completed_searches=completed_searches):
                     break
     result = final_four_license_result(org, state, records, deadline, sources[state])
     if covered_reviewed_names:
@@ -7618,7 +7620,25 @@ def nc_redundant_broad_query(query, required, records):
     return False
 
 
-def licensed_primary_positive_complete(org, selected, records, *, unreviewed_scope=False, state=None):
+def nc_entered_components_complete(org, row, completed_searches):
+    """A literal entered component is primary only after every component search.
+
+    This is a completion gate, not identity acceptance. The caller still runs
+    the unchanged master selector and requires corroboration before exiting.
+    Discovered aliases, partial words and short names cannot enable this gate.
+    """
+    if not trial_identity():
+        return False
+    parts = licensed_compound_retrieval_names(org.organization_name)
+    completed = {name.casefold() for name in completed_searches}
+    return bool(parts and all(part.casefold() in completed for part in parts)
+                and any(len(distinctive_match_tokens(part)) >= 2
+                        and normalized_match_name(row.get("name", "")) == normalized_match_name(part)
+                        for part in parts))
+
+
+def licensed_primary_positive_complete(org, selected, records, *, unreviewed_scope=False, state=None,
+                                      completed_searches=()):
     """End fallback work only after a complete search and safe primary match.
 
     Called by the final-four adapter after every potentially matching row in
@@ -7645,6 +7665,9 @@ def licensed_primary_positive_complete(org, selected, records, *, unreviewed_sco
     observed_ein = canonical_ein_digits(selected.get("ein", ""))
     if observed_ein:
         return observed_ein == canonical_ein_digits(org.ein)
+    if (state == "NC" and nc_entered_components_complete(org, selected, completed_searches)
+            and selected.get("address_evidence", {}).get("decision") == "corroborated"):
+        return True
     return (normalized_match_name(selected["name"]) == normalized_match_name(org.organization_name)
             and len(distinctive_match_tokens(org.organization_name)) >= 2
             and selected.get("match", {}).get("decision") == "accepted"
@@ -24297,7 +24320,7 @@ def ny_connector_advance(record):
     org = checker.Organization(record["organization_name"], record["ein"])
     started = time.perf_counter()
     supports_browser_detail = (record.get("connector_version") in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"}
-                               or bool(trial_identity() and record.get("connector_version") in {"0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77"}))
+                               or bool(trial_identity() and record.get("connector_version") in {"0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78"}))
     try:
         if record.get("purpose") == "identity":
             ein = canonical_ein_digits(record["ein"])
@@ -24347,7 +24370,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77"})):
+        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78"})):
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()

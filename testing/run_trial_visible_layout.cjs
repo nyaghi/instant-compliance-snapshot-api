@@ -140,7 +140,24 @@ test('Nevada fallback never enlarges a correctly coordinated window over its pee
  const {h,job,created}=await setup(ORIGIN+'/'),j=job('NV');
  await h.context.registryCreateOwnedTab(j,'https://orion.nv.gov/portal/public/',h.tabs.get(1));
  h.chrome.windows.get=async id=>id===10?{left:20,top:30,width:1400,height:1000,state:'normal'}:created[0];
+ h.chrome.tabs.sendMessage=async()=>({page_visibility:'visible'});
  assert.equal(await h.context.registryNevadaVisibleSnapshot(j),null);
  assert.equal(j.nvVisibilityOutcome,'coordinated_window');
  assert.equal(j.nvVisibilityAttempted,undefined);
+});
+
+test('matching tiled coordinates do not suppress recovery for a hidden Nevada page',async()=>{
+ const {h,job,created}=await setup(ORIGIN+'/'),j=job('NV');
+ await h.context.registryCreateOwnedTab(j,'https://orion.nv.gov/portal/public/',h.tabs.get(1));
+ h.chrome.windows.get=async id=>id===10?{left:20,top:30,width:1400,height:1000,state:'normal'}:created[0];
+ h.chrome.tabs.sendMessage=async()=>({page_visibility:'hidden'});
+ h.chrome.windows.getLastFocused=async()=>({id:10,focused:true});
+ h.chrome.tabs.query=async({windowId})=>[...h.tabs.values()].filter(t=>t.windowId===windowId);
+ const snapshot=await h.context.registryNevadaVisibleSnapshot(j);
+ assert.equal(snapshot.mode,'window');assert.equal(snapshot.coordinatedPlacement.width,created[0].width);
+ assert.equal(snapshot.coordinatedPlacement.left,created[0].left);
+ const changes=[];h.chrome.windows.update=async(id,options)=>changes.push({id,...options});
+ await h.context.registryNevadaMakeVisible(j,snapshot);
+ assert.equal(changes.length,1);assert.equal(changes[0].width,created[0].width);
+ assert.equal(changes[0].height,created[0].height);assert.equal(changes[0].focused,true);
 });
