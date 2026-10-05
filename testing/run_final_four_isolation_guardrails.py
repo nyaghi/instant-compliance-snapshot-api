@@ -71,6 +71,10 @@ class IsolationControls(unittest.TestCase):
         env, manifest = self.fixture()
         for now in (999, manifest['expires_epoch'], manifest['expires_epoch']+1):
             self.assertIsNone(identity.trial_identity(env, manifest, now))
+        self.assertFalse(identity.trial_access_expired(env, manifest, manifest['expires_epoch']-1))
+        self.assertTrue(identity.trial_access_expired(env, manifest, manifest['expires_epoch']))
+        self.assertFalse(identity.trial_access_expired({**env, 'CE_FINAL_FOUR_TRIAL': '0'}, manifest,
+                                                       manifest['expires_epoch']))
         for changed in ({**manifest, 'expires_epoch': manifest['expires_epoch']+1},
                         {**manifest, 'spending_cap_usd': 81}, {**manifest, 'spending_cap_usd': 0}):
             self.assertIsNone(identity.trial_identity(env, changed, 2000))

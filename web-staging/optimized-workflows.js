@@ -22,7 +22,17 @@
       const response=await fetch(apiBase+'/api/workflow',{method:'POST',
         headers:{'Content-Type':'application/json'},signal:!detached&&signal?AbortSignal.any([signal,timeout]):timeout,
         body:JSON.stringify({...credentials,action,token,...extra})});
-      if(!response.ok) throw new Error('State-check progress is temporarily unavailable ('+response.status+').');
+      if(!response.ok) {
+        if(response.status===503) {
+          const detail=await response.json().catch(()=>null);
+          if(detail?.code==='PERFORMANCE_LAB_EXPIRED') {
+            const error=new Error(detail.error);
+            error.code=detail.code;
+            throw error;
+          }
+        }
+        throw new Error('State-check progress is temporarily unavailable ('+response.status+').');
+      }
       return response.json();
     }
     const cancel=()=>{if(token) void call('cancel',{},true).catch(()=>{});};
@@ -48,6 +58,7 @@
         const payload={organization_name:name,ein,alternate_names:aliases,states,mode,consent:true,request_id:requestId};
         let accepted;
         try{accepted=await call('start',payload);}catch(error){
+          if(error.code==='PERFORMANCE_LAB_EXPIRED')throw error;
           signal?.throwIfAborted();accepted=await call('start',payload); // same idempotency key
         }
         token=accepted.token;
@@ -83,6 +94,7 @@
     } catch(error) {
       cancel();
       if(signal?.aborted)throw error;
+      if(error.code==='PERFORMANCE_LAB_EXPIRED')throw error;
       await connector;
       for(const state of states)if(!results.has(state))record(missing(state));
       return states.map(state=>results.get(state));

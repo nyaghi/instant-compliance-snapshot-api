@@ -18,7 +18,7 @@ from urllib.parse import unquote, urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from deployment.lab_identity import configured_lab_origin, trial_identity, TRIAL_RELEASE_LABEL
+from deployment.lab_identity import configured_lab_origin, trial_identity, trial_access_expired, TRIAL_RELEASE_LABEL
 
 LAB_ORIGIN = configured_lab_origin()
 LAB_SERVICE_ID = 'srv-d8u0hsu7r5hc73aqfsg0'
@@ -269,6 +269,9 @@ def build_handler(master, key, capacity=None, durable=None):
                     'durable_workflows_enabled': durable is not None,
                     'sales_queue_policy': getattr(durable, 'sales_policy', None),
                     'downloadable_data': {s: master.downloadable_data_info(s) for s in ('KS','KY','LA','NH','OR')}}
+            if os.environ.get('CE_FINAL_FOUR_TRIAL') == '1':
+                data['trial_access_active'] = trial_identity() is not None
+                data['trial_access_expired'] = trial_access_expired()
             if trial_identity(): data['trial_release'] = TRIAL_RELEASE_LABEL
             body = json.dumps(data).encode()
             self.send_response(200)
@@ -343,6 +346,10 @@ def build_handler(master, key, capacity=None, durable=None):
 
         def do_POST(self):
             if not self.authorized(): return
+            if trial_access_expired() and self.path in ('/api/workflow', '/api/discover-names',
+                    '/api/check', '/api/ny-connector', '/api/final-four-connector'):
+                return self._send_json(503, {'code': 'PERFORMANCE_LAB_EXPIRED',
+                    'error': 'The isolated Performance Lab access window has expired. No registry search was run.'})
             if trial_identity():
                 if self.path == '/api/workflow' and durable is not None:
                     from deployment.staging_workflows import handle

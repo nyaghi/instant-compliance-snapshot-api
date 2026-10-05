@@ -114,6 +114,7 @@
       if (requestRevision !== revision || requestIdentity !== identity()) return;
       if (!response.ok) {
         if (response.status === 401 || response.status === 403) { message.textContent = data.error || "Unlock staging to continue."; return; }
+        if (data.code === "PERFORMANCE_LAB_EXPIRED") { message.textContent = data.error; return; }
         throw new Error(data.error || "Name discovery did not complete.");
       }
       data.names ||= [];

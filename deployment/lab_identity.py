@@ -26,7 +26,7 @@ PROTECTED_ORIGINS = frozenset({
     'https://instant-compliance-snapshot-api-staging.onrender.com',
 })
 TRIAL_VERSION = '2026.09.29.2-performance-lab'
-TRIAL_RELEASE_LABEL = '29.2CR'
+TRIAL_RELEASE_LABEL = '29.2CS'
 TRIAL_DATABASE_NAME = 'cc_final_four_29_2'
 MANIFEST = Path(__file__).with_name('final-four-resources.json')
 
@@ -112,6 +112,18 @@ def trial_identity(env=None, manifest=None, now=None):
         return data
     except (KeyError, TypeError, ValueError, OverflowError):
         return None
+
+
+def trial_access_expired(env=None, manifest=None, now=None):
+    """Identify an expired disposable trial without weakening its identity gate."""
+    env = os.environ if env is None else env
+    if env.get('CE_FINAL_FOUR_TRIAL') != '1':
+        return False
+    data = _manifest() if manifest is None else manifest
+    try:
+        return (time.time() if now is None else now) >= float(data['expires_epoch'])
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
 
 
 def performance_origin_enabled(env=None):
