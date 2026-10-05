@@ -3,84 +3,84 @@
   "states": {
     "KY": {
       "state": "KY",
-      "record_count": 8347,
+      "record_count": 8383,
       "source_url": "https://www.ag.ky.gov/Resources/Consumer-Resources/charity/Documents/charity.pdf",
-      "source_date": "9/21/2026",
-      "downloaded_at": "2026-09-27T10:05:04.561279+00:00",
+      "source_date": "9/28/2026",
+      "downloaded_at": "2026-10-05T14:51:31.484030+00:00",
       "assets": [
         {
           "path": "downloadable-data/KY.pdf",
-          "sha256": "7dcd790d548423fef135950b57713e220b8805e4aacec8d18c67a50decdc3490"
+          "sha256": "b128ce3aa923eac587d93ec86083b484b57f084d6f6d1a3bc936f325fcc3908b"
         },
         {
           "path": "downloadable-data/KY-records.json",
-          "sha256": "d927953ad56d37ba7aed1d1dc9839aa89236c90b441bca7eabb2b46900f12f6a"
+          "sha256": "b5398677052b8a4bbf8f7b1d3f0150b37a90bc01c87add4ef4dd8ef2054e0257"
         }
       ]
     },
     "LA": {
       "state": "LA",
-      "record_count": 402,
+      "record_count": 405,
       "source_url": "https://www.ag.state.la.us/Charity/Registration/Listing",
       "source_date": "",
-      "downloaded_at": "2026-09-27T10:05:13.138710+00:00",
+      "downloaded_at": "2026-10-05T14:51:54.641970+00:00",
       "assets": [
         {
           "path": "downloadable-data/LA.xlsx",
-          "sha256": "2f3ef6cb3282fee310b73f78cea24001f4986538d2dabc0dad9f8cdf267a4d51"
+          "sha256": "bdaad50ebd3409cf05e537ed45f35737bfb48915e4b9187e2d5687605e4e3e59"
         }
       ]
     },
     "NH": {
       "state": "NH",
-      "status": "unchanged",
-      "record_count": 14058,
-      "updated_label": "September 21, 2026",
-      "checksum": "0b34911d4f620091232a486f2e9596c17b4444a7293654a679e3650d5685b45d",
+      "status": "changed",
+      "record_count": 14070,
+      "updated_label": "September 28, 2026",
+      "checksum": "0eeb194284d7e0df996046c56eaf563ce26fa2ad7fc5f17a0769bf33d09b5719",
       "source_url": "https://mm.nh.gov/files/uploads/doj/remote-docs/registered-charities.pdf",
-      "source_date": "September 21, 2026",
-      "downloaded_at": "2026-09-27T10:05:45.032809+00:00",
+      "source_date": "September 28, 2026",
+      "downloaded_at": "2026-10-05T14:52:31.539835+00:00",
       "assets": [
         {
           "path": "registered-charities.pdf",
-          "sha256": "0b34911d4f620091232a486f2e9596c17b4444a7293654a679e3650d5685b45d"
+          "sha256": "0eeb194284d7e0df996046c56eaf563ce26fa2ad7fc5f17a0769bf33d09b5719"
         },
         {
           "path": "downloadable-data/NH-records.json",
-          "sha256": "aeb30dcfdc5a9110d06ad26ebb304bea897c49fdbe0cb3a00ead05259344ad67"
+          "sha256": "6418e38b4f2c728ce7d9af09e09a17f58c12efa28c7e8853bcba744cd793c84d"
         }
       ]
     },
     "KS": {
       "state": "KS",
-      "record_count": 6521,
-      "source_url": "https://www.ag.ks.gov/home/showpublisheddocument/24722/639166915351670000",
+      "record_count": 6879,
+      "source_url": "https://www.ag.ks.gov/home/showpublisheddocument/24722/639264656285474413",
       "source_date": "",
-      "content_last_changed_at": "2026-06-16T10:23:36",
-      "downloaded_at": "2026-09-27T10:03:57.297135+00:00",
+      "content_last_changed_at": "2026-10-05T10:50:25",
+      "downloaded_at": "2026-10-05T14:50:25.635288+00:00",
       "assets": [
         {
           "path": "KS_weekly_checker.py",
-          "sha256": "378978ab806897ef19c8d8f8e6186dea0cb578fa331c8a6930bde2ac41bff5f4"
+          "sha256": "37997e1db475a0ebcf553e233d0f3108750e6fee893b9f73103412f5cfb28421"
         }
       ]
     },
     "OR": {
       "state": "OR",
-      "record_count": 23953,
+      "record_count": 23979,
       "source_url": "https://justice.oregon.gov/Charities/Charity/GetZip",
       "source_date": "",
-      "downloaded_at": "2026-09-27T10:05:46.585978+00:00",
+      "downloaded_at": "2026-10-05T14:52:33.438915+00:00",
       "assets": [
         {
           "path": "Charity_OR.txt",
-          "sha256": "9d97f0446b4928f1df1ba64f2e3793d5577d12fb646f5f302e15b527c6d62a4e"
+          "sha256": "8476987329940bde75b6c2738d6d3a3e1cb4bfc872e103b01ecd69ea3a59c01f"
         }
       ]
     }
   },
   "last_run": {
-    "at": "2026-09-27T10:05:46.592340+00:00",
+    "at": "2026-10-05T14:52:33.444357+00:00",
     "errors": []
   }
 }
