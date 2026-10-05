@@ -24,11 +24,11 @@ async function registryTrialWindowOptions(job, origin) {
   try { bounds=await chrome.windows.get(origin.windowId); }
   catch(error) { if(layout==='visible')throw error;return options; }
   // Existing full-size layouts stay unchanged. The ordinary trial may be
-  // launched from a small window; use that window's actual display work area
+  // launched from a small or minimized window; use its actual display work area
   // rather than silently creating overlapping, unfocused collectors.
   const usable=b=>['left','top','width','height'].every(k=>Number.isFinite(b?.[k]))
     && b.width>=1080 && b.height>=700 && b.width<=16384 && b.height<=16384;
-  if(layout==='coordinated' && bounds?.state!=='minimized' && !usable(bounds)) {
+  if(layout==='coordinated' && (bounds?.state==='minimized' || !usable(bounds))) {
     let timer;
     try {
       const display=await Promise.race([
@@ -231,13 +231,14 @@ async function registryNevadaExposeWindow(job,previous) {
   // An already tiled collector must keep its footprint, not expand over peers.
   // Missing layout information must not block exposure of an already owned
   // isolated collector. Focus in place: no guessed geometry or other windows.
-  const placement=minimizedSourceAllowed?{focused:true}:previous.coordinatedPlacement || (inactiveBrowser?{focused:true}:{focused:true,state:'normal',width,height,
+  const placement=previous.coordinatedPlacement || (minimizedSourceAllowed||inactiveBrowser?{focused:true}:{focused:true,state:'normal',width,height,
     left:bounds.left+bounds.width-width-8,top:bounds.top+bounds.height-height-8});
   await chrome.windows.update(tab.windowId,placement);
   diagnostic('nv-visibility',job,'owned separate window; same document and deadline');
   job.nvVisibilityOutcome=inactiveBrowser?'activated_from_inactive_browser':ownedTransition?'activated_after_owned_transition':'activated_separate_window';
   registryNevadaDiagnostic(job,'visibility-activated',{inactive_browser:focus.focused===false,
-    kept_existing_bounds:minimizedSourceAllowed||inactiveBrowser&&!previous.coordinatedPlacement,
+    kept_existing_bounds:!previous.coordinatedPlacement&&(minimizedSourceAllowed||inactiveBrowser),
+    coordinated_placement:!!previous.coordinatedPlacement,
     source_remains_minimized:minimizedSourceAllowed});
   await saveRuntime();return restore;
 }

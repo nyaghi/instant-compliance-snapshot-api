@@ -25,13 +25,67 @@ test('small source window uses its actual display rectangle for all five isolate
  }
  assert.equal(bounds.width,560);assert.equal(job.activeExpiresAt,70000);assert.equal(h.created.length,0);
 });
-test('invalid work area and minimized source never cause unbounded placement',async()=>{
+test('invalid work area never causes unbounded placement',async()=>{
  for(const display of [{left:0,top:0,width:900,height:600},{left:0,top:0,width:Infinity,height:900},{left:999999,top:0,width:1920,height:1040},{}]){
   const {h,job,bounds}=await setup();Object.assign(bounds,{width:560,height:400});h.chrome.tabs.sendMessage=async()=>display;
   assert.equal((await h.context.registryTrialWindowOptions(job,h.tabs.get(1))).focused,false);
  }
- const {h,job,bounds}=await setup();bounds.state='minimized';h.chrome.tabs.sendMessage=async()=>assert.fail('minimized source must not request layout');
+ const {h,job,bounds}=await setup();bounds.state='minimized';h.chrome.tabs.sendMessage=async()=>({});
  assert.equal((await h.context.registryTrialWindowOptions(job,h.tabs.get(1))).focused,false);
+});
+
+test('minimized source coordinates every existing isolated collector using the actual display',async()=>{
+ const {h,job,bounds,changes}=await setup();Object.assign(bounds,{state:'minimized',left:-32000,top:-32000});
+ const original={...bounds},positions=[];
+ h.chrome.tabs.sendMessage=async(id,m)=>{assert.equal(id,1);assert.equal(m.action,'trial-collector-display');return {left:-1920,top:0,width:1920,height:1040};};
+ for(const state of ['NV','NY','IL','NC','TN']){
+  const p=await h.context.registryTrialWindowOptions({...job,registryState:state},h.tabs.get(1));
+  assert.equal(p.focused,true,state);assert.equal(p.state,'normal');
+  assert.ok(p.left>=-1920&&p.top>=0&&p.left+p.width<=0&&p.top+p.height<=1040,state);positions.push(p);
+ }
+ for(let i=0;i<positions.length;i++)for(let j=i+1;j<positions.length;j++){
+  const a=positions[i],b=positions[j];assert.ok(a.left+a.width<=b.left||b.left+b.width<=a.left||a.top+a.height<=b.top||b.top+b.height<=a.top);
+ }
+ assert.deepEqual(bounds,original);assert.equal(changes.length,0);assert.equal(h.created.length,0);assert.equal(job.activeExpiresAt,70000);
+});
+
+test('minimized source display recovery still rejects cancellation and changed source ownership',async()=>{
+ for(const change of ['closed','expired','moved','navigated']){
+  const {h,job,bounds,changes}=await setup();bounds.state='minimized';const origin={...h.tabs.get(1)};
+  h.chrome.tabs.sendMessage=async()=>{
+   if(change==='closed')job.closed=true;
+   if(change==='expired')job.activeExpiresAt=0;
+   if(change==='moved')h.tabs.get(1).windowId=99;
+   if(change==='navigated')h.tabs.get(1).url='https://example.org/';
+   return {left:0,top:0,width:1920,height:1040};
+  };
+  await assert.rejects(h.context.registryTrialWindowOptions(job,origin),/INTERRUPTED|VISIBLE_LAYOUT_UNAVAILABLE/,change);
+  assert.equal(changes.length,0);assert.equal(h.created.length,0);
+ }
+});
+
+test('retained NY and TN collectors recover their tiles while their source stays minimized',async()=>{
+ for(const state of ['NY','TN']){
+  const {h,job,bounds,changes}=await setup(state);bounds.state='minimized';
+  if(state==='NY')h.tabs.get(3).url='https://charities-search.ag.ny.gov/RegistrySearch';
+  h.chrome.tabs.sendMessage=async()=>({left:0,top:0,width:1920,height:1040});
+  assert.equal(await h.context.registryExposeReusedNyTab(job,h.tabs.get(1)),true,state);
+  assert.equal(changes.length,1);assert.equal(changes[0].id,20);assert.equal(changes[0].focused,true);
+  assert.ok(changes[0].width<1000);assert.equal(bounds.state,'minimized');assert.equal(h.queries.length,0);
+ }
+});
+
+test('NV minimized-source recovery uses its shared tile instead of covering peer collectors',async()=>{
+ const {h,job,bounds,changes}=await setup('NV');bounds.state='minimized';job.nvSourceInitiallyMinimized=true;
+ h.chrome.windows.get=async id=>({id,...bounds,state:id===10?'minimized':'normal'});
+ h.chrome.tabs.sendMessage=async(id,m)=>m.action==='trial-collector-display'?{left:0,top:0,width:1920,height:1040}:{page_visibility:'hidden'};
+ const expected=await h.context.registryTrialWindowOptions(job,h.tabs.get(1));
+ const snapshot=await h.context.registryNevadaVisibleSnapshot(job);
+ assert.equal(snapshot.coordinatedPlacement.width,expected.width);
+ await h.context.registryNevadaMakeVisible(job,snapshot);
+ assert.equal(changes.length,1);assert.equal(changes[0].id,20);
+ for(const k of ['left','top','width','height'])assert.equal(changes[0][k],expected[k],k);
+ assert.equal(bounds.state,'minimized');assert.equal(job.activeExpiresAt,70000);
 });
 test('NC verification exposes its owned separate window without another search or a longer deadline',async()=>{
  const {h,job,changes}=await setup();
@@ -154,6 +208,7 @@ test('NV focus-in-place still refuses minimized, shared, canceled and changed co
 
 test('NV can focus its isolated collector when the source was already minimized at job start',async()=>{
  const {h,job,changes,bounds}=await setup('NV');job.nvSourceInitiallyMinimized=true;
+ h.chrome.tabs.sendMessage=async()=>({}); // No usable display; preserve the focus-in-place fallback.
  h.chrome.windows.get=async id=>({id,...bounds,state:id===10?'minimized':'normal'});
  h.tabs.set(4,{id:4,windowId:30,url:'https://example.org/user-page',active:true});
  h.chrome.windows.getLastFocused=async()=>({id:30,focused:false});
