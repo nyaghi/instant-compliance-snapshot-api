@@ -6711,7 +6711,7 @@ def final_four_browser_lookup(org, state, evidence, deadline=None):
         if (state == "NC" and trial_identity() and index >= len(required)
                 and nc_redundant_broad_query(name, required, records)):
             continue
-        if state in {"AL", "NV"} and trial_identity() and index >= len(required) and records and not unreviewed_scope:
+        if state in {"AL", "NC", "NV"} and trial_identity() and index >= len(required) and records and not unreviewed_scope:
             # Every reviewed identity has now completed (or was covered by a
             # complete literal prefix). Generated probes retrieve a missing
             # record; they are not additional accepted identities. Preserve
@@ -10210,8 +10210,8 @@ def va_evoke_status_from_entity_and_registrations(entity: dict, registrations: l
 def va_evoke_entity_matches_request(entity: dict, org, allow_name_match: bool) -> bool:
     requested_ein = canonical_ein_digits(getattr(org, "ein", "") or "")
     entity_ein = canonical_ein_digits(str(entity.get("ein") or entity.get("identificationNumber") or ""))
-    if requested_ein and entity_ein == requested_ein:
-        return True
+    if requested_ein and entity_ein:
+        return entity_ein == requested_ein
     if not allow_name_match:
         return False
     candidates = [
@@ -10219,7 +10219,10 @@ def va_evoke_entity_matches_request(entity: dict, org, allow_name_match: bool) -
         str(entity.get("fullName") or ""),
         str(entity.get("primaryName") or ""),
     ]
-    return any(registry_name_is_safe_for_org(candidate, org.organization_name, org.ein) for candidate in candidates if candidate)
+    return any(registry_name_is_safe_for_org(candidate, org.organization_name, org.ein)
+               and (is_reviewed_alias(org.ein, candidate)
+                    or not distinctive_entity_extension_mismatch(org.organization_name, candidate))
+               for candidate in candidates if candidate)
 
 
 def search_va_evoke_api(org):
@@ -27264,6 +27267,24 @@ def ms_legal_description_identity(org, external_result, deadline):
             "source_name": raw_name, "parsed_legal_name": base_name}
 
 
+def ms_ready_search_input(page, selectors, timeout=10000):
+    """One readiness window for all alternatives, not eight serial 5s waits."""
+    try:
+        page.wait_for_function("""selectors => selectors.some(selector => {
+            const field = document.querySelector(selector);
+            if (!field || !field.getClientRects().length) return false;
+            const style = getComputedStyle(field);
+            return style.visibility !== 'hidden' && style.visibility !== 'collapse';
+        })""", arg=selectors, timeout=timeout)
+        for selector in selectors:
+            field = page.locator(selector).first
+            if field.is_visible():
+                return field
+    except Exception:
+        pass
+    return None
+
+
 def search_ms_fast(page, org, navigate: bool = True):
     """Master-level Mississippi path with bounded waits around the embedded checker logic."""
     modules = state_batch_modules(["MS"])
@@ -27274,11 +27295,7 @@ def search_ms_fast(page, org, navigate: bool = True):
         raw_status_text="",
     )
     try:
-        if navigate:
-            page.goto(module.MS_SEARCH_URL, wait_until="domcontentloaded", timeout=9000)
-            safe_wait_for_network_idle(page, timeout=1000)
-
-        input_box = module.find_visible_input(page, [
+        selectors = [
             "#ContentPlaceHolder1_PortalPageControl1_ctl10_IFSearchControl1_EntityNameTextBox",
             'input[name="ctl00$ContentPlaceHolder1$PortalPageControl1$ctl10$IFSearchControl1$EntityNameTextBox"]',
             'input[aria-label*="Charity Name" i]',
@@ -27287,24 +27304,37 @@ def search_ms_fast(page, org, navigate: bool = True):
             'input[name*="Name" i]',
             'input[id*="Name" i]',
             'input[type="text"]',
-        ])
-        if not input_box:
-            if not navigate:
-                page.goto(module.MS_SEARCH_URL, wait_until="domcontentloaded", timeout=9000)
+        ]
+        input_box = None
+        for attempt in range(2):
+            response = None
+            if navigate or attempt:
+                response = page.goto(module.MS_SEARCH_URL, wait_until="domcontentloaded", timeout=9000)
+                if response is not None and response.status >= 400:
+                    result.error = f"Mississippi search page returned HTTP {response.status}."
+                    result.source_confidence = "incomplete_search"
+                    result.source_note = "Mississippi did not provide its search form; no registration search completed."
+                    return result
                 safe_wait_for_network_idle(page, timeout=1000)
-                input_box = module.find_visible_input(page, [
-                    "#ContentPlaceHolder1_PortalPageControl1_ctl10_IFSearchControl1_EntityNameTextBox",
-                    'input[name="ctl00$ContentPlaceHolder1$PortalPageControl1$ctl10$IFSearchControl1$EntityNameTextBox"]',
-                    'input[aria-label*="Charity Name" i]',
-                    'input[name*="CharityName" i]',
-                    'input[id*="CharityName" i]',
-                    'input[name*="Name" i]',
-                    'input[id*="Name" i]',
-                    'input[type="text"]',
-                ])
-            if not input_box:
-                result.error = "Could not find the Mississippi Charity Name input."
-                return result
+            input_box = ms_ready_search_input(page, selectors)
+            if input_box:
+                break
+            try:
+                excerpt = re.sub(r"\s+", " ", page.locator("body").inner_text(timeout=750))[:500]
+            except Exception:
+                excerpt = "Page body unavailable"
+            result.source_attempts = list(getattr(result, "source_attempts", []) or []) + [{
+                "stage": "MS search form readiness", "attempt": attempt + 1,
+                "http_status": response.status if response is not None else None,
+                "page_excerpt": excerpt,
+            }]
+            if re.search(r"captcha|verify.{0,30}human|security verification|access denied|too many requests", excerpt, re.I):
+                break
+        if not input_box:
+            result.error = "Could not find the Mississippi Charity Name input."
+            result.source_confidence = "incomplete_search"
+            result.source_note = "Mississippi did not provide a usable search form after bounded readiness recovery; no registration search completed."
+            return result
 
         input_box.click(timeout=3000)
         input_box.fill("")
@@ -27330,7 +27360,7 @@ def search_ms_fast(page, org, navigate: bool = True):
 
         table, completed_no_rows, readiness_note = ms_wait_for_search_results(page)
         if readiness_note:
-            result.source_attempts = [readiness_note]
+            result.source_attempts = list(getattr(result, "source_attempts", []) or []) + [readiness_note]
 
         if completed_no_rows:
             result.status = module.STATUS_NOT_FOUND
@@ -28353,16 +28383,30 @@ def ok_open_latest_equivalent_detail(page, org, module, selected):
                 lines.append(line)
         latest = ok_latest_filing_from_candidates(lines, module)
         filed = module.parse_ok_filing_date(latest)
+        status = module.extract_labeled_value_from_text(text, ["Status"])
+        event_basis = "registration_or_renewal"
+        if ok_terminal_closed_text(status):
+            # A canceled/exempt registration may never have a renewal filing.
+            # Compare its dated terminal event with other records' registration
+            # dates; never call an omitted renewal a transport failure, or use
+            # the record number/row order as proof of recency.
+            terminal_dates = [module.parse_ok_filing_date(line) for line in lines
+                              if re.match(r"^\d+\s+", line) and ok_terminal_closed_text(line)]
+            terminal_dates = [value for value in terminal_dates if value and value <= date.today()]
+            filed = max(terminal_dates) if terminal_dates else None
+            event_basis = "terminal_status_filing"
         if filed is None or filed > date.today():
-            raise TimeoutError("Oklahoma equivalent renewal date is incomplete")
-        collected.append((filed, name, identifier, target))
-    _, name, identifier, target = max(collected, key=lambda item: item[0])
+            raise TimeoutError("Oklahoma equivalent record recency is incomplete")
+        collected.append((filed, name, identifier, target, event_basis))
+    _, name, identifier, target, _ = max(collected, key=lambda item: item[0])
     if page.url != target:
         response = page.goto(target, wait_until="domcontentloaded", timeout=ok_action_timeout(org, 12000))
         if response is None or response.status != 200 or page.url != target:
             raise TimeoutError("Oklahoma selected newest detail did not complete")
-    org.ok_compared_records = [{"name": n, "identifier": i, "latest_registration_filed": d.isoformat()}
-                               for d, n, i, _ in collected]
+    org.ok_compared_records = [{"name": n, "identifier": i,
+                               "latest_registration_filed": d.isoformat() if basis == "registration_or_renewal" else None,
+                               "latest_identity_event_date": d.isoformat(), "recency_basis": basis}
+                               for d, n, i, _, basis in collected]
     return name, identifier
 
 

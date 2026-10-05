@@ -16,6 +16,21 @@ class BrowserTests(unittest.TestCase):
     def tearDownClass(cls):cls.browser.close();cls.pw.stop()
     def setUp(self):self.page=self.browser.new_page()
     def tearDown(self):self.page.close()
+    def test_form_fallback_is_immediate_without_waiting_for_missing_primary(self):
+        self.page.set_content('<input id="actualName" type="text">')
+        started=time.perf_counter()
+        field=c.ms_ready_search_input(self.page,['#missing','#actualName'])
+        self.assertEqual(field.get_attribute('id'),'actualName')
+        self.assertLess(time.perf_counter()-started,1)
+    def test_form_readiness_waits_for_visible_field(self):
+        self.page.set_content('<input id="name" style="display:none">')
+        self.page.evaluate('setTimeout(()=>document.querySelector("#name").style.display="block",200)')
+        self.assertIsNotNone(c.ms_ready_search_input(self.page,['#name'],timeout=1000))
+    def test_missing_or_hidden_form_has_one_total_wait(self):
+        self.page.set_content('<input id="hidden" style="visibility:hidden">')
+        started=time.perf_counter()
+        self.assertIsNone(c.ms_ready_search_input(self.page,['#hidden','#missing1','#missing2'],timeout=150))
+        self.assertLess(time.perf_counter()-started,1)
     def brief_wait(self):
         page=Mock(wraps=self.page)
         page.wait_for_function.side_effect=lambda script,**kw:self.page.wait_for_function(script,timeout=150)
@@ -66,7 +81,8 @@ class BudgetAndWorkflowTests(unittest.TestCase):
     def test_missing_results_do_not_become_negative_in_normal_ms_search(self):
         module=c.state_batch_modules(['MS'])[c.load_state_batch_bundle().STATE_TO_MODULE['MS']]
         org=module.Organization(organization_name='FoodCorps, Inc.');page=Mock()
-        with patch.object(module,'find_visible_input',return_value=Mock()),patch.object(c,'safe_wait_for_network_idle'),patch.object(c,'ms_wait_for_search_results',return_value=(None,False,'incomplete')):
+        page.goto.return_value=None
+        with patch.object(c,'ms_ready_search_input',return_value=Mock()),patch.object(c,'safe_wait_for_network_idle'),patch.object(c,'ms_wait_for_search_results',return_value=(None,False,'incomplete')):
             result=c.search_ms_fast(page,org)
         self.assertEqual(result.status,'Unable to Verify');self.assertFalse(result.success)
         self.assertEqual(result.source_confidence,'incomplete_search')
