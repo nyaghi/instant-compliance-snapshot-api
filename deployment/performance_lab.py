@@ -110,8 +110,8 @@ def final_four_asset(name, text):
         additions = ''.join(label[0].replace('value="AK"', 'value="'+state+'"').replace('>Alaska<', '>'+title+'<')
                             for state, title in [('AL','Alabama'),('NC','North Carolina'),('NV','Nevada'),('TN','Tennessee')])
         text = text[:label.end()] + additions + text[label.end():]
-        replace('!["IL", "GA"].includes(state)', '!["NY", "IL", "GA", "AL", "NC", "NV", "TN", "NM"].includes(state)')
-        replace('["NY", "IL", "GA"].includes(state)', '["NY", "IL", "GA", "AL", "NC", "NV", "TN", "NM"].includes(state)')
+        replace('!["IL", "GA"].includes(state)', '!["NY", "IL", "GA", "AL", "NC", "NV", "TN", "NM", "MS"].includes(state)')
+        replace('["NY", "IL", "GA"].includes(state)', '["NY", "IL", "GA", "AL", "NC", "NV", "TN", "NM", "MS"].includes(state)')
         replace('alternateNames = runAlternateNames, {signal} = {}', 'alternateNames = runAlternateNames, {signal,mode="standard"} = {}')
         replace('alternate_names: alternateNames, signal,', 'alternate_names: alternateNames, signal, mode,')
         replace('          result.status_reason = "NY_CONNECTOR_UNAVAILABLE";', '''          result.status_reason = "NY_CONNECTOR_UNAVAILABLE";
@@ -125,7 +125,7 @@ def final_four_asset(name, text):
         replace("const needsIdentity=mode==='sales'&&external.length>0&&aliases.length===0;", "const needsIdentity=false;")
         replace('signal, onResult=()=>{}, externalLookup} = options;', 'signal, onResult=()=>{}, externalLookup, sales_cutoff_seconds} = options;')
         replace('mode,consent:true,request_id:', 'mode,...(sales_cutoff_seconds!==undefined?{sales_cutoff_seconds}:{}),consent:true,request_id:')
-        replace("states.filter(s=>s==='IL'||s==='GA')", "states.filter(s=>['NY','IL','GA','AL','NC','NV','TN','NM'].includes(s))")
+        replace("states.filter(s=>s==='IL'||s==='GA')", "states.filter(s=>['NY','IL','GA','AL','NC','NV','TN','NM','MS'].includes(s))")
         replace("headers:{'Content-Type':'application/json'}", "headers:{'Content-Type':'application/json','Authorization':'Bearer '+credentials.admin_passcode}")
     elif name == 'sales-mode.js':
         replace("const VERSION = '2026.09.29.1-sales';", "const VERSION = '2026.09."+TRIAL_RELEASE_LABEL+"-sales-trial';")

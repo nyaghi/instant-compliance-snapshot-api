@@ -1,8 +1,10 @@
 """Bounded Mississippi public-browser fallback controls; no live registry calls."""
 import unittest
 from unittest.mock import patch
+from pathlib import Path
 
 import registry_snapshot_server as cc
+from deployment import performance_lab
 
 
 class MississippiBrowserFallbackControls(unittest.TestCase):
@@ -103,6 +105,17 @@ class MississippiBrowserFallbackControls(unittest.TestCase):
                 if response['phase'] == 'complete': break
             self.assertEqual(response['phase'], 'complete')
             self.assertEqual(response['result']['status'], 'Upcoming Filing')
+
+    def test_composed_lab_assets_route_ms_to_browser_connector(self):
+        root = Path(performance_lab.__file__).resolve().parents[1] / 'web-staging'
+        with patch.object(performance_lab, 'trial_identity', return_value={'origin': 'https://trial.example'}):
+            index = performance_lab.final_four_asset('index.html', (root / 'index.html').read_text(encoding='utf-8'))
+            workflows = performance_lab.final_four_asset('optimized-workflows.js', (root / 'optimized-workflows.js').read_text(encoding='utf-8'))
+            connector = performance_lab.final_four_asset('ny-connector.js', (root / 'ny-connector.js').read_text(encoding='utf-8'))
+        self.assertIn('!["NY", "IL", "GA", "AL", "NC", "NV", "TN", "NM", "MS"].includes(state)', index)
+        self.assertIn('["NY", "IL", "GA", "AL", "NC", "NV", "TN", "NM", "MS"].includes(state)', index)
+        self.assertIn("states.filter(s=>['NY','IL','GA','AL','NC','NV','TN','NM','MS'].includes(s))", workflows)
+        self.assertIn('MS:"Mississippi"', connector)
 
 
 if __name__ == '__main__':
