@@ -47,6 +47,19 @@ class AlabamaVerificationControls(ContinuationControls):
                 _, result=self.advance(response,self.evidence(response))
             self.assertEqual(result['result']['status'],'Unable to Confirm')
 
+    def test_reader_failure_reports_safe_stage_without_changing_status(self):
+        cases = [
+            (ValueError('Alabama verification image is uncertain'), 'NY_CONNECTOR_AL_IMAGE_UNCERTAIN'),
+            (TimeoutError('Alabama verification reader busy'), 'NY_CONNECTOR_AL_READER_UNAVAILABLE'),
+        ]
+        for error, reason in cases:
+            _, response = self.start('AL')
+            with patch.object(cc, 'al_read_verification_image', side_effect=error):
+                _, result = self.advance(response, self.evidence(response))
+            self.assertEqual(result['result']['status'], 'Unable to Confirm')
+            self.assertEqual(result['result']['status_reason'], reason)
+            self.assertNotIn('fixture-image', str(result['result']))
+
     def test_foreign_state_mismatched_query_and_wrong_device_do_not_enter_ocr(self):
         for state in ['NC','NV','TN']:
             _, response=self.start(state)
@@ -103,7 +116,7 @@ class AlabamaVerificationControls(ContinuationControls):
         validation=(Path(cc.__file__).parent/'deployment/final-four-validation.html').read_text(encoding='utf-8')
         self.assertIn("const VERSION='"+TRIAL_VERSION+"'",validation)
         self.assertEqual(TRIAL_VERSION,'2026.09.29.2-performance-lab')
-        self.assertEqual(TRIAL_RELEASE_LABEL,'29.2AI')
+        self.assertEqual(TRIAL_RELEASE_LABEL,'29.2CT')
 
 
 if __name__=='__main__':unittest.main()

@@ -7236,6 +7236,8 @@ def final_four_connector_failure(record, reason=""):
     if re.fullmatch(r"NY_CONNECTOR_[A-Z_]{1,60}", reason or ""):
         result.status_reason = reason
     why = ("The registry lookup reached its time limit before all required records were confirmed." if reason == "NY_CONNECTOR_TIMEOUT" else
+           "Alabama's verification image could not be read with sufficient confidence; the search remains incomplete." if state == "AL" and reason == "NY_CONNECTOR_AL_IMAGE_UNCERTAIN" else
+           "Alabama's verification reader was unavailable or ran out of time; the search remains incomplete." if state == "AL" and reason == "NY_CONNECTOR_AL_READER_UNAVAILABLE" else
            "North Carolina limited this search (HTTP 429). CharityClarity retained completed records and did not restart the rejected search in another page." if state == "NC" and reason == "NY_CONNECTOR_NC_RATE_LIMITED" else
            "New Mexico returned its public unexpected-error page for the submitted search." if state == 'NM' and reason == 'NY_CONNECTOR_REGISTRY_NM_SOURCE_ERROR' else
            "North Carolina's displayed result count does not agree with its result cards, so the search's completeness could not be confirmed." if state == "NC" and reason == "NY_CONNECTOR_REGISTRY_NC_RESULT_COUNT_MISMATCH" else
@@ -7466,7 +7468,11 @@ def final_four_connector_request(payload, origin):
                     'Alabama verification reader busy', 'Blank Alabama verification image',
                     'Alabama verification image deadline', 'Alabama verification image is uncertain'} else type(exc).__name__
                 log_event('AL verification reader incomplete: ' + safe_reason)
-                return 200, {'phase': 'complete', 'result': final_four_connector_failure(record, 'NY_CONNECTOR_AL_VERIFICATION_REQUIRED')}
+                reason = ('NY_CONNECTOR_AL_IMAGE_UNCERTAIN' if safe_reason in {
+                    'Invalid Alabama verification image', 'Invalid Alabama verification dimensions',
+                    'Blank Alabama verification image', 'Alabama verification image is uncertain'} else
+                    'NY_CONNECTOR_AL_READER_UNAVAILABLE')
+                return 200, {'phase': 'complete', 'result': final_four_connector_failure(record, reason)}
         try:
             evidence = final_four_clean_evidence(payload.get("evidence"), pending["query"])
         except (ValueError, TypeError, KeyError):
