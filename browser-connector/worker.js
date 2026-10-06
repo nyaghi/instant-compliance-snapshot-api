@@ -673,7 +673,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
 });
 chrome.runtime.onConnect.addListener(port => {
   const resume = port.name.startsWith("cc-ny-resume-v1:");
-  const registryState = port.name.startsWith("cc-il-lookup-v1:") ? "IL" : port.name.startsWith("cc-ga-lookup-v1:") ? "GA" : port.name.startsWith("cc-al-lookup-v1:") ? "AL" : port.name.startsWith("cc-nc-lookup-v1:") ? "NC" : port.name.startsWith("cc-nv-lookup-v1:") ? "NV" : port.name.startsWith("cc-tn-lookup-v1:") ? "TN" : port.name.startsWith("cc-nm-lookup-v1:") ? "NM" : "NY";
+  const registryState = port.name.startsWith("cc-il-lookup-v1:") ? "IL" : port.name.startsWith("cc-ga-lookup-v1:") ? "GA" : port.name.startsWith("cc-al-lookup-v1:") ? "AL" : port.name.startsWith("cc-nc-lookup-v1:") ? "NC" : port.name.startsWith("cc-nv-lookup-v1:") ? "NV" : port.name.startsWith("cc-tn-lookup-v1:") ? "TN" : port.name.startsWith("cc-nm-lookup-v1:") ? "NM" : port.name.startsWith("cc-ms-lookup-v1:") ? "MS" : "NY";
   if (!allowedSender(port.sender) || (!resume && !P.registryAllowed(registryState,new URL(port.sender.url).origin))) { port.disconnect(); return; }
   const prefix = registryState !== "NY" ? `cc-${registryState.toLowerCase()}-lookup-v1:` : resume ? "cc-ny-resume-v1:" : port.name.startsWith("cc-ny-refresh-v1:") ? "cc-ny-refresh-v1:" : "cc-ny-lookup-v1:";
   if (!allowedSender(port.sender) || !port.name.startsWith(prefix) || !P.validId(port.name.slice(prefix.length))) { port.disconnect(); return; }

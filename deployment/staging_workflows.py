@@ -183,7 +183,7 @@ def handle(master, handler, *, trial_queue=None):
             from deployment.lab_identity import trial_sales_cutoff
             cutoff = trial_sales_cutoff(payload, trial)
             data = prepare(master, payload, owner, transport=transport,
-                           external_states={'NY', 'IL', 'GA', 'AL', 'NC', 'NV', 'TN', 'NM'} if trial else None,
+                           external_states={'NY', 'IL', 'GA', 'AL', 'NC', 'NV', 'TN', 'NM', 'MS'} if trial else None,
                            external_slots=8 if trial else None,
                            sales_cutoff_seconds=cutoff if 'sales_cutoff_seconds' in payload else None)
             if trial:

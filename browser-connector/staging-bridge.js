@@ -40,7 +40,7 @@
     if (job.reconnects === 1) retry(); else job.reconnectTimer = setTimeout(retry, 1000 * job.reconnects);
   }
   function openPort(job, resume = false) {
-    const port = chrome.runtime.connect({ name: (resume ? "cc-ny-resume-v1:" : job.refreshOnly ? "cc-ny-refresh-v1:" : ["IL","GA","AL","NC","NV","TN","NM"].includes(job.registryState) ? `cc-${job.registryState.toLowerCase()}-lookup-v1:` : "cc-ny-lookup-v1:") + job.lookupId });
+    const port = chrome.runtime.connect({ name: (resume ? "cc-ny-resume-v1:" : job.refreshOnly ? "cc-ny-refresh-v1:" : ["IL","GA","AL","NC","NV","TN","NM","MS"].includes(job.registryState) ? `cc-${job.registryState.toLowerCase()}-lookup-v1:` : "cc-ny-lookup-v1:") + job.lookupId });
     job.port = port;
     port.onMessage.addListener(message => {
       if (job.closed || job.port !== port) return;
@@ -117,7 +117,7 @@
     try {
       // Acquire chooses the registry; subsequent search messages deliberately
       // omit intent and must retain that admitted registry.
-      const state = active?.registryState || (["IL","GA","AL","NC","NV","TN","NM"].includes(m.intent) ? m.intent : "NY");
+      const state = active?.registryState || (["IL","GA","AL","NC","NV","TN","NM","MS"].includes(m.intent) ? m.intent : "NY");
       if (active && m.intent && m.intent !== state) { reply(m.id,{ok:false,reason:"NY_CONNECTOR_INVALID_SEQUENCE"}); return; }
       if (!P.registryAllowed(state,ORIGIN)) { reply(m.id,{ok:false,reason:"NY_CONNECTOR_INVALID_SEQUENCE"}); return; }
       const job = active || connect(m.lookup_id, m.action === "acquire" && m.intent === "refresh", state);

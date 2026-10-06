@@ -9,7 +9,8 @@
   const NC = location.origin === "https://www.sosnc.gov";
   const AL = location.origin === "https://ago.igovsolution.net";
   const NM = location.origin === "https://secure.nmdoj.gov";
-  if (!IL && !GA && !NV && !TN && !NC && !AL && !NM) return;
+  const MS = location.origin === "https://charities.sos.ms.gov";
+  if (!IL && !GA && !NV && !TN && !NC && !AL && !NM && !MS) return;
   const documentId = crypto.randomUUID();
   const text = el => (el?.innerText || "").replace(/\s+/g, " ").trim();
   const visible = el => !!el && el.getClientRects().length > 0;
@@ -1309,8 +1310,71 @@
       search_enabled:[...document.querySelectorAll('button')].some(el=>text(el)==='Search'&&visible(el)&&!el.disabled)
     };
   }
+  let msLastRows=null;
+  function msGrid(query) {
+    if(document.querySelector('#ContentPlaceHolder1_PortalPageControl1_ctl10_IFSearchControl1_EntityNameTextBox')?.value!==query.name)
+      throw new Error('REGISTRY_FILTER_CHANGED');
+    const grid=document.querySelector('#kendoSearchResults');
+    if(!grid || !visible(grid) || grid.querySelector('.k-loading-mask') || grid.getAttribute('aria-busy')==='true')return null;
+    const pager=text(grid.querySelector('.k-pager-info'));
+    const count=pager.match(/^(\d+)\s*-\s*(\d+)\s+of\s+(\d+)\s+items$/i);
+    const empty=/^(?:No items to display|No Matches Found\.|0\s*-\s*0\s+of\s+0\s+items)$/i.test(pager);
+    if(!count&&!empty)return null;
+    const rows=[...grid.querySelectorAll('tbody tr[role="row"]')].map(tr=>{
+      const cells=[...tr.querySelectorAll('td[role="gridcell"]')].map(text);
+      if(cells.length<4 || !/^\d{5,15}$/.test(cells[1]) || !cells[0]
+          || !tr.querySelector('a.k-grid-Details'))throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+      return {name:cells[0],identifier:cells[1],raw_status:cells[2]};
+    });
+    const total=empty?0:Number(count[3]);
+    if((empty&&rows.length)||(count&&(Number(count[1])!==1||Number(count[2])!==rows.length))
+        ||total!==rows.length||total>100||new Set(rows.map(r=>r.identifier)).size!==rows.length)
+      throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+    return {rows,total};
+  }
+  async function msSearch(query,deadline) {
+    if(location.pathname!=='/online/portal/ch/page/charities-search/Portal.aspx'
+        ||query?.operation!=='search'||query.state!=='MS')throw new Error('REGISTRY_WRONG_ORIGIN');
+    const field=document.querySelector('#ContentPlaceHolder1_PortalPageControl1_ctl10_IFSearchControl1_EntityNameTextBox');
+    const button=document.querySelector('#SearchButton');
+    if(!field||!visible(field)||!button||!visible(button)||button.disabled)throw new Error('REGISTRY_FORM_CHANGED');
+    set(field,query.name);
+    const found=await wait(()=>msGrid(query),Math.max(1,deadline-Date.now()),{action:()=>button.click(),settle:300,
+      sameCandidate:(a,b)=>a.total===b.total&&JSON.stringify(a.rows)===JSON.stringify(b.rows)});
+    msLastRows=found.rows;
+    return {state:'MS',query,complete:true,verification_pending:false,rows:found.rows,total:found.total};
+  }
+  async function msDetail(query,deadline) {
+    if(query?.operation!=='detail'||query.state!=='MS'||!Array.isArray(msLastRows)
+        ||!msLastRows.some(row=>row.identifier===query.identifier))throw new Error('REGISTRY_COMMAND_INVALID');
+    const rows=[...document.querySelectorAll('#kendoSearchResults tbody tr[role="row"]')];
+    const row=rows.find(r=>text(r.querySelector('td[role="gridcell"]:nth-child(2)'))===query.identifier);
+    const link=row?.querySelector('a.k-grid-Details');
+    if(!link||!visible(link))throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
+    const result=await wait(()=>{
+      const panel=document.querySelector('#printDiv1');
+      if(!panel||!visible(panel))return null;
+      const fields={};
+      for(const tr of panel.querySelectorAll('tr')) {
+        const label=tr.querySelector('td.infoText');
+        if(label&&tr.cells.length>=2)fields[text(label).replace(/:$/,'')]=text(tr.cells[1]);
+      }
+      const name=text(panel.querySelector('font'));
+      if(fields['Filing Number']!==query.identifier || !name || !fields['Filing Status'])return null;
+      const matched=msLastRows.find(r=>r.identifier===query.identifier);
+      if(name.toLowerCase()!==matched.name.toLowerCase())throw new Error('REGISTRY_DETAIL_CHANGED');
+      return {query,complete:true,fields:{Name:name,'Filing Number':fields['Filing Number'],
+        'Filing Status':fields['Filing Status'],'Expiration Date':fields['Expiration Date']||'',
+        'Registered Name':fields['Registered Name']||''},
+        source_url:'https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx'};
+    },Math.max(1,deadline-Date.now()),{action:()=>link.click()});
+    return result;
+  }
   function registryDocumentReady() {
     if (document.readyState === 'loading') return false;
+    if(MS)return location.pathname==='/online/portal/ch/page/charities-search/Portal.aspx'
+      && !!document.querySelector('#ContentPlaceHolder1_PortalPageControl1_ctl10_IFSearchControl1_EntityNameTextBox')
+      && !!document.querySelector('#SearchButton');
     if(NM)return location.pathname.endsWith('/CharityDetail.aspx')
       ? !!document.querySelector('#MainContent_GridViewStatuses')
       : !!document.querySelector('#MainContent_TextBoxFEIN') && !!document.querySelector('#MainContent_ButtonSearch');
@@ -1407,6 +1471,11 @@
           history_rows:historyRows,financial_periods:periods}};
       }
       throw new Error('REGISTRY_COMMAND_INVALID');
+    }
+    if (MS && m.action==='registry-ms') {
+      const deadline=Date.now()+Math.min(30000,Number.isFinite(m.budgetMs)&&m.budgetMs>0?m.budgetMs:30000);
+      return {ok:true,evidence:m.query?.operation==='search'
+        ?await msSearch(m.query,deadline):await msDetail(m.query,deadline)};
     }
     if (AL && m.action==='registry-al') {
       if (m.query?.state!=='AL' || m.query.operation!=='search') throw new Error('REGISTRY_COMMAND_INVALID');

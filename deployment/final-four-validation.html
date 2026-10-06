@@ -20,7 +20,7 @@
 const VERSION='2026.09.29.2-performance-lab',API=location.origin;
 const setup=document.getElementById('setup'),progress=document.getElementById('progress'),output=document.getElementById('results');
 if(new URLSearchParams(location.search).get('collector_layout')==='visible')document.getElementById('scope').textContent+=' Visible-window comparison: NY, NV, IL and NC open in four non-overlapping windows. Existing windows are not moved.';
-const EXTERNAL=new Set(['NY','IL','GA','AL','NC','NV','TN','NM']);
+const EXTERNAL=new Set(['NY','IL','GA','AL','NC','NV','TN','NM','MS']);
 let connectorCheck=null,completed=[];
 function renderCompleted(){
  output.textContent=JSON.stringify(completed.map(row=>({trial_release:row.trial_release,organization_name:row.organization_name,

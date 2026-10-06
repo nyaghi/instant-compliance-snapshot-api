@@ -1,6 +1,6 @@
 /* Public-registry transport in the existing connector; no independent runtime. */
-const registryOrigin = state => ({IL:"https://charitable.illinoisattorneygeneral.gov",GA:"https://verify.sos.ga.gov",AL:"https://ago.igovsolution.net",NC:"https://www.sosnc.gov",NV:"https://orion.nv.gov",TN:"https://tncab.tnsos.gov",NM:"https://secure.nmdoj.gov"})[state];
-const registryStart = state => registryOrigin(state) + ({IL:"/search",GA:"/verification/Search.aspx?facility=Y",AL:"/online/Lookups/Business.aspx",NC:"/online_services/search/by_title/search_charities",NV:"/portal/public/#/public/nvsos/en/CaseXscreen?screen=external-GenericFilingsSearch&tabRoute=business",TN:"/portal/registered-charities-search",NM:"/CharitySearch/"})[state];
+const registryOrigin = state => ({IL:"https://charitable.illinoisattorneygeneral.gov",GA:"https://verify.sos.ga.gov",AL:"https://ago.igovsolution.net",NC:"https://www.sosnc.gov",NV:"https://orion.nv.gov",TN:"https://tncab.tnsos.gov",NM:"https://secure.nmdoj.gov",MS:"https://charities.sos.ms.gov"})[state];
+const registryStart = state => registryOrigin(state) + ({IL:"/search",GA:"/verification/Search.aspx?facility=Y",AL:"/online/Lookups/Business.aspx",NC:"/online_services/search/by_title/search_charities",NV:"/portal/public/#/public/nvsos/en/CaseXscreen?screen=external-GenericFilingsSearch&tabRoute=business",TN:"/portal/registered-charities-search",NM:"/CharitySearch/",MS:"/online/portal/ch/page/charities-search/Portal.aspx"})[state];
 function registryTrialLayout(origin) {
   const source=new URL(origin.url);
   if(!P.TRIAL_ORIGIN || source.origin!==P.TRIAL_ORIGIN
@@ -164,7 +164,7 @@ function registryNevadaOwnedForeground(tab,source) {
   if(!tab?.active)return false;
   if(tab.id===source.id)return tab.windowId===source.windowId&&tab.url===source.url;
   if(!owned.has(tab.id))return false;
-  try {return nyRegistryPage(tab.url)||['IL','GA','AL','NC','NV','TN','NM'].some(s=>new URL(tab.url).origin===registryOrigin(s));}
+  try {return nyRegistryPage(tab.url)||['IL','GA','AL','NC','NV','TN','NM','MS'].some(s=>new URL(tab.url).origin===registryOrigin(s));}
   catch {return false;}
 }
 function registryNevadaDiagnostic(job, phase, detail={}) {
@@ -581,6 +581,16 @@ async function registryIllinoisVerification(job, collect) {
 }
 async function performRegistryQuery(job, query) {
   if (!P.validQuery(query) || query.state !== job.registryState || !P.registryAllowed(query.state,new URL(job.sender.url).origin)) throw new Error("NY_CONNECTOR_INVALID_SEQUENCE");
+  if(query.state==='MS') {
+    if(query.operation==='search') {
+      // A fresh public form prevents a prior Kendo grid from being mistaken
+      // for this signed query's completed response.
+      await registryNavigate(job,registryStart('MS'),Math.min(30000,job.activeExpiresAt-Date.now()));
+      return registryMessage(job,{action:'registry-ms',query,budgetMs:Math.max(1,Math.min(30000,job.activeExpiresAt-Date.now()))});
+    }
+    if(job.tab===null)throw new Error('NY_CONNECTOR_INVALID_SEQUENCE');
+    return registryMessage(job,{action:'registry-ms',query,budgetMs:Math.max(1,Math.min(20000,job.activeExpiresAt-Date.now()))});
+  }
   if(query.state==='NM') {
     if(query.operation==='search') {
       // ASP.NET preserves the submitted filters when this URL is reloaded.

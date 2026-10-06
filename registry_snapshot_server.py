@@ -7063,6 +7063,117 @@ def nm_browser_lookup(org, evidence):
     return result
 
 
+MS_BROWSER_SOURCE = 'https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx'
+
+
+def ms_browser_clean_evidence(payload, query):
+    """Keep only bounded, query-bound public Mississippi registry fields."""
+    if not isinstance(payload, dict) or payload.get('query') != query or payload.get('complete') is not True:
+        raise ValueError('Mississippi browser evidence is incomplete')
+    if query.get('operation') == 'search':
+        if (set(payload) != {'state', 'query', 'complete', 'verification_pending', 'rows', 'total'}
+                or payload['state'] != 'MS' or payload['verification_pending'] is not False
+                or type(payload['total']) is not int or not 0 <= payload['total'] <= 100
+                or not isinstance(payload['rows'], list) or len(payload['rows']) != payload['total']):
+            raise ValueError('Mississippi search is incomplete')
+        seen = set()
+        for row in payload['rows']:
+            if (not isinstance(row, dict) or set(row) != {'name', 'identifier', 'raw_status'}
+                    or not all(isinstance(v, str) and len(v) <= 500 for v in row.values())
+                    or not row['name'].strip() or not re.fullmatch(r'\d{5,15}', row['identifier'])
+                    or row['identifier'] in seen):
+                raise ValueError('Mississippi search row is incomplete')
+            seen.add(row['identifier'])
+    elif query.get('operation') == 'detail':
+        if (set(payload) != {'query', 'complete', 'fields', 'source_url'}
+                or not isinstance(payload['fields'], dict)
+                or set(payload['fields']) != {'Name', 'Filing Number', 'Filing Status', 'Expiration Date', 'Registered Name'}
+                or not all(isinstance(v, str) and len(v) <= 1000 for v in payload['fields'].values())
+                or payload['fields']['Filing Number'] != query.get('identifier')
+                or not payload['fields']['Name'].strip()
+                or payload['source_url'] != MS_BROWSER_SOURCE):
+            raise ValueError('Mississippi detail is incomplete or mismatched')
+    else:
+        raise ValueError('Unsupported Mississippi browser query')
+    return json.loads(json.dumps(payload))
+
+
+def ms_browser_lookup(org, evidence, alternate_names=()):
+    """Use the master name plan, identity guard and status interpreter on public browser evidence."""
+    module = state_batch_modules(['MS'])[load_state_batch_bundle().STATE_TO_MODULE['MS']]
+    # The signed request supplies reviewed names only in Standard. Sales must
+    # never acquire names from the process-wide discovery cache.
+    reviewed = list(dict.fromkeys([org.organization_name, *alternate_names]))
+    planned = list(dict.fromkeys(query for target in reviewed
+                                 for query in ms_name_search_plan(target, '')))
+    if not planned:
+        raise ValueError('No safe Mississippi name search')
+    attempted = []
+    possible = []
+    ambiguous = False
+    for name in planned:
+        query = {'state': 'MS', 'operation': 'search', 'name': name}
+        rows = ms_browser_clean_evidence(evidence(query), query)['rows']
+        attempted.append({'query': query, 'completed': True})
+        accepted = []
+        for row in rows:
+            # This public result has no EIN. Match only against names signed
+            # into this workflow, never an EIN-keyed discovery cache.
+            scores = [score_candidate(target, '', {'name': row['name'], 'ein': ''})
+                      for target in reviewed if target]
+            best = max(scores, key=lambda item: item['score']) if scores else None
+            if (best and best['decision'] == 'accepted'
+                    and any(ms_registry_name_is_safe(row['name'], target, '') for target in reviewed)):
+                accepted.append(row)
+            elif best and best['decision'] in {'accepted', 'possible'}:
+                possible.append(row['name'])
+        # Do not select the first of multiple plausible state identities.
+        if len(accepted) > 1:
+            ambiguous = True
+            break
+        if not accepted:
+            continue
+        selected = accepted[0]
+        detail_query = {'state': 'MS', 'operation': 'detail', 'identifier': selected['identifier']}
+        fields = ms_browser_clean_evidence(evidence(detail_query), detail_query)['fields']
+        if (normalized_match_name(fields['Name']) != normalized_match_name(selected['name'])
+                or not fields['Filing Status'].strip()):
+            raise ValueError('Mississippi detail identity or status changed')
+        filing = fields['Filing Status'].strip()
+        expiration = module.parse_mmddyyyy_date(fields['Expiration Date']) if fields['Expiration Date'] else None
+        if fields['Expiration Date'] and not expiration:
+            raise ValueError('Mississippi expiration date is malformed')
+        result = checker.StateResult(org.organization_name, org.ein, 'MS', checker.STATUS_UNKNOWN, MS_BROWSER_SOURCE)
+        result.success = True
+        result.matched_registry_name = selected['name']
+        result.matched_registry_identifier = selected['identifier']
+        result.queries_attempted = attempted + [{'query': detail_query, 'completed': True}]
+        if re.search(r'\bexempt(?:ed|ion)?\b', filing, re.I):
+            result.status = 'Exempt'
+        elif not expiration and re.search(r'\bcurrent\b|\bregistered\b', filing, re.I):
+            annual = date(date.today().year, 11, 15)
+            if annual < date.today(): annual = date(date.today().year + 1, 11, 15)
+            result.status = status_from_calendar_date(annual)
+            result.source_note = ('The matched Mississippi record did not display an expiration date; '
+                                  'the state annual November 15 renewal timing was used.')
+        else:
+            result.status = ms_status_from_filing_status(filing, expiration, module.classify_ms_registration)
+        result.raw_status_text = module.normalize_ms_filing_status(filing)
+        if expiration: result.raw_status_text += ' | Expiration Date: ' + format_date(expiration)
+        result.source_note = (result.source_note + ' ' if getattr(result, 'source_note', '') else '') + \
+            'The public Mississippi search row and detail filing number matched; status uses the displayed Filing Status and Expiration Date.'
+        return result
+    result = checker.StateResult(org.organization_name, org.ein, 'MS',
+                                  'Needs Review' if possible or ambiguous else 'Not Registered',
+                                 MS_BROWSER_SOURCE)
+    result.success = not (possible or ambiguous)
+    result.queries_attempted = attempted
+    result.source_note = ('Mississippi returned one or more possible identities, but none was confirmed safely.'
+                          if not result.success else
+                          'Mississippi completed all planned public name searches without a qualifying registration record.')
+    return result
+
+
 def final_four_clean_evidence(payload, query):
     """Bounded public fields for the existing signed connector continuation.
 
@@ -7072,6 +7183,8 @@ def final_four_clean_evidence(payload, query):
     state = query.get("state")
     if state == 'NM':
         return nm_browser_clean_evidence(payload, query)
+    if state == 'MS':
+        return ms_browser_clean_evidence(payload, query)
     if (state not in {"AL", "NC", "NV", "TN"} or not isinstance(payload, dict)
             or payload.get("query") != query or payload.get("complete") is not True):
         raise ValueError("Incomplete or mismatched final-four evidence")
@@ -7222,7 +7335,8 @@ def final_four_connector_failure(record, reason=""):
                "NC": "https://www.sosnc.gov/online_services/search/by_title/search_charities",
                "NV": "https://orion.nv.gov/portal/public/",
                "TN": "https://tncab.tnsos.gov/portal/registered-charities-search",
-               "NM": "https://secure.nmdoj.gov/CharitySearch/"}
+               "NM": "https://secure.nmdoj.gov/CharitySearch/",
+               "MS": MS_BROWSER_SOURCE}
     org = checker.Organization(record["organization_name"], record["ein"])
     result = licensed_charity_failure(org, state, sources[state], ValueError("Browser evidence incomplete"))
     # Public query stages only: never export the signed continuation, device,
@@ -7273,7 +7387,8 @@ def final_four_connector_advance(record):
         raise NYConnectorQueryNeeded(query)
     org = checker.Organization(record["organization_name"], record["ein"])
     try:
-        result = (nm_browser_lookup(org, evidence) if record['state'] == 'NM' else
+        result = (ms_browser_lookup(org, evidence, record.get('alternate_names', ())) if record['state'] == 'MS' else
+                  nm_browser_lookup(org, evidence) if record['state'] == 'NM' else
                   final_four_browser_lookup(org, record["state"], evidence, time.monotonic()+remaining))
     except NYConnectorQueryNeeded as pending:
         required, generated = licensed_charity_names(org)
@@ -7401,7 +7516,7 @@ def final_four_connector_request(payload, origin):
     if action == "start":
         state, name, ein = payload.get("state"), payload.get("organization_name"), payload.get("ein")
         mode = payload.get("mode", "standard")
-        if (state not in {"AL", "NC", "NV", "TN", "NM"} or mode not in {"sales", "standard"}
+        if (state not in {"AL", "NC", "NV", "TN", "NM", "MS"} or mode not in {"sales", "standard"}
                 or payload.get("purpose", "registration") != "registration"
                 or not isinstance(name, str) or not 1 <= len(name.strip()) <= 500
                 or not isinstance(ein, str) or not re.fullmatch(r"[0-9]{2}-?[0-9]{7}", ein)
@@ -7427,7 +7542,7 @@ def final_four_connector_request(payload, origin):
         try:
             record = ny_connector_unpack(payload.get("check_token"), email, device)
             if (record.get("origin") != origin or record.get("protocol") != "final-four-public-v1"
-                    or record.get("state") not in {"AL", "NC", "NV", "TN", "NM"}):
+                    or record.get("state") not in {"AL", "NC", "NV", "TN", "NM", "MS"}):
                 raise ValueError("Wrong continuation scope")
         except (ValueError, TypeError, KeyError, UnicodeError):
             return 410, {"error": "This registry check expired or changed. Run the state check again."}
