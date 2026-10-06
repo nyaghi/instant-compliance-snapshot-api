@@ -21,7 +21,7 @@ class TrialReleaseContract(unittest.TestCase):
             stack.enter_context(patch.object(cc,'build_search_queries',return_value=['Example Foundation']))
             stack.enter_context(patch.object(cc,'public_profile_for_ein',return_value={}))
             for state in ('NY','IL'):
-                for version, expected in (('0.6.84',200),('0.6.85',400),('0.6.86',200)):
+                for version, expected in (('0.6.84',200),('0.6.85',400),('0.6.86',200),('0.6.87',200)):
                     with self.subTest(state=state,version=version), patch.object(cc,'trial_identity',return_value=trial):
                         status,result=cc.ny_connector_request({**payload,'state':state,'connector_version':version},trial['origin'])
                         self.assertEqual(status,expected,result)
@@ -29,8 +29,9 @@ class TrialReleaseContract(unittest.TestCase):
                             record=cc.ny_connector_unpack(result['check_token'],payload['email'],payload['device_id'])
                             self.assertEqual(record['connector_version'],version)
                 with self.subTest(state=state,trial=False), patch.object(cc,'trial_identity',return_value=None):
-                    status,_=cc.ny_connector_request({**payload,'state':state,'connector_version':'0.6.86'},cc.NY_CONNECTOR_ORIGIN)
-                    self.assertEqual(status,400)
+                    for candidate in ('0.6.86','0.6.87'):
+                        status,_=cc.ny_connector_request({**payload,'state':state,'connector_version':candidate},cc.NY_CONNECTOR_ORIGIN)
+                        self.assertEqual(status,400)
 
     def test_packaged_version_admitted_only_in_trial_for_all_mature_transports(self):
         with tempfile.TemporaryDirectory() as temp:
