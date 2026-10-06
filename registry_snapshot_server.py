@@ -7340,7 +7340,10 @@ def al_read_verification_image(data_url, deadline):
             if not rows or len(rows) != 1:
                 continue
             value = re.sub(r'\s+', '', str(rows[0][0])).upper()
-            if re.fullmatch(r'[A-Z0-9]{6}', value) and float(rows[0][1]) >= .85:
+            # The public form does not fix the code length, and observed images
+            # include five-character challenges. Require two agreeing reads;
+            # the registry Search remains the authority on code acceptance.
+            if re.fullmatch(r'[A-Z0-9]{5,6}', value) and float(rows[0][1]) >= .70:
                 candidates.append(value)
         if time.monotonic() >= deadline:
             raise TimeoutError('Alabama verification image deadline')

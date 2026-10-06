@@ -87,9 +87,10 @@ class AlabamaVerificationControls(ContinuationControls):
         image.paste('black',(10,30,110,45));image.save(buffer,format='PNG')
         pixels='data:image/png;base64,'+base64.b64encode(buffer.getvalue()).decode()
         for answers,expected in [([['ABC123',.99],['ABC123',.96]],'ABC123'),
+                                 ([['ABC12',.76],['ABC12',.74]],'ABC12'),
                                  ([['ABC123',.99],['ABC124',.99]],None),
                                  ([['ABC123',.60],['ABC123',.99]],None),
-                                 ([['ABC12',.99],['ABC12',.99]],None)]:
+                                 ([['ABC1',.99],['ABC1',.99]],None)]:
             reader=Mock(side_effect=[([answer],[.01]) for answer in answers])
             with patch.dict('sys.modules',{'rapidocr_onnxruntime':types.SimpleNamespace(RapidOCR=Mock())}), \
                     patch.object(cc,'_AL_VERIFICATION_OCR',reader):
@@ -116,7 +117,7 @@ class AlabamaVerificationControls(ContinuationControls):
         validation=(Path(cc.__file__).parent/'deployment/final-four-validation.html').read_text(encoding='utf-8')
         self.assertIn("const VERSION='"+TRIAL_VERSION+"'",validation)
         self.assertEqual(TRIAL_VERSION,'2026.09.29.2-performance-lab')
-        self.assertEqual(TRIAL_RELEASE_LABEL,'29.2CT')
+        self.assertEqual(TRIAL_RELEASE_LABEL,'29.2CU')
 
 
 if __name__=='__main__':unittest.main()

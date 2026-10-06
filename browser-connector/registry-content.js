@@ -1215,7 +1215,7 @@
   function alApplyVerification(query) {
     const answer=query.verification, pending=alVerificationImage;
     if(!answer || !pending || answer.id!==pending.id || pending.name!==query.name
-        || Date.now()-pending.created>45000 || !/^[A-Z0-9]{6}$/.test(answer.code)
+        || Date.now()-pending.created>45000 || !/^[A-Z0-9]{5,6}$/.test(answer.code)
         || alImagePixels()!==pending.pixels)throw new Error('NY_CONNECTOR_AL_VERIFICATION_REQUIRED');
     // Consume once. The ordinary Search response still decides acceptance.
     alVerificationImage=null;

@@ -31,6 +31,11 @@ test('only a matching answer for the same current image can be entered once',()=
  h.api.alApplyVerification({...q,verification:answer});assert.equal(h.input.value,'ABC123');
  assert.throws(()=>h.api.alApplyVerification({...q,verification:answer}),/VERIFICATION_REQUIRED/);
 });
+test('a five-character public code remains image-bound and one-use',()=>{
+ const h=harness(),r=h.api.alVerificationRequest(q),answer={id:r.verification_id,code:'AB123'};
+ h.api.alApplyVerification({...q,verification:answer});assert.equal(h.input.value,'AB123');
+ assert.throws(()=>h.api.alApplyVerification({...q,verification:answer}),/VERIFICATION_REQUIRED/);
+});
 test('changed image, name, expired answer and wrong identifier cannot submit',()=>{
  for(const cause of ['pixels','name','age','id','code']){
   const h=harness(),r=h.api.alVerificationRequest(q),request={...q,verification:{id:r.verification_id,code:'ABC123'}};
@@ -71,6 +76,7 @@ test('production protocol refuses the added verification command; trial AL only 
   const context=vm.createContext({URL});vm.runInContext(trial?source.replace('const TRIAL_ORIGIN = "";','const TRIAL_ORIGIN = "https://fixture.onrender.com";'):source,context);
   const query={...q,verification:{id:'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',code:'ABC123'}};
   assert.equal(context.CCNYProtocol.validQuery(query),trial);
+  assert.equal(context.CCNYProtocol.validQuery({...query,verification:{...query.verification,code:'AB123'}}),trial);
   assert.equal(context.CCNYProtocol.validQuery({...query,state:'NV'}),false);
   assert.equal(context.CCNYProtocol.validQuery({...query,verification:{...query.verification,extra:true}}),false);
   if(trial)assert.equal(context.CCNYProtocol.sameQuery(JSON.parse(JSON.stringify(query)),query),true);
@@ -80,7 +86,7 @@ test('AL image and answer are omitted from saved worker command and result state
  const worker=fs.readFileSync(path.join(root,'browser-connector/worker.js'),'utf8');
  const expression=worker.match(/const runtimeState = \(\) => ([^\n]+);/)[1];
  const active={lookupId:'fixture',registryState:'AL',sender:{tab:{id:1}},command:{query:{verification:{code:'PRIVATE'}}},lastResponse:{verification_image:'PRIVATE'}};
- const result=vm.runInNewContext(expression,{P:{TRIAL_ORIGIN:'https://fixture.onrender.com'},nextStart:0,laneStarts:new Map(),owned:new Set(),diagnostics:[],allJobs:()=>[active],isActive:j=>j===active});
+ const result=vm.runInNewContext(expression,{P:{TRIAL_ORIGIN:'https://fixture.onrender.com',nyDiagnostics:()=>[]},nextStart:0,laneStarts:new Map(),owned:new Set(),diagnostics:[],allJobs:()=>[active],isActive:j=>j===active});
  assert.equal(result.queue[0].command,null);assert.equal(result.queue[0].lastResponse,null);
  assert.ok(!JSON.stringify(result).includes('PRIVATE'));
 });
