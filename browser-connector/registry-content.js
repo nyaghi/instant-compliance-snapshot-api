@@ -1198,7 +1198,20 @@
     if(pixels.length>180000)throw new Error('NY_CONNECTOR_AL_VERIFICATION_REQUIRED');
     return pixels;
   }
-  function alVerificationRequest(query) {
+  async function alImagePixelsWhenReady(deadline) {
+    // A completed HTML document can precede its public verification image,
+    // including a replacement image after the state rejects a code. Wait
+    // only inside the existing command deadline; never submit a blank code.
+    const end=Math.min(deadline,Date.now()+4000);
+    while(Date.now()<end) {
+      const image=document.getElementById('imgcap');
+      if(image?.complete && image.naturalWidth>0 && image.naturalHeight>0)
+        return alImagePixels();
+      await new Promise(resolve=>setTimeout(resolve,Math.min(125,Math.max(1,end-Date.now()))));
+    }
+    throw new Error('NY_CONNECTOR_AL_VERIFICATION_REQUIRED');
+  }
+  async function alVerificationRequest(query,deadline) {
     // Only the currently displayed public image is sent to the signed master
     // continuation. Never fetch another image, or forward cookies/form state.
     const alert=document.querySelector('#altdialog');
@@ -1209,7 +1222,7 @@
       ok.click();
       if(visible(alert))throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
     }
-    const pixels=alImagePixels();
+    const pixels=await alImagePixelsWhenReady(deadline);
     alVerificationImage={id:crypto.randomUUID(),pixels,name:query.name,created:Date.now()};
     return {state:'AL',query,complete:false,verification_pending:true,
       verification_image:pixels,verification_id:alVerificationImage.id};
@@ -1373,6 +1386,14 @@
   }
   function registryDocumentReady() {
     if (document.readyState === 'loading') return false;
+    if (AL) {
+      const input=id=>document.getElementById('ctl00_cntbdy_'+id);
+      const image=document.getElementById('imgcap'),button=input('btn_search');
+      return location.pathname==='/online/Lookups/Business.aspx' && document.readyState==='complete'
+        && !!input('txt_businessname') && !!input('txt_verify') && !!button
+        && visible(button) && !button.disabled && !!image && image.complete
+        && image.naturalWidth>=20 && image.naturalHeight>=10;
+    }
     if(MS)return location.pathname==='/online/portal/ch/page/charities-search/Portal.aspx'
       && !!document.querySelector('#ContentPlaceHolder1_PortalPageControl1_ctl10_IFSearchControl1_EntityNameTextBox')
       && !!document.querySelector('#SearchButton');
@@ -1481,12 +1502,13 @@
     if (AL && m.action==='registry-al') {
       if (m.query?.state!=='AL' || m.query.operation!=='search') throw new Error('REGISTRY_COMMAND_INVALID');
       const query={state:'AL',operation:'search',name:m.query.name};
+      const deadline=Date.now()+Math.min(45000,Number.isFinite(m.budgetMs)&&m.budgetMs>0?m.budgetMs:45000);
       try {
         if(m.query.verification)alApplyVerification(m.query);
-        return {ok:true,evidence:await alSearch(query,Date.now()+Math.min(45000,Number.isFinite(m.budgetMs)&&m.budgetMs>0?m.budgetMs:45000))};
+        return {ok:true,evidence:await alSearch(query,deadline)};
       } catch(error) {
         if(error.message!=='NY_CONNECTOR_AL_VERIFICATION_REQUIRED' || !m.automaticVerification)throw error;
-        return {ok:true,evidence:alVerificationRequest(query)};
+        return {ok:true,evidence:await alVerificationRequest(query,deadline)};
       }
     }
     if (m.action === "registry-ready") return {ready:registryDocumentReady(), url:location.href, documentId,
