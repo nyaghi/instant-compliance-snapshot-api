@@ -114,16 +114,20 @@ def final_four_asset(name, text):
         replace('["NY", "IL", "GA"].includes(state)', '["NY", "IL", "GA", "AL", "NC", "NV", "TN", "NM", "MS"].includes(state)')
         replace('alternateNames = runAlternateNames, {signal} = {}', 'alternateNames = runAlternateNames, {signal,mode="standard"} = {}')
         replace('alternate_names: alternateNames, signal,', 'alternate_names: alternateNames, signal, mode,')
-        # Trial-only, in-memory diagnostics for the two incomplete public
-        # browser lookups. This does not change registry requests or results.
+        # Trial-only, in-memory diagnostics for incomplete public browser
+        # lookups. This does not change registry requests or results.
         replace('            onProgress: (message) => {', '''            onProgress: (message, detail) => {
-              if (detail && ["NM", "MS"].includes(detail.state)) {
+              if (detail && ["NM", "MS", "IL", "NV"].includes(detail.state)) {
                 const events = window.__CCLabStateTrace ||= [];
                 events.push({at: Date.now(), state: detail.state, stage: detail.stage || "",
                   action: detail.action || "", operation: detail.query?.operation || "",
                   query: detail.query?.name || "", reason: detail.reason || "",
                   ny_phase: detail.ny_phase || "", http_status: detail.http_status ?? null,
-                  phase: detail.phase || "", diagnostic: detail.diagnostic || null});
+                  phase: detail.phase || "", diagnostic: detail.diagnostic || null,
+                  page_visibility: detail.page_visibility || "",
+                  il_dom: Array.isArray(detail.il_dom) ? detail.il_dom : null,
+                  nv_readiness: detail.nv_readiness || null,
+                  nv_filings: detail.nv_filings || null});
                 if (events.length > 300) events.splice(0, events.length - 300);
                 let traceNode = document.getElementById("cc-lab-state-trace");
                 if (!traceNode) {
