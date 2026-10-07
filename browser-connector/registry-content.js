@@ -929,6 +929,13 @@
     // Revenue and individual officer/contact information are not collected.
     return {financial_periods:rows.map(row=>{if(row.children.length!==columns.length)throw new Error('REGISTRY_TN_FINANCIALS_INCOMPLETE');return text(row.children[index]);}),financial_count:count};
   }
+  function tnConfirmedAbsentFinancials(dialog, selected) {
+    // The public detail can have only an Officers tab. Confirm the same loaded
+    // detail after the normal financial-table wait before calling it empty.
+    if (!visible(dialog) || tnFields(selected)?.['CO Number']!==selected.identifier) return false;
+    const tabs=[...dialog.querySelectorAll('#DetailsTabStrip > li > a')].map(text);
+    return tabs.length>0 && tabs.every(label=>/^Officers \(\d+\)$/.test(label));
+  }
   async function tnDetail(query,deadline) {
     if(query?.state!=='TN'||query.operation!=='detail'||!/^CO\d+$/.test(query.identifier)
         ||Object.keys(query).sort().join(',')!=='identifier,operation,state')throw new Error('REGISTRY_COMMAND_INVALID');
@@ -951,7 +958,13 @@
       try {return tnFinancials(document.querySelector('#KendoWindowLevel1'));}
       catch(error) {if(error.message==='REGISTRY_TN_FINANCIALS_INCOMPLETE')return null;throw error;}
     },Math.max(1,Math.min(12000,deadline-Date.now())))); }
-    catch { fields.financial_count=-1;fields.financial_periods=[]; }
+    catch {
+      const dialog=document.querySelector('#KendoWindowLevel1');
+      const empty=tnConfirmedAbsentFinancials(dialog,selected);
+      fields.financial_count=empty?0:-1;
+      fields.financial_periods=[];
+      if(empty)fields.financial_history_absent=true;
+    }
     return {query,complete:true,fields};
   }
   function ncLabeled(scope, allowed) {
