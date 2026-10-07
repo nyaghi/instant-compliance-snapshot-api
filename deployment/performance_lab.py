@@ -125,6 +125,14 @@ def final_four_asset(name, text):
                   ny_phase: detail.ny_phase || "", http_status: detail.http_status ?? null,
                   phase: detail.phase || "", diagnostic: detail.diagnostic || null});
                 if (events.length > 300) events.splice(0, events.length - 300);
+                let traceNode = document.getElementById("cc-lab-state-trace");
+                if (!traceNode) {
+                  traceNode = document.createElement("script");
+                  traceNode.id = "cc-lab-state-trace";
+                  traceNode.type = "application/json";
+                  document.body.appendChild(traceNode);
+                }
+                traceNode.textContent = JSON.stringify(events);
               }''')
         replace('          result.status_reason = "NY_CONNECTOR_UNAVAILABLE";', '''          result.status_reason = "NY_CONNECTOR_UNAVAILABLE";
           result.reviewed_alternate_names = [...alternateNames];''')
