@@ -107,9 +107,17 @@ def final_four_asset(name, text):
         import re
         label = re.search(r'<label[^>]*><input type="checkbox" name="states" value="AK"[^>]* /> <span>Alaska</span></label>', text)
         if not label: raise RuntimeError('Missing approved state selector template')
-        additions = ''.join(label[0].replace('value="AK"', 'value="'+state+'"').replace('>Alaska<', '>'+title+'<')
-                            for state, title in [('AL','Alabama'),('NC','North Carolina'),('NV','Nevada'),('TN','Tennessee')])
-        text = text[:label.end()] + additions + text[label.end():]
+        # Keep the existing selector's alphabetical display order. Its layout
+        # does not control the separately sorted execution order.
+        additions = [label[0].replace('value="AK"', 'value="'+state+'"').replace('>Alaska<', '>'+title+'<')
+                     for state, title in [('AL','Alabama'),('NC','North Carolina'),('NV','Nevada'),('TN','Tennessee')]]
+        selector = re.compile(r'<label[^>]*><input type="checkbox" name="states" value="[A-Z]{2}"[^>]* /> <span>[^<]+</span></label>')
+        choices = list(selector.finditer(text))
+        if len(choices) != 34:
+            raise RuntimeError('29.2 state selector no longer matches the approved template')
+        labels = [match[0] for match in choices] + additions
+        labels.sort(key=lambda value: re.search(r'<span>([^<]+)</span>', value)[1].casefold())
+        text = text[:choices[0].start()] + '\n\n                  '.join(labels) + text[choices[-1].end():]
         replace('!["IL", "GA"].includes(state)', '!["NY", "IL", "GA", "AL", "NC", "NV", "TN", "NM", "MS"].includes(state)')
         replace('["NY", "IL", "GA"].includes(state)', '["NY", "IL", "GA", "AL", "NC", "NV", "TN", "NM", "MS"].includes(state)')
         replace('alternateNames = runAlternateNames, {signal} = {}', 'alternateNames = runAlternateNames, {signal,mode="standard"} = {}')

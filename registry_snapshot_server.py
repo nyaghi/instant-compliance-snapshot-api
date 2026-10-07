@@ -19656,11 +19656,37 @@ def explicit_acronym_alias_matches_registry(original_name: str, registry_name: s
     return len((set(words) & original_words) - ignored) >= 3 and set(words[:-1]).issubset(original_words)
 
 
+def wi_possessive_supplied_component_match(original_name: str, registry_name: str) -> bool:
+    """Match a complete supplied component with an unpunctuated possessive.
+
+    Wisconsin does not show an EIN on its search row, so the credential must
+    also have corroborating location evidence before a conclusive result.
+    """
+    parts = licensed_compound_retrieval_names(original_name)
+    if len(parts) < 2 or any(guard(original_name, registry_name) for guard in (
+            institution_location_conflict, named_jurisdiction_scope_conflict,
+            named_geographic_scope_conflict, embedded_institution_identity_conflict,
+            institutional_subunit_identity_conflict, related_affiliate_or_chapter_mismatch)):
+        return False
+    candidate = complete_name_identity_key(registry_name)
+    def normalize(value: str) -> str:
+        value = re.sub(r"\b(women|men|children)\s+s\b", r"\1", value)
+        return re.sub(r"\b(women|men|children)s\b", r"\1", value)
+    return bool(candidate and any(
+        len(complete_name_identity_key(part).split()) >= 3
+        and len(distinctive_match_tokens(part)) >= 2
+        and complete_name_identity_key(part) != candidate
+        and normalize(complete_name_identity_key(part)) == normalize(candidate)
+        for part in parts))
+
+
 def wi_live_candidate_name_is_safe(registry_name: str, target_names: list[str], original_name: str, ein: str) -> bool:
     if not reviewed_name_candidate_is_safe(registry_name, original_name, ein):
         return False
     if (supplied_separator_component_match(original_name, registry_name)
             and registry_name_is_safe_for_org(registry_name, original_name, ein)):
+        return True
+    if wi_possessive_supplied_component_match(original_name, registry_name):
         return True
     # A shared acronym alone cannot replace the full organization identity.
     explicit_acronyms = [part.strip() for part in re.split(r"[/|]", original_name or "") if re.fullmatch(r"[A-Z]{3,8}", part.strip())]
@@ -19917,7 +19943,8 @@ def wi_candidate_from_row_html(row_html: str, target_names: list[str], original_
         return wi_foundation_identity_review(registry_name, original_name, license_number, review_href, expiration_text, location)
     score = checker.name_match_priority_for_targets(registry_name, target_names)
     if (explicit_acronym_alias_matches_registry(original_name, registry_name)
-            or supplied_separator_component_match(original_name, registry_name)):
+            or supplied_separator_component_match(original_name, registry_name)
+            or wi_possessive_supplied_component_match(original_name, registry_name)):
         score = max(score, 4)
     if score < 4 and not wi_contains_full_target_name(registry_name, target_names):
         return wi_foundation_identity_review(registry_name, original_name, license_number, review_href, expiration_text, location)
@@ -19954,7 +19981,8 @@ def wi_candidate_from_markdown_row(row_text: str, target_names: list[str], origi
         return wi_foundation_identity_review(registry_name, original_name, license_number, detail_href, expiration_text, location)
     score = checker.name_match_priority_for_targets(registry_name, target_names)
     if (explicit_acronym_alias_matches_registry(original_name, registry_name)
-            or supplied_separator_component_match(original_name, registry_name)):
+            or supplied_separator_component_match(original_name, registry_name)
+            or wi_possessive_supplied_component_match(original_name, registry_name)):
         score = max(score, 4)
     if score < 4 and not wi_contains_full_target_name(registry_name, target_names):
         return wi_foundation_identity_review(registry_name, original_name, license_number, detail_href, expiration_text, location)
@@ -20183,6 +20211,10 @@ def wi_verify_candidate_identity(candidate: dict, targets: list[str], original: 
             [candidate.get("location", ""), location[1] if location else ""])
         if cross_state:
             address = cross_state
+    if (wi_possessive_supplied_component_match(original, primary[1])
+            and address["decision"] != "corroborated"):
+        return dict(candidate, primary_registry_name=primary[1], address_evidence=address,
+                    identity_conflict=True)
     return dict(candidate, primary_registry_name=primary[1], address_evidence=address,
                 identity_conflict=address["decision"] in {"conflict", "different_ein"},
                 identity_preference=registry_identity_preference(primary[1], original, ein))
@@ -21575,7 +21607,12 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
             getattr(result, "ein", "") or getattr(org, "ein", ""),
             {"name": getattr(result, "matched_registry_name", "")},
         )
-        if identity_decision.get("decision") == "rejected" and not wi_result_has_reviewed_identity(result, org) and not explicit_acronym_alias_matches_registry(
+        corroborated_component = (
+            wi_possessive_supplied_component_match(
+                getattr(org, "organization_name", ""),
+                getattr(result, "matched_registry_name", ""))
+            and (getattr(result, "address_evidence", {}) or {}).get("decision") == "corroborated")
+        if identity_decision.get("decision") == "rejected" and not wi_result_has_reviewed_identity(result, org) and not corroborated_component and not explicit_acronym_alias_matches_registry(
             getattr(org, "organization_name", ""), getattr(result, "matched_registry_name", "")
         ):
             rejected_name = getattr(result, "matched_registry_name", "")
@@ -26972,6 +27009,22 @@ def ms_search_variant_too_broad(value: str) -> bool:
     return False
 
 
+# A generic category or address word alone can produce thousands of MS rows.
+# Retain complete names, multiword variants, and genuinely single-word names.
+MS_BROAD_SINGLE_WORD_PROBES = frozenset({
+    "avenue", "boulevard", "church", "college", "foundation", "hospital",
+    "institute", "ministries", "ministry", "nonprofit", "nonprofits", "road", "school", "schools",
+    "services", "street", "university",
+})
+
+
+def ms_discard_generic_probe(original_name: str, probe: str) -> bool:
+    original_words = re.findall(r"[A-Za-z0-9]+", original_name or "")
+    probe_words = re.findall(r"[A-Za-z0-9]+", probe or "")
+    return (len(original_words) > 1 and len(probe_words) == 1
+            and probe_words[0].casefold() in MS_BROAD_SINGLE_WORD_PROBES)
+
+
 def ms_words_for_match(value: str) -> list[str]:
     return [
         word.lower()
@@ -29577,7 +29630,8 @@ def ms_name_search_plan(name: str, ein: str = "") -> list[str]:
     planned = reviewed_queries_first(name, ein, generated, limit=6, transform=ascii_dash_search_name)
     # These are retrieval probes only; search_ms_fast still checks full row and
     # detail identity against original_organization_name and reviewed names.
-    return list(dict.fromkeys([*priority, *planned]))
+    return [query for query in dict.fromkeys([*priority, *planned])
+            if not ms_discard_generic_probe(name, query)]
 
 
 def case_boundary_name_variant(name: str) -> str:

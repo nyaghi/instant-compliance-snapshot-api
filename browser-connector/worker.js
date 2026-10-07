@@ -97,6 +97,7 @@ async function removeOwned(tabId) {
       || (url.origin === "https://ago.igovsolution.net" && url.pathname === "/online/Lookups/Business.aspx")
       || (url.origin === "https://tncab.tnsos.gov" && url.pathname === "/portal/registered-charities-search")
       || (url.origin === "https://secure.nmdoj.gov" && /^\/CharitySearch\/(?:CharityDetail\.aspx|GenericError\.htm)?$/i.test(url.pathname))
+      || (url.origin === "https://charities.sos.ms.gov" && url.pathname === "/online/portal/ch/page/charities-search/Portal.aspx")
       || (url.origin === "https://www.sosnc.gov" && /^\/online_services\/search\/(?:by_title\/search_charities|Charities_Results|charities_(?:profile|filings)\/\d+)$/.test(url.pathname)));
     if (trialRegistry || (["https://charitable.illinoisattorneygeneral.gov", "https://verify.sos.ga.gov"].includes(url.origin)) || url.origin === P.NY && /^\/RegistrySearch(?:\/[0-9]{2}-[0-9]{2}-[0-9]{2})?\/?$/.test(url.pathname)) await chrome.tabs.remove(tabId);
   } catch { /* The tab has already closed or was taken over by the user. */ }
