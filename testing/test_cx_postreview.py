@@ -59,13 +59,17 @@ class MississippiPlanner(unittest.TestCase):
     def test_discard_generic_single_word_probes(self):
         for name, blocked in (("Saks Fifth Avenue Foundation", "Avenue"),
                               ("Imagine School Nonprofit", "School"),
-                              ("Imagine Schools Non-Profit, Inc.", "Schools")):
+                              ("Imagine Schools Non-Profit, Inc.", "Schools"),
+                              ("International Studies Association", "Studies"),
+                              ("National Church Residences Foundation", "Residences")):
             with self.subTest(name=name):
                 plan = cc.ms_name_search_plan(name)
                 self.assertIn(name, plan)
                 self.assertNotIn(blocked, plan)
         self.assertIn("redrover", [item.casefold() for item in cc.ms_name_search_plan("United Animal Nations - RedRover")])
         self.assertIn("Avenue", cc.ms_name_search_plan("Avenue"))
+        self.assertTrue(all(len(re.findall(r"[A-Za-z0-9]+", q)) > 1
+                            for q in cc.ms_name_search_plan("YMCA of Greater Boston")))
 
 
 class StateSelector(unittest.TestCase):

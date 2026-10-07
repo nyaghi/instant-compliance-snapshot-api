@@ -284,6 +284,10 @@ class SourceControls(unittest.TestCase):
         row = cc.nc_charity_record_evidence(fields)
         self.assertTrue(row['unissued_application'])
         self.assertEqual(row['status'], 'Pending')
+        for raw in ('Withdrawn', 'Withdrawn In Process'):
+            withdrawn = cc.nc_charity_record_evidence({**fields, 'Status': raw})
+            self.assertEqual(withdrawn['status'], 'Closed / Withdrawn / Canceled')
+            self.assertEqual(withdrawn['raw_status'], raw)
         for bad in [{'Status': 'Active'}, {'CSL Type': 'Charitable Organization'},
                     {'Expiration Date': '12/31/2027'}, {'profile_url': 'https://example.com/profile/1'}]:
             with self.subTest(bad=bad), self.assertRaises(ValueError):
@@ -1348,6 +1352,19 @@ class LookupControls(unittest.TestCase):
             result = cc.final_four_browser_lookup(self.orgs['NC'], 'NC', pending)
             self.assertEqual(result.status, expected)
             self.assertEqual(bool(result.matched_registry_identifier), expected=='Pending')
+
+    def test_nc_withdrawn_application_requires_same_confirmed_identity(self):
+        for name, expected in [("America's Charities", 'Closed / Withdrawn / Canceled'),
+                               ('Unrelated Junior League', 'Not Registered')]:
+            def withdrawn(query):
+                row = {**NC, 'CSL Legal Name': name, 'License': '', 'CSL Type': 'In-Process',
+                       'Status': 'Withdrawn', 'Expiration Date': '', 'Extension End Date': ''}
+                return {'state':'NC', 'query':query, 'complete':True, 'verification_pending':False,
+                        'total':1, 'rows':[row]}
+            result = cc.final_four_browser_lookup(self.orgs['NC'], 'NC', withdrawn)
+            self.assertEqual(result.status, expected)
+            if expected.startswith('Closed'):
+                self.assertIn('not an issued charity license', result.source_note)
 
     def test_nv_blank_search_status_does_not_classify_a_matching_record(self):
         self.nvrow['raw_status'] = ''

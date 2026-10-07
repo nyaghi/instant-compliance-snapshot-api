@@ -1062,7 +1062,8 @@
         (key==='CSL Legal Name'?legal:other).push(value);
       }
       const headerText=text(button.querySelector('.searchHeader'));
-      const pending=fields['CSL Type']==='In-Process'&&fields.Status==='In-Process'&&!fields.License;
+      const pending=fields['CSL Type']==='In-Process'&&!fields.License&&
+        (fields.Status==='In-Process'||/\bWithdrawn\b/i.test(fields.Status||''));
       const header=headerText.match(/^(.+?)\s*•\s*\(((?:SL|EX)\d+)\)$/);
       const displayName=pending?headerText:header?.[1].trim();
       const names=[...new Set([...legal,...other])];

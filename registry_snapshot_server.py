@@ -6001,7 +6001,7 @@ def il_verification_recovery(record, payload, now):
     if (record.get("state") != "IL" or record.get("purpose") != "registration"
             or record.get("recovery_protocol") != "il-fresh-page-v1"
             or (record.get("connector_version") != "0.5.10"
-                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98"}))
+                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100"}))
             or payload.get("reason") != "NY_CONNECTOR_IL_VERIFICATION_PENDING"
             or record.get("il_verification_recovery")
             or now + 120 >= record["issued"] + NY_CONNECTOR_TTL_SECONDS):
@@ -6105,25 +6105,28 @@ def nc_charity_record_evidence(fields):
     name = display_name.strip()
     aliases = list(dict.fromkeys(n.strip() for n in aliases if n.strip() != name))
     kind = fields["CSL Type"].strip()
-    pending = kind == "In-Process" and fields["Status"].strip() == "In-Process" and not identifier
+    raw = re.sub(r"\s+", " ", fields["Status"]).strip()
+    unissued = kind == "In-Process" and not identifier and (
+        raw == "In-Process" or bool(re.search(r"\bwithdrawn\b", raw, re.I)))
     # NC retains historical SL/EX identifiers when the explicit record category
     # changes. Validate both source fields without deriving one from the other.
     valid_kind = (re.fullmatch(r"(?:SL|EX)\d+", identifier)
                   and kind in {"Charitable Organization", "CSL Exempt Organization"})
-    if not name or (not valid_kind and not pending):
+    if not name or (not valid_kind and not unissued):
         raise ValueError("North Carolina result is not an identified charity license")
     url = urlparse(fields["profile_url"])
     if url.scheme != "https" or url.netloc != "www.sosnc.gov" or not re.fullmatch(r"/online_services/search/charities_profile/\d+", url.path) or url.query or url.fragment:
         raise ValueError("North Carolina profile link is not an official charity record")
-    if pending:
+    if unissued:
         # This public application identity is only a deduplication key. It is
         # never presented as an issued license or accepted without review.
         if fields["Expiration Date"].strip() or str(fields.get("Extension End Date") or "").strip():
             raise ValueError("North Carolina unissued application has conflicting license dates")
         return dict(name=name, identifier="NCAPP-" + url.path.rsplit("/", 1)[1], ein="", aliases=aliases,
-                    unissued_application=True, raw_status="In-Process", status="Pending", url=fields["profile_url"],
+                    unissued_application=True, raw_status=raw,
+                    status="Pending" if raw == "In-Process" else licensed_charity_status(raw, None),
+                    url=fields["profile_url"],
                     expiration=None, initial=None, renewal=None, street="", location="")
-    raw = re.sub(r"\s+", " ", fields["Status"]).strip()
     expiration = final_four_source_date(fields["Expiration Date"], "North Carolina expiration")
     extension = final_four_source_date(fields.get("Extension End Date"), "North Carolina extension")
     extended = bool(re.fullmatch(r"Current Active\s*[–-]\s*Filing Extension Granted", raw, re.I))
@@ -6197,8 +6200,8 @@ def final_four_license_result(org, state, records, deadline, source):
             f"The displayed license expiration date is {selected['expiration'].isoformat()}. ",
             f"The controlling renewal deadline calculated from the latest filed fiscal period is {selected['expiration'].isoformat()}. ", 1)
     if state == "NC" and selected.get("unissued_application"):
-        result.source_note = (f"North Carolina lists a confirmed matching application for {selected['name']} as In-Process. "
-                              "CharityClarity reports Pending; this is an application, not an issued charity license.")
+        result.source_note = (f"North Carolina lists a confirmed matching application for {selected['name']} as {selected['raw_status']}. "
+                              f"CharityClarity reports {selected['status']}; this is an application, not an issued charity license.")
     if state == "NC" and selected.get("extension_end"):
         extension = selected["extension_end"].isoformat()
         original = selected.get("base_expiration")
@@ -7349,7 +7352,9 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
                                                   if k in {"state", "operation", "name", "identifier"}}, "completed": False})
     if re.fullmatch(r"NY_CONNECTOR_[A-Z_]{1,60}", reason or ""):
         result.status_reason = reason
+    attempts = record.get('al_verification_attempts', 0) if state == 'AL' else 0
     why = ("The registry lookup reached its time limit before all required records were confirmed." if reason == "NY_CONNECTOR_TIMEOUT" else
+           "Alabama presented another verification challenge after two bounded code submissions; the search remains incomplete." if state == "AL" and attempts >= 2 and reason == "NY_CONNECTOR_AL_VERIFICATION_REQUIRED" else
            "Alabama's verification image could not be read with sufficient confidence; the search remains incomplete." if state == "AL" and reason == "NY_CONNECTOR_AL_IMAGE_UNCERTAIN" else
            "Alabama's verification reader was unavailable or ran out of time; the search remains incomplete." if state == "AL" and reason == "NY_CONNECTOR_AL_READER_UNAVAILABLE" else
            "North Carolina limited this search (HTTP 429). CharityClarity retained completed records and did not restart the rejected search in another page." if state == "NC" and reason == "NY_CONNECTOR_NC_RATE_LIMITED" else
@@ -7373,6 +7378,10 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
     # NY transport codes are shared internally; their generic comment fallback
     # must not erase the actual verification/timeout cause for these sources.
     data["comments"] = result.source_note
+    if state == "AL":
+        data["lab_diagnostic"] = {"verification_attempts": attempts,
+                                  "failure_reason": result.status_reason,
+                                  "completed_queries": len(record.get("completed", []))}
     if state in {"NM", "MS"}:
         pending = (record.get("pending") or {}).get("query") or {}
         data["lab_diagnostic"] = {
@@ -7594,6 +7603,9 @@ def final_four_connector_request(payload, origin):
             return 409, {"error": "The response is stale or belongs to another registry query."}
         raw_evidence = payload.get('evidence')
         if record['state'] == 'AL' and isinstance(raw_evidence, dict) and raw_evidence.get('verification_pending') is True:
+            if record.get('al_verification_attempts', 0) >= 2:
+                return 200, {'phase': 'complete', 'result': final_four_connector_failure(
+                    record, 'NY_CONNECTOR_AL_VERIFICATION_REQUIRED')}
             try:
                 return 200, al_verification_continuation(record, raw_evidence)
             except Exception as exc:
@@ -24548,7 +24560,7 @@ def ny_connector_advance(record):
     org = checker.Organization(record["organization_name"], record["ein"])
     started = time.perf_counter()
     supports_browser_detail = (record.get("connector_version") in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"}
-                               or bool(trial_identity() and record.get("connector_version") in {"0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98"}))
+                               or bool(trial_identity() and record.get("connector_version") in {"0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100"}))
     try:
         if record.get("purpose") == "identity":
             ein = canonical_ein_digits(record["ein"])
@@ -24598,7 +24610,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98"})):
+        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100"})):
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()
@@ -27009,20 +27021,21 @@ def ms_search_variant_too_broad(value: str) -> bool:
     return False
 
 
-# A generic category or address word alone can produce thousands of MS rows.
-# Retain complete names, multiword variants, and genuinely single-word names.
-MS_BROAD_SINGLE_WORD_PROBES = frozenset({
-    "avenue", "boulevard", "church", "college", "foundation", "hospital",
-    "institute", "ministries", "ministry", "nonprofit", "nonprofits", "road", "school", "schools",
-    "services", "street", "university",
-})
-
-
-def ms_discard_generic_probe(original_name: str, probe: str) -> bool:
+def ms_discard_generic_probe(original_name: str, probe: str, ein: str = "") -> bool:
+    """Avoid unreviewed one-word probes derived from a multiword identity."""
     original_words = re.findall(r"[A-Za-z0-9]+", original_name or "")
     probe_words = re.findall(r"[A-Za-z0-9]+", probe or "")
-    return (len(original_words) > 1 and len(probe_words) == 1
-            and probe_words[0].casefold() in MS_BROAD_SINGLE_WORD_PROBES)
+    if len(original_words) <= 1 or len(probe_words) != 1:
+        return False
+    key = normalized_match_name(probe)
+    if any(normalized_match_name(part) == key
+           for part in licensed_compound_retrieval_names(original_name)):
+        return False
+    if ein and any(normalized_match_name(alias) == key
+                   for alias in known_names_for_ein(ein)
+                   if compatible_ein_alias_for_name(original_name, alias)):
+        return False
+    return True
 
 
 def ms_words_for_match(value: str) -> list[str]:
@@ -29631,7 +29644,7 @@ def ms_name_search_plan(name: str, ein: str = "") -> list[str]:
     # These are retrieval probes only; search_ms_fast still checks full row and
     # detail identity against original_organization_name and reviewed names.
     return [query for query in dict.fromkeys([*priority, *planned])
-            if not ms_discard_generic_probe(name, query)]
+            if not ms_discard_generic_probe(name, query, ein)]
 
 
 def case_boundary_name_variant(name: str) -> str:
