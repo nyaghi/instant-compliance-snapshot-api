@@ -171,6 +171,23 @@ with patch.object(c,'public_profile_for_ein',return_value={}),patch.object(c,'bu
         self.assertEqual(code,200);self.assertEqual(next_state['query'],{'orgName':ROW['orgName']})
         code,final=process({'action':'fail','check_token':next_state['check_token'],'reason':'NY_CONNECTOR_UNAVAILABLE'})
         self.assertEqual(code,200);self.assertEqual(final['result']['status'],'Unable to Confirm')
+    def test_current_trial_connector_version_is_accepted_by_all_mature_states(self):
+        origin = 'https://charityclarity-final-four-29-2.onrender.com'
+        payload = {**self.auth, 'action': 'start',
+                   'organization_name': ROW['orgName'], 'ein': ROW['ein']}
+        with patch.object(c, 'trial_identity', return_value={'origin': origin}), \
+                patch.dict(os.environ, {'CE_FINAL_FOUR_TRIAL': '1'}):
+            for version in ('0.6.96', '0.6.97'):
+                for state in ('NY', 'IL', 'GA'):
+                    with self.subTest(version=version, state=state):
+                        code, result = c.ny_connector_request(
+                            {**payload, 'state': state, 'connector_version': version}, origin)
+                        self.assertEqual(code, 200, result)
+                        self.assertNotEqual(result.get('phase'), 'complete')
+            code, _ = c.ny_connector_request({**payload, 'state': 'NY',
+                                              'connector_version': '0.6.98'}, origin)
+            self.assertEqual(code, 400)
+
     def test_real_http_handler_contract(self):
         server=ThreadingHTTPServer(('127.0.0.1',0),c.RegistrySnapshotHandler)
         thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
