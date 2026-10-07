@@ -7236,11 +7236,16 @@ def final_four_clean_evidence(payload, query):
             return json.loads(json.dumps(payload))
         allowed = ({"Name", "Registration #", "Status", "Expiration Date", "Extension End Date", "Last Application Date", "Street", "City", "State", "Zip", "profile_url"} if state == "NC" else
                    {"Entity Name", "NV Business ID", "Entity Status", "Entity Type", "FEIN", "Solicits Charitable Contribution?", "IRS Registered Name", "Campaign Name", "Formation Date in Nevada", "Annual Renewal Due Date/Expiration Date"} if state == "NV" else
-                   {"Name", "CO Number", "Status", "Registration Date", "Expiration Date", "Address", "financial_periods", "financial_count"})
+                   {"Name", "CO Number", "Status", "Registration Date", "Expiration Date", "Address", "financial_periods", "financial_count", "financial_history_absent"})
         fields = payload.get("fields")
         identity_key = {"NC": "Registration #", "NV": "NV Business ID", "TN": "CO Number"}[state]
         if not isinstance(fields, dict) or set(fields) - allowed or fields.get(identity_key) != query.get("identifier"):
             raise ValueError("Unexpected or mismatched detail identity fields")
+        if state == "TN" and "financial_history_absent" in fields:
+            if (fields["financial_history_absent"] is not True or type(fields.get("financial_count")) is not int
+                    or fields["financial_count"] != 0
+                    or fields.get("financial_periods") != [] or fields.get("Expiration Date") != ""):
+                raise ValueError("Invalid Tennessee absent financial section evidence")
         history = payload.get("filings")
         if history is not None:
             history_keys = {"url", "complete", "rows"} if state == "NC" else {"identifier", "name", "complete", "total", "headers", "rows"}
