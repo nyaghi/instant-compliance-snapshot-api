@@ -177,7 +177,7 @@ with patch.object(c,'public_profile_for_ein',return_value={}),patch.object(c,'bu
                    'organization_name': ROW['orgName'], 'ein': ROW['ein']}
         with patch.object(c, 'trial_identity', return_value={'origin': origin}), \
                 patch.dict(os.environ, {'CE_FINAL_FOUR_TRIAL': '1'}):
-            for version in ('0.6.96', '0.6.97'):
+            for version in ('0.6.96', '0.6.97', '0.6.98'):
                 for state in ('NY', 'IL', 'GA'):
                     with self.subTest(version=version, state=state):
                         code, result = c.ny_connector_request(
@@ -185,7 +185,7 @@ with patch.object(c,'public_profile_for_ein',return_value={}),patch.object(c,'bu
                         self.assertEqual(code, 200, result)
                         self.assertNotEqual(result.get('phase'), 'complete')
             code, _ = c.ny_connector_request({**payload, 'state': 'NY',
-                                              'connector_version': '0.6.98'}, origin)
+                                              'connector_version': '0.6.99'}, origin)
             self.assertEqual(code, 400)
 
     def test_real_http_handler_contract(self):
