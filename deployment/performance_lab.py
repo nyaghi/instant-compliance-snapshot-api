@@ -114,6 +114,18 @@ def final_four_asset(name, text):
         replace('["NY", "IL", "GA"].includes(state)', '["NY", "IL", "GA", "AL", "NC", "NV", "TN", "NM", "MS"].includes(state)')
         replace('alternateNames = runAlternateNames, {signal} = {}', 'alternateNames = runAlternateNames, {signal,mode="standard"} = {}')
         replace('alternate_names: alternateNames, signal,', 'alternate_names: alternateNames, signal, mode,')
+        # Trial-only, in-memory diagnostics for the two incomplete public
+        # browser lookups. This does not change registry requests or results.
+        replace('            onProgress: (message) => {', '''            onProgress: (message, detail) => {
+              if (detail && ["NM", "MS"].includes(detail.state)) {
+                const events = window.__CCLabStateTrace ||= [];
+                events.push({at: Date.now(), state: detail.state, stage: detail.stage || "",
+                  action: detail.action || "", operation: detail.query?.operation || "",
+                  query: detail.query?.name || "", reason: detail.reason || "",
+                  ny_phase: detail.ny_phase || "", http_status: detail.http_status ?? null,
+                  phase: detail.phase || "", diagnostic: detail.diagnostic || null});
+                if (events.length > 300) events.splice(0, events.length - 300);
+              }''')
         replace('          result.status_reason = "NY_CONNECTOR_UNAVAILABLE";', '''          result.status_reason = "NY_CONNECTOR_UNAVAILABLE";
           result.reviewed_alternate_names = [...alternateNames];''')
         replace('v2026.09.29.1 &middot; Staging', 'v2026.09.'+TRIAL_RELEASE_LABEL+' &middot; Isolated Trial')
@@ -167,7 +179,7 @@ def final_four_asset(name, text):
     };
     async function api(fields, cleanup = false) {
       if (!cleanup) trace("master request", null, {action:fields.action});''')
-        replace('      const payload = await response.json();', '      const payload = await response.json();\n      if (!cleanup) trace("master response", null, {action:fields.action,http_status:response.status,phase:payload.phase});')
+        replace('      const payload = await response.json();', '      const payload = await response.json();\n      if (!cleanup) trace("master response", null, {action:fields.action,http_status:response.status,phase:payload.phase,diagnostic:payload.result?.lab_diagnostic||null});')
         replace('        let completed;', '        let completed;\n        trace("browser query started", state.query);')
         replace('progress => onProgress?.(progress.reconnecting ? `${label}: reconnecting and resuming this check.',
                 'progress => ["opening_page","waiting_for_form","preparing_query","query_sent"].includes(progress.ny_phase) ? trace("browser stage", state.query, {ny_phase:progress.ny_phase}) : Array.isArray(progress.ny_diagnostics) ? trace("browser stage", state.query, {ny_diagnostics:nyDiagnostics(progress.ny_diagnostics)}) : onProgress?.(progress.reconnecting ? `${label}: reconnecting and resuming this check.')

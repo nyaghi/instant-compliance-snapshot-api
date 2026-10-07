@@ -7329,7 +7329,7 @@ def nc_completed_candidates_for_review(record):
         REVIEWED_NAME_CONTEXT.reset(context)
 
 
-def final_four_connector_failure(record, reason=""):
+def final_four_connector_failure(record, reason="", diagnostic=""):
     state = record["state"]
     sources = {"AL": "https://ago.igovsolution.net/online/Lookups/Business.aspx",
                "NC": "https://www.sosnc.gov/online_services/search/by_title/search_charities",
@@ -7373,6 +7373,14 @@ def final_four_connector_failure(record, reason=""):
     # NY transport codes are shared internally; their generic comment fallback
     # must not erase the actual verification/timeout cause for these sources.
     data["comments"] = result.source_note
+    if state in {"NM", "MS"}:
+        pending = (record.get("pending") or {}).get("query") or {}
+        data["lab_diagnostic"] = {
+            "code": diagnostic or reason or "INCOMPLETE_EVIDENCE",
+            "completed_count": len(record.get("completed", [])),
+            "pending_operation": pending.get("operation", ""),
+            "pending_name": pending.get("name", ""),
+        }
     return data
 
 
@@ -7398,7 +7406,18 @@ def final_four_connector_advance(record):
         return {"phase": "search", **record["pending"]}
     except (ValueError, TimeoutError) as exc:
         log_event(f"{record['state']} final-four public evidence incomplete: {type(exc).__name__}")
-        return {"phase": "complete", "result": final_four_connector_failure(record, "NY_CONNECTOR_TIMEOUT" if isinstance(exc, TimeoutError) else "")}
+        safe_errors = {
+            'Incomplete New Mexico evidence', 'New Mexico evidence exceeded its bound',
+            'Unexpected New Mexico search fields', 'Incomplete New Mexico result set',
+            'Invalid New Mexico identity row', 'Mississippi browser evidence is incomplete',
+            'Mississippi search is incomplete', 'Mississippi search row is incomplete',
+            'Mississippi detail is incomplete or mismatched',
+            'Mississippi detail identity or status changed',
+            'Mississippi expiration date is malformed', 'No safe Mississippi name search',
+        }
+        diagnostic = str(exc) if str(exc) in safe_errors else type(exc).__name__
+        return {"phase": "complete", "result": final_four_connector_failure(
+            record, "NY_CONNECTOR_TIMEOUT" if isinstance(exc, TimeoutError) else "", diagnostic)}
     if time.time() >= record["expires"]:
         return {"phase": "complete", "result": final_four_connector_failure(record, "NY_CONNECTOR_TIMEOUT")}
     if record.get("nc_search_recovery"):
@@ -7594,7 +7613,8 @@ def final_four_connector_request(payload, origin):
         try:
             evidence = final_four_clean_evidence(payload.get("evidence"), pending["query"])
         except (ValueError, TypeError, KeyError):
-            return 200, {"phase": "complete", "result": final_four_connector_failure(record)}
+            return 200, {"phase": "complete", "result": final_four_connector_failure(
+                record, diagnostic="SERVER_EVIDENCE_REJECTED")}
         evidence = final_four_compact_search_evidence(record, evidence)
         record["completed"].append({"query": pending["query"], "evidence": evidence})
         record["pending"] = None
