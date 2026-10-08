@@ -171,6 +171,30 @@ class ConnectedInsightTests(unittest.TestCase):
         self.assertEqual(f['priority'],2)
         self.assertIn('not an approved current registration',f['why'])
 
+    def test_compliance_matrix_is_exclusive_and_keeps_uncertain_evidence_out_of_clear_blocks(self):
+        combined = report.reconcile_head_start(self.rows, self.assessment)
+        blocks, unchecked = report.compliance_matrix(combined)
+        all_states = [state for states in blocks.values() for state in states]
+        self.assertEqual(len(all_states), len(self.rows))
+        self.assertEqual(len(set(all_states)), len(all_states))
+        self.assertEqual(unchecked, 51 - len(self.rows))
+        for status, expected in [
+            ('Current', 'On track / deadline approaching'),
+            ('Upcoming Filing', 'On track / deadline approaching'),
+            ('Not Registered', 'Action needed'),
+            ('Unable to Confirm', 'Needs confirmation'),
+            ('Exempt', 'Needs confirmation'),
+        ]:
+            blocks, _ = report.compliance_matrix([self.finding('WA', status=status)])
+            self.assertEqual(blocks[expected], ['WA'])
+        blocks, _ = report.compliance_matrix([self.finding('HI', status='Exempt')])
+        self.assertEqual(blocks['No registration needed'], ['HI'])
+        recorded = self.finding('HI', status='Exempt', exemption_evidence=None)
+        self.assertEqual(recorded['finding'], 'Exemption recorded')
+        self.assertNotIn('application', recorded['action'].lower())
+        blocks, _ = report.compliance_matrix([recorded])
+        self.assertEqual(blocks['No registration needed'], ['HI'])
+
     def test_explicit_failed_lookup_can_never_create_a_registration_gap(self):
         payload=copy.deepcopy(self.payload)
         row=next(r for r in payload['results'] if r['state']=='WA')
