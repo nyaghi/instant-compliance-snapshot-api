@@ -332,6 +332,12 @@ def validate_results(payload, supported_states):
             raise ValueError("A result status is not supported by this report template.")
         if status == IL_COMBINED and state != "IL":
             raise ValueError("The combined non-registration/non-compliance status is Illinois-only.")
+        if row.get("success") is not None and not isinstance(row["success"], bool):
+            raise ValueError("Snapshot success must retain its boolean meaning.")
+        returned_status = status
+        unsuccessful = row.get("success") is False
+        if unsuccessful and status not in INCOMPLETE:
+            status = "Unable to Confirm"
         checked = row.get("checked_at_epoch")
         registration_date = text(row.get("registration_date"), 10)
         registration_type = text(row.get("registration_date_type"), 50)
@@ -379,6 +385,8 @@ def validate_results(payload, supported_states):
             "renewal_filing_label": combined_label, "renewal_filing_note": combined_note,
             "renewal_filing_source_url": combined_url,
             "organization_name": name, "ein": ein, "state": state, "status": status,
+            "returned_status": returned_status, "unsuccessful": unsuccessful,
+            "lookup_error": text(row.get("error"), 10000),
             "checked_at_epoch": checked,
         })
     return sorted(clean, key=lambda r: r["state"])
@@ -824,6 +832,10 @@ def generate_report(payload, supported_states):
         dates_table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), PALE), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 6), ("RIGHTPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
         story.append(dates_table)
         story.append(labeled("Evidence returned with the check:", row["raw_status_text"] or "No separate registry excerpt supplied."))
+        if row["unsuccessful"]:
+            story.append(labeled("Lookup qualification:", "The snapshot marked this lookup unsuccessful. Its returned status was " + row["returned_status"] + "; it cannot establish registration or non-registration."))
+            if row["lookup_error"]:
+                story.append(labeled("Reported lookup issue:", row["lookup_error"]))
         if row["source_note"]:
             story.append(labeled("Evidence context:", row["source_note"]))
         story.append(labeled("CharityClarity Aurora interpretation:", row["comments"] or "No explanatory comment supplied with the returned status."))

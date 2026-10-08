@@ -171,6 +171,19 @@ class ConnectedInsightTests(unittest.TestCase):
         self.assertEqual(f['priority'],2)
         self.assertIn('not an approved current registration',f['why'])
 
+    def test_explicit_failed_lookup_can_never_create_a_registration_gap(self):
+        payload=copy.deepcopy(self.payload)
+        row=next(r for r in payload['results'] if r['state']=='WA')
+        row.update(success=False,error='Registry verification could not be completed.')
+        rows=report.validate_results(payload,set(cc.SUPPORTED_STATES))
+        normalized=next(r for r in rows if r['state']=='WA')
+        self.assertEqual(normalized['status'],'Unable to Confirm')
+        self.assertEqual(normalized['returned_status'],'Not Registered')
+        joined=report.reconcile_head_start(rows,self.assessment)
+        self.assertEqual(next(f for f in joined if f['state']=='WA')['finding'],'Registration status unresolved')
+        self.assertEqual(report.executive_metrics(joined)[1]['states'],[])
+        self.assertEqual(row['status'],'Not Registered','Source evidence must not be mutated')
+
     def test_handoff_endpoint_requires_existing_auth_owner_binding_and_immutable_snapshot(self):
         server = ThreadingHTTPServer(('127.0.0.1',0),cc.RegistrySnapshotHandler)
         thread = threading.Thread(target=server.serve_forever,daemon=True); thread.start()

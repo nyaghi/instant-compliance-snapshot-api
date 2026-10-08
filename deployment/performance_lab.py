@@ -229,6 +229,7 @@ def insight_asset(name, text):
         ('    const STAGING_ACCESS_REQUIRED = true;', '    const STAGING_ACCESS_REQUIRED = true;\n    window.CCHeadStartConfig = () => ({apiBase:API_BASE,email:email.value.trim(),passcode:adminPasscode.value.trim(),unlocked:internalUnlocked,generateReport,renderResults});'),
         ('      unlockButton.textContent = internalUnlocked ? "Unlocked" : "Unlock";', '      unlockButton.textContent = internalUnlocked ? "Unlocked" : "Unlock";\n      window.CCHeadStart?.applyStates();'),
         ('      generateReportButton.disabled = false;', '      generateReportButton.disabled = false;\n      window.CCHeadStart?.refresh();'),
+        ('const reportFields = ["organization_name",', 'const reportFields = ["success", "error", "organization_name",'),
         ('        const response = await fetch(`${API_BASE}/api/report`, {', '        await window.CCHeadStart?.save();\n        const response = await fetch(`${API_BASE}/api/report`, {'),
         ('headers: { "Content-Type": "application/json" },\n          signal: controller.signal,', 'headers: { "Content-Type": "application/json", "Authorization": "Bearer " + adminPasscode.value.trim() },\n          signal: controller.signal,'),
         ('body: JSON.stringify({ results, email: email.value.trim(), admin_passcode: adminPasscode.value.trim() })', 'body: JSON.stringify({ results, email: email.value.trim(), admin_passcode: adminPasscode.value.trim(), head_start:window.CCHeadStart?.forResults(results) })'),
