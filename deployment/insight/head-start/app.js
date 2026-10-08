@@ -151,7 +151,7 @@ function renderReport(){
 function headStartPacket(name,ein){
  const eligibility=new Map(groups.potentialExemption.map(r=>[r.code,r]));
  return {schema_version:'cc.head-start/1',assessment_id:crypto.randomUUID(),organization_name:name,ein,
-  assessed_at:report.assessedAt,engine_version:report.version,ui_version:'0.19.0',rules_reviewed_at:report.reviewDate,
+  assessed_at:report.assessedAt,engine_version:report.version,ui_version:'0.19.1',rules_reviewed_at:report.reviewDate,
   profile:structuredClone(prepareProfile(profile)),requirements:report.results.map(r=>({...structuredClone(r),
    exemption_evidence:eligibility.get(r.code)?.exemptionEvidence||null,possible_exemption:eligibility.has(r.code),
    approvalRequired:!!r.approvalRequired,discretionaryRequest:!!r.discretionaryRequest,deferred:!!r.deferred,nexusPending:!!r.nexusPending}))};
@@ -162,7 +162,7 @@ function connectAurora(e){
  profile.organizationName=name;profile.ein=ein.slice(0,2)+'-'+ein.slice(2);
  const packet=headStartPacket(name,ein),nonce=crypto.randomUUID();
  const labOrigin='https://charityclarity-final-four-29-2.onrender.com';
- const destination=new URL('/instant-compliance-snapshot',labOrigin);
+ const destination=new URL('/',labOrigin);
  destination.hash=new URLSearchParams({hs_sender:location.origin,hs_nonce:nonce}).toString();
  const child=window.open(destination.href,'_blank');
  if(!child){showErrors('handoffError',['Allow this page to open Aurora, then continue again. Your answers are retained.']);return;}

@@ -75,7 +75,16 @@
     window.CCHeadStartConfig().renderResults(event.detail.results);
     const panel=document.getElementById('ccSalesResults');if(!panel)return;
     let button=document.getElementById('ccSalesInsight');
-    if(!button){button=document.createElement('button');button.id='ccSalesInsight';button.type='button';button.textContent='Connect to Insight';button.addEventListener('click',()=>window.CCHeadStartConfig().generateReport());panel.append(button);}
+    if(!button){
+      button=document.createElement('button');button.id='ccSalesInsight';button.type='button';button.textContent='Connect to Insight';
+      const feedback=document.createElement('p');feedback.id='ccSalesInsightMessage';feedback.setAttribute('role','status');
+      button.addEventListener('click',async()=>{
+        button.disabled=true;feedback.textContent='Preparing your Insight report…';
+        try{await window.CCHeadStartConfig().generateReport();feedback.textContent=document.getElementById('reportMessage')?.textContent||'Your results are retained. Return to these results to prepare Insight.';}
+        finally{button.disabled=false;}
+      });
+      panel.append(button,feedback);
+    }
   });
   const fragment=new URLSearchParams(location.hash.slice(1));
   const sender=fragment.get('hs_sender'),nonce=fragment.get('hs_nonce');
