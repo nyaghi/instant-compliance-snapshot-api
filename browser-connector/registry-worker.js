@@ -583,12 +583,31 @@ async function performRegistryQuery(job, query) {
   if (!P.validQuery(query) || query.state !== job.registryState || !P.registryAllowed(query.state,new URL(job.sender.url).origin)) throw new Error("NY_CONNECTOR_INVALID_SEQUENCE");
   if(query.state==='MS') {
     if(query.operation==='search') {
-      // A fresh public form prevents a prior Kendo grid from being mistaken
-      // for this signed query's completed response.
-      await registryNavigate(job,registryStart('MS'),Math.min(30000,job.activeExpiresAt-Date.now()));
-      return registryMessage(job,{action:'registry-ms',query,budgetMs:Math.max(1,Math.min(30000,job.activeExpiresAt-Date.now()))});
+      // Reuse a completed search form within this owned trial job. The page
+      // handler must see a new Kendo render after submission; its old grid is
+      // never evidence for the next signed query. Detail opens a modal and
+      // resets this allowance, so the next search uses a fresh public form.
+      const current=job.tab===null?null:await chrome.tabs.get(job.tab);
+      const reuse=!!P.TRIAL_ORIGIN && job.msReusableForm===true && current?.url===registryStart('MS');
+      if(reuse) await registryReady(job,null,new URL(registryStart('MS')).pathname,
+        Math.min(30000,job.activeExpiresAt-Date.now()));
+      else await registryNavigate(job,registryStart('MS'),Math.min(30000,job.activeExpiresAt-Date.now()));
+      job.msReusableForm=false;
+      const started=Date.now();
+      let result=await registryMessage(job,{action:'registry-ms',query,requireFreshGrid:reuse,
+        budgetMs:Math.max(1,Math.min(30000,job.activeExpiresAt-Date.now()))});
+      diagnostic('ms-command',job,`reuse=${reuse} ms=${Date.now()-started} ${result?.ok?'complete':result?.reason||'incomplete'}`);
+      if(reuse && !result?.ok && job.activeExpiresAt-Date.now()>35000) {
+        diagnostic('ms-fresh-recovery',job,'repeating identical signed query on new public form');
+        await registryNavigate(job,registryStart('MS'),Math.min(30000,job.activeExpiresAt-Date.now()));
+        result=await registryMessage(job,{action:'registry-ms',query,
+          budgetMs:Math.max(1,Math.min(30000,job.activeExpiresAt-Date.now()))});
+      }
+      job.msReusableForm=result?.ok===true;
+      return result;
     }
     if(job.tab===null)throw new Error('NY_CONNECTOR_INVALID_SEQUENCE');
+    job.msReusableForm=false;
     return registryMessage(job,{action:'registry-ms',query,budgetMs:Math.max(1,Math.min(20000,job.activeExpiresAt-Date.now()))});
   }
   if(query.state==='NM') {
@@ -820,17 +839,28 @@ async function registryNorthCarolinaQuery(job,query) {
   return {ok:true,evidence:profile.evidence};
 }
 async function registryGaSearch(job, query, requestedIdentifier=null, selectedRecord=null) {
+  let phaseStarted=Date.now(), totalStarted=phaseStarted;
+  const phase=name=>{
+    const elapsed=Date.now()-phaseStarted;phaseStarted=Date.now();
+    if(P.TRIAL_ORIGIN && elapsed>=2000)diagnostic('ga-phase',job,`${name} ms=${elapsed} total_ms=${phaseStarted-totalStarted}`);
+  };
   let document=await registryNavigate(job,registryStart("GA"));
+  phase('navigate');
   let form=await registryMessage(job,{action:"registry-ga-form",query});
+  phase('form');
   if (form.phase === "profession") {
     document=await registryReady(job,document.documentId,"/verification/Search.aspx");
+    phase('profession-ready');
     form=await registryMessage(job,{action:"registry-ga-form",query});
+    phase('profession-form');
   }
   if (!form.ok || form.phase!=="submitted") throw new Error("NY_CONNECTOR_INCOMPLETE");
   document=await registryReady(job,document.documentId,"/verification/SearchResults.aspx");
+  phase('results-ready');
   const rows=[];
   for(let page=1;page<=10;page++) {
     const result=await registryMessage(job,{action:"registry-ga-rows"});
+    phase('rows');
     if(!result.ok || result.page!==page || !Array.isArray(result.rows)) throw new Error("NY_CONNECTOR_INCOMPLETE");
     if(requestedIdentifier !== null) {
       const found=result.rows.filter(row=>row.identifier===requestedIdentifier && (!selectedRecord
@@ -848,8 +878,10 @@ async function registryGaSearch(job, query, requestedIdentifier=null, selectedRe
       return {ok:true,evidence:{query,complete:true,total:rows.length,rows}};
     }
     const next=await registryMessage(job,{action:"registry-ga-next",page:page+1});
+    phase('next-page');
     if(!next.ok) throw new Error("NY_CONNECTOR_INCOMPLETE");
     document=await registryReady(job,document.documentId,"/verification/SearchResults.aspx");
+    phase('page-ready');
   }
   throw new Error("NY_CONNECTOR_INCOMPLETE");
 }

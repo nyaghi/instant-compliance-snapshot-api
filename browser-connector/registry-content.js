@@ -1359,14 +1359,28 @@
       throw new Error('REGISTRY_RESPONSE_INCOMPLETE');
     return {rows,total};
   }
-  async function msSearch(query,deadline) {
+  async function msSearch(query,deadline,requireFreshGrid=false) {
     if(location.pathname!=='/online/portal/ch/page/charities-search/Portal.aspx'
         ||query?.operation!=='search'||query.state!=='MS')throw new Error('REGISTRY_WRONG_ORIGIN');
     const field=document.querySelector('#ContentPlaceHolder1_PortalPageControl1_ctl10_IFSearchControl1_EntityNameTextBox');
     const button=document.querySelector('#SearchButton');
     if(!field||!visible(field)||!button||!visible(button)||button.disabled)throw new Error('REGISTRY_FORM_CHANGED');
     set(field,query.name);
-    const found=await wait(()=>msGrid(query),Math.max(1,deadline-Date.now()),{action:()=>button.click(),settle:300,
+    let gridRebound=!requireFreshGrid;
+    const found=await wait(()=>gridRebound?msGrid(query):null,Math.max(1,deadline-Date.now()),{
+      action:()=>button.click(),settle:300,
+      // The public page keeps its previous Kendo grid on screen while the
+      // next AJAX request runs. Only a new grid render after this click can
+      // make a reused-page result complete. An AJAX error leaves the old grid
+      // unchanged, so it remains inconclusive rather than a false negative.
+      relevant:list=>{
+        if(!requireFreshGrid)return true;
+        const rendered=list.some(m=>["childList","characterData"].includes(m.type)
+          && (m.target.nodeType===1?m.target:m.target.parentElement)
+            ?.closest('#kendoSearchResults tbody, #kendoSearchResults .k-pager-info, #kendoSearchResults .k-pager-numbers'));
+        gridRebound ||= rendered;
+        return rendered || gridRebound;
+      },
       sameCandidate:(a,b)=>a.total===b.total&&JSON.stringify(a.rows)===JSON.stringify(b.rows)});
     msLastRows=found.rows;
     return {state:'MS',query,complete:true,verification_pending:false,rows:found.rows,total:found.total};
@@ -1510,7 +1524,7 @@
     if (MS && m.action==='registry-ms') {
       const deadline=Date.now()+Math.min(30000,Number.isFinite(m.budgetMs)&&m.budgetMs>0?m.budgetMs:30000);
       return {ok:true,evidence:m.query?.operation==='search'
-        ?await msSearch(m.query,deadline):await msDetail(m.query,deadline)};
+        ?await msSearch(m.query,deadline,m.requireFreshGrid===true):await msDetail(m.query,deadline)};
     }
     if (AL && m.action==='registry-al') {
       if (m.query?.state!=='AL' || m.query.operation!=='search') throw new Error('REGISTRY_COMMAND_INVALID');
