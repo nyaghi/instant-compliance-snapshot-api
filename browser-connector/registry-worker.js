@@ -589,14 +589,19 @@ async function performRegistryQuery(job, query) {
       // resets this allowance, so the next search uses a fresh public form.
       const current=job.tab===null?null:await chrome.tabs.get(job.tab);
       const reuse=!!P.TRIAL_ORIGIN && job.msReusableForm===true && current?.url===registryStart('MS');
+      const navigationStarted=Date.now();
+      diagnostic('ms-navigation-start',job,reuse?'reuse ready form':'open fresh form');
       if(reuse) await registryReady(job,null,new URL(registryStart('MS')).pathname,
         Math.min(30000,job.activeExpiresAt-Date.now()));
       else await registryNavigate(job,registryStart('MS'),Math.min(30000,job.activeExpiresAt-Date.now()));
+      diagnostic('ms-navigation-done',job,`reuse=${reuse} ms=${Date.now()-navigationStarted}`);
       job.msReusableForm=false;
       const started=Date.now();
       let result=await registryMessage(job,{action:'registry-ms',query,requireFreshGrid:reuse,
         budgetMs:Math.max(1,Math.min(30000,job.activeExpiresAt-Date.now()))});
       diagnostic('ms-command',job,`reuse=${reuse} ms=${Date.now()-started} ${result?.ok?'complete':result?.reason||'incomplete'}`);
+      if(P.TRIAL_ORIGIN && result?.ms_diagnostic)
+        diagnostic('ms-page',job,JSON.stringify(result.ms_diagnostic));
       if(reuse && !result?.ok && job.activeExpiresAt-Date.now()>35000) {
         diagnostic('ms-fresh-recovery',job,'repeating identical signed query on new public form');
         await registryNavigate(job,registryStart('MS'),Math.min(30000,job.activeExpiresAt-Date.now()));
@@ -842,8 +847,9 @@ async function registryGaSearch(job, query, requestedIdentifier=null, selectedRe
   let phaseStarted=Date.now(), totalStarted=phaseStarted;
   const phase=name=>{
     const elapsed=Date.now()-phaseStarted;phaseStarted=Date.now();
-    if(P.TRIAL_ORIGIN && elapsed>=2000)diagnostic('ga-phase',job,`${name} ms=${elapsed} total_ms=${phaseStarted-totalStarted}`);
+    if(P.TRIAL_ORIGIN)diagnostic('ga-phase',job,`${name} ms=${elapsed} total_ms=${phaseStarted-totalStarted}`);
   };
+  if(P.TRIAL_ORIGIN)diagnostic('ga-search-start',job,requestedIdentifier===null?'name search':'record detail');
   let document=await registryNavigate(job,registryStart("GA"));
   phase('navigate');
   let form=await registryMessage(job,{action:"registry-ga-form",query});

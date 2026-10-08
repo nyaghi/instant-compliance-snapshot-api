@@ -1337,7 +1337,7 @@
       search_enabled:[...document.querySelectorAll('button')].some(el=>text(el)==='Search'&&visible(el)&&!el.disabled)
     };
   }
-  let msLastRows=null;
+  let msLastRows=null, msLastDiagnostic=null;
   function msGrid(query) {
     if(document.querySelector('#ContentPlaceHolder1_PortalPageControl1_ctl10_IFSearchControl1_EntityNameTextBox')?.value!==query.name)
       throw new Error('REGISTRY_FILTER_CHANGED');
@@ -1360,6 +1360,9 @@
     return {rows,total};
   }
   async function msSearch(query,deadline,requireFreshGrid=false) {
+    msLastDiagnostic={visibility:document.visibilityState,ready_state:document.readyState,
+      reused_form:requireFreshGrid,grid_rebound:!requireFreshGrid,
+      relevant_mutations:0,events:[]};
     if(location.pathname!=='/online/portal/ch/page/charities-search/Portal.aspx'
         ||query?.operation!=='search'||query.state!=='MS')throw new Error('REGISTRY_WRONG_ORIGIN');
     const field=document.querySelector('#ContentPlaceHolder1_PortalPageControl1_ctl10_IFSearchControl1_EntityNameTextBox');
@@ -1378,10 +1381,14 @@
         const rendered=list.some(m=>["childList","characterData"].includes(m.type)
           && (m.target.nodeType===1?m.target:m.target.parentElement)
             ?.closest('#kendoSearchResults tbody, #kendoSearchResults .k-pager-info, #kendoSearchResults .k-pager-numbers'));
+        if(rendered)msLastDiagnostic.relevant_mutations++;
         gridRebound ||= rendered;
+        msLastDiagnostic.grid_rebound=gridRebound;
         return rendered || gridRebound;
       },
-      sameCandidate:(a,b)=>a.total===b.total&&JSON.stringify(a.rows)===JSON.stringify(b.rows)});
+      sameCandidate:(a,b)=>a.total===b.total&&JSON.stringify(a.rows)===JSON.stringify(b.rows),
+      trace:(event,elapsed)=>msLastDiagnostic.events.push({event,elapsed_ms:elapsed})});
+    msLastDiagnostic.rows=found.rows.length;
     msLastRows=found.rows;
     return {state:'MS',query,complete:true,verification_pending:false,rows:found.rows,total:found.total};
   }
@@ -1523,8 +1530,9 @@
     }
     if (MS && m.action==='registry-ms') {
       const deadline=Date.now()+Math.min(30000,Number.isFinite(m.budgetMs)&&m.budgetMs>0?m.budgetMs:30000);
-      return {ok:true,evidence:m.query?.operation==='search'
-        ?await msSearch(m.query,deadline,m.requireFreshGrid===true):await msDetail(m.query,deadline)};
+      const evidence=m.query?.operation==='search'
+        ?await msSearch(m.query,deadline,m.requireFreshGrid===true):await msDetail(m.query,deadline);
+      return {ok:true,evidence,ms_diagnostic:msLastDiagnostic};
     }
     if (AL && m.action==='registry-al') {
       if (m.query?.state!=='AL' || m.query.operation!=='search') throw new Error('REGISTRY_COMMAND_INVALID');
@@ -1636,6 +1644,7 @@
       const ilReasons={REGISTRY_RESPONSE_INCOMPLETE:'NY_CONNECTOR_IL_RESPONSE_TIMEOUT',REGISTRY_RESULTS_INCOMPLETE:'NY_CONNECTOR_IL_RESULTS_INCOMPLETE',REGISTRY_TOTAL_CHANGED:'NY_CONNECTOR_IL_TOTAL_CHANGED',REGISTRY_RESULT_LIMIT:'NY_CONNECTOR_IL_RESULT_LIMIT',REGISTRY_PAGINATION_INCOMPLETE:'NY_CONNECTOR_IL_PAGINATION_INCOMPLETE'};
       reply({ok:false,reason:trialReason || (AL && code==='NY_CONNECTOR_AL_VERIFICATION_REQUIRED' ? code : TN && code==='NY_CONNECTOR_TN_VERIFICATION_OR_FORM_PENDING' ? code : /^NY_CONNECTOR_IL_(?:VERIFICATION_PENDING|FORM_READY_TIMEOUT|FORM_DISABLED|FORM_MISSING|DETAIL_(?:NOT_OPENED|BLANK|IDENTITY_INCOMPLETE|RESPONSE_TIMEOUT))$/.test(code) ? code : IL && ilReasons[code] || 'NY_CONNECTOR_INCOMPLETE'),
         ...(NV ? {nv_readiness:{...nvReadiness(),page_visibility:document.visibilityState}} : {}),
+        ...(MS ? {ms_diagnostic:{...msLastDiagnostic,source_error:/^REGISTRY_[A-Z_]+$/.test(code)?code:'UNEXPECTED_ERROR'}} : {}),
         ...(IL && error.diagnostics ? {diagnostics:error.diagnostics} : {})});
     });
     return true;

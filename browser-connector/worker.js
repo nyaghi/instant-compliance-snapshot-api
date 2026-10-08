@@ -45,8 +45,14 @@ function armTrialAlIdle() {
 }
 const diagnostics = [];
 function diagnostic(type, job, detail = "") {
-  diagnostics.push({ at: Date.now(), type, id: job?.lookupId || "", phase: job?.pending ? "search" : isActive(job) ? "active" : "queued", detail: String(detail).slice(0, 180) });
+  const at=Date.now(), summary=String(detail).slice(0,180);
+  diagnostics.push({ at, type, id: job?.lookupId || "", phase: job?.pending ? "search" : isActive(job) ? "active" : "queued", detail: summary });
   if (diagnostics.length > 80) diagnostics.shift();
+  if(P.TRIAL_ORIGIN && job && ["GA","MS"].includes(job.registryState)) {
+    job.trialDiagnostics ||= [];
+    job.trialDiagnostics.push({at,type,detail:String(detail).slice(0,600)});
+    if(job.trialDiagnostics.length>120)job.trialDiagnostics.shift();
+  }
 }
 function keepAlive() {
   if (keepAliveTimer || !allJobs().some(j => j && !j.closed)) return;
@@ -164,7 +170,12 @@ function allowedSender(sender) {
   try { return sender.id === chrome.runtime.id && sender.frameId === 0 && P.allowedOrigin(new URL(sender.url).origin) && Number.isInteger(sender.tab?.id); }
   catch { return false; }
 }
-function post(job, message) { try { job.port.postMessage(message); } catch {} }
+function post(job, message) {
+  if(P.TRIAL_ORIGIN && ["GA","MS"].includes(job.registryState)
+      && (message.action==="closed" || (typeof message.ok==="boolean" && !message.progress)))
+    message={...message,trial_diagnostics:[...(job.trialDiagnostics||[])]};
+  try { job.port.postMessage(message); } catch {}
+}
 function notifyQueue() {
   queue.forEach((job, index) => {
     if (job.acquireId) post(job, { id: job.acquireId, progress: true, position: index + 1 });
