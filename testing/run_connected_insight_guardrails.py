@@ -161,6 +161,16 @@ class ConnectedInsightTests(unittest.TestCase):
             self.assertEqual(report.executive_metrics(altered)[2]['states'], [])
         self.assertEqual(report.executive_metrics([self.finding('HI', status='Delinquent')])[3]['states'], ['HI'])
 
+    def test_unknown_requirement_is_not_a_withdrawal_opportunity(self):
+        f=self.finding('HI', requirement='review', possible_exemption=False, exemption_evidence=None, approvalRequired=False)
+        self.assertEqual(report.executive_metrics([f])[2]['states'], [])
+
+    def test_pending_registration_cannot_be_presented_as_requirement_satisfied(self):
+        f=self.finding('WA', status='Pending')
+        self.assertEqual(f['finding'],'Registration pending')
+        self.assertEqual(f['priority'],2)
+        self.assertIn('not an approved current registration',f['why'])
+
     def test_handoff_endpoint_requires_existing_auth_owner_binding_and_immutable_snapshot(self):
         server = ThreadingHTTPServer(('127.0.0.1',0),cc.RegistrySnapshotHandler)
         thread = threading.Thread(target=server.serve_forever,daemon=True); thread.start()

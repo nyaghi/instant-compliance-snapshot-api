@@ -532,8 +532,12 @@ def reconcile_head_start(rows, assessment):
                 priority, finding = 2, "Requirement and recorded exemption differ"
                 action = "Verify the exemption determination and whether it covers the same entity, activity and registration regime identified by Head Start."
                 why = "A recorded exemption can have narrower scope than the registration or trust requirement in the assessment."
+            elif actual == "Pending":
+                priority, finding = 2, "Registration pending"
+                action = "Confirm the pending submission and whether fundraising is authorized while the state reviews it."
+                why = "Head Start indicates registration, but a pending record is not an approved current registration."
             else:
-                finding, action, why = "Requirements and registration align", "Maintain registration and applicable filings.", "Head Start indicates registration and Aurora returned a registration record."
+                finding, action, why = "Registration record found", "Confirm the record covers the requirement identified by Head Start; maintain applicable filings.", "Head Start indicates registration and Aurora returned a record. Confirm its entity, activity and registration regime before relying on it."
         elif h.get("discretionaryRequest"):
             priority, finding = 3, "Discretionary waiver opportunity"
             action = h["action"] + " Keep existing obligations current while the request is reviewed."
@@ -579,7 +583,7 @@ def executive_metrics(combined):
     definitions = [
         ("Potential exemption opportunities", "Eligibility and procedure to confirm", lambda f: f["finding"] in {"Exemption opportunity", "Exemption eligibility to confirm", "Discretionary waiver opportunity"}, False),
         ("Registration gaps indicated", "Requirement indicated; no record found", lambda f: f["finding"] == "Registration gap indicated", True),
-        ("Potential withdrawal reviews", "Confirm activity before changing filings", lambda f: f["finding"] == "Review registration context" and f["aurora_status"] in {"Current", "Upcoming Filing"}, False),
+        ("Potential withdrawal reviews", "Confirm activity before changing filings", lambda f: f["finding"] == "Review registration context" and f["aurora_status"] in {"Current", "Upcoming Filing"} and (f["head_start"]["status"] in {"outside", "none"} or f["head_start"].get("deferred")), False),
         ("Delinquencies", "Returned delinquent status needs follow-up", lambda f: f["aurora_status"] == "Delinquent", True),
         ("Upcoming filings", "Plan the returned filing or expiration", lambda f: f["aurora_status"] == "Upcoming Filing", False),
         ("Unresolved status checks", "Incomplete or relevant states not checked", lambda f: f["finding"] in {"Registration status unresolved", "Registration status not checked"}, False),
