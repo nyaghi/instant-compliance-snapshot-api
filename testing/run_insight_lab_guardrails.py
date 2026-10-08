@@ -25,6 +25,7 @@ class InsightLabTests(unittest.TestCase):
         self.assertIn('head_start:assessment',html)
         self.assertNotIn('await window.CCHeadStart?.save()',html)
         self.assertIn('head-start-bridge.js',html)
+        self.assertIn('head-start/journey.css',html)
         self.assertNotIn('instant-compliance-snapshot-api-hn4v.onrender.com',html)
         self.assertNotIn('https://staging.compliance-express.com',html)
         self.assertIn('mode="standard"',html)
@@ -36,6 +37,9 @@ class InsightLabTests(unittest.TestCase):
     def test_head_start_assets_never_expose_json_or_escape_the_public_asset_folder(self):
         self.assertIn(b'continueAurora',lab.lab_asset('/head-start/app.js')[0])
         self.assertIn(b'head-start-logo.png',lab.lab_asset('/head-start/')[0])
+        self.assertIn(b'collector_layout',lab.lab_asset('/head-start/app.js')[0])
+        self.assertTrue(lab.lab_asset('/head-start/journey.css')[0])
+        self.assertTrue(lab.lab_asset('/head-start/charityclarity-aurora.png')[0].startswith(b'\x89PNG'))
         self.assertIsNone(lab.lab_asset('/head-start/../../final-four-resources.json'))
         self.assertIsNone(lab.lab_asset('/head-start/profile.json'))
         self.assertIsNone(lab.lab_asset('/head-start/../head-start-bridge.js/../../performance_lab.py'))

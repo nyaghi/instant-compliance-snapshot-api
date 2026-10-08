@@ -236,7 +236,8 @@ def insight_asset(name, text):
         ('link.download = `CharityClarity Aurora-', "link.download = `CharityClarity ${window.CCHeadStart?.forResults(results)?'Insight':'Aurora'}-"),
         ('generateReportButton.disabled = submitButton.disabled || !latestResults.length;', 'generateReportButton.disabled = !latestResults.length;'),
         ('      stateCheckboxes.forEach((box) => { box.checked = false; });\n\n      updatePasscodeVisibility();', '      if(!window.CCHeadStart?.hasAssessment())stateCheckboxes.forEach((box) => { box.checked = false; });\n\n      updatePasscodeVisibility();'),
-        ('</body>', '  <script src="/head-start-bridge.js?v=2.0.0"></script>\n</body>'),
+        ('</head>', '  <link rel="stylesheet" href="/head-start/journey.css?v=20261008.1">\n</head>'),
+        ('</body>', '  <script src="/head-start-bridge.js?v=2.0.1"></script>\n</body>'),
     ]
     for old, new in replacements:
         if text.count(old) != 1:
@@ -340,7 +341,7 @@ def build_handler(master, key, capacity=None, durable=None):
                 data['trial_access_expired'] = trial_access_expired()
             if trial_identity():
                 data['trial_release'] = TRIAL_RELEASE_LABEL
-                data['insight_report_version'] = '2.0.0'
+                data['insight_report_version'] = '2.0.1'
             body = json.dumps(data).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')

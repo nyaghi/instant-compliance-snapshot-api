@@ -7,8 +7,8 @@ function setup({sender='http://127.0.0.1:8000',nonce='4d43f91a-52fa-48f3-a4b4-ef
   const elements={},listeners={},posts=[],requests=[],timers=new Map(),rendered=[];
   let nextTimer=0,storage=stored,replaced=null,reports=0;
   class Element{
-    constructor(){this.events={};this.children=[];this.style={};this.value='';this.checked=false;this.textContent='';this.hidden=false;}
-    setAttribute(){} append(...children){this.children.push(...children);for(const child of children)if(child.id)elements[child.id]=child;}
+    constructor(){this.events={};this.children=[];this.style={};this.dataset={};this.classList={add:()=>{}};this.value='';this.checked=false;this.textContent='';this.innerHTML='';this.hidden=false;}
+    setAttribute(name,value){this[name]=value;} append(...children){this.children.push(...children);for(const child of children)if(child.id)elements[child.id]=child;}
     before(child){elements.card=child;} addEventListener(type,handler){this.events[type]=handler;} dispatchEvent(event){this.events[event.type]?.(event);}
   }
   for(const id of ['snapshotForm','organizationName','ein','generateReportButton','ccSalesSelectedCount','ccSalesResults'])elements[id]=new Element();
@@ -35,7 +35,8 @@ test('untrusted opener gets no message and cannot activate the assessment',()=>{
 test('all 51 requirements survive reload and Standard and Sales receive the same activity suggestions',()=>{
   const c=setup({sender:null,stored:JSON.stringify(packet)});assert.equal(c.window.CCHeadStart.hasAssessment(),true);
   const selected=c.boxes.filter(b=>b.checked).map(b=>b.value);assert.equal(selected.length,14);assert(!selected.includes('AK'));
-  assert.equal(c.window.CCHeadStart.forResults([]).requirements.length,51);assert.equal(c.elements.generateReportButton.textContent,'Connect to Insight');
+  assert.equal(c.window.CCHeadStart.forResults([]).requirements.length,51);assert.match(c.elements.generateReportButton.innerHTML,/cc-journey-script.*Insight/);
+  assert.equal(c.elements.generateReportButton['aria-label'],'Continue to CharityClarity Insight');
 });
 test('locked gate delays suggestions and later activation does not overwrite manual changes',()=>{
   const c=setup({unlocked:false});c.deliver();assert(c.boxes.every(b=>!b.checked));c.config.unlocked=true;c.window.CCHeadStart.applyStates();assert(c.boxes.some(b=>b.checked));c.boxes.forEach(b=>b.checked=false);c.window.CCHeadStart.applyStates();assert(c.boxes.every(b=>!b.checked));
@@ -51,5 +52,5 @@ test('authenticated saving persists assessment only and never requests a state c
 });
 test('Sales completion passes settled raw evidence into existing report flow without an extra search',()=>{
   const c=setup();c.deliver();const results=[{organization_name:packet.organization_name,ein:packet.ein,state:'HI',status:'Site Not Reachable',comments:'Blocked'}];
-  c.listeners['cc-sales-complete']({detail:{results}});assert.equal(c.rendered[0],results);assert.equal(c.requests.length,0);assert.equal(c.elements.ccSalesInsight.textContent,'Connect to Insight');c.elements.ccSalesInsight.events.click();assert.equal(c.reports,1);
+  c.listeners['cc-sales-complete']({detail:{results}});assert.equal(c.rendered[0],results);assert.equal(c.requests.length,0);assert.match(c.elements.ccSalesInsight.innerHTML,/cc-journey-script.*Insight/);c.elements.ccSalesInsight.events.click();assert.equal(c.reports,1);
 });

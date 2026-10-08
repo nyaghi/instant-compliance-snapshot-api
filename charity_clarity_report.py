@@ -11,10 +11,12 @@ from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, CondPageBreak, KeepTogether
 
 REPORT_VERSION = "1.3.3"
-INSIGHT_VERSION = "2.0.0"
+INSIGHT_VERSION = "2.0.1"
 NAVY = colors.HexColor("#0B2A5B")
 INK = colors.HexColor("#172B45")
 MUTED = colors.HexColor("#536274")
@@ -893,6 +895,8 @@ def generate_report(payload, supported_states):
 
     logo = ImageReader(str(ASSETS / "compliance-express.png"))
     brand = ImageReader(str(ASSETS / ("charityclarity.png" if linked else "charityclarity-aurora.png")))
+    if linked:
+        pdfmetrics.registerFont(TTFont("CharityClaritySignature", str(ASSETS.parent / "deployment/insight/head-start/fonts/Allura-Regular.ttf")))
     brand_width, brand_height = brand.getSize()
     page_count = 0
     def page_frame(canvas, document):
@@ -901,8 +905,8 @@ def generate_report(payload, supported_states):
         canvas.drawImage(brand, 400, 731 if linked else 724, width=170, height=170 * brand_height / brand_width, mask="auto")
         if linked:
             canvas.setFillColor(NAVY)
-            canvas.setFont("Helvetica-Bold", 10)
-            canvas.drawRightString(570, 722, "Insight")
+            canvas.setFont("CharityClaritySignature", 28)
+            canvas.drawRightString(558, 729, "Insight")
         canvas.setStrokeColor(colors.HexColor("#DCE3EB"))
         canvas.line(42, 719, 570, 719)
         canvas.setFont("Helvetica", 7.5)

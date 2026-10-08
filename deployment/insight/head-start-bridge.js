@@ -5,6 +5,14 @@
   const fields = () => ({name:document.getElementById('organizationName'),ein:document.getElementById('ein')});
   const normalizeEin = value => String(value || '').replace(/\D/g,'');
   const normalizeName = value => String(value || '').trim().replace(/\s+/g,' ').toLowerCase();
+  const insightButtonMarkup = '<span class="cc-journey-lead">Continue to</span><span class="cc-journey-mark cc-journey-mark--insight"><img src="/head-start/charityclarity-wordmark.png" alt=""><span class="cc-journey-script" aria-hidden="true">Insight</span></span>';
+  function brandInsightButton(button) {
+    if(!button || button.dataset.ccInsightBrand)return;
+    button.dataset.ccInsightBrand='true';
+    button.classList.add('cc-journey-cta');
+    button.setAttribute('aria-label','Continue to CharityClarity Insight');
+    button.innerHTML=insightButtonMarkup;
+  }
   let assessment = null, applied = false;
   const card = document.createElement('section');
   card.hidden = true;
@@ -32,7 +40,7 @@
     card.hidden=false;
     description.textContent=`${assessment.organization_name} · EIN ${normalizeEin(assessment.ein).replace(/^(\d{2})(\d{7})$/,'$1-$2')} · Requirements assessed ${new Date(assessment.assessed_at).toLocaleDateString()}`;
     const button=document.getElementById('generateReportButton');
-    if(button)button.textContent='Connect to Insight';
+    brandInsightButton(button);
     if(!compatible())message.textContent='The organization differs from Head Start. Return to the assessed organization or create a new assessment before combining the results.';
   }
   function applyStates() {
@@ -79,7 +87,7 @@
     const panel=document.getElementById('ccSalesResults');if(!panel)return;
     let button=document.getElementById('ccSalesInsight');
     if(!button){
-      button=document.createElement('button');button.id='ccSalesInsight';button.type='button';button.textContent='Connect to Insight';
+      button=document.createElement('button');button.id='ccSalesInsight';button.type='button';brandInsightButton(button);
       const feedback=document.createElement('p');feedback.id='ccSalesInsightMessage';feedback.setAttribute('role','status');
       button.addEventListener('click',async()=>{
         button.disabled=true;feedback.textContent='Preparing your Insight report…';

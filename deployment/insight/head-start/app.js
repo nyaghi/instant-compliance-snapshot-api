@@ -141,7 +141,7 @@ function renderReport(){
  <p class="result-note"><strong>Your reported activity:</strong> ${esc(REACH.find(([v])=>v===profile.reach)?.[1])}${profile.fiscalActual!==''?` · $${Number(normalizeNumeric(profile.fiscalActual)).toLocaleString('en-US')} in all-state contributions last completed fiscal year`:''}${profile.donorStates.length?` · Gifts reported: ${esc(profile.donorStates.map(c=>STATES.find(s=>s.code===c)?.name).join(', '))}`:''}.</p>
  ${profile.outsideGifts==='unknown'?'<p class="result-note">Outside gifts are not yet confirmed. Add known donor states and amounts before relying on the geographic scope.</p>':''}
  ${profile.reach==='home'&&profile.online==='yes'?'<p class="result-note">A public donation page alone does not establish a filing task in every state. Reassess for targeted appeals or repeated or substantial outside support; there is no universal donation amount that clears every state.</p>':''}
- <div class="provider-note"><strong>Check your actual registration status</strong><p>Continue to Aurora with these answers, then combine the findings in your Insight report.</p><button type="button" class="primary" id="continueAurora">Continue to Aurora →</button></div>
+ <div class="provider-note"><strong>Check your actual registration status</strong><p>Continue to Aurora with these answers, then combine the findings in your Insight report.</p><button type="button" class="primary cc-journey-cta" id="continueAurora" aria-label="Continue to CharityClarity Aurora"><span class="cc-journey-lead">Continue to</span><span class="cc-journey-mark"><img src="./charityclarity-aurora.png" alt="CharityClarity Aurora"></span></button></div>
  <div class="provider-note"><strong>Need guidance specific to your organization?</strong><p>Contact a compliance service provider to confirm eligibility and what needs to be filed.</p><a href="mailto:info@compliance-express.com">Contact Compliance Express →</a></div>
  <p class="scope-note">This table covers initial charitable organization registration, including separate charitable trust requirements where relevant. Entity, tax and professional fundraiser filings are separate. It does not verify current registration status or authorize stopping existing filings.</p>
  <p id="reportNotice" role="status" aria-live="polite"></p>`;
@@ -163,6 +163,7 @@ function connectAurora(e){
  const packet=headStartPacket(name,ein),nonce=crypto.randomUUID();
  const labOrigin='https://charityclarity-final-four-29-2.onrender.com';
  const destination=new URL('/',labOrigin);
+ destination.searchParams.set('collector_layout','duo');
  destination.hash=new URLSearchParams({hs_sender:location.origin,hs_nonce:nonce}).toString();
  const child=window.open(destination.href,'_blank');
  if(!child){showErrors('handoffError',['Allow this page to open Aurora, then continue again. Your answers are retained.']);return;}

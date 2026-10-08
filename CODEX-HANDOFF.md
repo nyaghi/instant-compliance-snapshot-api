@@ -1,6 +1,6 @@
 # Connected Insight in the Performance Lab
 
-User-authorized target: the latest isolated Performance Lab, based on 29.2DC
+User-authorized target: the latest isolated Performance Lab, now 29.2DD, based on 29.2DC
 commit `00426759be4124702f4267b6df3def980bbb326a`. The earlier staging-derived
 `CharityClarity-Connected` folder is a superseded local experiment. Do not deploy
 it. Ordinary staging and production are not deployment targets.
@@ -10,6 +10,13 @@ Existing API: `srv-dau1rv0u01pc73auc4jg`.
 Existing worker: `srv-dau1s0navr4c73fc41fg`.
 Existing trial branch: `performance-final-four-20260929`.
 Do not change plans, instances, keys, queues, connector permissions or trial expiry.
+
+29.2DD restores the opt-in registry rail on Head Start → Aurora by opening the
+existing trial with `collector_layout=duo`. The installed 0.6.102 connector
+continues to own the rail and collector placement. It also presents matching
+red, logo-bearing Aurora and Insight transition controls and draws the approved
+handwritten Insight treatment in the linked PDF. No registry, search, status,
+queue, or Sales timing code changed.
 
 The master owns the authenticated assessment endpoint and Insight reconciliation.
 `deployment/performance_lab.py` assembles the connected UI from the frozen frontend
