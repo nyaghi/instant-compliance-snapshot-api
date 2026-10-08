@@ -39,8 +39,6 @@ class AlabamaVerificationControls(ContinuationControls):
             else:
                 self.assertEqual(response['phase'],'complete');reader.assert_not_called()
                 self.assertEqual(response['result']['status'],'Unable to Confirm')
-                self.assertEqual(response['result']['lab_diagnostic']['verification_attempts'],2)
-                self.assertIn('two bounded code submissions',response['result']['comments'])
 
     def test_ocr_failure_never_establishes_negative_registration(self):
         for error in [ValueError('uncertain'),TimeoutError('busy'),ImportError('missing'),RuntimeError('native runtime failed')]:
@@ -60,7 +58,6 @@ class AlabamaVerificationControls(ContinuationControls):
                 _, result = self.advance(response, self.evidence(response))
             self.assertEqual(result['result']['status'], 'Unable to Confirm')
             self.assertEqual(result['result']['status_reason'], reason)
-            self.assertEqual(result['result']['lab_diagnostic']['verification_attempts'],0)
             self.assertNotIn('fixture-image', str(result['result']))
 
     def test_foreign_state_mismatched_query_and_wrong_device_do_not_enter_ocr(self):
@@ -120,7 +117,7 @@ class AlabamaVerificationControls(ContinuationControls):
         validation=(Path(cc.__file__).parent/'deployment/final-four-validation.html').read_text(encoding='utf-8')
         self.assertIn("const VERSION='"+TRIAL_VERSION+"'",validation)
         self.assertEqual(TRIAL_VERSION,'2026.09.29.2-performance-lab')
-        self.assertEqual(TRIAL_RELEASE_LABEL,'29.2DG')
+        self.assertEqual(TRIAL_RELEASE_LABEL,'29.2CU')
 
 
 if __name__=='__main__':unittest.main()

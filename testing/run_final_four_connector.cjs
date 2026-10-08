@@ -37,17 +37,6 @@ function fixture(enabled=true){
   return Object.assign(h,{calls,reloads});
 }
 
-test('MS closes only its owned public search tab after collection',async()=>{
- const h=fixture();await tick();
- const url='https://charities.sos.ms.gov/online/portal/ch/page/charities-search/Portal.aspx';
- h.tabs.set(3,{id:3,windowId:10,url});
- h.tabs.set(4,{id:4,windowId:10,url});
- vm.runInContext('owned.add(3)',h.context);
- await h.context.removeOwned(3);
- assert.equal(h.tabs.has(3),false);
- assert.equal(h.tabs.has(4),true);
-});
-
 test('NM public error aborts readiness immediately rather than consuming thirty seconds',async()=>{
  const h=fixture();h.tabs.set(3,{id:3,windowId:10,url:'https://secure.nmdoj.gov/CharitySearch/'});
  let checks=0;h.chrome.tabs.sendMessage=async()=>{checks++;return {ready:false,source_failure:'REGISTRY_NM_SOURCE_ERROR'};};

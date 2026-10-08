@@ -70,26 +70,6 @@ class Repairs(unittest.TestCase):
         fields={k:v for k,v in TN.items() if k not in {'financial_periods','financial_count'}}
         fields['Expiration Date']=''
         self.assertEqual(cc.tn_charity_detail_evidence(fields,'CO3674',TN_ROW)['status'],'Unable to Confirm')
-    def test_tn_loaded_absent_financial_section_is_delinquent_but_broken_table_is_not(self):
-        empty={**TN,'Expiration Date':'','financial_periods':[],'financial_count':0,'financial_history_absent':True}
-        record=cc.tn_charity_detail_evidence(empty,'CO3674',TN_ROW)
-        self.assertEqual(record['status'],'Delinquent')
-        self.assertIn('no Financials section',record['date_evidence_note'])
-        self.assertIn('infers Delinquent',record['date_evidence_note'])
-        with self.assertRaisesRegex(ValueError,'financial history is incomplete'):
-            cc.tn_charity_detail_evidence({**empty,'financial_count':-1,'financial_history_absent':False},'CO3674',TN_ROW)
-        exempt=cc.tn_charity_detail_evidence({**empty,'Status':'Exempt'},'CO3674',TN_ROW)
-        self.assertEqual(exempt['status'],'Exempt')
-    def test_tn_absent_financial_section_survives_signed_evidence_validation(self):
-        query={'state':'TN','operation':'detail','identifier':'CO3674'}
-        fields={**TN,'Expiration Date':'','financial_periods':[],
-                'financial_count':0,'financial_history_absent':True}
-        evidence={'query':query,'complete':True,'fields':fields}
-        self.assertEqual(cc.final_four_clean_evidence(evidence,query),evidence)
-        for changes in ({'financial_history_absent':False}, {'financial_count':1},
-                        {'financial_periods':['09/30/2015']}, {'Expiration Date':'11/27/2026'}):
-            with self.subTest(changes=changes),self.assertRaises(ValueError):
-                cc.final_four_clean_evidence({**evidence,'fields':{**fields,**changes}},query)
     def test_tn_explicit_exemption_and_expiry_keep_priority(self):
         for raw,expiry,status in [('Exempt','','Exempt'),('Revoked','','Revoked'),('Active','11/27/2026','Upcoming Filing')]:
             r=cc.tn_charity_detail_evidence({**TN,'Status':raw,'Expiration Date':expiry,'financial_periods':['09/30/2015'],'financial_count':1},'CO3674',TN_ROW)

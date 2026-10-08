@@ -107,17 +107,9 @@ def final_four_asset(name, text):
         import re
         label = re.search(r'<label[^>]*><input type="checkbox" name="states" value="AK"[^>]* /> <span>Alaska</span></label>', text)
         if not label: raise RuntimeError('Missing approved state selector template')
-        # Keep the existing selector's alphabetical display order. Its layout
-        # does not control the separately sorted execution order.
-        additions = [label[0].replace('value="AK"', 'value="'+state+'"').replace('>Alaska<', '>'+title+'<')
-                     for state, title in [('AL','Alabama'),('NC','North Carolina'),('NV','Nevada'),('TN','Tennessee')]]
-        selector = re.compile(r'<label[^>]*><input type="checkbox" name="states" value="[A-Z]{2}"[^>]* /> <span>[^<]+</span></label>')
-        choices = list(selector.finditer(text))
-        if len(choices) != 34:
-            raise RuntimeError('29.2 state selector no longer matches the approved template')
-        labels = [match[0] for match in choices] + additions
-        labels.sort(key=lambda value: re.search(r'<span>([^<]+)</span>', value)[1].casefold())
-        text = text[:choices[0].start()] + '\n\n                  '.join(labels) + text[choices[-1].end():]
+        additions = ''.join(label[0].replace('value="AK"', 'value="'+state+'"').replace('>Alaska<', '>'+title+'<')
+                            for state, title in [('AL','Alabama'),('NC','North Carolina'),('NV','Nevada'),('TN','Tennessee')])
+        text = text[:label.end()] + additions + text[label.end():]
         replace('!["IL", "GA"].includes(state)', '!["NY", "IL", "GA", "AL", "NC", "NV", "TN", "NM", "MS"].includes(state)')
         replace('["NY", "IL", "GA"].includes(state)', '["NY", "IL", "GA", "AL", "NC", "NV", "TN", "NM", "MS"].includes(state)')
         replace('alternateNames = runAlternateNames, {signal} = {}', 'alternateNames = runAlternateNames, {signal,mode="standard"} = {}')
@@ -216,49 +208,14 @@ def final_four_asset(name, text):
           completed = {...completed, reason:"NY_CONNECTOR_NC_RATE_LIMITED"};
         }
         state = completed.ok''')
-    return insight_asset(name, text)
-
-
-def insight_asset(name, text):
-    """Trial-only Head Start/report integration; protected frontend stays frozen."""
-    if not trial_identity() or name != 'index.html':
-        return text
-    text = text.replace('\r\n', '\n')
-    replacements = [
-        ('>Generate report</button>', '>Connect to Insight</button>'),
-        ('    const STAGING_ACCESS_REQUIRED = true;', '    const STAGING_ACCESS_REQUIRED = true;\n    window.CCHeadStartConfig = () => ({apiBase:API_BASE,email:email.value.trim(),passcode:adminPasscode.value.trim(),unlocked:internalUnlocked,generateReport,renderResults});'),
-        ('      unlockButton.textContent = internalUnlocked ? "Unlocked" : "Unlock";', '      unlockButton.textContent = internalUnlocked ? "Unlocked" : "Unlock";\n      window.CCHeadStart?.applyStates();'),
-        ('      generateReportButton.disabled = false;', '      generateReportButton.disabled = false;\n      window.CCHeadStart?.refresh();'),
-        ('const reportFields = ["organization_name",', 'const reportFields = ["success", "error", "organization_name",'),
-        ('        const response = await fetch(`${API_BASE}/api/report`, {', '        const assessment = window.CCHeadStart?.forResults(results);\n        window.CCHeadStart?.save().catch(() => {});\n        const response = await fetch(`${API_BASE}/api/report`, {'),
-        ('headers: { "Content-Type": "application/json" },\n          signal: controller.signal,', 'headers: { "Content-Type": "application/json", "Authorization": "Bearer " + adminPasscode.value.trim() },\n          signal: controller.signal,'),
-        ('body: JSON.stringify({ results, email: email.value.trim(), admin_passcode: adminPasscode.value.trim() })', 'body: JSON.stringify({ results, email: email.value.trim(), admin_passcode: adminPasscode.value.trim(), head_start:assessment })'),
-        ('link.download = `CharityClarity Aurora-', "link.download = `CharityClarity ${window.CCHeadStart?.forResults(results)?'Insight':'Aurora'}-"),
-        ('generateReportButton.disabled = submitButton.disabled || !latestResults.length;', 'generateReportButton.disabled = !latestResults.length;'),
-        ('      stateCheckboxes.forEach((box) => { box.checked = false; });\n\n      updatePasscodeVisibility();', '      if(!window.CCHeadStart?.hasAssessment())stateCheckboxes.forEach((box) => { box.checked = false; });\n\n      updatePasscodeVisibility();'),
-        ('</head>', '  <link rel="stylesheet" href="/head-start/journey.css?v=20261008.1">\n</head>'),
-        ('</body>', '  <script src="/head-start-bridge.js?v=2.0.1"></script>\n</body>'),
-    ]
-    for old, new in replacements:
-        if text.count(old) != 1:
-            raise RuntimeError('Insight frontend template mismatch: '+old[:100]+'; matches='+str(text.count(old)))
-        text = text.replace(old, new, 1)
     return text
 
 
 def lab_asset(path):
     path = unquote(urlparse(path).path)
-    if path in ('/head-start', '/head-start/'):
-        path = '/head-start/index.html'
-    if path.startswith('/head-start/') or path == '/head-start-bridge.js':
-        root = (ROOT/'deployment/insight').resolve()
-        file = (root/path.lstrip('/')).resolve()
-        if (not file.is_relative_to(root) or file.suffix.lower() not in {'.html','.js','.css','.png','.svg','.ttf'} or not file.is_file()):
-            return None
-        return file.read_bytes(), mimetypes.guess_type(file)[0] or 'application/octet-stream'
     if path == '/connector/final-four-validation.html' and trial_identity():
         return (ROOT/'deployment/final-four-validation.html').read_bytes(), 'text/html'
-    if path in ('/', '/registry-snapshot', '/registry-snapshot/', '/instant-compliance-snapshot', '/instant-compliance-snapshot/'):
+    if path in ('/', '/registry-snapshot', '/registry-snapshot/'):
         path = '/index.html'
     root = (ROOT / 'web-staging').resolve()
     file = (root / path.lstrip('/')).resolve()
@@ -339,10 +296,7 @@ def build_handler(master, key, capacity=None, durable=None):
             if os.environ.get('CE_FINAL_FOUR_TRIAL') == '1':
                 data['trial_access_active'] = trial_identity() is not None
                 data['trial_access_expired'] = trial_access_expired()
-            if trial_identity():
-                from charity_clarity_report import INSIGHT_VERSION
-                data['trial_release'] = TRIAL_RELEASE_LABEL
-                data['insight_report_version'] = INSIGHT_VERSION
+            if trial_identity(): data['trial_release'] = TRIAL_RELEASE_LABEL
             body = json.dumps(data).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
@@ -424,7 +378,7 @@ def build_handler(master, key, capacity=None, durable=None):
                 if self.path == '/api/workflow' and durable is not None:
                     from deployment.staging_workflows import handle
                     return handle(master, self, trial_queue=durable)
-                if self.path in ('/api/final-four-connector', '/api/ny-connector', '/api/identity-review', '/api/report', '/api/head-start'):
+                if self.path in ('/api/final-four-connector', '/api/ny-connector', '/api/identity-review', '/api/report'):
                     return super().do_POST()
                 if self.path == '/api/discover-names':
                     # The approved master already bounds concurrent discovery;
