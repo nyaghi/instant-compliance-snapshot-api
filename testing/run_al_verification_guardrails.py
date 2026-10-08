@@ -120,7 +120,7 @@ class AlabamaVerificationControls(ContinuationControls):
         validation=(Path(cc.__file__).parent/'deployment/final-four-validation.html').read_text(encoding='utf-8')
         self.assertIn("const VERSION='"+TRIAL_VERSION+"'",validation)
         self.assertEqual(TRIAL_VERSION,'2026.09.29.2-performance-lab')
-        self.assertEqual(TRIAL_RELEASE_LABEL,'29.2DF')
+        self.assertEqual(TRIAL_RELEASE_LABEL,'29.2DG')
 
 
 if __name__=='__main__':unittest.main()
