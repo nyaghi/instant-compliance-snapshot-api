@@ -184,6 +184,14 @@ class ConnectedInsightTests(unittest.TestCase):
         self.assertEqual(report.executive_metrics(joined)[1]['states'],[])
         self.assertEqual(row['status'],'Not Registered','Source evidence must not be mutated')
 
+    def test_profile_preserves_real_intake_numeric_strings_and_readable_types(self):
+        profile={'type':'university','fiscalActual':'100000000','online':'no','onlineReach':'public'}
+        self.assertEqual(report.profile_summary(profile),('College / university','$100,000,000','No online donation requests'))
+        self.assertEqual(profile['fiscalActual'],'100000000')
+        for value in [None,'',True,'unknown','NaN']:
+            self.assertEqual(report.profile_summary({**profile,'fiscalActual':value})[1],'Not supplied')
+        self.assertEqual(report.profile_summary({**profile,'fiscalActual':'250000.25'})[1],'$250,000.25')
+
     def test_handoff_endpoint_requires_existing_auth_owner_binding_and_immutable_snapshot(self):
         server = ThreadingHTTPServer(('127.0.0.1',0),cc.RegistrySnapshotHandler)
         thread = threading.Thread(target=server.serve_forever,daemon=True); thread.start()

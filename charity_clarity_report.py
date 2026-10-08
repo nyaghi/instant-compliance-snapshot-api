@@ -600,6 +600,29 @@ def executive_metrics(combined):
             for label, note, include, urgent in definitions]
 
 
+def profile_summary(profile):
+    """Display the real intake values, including normalized numeric strings."""
+    from decimal import Decimal, InvalidOperation
+    types = {"charity":"Public charity / community nonprofit", "religious":"House of worship / religious organization",
+             "school":"Elementary or secondary school", "university":"College / university", "hospital":"Nonprofit hospital",
+             "educationalFoundation":"Educational foundation", "hospitalFoundation":"Hospital foundation",
+             "foundation":"Other institutional foundation", "privateFoundation":"Private foundation",
+             "veterans":"Veterans organization", "membership":"Membership organization", "other":"Other nonprofit", "unknown":"Type to confirm"}
+    value = profile.get("fiscalActual")
+    amount = "Not supplied"
+    try:
+        if value is not None and value != "" and not isinstance(value, bool):
+            number = Decimal(str(value).replace(",", "").removeprefix("$"))
+            if number.is_finite() and number >= 0:
+                amount = f"${number:,.2f}".removesuffix(".00")
+    except (InvalidOperation, ValueError):
+        pass
+    online = {"public":"Public donation page", "selected":"Specific states", "nationwide":"Nationwide requests", "targeted":"Targeted online fundraising"}.get(profile.get("onlineReach"), "Online activity to confirm")
+    if profile.get("online") == "no": online = "No online donation requests"
+    elif profile.get("online") == "unknown": online = "Online activity to confirm"
+    return types.get(profile.get("type"), "Type to confirm"), amount, online
+
+
 def generate_report(payload, supported_states):
     from copy import deepcopy
     rows = validate_results(payload, set(supported_states))
@@ -678,10 +701,7 @@ def generate_report(payload, supported_states):
                       p(f"Head Start: {assessment_date} | Aurora: {period}. The requirements assessment covers 50 states and DC; {len(rows)} registry results were supplied. Dates and coverage remain separate.", "small"),
                       p("Head Start eligibility is based on supplied organizational facts. It is not verified state approval. No reported activity is not a statutory clearance, and a missing or unchecked registry result is not proof of a violation.", "small")])
         profile = linked["profile"]
-        total = profile.get("fiscalActual")
-        amount = f"${total:,.2f}".removesuffix(".00") if isinstance(total, (int, float)) and not isinstance(total, bool) else "Not supplied"
-        type_label = {"hospital": "Nonprofit hospital", "religious": "House of worship / religious organization", "education": "Educational institution", "general": "Charitable organization"}.get(profile.get("type"), profile.get("type", "Not supplied"))
-        online_label = {"public": "Public donation page", "none": "No online donations", "targeted": "Targeted online fundraising"}.get(profile.get("onlineReach"), profile.get("onlineReach", "Not supplied"))
+        type_label, amount, online_label = profile_summary(profile)
         story.append(p(f"Reported profile: {type_label}; principal office {profile.get('base', 'Not supplied')}; last completed fiscal-year contributions {amount}; online reach {online_label}. Other periods and definitions are preserved in the Head Start assessment.", "small"))
     story.append(table([["Finding", "Count", "States"]] + [[label, str(len(states)), ", ".join(states)] for label, states in groups], [236, 48, 244]))
     record_count = sum(f["status"] not in INCOMPLETE | NO_LISTING for f in findings)
@@ -693,7 +713,7 @@ def generate_report(payload, supported_states):
                   p(f"{'Aurora status follow-up indicator' if linked else 'Follow-up risk indicator'}: {risk}", "h3"),
                   p("This uses the highest returned signal, not an average or a legal conclusion. High covers overdue, suspended, revoked, expired or failed-to-renew results. Moderate covers upcoming, pending, closed or no-record results. Low covers Current and Exempt. Incomplete checks cannot support an overall Low assessment.", "small"),
                   p('No registration found describes the completed registry search. Head Start supplies a separate requirements assessment; review recent submissions, exemption scope and actual activity before acting on an indicated gap.' if linked else 'In this report, "No registration found" is the presentation label for the snapshot status "Not Registered." Registration obligation remains Unknown until activity and applicable requirements are reviewed.', "small"),
-                  p(DISCLAIMER, "small"), p("Generating this report does not refresh the registry evidence. Unchecked states are outside its scope.", "small")])
+                  p(DISCLAIMER, "small"), p("Generating this report does not refresh the registry evidence. " + ("Unchecked states have no verified Aurora status in this report." if linked else "Unchecked states are outside its scope."), "small")])
     action_start = len(story)
     story.extend([section_break(force=True), p("Prioritized action items", "title"), p("Assign an owner to each applicable item. The state findings preserve the evidence and qualifications needed to act.", "small")])
     for number, (title, states, detail) in enumerate(action_items(rows, findings), 1):
