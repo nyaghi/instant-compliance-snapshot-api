@@ -340,8 +340,9 @@ def build_handler(master, key, capacity=None, durable=None):
                 data['trial_access_active'] = trial_identity() is not None
                 data['trial_access_expired'] = trial_access_expired()
             if trial_identity():
+                from charity_clarity_report import INSIGHT_VERSION
                 data['trial_release'] = TRIAL_RELEASE_LABEL
-                data['insight_report_version'] = '2.0.1'
+                data['insight_report_version'] = INSIGHT_VERSION
             body = json.dumps(data).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
