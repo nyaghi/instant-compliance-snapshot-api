@@ -230,13 +230,12 @@ def insight_asset(name, text):
         ('      unlockButton.textContent = internalUnlocked ? "Unlocked" : "Unlock";', '      unlockButton.textContent = internalUnlocked ? "Unlocked" : "Unlock";\n      window.CCHeadStart?.applyStates();'),
         ('      generateReportButton.disabled = false;', '      generateReportButton.disabled = false;\n      window.CCHeadStart?.refresh();'),
         ('const reportFields = ["organization_name",', 'const reportFields = ["success", "error", "organization_name",'),
-        ('        const response = await fetch(`${API_BASE}/api/report`, {', '        await window.CCHeadStart?.save();\n        const response = await fetch(`${API_BASE}/api/report`, {'),
+        ('        const response = await fetch(`${API_BASE}/api/report`, {', '        const assessment = window.CCHeadStart?.forResults(results);\n        window.CCHeadStart?.save().catch(() => {});\n        const response = await fetch(`${API_BASE}/api/report`, {'),
         ('headers: { "Content-Type": "application/json" },\n          signal: controller.signal,', 'headers: { "Content-Type": "application/json", "Authorization": "Bearer " + adminPasscode.value.trim() },\n          signal: controller.signal,'),
-        ('body: JSON.stringify({ results, email: email.value.trim(), admin_passcode: adminPasscode.value.trim() })', 'body: JSON.stringify({ results, email: email.value.trim(), admin_passcode: adminPasscode.value.trim(), head_start:window.CCHeadStart?.forResults(results) })'),
+        ('body: JSON.stringify({ results, email: email.value.trim(), admin_passcode: adminPasscode.value.trim() })', 'body: JSON.stringify({ results, email: email.value.trim(), admin_passcode: adminPasscode.value.trim(), head_start:assessment })'),
         ('link.download = `CharityClarity Aurora-', "link.download = `CharityClarity ${window.CCHeadStart?.forResults(results)?'Insight':'Aurora'}-"),
         ('generateReportButton.disabled = submitButton.disabled || !latestResults.length;', 'generateReportButton.disabled = !latestResults.length;'),
         ('      stateCheckboxes.forEach((box) => { box.checked = false; });\n\n      updatePasscodeVisibility();', '      if(!window.CCHeadStart?.hasAssessment())stateCheckboxes.forEach((box) => { box.checked = false; });\n\n      updatePasscodeVisibility();'),
-        ('        const results = await runStateChecks(states, einValue, emailValue, organizationNameValue);', '        await window.CCHeadStart?.save();\n        const results = await runStateChecks(states, einValue, emailValue, organizationNameValue);'),
         ('</body>', '  <script src="/head-start-bridge.js?v=2.0.0"></script>\n</body>'),
     ]
     for old, new in replacements:

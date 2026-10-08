@@ -60,8 +60,11 @@
     if(!assessment)return;
     if(!compatible())throw Error('Head Start and Aurora must use the same organization and EIN.');
     const config=window.CCHeadStartConfig();
-    const response=await fetch(`${config.apiBase}/api/head-start`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+config.passcode},body:JSON.stringify({action:'save',head_start:assessment,email:config.email,admin_passcode:config.passcode})});
-    if(!response.ok){const body=await response.json().catch(()=>({}));throw Error(body.error||'The Head Start assessment could not be saved. Your browser copy is retained.');}
+    const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),8000);
+    try{
+      const response=await fetch(`${config.apiBase}/api/head-start`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+config.passcode},signal:controller.signal,body:JSON.stringify({action:'save',head_start:assessment,email:config.email,admin_passcode:config.passcode})});
+      if(!response.ok){const body=await response.json().catch(()=>({}));throw Error(body.error||'The Head Start assessment could not be saved. Your browser copy is retained.');}
+    }finally{clearTimeout(timeout);}
   }
   window.CCHeadStart=Object.freeze({refresh,applyStates,save,hasAssessment:()=>!!assessment,forResults(rows){
     if(!assessment)return undefined;

@@ -5,9 +5,9 @@ const script="from unittest.mock import patch; from deployment import performanc
 const html=cp.execFileSync('py',['-c',script],{cwd:root,encoding:'utf8',maxBuffer:1024*1024});
 const source=html.slice(html.indexOf('    async function generateReport()'),html.indexOf('    function downloadExcel()'));
 const packet=JSON.parse(fs.readFileSync(path.join(__dirname,'fixtures/connected-hospital/report-payload.json'),'utf8'));
-function setup({headStart=true,mismatch=false,invalidType=false}={}){
+function setup({headStart=true,mismatch=false,invalidType=false,cacheFailure=false}={}){
   const calls=[],downloads=[],button={disabled:false},message={textContent:''};let saves=0;
-  const context={latestResults:structuredClone(packet.results),generateReportButton:button,reportMessage:message,submitButton:{disabled:true},email:{value:'fixture@example.test'},adminPasscode:{value:'fixture-not-a-real-credential'},API_BASE:'https://charityclarity-final-four-29-2.onrender.com',AbortController,setTimeout:()=>1,clearTimeout(){},URL:{createObjectURL:()=> 'blob:fixture',revokeObjectURL(){}},document:{body:{appendChild(){}},createElement:()=>({click(){downloads.push(this.download);},remove(){}})},fetch:async(url,options)=>{calls.push({url,headers:options.headers,body:JSON.parse(options.body)});return {ok:true,headers:{get:()=>invalidType?'text/html':'application/pdf'},blob:async()=>({type:'application/pdf'})};},window:{CCHeadStart:headStart?{save:async()=>{saves++;if(mismatch)throw Error('Head Start and Aurora must use the same organization and EIN.');},forResults:()=>structuredClone(packet.head_start)}:undefined}};
+  const context={latestResults:structuredClone(packet.results),generateReportButton:button,reportMessage:message,submitButton:{disabled:true},email:{value:'fixture@example.test'},adminPasscode:{value:'fixture-not-a-real-credential'},API_BASE:'https://charityclarity-final-four-29-2.onrender.com',AbortController,setTimeout:()=>1,clearTimeout(){},URL:{createObjectURL:()=> 'blob:fixture',revokeObjectURL(){}},document:{body:{appendChild(){}},createElement:()=>({click(){downloads.push(this.download);},remove(){}})},fetch:async(url,options)=>{calls.push({url,headers:options.headers,body:JSON.parse(options.body)});return {ok:true,headers:{get:()=>invalidType?'text/html':'application/pdf'},blob:async()=>({type:'application/pdf'})};},window:{CCHeadStart:headStart?{save:async()=>{saves++;if(cacheFailure)throw Error('Cache unavailable');},forResults:()=>{if(mismatch)throw Error('Head Start and Aurora must use the same organization and EIN.');return structuredClone(packet.head_start);}}:undefined}};
   vm.createContext(context);vm.runInContext(source+'\nthis.run=generateReport;',context);
   return {context,button,message,calls,downloads,get saves(){return saves;}};
 }
@@ -23,4 +23,7 @@ test('unexpected HTML cannot be presented as a downloaded PDF',async()=>{
 });
 test('standalone Aurora reports retain their original input and filename',async()=>{
   const c=setup({headStart:false});await c.context.run();assert.equal(c.calls[0].body.head_start,undefined);assert.match(c.downloads[0],/^CharityClarity Aurora-/);assert.equal(c.context.latestResults.length,8);
+});
+test('an optional assessment cache failure cannot block a valid Insight download',async()=>{
+  const c=setup({cacheFailure:true});await c.context.run();assert.equal(c.downloads.length,1);assert.equal(c.calls[0].body.head_start.requirements.length,51);assert.equal(c.context.latestResults.length,8);
 });
