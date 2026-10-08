@@ -41,6 +41,31 @@ class MississippiBrowserFallbackControls(unittest.TestCase):
         self.assertGreater(len(calls), 1)
         self.assertEqual(len(calls), len(result.queries_attempted))
 
+    def test_case_equivalent_discovery_name_does_not_repeat_public_searches(self):
+        org = cc.checker.Organization('National Church Residences Foundation', '20-2308665')
+        searched = []
+        def evidence(query):
+            searched.append(query['name'])
+            return self.search(query, [])
+        result = cc.ms_browser_lookup(org, evidence, ['NATIONAL CHURCH RESIDENCES FOUNDATION'])
+        self.assertEqual(result.status, 'Not Registered')
+        self.assertEqual(searched, cc.ms_name_search_plan(org.organization_name))
+        self.assertEqual(len(result.queries_attempted), len(searched))
+
+    def test_distinct_reviewed_alias_still_reaches_confirmed_record(self):
+        org = cc.checker.Organization('Example Foundation', '58-2366765')
+        searched = []
+        def evidence(query):
+            if query['operation'] == 'detail':
+                return self.detail(query)
+            searched.append(query['name'])
+            return self.search(query, [self.row] if query['name'] == self.row['name'] else [])
+        result = cc.ms_browser_lookup(org, evidence,
+                                      ['EXAMPLE FOUNDATION', 'Better World Fund, Inc.'])
+        self.assertEqual(result.status, 'Upcoming Filing')
+        self.assertIn('Better World Fund, Inc.', searched)
+        self.assertEqual(searched.count('Example Foundation'), 1)
+
     def test_unrelated_and_ambiguous_records_are_never_assigned_positive_status(self):
         unrelated = {**self.row, 'name': 'Better World Community Fund'}
         with patch.object(cc, 'ms_name_search_plan', return_value=['Better World Fund, Inc.']):

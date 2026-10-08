@@ -7110,9 +7110,22 @@ def ms_browser_lookup(org, evidence, alternate_names=()):
     module = state_batch_modules(['MS'])[load_state_batch_bundle().STATE_TO_MODULE['MS']]
     # The signed request supplies reviewed names only in Standard. Sales must
     # never acquire names from the process-wide discovery cache.
-    reviewed = list(dict.fromkeys([org.organization_name, *alternate_names]))
-    planned = list(dict.fromkeys(query for target in reviewed
-                                 for query in ms_name_search_plan(target, '')))
+    # Discovery can return the entered legal name in a different case. Keep
+    # one representative of each case-equivalent search intent so the browser
+    # does not repeat a full search sequence for that same name.
+    reviewed, seen_names = [], set()
+    for name in [org.organization_name, *alternate_names]:
+        key = name.casefold()
+        if key not in seen_names:
+            reviewed.append(name)
+            seen_names.add(key)
+    planned, seen_queries = [], set()
+    for target in reviewed:
+        for query in ms_name_search_plan(target, ''):
+            key = query.casefold()
+            if key not in seen_queries:
+                planned.append(query)
+                seen_queries.add(key)
     if not planned:
         raise ValueError('No safe Mississippi name search')
     attempted = []
