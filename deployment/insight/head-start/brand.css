@@ -1,0 +1,23 @@
+/* Compliance Express brand tokens. Preserve the approved logo and navy/red identity. */
+:root{--ink:#0B2A5B;--teal:#0B2A5B;--mint:#edf2f9;--line:#dbe2ed;--muted:#5c6b80;--paper:#f7f9fc;--white:#fff;--brand-red:#C62828}
+header{height:108px;border-bottom:3px solid var(--brand-red)}
+.brand{gap:25px;font-size:19px}.ce-logo{width:300px;height:auto;display:block;max-width:36vw}.product-name{border-left:1px solid var(--line);padding-left:25px;white-space:nowrap}.product-name .charity{color:var(--ink);font-weight:650}.product-name .clarity{color:var(--brand-red);font-weight:650}.product-name strong{font-size:17px;letter-spacing:.06em;line-height:1.5}.brandmark{display:none}
+.primary{background:var(--brand-red);border-color:var(--brand-red)}.primary:hover{background:#A61E1E}.secondary:hover{background:#eef3f9}.pill{color:var(--ink);border-color:#d9e1ee;background:#f1f4fa;font-size:12px}.intro-note{background:#f0f4fa;border-color:var(--brand-red)}.step.active{background:#edf2f9}.step.active .num{background:var(--brand-red);border-color:var(--brand-red)}.step.done .num{background:#edf2f9}.side-note p{font-size:14px}.progress-caption,.eyebrow{font-size:12px}.intro-note .tiny-icon{display:none}.callout:not(.amber){background:#f1f4fa;border-color:#dce3ee;color:#3e5272}.textbtn{font-size:14px}.countlabel,.source-link{font-size:14px}.badge{font-size:12px}.metric span{font-size:14px}.tabs button{font-size:14px}.state-check{font-size:14px}.audit{font-size:12px}.intro .eyebrow{color:var(--brand-red)}
+.scope-summary{border-left:3px solid var(--brand-red);padding:14px 16px;background:#f4f6fa;margin:18px 0;font-size:15px}.scope-summary p{font-size:14px;margin-top:6px;margin-bottom:0}
+footer{font-size:12px;align-items:center}footer div{display:flex;flex-direction:column;gap:5px}.footer-logo{width:185px;height:auto;display:block}footer a{text-decoration:none}footer>span{text-align:right}
+@media(max-width:950px){.brand{gap:15px}.ce-logo{width:250px}.product-name{padding-left:15px;font-size:17px}.header-actions{gap:12px}.header-actions .pill{display:none}}
+@media(max-width:700px){header{height:auto;min-height:108px;padding:12px 16px;gap:10px}.brand{gap:8px;flex-direction:column;align-items:flex-start}.ce-logo{width:225px;max-width:60vw}.product-name{padding:0;border:0;font-size:16px}.product-name strong{display:inline;margin-left:8px;font-size:14px;letter-spacing:0}.header-actions button{max-width:95px;font-size:14px}.step{font-size:12px}.step span:last-child{min-height:34px}.badge{font-size:11px}.state-card summary{gap:10px}.metric span{font-size:13px}footer{align-items:flex-start}footer>span{text-align:left}.intro{padding:25px 0}h1{font-size:32px}}
+@media print{header{display:flex!important;padding:10px 0;height:auto;min-height:70px}.ce-logo{width:230px}.header-actions{display:none}.brand{flex-direction:row;align-items:center}.product-name{border:0;padding-left:12px}footer{display:flex!important;margin-top:20px}.footer-logo{display:none}.scope-summary{break-inside:avoid}}
+
+/* Flowing navy signature lettering, guided by the approved Aurora reference. */
+@font-face{font-family:'Head Start Signature';src:url('/fonts/Allura-Regular.ttf') format('truetype');font-display:swap;font-weight:400}
+.product-name strong{font-family:'Head Start Signature',cursive;font-size:40px;font-weight:400;letter-spacing:0;line-height:1.05;color:#0B2A5B;display:block;text-align:right;transform:rotate(-3deg);padding-right:4px}
+@media(max-width:700px){.product-name strong{display:inline-block;font-size:30px;margin-left:8px}}
+@media print{.product-name strong{font-size:34px}}
+
+/* Keep the questions prominent in the simpler intake. */
+.head-start-logo{display:block;width:298px;height:auto;object-fit:contain}
+@media(max-width:700px){.head-start-logo{width:225px;max-width:60vw}header{height:auto}}
+@media print{.head-start-logo{width:250px;max-width:none}}
+.intro{padding:18px 0;gap:24px}.intro h1{font-size:30px;line-height:1.15;margin:8px 0}.intro p{font-size:15px;line-height:1.5}.intro-note{padding:16px 20px}.intro-note strong{font-size:15px}.intro-note p{margin:8px 0}.report-head .pill{white-space:nowrap}
+@media(max-width:700px){.intro{padding:14px 0;gap:12px}.intro h1{font-size:26px}.intro-note{padding:12px 16px}.report-head h2{font-size:25px}.form-footer{gap:10px}}

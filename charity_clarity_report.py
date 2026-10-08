@@ -14,6 +14,7 @@ from reportlab.lib.utils import ImageReader
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, CondPageBreak, KeepTogether
 
 REPORT_VERSION = "1.3.3"
+INSIGHT_VERSION = "2.0.0"
 NAVY = colors.HexColor("#0B2A5B")
 INK = colors.HexColor("#172B45")
 MUTED = colors.HexColor("#536274")
@@ -429,6 +430,164 @@ def safe_source(value):
     return "", "Source link unavailable"
 
 
+HEAD_START_STATES = set("AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY".split())
+HEAD_START_FILINGS = {None, "none", "optional", "application", "annual", "simplified", "verify"}
+
+
+def validate_head_start(value, identity=None):
+    """Validate a user-supplied assessment snapshot, never certify its legal facts."""
+    from copy import deepcopy
+    import uuid
+    if not isinstance(value, dict) or value.get("schema_version") != "cc.head-start/1":
+        raise ValueError("Use a supported Head Start assessment file.")
+    item = deepcopy(value)
+    name = text(item.get("organization_name"), 250)
+    ein = re.sub(r"\D", "", text(item.get("ein"), 20))
+    if not name or len(ein) != 9 or ein == "000000000":
+        raise ValueError("The Head Start assessment needs the organization name and EIN.")
+    try:
+        item["assessment_id"] = str(uuid.UUID(item.get("assessment_id", "")))
+        assessed = datetime.fromisoformat(item.get("assessed_at", "").replace("Z", "+00:00"))
+        if assessed.tzinfo is None:
+            raise ValueError()
+    except (ValueError, TypeError, AttributeError):
+        raise ValueError("The Head Start assessment identifier or date is invalid.") from None
+    if identity:
+        normalized = lambda s: " ".join(s.split()).casefold()
+        if ein != identity[1] or normalized(name) != normalized(identity[0]):
+            raise ValueError("Head Start and Aurora must describe the same organization and EIN.")
+    profile = item.get("profile")
+    if not isinstance(profile, dict) or profile.get("taxStatus") != "recognized501c3":
+        raise ValueError("Insight supports Head Start assessments for recognized 501(c)(3) nonprofits.")
+    requirements = item.get("requirements")
+    if not isinstance(requirements, list) or len(requirements) != 51:
+        raise ValueError("The Head Start file must preserve all 50 states and DC.")
+    seen = set()
+    for r in requirements:
+        if not isinstance(r, dict) or r.get("code") not in HEAD_START_STATES or r["code"] in seen:
+            raise ValueError("The Head Start assessment has an invalid or duplicated state.")
+        seen.add(r["code"])
+        if r.get("status") not in {"required", "exemption", "none", "review", "outside"} or r.get("filing") not in HEAD_START_FILINGS:
+            raise ValueError("The Head Start assessment has an unsupported finding or filing route.")
+        for key in ("name", "why", "action"):
+            if not isinstance(r.get(key), str) or len(r[key]) > 15000:
+                raise ValueError("The Head Start assessment is missing its finding explanation.")
+        for key in ("approvalRequired", "discretionaryRequest", "deferred", "nexusPending", "possible_exemption"):
+            if key in r and not isinstance(r[key], bool):
+                raise ValueError("The Head Start assessment has an invalid eligibility flag.")
+        if r.get("exemption_evidence") not in {None, "answers"}:
+            raise ValueError("The Head Start assessment has an invalid eligibility basis.")
+        if r.get("exemption_evidence") == "answers" and (r["status"] not in {"none", "exemption"} or r.get("discretionaryRequest")):
+            raise ValueError("Missing eligibility or a waiver request cannot be declared confirmed.")
+        sources = r.get("sources", [])
+        if not isinstance(sources, list) or len(sources) > 40 or any(not isinstance(s, dict) or not isinstance(s.get("url"), str) for s in sources):
+            raise ValueError("The Head Start assessment has invalid source references.")
+    item["organization_name"], item["ein"] = name, ein
+    item["engine_version"] = text(item.get("engine_version"), 100)
+    return item
+
+
+def reconcile_head_start(rows, assessment):
+    """Join requirements and completed evidence; do not change either input."""
+    indexed = {r["state"]: r for r in rows}
+    findings = []
+    procedures = {"none": "No exemption filing indicated", "optional": "State confirmation optional", "application": "Submit an exemption claim", "annual": "Annual exemption filing", "simplified": "Annual small-charity paperwork", "verify": "Filing procedure to confirm"}
+    for h in assessment["requirements"]:
+        code, status = h["code"], h["status"]
+        row = indexed.get(code)
+        actual = row["status"] if row else "Not checked"
+        outside = status == "outside" or h.get("deferred", False)
+        supported = not outside and not h.get("discretionaryRequest") and h.get("exemption_evidence") == "answers"
+        possible = not outside and (h.get("possible_exemption") or status == "exemption" or supported)
+        requirement = "No reported connection" if outside else "Registration indicated" if status == "required" else "Eligibility supported" if supported else "Potential exemption" if possible else "No registration indicated" if status == "none" else "Requirement needs clarification"
+        if supported:
+            requirement += ": " + ("state approval needed" if h.get("approvalRequired") else procedures.get(h.get("filing"), "filing procedure to confirm"))
+        priority, finding = 4, "No immediate action indicated"
+        action = "Reassess if fundraising, donor gifts or operations change."
+        why = "The supplied assessment does not identify a present filing task; this is not clearance for future activity."
+        if actual in HIGH:
+            priority, finding = 1, "Existing registration needs attention"
+            action = verification_needed(row)
+            why = "Aurora returned an adverse registration signal. Check acknowledgments, accepted extensions and the applicable period before deciding which correction is needed."
+            if possible:
+                action += " Review the exemption route separately; keep applicable filings current while relief is unresolved."
+        elif actual in CLOSED:
+            priority, finding = 2, "Closed registration needs review"
+            action = "Confirm whether closure was intentional, whether activity continues, and whether an exemption or replacement registration applies."
+            why = "A closed record is not a current registration and does not by itself establish that reinstatement is necessary."
+        elif actual in INCOMPLETE:
+            priority, finding = 2, "Registration status unresolved"
+            action = "Resolve the registry access, identity or evidence issue shown in Aurora before treating this state as unregistered."
+            why = "An incomplete or ambiguous search is not a negative registration result."
+        elif actual == "Not checked" and not outside and (status in {"required", "review", "exemption"} or supported):
+            priority, finding = 2, "Registration status not checked"
+            action = "Check the existing registration or exemption record through Aurora where supported, otherwise with the state directly."
+            why = "Head Start has a relevant finding, but no completed Aurora result was supplied for this state."
+        elif status == "required" and not outside:
+            if actual in NO_LISTING:
+                priority, finding = 1, "Registration gap indicated"
+                action = "Confirm no recent submission or applicable exemption explains the missing record, then complete registration if the requirement still applies."
+                why = "The supplied Head Start facts indicate registration, and Aurora completed its search without finding a qualifying registration."
+            elif actual == "Exempt":
+                priority, finding = 2, "Requirement and recorded exemption differ"
+                action = "Verify the exemption determination and whether it covers the same entity, activity and registration regime identified by Head Start."
+                why = "A recorded exemption can have narrower scope than the registration or trust requirement in the assessment."
+            else:
+                finding, action, why = "Requirements and registration align", "Maintain registration and applicable filings.", "Head Start indicates registration and Aurora returned a registration record."
+        elif h.get("discretionaryRequest"):
+            priority, finding = 3, "Discretionary waiver opportunity"
+            action = h["action"] + " Keep existing obligations current while the request is reviewed."
+            why = "Head Start identifies a waiver-request route. Relief depends on the agency's decision, not the category or request alone."
+        elif supported:
+            if actual in {"Current", "Upcoming Filing", "Pending"}:
+                priority, finding = 3, "Exemption opportunity"
+                action = h["action"] + " Keep existing obligations current until the exemption procedure and its scope are established."
+                why = "Your answers support an exemption route, while Aurora returned an existing registration or pending record. Review whether relief could reduce future filing work."
+            elif actual == "Exempt":
+                finding, action, why = "Exemption findings align", "Retain the determination and check its scope, continuing eligibility and any exemption paperwork.", "Head Start supports eligibility and Aurora reports an exemption; the determination still governs its actual scope."
+            elif actual in NO_LISTING:
+                if h.get("approvalRequired") or h.get("filing") in {"application", "annual", "simplified", "verify"}:
+                    priority, finding = 2, "Exemption filing or approval to confirm"
+                else:
+                    finding = "Eligibility supports registration relief"
+                action, why = h["action"], "The missing registration does not alone establish a gap when the supplied facts support relief. Verify the actual filing or approval procedure."
+        elif possible:
+            priority, finding = 3 if actual in {"Current", "Upcoming Filing", "Exempt"} else 2, "Exemption eligibility to confirm"
+            action = "Answer the missing eligibility facts in Head Start, then review the applicable filing or approval procedure."
+            why = "An organizational category or waiver possibility does not establish eligibility or state approval."
+        elif actual in {"Current", "Upcoming Filing", "Pending", "Exempt"}:
+            priority, finding = 3, "Review registration context"
+            action = "Confirm ongoing state activity and the record's scope before changing existing registrations or filings."
+            why = "Aurora returned a record, while the assessment does not establish a current registration task for the reported activity. Historical and separate obligations can still apply."
+        elif not outside and status == "review":
+            priority, finding = 2, "Registration requirement to clarify"
+            action, why = h["action"], h["why"]
+        if actual == "Upcoming Filing":
+            priority = min(priority, 2)
+            action += " Confirm and plan the upcoming filing or expiration shown in the workload forecast."
+        if actual == "Pending":
+            priority = min(priority, 2)
+            action += " Confirm the pending submission's disposition; it is not an approved current registration."
+        findings.append({"state": code, "name": h["name"], "requirement": requirement, "aurora_status": actual,
+                         "finding": finding, "priority": priority, "action": action, "why": why,
+                         "head_start": h, "aurora_row": row})
+    return sorted(findings, key=lambda f: (f["priority"], f["name"]))
+
+
+def executive_metrics(combined):
+    """Count actionable findings, not hypothetical obligations or missing evidence."""
+    definitions = [
+        ("Potential exemption opportunities", "Eligibility and procedure to confirm", lambda f: f["finding"] in {"Exemption opportunity", "Exemption eligibility to confirm", "Discretionary waiver opportunity"}, False),
+        ("Registration gaps indicated", "Requirement indicated; no record found", lambda f: f["finding"] == "Registration gap indicated", True),
+        ("Potential withdrawal reviews", "Confirm activity before changing filings", lambda f: f["finding"] == "Review registration context" and f["aurora_status"] in {"Current", "Upcoming Filing"}, False),
+        ("Delinquencies", "Returned delinquent status needs follow-up", lambda f: f["aurora_status"] == "Delinquent", True),
+        ("Upcoming filings", "Plan the returned filing or expiration", lambda f: f["aurora_status"] == "Upcoming Filing", False),
+        ("Unresolved status checks", "Incomplete or relevant states not checked", lambda f: f["finding"] in {"Registration status unresolved", "Registration status not checked"}, False),
+    ]
+    return [{"label": label, "note": note, "states": [f["state"] for f in combined if include(f)], "urgent": urgent}
+            for label, note, include, urgent in definitions]
+
+
 def generate_report(payload, supported_states):
     from copy import deepcopy
     rows = validate_results(payload, set(supported_states))
@@ -436,6 +595,8 @@ def generate_report(payload, supported_states):
     groups = summary_groups(findings)
     risk, incomplete, counts = risk_summary(rows)
     org, ein = rows[0]["organization_name"], rows[0]["ein"]
+    linked = validate_head_start(payload["head_start"], (org, re.sub(r"\D", "", ein))) if payload.get("head_start") is not None else None
+    combined = reconcile_head_start(rows, linked) if linked else []
     ein = ein[:2] + "-" + ein[2:]
     styles = {
         "title": ParagraphStyle("title", fontName="Helvetica-Bold", fontSize=23, leading=28, textColor=NAVY, spaceAfter=12, keepWithNext=True),
@@ -446,6 +607,10 @@ def generate_report(payload, supported_states):
         "detail": ParagraphStyle("detail", fontName="Helvetica", fontSize=9.2, leading=12.6, textColor=INK, spaceAfter=7),
         "cell": ParagraphStyle("cell", fontName="Helvetica", fontSize=8.5, leading=11.5, textColor=INK),
         "head": ParagraphStyle("head", fontName="Helvetica-Bold", fontSize=8.5, leading=11.5, textColor=colors.white),
+        "metric_number": ParagraphStyle("metric_number", fontName="Helvetica-Bold", fontSize=27, leading=30, textColor=NAVY, spaceAfter=4),
+        "metric_urgent": ParagraphStyle("metric_urgent", fontName="Helvetica-Bold", fontSize=27, leading=30, textColor=colors.HexColor("#C62828"), spaceAfter=4),
+        "metric_label": ParagraphStyle("metric_label", fontName="Helvetica-Bold", fontSize=9, leading=12, textColor=NAVY, spaceAfter=4),
+        "metric_note": ParagraphStyle("metric_note", fontName="Helvetica", fontSize=7.5, leading=10, textColor=MUTED),
     }
 
     def section_break(force=False):
@@ -468,6 +633,19 @@ def generate_report(payload, supported_states):
         ]))
         return grid
 
+    def metric_cards(metrics):
+        cells = [[p(len(m["states"]), "metric_urgent" if m["urgent"] and m["states"] else "metric_number"),
+                  p(m["label"], "metric_label"), p(m["note"], "metric_note")] for m in metrics]
+        grid = Table([cells[:3], cells[3:]], colWidths=[176]*3, hAlign="LEFT")
+        grid.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"), ("BACKGROUND", (0, 0), (-1, -1), PALE),
+            ("BOX", (0, 0), (-1, -1), .5, colors.HexColor("#DCE3EB")),
+            ("INNERGRID", (0, 0), (-1, -1), 2, colors.white),
+            ("LEFTPADDING", (0, 0), (-1, -1), 12), ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+            ("TOPPADDING", (0, 0), (-1, -1), 10), ("BOTTOMPADDING", (0, 0), (-1, -1), 11),
+        ]))
+        return KeepTogether([grid, Spacer(1, 6), p("Counts describe state findings and can overlap. Exemption and withdrawal opportunities require review; keep existing obligations current until the applicable procedure is confirmed.", "small")])
+
     checked = [r["checked_at_epoch"] for r in rows if r["checked_at_epoch"]]
     def stamp(epoch):
         return datetime.fromtimestamp(epoch, timezone.utc).strftime("%b %d, %Y %H:%M UTC")
@@ -475,9 +653,24 @@ def generate_report(payload, supported_states):
     if checked and max(checked) != min(checked):
         period += " to " + stamp(max(checked))
     versions = ", ".join(sorted({r["app_version"] or "not supplied" for r in rows}))
-    story = [p("Charity registration snapshot", "title"), p(org, "h2"),
-             p(f"EIN {ein}  |  {len(rows)} states checked", "small"), p(period, "small"), Spacer(1, 12),
+    story = [p("CharityClarity Insight" if linked else "Charity registration snapshot", "title"), p(org, "h2"),
+             p(f"EIN {ein}  |  {len(rows)} {'illustrative registry results' if payload.get('illustrative_example') else 'states checked'}", "small"), p(period, "small"), Spacer(1, 12),
              p("Executive summary", "h2"), p("The findings at a glance", "h3")]
+    if linked:
+        counts = Counter(f["priority"] for f in combined)
+        story.insert(0, p("Illustrative example - fictional organization and registry results", "small")) if payload.get("illustrative_example") else None
+        assessment_date = stamp(datetime.fromisoformat(linked['assessed_at'].replace('Z', '+00:00')).timestamp())
+        finding_word = "finding" if counts[1] == 1 else "findings"
+        story.extend([metric_cards(executive_metrics(combined)),
+                      p(f"The combined assessment identifies {counts[1]} state {finding_word} to address first, {counts[2]} to clarify or plan next, and {counts[3]} opportunities or registration-context reviews. Findings with no present task remain in the state coverage table."),
+                      p(f"Head Start: {assessment_date} | Aurora: {period}. The requirements assessment covers 50 states and DC; {len(rows)} registry results were supplied. Dates and coverage remain separate.", "small"),
+                      p("Head Start eligibility is based on supplied organizational facts. It is not verified state approval. No reported activity is not a statutory clearance, and a missing or unchecked registry result is not proof of a violation.", "small")])
+        profile = linked["profile"]
+        total = profile.get("fiscalActual")
+        amount = f"${total:,.2f}".removesuffix(".00") if isinstance(total, (int, float)) and not isinstance(total, bool) else "Not supplied"
+        type_label = {"hospital": "Nonprofit hospital", "religious": "House of worship / religious organization", "education": "Educational institution", "general": "Charitable organization"}.get(profile.get("type"), profile.get("type", "Not supplied"))
+        online_label = {"public": "Public donation page", "none": "No online donations", "targeted": "Targeted online fundraising"}.get(profile.get("onlineReach"), profile.get("onlineReach", "Not supplied"))
+        story.append(p(f"Reported profile: {type_label}; principal office {profile.get('base', 'Not supplied')}; last completed fiscal-year contributions {amount}; online reach {online_label}. Other periods and definitions are preserved in the Head Start assessment.", "small"))
     story.append(table([["Finding", "Count", "States"]] + [[label, str(len(states)), ", ".join(states)] for label, states in groups], [236, 48, 244]))
     record_count = sum(f["status"] not in INCOMPLETE | NO_LISTING for f in findings)
     closed_count = sum(f["status"] in CLOSED for f in findings)
@@ -485,14 +678,16 @@ def generate_report(payload, supported_states):
     il_count = sum(f["status"] == IL_COMBINED for f in findings)
     il_coverage = f", {il_count} Illinois not-registered / non-compliant result" if il_count else ""
     story.extend([Spacer(1, 10), p(f"Coverage reconciles to {len(rows)} checked states: {record_count} record-based results (including {closed_count} closed), {missing_count} no-registration-found results{il_coverage}, and {incomplete} unresolved checks.", "small"),
-                  p(f"Follow-up risk indicator: {risk}", "h3"),
+                  p(f"{'Aurora status follow-up indicator' if linked else 'Follow-up risk indicator'}: {risk}", "h3"),
                   p("This uses the highest returned signal, not an average or a legal conclusion. High covers overdue, suspended, revoked, expired or failed-to-renew results. Moderate covers upcoming, pending, closed or no-record results. Low covers Current and Exempt. Incomplete checks cannot support an overall Low assessment.", "small"),
-                  p('In this report, "No registration found" is the presentation label for the snapshot status "Not Registered." Registration obligation remains Unknown until activity and applicable requirements are reviewed.', "small"),
+                  p('No registration found describes the completed registry search. Head Start supplies a separate requirements assessment; review recent submissions, exemption scope and actual activity before acting on an indicated gap.' if linked else 'In this report, "No registration found" is the presentation label for the snapshot status "Not Registered." Registration obligation remains Unknown until activity and applicable requirements are reviewed.', "small"),
                   p(DISCLAIMER, "small"), p("Generating this report does not refresh the registry evidence. Unchecked states are outside its scope.", "small")])
+    action_start = len(story)
     story.extend([section_break(force=True), p("Prioritized action items", "title"), p("Assign an owner to each applicable item. The state findings preserve the evidence and qualifications needed to act.", "small")])
     for number, (title, states, detail) in enumerate(action_items(rows, findings), 1):
         story.extend([p(f"{number}. {title}", "h3"), p("; ".join(states), "small"), p(detail, "detail")])
 
+    forecast_start = len(story)
     story.extend([section_break(force=True), p("Workload forecast", "title"),
                   p("Dates are copied from the completed snapshot, not independently revalidated. Day counts use each state's check date. The preparation target is a planning suggestion: 30 days before the returned date, or the check date when already inside that window. It is not an additional filing deadline.", "small")])
     calendar = [f for f in findings if f["bucket"]]
@@ -523,6 +718,7 @@ def generate_report(payload, supported_states):
                      [[f["state"], date_text(f["deadline"]["base"]), date_text(f["deadline"]["extended"])] for f in extensions], [64, 232, 232]),
                      p("The forecast uses the returned effective date. Extension eligibility and any inferred dates remain qualified in the state findings; report generation does not establish eligibility.", "small")])
 
+    operational_start = len(story)
     story.extend([section_break(), p("Operational Insights", "title"),
                   p("Patterns in the checked states, with the evidence limits and a specific next step.", "small")])
     for insight in insight_records(findings):
@@ -537,6 +733,7 @@ def generate_report(payload, supported_states):
                               "Explicit filed fiscal period end" if f["filed_period"] else "Period unconfirmed; not an outlier finding"] for f in periods], [60, 220, 248]),
                       p("Only explicit filed period ends with the same month and day are aligned. A next-required period, submission date or tax-year label is not substituted for the latest filed period. Other states did not return a usable period for this comparison.", "small")])
 
+    coverage_start = len(story)
     missing = [f["state"] for f in findings if f["status"] == "Not Registered"]
     exempt = [f["state"] for f in findings if f["status"] == "Exempt"]
     if missing or exempt:
@@ -566,12 +763,45 @@ def generate_report(payload, supported_states):
                              ["Official rule source", "Not supplied for an eligibility assessment. Use the target state's official exemption guidance; the registry links in the findings are evidence links, not a completed legal rules review."]], [150, 378]),
                       p("Keep existing registrations and required filings current while exemption eligibility or a request is being reviewed.", "small")])
 
-    story.extend([section_break(), p("State findings and evidence", "title"),
+    if linked:
+        key_story = [section_break(force=True), p("Key findings", "title"),
+                     p("What the requirements and completed registry evidence mean together.", "small")]
+        categories = {}
+        for f in combined:
+            if f["priority"] < 4:
+                categories.setdefault(f["finding"], []).append(f["state"])
+        key_story.append(table([["Finding", "States"]] + [[k, ", ".join(v)] for k, v in categories.items()], [260, 268]))
+        if not categories:
+            key_story.append(p("No immediate follow-up task is indicated by the supplied comparison. Continue maintaining established obligations."))
+        plan = [section_break(force=True), p("Prioritized action items", "title"),
+                p("Address first, then clarify upcoming obligations, then review opportunities. Assign an owner and retain the evidence that resolves each item.", "small")]
+        for i, f in enumerate((f for f in combined if f["priority"] < 4), 1):
+            priority_label = {1: "Address first", 2: "Plan or clarify next", 3: "Review opportunity or context"}[f["priority"]]
+            plan.extend([CondPageBreak(110), p(f"{i}. {f['name']} - {f['finding']}", "h3"), p(priority_label, "small"),
+                         labeled("Action:", f["action"]), labeled("Reason:", f["why"])])
+        if not any(f["priority"] < 4 for f in combined):
+            plan.append(p("Maintain current registrations and documented exemptions; reassess when facts change."))
+        story = story[:action_start] + key_story + story[operational_start:coverage_start] + plan + story[forecast_start:operational_start]
+        story.extend([section_break(force=True), p("Detailed state review", "title"),
+                      p("All 50 states and DC are retained. Not checked is distinct from an incomplete search or no registration found.", "small"),
+                      table([["State", "Head Start", "Aurora", "Insight"]] +
+                            [[f["name"], f["requirement"], f["aurora_status"], f["finding"]] for f in combined], [80, 166, 112, 170])])
+    story.extend([section_break(), p("State findings and evidence", "h2" if linked else "title"),
                   p("Each finding separates the returned evidence, CharityClarity Aurora's interpretation and the verification needed. Evidence may include filing information assembled by CharityClarity Aurora; it is not necessarily a status displayed on the public page. Comments and source notes are retained without excerpt truncation.", "small")])
-    for f in findings:
+    detail_findings = sorted(findings, key=lambda f: next(j["priority"] for j in combined if j["state"] == f["state"])) if linked else findings
+    for f in detail_findings:
         row = f["row"]
         start = len(story)
         story.extend([CondPageBreak(155), p(f"{f['state']}  |  {f['label']}", "h2")])
+        if linked:
+            joined = next(j for j in combined if j["state"] == f["state"])
+            h = joined["head_start"]
+            story.extend([labeled("Head Start requirement:", joined["requirement"]), labeled("Basis:", h["why"]),
+                          labeled("Insight recommendation:", joined["action"])])
+            for source in h.get("sources", []):
+                rule_url, _ = safe_source(source["url"])
+                if rule_url:
+                    story.append(p(f'<link href="{escape(rule_url, quote=True)}" color="#0B2A5B">Head Start rule source: {escape(source.get("title", "Official guidance"))}</link>', "small", markup=True))
         url, host = safe_source(row["source_url"])
         link = f'<link href="{escape(url, quote=True)}" color="#0B2A5B">Open {escape(row["state"])} registry</link>' if url else escape(host)
         if row["matched_registry_identifier"]:
@@ -593,7 +823,10 @@ def generate_report(payload, supported_states):
         if row["source_note"]:
             story.append(labeled("Evidence context:", row["source_note"]))
         story.append(labeled("CharityClarity Aurora interpretation:", row["comments"] or "No explanatory comment supplied with the returned status."))
-        story.append(labeled("Verification needed:", verification_needed(row)))
+        verification = verification_needed(row)
+        if linked:
+            verification = verification.replace("Registration obligation: Unknown. ", "Aurora alone does not establish the registration obligation. ")
+        story.append(labeled("Verification needed:", verification))
         for state, when, source_date in freshness([row]):
             try:
                 downloaded = datetime.fromisoformat(when)
@@ -609,29 +842,45 @@ def generate_report(payload, supported_states):
         story.append(Spacer(1, 12))
         # Normal findings stay together so a qualification is not stranded on the
         # next page. Unusually long source fields remain splittable and complete.
-        if sum(len(row[k]) for k in ("comments", "raw_status_text", "source_note")) <= 3000:
+        evidence_size = sum(len(row[k]) for k in ("comments", "raw_status_text", "source_note"))
+        if linked:
+            evidence_size += len(h["why"]) + len(joined["action"]) + sum(len(source.get("title", "Official guidance")) + 45 for source in h.get("sources", []))
+        if evidence_size <= (2800 if linked else 3000):
             story[start:] = [KeepTogether(story[start + 1:])]
-    story.append(p("Report template " + REPORT_VERSION + " | Snapshot version(s): " + versions, "small"))
+    if linked:
+        for f in combined:
+            if f["aurora_row"] is None and f["head_start"]["status"] != "outside" and not f["head_start"].get("deferred"):
+                story.extend([CondPageBreak(100), p(f["name"] + " - registration status not checked", "h3"),
+                              labeled("Head Start:", f["head_start"]["why"]), labeled("Next step:", f["action"])])
+        story.append(p(f"Head Start assessment {linked['assessment_id']} | Engine {linked['engine_version']}. Supplied activity and eligibility facts must be reassessed when they change.", "small"))
+    story.append(p("Report template " + (INSIGHT_VERSION if linked else REPORT_VERSION) + " | Snapshot version(s): " + versions, "small"))
 
     logo = ImageReader(str(ASSETS / "compliance-express.png"))
-    brand = ImageReader(str(ASSETS / "charityclarity-aurora.png"))
+    brand = ImageReader(str(ASSETS / ("charityclarity.png" if linked else "charityclarity-aurora.png")))
+    brand_width, brand_height = brand.getSize()
     page_count = 0
     def page_frame(canvas, document):
         canvas.saveState()
         canvas.drawImage(logo, 42, 747, width=150, height=36.15, mask="auto")
-        canvas.drawImage(brand, 400, 724, width=170, height=170 * 793 / 1983, mask="auto")
+        canvas.drawImage(brand, 400, 731 if linked else 724, width=170, height=170 * brand_height / brand_width, mask="auto")
+        if linked:
+            canvas.setFillColor(NAVY)
+            canvas.setFont("Helvetica-Bold", 10)
+            canvas.drawRightString(570, 722, "Insight")
         canvas.setStrokeColor(colors.HexColor("#DCE3EB"))
         canvas.line(42, 719, 570, 719)
         canvas.setFont("Helvetica", 7.5)
         canvas.setFillColor(MUTED)
         canvas.drawString(42, 33, "www.compliance-express.com  |  info@compliance-express.com")
-        canvas.drawRightString(570, 33, f"CharityClarity Aurora  |  {document.page} / {page_count}")
+        if payload.get("illustrative_example"):
+            canvas.drawString(42, 44, "Illustrative example - no registry checks performed")
+        canvas.drawRightString(570, 33, f"CharityClarity {'Insight' if linked else 'Aurora'}  |  {document.page} / {page_count}")
         canvas.restoreState()
     # Two fresh layout passes preserve variable-length evidence and correct page totals.
     for _ in range(2):
         output = BytesIO()
         doc = SimpleDocTemplate(output, pagesize=(612, 792), leftMargin=42, rightMargin=42,
-                                topMargin=94, bottomMargin=53, title=f"CharityClarity Aurora - {org}", author="Compliance Express")
+                                topMargin=94, bottomMargin=53, title=f"CharityClarity {'Insight' if linked else 'Aurora'} - {org}", author="Compliance Express")
         doc.build(deepcopy(story), onFirstPage=page_frame, onLaterPages=page_frame)
         if page_count:
             assert page_count == doc.page, "Report pagination changed between layout passes"

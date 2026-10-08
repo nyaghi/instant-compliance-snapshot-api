@@ -216,14 +216,48 @@ def final_four_asset(name, text):
           completed = {...completed, reason:"NY_CONNECTOR_NC_RATE_LIMITED"};
         }
         state = completed.ok''')
+    return insight_asset(name, text)
+
+
+def insight_asset(name, text):
+    """Trial-only Head Start/report integration; protected frontend stays frozen."""
+    if not trial_identity() or name != 'index.html':
+        return text
+    text = text.replace('\r\n', '\n')
+    replacements = [
+        ('>Generate report</button>', '>Connect to Insight</button>'),
+        ('    const STAGING_ACCESS_REQUIRED = true;', '    const STAGING_ACCESS_REQUIRED = true;\n    window.CCHeadStartConfig = () => ({apiBase:API_BASE,email:email.value.trim(),passcode:adminPasscode.value.trim(),unlocked:internalUnlocked,generateReport,renderResults});'),
+        ('      unlockButton.textContent = internalUnlocked ? "Unlocked" : "Unlock";', '      unlockButton.textContent = internalUnlocked ? "Unlocked" : "Unlock";\n      window.CCHeadStart?.applyStates();'),
+        ('      generateReportButton.disabled = false;', '      generateReportButton.disabled = false;\n      window.CCHeadStart?.refresh();'),
+        ('        const response = await fetch(`${API_BASE}/api/report`, {', '        await window.CCHeadStart?.save();\n        const response = await fetch(`${API_BASE}/api/report`, {'),
+        ('headers: { "Content-Type": "application/json" },\n          signal: controller.signal,', 'headers: { "Content-Type": "application/json", "Authorization": "Bearer " + adminPasscode.value.trim() },\n          signal: controller.signal,'),
+        ('body: JSON.stringify({ results, email: email.value.trim(), admin_passcode: adminPasscode.value.trim() })', 'body: JSON.stringify({ results, email: email.value.trim(), admin_passcode: adminPasscode.value.trim(), head_start:window.CCHeadStart?.forResults(results) })'),
+        ('link.download = `CharityClarity Aurora-', "link.download = `CharityClarity ${window.CCHeadStart?.forResults(results)?'Insight':'Aurora'}-"),
+        ('generateReportButton.disabled = submitButton.disabled || !latestResults.length;', 'generateReportButton.disabled = !latestResults.length;'),
+        ('      stateCheckboxes.forEach((box) => { box.checked = false; });\n\n      updatePasscodeVisibility();', '      if(!window.CCHeadStart?.hasAssessment())stateCheckboxes.forEach((box) => { box.checked = false; });\n\n      updatePasscodeVisibility();'),
+        ('        const results = await runStateChecks(states, einValue, emailValue, organizationNameValue);', '        await window.CCHeadStart?.save();\n        const results = await runStateChecks(states, einValue, emailValue, organizationNameValue);'),
+        ('</body>', '  <script src="/head-start-bridge.js?v=2.0.0"></script>\n</body>'),
+    ]
+    for old, new in replacements:
+        if text.count(old) != 1:
+            raise RuntimeError('Insight frontend template mismatch: '+old[:100]+'; matches='+str(text.count(old)))
+        text = text.replace(old, new, 1)
     return text
 
 
 def lab_asset(path):
     path = unquote(urlparse(path).path)
+    if path in ('/head-start', '/head-start/'):
+        path = '/head-start/index.html'
+    if path.startswith('/head-start/') or path == '/head-start-bridge.js':
+        root = (ROOT/'deployment/insight').resolve()
+        file = (root/path.lstrip('/')).resolve()
+        if (not file.is_relative_to(root) or file.suffix.lower() not in {'.html','.js','.css','.png','.svg','.ttf'} or not file.is_file()):
+            return None
+        return file.read_bytes(), mimetypes.guess_type(file)[0] or 'application/octet-stream'
     if path == '/connector/final-four-validation.html' and trial_identity():
         return (ROOT/'deployment/final-four-validation.html').read_bytes(), 'text/html'
-    if path in ('/', '/registry-snapshot', '/registry-snapshot/'):
+    if path in ('/', '/registry-snapshot', '/registry-snapshot/', '/instant-compliance-snapshot', '/instant-compliance-snapshot/'):
         path = '/index.html'
     root = (ROOT / 'web-staging').resolve()
     file = (root / path.lstrip('/')).resolve()
@@ -304,7 +338,9 @@ def build_handler(master, key, capacity=None, durable=None):
             if os.environ.get('CE_FINAL_FOUR_TRIAL') == '1':
                 data['trial_access_active'] = trial_identity() is not None
                 data['trial_access_expired'] = trial_access_expired()
-            if trial_identity(): data['trial_release'] = TRIAL_RELEASE_LABEL
+            if trial_identity():
+                data['trial_release'] = TRIAL_RELEASE_LABEL
+                data['insight_report_version'] = '2.0.0'
             body = json.dumps(data).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
@@ -386,7 +422,7 @@ def build_handler(master, key, capacity=None, durable=None):
                 if self.path == '/api/workflow' and durable is not None:
                     from deployment.staging_workflows import handle
                     return handle(master, self, trial_queue=durable)
-                if self.path in ('/api/final-four-connector', '/api/ny-connector', '/api/identity-review', '/api/report'):
+                if self.path in ('/api/final-four-connector', '/api/ny-connector', '/api/identity-review', '/api/report', '/api/head-start'):
                     return super().do_POST()
                 if self.path == '/api/discover-names':
                     # The approved master already bounds concurrent discovery;

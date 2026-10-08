@@ -137,6 +137,7 @@ HOST = os.environ.get("HOST") or ("0.0.0.0" if os.environ.get("PORT") else "127.
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", f"http://127.0.0.1:{PORT}").splitlines()[0]).strip().rstrip("/")
 APP_VERSION = os.environ.get("CE_APP_VERSION", "2026.09.29.1-staging").strip() or "2026.09.29.1-staging"
 REPORT_REQUEST_SEMAPHORE = threading.BoundedSemaphore(2)
+HEAD_START_HANDOFF_LOCK = threading.Lock()
 
 
 def parse_api_url_list(*raw_values: str | None) -> list[str]:
@@ -33290,6 +33291,54 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
             log_error(f"NY connector request failed: {type(exc).__name__}")
             self._send_json(500, {"error": "The New York browser check could not be completed. Retry the check."})
 
+    def _send_head_start_handoff(self) -> None:
+        """Store/retrieve assessments using the existing internal access gate."""
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= 524288:
+                self._send_json(413, {"error": "Head Start input must be at most 512 KB."}); return
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("Invalid Head Start handoff.")
+            email = normalize_email(payload.get("email") or "")
+            passcode = str(payload.get("admin_passcode") or "").strip()
+            access_error = staging_access_error(email, passcode)
+            if access_error or not is_verified_internal_passcode(email, passcode):
+                self._send_json(403, {"error": access_error or "Sign in with authorized Compliance Express access."}); return
+            from charity_clarity_report import validate_head_start
+            import uuid
+            if payload.get("action") == "load":
+                identifier = str(uuid.UUID(payload.get("assessment_id", "")))
+                key = hashlib.sha256((email + "|" + identifier).encode()).hexdigest()
+                path = ARTIFACTS_DIR / "head-start-handoffs" / (key + ".json")
+                if not path.exists():
+                    self._send_json(404, {"error": "This assessment is not available for this sign-in. Import the saved Head Start file."}); return
+                assessment = validate_head_start(json.loads(path.read_text(encoding="utf-8")))
+            elif payload.get("action") == "save":
+                assessment = validate_head_start(payload.get("head_start"))
+                key = hashlib.sha256((email + "|" + assessment["assessment_id"]).encode()).hexdigest()
+                folder = ARTIFACTS_DIR / "head-start-handoffs"
+                folder.mkdir(parents=True, exist_ok=True)
+                path = folder / (key + ".json")
+                body = json.dumps(assessment, sort_keys=True, ensure_ascii=False)
+                # One identifier describes one immutable snapshot. Editing creates a new ID.
+                with HEAD_START_HANDOFF_LOCK:
+                    if path.exists() and json.loads(path.read_text(encoding="utf-8")) != assessment:
+                        raise ValueError("The assessment identifier already belongs to a different snapshot.")
+                    if not path.exists():
+                        temporary = folder / (key + "." + secrets.token_hex(8) + ".tmp")
+                        temporary.write_text(body, encoding="utf-8")
+                        temporary.chmod(0o600)
+                        temporary.replace(path)
+            else:
+                raise ValueError("Choose save or load for this assessment.")
+            self._send_json(200, {"head_start": assessment}, {"Cache-Control": "no-store"})
+        except (ValueError, TypeError, UnicodeError, AttributeError):
+            self._send_json(400, {"error": "The Head Start assessment could not be validated. Keep the original file and review its organization and findings."})
+        except Exception as exc:
+            log_error(f"Head Start handoff failed: {type(exc).__name__}")
+            self._send_json(500, {"error": "The assessment could not be saved. Its browser copy has been retained."})
+
     def _send_snapshot_report(self) -> None:
         # Report rendering is independent of state lookup capacity and performs no registry calls.
         admitted = False
@@ -33509,6 +33558,9 @@ class RegistrySnapshotHandler(BaseHTTPRequestHandler):
         self._send_json(404, {"error": "Open http://127.0.0.1:8765/ to use the registry snapshot page."})
 
     def do_POST(self) -> None:
+        if self.path == "/api/head-start":
+            self._send_head_start_handoff()
+            return
         if self.path == "/api/final-four-connector":
             self._send_final_four_connector()
             return
