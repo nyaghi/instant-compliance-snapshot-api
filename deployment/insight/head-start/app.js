@@ -161,9 +161,8 @@ function connectAurora(e){
  if(!name||name.length>250||!/^\d{9}$/.test(ein)||ein==='000000000'){showErrors('handoffError',['Enter the organization name and a nine-digit EIN.']);return;}
  profile.organizationName=name;profile.ein=ein.slice(0,2)+'-'+ein.slice(2);
  const packet=headStartPacket(name,ein),nonce=crypto.randomUUID();
- const local=['localhost','127.0.0.1'].includes(location.hostname);
  const labOrigin='https://charityclarity-final-four-29-2.onrender.com';
- const destination=new URL(local?(location.port==='8000'?'http://127.0.0.1:8766/instant-compliance-snapshot':new URL('/instant-compliance-snapshot',location.origin).href):new URL('/instant-compliance-snapshot',labOrigin).href);
+ const destination=new URL('/instant-compliance-snapshot',labOrigin);
  destination.hash=new URLSearchParams({hs_sender:location.origin,hs_nonce:nonce}).toString();
  const child=window.open(destination.href,'_blank');
  if(!child){showErrors('handoffError',['Allow this page to open Aurora, then continue again. Your answers are retained.']);return;}
