@@ -1,0 +1,1906 @@
+{
+  "schema_version": "cc.head-start/1",
+  "assessment_id": "4d43f91a-52fa-48f3-a4b4-ef7e04a690d3",
+  "organization_name": "Example Regional Hospital",
+  "ein": "012345678",
+  "assessed_at": "2026-10-08T01:41:54.942Z",
+  "engine_version": "0.11.0-dev",
+  "ui_version": "0.19.0",
+  "profile": {
+    "taxStatus": "recognized501c3",
+    "screeningMode": "activity",
+    "type": "hospital",
+    "base": "PA",
+    "incorporation": "PA",
+    "homeOnly": "no",
+    "target": [
+      "PA",
+      "HI",
+      "CA",
+      "CT",
+      "CO",
+      "WA",
+      "NY"
+    ],
+    "online": "yes",
+    "onlineReach": "public",
+    "onlineNationwide": "no",
+    "fiscalActual": 250000,
+    "donorStates": [],
+    "operations": [
+      "WA"
+    ],
+    "registered": [],
+    "bankStates": [],
+    "receipts": {},
+    "solicitor": "no",
+    "consultant": "no",
+    "paidStaff": "no",
+    "coVenturer": "no",
+    "hospitalLicense": "yes",
+    "caPrimaryInstitution": "yes",
+    "paHospitalRegulated": "yes",
+    "waTrustAssets": 300000,
+    "waTrustExempt": "no",
+    "coFiscalGross": 15000,
+    "coExpectedGross": 20000
+  },
+  "requirements": [
+    {
+      "connectionConfirmed": false,
+      "code": "AL",
+      "name": "Alabama",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://www.alabamaag.gov/licensing-registration/charitable-organizations/",
+          "title": "Attorney General · charitable organizations"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://www.alabamaag.gov/licensing-registration/charitable-organizations/"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "Religious, educational and certain other categories may qualify. Review the exact statutory category and exemption portal.",
+        "The statutory small-charity exemption is supported when all conditions are met. Confirm any category-specific agency claim procedure; a universal mandatory exemption claim has not been established."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "AK",
+      "name": "Alaska",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://law.alaska.gov/department/civil/consumer/charityreg.html",
+          "title": "Department of Law · registration"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://law.alaska.gov/department/civil/consumer/charityreg.html"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "Religious, educational and certain membership organizations have exclusions. Confirm eligibility.",
+        "Small organization and limited donor exemptions have additional conditions; not automated in this version."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "AZ",
+      "name": "Arizona",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://azsos.gov/business/other-services/veterans-charities-organizations",
+          "title": "Secretary of State · veterans charities"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-03",
+      "notes": [
+        "Ordinary charitable solicitation has no general Secretary of State registration. Veterans fundraising has a separate program.",
+        "Veterans status must be assessed before a negative result."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "AR",
+      "name": "Arkansas",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://www.sos.arkansas.gov/uploads/bcs/SoS_-CharitableRegistrationInArkansas_5.2025_.pdf",
+          "title": "Secretary of State · registration guide"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://www.sos.arkansas.gov/uploads/bcs/SoS_-CharitableRegistrationInArkansas_5.2025_.pdf"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "Exempt organizations submit EX-01 verification. School approval and hospital licensing matter.",
+        "Submit EX-01 with supporting eligibility evidence."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": true,
+      "code": "CA",
+      "name": "California",
+      "status": "exemption",
+      "why": "The supplied eligibility facts support this institutional exemption or exclusion. Documents and current registry standing have not been verified.",
+      "action": "California exempts qualifying primary religious, educational and hospital institutions by law. A supporting foundation must qualify in its own right; affiliation alone is insufficient. A written exemption review with organizing documents and the IRS letter is available if confirmation is needed; do not submit it through the Online Filing Service.",
+      "sources": [
+        {
+          "url": "https://oag.ca.gov/charities/initial-reg",
+          "title": "Attorney General · initial registration"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://oag.ca.gov/charities/initial-reg"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "Organizations primarily religious, educational or hospital based may be excluded; case by case review is available.",
+        "Assets, activities and solicitation can trigger registration. Generally file within 30 days after initial receipt of charitable assets; no general small dollar exemption."
+      ],
+      "ruleIds": [
+        "CA.registration-trigger",
+        "CA.institution-qualified"
+      ],
+      "inputs": [
+        "caPrimaryInstitution"
+      ],
+      "registrationTrigger": true,
+      "filing": "optional",
+      "filingLabel": "Exemption appears applicable · confirmation optional",
+      "label": "Exemption appears applicable · confirmation optional",
+      "nextSteps": [
+        {
+          "title": "Review your appeal materials",
+          "text": "Check this state’s disclosure wording for websites, email, printed appeals, receipts and paid campaigns. Registration is not a state endorsement. Do not copy one state’s wording across all appeals.",
+          "url": "https://oag.ca.gov/charities/initial-reg"
+        }
+      ],
+      "exemption_evidence": "answers",
+      "possible_exemption": true,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": true,
+      "code": "CO",
+      "name": "Colorado",
+      "status": "exemption",
+      "why": "The supplied actual and intended nationwide adjusted gross revenue is no more than $25,000, supporting Colorado’s small organization route. This is a revenue test, not a test of Colorado donations alone.",
+      "action": "Keep evidence of actual and intended adjusted gross revenue of no more than $25,000 and no contracted paid solicitor. Colorado excludes government and 501(c)(3) grants from this revenue test; this is not a contribution-only test.",
+      "sources": [
+        {
+          "url": "https://www.sos.state.co.us/CCR/GenerateRulePdf.do?fileName=8+CCR+1505-9&ruleVersionId=5762",
+          "title": "Secretary of State · 8 CCR 1505-9"
+        },
+        {
+          "url": "https://www.sos.state.co.us/pubs/info_center/laws/Title6/Title6Article16.html",
+          "title": "Agency or statutory companion guidance"
+        },
+        {
+          "url": "https://www.sos.state.co.us/pubs/charities/FAQ/registration.html",
+          "title": "Current Colorado registration and exemption FAQ"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://www.sos.state.co.us/pubs/charities/FAQ/registration.html"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "Church and specified church-related categories require the federal religious return exclusion. No blanket school or university exemption is assumed. The small dollar exemption uses adjusted gross revenue, not contributions alone; the separate ten-person receipt route needs review.",
+        "Keep evidence of actual and intended adjusted gross revenue of no more than $25,000 and no contracted paid solicitor. Colorado excludes government and 501(c)(3) grants from this revenue test; this is not a contribution-only test."
+      ],
+      "ruleIds": [
+        "CO.registration-trigger",
+        "CO.small-candidate"
+      ],
+      "inputs": [
+        "coPersonsActual",
+        "noSolicitor",
+        "coFiscalGross",
+        "coExpectedGross",
+        "noSolicitor"
+      ],
+      "registrationTrigger": true,
+      "filing": "none",
+      "filingLabel": "Exemption appears applicable · no filing",
+      "label": "Exemption appears applicable · no filing",
+      "nextSteps": [
+        {
+          "title": "Review your appeal materials",
+          "text": "Check this state’s disclosure wording for websites, email, printed appeals, receipts and paid campaigns. Registration is not a state endorsement. Do not copy one state’s wording across all appeals.",
+          "url": "https://www.sos.state.co.us/CCR/GenerateRulePdf.do?fileName=8+CCR+1505-9&ruleVersionId=5762"
+        }
+      ],
+      "exemption_evidence": "answers",
+      "possible_exemption": true,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": true,
+      "code": "CT",
+      "name": "Connecticut",
+      "status": "exemption",
+      "why": "The supplied eligibility facts support this institutional exemption or exclusion. Documents and current registry standing have not been verified.",
+      "action": "Submit Form CPC-54 to claim the exemption. Five years after approval and every five years thereafter, send a signed continued-eligibility letter updating officer/contact details under 21a-190k-3(d). This is not an annual exemption renewal.",
+      "sources": [
+        {
+          "url": "https://portal.ct.gov/dcp/charities/general-information-on-the-connecticut-solicitation-of-charitable-funds-act",
+          "title": "Consumer Protection · solicitation act"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-03",
+      "notes": [
+        "An exemption claim uses the agency exemption process; accredited education and nonprofit hospital criteria matter.",
+        "Small exemption uses worldwide contributions below $50,000 in two of the last three years; newer charities need a good faith estimate. CPC-54 is required to claim an exemption."
+      ],
+      "ruleIds": [
+        "CT.registration-trigger",
+        "CT.institution-qualified"
+      ],
+      "inputs": [
+        "hospitalLicense"
+      ],
+      "registrationTrigger": true,
+      "filing": "application",
+      "filingLabel": "Submit an exemption claim",
+      "label": "Submit an exemption claim",
+      "nextSteps": [
+        {
+          "title": "Keep exemption eligibility current",
+          "text": "CPC-54 is the initial claim. Five years after approval and every five years thereafter, submit a signed letter confirming continued eligibility and updating officers/contact details. There is no annual exemption renewal.",
+          "url": "https://eregulations.ct.gov/eRegsPortal/Search/getDocument?guid=%7BA0A84A6D-0500-CCCF-8086-851A96A08902%7D"
+        },
+        {
+          "title": "Prepare the initial filing",
+          "text": "Use the agency’s current form or portal. Gather the IRS determination letter, organizing documents and supporting eligibility evidence. A Unified Registration Statement does not replace state-specific requirements.",
+          "url": "https://portal.ct.gov/dcp/charities/general-information-on-the-connecticut-solicitation-of-charitable-funds-act"
+        },
+        {
+          "title": "Review your appeal materials",
+          "text": "Check this state’s disclosure wording for websites, email, printed appeals, receipts and paid campaigns. Registration is not a state endorsement. Do not copy one state’s wording across all appeals.",
+          "url": "https://portal.ct.gov/dcp/charities/general-information-on-the-connecticut-solicitation-of-charitable-funds-act"
+        }
+      ],
+      "exemption_evidence": "answers",
+      "possible_exemption": true,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "DE",
+      "name": "Delaware",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://www.irs.gov/charities-non-profits/delaware",
+          "title": "IRS · Delaware state requirements"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-03",
+      "notes": [
+        "No general charitable solicitation registration statute is identified. Private foundation and other entity filings remain separate.",
+        "This assessment does not cover federal or corporate annual filings."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "DC",
+      "name": "District of Columbia",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "title": "DC Code 44-1703 · registration and exceptions",
+          "url": "https://code.dccouncil.gov/us/dc/council/code/sections/44-1703"
+        },
+        {
+          "title": "DLCP charitable services licensing",
+          "url": "https://dlcp.dc.gov/page/charitable-services-business-0"
+        }
+      ],
+      "coverage": "Core solicitation framework verified; exemptions evaluated separately",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "Covered solicitation requires a District charitable solicitation license unless a statutory or regulatory exemption applies.",
+        "Church-controlled and membership-only solicitations have distinct exclusions. The statutory ceiling for regulatory small-solicitation relief is inflation-adjusted; do not assume a fixed $25,000 exemption."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "FL",
+      "name": "Florida",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://www.fdacs.gov/Business-Services/Solicitation-of-Contributions",
+          "title": "FDACS · solicitation of contributions"
+        },
+        {
+          "url": "https://www.fdacs.gov/Consumer-Resources/Charities/Charities-FAQ/Do-all-fundraising-organizations-have-to-register-with-the-state",
+          "title": "Agency or statutory companion guidance"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-03",
+      "notes": [
+        "Religious and qualifying educational institutions are excluded. Small charities use an annual small organization application, not a filing free exemption.",
+        "Small application: less than $50,000 in the preceding fiscal year, volunteer fundraising, no officer or member income, and no professional solicitor, consultant or commercial co-venturer."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [
+        {
+          "title": "Confirm Florida’s connection",
+          "text": "An untargeted out-of-state donation page does not by itself establish Florida targeting or blanket clearance. Confirm actual Florida appeals, receipts, business or other connections before assigning a filing route.",
+          "url": "https://www.fdacs.gov/business-services/solicitation-of-contributions"
+        }
+      ],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "GA",
+      "name": "Georgia",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://sos.ga.gov/sites/default/files/2022-02/charity_org_info_release_revised_november_20185.pdf",
+          "title": "Secretary of State · charity guidance"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://sos.ga.gov/page/charities-division-faq"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "Review religious and educational definitions. Retain documentation for any statutory exemption.",
+        "Document the previous and current calendar year totals and the absence of a paid solicitor."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": true,
+      "code": "HI",
+      "name": "Hawaii",
+      "status": "exemption",
+      "why": "The supplied eligibility facts support this institutional exemption or exclusion. Documents and current registry standing have not been verified.",
+      "action": "Apply through Hawaii’s charity exemption system and obtain the Attorney General’s approval before relying on the exemption. Retain the determination.",
+      "sources": [
+        {
+          "url": "https://ag.hawaii.gov/tax/files/2019/10/Frequently-Asked-Questions.pdf",
+          "title": "Attorney General · charity FAQ"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-03",
+      "notes": [
+        "Exemption application available for qualifying religious, accredited educational and licensed nonprofit hospital organizations.",
+        "Applications to government or other 501(c)(3) grantmakers are excluded from solicitation; these grants are also excluded from contribution totals. Guidance document dated 2019."
+      ],
+      "ruleIds": [
+        "HI.registration-trigger",
+        "HI.institution-qualified"
+      ],
+      "inputs": [
+        "hospitalLicense"
+      ],
+      "registrationTrigger": true,
+      "filing": "application",
+      "filingLabel": "Submit an exemption claim",
+      "approvalRequired": true,
+      "label": "Submit an exemption claim",
+      "nextSteps": [
+        {
+          "title": "Prepare the initial filing",
+          "text": "Use the agency’s current form or portal. Gather the IRS determination letter, organizing documents and supporting eligibility evidence. A Unified Registration Statement does not replace state-specific requirements.",
+          "url": "https://ag.hawaii.gov/tax/files/2019/10/Frequently-Asked-Questions.pdf"
+        },
+        {
+          "title": "Review your appeal materials",
+          "text": "Check this state’s disclosure wording for websites, email, printed appeals, receipts and paid campaigns. Registration is not a state endorsement. Do not copy one state’s wording across all appeals.",
+          "url": "https://ag.hawaii.gov/tax/files/2019/10/Frequently-Asked-Questions.pdf"
+        }
+      ],
+      "exemption_evidence": "answers",
+      "possible_exemption": true,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "ID",
+      "name": "Idaho",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://www.nasconet.org/survey-map",
+          "title": "NASCO · state charities registration survey"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-03",
+      "notes": [
+        "Idaho has no general charitable solicitation registration requirement. This matches the supplied booklet and the current NASCO survey.",
+        "Other entity, tax, local solicitation or special activity requirements are outside this general registration conclusion."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "IL",
+      "name": "Illinois",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://illinoisattorneygeneral.gov/Consumer-Protection/Charities/Building-Better-Charities/Forming-Charitable-Organizations/",
+          "title": "Attorney General · forming charities"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://illinoisattorneygeneral.gov/Page-Attachments/ILCharitableOrganizLaws.pdf"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "An educational annual reporting exemption does not itself eliminate initial registration. Religious exclusions require a separate review.",
+        "Solicitation and holding charitable assets are separate triggers. Reporting relief and initial registration must be assessed separately."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "IN",
+      "name": "Indiana",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://secure.in.gov/attorneygeneral/consumer-protection-division/charities-and-donors/charitable-fundraising/",
+          "title": "Attorney General · fundraising"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-03",
+      "notes": [
+        "No general charity registration program is identified; professional solicitor registration and campaign obligations are separate.",
+        "Paid fundraising triggers an additional review, not an automatic charity registration conclusion."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "IA",
+      "name": "Iowa",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://www.iowaattorneygeneral.gov/for-businesses/charities-nonprofits-fundraising-information",
+          "title": "Attorney General · charity information"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-03",
+      "notes": [
+        "General charity solicitation registration is not the core filing; professional fundraiser and charitable trust duties require separate assessment.",
+        "Charitable assets or private foundation activity are referred for review."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "KS",
+      "name": "Kansas",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://www.kslegislature.gov/b2023_24/laws/017_000_0000_chapter/017_017_0000_article/017_017_0062_section/017_017_0062_k/",
+          "title": "Kansas Legislature · section 17-1762"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://www.kslegislature.gov/b2025_26/laws/017_000_0000_chapter/017_017_0000_article/017_017_0062_section/017_017_0062_k/"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "Statutory exclusions include qualifying education, religious and Kansas licensed medical organizations.",
+        "Retain actual and intended tax-period contributions and unpaid fundraising evidence. You may ask the Attorney General for written confirmation if needed."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "KY",
+      "name": "Kentucky",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://www.ag.ky.gov/Resources/Consumer-Resources/charity/Pages/faq.aspx",
+          "title": "Attorney General · charities FAQ"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://www.ag.ky.gov/Resources/Consumer-Resources/charity/Pages/registration.aspx"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "Kentucky uses a Form 990 submission framework rather than a conventional application.",
+        "The federal return requirement and KRS 367.660 exemptions must be confirmed, including 990-N treatment."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "LA",
+      "name": "Louisiana",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://www.ag.state.la.us/Charity/",
+          "title": "Attorney General · charities"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-03",
+      "notes": [
+        "Organizations using professional solicitors have an annual registration obligation before solicitation.",
+        "A paid employee or consultant can require a definition review; do not assume all paid roles are identical."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "ME",
+      "name": "Maine",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://www.legislature.maine.gov/legis/statutes/9/title9sec5006.html",
+          "title": "Maine Legislature · section 5006"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://www.legislature.maine.gov/legis/statutes/9/title9sec5006.html"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "Exemption eligibility and required statement must be confirmed under section 5006.",
+        "Dollar and limited donor exemptions are not automated; professional solicitor use and private benefit matter."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "MD",
+      "name": "Maryland",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://sos.maryland.gov/Charity/Pages/Registering-Charity.aspx",
+          "title": "Secretary of State · registering a charity"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://sos.maryland.gov/documents/exemptorganizationfund.pdf"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "Small organizations can still have an Exempt Organization Fundraising Notice obligation.",
+        "Submit Maryland’s annual Exempt Organization Fund-Raising Notice with the financial evidence. This is simplified paperwork, not filing-free clearance."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "MA",
+      "name": "Massachusetts",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://www.mass.gov/info-details/frequently-asked-questions-about-charitable-organizations",
+          "title": "Attorney General · charity FAQ"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://www.mass.gov/regulations/940-CMR-200-regulations-of-the-director-of-public-charities"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "Religious exclusions require eligibility review; charity registration and public solicitation certificate duties differ.",
+        "Assets and conducting charitable activity can create obligations apart from appeals. No general small dollar exclusion is automated."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "MI",
+      "name": "Michigan",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://www.michigan.gov/consumerprotection/about/frequently-asked-questions/faq-categories-folder/charity-pfr-ps-questions",
+          "title": "Attorney General · charity FAQ"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://www.michigan.gov/consumerprotection/-/media/Project/Websites/AG/charities/registration-forms/Request-for-Exemption-CTS-3.pdf"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "Separate solicitation licensing and charitable assets registration. School exclusions can depend on Michigan approval.",
+        "Submit CTS-03 with financial evidence and the schedule of government and restricted foundation grants excluded from the any-12-month contribution test. This route exempts solicitation only; charitable trust registration is assessed separately."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "MN",
+      "name": "Minnesota",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://www.revisor.mn.gov/statutes/cite/309.515",
+          "title": "Minnesota Legislature · section 309.515"
+        },
+        {
+          "url": "https://www.ag.state.mn.us/Consumer/Handbooks/CharitiesLaws/CH2.asp",
+          "title": "Agency or statutory companion guidance"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://www.revisor.mn.gov/statutes/cite/309.515"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "An exemption notice and supporting facts may be needed; private foundation trust rules are separate.",
+        "Confirm the exemption notice and supporting documentation with the Attorney General."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "MS",
+      "name": "Mississippi",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://sos.ms.gov/sites/default/files/charities/MS%20Charities%20Act%20Rules%20-%20September%202025.pdf",
+          "title": "Secretary of State · September 2025 rules"
+        },
+        {
+          "url": "https://online.sos.ms.gov/online/portal/ch/page/instructions/Portal.aspx",
+          "title": "Agency or statutory companion guidance"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://charities.sos.ms.gov/online/portal/default/page/instructions/Portal.aspx"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "Check exemption certificate eligibility and changes under Rule 2.07.",
+        "Rule 2.08: local bank or address, paid targeting, or online receipts or intended receipts at least $25,000 OR at least 25 distinct resident donors."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "MO",
+      "name": "Missouri",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://ago.mo.gov/get-help/programs-services-from-a-z/charity/for-nonprofits/registration-faqs/",
+          "title": "Attorney General · registration FAQ"
+        },
+        {
+          "url": "https://ago.mo.gov/get-help/programs-services-from-a-z/charity/for-nonprofits/registration-faqs/",
+          "title": "Current Missouri registration FAQs"
+        },
+        {
+          "url": "https://ago.mo.gov/get-help/programs-services-from-a-z/charity/for-nonprofits/",
+          "title": "Optional agency exemption letter request"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-03",
+      "notes": [
+        "Recognized 501(c)(3) organizations need not register. The agency offers an exemption confirmation letter if needed; attach the IRS determination to the request.",
+        "An IRS determination letter can be supplied for confirmation; other entity duties remain separate."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "MT",
+      "name": "Montana",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://www.nasconet.org/survey-map",
+          "title": "NASCO · state charities registration survey"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-03",
+      "notes": [
+        "Montana has no general charitable solicitation registration requirement. This matches the supplied booklet and the current NASCO survey.",
+        "Montana entity annual reporting is separate. Fundraising in another state is assessed under that state’s rules."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "NE",
+      "name": "Nebraska",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://sos.nebraska.gov/licensing/information-charitable-solicitors",
+          "title": "Secretary of State · charitable solicitors"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-03",
+      "notes": [
+        "Charitable organizations no longer register under the solicitor program. Paid solicitor requirements remain.",
+        "Review professional fundraising separately."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "NV",
+      "name": "Nevada",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://nvsos.gov/index.aspx?page=1344",
+          "title": "Secretary of State · nonprofit solicitation"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://www.leg.state.nv.us/NRS/NRS-082A.html"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "Charitable solicitation statement and disclosure obligations differ. Churches and limited person appeals have exclusions.",
+        "An exemption statement may still be filed. Fewer than 15 persons and entity registration are not automated here."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "NH",
+      "name": "New Hampshire",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://gc.nh.gov/rules/state_agencies/jus400.html",
+          "title": "NH administrative rules · Jus 400"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://gc.nh.gov/rsa/html/I/7/7-19.htm"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "Religious exclusions require review. Foreign organizations are assessed for reasonable contacts; domestic organizations have trust unit obligations.",
+        "Reasonable contacts include operations, targeting, or repeated, ongoing or substantial receipts. No numeric online safe harbor is assumed."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "NJ",
+      "name": "New Jersey",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://www.njconsumeraffairs.gov/charities/pages/charities-registration-information.aspx",
+          "title": "Consumer Affairs · registration"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://www.njconsumeraffairs.gov/charities/Pages/FAQ.aspx"
+        },
+        {
+          "title": "Enacted section 45:17A-26 · State Law Library legislative record",
+          "url": "https://repo.njstatelib.org/server/api/core/bitstreams/7cca27f9-e045-4ab3-b229-0538f1a4a7f7/content"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "Operating, being based or soliciting in New Jersey can matter. Verify statutory exemptions.",
+        "Amount and role conditions can support the statutory exemption. Confirm Consumer Affairs’ category-specific claim procedure before assuming no filing. Exactly $10,000 meets the amount condition; monitor current-year crossings separately."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "NM",
+      "name": "New Mexico",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://www.nmag.gov/get-help/charities/",
+          "title": "Department of Justice · charities"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://nmag.gov/get-help/charities/"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "Religious and educational exclusions have defined conditions.",
+        "Existing, operating or soliciting can create obligations; no small dollar exemption is automated."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": true,
+      "code": "NY",
+      "name": "New York",
+      "status": "review",
+      "why": "A small organization route may be available, but contribution periods or compensation facts are incomplete.",
+      "action": "Complete the contribution totals and eligibility facts; then confirm the statutory definition and filing route.",
+      "sources": [
+        {
+          "url": "https://ag.ny.gov/resources/government-organizations/charities-nonprofits-fundraisers/charities-registration",
+          "title": "Attorney General · registration"
+        },
+        {
+          "url": "https://ag.ny.gov/sites/default/files/regulatory-documents/online-reg-useguide.pdf",
+          "title": "New York contributions basis and separate registration categories"
+        },
+        {
+          "url": "https://www.nysenate.gov/legislation/laws/EXC/172-A",
+          "title": "Article 7-A exemptions and paid fundraising restrictions"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://ag.ny.gov/sites/default/files/regulatory-documents/Regs-F.pdf"
+        },
+        {
+          "title": "EPTL hospital exclusion",
+          "url": "https://www.nysenate.gov/legislation/laws/EPT/8-1.4"
+        },
+        {
+          "title": "Separate solicitation exemptions",
+          "url": "https://www.nysenate.gov/legislation/laws/EXC/172-A"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "Article 7-A solicitation and EPTL trust registration are separate. Exemptions can apply to one and not the other.",
+        "Confirm the Article 7-A small solicitation exemption using New York contributions and no professional fundraiser or fundraising counsel. A separate EPTL charitable assets registration may still apply. Under section 91.3, confirmation is optional unless the Attorney General sends a failure-to-register notice.",
+        "Hospital eligibility can remove EPTL registration; it does not by itself remove Article 7-A solicitation registration."
+      ],
+      "ruleIds": [
+        "NY.registration-trigger",
+        "NY.small-missing-facts"
+      ],
+      "inputs": [
+        "hospitalLicense",
+        "nyFiscalActual",
+        "nyFiscalExpected",
+        "noProfessional"
+      ],
+      "partialExemptions": [
+        "Hospital eligibility can remove EPTL registration; it does not by itself remove Article 7-A solicitation registration."
+      ],
+      "registrationTrigger": true,
+      "nextSteps": [
+        {
+          "title": "Review your appeal materials",
+          "text": "Check this state’s disclosure wording for websites, email, printed appeals, receipts and paid campaigns. Registration is not a state endorsement. Do not copy one state’s wording across all appeals.",
+          "url": "https://ag.ny.gov/resources/government-organizations/charities-nonprofits-fundraisers/charities-registration"
+        }
+      ],
+      "exemption_evidence": null,
+      "possible_exemption": true,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "NC",
+      "name": "North Carolina",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://www.sosnc.gov/divisions/charities/exemptions",
+          "title": "Secretary of State · exemptions"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-03",
+      "notes": [
+        "Written exemption requests require supporting evidence; hospital licensing and educational accreditation matter.",
+        "Small exemption: less than $50,000 in a calendar year with no compensation to officers, trustees, organizers, incorporators, fundraisers or solicitors."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "ND",
+      "name": "North Dakota",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://www.sos.nd.gov/business/nonprofit-services/charitable-organizations",
+          "title": "Secretary of State · charitable organizations"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://www.legis.nd.gov/cencode/t50c22.pdf"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "Qualifying schools, higher education appeals and religious organizations exempt from federal annual returns are excluded.",
+        "Charity registration and nonprofit entity annual reports are separate. No general small dollar exclusion is automated."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "OH",
+      "name": "Ohio",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://charitable.ohioago.gov/Charity-Registration",
+          "title": "Attorney General · charity registration"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://codes.ohio.gov/ohio-administrative-code/rule-109:1-1-02"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "Charitable trust and solicitation rules must be assessed separately; submit exemption evidence through the state portal.",
+        "Document adjusted gross revenue for the immediately preceding fiscal year, excluding government and 501(c) grants, and the compensation facts. This exempts solicitation only; Ohio charitable trust registration remains separate."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "OK",
+      "name": "Oklahoma",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "title": "Attorney General · current solicitation requirements and exclusions",
+          "url": "https://oklahoma.gov/oag/about/divisions/charity-enforcement.html"
+        },
+        {
+          "title": "Secretary of State · charitable organizations",
+          "url": "https://www.sos.ok.gov/charity/Default.aspx"
+        },
+        {
+          "title": "Attorney General · applicable statutory exclusions",
+          "url": "https://oklahoma.gov/oag/about/divisions/charity-enforcement.html"
+        }
+      ],
+      "coverage": "Core solicitation framework verified; exemptions evaluated separately",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "Covered solicitation requires Secretary of State registration unless section 552.4 applies. Federal 501(c)(3) status is not a state registration exemption.",
+        "The $10,000 figure does not provide a general small-charity exemption. Religious, educational and other statutory categories have qualifying conditions. Use the actual institutional criteria; no blanket small-dollar exclusion is applied."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "OR",
+      "name": "Oregon",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://www.doj.state.or.us/charitable-activities/starting-or-closing-a-charity/registering-a-new-charity/",
+          "title": "Department of Justice · registering a charity"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://www.oregonlegislature.gov/bills_laws/ors/ors128.html"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "Foreign organizations can be covered by solicitation, assets or business activity.",
+        "No general small dollar exemption is automated. Review religious eligibility independently."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": true,
+      "code": "PA",
+      "name": "Pennsylvania",
+      "status": "exemption",
+      "why": "The supplied eligibility facts support this institutional exemption or exclusion. Documents and current registry standing have not been verified.",
+      "action": "No solicitation registration filing is indicated if the regulated hospital route applies. BCO-9 is available for optional agency confirmation.",
+      "sources": [
+        {
+          "url": "https://www.pa.gov/agencies/dos/programs/charities/excluded-or-exempt-organizations",
+          "title": "Department of State · exclusions and exemptions"
+        },
+        {
+          "url": "https://www.pa.gov/agencies/dos/programs/charities/information-for-charities/purely-public-charities",
+          "title": "Agency or statutory companion guidance"
+        },
+        {
+          "url": "https://www.legis.state.pa.us/WU01/LI/LI/US/HTM/1990/0/0202..HTM",
+          "title": "Pennsylvania Solicitation Act · section 3 religious exclusion"
+        },
+        {
+          "url": "https://www.pa.gov/agencies/dos/programs/charities/information-for-charities/-charitable-organizations",
+          "title": "Institutional eligibility and filing procedure"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-03",
+      "notes": [
+        "Hospital licensing, school approval and other category conditions must be verified. Purely public charity filings can be separate.",
+        "Small exemption: gross national contributions no more than $25,000 with no compensated solicitation."
+      ],
+      "ruleIds": [
+        "PA.registration-trigger",
+        "PA.institution-qualified"
+      ],
+      "inputs": [
+        "paHospitalRegulated"
+      ],
+      "registrationTrigger": true,
+      "filing": "optional",
+      "filingLabel": "Exemption appears applicable · confirmation optional",
+      "label": "Exemption appears applicable · confirmation optional",
+      "nextSteps": [
+        {
+          "title": "Separate Pennsylvania public-charity filing",
+          "text": "If you receive or claim Pennsylvania property or sales tax exemption, review the separate annual purely-public-charity report. Solicitation relief alone does not remove it. Exceptions include qualifying religious no-990 institutions, or contributions below $25,000 AND program revenue below $5 million.",
+          "url": "https://www.pa.gov/agencies/dos/programs/charities/information-for-charities/purely-public-charities"
+        },
+        {
+          "title": "Keep entity filings separate",
+          "text": "Check corporate formation or foreign qualification for your operations. A charity registration does not itself create authority to do business. A corporate registered agent and a charity service-of-process contact serve different filings.",
+          "url": "https://www.pa.gov/agencies/dos/programs/charities/excluded-or-exempt-organizations"
+        },
+        {
+          "title": "Review your appeal materials",
+          "text": "Check this state’s disclosure wording for websites, email, printed appeals, receipts and paid campaigns. Registration is not a state endorsement. Do not copy one state’s wording across all appeals.",
+          "url": "https://www.pa.gov/agencies/dos/programs/charities/excluded-or-exempt-organizations"
+        }
+      ],
+      "exemption_evidence": "answers",
+      "possible_exemption": true,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "RI",
+      "name": "Rhode Island",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://dbr.ri.gov/banking-securities-and-charitable-organizations/securities-and-charities/charitable-organizations",
+          "title": "Business Regulation · charities"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://webserver.rilegislature.gov/Statutes/TITLE5/5-53.1/5-53.1-3.htm"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "Statutory exemptions are self executing; the agency does not grant or approve exemption requests.",
+        "Document the self executing statutory exclusion, absence of professional fundraising and absence of officer or member benefit; monitor actual and intended receipts."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "SC",
+      "name": "South Carolina",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://sos.sc.gov/online-filings/charities-pfrs-and-raffles/charities",
+          "title": "Secretary of State · charities"
+        },
+        {
+          "url": "https://www.scstatehouse.gov/code/t33c056.php",
+          "title": "Religious exclusion versus annual exemption · sections 33-56-20 and 33-56-50"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://www.scstatehouse.gov/sess126_2025-2026/bills/715.htm"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "Qualifying religious entities are excluded under section 33-56-20 and do not use the annual exemption application. Section 33-56-50 educational and small organization exemptions require annual applications.",
+        "Act 170 (effective May 18, 2026): fiscal gross revenue up to $10,000 regardless of professional fundraising, or up to $25,000 with the specified compensation and provider conditions. Annual exemption application remains required."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "SD",
+      "name": "South Dakota",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://consumer.sd.gov/fastfacts/charity.aspx",
+          "title": "Consumer Protection · charities"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-03",
+      "notes": [
+        "No general charity registration program is identified. Paid telephone solicitation has separate obligations.",
+        "Paid fundraising is referred for campaign review."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "TN",
+      "name": "Tennessee",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://sos-tn-gov-files.tnsosfiles.com/forms/Charitable%20Solicitations%20Act.pdf",
+          "title": "Secretary of State · solicitation act"
+        },
+        {
+          "url": "https://publications.tnsosfiles.com/rules/1360/1360-03/1360-03-01.20241208.pdf",
+          "title": "Internet solicitation rules · definitions and rule .07"
+        },
+        {
+          "title": "2024 enacted definitions · Public Chapter 533",
+          "url": "https://publications.tnsosfiles.com/acts/113/pub/pc0533.pdf"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-03",
+      "notes": [
+        "Qualifying religious, educational and Tennessee regulated healthcare organizations can be exempt.",
+        "Internet: 100 resident online contributions OR $25,000 in a year. Targeting and domicile are independent triggers. Small fiscal public contributions exemption up to $50,000 requires an annual statement."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "TX",
+      "name": "Texas",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://www.texasattorneygeneral.gov/divisions/charitable-trusts/registration-and-filings",
+          "title": "Attorney General · registration and filings"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-03",
+      "notes": [
+        "Most charities have no general solicitation filing. Veterans, law enforcement, public safety and private foundation filings require separate review.",
+        "Special purpose telephone appeals must be assessed before a negative result."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "UT",
+      "name": "Utah",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://commerce.utah.gov/dcp/for-businesses/charities/",
+          "title": "Commerce · charities"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://commerce.utah.gov/dcp/for-businesses/charities/"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "DCP charity licensing ended in 2024. Entity registration and annual IRS return submissions through the corporations division can still apply.",
+        "Do not interpret the end of DCP licensing as no state obligations."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "VT",
+      "name": "Vermont",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://ago.vermont.gov/attorney-generals-office-divisions-and-units/consumer-protection/charities-and-paid-fundraisers",
+          "title": "Attorney General · paid fundraisers"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-03",
+      "notes": [
+        "No general charity registration program is identified; paid fundraiser notices and requirements remain separate.",
+        "Review professional fundraising contracts and campaigns."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "VA",
+      "name": "Virginia",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://www.vdacs.virginia.gov/food-charitable-solicitation.shtml",
+          "title": "VDACS · charitable solicitation"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://law.lis.virginia.gov/vacode/title57/chapter5/section57-60/"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "Exclusions and exemption applications differ. Verify Form 100 and statutory eligibility.",
+        "Submit Virginia Form 100 to request the exemption letter. Use each of the three preceding calendar years and the current calendar year, rather than a rough annual estimate."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": true,
+      "code": "WA",
+      "name": "Washington",
+      "status": "required",
+      "why": "Income-producing trust assets exceed $250,000; Washington’s separate trust exclusions must be assessed.",
+      "action": "Confirm the trust instrument and religious, remainder or accredited-public-education exclusion; register the trust if no exclusion applies.",
+      "sources": [
+        {
+          "url": "https://www.sos.wa.gov/corporations-charities/frequently-asked-questions-faqs/charitable-organizations-frequently-asked-questions",
+          "title": "Secretary of State · charity FAQ"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://www.sos.wa.gov/corporations-charities/frequently-asked-questions-faqs/charitable-organizations-frequently-asked-questions"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "Church eligibility requires IRS church status, not merely a religious mission.",
+        "Retain evidence of the contribution total and that all activities are unpaid."
+      ],
+      "ruleIds": [
+        "WA.registration-trigger",
+        "WA.trust-scope"
+      ],
+      "inputs": [
+        "fiscalActual",
+        "fiscalExpected",
+        "allUnpaid",
+        "noPrivateBenefit",
+        "waTrustAssets",
+        "waTrustExempt"
+      ],
+      "registrationTrigger": true,
+      "partialExemptions": [
+        "Any solicitation exemption does not remove separate charitable trust registration."
+      ],
+      "nextSteps": [
+        {
+          "title": "Prepare the initial filing",
+          "text": "Use the agency’s current form or portal. Gather the IRS determination letter, organizing documents and supporting eligibility evidence. A Unified Registration Statement does not replace state-specific requirements.",
+          "url": "https://www.sos.wa.gov/corporations-charities/frequently-asked-questions-faqs/charitable-organizations-frequently-asked-questions"
+        },
+        {
+          "title": "Keep entity filings separate",
+          "text": "Check corporate formation or foreign qualification for your operations. A charity registration does not itself create authority to do business. A corporate registered agent and a charity service-of-process contact serve different filings.",
+          "url": "https://www.sos.wa.gov/corporations-charities/frequently-asked-questions-faqs/charitable-organizations-frequently-asked-questions"
+        },
+        {
+          "title": "Wait for required authorization",
+          "text": "Submitting a form is not proof of registration or permission to fundraise. Check the agency’s approval and effective-date rules before starting covered appeals.",
+          "url": "https://www.sos.wa.gov/corporations-charities/frequently-asked-questions-faqs/charitable-organizations-frequently-asked-questions"
+        },
+        {
+          "title": "Manage ongoing filings in CC Aurora",
+          "text": "Use CC Aurora for current registration standing, filing dates, renewals, extensions, audit requirements, fees and historical filing management. Head Start identifies the initial registration or exemption route."
+        },
+        {
+          "title": "Review your appeal materials",
+          "text": "Check this state’s disclosure wording for websites, email, printed appeals, receipts and paid campaigns. Registration is not a state endorsement. Do not copy one state’s wording across all appeals.",
+          "url": "https://www.sos.wa.gov/corporations-charities/frequently-asked-questions-faqs/charitable-organizations-frequently-asked-questions"
+        },
+        {
+          "title": "Public documents do not replace filing",
+          "text": "Publishing Form 990, the exemption application or a Unified Registration Statement does not fulfill state registration. Complete the agency’s actual filing and required attachments.",
+          "url": "https://www.sos.wa.gov/corporations-charities/frequently-asked-questions-faqs/charitable-organizations-frequently-asked-questions"
+        }
+      ],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "WV",
+      "name": "West Virginia",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://sos.wv.gov/FormSearch/Business/Documents/ExemptChar.pdf",
+          "title": "Secretary of State · exemption form"
+        },
+        {
+          "title": "Current requirements and exemption source reviewed October 6, 2026",
+          "url": "https://code.wvlegislature.gov/29-19-6/"
+        },
+        {
+          "title": "Current agency exemption-letter instructions",
+          "url": "https://sos.wv.gov/charities-frequently-asked-questions"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-06",
+      "notes": [
+        "Exemption form and category conditions must be verified.",
+        "Send the Secretary of State an exemption letter describing the organization, fundraising methods and expected annual revenue; retain its determination."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "WI",
+      "name": "Wisconsin",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://dfi.wi.gov/Pages/BusinessServices/CharitableProfessionalOrganizations/CharitableOrganizationsFAQ.aspx",
+          "title": "DFI · charitable organizations FAQ"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-03",
+      "notes": [
+        "Religious federal return exclusions, approved schools and specified member appeals can qualify.",
+        "Online nexus: Wisconsin domicile or targeting, or at least 50 contributions AND more than $25,000 from residents in a fiscal year. Small exemption has a $25,000 ceiling and all unpaid functions."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    },
+    {
+      "connectionConfirmed": false,
+      "code": "WY",
+      "name": "Wyoming",
+      "status": "outside",
+      "why": "No specific activity was entered for this state. It is not included in this focused screening; reassess if your appeals, donors or operations reach it.",
+      "action": "Reassess before adding activities or fundraising in this state.",
+      "sources": [
+        {
+          "url": "https://sos.wyo.gov/faqs.aspx?root=BUS",
+          "title": "Secretary of State · business FAQ"
+        }
+      ],
+      "coverage": "Core framework checked; exceptions screened",
+      "reviewed": "2026-10-03",
+      "notes": [
+        "No general state charitable solicitation registration requirement is identified.",
+        "Foreign entity qualification and other corporate filings are separate."
+      ],
+      "ruleIds": [],
+      "inputs": [],
+      "nextSteps": [],
+      "exemption_evidence": null,
+      "possible_exemption": false,
+      "approvalRequired": false,
+      "discretionaryRequest": false,
+      "deferred": false,
+      "nexusPending": false
+    }
+  ]
+}

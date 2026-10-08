@@ -6,6 +6,7 @@ const source=fs.readFileSync(path.join(process.env.CC_TEST_TRIAL_DIR||path.join(
 const origin='https://www.sosnc.gov',profile=origin+'/online_services/search/charities_profile/5700751';
 const active={'CSL Legal Name':"America's Charities",'CSL Type':'Charitable Organization',Status:'Current Active – Filing Extension Granted',License:'SL000448','Expiration Date':'5/15/2026','Extension End Date':'11/15/2026'};
 const exempt={'CSL Legal Name':'YWCA of the U.S.A.','CSL Type':'CSL Exempt Organization',Status:'CSL Exempt',License:'EX003050'};
+const withdrawnApplication={'CSL Legal Name':'Generic Literacy Organization','CSL Type':'In-Process',Status:'Withdrawn',License:''};
 const txt=innerText=>({innerText,querySelector:()=>null});
 function labels(values){return Object.entries(values).map(([key,value])=>({innerText:key+':',parentElement:txt(key+': '+value)}));}
 function harness({cards=[active],total=cards.length,query="America's Charities",url=origin+'/online_services/search/Charities_Results',fields=null,periods=null,uploadLink=false,extraLabels=[],displayName=null,addressCount=1,profileIds=null}={}){
@@ -33,6 +34,16 @@ function harness({cards=[active],total=cards.length,query="America's Charities",
   chrome:{runtime:{id:'fixture',onMessage:{addListener(){}}}}});
  vm.runInContext(source,context);return {api:context.testNC,context,input,words,print,button,main,panels,addressValues,clicks:()=>clicks,formClicks:()=>formClicks};
 }
+
+test('NC retains a withdrawn unissued card and keeps an in-process card pending',async()=>{
+ for(const status of ['Withdrawn','Withdrawn In Process','In-Process']) {
+  const card={...withdrawnApplication,Status:status};
+  const h=harness({cards:[card],query:card['CSL Legal Name']});
+  const row=(await h.api.ncRows({state:'NC',operation:'search',name:card['CSL Legal Name']})).evidence.rows[0];
+  assert.equal(row.Status,status);
+  assert.equal(row.License,'');
+ }
+});
 
 test('NC passive timing separates completed HTTP failures from idle submission without leaking request data',async()=>{
  const h=harness({url:origin+'/online_services/search/by_title/search_charities'});
