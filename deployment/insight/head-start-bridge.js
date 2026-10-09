@@ -41,6 +41,7 @@
     description.textContent=`${assessment.organization_name} · EIN ${normalizeEin(assessment.ein).replace(/^(\d{2})(\d{7})$/,'$1-$2')} · Requirements assessed ${new Date(assessment.assessed_at).toLocaleDateString()}`;
     const button=document.getElementById('generateReportButton');
     brandInsightButton(button);
+    if(button && document.getElementById('resultRows')?.children.length)button.classList.remove('hidden');
     if(!compatible())message.textContent='The organization differs from Head Start. Return to the assessed organization or create a new assessment before combining the results.';
   }
   function applyStates() {

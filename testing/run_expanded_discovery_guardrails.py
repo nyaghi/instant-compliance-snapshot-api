@@ -78,6 +78,19 @@ class ExpandedDiscoveryTests(unittest.TestCase):
     def test_no_alias_keeps_original_query_order_and_cap(self):
         original=['Distinctive','Original Name','Prefix']
         self.assertEqual(c.reviewed_queries_first(NAME,EIN,original,limit=2),original[:2])
+    def test_dotted_initials_remain_a_distinct_literal_search_not_a_new_identity(self):
+        name='ABC Community Research Foundation'
+        dotted='A.B.C. Community Research Foundation, Inc.'
+        payload={'organization_name':name,'ein':'05-0536854','alternate_names':[dotted,dotted.lower(),name]}
+        normalized=c.normalize_organization_requests(payload,privileged=False)[0]
+        self.assertEqual(normalized['alternate_names'],[dotted])
+        c.REVIEWED_NAME_CONTEXT.set({EIN:tuple(normalized['alternate_names'])})
+        self.assertEqual(c.reviewed_queries_first(name,EIN,[name,'Community Research'],limit=1),
+                         [name,dotted,'Community Research'])
+        self.assertEqual(c.identity_name_key(name),c.identity_name_key(dotted))
+        self.assertEqual(c.normalize_organization_requests(
+            {'organization_name':'Beacon Charity','ein':'05-0536854',
+             'alternate_names':['Beacon Charity, Inc.']},privileged=False)[0]['alternate_names'],[])
     def test_completion_guard_accepts_supported_punctuation_spellings(self):
         for original in ['CLASSICAL 981 C/O JENNIFER RIDEWOOD', 'Example (National) Foundation', "Children's Support, Inc."]:
             with self.subTest(original=original):

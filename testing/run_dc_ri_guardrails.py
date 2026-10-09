@@ -46,6 +46,20 @@ class LicenseControls(unittest.TestCase):
         self.assertLessEqual(len(generated),3*len(required))
         self.assertTrue(all(cc.distinctive_match_tokens(name) for name in generated))
         with self.assertRaises(TimeoutError):cc.select_licensed_charity(self.org,[row()],'RI',time.monotonic()-1)
+    def test_ri_dotted_initialism_gets_literal_suffix_free_probe_within_cap(self):
+        dotted='A.B.C. Community Research Foundation, Inc.'
+        token=cc.REVIEWED_NAME_CONTEXT.set({'123456789':(dotted,)})
+        try:
+            required,generated=cc.licensed_charity_names(
+                cc.checker.Organization('ABC Community Research Foundation','123456789'),
+                literal_suffix_priority=True)
+            self.assertIn(dotted,required)
+            self.assertIn('A.B.C. Community Research Foundation',generated)
+            self.assertLessEqual(len(generated),3*len(required))
+            plain=cc.checker.Organization('Beacon Learning Foundation','987654321')
+            plain_required,plain_generated=cc.licensed_charity_names(plain,literal_suffix_priority=True)
+            self.assertEqual((plain_required,plain_generated),cc.licensed_charity_names(plain))
+        finally:cc.REVIEWED_NAME_CONTEXT.reset(token)
     def test_short_legal_core_is_retrieved_without_suffix_punctuation(self):
         for legal,core in [('Ceres, Inc.','Ceres'),('Acorn, Inc.','Acorn')]:
             org=cc.checker.Organization(legal,'123456789')

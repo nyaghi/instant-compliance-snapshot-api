@@ -264,15 +264,16 @@ def insight_asset(name, text):
         ('    const STAGING_ACCESS_REQUIRED = true;', '    const STAGING_ACCESS_REQUIRED = true;\n    window.CCHeadStartConfig = () => ({apiBase:API_BASE,email:email.value.trim(),passcode:adminPasscode.value.trim(),unlocked:internalUnlocked,generateReport,renderResults});'),
         ('      unlockButton.textContent = internalUnlocked ? "Unlocked" : "Unlock";', '      unlockButton.textContent = internalUnlocked ? "Unlocked" : "Unlock";\n      window.CCHeadStart?.applyStates();'),
         ('      generateReportButton.disabled = false;', '      generateReportButton.disabled = false;\n      window.CCHeadStart?.refresh();'),
+        ('      generateReportButton.classList.toggle("hidden", !results.length);', '      generateReportButton.classList.toggle("hidden", !results.length || !window.CCHeadStart?.hasAssessment());\n      window.dispatchEvent(new CustomEvent("cc-standard-results", { detail: { results } }));'),
         ('const reportFields = ["organization_name",', 'const reportFields = ["success", "error", "organization_name",'),
         ('        const response = await fetch(`${API_BASE}/api/report`, {', '        const assessment = window.CCHeadStart?.forResults(results);\n        window.CCHeadStart?.save().catch(() => {});\n        const response = await fetch(`${API_BASE}/api/report`, {'),
         ('headers: { "Content-Type": "application/json" },\n          signal: controller.signal,', 'headers: { "Content-Type": "application/json", "Authorization": "Bearer " + adminPasscode.value.trim() },\n          signal: controller.signal,'),
         ('body: JSON.stringify({ results, email: email.value.trim(), admin_passcode: adminPasscode.value.trim() })', 'body: JSON.stringify({ results, email: email.value.trim(), admin_passcode: adminPasscode.value.trim(), head_start:assessment })'),
         ('link.download = `CharityClarity Aurora-', "link.download = `CharityClarity ${window.CCHeadStart?.forResults(results)?'Insight':'Aurora'}-"),
-        ('generateReportButton.disabled = submitButton.disabled || !latestResults.length;', 'generateReportButton.disabled = !latestResults.length;'),
+        ('generateReportButton.disabled = submitButton.disabled || !latestResults.length;', 'generateReportButton.disabled = !latestResults.length || !window.CCHeadStart?.hasAssessment();'),
         ('      stateCheckboxes.forEach((box) => { box.checked = false; });\n\n      updatePasscodeVisibility();', '      if(!window.CCHeadStart?.hasAssessment())stateCheckboxes.forEach((box) => { box.checked = false; });\n\n      updatePasscodeVisibility();'),
         ('</head>', '  <link rel="stylesheet" href="/head-start/journey.css?v=20261008.1">\n</head>'),
-        ('</body>', '  <script src="/head-start-bridge.js?v=2.0.1"></script>\n</body>'),
+        ('</body>', '  <script src="/head-start-bridge.js?v=2.0.2"></script>\n  <script src="/sales-extract.js?v=1"></script>\n</body>'),
     ]
     for old, new in replacements:
         if text.count(old) != 1:
@@ -285,7 +286,7 @@ def lab_asset(path):
     path = unquote(urlparse(path).path)
     if path in ('/head-start', '/head-start/'):
         path = '/head-start/index.html'
-    if path.startswith('/head-start/') or path == '/head-start-bridge.js':
+    if path.startswith('/head-start/') or path in ('/head-start-bridge.js', '/sales-extract.js'):
         root = (ROOT/'deployment/insight').resolve()
         file = (root/path.lstrip('/')).resolve()
         if (not file.is_relative_to(root) or file.suffix.lower() not in {'.html','.js','.css','.png','.svg','.ttf'} or not file.is_file()):

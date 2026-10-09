@@ -1925,6 +1925,16 @@ def search_spelling_key(value: str) -> str:
     return re.sub(r"(?:\s+(?:inc|incorporated|corp|corporation|llc|ltd|limited))+$", "", value).strip()
 
 
+def reviewed_retrieval_key(value: str) -> tuple[str, bool]:
+    """Deduplicate identities without losing literal dotted-initial searches.
+
+    Some registries distinguish A.B.C. from ABC in their search box, even
+    though the two remain the same name for identity matching. This key is
+    only for retrieval planning; it does not relax candidate acceptance.
+    """
+    return search_spelling_key(value), bool(re.search(r"(?:\b[A-Za-z]\.){2,}", value or ""))
+
+
 def ascii_dash_search_name(value: str) -> str:
     """One punctuation-only retrieval alternative; acceptance stays unchanged."""
     return re.sub(r"[\u2010-\u2015\u2212]", "-", value)
@@ -1938,7 +1948,7 @@ def normalize_reviewed_names(value) -> list[str]:
         if not isinstance(item, str) or len(item) > 300 or re.search(r"[\x00-\x1f]", item):
             raise ValueError("Each alternate name must be plain text of at most 300 characters.")
         name = re.sub(r"\s+", " ", item).strip()
-        key = search_spelling_key(name)
+        key = reviewed_retrieval_key(name)
         if key and key not in seen:
             result.append(name); seen.add(key)
     return result
@@ -6002,7 +6012,7 @@ def il_verification_recovery(record, payload, now):
     if (record.get("state") != "IL" or record.get("purpose") != "registration"
             or record.get("recovery_protocol") != "il-fresh-page-v1"
             or (record.get("connector_version") != "0.5.10"
-                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113"}))
+                and not (trial_identity() and record.get("connector_version") in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114"}))
             or payload.get("reason") != "NY_CONNECTOR_IL_VERIFICATION_PENDING"
             or record.get("il_verification_recovery")
             or now + 120 >= record["issued"] + NY_CONNECTOR_TTL_SECONDS):
@@ -7404,13 +7414,14 @@ def final_four_connector_failure(record, reason="", diagnostic=""):
         data["lab_diagnostic"] = {"verification_attempts": attempts,
                                   "failure_reason": result.status_reason,
                                   "completed_queries": len(record.get("completed", []))}
-    if state in {"NM", "MS"}:
+    if state in {"NM", "MS", "NC"}:
         pending = (record.get("pending") or {}).get("query") or {}
         data["lab_diagnostic"] = {
             "code": diagnostic or reason or "INCOMPLETE_EVIDENCE",
             "completed_count": len(record.get("completed", [])),
             "pending_operation": pending.get("operation", ""),
             "pending_name": pending.get("name", ""),
+            **({"elapsed_seconds": round(max(0, time.time() - record["issued"]), 2)} if state == "NC" else {}),
         }
     return data
 
@@ -7751,7 +7762,7 @@ def licensed_dash_retrieval_forms(name):
     return list(dict.fromkeys(forms))
 
 
-def licensed_charity_names(org):
+def licensed_charity_names(org, *, literal_suffix_priority=False):
     """Every reviewed name precedes bounded generated spelling/search variants."""
     primary = [org.organization_name, *known_names_for_ein(org.ein)]
     required, generated = [], []
@@ -7773,8 +7784,11 @@ def licensed_charity_names(org):
         # no fallback when punctuation or an entity suffix differs in the
         # registry. Reuse the mature retrieval helper without widening match
         # acceptance or exceeding the existing three-probe bound.
-        for value in (licensed_dash_retrieval_forms(name) + possessive_search_phrases(name) + high_signal_search_phrases(name)
-                      + literal_name_retrieval_forms(name)):
+        literal_forms = literal_name_retrieval_forms(name)
+        forms = (licensed_dash_retrieval_forms(name) + possessive_search_phrases(name)
+                 + (literal_forms if literal_suffix_priority and reviewed_retrieval_key(name)[1] else [])
+                 + high_signal_search_phrases(name) + literal_forms)
+        for value in forms:
             value = re.sub(r"\s+", " ", value).strip()
             if value.casefold() in seen or not distinctive_match_tokens(value): continue
             seen.add(value.casefold()); generated.append(value); added += 1
@@ -8468,7 +8482,7 @@ def search_ri(org):
         token = registry_json_request(RI_PUBLIC_PORTAL + "/api/auth/token", deadline, payload={})
         if not isinstance(token, dict) or not token.get("access_token"): raise ValueError("Rhode Island public search session unavailable")
         headers = {"Authorization": "Bearer " + token["access_token"]}
-        required, generated = licensed_charity_names(org)
+        required, generated = licensed_charity_names(org, literal_suffix_priority=True)
         # A literal suffix-free legal name must be tried before an alias can
         # end fallback discovery. The registry's literal search can miss the
         # legal record with Inc. present while returning a retired alias.
@@ -11650,6 +11664,7 @@ def copy_external_result(org, state: str, external_result):
     result.error = normalized_error
     for attr in [
         "queries_attempted",
+        "lab_diagnostic",
         "source_attempts",
         "source_confidence",
         "reason_code",
@@ -14404,7 +14419,7 @@ def reviewed_queries_first(original_name: str, ein: str, generated: list[str], *
     for value in [original_name, *known_names_for_ein(ein)]:
         value = canonical_name_punctuation(value)
         value = transform(value) if transform else value
-        key = search_spelling_key(value)
+        key = reviewed_retrieval_key(value)
         if key and key not in identity_seen:
             queries.append(value); identity_seen.add(key); seen.add(value.casefold())
     fallback_count = 0
@@ -21718,6 +21733,7 @@ def response_data_for_lookup(result, body: str, org, organization_name: str, ein
     for evidence_key in [
         "attempted_queries",
         "queries_attempted",
+        "lab_diagnostic",
         "source_attempts",
         "rejected_candidates",
         "rejection_reason",
@@ -22451,9 +22467,10 @@ def nj_name_exemption_result(data, org, deadline):
 
 def nj_search_body(page, query):
     """Reuse only this page's ready form; never treat a prior grid as a new result."""
+    observation_started = time.monotonic()
     page._cc_nj_query_incomplete = True
     page._cc_nj_completed_data = None
-    page._cc_nj_query_diagnostic = {"query": query, "phase": "awaiting_response"}
+    page._cc_nj_query_diagnostic = {"query": query, "phase": "awaiting_response", "reused_form": False}
     url = "https://charportal.dca.njoag.gov/Charity-Registration/CHR-Public-Search-Page/"
     selector = '#SearchBox28, input[placeholder="Search"], input[aria-label*="partial text" i], input[id^="SearchBox"], input[type="search"]'
     box = page.locator(selector).first
@@ -22470,6 +22487,8 @@ def nj_search_body(page, query):
     if not ready:
         page.goto(url, wait_until="domcontentloaded", timeout=60000)
     box.wait_for(state="visible", timeout=10000)
+    page._cc_nj_query_diagnostic["reused_form"] = ready
+    page._cc_nj_query_diagnostic["form_ready_seconds"] = round(time.monotonic() - observation_started, 2)
     started_requests = set()
     completed = []
 
@@ -22482,6 +22501,8 @@ def nj_search_body(page, query):
         rows = nj_completed_query_rows(request, query)
         if rows is not None:
             completed.append((rows, request.response().json()))
+            page._cc_nj_query_diagnostic["matching_responses"] = len(completed)
+            page._cc_nj_query_diagnostic["response_seconds"] = round(time.monotonic() - observation_started, 2)
         elif request.url.startswith("https://charportal.dca.njoag.gov/_services/entity-grid-data.json/"):
             page._cc_nj_query_diagnostic["phase"] = "response_rejected_or_other_query"
 
@@ -22506,8 +22527,10 @@ def nj_search_body(page, query):
                     page._cc_nj_query_incomplete = False
                     page._cc_nj_completed_data = data
                     page._cc_nj_query_diagnostic["phase"] = "complete"
+                    page._cc_nj_query_diagnostic["elapsed_seconds"] = round(time.monotonic() - observation_started, 2)
                     return page.locator("body").inner_text(timeout=1000)
             page.wait_for_timeout(100)
+        page._cc_nj_query_diagnostic["elapsed_seconds"] = round(time.monotonic() - observation_started, 2)
         return None
     finally:
         page.remove_listener("request", on_request)
@@ -23006,6 +23029,8 @@ def search_nj_direct(page, org, identity_org=None):
             result.source_note = "New Jersey did not finish the submitted search with a complete, matching response. Registration status could not be confirmed."
             result.reason_code = "NJ_INCOMPLETE_QUERY_RESPONSE"
             result.queries_attempted = [getattr(page, "_cc_nj_query_diagnostic", {"query": ein_digits or org.organization_name, "phase": "incomplete"})]
+            result.lab_diagnostic = {"path": "browser", "stage": "search_grid", "query_kind": "ein" if ein_digits else "name",
+                                     "observation": {k: v for k, v in result.queries_attempted[0].items() if k != "query"}}
             result.success = False
             return result
         exemption = nj_name_exemption_result(getattr(page, "_cc_nj_completed_data", None), identity_org or org, time.monotonic()+8)
@@ -23025,6 +23050,8 @@ def search_nj_direct(page, org, identity_org=None):
                 "within CharityClarity's bounded lookup window, so CharityClarity did not finalize a Not Registered result."
             )
             result.reason_code = "NJ_INCOMPLETE_EIN_SEARCH"
+            result.lab_diagnostic = {"path": "browser", "stage": "ein_not_visible", "query_kind": "ein",
+                                     "observation": {k: v for k, v in getattr(page, "_cc_nj_query_diagnostic", {}).items() if k != "query"}}
             result.success = False
             return result
 
@@ -24582,7 +24609,7 @@ def ny_connector_advance(record):
     org = checker.Organization(record["organization_name"], record["ein"])
     started = time.perf_counter()
     supports_browser_detail = (record.get("connector_version") in {"0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"}
-                               or bool(trial_identity() and record.get("connector_version") in {"0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113"}))
+                               or bool(trial_identity() and record.get("connector_version") in {"0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114"}))
     try:
         if record.get("purpose") == "identity":
             ein = canonical_ein_digits(record["ein"])
@@ -24632,7 +24659,7 @@ def ny_connector_request(payload, origin):
         if purpose not in {"registration", "identity"}:
             return 400, {"error": "Invalid connector purpose."}
         connector_version = payload.get("connector_version", "0.2.1")
-        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113"})):
+        if not isinstance(connector_version, str) or (connector_version not in {"0.2.1", "0.3.0", "0.3.1", "0.3.2", "0.3.3", "0.3.4", "0.3.5", "0.3.6", "0.4.0", "0.4.1", "0.4.2", "0.5.0", "0.5.1", "0.5.2", "0.5.3", "0.5.4", "0.5.5", "0.5.6", "0.5.7", "0.5.8", "0.5.9", "0.5.10"} and not (trial_identity() and connector_version in {"0.6.4", "0.6.5", "0.6.6", "0.6.7", "0.6.8", "0.6.9", "0.6.10", "0.6.11", "0.6.12", "0.6.13", "0.6.14", "0.6.15", "0.6.16", "0.6.17", "0.6.18", "0.6.19", "0.6.20", "0.6.21", "0.6.22", "0.6.23", "0.6.24", "0.6.25", "0.6.26", "0.6.27", "0.6.28", "0.6.29", "0.6.30", "0.6.31", "0.6.32", "0.6.33", "0.6.34", "0.6.35", "0.6.36", "0.6.37", "0.6.38", "0.6.39", "0.6.40", "0.6.41", "0.6.42", "0.6.43", "0.6.44", "0.6.45", "0.6.46", "0.6.47", "0.6.48", "0.6.49", "0.6.50", "0.6.51", "0.6.52", "0.6.53", "0.6.54", "0.6.55", "0.6.56", "0.6.60", "0.6.61", "0.6.62", "0.6.63", "0.6.64", "0.6.66", "0.6.67", "0.6.68", "0.6.69", "0.6.70", "0.6.71", "0.6.72", "0.6.73", "0.6.74", "0.6.75", "0.6.76", "0.6.77", "0.6.78", "0.6.79", "0.6.80", "0.6.81", "0.6.82", "0.6.83", "0.6.84", "0.6.86", "0.6.87", "0.6.88", "0.6.89", "0.6.90", "0.6.91", "0.6.92", "0.6.93", "0.6.94", "0.6.95", "0.6.96", "0.6.97", "0.6.98", "0.6.100", "0.6.101", "0.6.102", "0.6.106", "0.6.107", "0.6.108", "0.6.109", "0.6.111", "0.6.112", "0.6.113", "0.6.114"})):
             return 400, {"error": "The New York connector version is unsupported. Refresh or update the connector."}
         name = payload.get("organization_name")
         ein = str(payload.get("ein") or "").strip()
@@ -33202,7 +33229,7 @@ def normalize_organization_requests(payload: dict, privileged: bool) -> list[dic
         seen.add(key)
         if "alternate_names" in org:
             org["alternate_names"] = [alias for alias in org["alternate_names"]
-                                      if search_spelling_key(alias) != search_spelling_key(org["organization_name"])]
+                                      if reviewed_retrieval_key(alias) != reviewed_retrieval_key(org["organization_name"])]
         deduped.append(org)
     return deduped
 
