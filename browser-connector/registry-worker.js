@@ -284,6 +284,24 @@ async function registryMessage(job, message) {
     if (new URL(tab.url).origin !== registryOrigin(job.registryState)) throw new Error("NY_CONNECTOR_INCOMPLETE");
     return chrome.tabs.sendMessage(job.tab, {...message,...(P.TRIAL_ORIGIN && job.registryState==='NV' && message.action==='registry-nv'?{diagnosticId:job.pending,skipHistory:message.query?.operation==='detail'}:{})}, {frameId:0});
   };
+  if(P.TRIAL_ORIGIN && job.registryState==='MS' && message.action==='registry-ms'
+      && message.requireFreshGrid===true && Number.isFinite(message.budgetMs)) {
+    // A reused Kendo grid is not evidence for a new query. Hidden-tab timers
+    // have taken 55s to report an absent response despite a 30s page budget.
+    // The worker can end this one wait early and use the existing same-query
+    // fresh-form recovery; neither old rows nor an extra name is accepted.
+    const waitMs=Math.max(1,Math.min(8000,message.budgetMs,job.activeExpiresAt-Date.now()));
+    let timer;
+    try {
+      return await Promise.race([send(),new Promise(resolve=>{
+        timer=setTimeout(()=>{
+          diagnostic('ms-grid-watchdog',job,`reuse wait_ms=${waitMs}`);
+          resolve({ok:false,reason:'NY_CONNECTOR_INCOMPLETE',
+            ms_diagnostic:{source_error:'REGISTRY_GRID_WATCHDOG',reused_form:true,wait_ms:waitMs}});
+        },waitMs);
+      })]);
+    } finally {clearTimeout(timer);}
+  }
   if (job.registryState!=='NV' || !Number.isFinite(message.budgetMs)) return send();
   // Keep the overall job deadline as the transport bound. A second timer at
   // exactly the page's allowance races its normal timeout reply and prevents
@@ -505,6 +523,7 @@ async function registryNavigate(job, url, budgetMs = 45000, freshNvRecovery = fa
   if (new URL(url).origin !== registryOrigin(job.registryState)) throw new Error("NY_CONNECTOR_INCOMPLETE");
   if (freshNvRecovery && (job.registryState!=='NV' || url!==registryStart('NV')
       || !(job.nvReturnRecoveryUsed || job.nvReservationDetail || job.nvModeRecoveryUsed))) throw new Error('NY_CONNECTOR_INVALID_SEQUENCE');
+    const navigationStarted=Date.now();
     const deadline=Math.min(job.activeExpiresAt,Date.now()+Math.max(1,Math.min(45000,budgetMs)));
     let previous;
   if (job.tab !== null) {
@@ -549,8 +568,13 @@ async function registryNavigate(job, url, budgetMs = 45000, freshNvRecovery = fa
       await registryCreateOwnedTab(job,url,origin);
     })();
     await job.creating;job.creating=null;
+    if(P.TRIAL_ORIGIN && job.registryState==='MS')
+      diagnostic('ms-tab-created',job,`ms=${Date.now()-navigationStarted}`);
   }
-    return registryReady(job,previous,new URL(url).pathname,freshNvRecovery?Math.max(1,deadline-Date.now()):budgetMs);
+    const ready=await registryReady(job,previous,new URL(url).pathname,freshNvRecovery?Math.max(1,deadline-Date.now()):budgetMs);
+    if(P.TRIAL_ORIGIN && job.registryState==='MS')
+      diagnostic('ms-page-ready',job,`ms=${Date.now()-navigationStarted} tab=${job.tab}`);
+    return ready;
 }
 async function registryIllinoisVerification(job, collect) {
   // Preserve the verification document. Reloading here resets Illinois's
@@ -803,8 +827,13 @@ async function performRegistryQuery(job, query) {
     if(!source)throw new Error("NY_CONNECTOR_INCOMPLETE");
     const current=await registryGaSearch(job,source,query.identifier,legacy ? query : null);
     if(!current?.detail_key)throw new Error("NY_CONNECTOR_INCOMPLETE");
+    const detailStarted=Date.now();
+    if(P.TRIAL_ORIGIN)diagnostic('ga-detail-navigation-start',job,'open selected public detail');
     await registryNavigate(job,registryOrigin("GA")+"/verification/Details.aspx?result="+current.detail_key);
-    return registryMessage(job,{action:"registry-ga-detail",query});
+    if(P.TRIAL_ORIGIN)diagnostic('ga-detail-navigation-done',job,`ms=${Date.now()-detailStarted}`);
+    const result=await registryMessage(job,{action:"registry-ga-detail",query});
+    if(P.TRIAL_ORIGIN)diagnostic('ga-detail-command',job,`ms=${Date.now()-detailStarted} ${result?.ok?'complete':result?.reason||'incomplete'}`);
+    return result;
   }
   return registryGaSearch(job,query);
 }
