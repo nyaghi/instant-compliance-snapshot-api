@@ -285,19 +285,21 @@ async function registryMessage(job, message) {
     return chrome.tabs.sendMessage(job.tab, {...message,...(P.TRIAL_ORIGIN && job.registryState==='NV' && message.action==='registry-nv'?{diagnosticId:job.pending,skipHistory:message.query?.operation==='detail'}:{})}, {frameId:0});
   };
   if(P.TRIAL_ORIGIN && job.registryState==='MS' && message.action==='registry-ms'
-      && message.requireFreshGrid===true && Number.isFinite(message.budgetMs)) {
-    // A reused Kendo grid is not evidence for a new query. Hidden-tab timers
-    // have taken 55s to report an absent response despite a 30s page budget.
-    // The worker can end this one wait early and use the existing same-query
-    // fresh-form recovery; neither old rows nor an extra name is accepted.
-    const waitMs=Math.max(1,Math.min(8000,message.budgetMs,job.activeExpiresAt-Date.now()));
+      && message.query?.operation==='search' && Number.isFinite(message.budgetMs)) {
+    // A Kendo grid is evidence only after this signed search produces a new
+    // completed response. Under load both a fresh form and a reused form can
+    // leave the grid unchanged, while hidden-tab timers delay the page error.
+    // Bound that wait and use the same-query fresh-form recovery below.
+    const waitMs=Math.max(1,Math.min(message.requireFreshGrid?8000:12000,
+      message.budgetMs,job.activeExpiresAt-Date.now()));
     let timer;
     try {
       return await Promise.race([send(),new Promise(resolve=>{
         timer=setTimeout(()=>{
-          diagnostic('ms-grid-watchdog',job,`reuse wait_ms=${waitMs}`);
+          diagnostic('ms-grid-watchdog',job,`reuse=${message.requireFreshGrid===true} wait_ms=${waitMs}`);
           resolve({ok:false,reason:'NY_CONNECTOR_INCOMPLETE',
-            ms_diagnostic:{source_error:'REGISTRY_GRID_WATCHDOG',reused_form:true,wait_ms:waitMs}});
+            ms_diagnostic:{source_error:'REGISTRY_GRID_WATCHDOG',
+              reused_form:message.requireFreshGrid===true,wait_ms:waitMs}});
         },waitMs);
       })]);
     } finally {clearTimeout(timer);}
@@ -626,7 +628,9 @@ async function performRegistryQuery(job, query) {
       diagnostic('ms-command',job,`reuse=${reuse} ms=${Date.now()-started} ${result?.ok?'complete':result?.reason||'incomplete'}`);
       if(P.TRIAL_ORIGIN && result?.ms_diagnostic)
         diagnostic('ms-page',job,JSON.stringify(result.ms_diagnostic));
-      if(reuse && !result?.ok && job.activeExpiresAt-Date.now()>35000) {
+      if(!result?.ok && job.activeExpiresAt-Date.now()>35000 &&
+          (reuse || ['REGISTRY_GRID_WATCHDOG','REGISTRY_RESPONSE_INCOMPLETE']
+            .includes(result.ms_diagnostic?.source_error))) {
         diagnostic('ms-fresh-recovery',job,'repeating identical signed query on new public form');
         await registryNavigate(job,registryStart('MS'),Math.min(30000,job.activeExpiresAt-Date.now()));
         result=await registryMessage(job,{action:'registry-ms',query,
