@@ -125,7 +125,7 @@ def final_four_asset(name, text):
         # Trial-only, in-memory diagnostics for incomplete public browser
         # lookups. This does not change registry requests or results.
         replace('            onProgress: (message) => {', '''            onProgress: (message, detail) => {
-              if (detail && ["NM", "MS", "IL", "NV", "GA", "NC"].includes(detail.state)) {
+              if (detail && ["AL", "NM", "MS", "IL", "NV", "GA", "NC"].includes(detail.state)) {
                 const events = window.__CCLabStateTrace ||= [];
                 events.push({at: Date.now(), state: detail.state, stage: detail.stage || "",
                   action: detail.action || "", operation: detail.query?.operation || "",
